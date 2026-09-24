@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the implemented 0.6 architecture in this checkout and is verified against the source under `src/buddy/`, the DSH scripts and plugins under `harnesses/dsh/`, and the React sources in `apps/console/`. The release identity is 0.6.2; `CONTRACT_VERSION` is `0.6.1`, the transport protocol version is 2, and the database accepts schema 8 only. The repository's `docs/decisions/` directory holds the design record; design proposals do not by themselves establish runtime behavior, and installed-runtime identity is verified separately from this checkout.
+This page describes the implemented 0.7 source under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.7.0, transport protocol is 2, and startup accepts schema 9 only. Design records live in `docs/decisions/`; source verification, plugin installation and the running runtime are separate facts.
 
 ## Process topology
 
@@ -9,7 +9,7 @@ Codex skill / CLI / private console / external worker
                   |  named C-Two RPC (private token)
         Python blackboard daemon  <-- only writer of authoritative state
           state machine + transactions + events
-                  |  SQLite WAL (board.sqlite3, schema 8)
+                  |  SQLite WAL (board.sqlite3, schema 9)
         tasks / attempts / workers / messages / artifacts
         events / command receipts / resource claims
         evaluation table / governed goal, turn, request and route records
@@ -40,17 +40,17 @@ The transport DTO in the released C-Two 0.5.1 uses the Python pickle protocol fo
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 8) owns every authoritative fact in 35 tables.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 9) owns every authoritative fact in 36 tables.
 
 | Group | Tables |
 | --- | --- |
 | Core | `meta`, `tasks`, `attempts`, `workers`, `messages`, `artifacts`, `events`, `commands`, `resource_claims`, `cursors` |
-| Evaluation | `evaluation_state`, `evaluation_revisions`, `evaluation_profiles`, `evaluation_cards`, `evaluation_preferences`, `evaluation_evidence`, `evaluation_decisions`, `evaluation_catalog`, `evaluation_readers`, `evaluation_writers`, `evaluation_evidence_pending`, `evaluation_samples`, `evaluation_card_history`, `evaluation_aggregates`, `decision_requests` |
+| Evaluation | `evaluation_state`, `evaluation_revisions`, `evaluation_profiles`, `evaluation_cards`, `evaluation_preferences`, `evaluation_evidence`, `evaluation_decisions`, `evaluation_catalog`, `evaluation_readers`, `evaluation_writers`, `evaluation_evidence_pending`, `evaluation_samples`, `evaluation_card_history`, `evaluation_aggregates`, `evaluation_maintenance_checkpoints`, `decision_requests` |
 | Governed work | `workflow_runs`, `workflow_routes`, `workflow_turns`, `workflow_requests`, `workflow_children`, `workflow_continuations`, `workspace_reservations`, `agent_credentials`, `workflow_artifacts`, `workflow_suggestions` |
 
 Notable responsibilities: `tasks` holds the durable `task_id` (= `runId`), unique `request_id`, owner attribution, canonical specification and input fingerprint, adapter, cwd, required capabilities, exclusive resources, timeout, state, `queue_reason`, revision and acceptance fields; `attempts` holds one row per attempt generation with worker identity/instance, nonce verifier, claim request id, lease, execution state, runtime identity, log paths, result, cancel request, exit code/signal and shutdown evidence; `commands` is the idempotency receipt ledger; `evaluation_readers`/`evaluation_writers` implement table-level admission with fair writer intent, generations and expiring grants; `workflow_routes` binds one routing decision to one run and owner generation; `workflow_turns` stores one structured turn per execution with its frozen input, outcome and native provenance; `workflow_artifacts` pins immutable input/output manifests; `workspace_reservations` records logical checkout ownership independently of attempt capacity.
 
-Connections are opened per operation with `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000` and `trusted_schema=OFF`; writes use `BEGIN IMMEDIATE`. Startup refuses a database whose schema marker is not `8`, whose integrity check fails or whose foreign-key check is nonempty, and tells the operator to use a clean state directory and retain the existing directory as an archive. There is no importer, conversion branch or compatibility path for older schemas or the removed Node records.
+Connections are opened per operation with `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000` and `trusted_schema=OFF`; writes use `BEGIN IMMEDIATE`. Startup accepts only schema marker `9`, successful integrity checks and an empty foreign-key check. Existing unsupported state is retained as an archive. Runtime startup contains no importer, conversion branch or older-schema fallback.
 
 Routine lease renewal and liveness timestamp updates do not each emit an event. Atomic event delivery applies to the business operations that record events.
 
@@ -94,7 +94,7 @@ The service has no automatic inquiry scheduler; clients request it as needed. Th
 
 The private writable console serves a built React/Vite bundle over authenticated loopback HTTP. Its session, exact-origin and CSRF checks are separate from the ordinary CLI token. HTTP mutations and agent-side C-Two operations reach the same Python business operations. The table-level reader/writer gate excludes selection readers from edits, not existing business execution; ordinary snapshot reads never take a lease or invoke models. The [evaluation reference](evaluation.md) owns the console HTTP surface, the gate, evidence, cards, decisions and maintenance.
 
-`selection_request`, `selection_get`, `selection_list`, `evaluation_maintain` and `model_catalog_refresh` are named C-Two operations. Decisions use the internal `decision` adapter on the existing Worker queue, not a daemon-owned process runner. Input is frozen in the claim, and decision completion, reader/writer release and any publication share the Worker result transaction. Proposal validation uses a savepoint so an invalid patch can settle without poisoning the completion receipt. The [native helper](decision.md) is DSH-only and has no coding tools. Read-only decision history and per-run routing history use bounded keyset pages over existing durable request/route sequences; they do not enter model admission. New turn inputs retain their exact routing/configuration-revision binding, with absent historical bindings reported as unknown.
+`selection_request`, `selection_get`, `selection_list`, `evaluation_prepare`, `evaluation_history` and `model_catalog_refresh` are named C-Two operations. Routing uses the internal `decision` adapter and its reserved lane; frozen selection input and completion/reader release retain ordinary attempt ownership. Evaluation maintenance runs in the invoking Harness: bounded preparation follows the indexed immutable review-event sequence and per-profile checkpoints, then an external synthesis is published as a card-only patch under a short writer grant. Current and qualified archived reviews retain exact attempt/artifact/configuration bindings. The [maintenance reference](evaluation-maintenance.md) owns that contract; the tool-free [DSH helper](decision.md) only selects execution profiles.
 
 ## Host-directed work
 
@@ -136,7 +136,7 @@ Dependency management is uv-only with a frozen lock. `packaging/runtime-assets.j
 - One daemon owns a state directory (lifetime locks); a schema or contract mismatch is refused instead of migrated silently. The default fresh board is `~/.local/share/hey-my-buddy/state`.
 - SQLite is the deliberate local database. Remote untrusted tenancy, PostgreSQL/HA and exactly-once external side effects are not implemented and are not claimed.
 - DSH continuations reconstruct a fresh session; ZCode resumes a proven session only with a matching goal, checkout and configuration binding. Without a proven session or after a configuration change, ZCode reconstructs a new root session. Neither adapter recovers an omitted transcript implicitly.
-- No monetary budgets, automatic community research, periodic evaluation maintenance or native post-turn App wakeup. Notifications are post-commit hints; inspect `capabilities` for the installed version's supported operations and limits.
+- No monetary budgets, automatic community research, built-in periodic evaluation maintenance or native post-turn App wakeup. A Harness may schedule explicit card updates using its own scheduling facility. Notifications are post-commit hints; inspect installed `capabilities` for supported operations and limits.
 - ZCode has no inquiry bridge, supports API-key providers only and reports no served-model identity.
 - The [0.6 acceptance record](../acceptance/neutral-core-0.6.0.md) identifies the verified installed runtime and real artifacts; a checkout alone does not establish the identity of another running installation.
 - The effective state-transition tables live in `store.py` (`TASK_TRANSITIONS`, `ATTEMPT_TRANSITIONS`) and are summarized here.

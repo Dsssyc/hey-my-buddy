@@ -62,7 +62,7 @@ export function RoutingDetails({ value, api, csrfToken, active }: {
       {error && <p className="error-message" role="alert">{error}</p>}
       {busy && <p role="status" className="small muted">正在读取路由历史…</p>}
       {!busy && page?.entries.length === 0 && <p className="muted">没有智能路由历史。</p>}
-      <ul className="maintenance-list" aria-busy={busy}>{page?.entries.map(d => <li key={d.decisionId}>
+      <ul className="history-list" aria-busy={busy}>{page?.entries.map(d => <li key={d.decisionId}>
         <button className="history-choice" aria-pressed={d.decisionId === chosenId} disabled={busy} onClick={() => inspect(d.decisionId)}>
           <span>{formatDate(d.createdAt)} · {d.selectedProfile ? configurationText(d.selectedProfile) : "未选定配置"}</span>
           <span>{decisionStatus[d.status] || d.status}{d.current ? " · 当前" : ""}</span>

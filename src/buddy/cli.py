@@ -79,7 +79,8 @@ METHODS = [
     "evaluation-reader-begin",
     "evaluation-reader-release",
     "evaluation-evidence-record",
-    "evaluation-maintain",
+    "evaluation-prepare",
+    "evaluation-history",
     "selection-request",
     "selection-get",
     "selection-list",
@@ -182,10 +183,10 @@ examples:
       proposal. A recommendation is recorded history, never an execution permit;
       a queued decision stays cancellable through `execution-cancel` on its runId.
 
-  buddy evaluation-maintain '{"requestId":"tidy-1"}'
-      One bounded maintenance call over the pending evidence batch using the fixed
-      configured decision profile. With configuration.autoMaintain=false the validated
-      card-only proposal is retained as needs-host and nothing is published.
+  buddy evaluation-prepare '{"requestId":"maint-1","limit":32}'   buddy evaluation-history '{"limit":20}'
+      Harness-owned maintenance: prepare collects a bounded, deterministic batch of real Host-reviewed
+      facts (no model call, no lease); synthesize the cards and publish a short card-only patch with
+      `evaluation-write-publish`. `evaluation-history` reads bounded publication pages; there is no autoMaintain.
 
   Repeating an inquiryId never injects the question twice; the same id with
   different text is an error.

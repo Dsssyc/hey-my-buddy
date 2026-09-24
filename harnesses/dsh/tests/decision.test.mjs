@@ -114,21 +114,6 @@ function defaultRequest(overrides = {}) {
   };
 }
 
-/** The canonical valid `maintain` request. */
-function maintainRequest(overrides = {}) {
-  return {
-    operation: 'maintain',
-    requestId: 'req-2',
-    profile: { provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off' },
-    tableRevision: 3,
-    profiles: defaultRequest().profiles,
-    cards: [{ profileId: 'p1', revision: 2, summary: 'current', strengths: [], limitations: [], risks: [], evidenceIds: ['e1'], sampleCount: 1, updatedAt: null }],
-    preferences: [],
-    evidence: [{ evidenceId: 'e2', profileId: 'p1', kind: 'human', summary: 'ok', source: 'test' }],
-    ...overrides,
-  };
-}
-
 /** Run the CLI to completion. */
 function runDecisionCli(s, { timeoutMs = 60_000, env } = {}) {
   return spawnSync(process.execPath, [CLI_PATH, ...s.args], { env: env ?? s.env, encoding: 'utf8', timeout: timeoutMs });
@@ -214,9 +199,8 @@ describe('usage and help', () => {
 });
 
 describe('request validation', () => {
-  test('accepts the documented select and maintain shapes', () => {
+  test('accepts the documented select shape', () => {
     assert.equal(validateRequest(defaultRequest()).operation, 'select');
-    assert.equal(validateRequest(maintainRequest()).operation, 'maintain');
   });
 
   test('rejects malformed requests with a stable code', () => {
@@ -230,8 +214,6 @@ describe('request validation', () => {
       [{ ...defaultRequest(), profiles: [] }, /"profiles" must hold at least/],
       [{ ...defaultRequest(), profiles: [{ profileId: 'a' }, { profileId: 'a' }] }, /repeats a/],
       [{ ...defaultRequest(), task: undefined }, /"task" must be bounded/],
-      [{ ...maintainRequest(), task: 'not allowed here' }, /not part of a maintain request/],
-      [{ ...maintainRequest(), cards: undefined }, /"cards" is required/],
       [{ ...defaultRequest(), evidence: 'nope' }, /"evidence" must be an array/],
       [{ ...defaultRequest(), unexpected: 1 }, /unexpected request field/],
     ];
@@ -325,21 +307,6 @@ describe('select success path', () => {
     assert.deepEqual(argv.argv.slice(-3), ['--', '--', 'deepseek-delegate-decision-adapter']);
   });
 
-  test('a maintain response is returned as a bounded proposal', () => {
-    const s = scenario({ request: maintainRequest() });
-    const result = runDecisionCli(s);
-    assert.equal(result.status, 0, result.stderr);
-    const envelope = readEnvelope(s);
-    assert.equal(envelope.operation, 'maintain');
-    assert.equal(envelope.decision, undefined);
-    assert.equal(envelope.proposal.cards.length, 1);
-    assert.equal(envelope.proposal.cards[0].profileId, 'p1');
-    assert.equal(typeof envelope.proposal.reason, 'string');
-    assert.deepEqual(Object.keys(envelope), [
-      'status', 'operation', 'tableRevision', 'requested', 'resolved', 'observed', 'usage', 'elapsedSeconds', 'shutdownConfirmed', 'proposal',
-    ]);
-  });
-
   test('an abstention is preserved as a null profileId, not invented', () => {
     const s = scenario({
       answer: JSON.stringify({ decision: { profileId: null, reason: 'no candidate is clearly better supported', evidenceIds: [] } }),
@@ -389,45 +356,10 @@ describe('bounded output validation', () => {
     assert.equal(readEnvelope(s).code, 'decision-evidence-unknown');
   });
 
-  test('unknown answer fields and wrong operations are refused as protocol errors', () => {
+  test('unknown answer fields are refused as protocol errors', () => {
     const extra = scenario({ answer: JSON.stringify({ decision: { profileId: 'p1', reason: 'ok', evidenceIds: [], temperature: 1 } }) });
     assert.equal(runDecisionCli(extra).status, 1);
     assert.equal(readEnvelope(extra).code, 'child-protocol-error');
-    const wrongOperation = scenario({ answer: JSON.stringify({ operation: 'maintain', decision: { profileId: 'p1', reason: 'ok', evidenceIds: [] } }) });
-    assert.equal(runDecisionCli(wrongOperation).status, 1);
-    assert.equal(readEnvelope(wrongOperation).code, 'child-protocol-error');
-  });
-
-  test('a maintain card for an unsupplied profile or with unknown fields is refused', () => {
-    const other = scenario({
-      request: maintainRequest(),
-      answer: JSON.stringify({ proposal: { cards: [{ profileId: 'missing', summary: 's', strengths: [], limitations: [], risks: [], evidenceIds: [] }], reason: 'r' } }),
-    });
-    assert.equal(runDecisionCli(other).status, 1);
-    assert.equal(readEnvelope(other).code, 'decision-profile-unknown');
-    const extra = scenario({
-      request: maintainRequest(),
-      answer: JSON.stringify({ proposal: { cards: [{ profileId: 'p1', summary: 's', strengths: [], limitations: [], risks: [], evidenceIds: [], score: 9 }], reason: 'r' } }),
-    });
-    assert.equal(runDecisionCli(extra).status, 1);
-    assert.equal(readEnvelope(extra).code, 'child-protocol-error');
-  });
-
-  test('maintenance may record a card for a disabled or unavailable profile', () => {
-    for (const profileId of ['p2', 'p3']) {
-      const s = scenario({
-        request: maintainRequest(),
-        answer: JSON.stringify({
-          proposal: {
-            cards: [{ profileId, summary: 'excluded after the incident', strengths: [], limitations: ['unavailable'], risks: [], evidenceIds: [] }],
-            reason: 'record the exclusion',
-          },
-        }),
-      });
-      const result = runDecisionCli(s);
-      assert.equal(result.status, 0, `${profileId}: ${result.stderr} ${JSON.stringify(readEnvelope(s))}`);
-      assert.equal(readEnvelope(s).proposal.cards[0].profileId, profileId);
-    }
   });
 });
 

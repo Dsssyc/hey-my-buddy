@@ -1,6 +1,6 @@
 ---
 name: buddy
-description: Delegate bounded coding, testing, investigation or documentation to local Buddy harnesses with model routing, explicit workspaces, Host-directed assistance and verified artifacts. Use when scope and acceptance are clear; skip trivial edits and unresolved requirements.
+description: Delegate bounded work to local Buddy harnesses with model routing, explicit workspaces, Host-directed assistance and verified artifacts, or update shared model evaluation cards from reviewed work. Use when scope and acceptance are clear; skip trivial edits and unresolved requirements.
 ---
 
 # Hey My Buddy
@@ -48,8 +48,20 @@ Cancel the goal with `cancel` and its control file, then wait for actual shutdow
 
 Keep the Host turn active while delegated work is running. For user-requested work beyond the turn, register the product's official recurring follow-up on this task as described in [background work](../../docs/reference/usage.md#background-work-that-outlives-the-turn). It is periodic follow-up, not immediate native App wakeup. If unavailable, keep waiting. Never end with an unmonitored job or restart work the user stopped.
 
+## Maintain model cards
+
+Any skill-equipped Harness can be the maintenance Host, and shared evidence may come from different source Hosts and projects: the maintenance executor's identity never filters evidence, and a Worker's limited credentials must not be stripped or borrowed to impersonate this role. The blackboard does not schedule evaluation maintenance, and no acknowledgement or page view calls a model. When the user requests recurring updates, use the invoking Harness's own scheduling facility for this workflow.
+
+Maintenance is an explicit, bounded read-then-publish loop over [the maintenance reference](../../docs/reference/evaluation-maintenance.md):
+
+1. `evaluation-prepare '{"requestId":"<stable-id>","limit":32}'` collects a bounded batch of actual Host-reviewed facts (optionally narrowed with `profileId` or `adapter`, which filter assessed execution identities and never a source Host or project). It calls no model, takes no writer lease and publishes nothing.
+2. Inspect the packet: read the frozen attempt, verdict, acceptance note, bounded task scope, source Host and reviewed artifact per fact, the current cards and preferences, the pending and referenced evidence, and the `progress`/`skipped`/`unproven` reports.
+3. Synthesize only evidenced changes: keep conditions and attribution, never present a user or community claim as a verified outcome, and preserve unresolved risks and limitations. When the batch contains no new material for a profile, skip regenerating its card unless the user explicitly asks for a reevaluation.
+4. After synthesis, acquire a short grant with `evaluation-write-begin` (`requestId`, the packet's `tableRevision` as `expectedRevision`, `kind: "maintenance"`). Wait/renew if queued, then use `evaluation-write-publish` with the returned writer identity/token, a stable `commandId`, `expectedRevision` and only changed `cards`. Preserve grant/command identities after an uncertain reply; abort an unused grant with `evaluation-write-abort`. Profiles, preferences, configuration, counters and unrelated cards are preserved; a maintenance payload cannot supply them.
+5. Verify with `console-snapshot '{}'` (cards, `sampleCounts`, pending evidence) or `evaluation-history '{"limit":20}'`. A `REVISION_CONFLICT` means re-prepare at the new revision and publish again; a lost reply is replayed with the original `commandId`.
+
 ## Configuration and evidence
 
-The private React/Vite console has top tabs for delegation records, model cards and routing configuration. Records are grouped by source project with original/current Host attribution and paginated history; click the executor for that delegation's frozen routing rationale and prior decisions. Model families expose effort variants without merging evaluations; their page also contains evaluation maintenance and retained suggestions. Routing configuration contains settings only. Use the bounded [evaluation workflow](../../docs/reference/evaluation.md) to record scoped observations and request maintenance. Automatic card publication is opt-in; model-generated maintenance cannot change profiles, user preferences or authority. Cost accounting and economic budgets are not required for execution.
+The private React/Vite console has top tabs for delegation records, model cards and routing configuration. Records show source project, original/current Host, execution turns and recorded routing rationale. Model families group effort variants while preserving independent evaluations; enabled variants carry a separate marker from the currently inspected variant. The shared edit-mode switch creates a local draft; only Save acquires a short publication grant, and conflicts or uncertain replies retain recoverable state. Users can edit card text, preferences and configuration; evidence stays read-only even in edit mode, with a hint to request Harness-owned maintenance when empty. Read-only update history and the persistent light/dark preference call no model. Cost accounting and economic budgets are not required for execution.
 
 Read [CLI](../../docs/reference/cli.md) for exact fields and bounds, [workers](../../docs/reference/workers.md) for harness/authentication capabilities, [operations](../../docs/reference/operations.md) for lifecycle and recovery, and [architecture](../../docs/reference/architecture.md) before changing service contracts. The advanced execution/worker primitives support command, external and internal decision processes; coding goals always use `submit`.

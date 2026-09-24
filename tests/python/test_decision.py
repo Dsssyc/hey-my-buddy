@@ -1,4 +1,4 @@
-"""Durable decision orchestration: selection, maintenance and their fencing.
+"""Durable decision orchestration: selection and its fencing.
 
 Every test here uses the production store, the production resource implementations
 and the production Worker against a private state directory. The bounded decision
@@ -54,7 +54,6 @@ MOCK_ENV_KEYS = (
     "MOCK_DECISION_MODE",
     "MOCK_DECISION_PROFILE_ID",
     "MOCK_DECISION_EVIDENCE",
-    "MOCK_DECISION_CARD_MODE",
     "MOCK_DECISION_SLEEP",
     "MOCK_DECISION_SURVIVOR",
 )
@@ -91,7 +90,6 @@ class DecisionTestCase(BoardTestCase):
         board,
         *,
         profiles=(PROFILE, SECOND_PROFILE),
-        auto_maintain: bool = False,
         decision_profile: str | None = PROFILE_ID,
         preferences=None,
         cards=None,
@@ -111,7 +109,7 @@ class DecisionTestCase(BoardTestCase):
                 "profiles": list(profiles),
                 "cards": cards or [],
                 "preferences": preferences or [],
-                "configuration": {"decisionProfileId": decision_profile, "autoMaintain": auto_maintain},
+                "configuration": {"decisionProfileId": decision_profile},
             },
         )
 
@@ -381,9 +379,9 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(request["status"], "failed")
         self.assertIsNone(request["runId"])
         self.assertIn("ADAPTER_UNAVAILABLE", self.decision(board, request["decisionId"])["error"])
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-missing"})
-        self.assertEqual(maintain["status"], "failed")
-        self.assertIn("ADAPTER_UNAVAILABLE", self.decision(board, maintain["decisionId"])["error"])
+        # Maintenance is not a blackboard model call at all any more, so an absent
+        # helper cannot report it as an adapter-unavailable maintenance failure.
+        self.assertFalse(capabilities["maintenance"])
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
     def test_capabilities_report_real_availability(self):
@@ -391,7 +389,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board)
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertTrue(capabilities["selection"])
-        self.assertTrue(capabilities["maintenance"])
+        self.assertFalse(capabilities["maintenance"])
         self.assertTrue(capabilities["decisionAdapter"])
         report = board.call("capabilities", {})
         self.assertIn("decision", report["adapters"])
@@ -452,33 +450,52 @@ class DecisionGateTests(DecisionTestCase):
         self.assertEqual(decision["input"]["tableRevision"], revision + 1)
         self.assertEqual([card["profileId"] for card in decision["input"]["cards"]], [SECOND_PROFILE_ID])
 
-    def test_one_slot_maintenance_runs_before_the_queued_selector_without_deadlock(self):
+    def test_one_slot_maintenance_patch_runs_before_the_queued_selector_without_deadlock(self):
+        """The external Harness patch is an ordinary writer intent, not a model job."""
         board = self.board(max_concurrent=1)
-        self.seed(board, auto_maintain=True)
-        self.card_with_pending_evidence(board)
+        self.seed(board)
+        first, second = self.card_with_pending_evidence(board)
         selection = self.request(board)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-1"})
-        self.assertEqual(maintain["status"], "queued")
+        revision = board.call("console_snapshot", {})["tableRevision"]
+        grant = board.call(
+            "evaluation_write_begin",
+            {"requestId": "tidy-1", "expectedRevision": revision, "kind": "maintenance"},
+        )
+        self.assertEqual(grant["phase"], "writing")
         worker = self.run_worker(board, worker_id="w-slot")
-        maintenance = self.decision(board, maintain["decisionId"])
-        self.assertEqual(maintenance["status"], "completed")
-        self.assertEqual(maintenance["publishedRevision"], 3)
+        # The queued selector cannot claim while the maintenance writer holds the gate.
         self.assertEqual(self.decision(board, selection["decisionId"])["status"], "queued")
-        # The waiting selector is not lost: the next claim runs it on the new revision.
+        published = board.call(
+            "evaluation_write_publish",
+            {
+                "commandId": "tidy-1",
+                "writerId": grant["writerId"],
+                "generation": grant["generation"],
+                "writerToken": grant["writerToken"],
+                "expectedRevision": revision,
+                "cards": [
+                    {
+                        "profileId": PROFILE_ID,
+                        "summary": "card synthesized by the external Harness",
+                        "strengths": ["fast"],
+                        "limitations": ["small"],
+                        "risks": ["still open: fixture risk"],
+                        "evidenceIds": [first, second],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(published["revision"], revision + 1)
         worker.run_once()
         selected = self.decision(board, selection["decisionId"])
         self.assertEqual(selected["status"], "completed")
-        self.assertEqual(selected["expectedRevision"], 3)
+        self.assertEqual(selected["expectedRevision"], revision + 1)
         self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 0)
 
     def test_admitted_reader_drains_before_the_writer_and_the_released_reader_fails_honestly(self):
         board = self.board(max_concurrent=2)
-        # Two decision slots so this test exercises the reader/writer gate itself,
-        # not the independently reserved decision-lane limit: the admitted reader
-        # holds one slot and the queued maintenance writer must still reach the gate.
-        board.store.decision_concurrent = 2
-        self.seed(board, auto_maintain=True)
-        self.card_with_pending_evidence(board)
+        self.seed(board)
+        first, second = self.card_with_pending_evidence(board)
         selection = self.request(board)
         client = board.client()
         client.register_worker("w-reader", adapter="dsh", capabilities=["dsh", "decision"])
@@ -489,12 +506,16 @@ class DecisionGateTests(DecisionTestCase):
         self.assertEqual(self.decision(board, selection["decisionId"])["status"], "running")
         self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 1)
 
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-1"})
-        client.register_worker("w-maint", adapter="dsh", capabilities=["dsh", "decision"])
-        blocked = client.claim("w-maint", "claim-maint", "m" * 32, task_id=maintain["runId"])
-        self.assertIsNone(blocked["claim"])
-        self.assertEqual(blocked["reason"], "evaluation-writer-pending")
+        revision = board.call("console_snapshot", {})["tableRevision"]
+        grant = board.call(
+            "evaluation_write_begin",
+            {"requestId": "tidy-1", "expectedRevision": revision, "kind": "maintenance"},
+        )
+        self.assertEqual(grant["state"], "waiting")
         self.assertEqual(board.call("console_snapshot", {})["gate"]["waitingWriters"], 1)
+        # A queued selector is refused admission while the writer waits; it is not
+        # silently admitted against a revision the writer is about to move.
+        self.assert_code("TABLE_BUSY", board.call, "evaluation_reader_begin", {"kind": "selection"})
 
         # The admitted reader gives the attempt back without ever spawning a helper.
         client.release(
@@ -508,10 +529,28 @@ class DecisionGateTests(DecisionTestCase):
         self.assertEqual(self.decision(board, selection["decisionId"])["status"], "failed")
         self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
         self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "writing")
-        # The writer is granted once the reader settled, and the maintenance runs.
-        self.run_worker(board, worker_id="w-maint-run")
-        maintenance = self.decision(board, maintain["decisionId"])
-        self.assertEqual(maintenance["status"], "completed")
+        # The writer is granted once the reader settled, and its card-only patch commits.
+        published = board.call(
+            "evaluation_write_publish",
+            {
+                "commandId": "tidy-1",
+                "writerId": grant["writerId"],
+                "generation": grant["generation"],
+                "writerToken": grant["writerToken"],
+                "expectedRevision": revision,
+                "cards": [
+                    {
+                        "profileId": PROFILE_ID,
+                        "summary": "patched after the reader drained",
+                        "strengths": ["fast"],
+                        "limitations": ["small"],
+                        "risks": ["still open: fixture risk"],
+                        "evidenceIds": [first, second],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(published["revision"], revision + 1)
         self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "open")
 
     def test_queued_selection_cancel_is_durable_and_never_runs(self):
@@ -528,15 +567,12 @@ class DecisionGateTests(DecisionTestCase):
 
 
 class DecisionFailureTests(DecisionTestCase):
-    def outcome(self, board, mode: str, *, kind: str = "select", request_id: str = "pick-x") -> dict:
+    def outcome(self, board, mode: str, *, request_id: str = "pick-x") -> dict:
         if mode == "foreign_evidence":
             self.use_helper(mode="select_first", evidence="foreign")
         else:
             self.use_helper(mode=mode)
-        if kind == "select":
-            request = self.request(board, request_id=request_id)
-        else:
-            request = board.call("evaluation_maintain", {"requestId": request_id})
+        request = self.request(board, request_id=request_id)
         self.run_worker(board, worker_id=f"w-{request_id}")
         return self.decision(board, request["decisionId"])
 
@@ -724,389 +760,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(board.call("console_snapshot", {})["decisions"], revisions)
 
 
-class MaintenanceTests(DecisionTestCase):
-    def test_explicit_maintenance_without_preauthorization_retains_the_proposal(self):
-        board = self.board()
-        self.seed(board, auto_maintain=False)
-        self.card_with_pending_evidence(board)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-1"})
-        self.run_worker(board)
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "needs-host")
-        self.assertFalse(decision["autoPublish"])
-        self.assertIn("autoMaintain is false", decision["reason"])
-        self.assertIsNotNone(decision["proposal"])
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["waitingWriters"], 0)
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-
-    def test_auto_maintain_adopts_only_cards_and_preserves_risks_and_references(self):
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        evidence_id, second = self.card_with_pending_evidence(board)
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-1"})
-        self.run_worker(board)
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed")
-        self.assertEqual(decision["publishedRevision"], 3)
-        self.assertEqual(decision["consideredEvidence"], 1)
-        self.assertEqual(decision["pendingEvidenceRemaining"], 0)
-        card = board.call("console_snapshot", {})["cards"][0]
-        self.assertEqual(card["summary"], f"mock maintenance summary for {PROFILE_ID}")
-        self.assertEqual(card["risks"], ["still open: fixture risk"])
-        self.assertEqual(card["evidenceIds"], [evidence_id, second])
-        self.assertEqual(card["sampleCount"], 2)
-        # The processed evidence is incorporated, not left pending forever.
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 0)
-        self.assertEqual(decision["proposal"]["basisRevision"], decision["expectedRevision"])
-        self.assertEqual(decision["proposal"]["retiredEvidenceIds"], [])
-
-    def test_a_risk_removing_or_overreaching_proposal_is_never_adopted(self):
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        self.card_with_pending_evidence(board)
-        before = board.call("console_snapshot", {})["cards"][0]
-        for mode, request_id, expected in (
-            ("drop_risk", "tidy-risk", "unresolved risk"),
-            ("drop_limitation", "tidy-limitation", "known limitation"),
-            ("extra_field", "tidy-field", "cards only"),
-            ("config_change", "tidy-config", "unexpected field"),
-            ("foreign_evidence", "tidy-foreign", "not supplied"),
-        ):
-            self.use_helper(mode="maintain", card_mode=mode)
-            maintain = board.call("evaluation_maintain", {"requestId": request_id})
-            self.run_worker(board, worker_id=f"w-{request_id}")
-            decision = self.decision(board, maintain["decisionId"])
-            self.assertEqual(decision["status"], "needs-host", f"{mode}: {decision['reason']}")
-            self.assertIn(expected, decision["reason"], mode)
-            self.assertEqual(board.call("console_snapshot", {})["cards"][0]["summary"], before["summary"])
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
-
-    def test_maintenance_never_touches_profiles_preferences_or_configuration(self):
-        board = self.board()
-        self.seed(board, auto_maintain=True, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap"}])
-        self.card_with_pending_evidence(board)
-        before = board.call("console_snapshot", {})
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-new"})
-        self.run_worker(board)
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed")
-        after = board.call("console_snapshot", {})
-        self.assertEqual(after["profiles"], before["profiles"])
-        self.assertEqual(after["preferences"], before["preferences"])
-        self.assertEqual(after["configuration"], before["configuration"])
-        self.assertEqual(len(after["cards"]), 1)
-
-    def test_maintenance_batch_publishes_a_subset_and_leaves_unrelated_cards_untouched(self):
-        """A batch touching A must republish B byte-for-byte, not fail validation."""
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        first = self.evidence(board, "task-1", summary="profile A sample")
-        second = self.evidence(
-            board,
-            "task-2",
-            summary="profile B sample",
-            profile=SECOND_PROFILE_ID,
-            model=SECOND_PROFILE["model"],
-            effort=SECOND_PROFILE["effort"],
-        )
-        card_a = {
-            "profileId": PROFILE_ID,
-            "summary": "card A before",
-            "strengths": ["fast"],
-            "limitations": [],
-            "risks": ["open risk A"],
-            "evidenceIds": [first],
-        }
-        card_b = {
-            "profileId": SECOND_PROFILE_ID,
-            "summary": "card B untouched",
-            "strengths": ["stable"],
-            "limitations": ["narrow"],
-            "risks": ["open risk B"],
-            "evidenceIds": [second],
-        }
-        self.publish_more(board, request_id="cards-seed", command_id="cards-seed", cards=[card_a, card_b])
-        # Releasing A's evidence reference makes it pending again, so the batch carries
-        # only profile A; B keeps its published card byte-for-byte.
-        self.publish_more(
-            board,
-            request_id="card-a-release",
-            command_id="card-a-release",
-            cards=[{**card_a, "evidenceIds": []}, card_b],
-        )
-        before = {card["profileId"]: card for card in board.call("console_snapshot", {})["cards"]}
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-subset"})
-        self.run_worker(board)
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed", decision["reason"])
-        self.assertEqual(decision["publishedRevision"], 4)
-        after = {card["profileId"]: card for card in board.call("console_snapshot", {})["cards"]}
-        self.assertEqual(after[PROFILE_ID]["summary"], f"mock maintenance summary for {PROFILE_ID}")
-        self.assertEqual(after[PROFILE_ID]["risks"], ["open risk A"])
-        # The unrelated card keeps its exact content, revision and timestamp.
-        self.assertEqual(after[SECOND_PROFILE_ID], before[SECOND_PROFILE_ID])
-
-    def test_an_invalid_proposal_never_poisons_the_worker_receipt(self):
-        """A rejected proposal settles the decision and still commits the result once."""
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        self.card_with_pending_evidence(board)
-        self.use_helper(mode="maintain", card_mode="drop_risk")
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-poison"})
-        client = board.client()
-        worker = Worker("w-poison", self.directory, client=client)
-        worker.register()
-        self.assertEqual(worker.run_once(), "ran")
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "needs-host")
-        task = board.call("task_get", {"runId": maintain["runId"]})["task"]
-        self.assertEqual(task["status"], "completed")
-        self.assertTrue(task["shutdownConfirmed"])
-        self.assertTrue(worker.spool.pending() == [], "the receipt must be committed, not retried")
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
-        self.assertEqual(board.call("console_snapshot", {})["cards"][0]["summary"], "before maintenance")
-
-    def test_no_op_proposal_settles_completed_without_a_new_revision(self):
-        """A valid proposal that changes nothing is a no-op, never a task failure."""
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        self.card_with_pending_evidence(board)
-        self.use_helper(mode="maintain", card_mode="no_op")
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-noop"})
-        worker = self.run_worker(board, worker_id="w-noop")
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed", decision["reason"])
-        self.assertIsNone(decision["publishedRevision"])
-        self.assertIn("no card change was needed", decision["reason"])
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
-        # The evidence the model declined to incorporate stays pending and visible.
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-        self.assertEqual(decision["pendingEvidenceRemaining"], 1)
-        task = board.call("task_get", {"runId": maintain["runId"]})["task"]
-        self.assertEqual(task["status"], "completed")
-        self.assertEqual(worker.spool.pending(), [])
-        with board.store.db.read() as connection:
-            receipt = connection.execute(
-                "SELECT response_json FROM commands WHERE task_id=? AND kind='worker.result'",
-                (maintain["runId"],),
-            ).fetchone()
-        self.assertIsNotNone(receipt)
-        self.assertIsNone(json.loads(receipt["response_json"])["decision"]["publishedRevision"])
-
-    def test_safe_compaction_retires_a_reference_without_requeueing_it(self):
-        """Retiring a current reference keeps it incorporated and archived."""
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        first, second = self.card_with_pending_evidence(board)
-        self.use_helper(mode="maintain", card_mode="drop_evidence")
-        before = board.call("console_snapshot", {})["cards"][0]
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-compact"})
-        self.run_worker(board, worker_id="w-compact")
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed", decision["reason"])
-        self.assertEqual(decision["proposal"]["retiredEvidenceIds"], [first])
-        self.assertEqual(decision["proposal"]["basisRevision"], decision["expectedRevision"])
-        card = board.call("console_snapshot", {})["cards"][0]
-        self.assertEqual(card["evidenceIds"], [])
-        # The risk text survived compaction; the retired reference is not requeued.
-        self.assertEqual(card["risks"], ["still open: fixture risk"])
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-        self.assertNotEqual(second, first)
-        with board.store.db.read() as connection:
-            archived = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_evidence WHERE evidence_id=?", (first,)
-            ).fetchone()["count"]
-            self.assertEqual(int(archived), 1, "the retired source stays in the archive")
-            history = board.evaluation.card_history(connection, PROFILE_ID)
-        # The new revision archives the compacted card; the earlier publication
-        # snapshot still holds the reference that was retired.
-        self.assertEqual(history[0]["tableRevision"], decision["publishedRevision"])
-        self.assertEqual(history[0]["evidenceIds"], [])
-        previous = {row["tableRevision"]: row for row in history}[2]
-        self.assertEqual(previous["evidenceIds"], before["evidenceIds"])
-        self.assertEqual(previous["risks"], before["risks"])
-
-    def test_only_cited_pending_evidence_is_consumed(self):
-        """A batch row the model omitted stays pending and is reported as remaining."""
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        self.publish_more(
-            board,
-            request_id="card-seed",
-            command_id="card-seed",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "bounded card",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": ["open risk"],
-                    "evidenceIds": [],
-                }
-            ],
-        )
-        first = self.evidence(board, "task-1", summary="cited sample")
-        second = self.evidence(board, "task-2", summary="omitted sample")
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 2)
-        # The proposal cites the first pending sample only: no compaction window here.
-        self.use_helper(mode="maintain", card_mode="cite_first_pending")
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-cite"})
-        self.run_worker(board, worker_id="w-cite")
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed", decision["reason"])
-        card = board.call("console_snapshot", {})["cards"][0]
-        self.assertEqual(card["evidenceIds"], [first])
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-        self.assertEqual(decision["pendingEvidenceRemaining"], 1)
-        self.assertEqual(decision["proposal"]["incorporatedEvidenceIds"], [first])
-        with board.store.db.read() as connection:
-            pending_ids = {
-                row["evidence_id"]
-                for row in connection.execute("SELECT evidence_id FROM evaluation_evidence_pending")
-            }
-        self.assertEqual(pending_ids, {second}, "an omitted row must stay pending")
-
-    def test_evidence_arriving_during_the_call_stays_pending(self):
-        """The input snapshot is frozen; evidence recorded after it is never consumed."""
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        self.card_with_pending_evidence(board)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-during"})
-        client = board.client()
-        client.register_worker("w-during", adapter="dsh", capabilities=["dsh", "decision"])
-        claim = client.claim("w-during", "claim-during", "n" * 32, task_id=maintain["runId"])["claim"]
-        self.assertIsNotNone(claim)
-        self.assertEqual(self.decision(board, maintain["decisionId"])["status"], "running")
-        # New evidence lands after the frozen snapshot, inside the writer interval.
-        late = self.evidence(board, "task-late", summary="arrived during the call")
-        snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["pendingEvidence"], 2)
-        document = claim["decisionInput"]
-        self.assertNotIn(late, json.dumps(document["evidence"]))
-        envelope = {
-            "status": "ok",
-            "operation": "maintain",
-            "tableRevision": self.decision(board, maintain["decisionId"])["expectedRevision"],
-            "requested": {"provider": PROFILE["provider"], "model": PROFILE["model"], "reasoningEffort": PROFILE["effort"]},
-            "resolved": None,
-            "observed": None,
-            "usage": None,
-            "elapsedSeconds": 0.1,
-            "shutdownConfirmed": True,
-            "proposal": {
-                "cards": [
-                    {
-                        "profileId": PROFILE_ID,
-                        "summary": "mock maintenance summary for " + PROFILE_ID,
-                        "strengths": ["fast"],
-                        "limitations": ["small"],
-                        "risks": ["still open: fixture risk"],
-                        "evidenceIds": [document["evidence"][0]["evidenceId"]],
-                    }
-                ],
-                "reason": "cited only the frozen snapshot",
-            },
-        }
-        client.submit_result(
-            "w-during",
-            claim["attempt"]["attemptId"],
-            claim["attempt"]["generation"],
-            "n" * 32,
-            {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0},
-        )
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["status"], "completed", decision["reason"])
-        self.assertEqual(decision["proposal"]["incorporatedEvidenceIds"], [document["evidence"][0]["evidenceId"]])
-        # The late evidence is untouched and the remaining count includes it.
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 1)
-        self.assertEqual(decision["pendingEvidenceRemaining"], 1)
-        with board.store.db.read() as connection:
-            pending_ids = {
-                row["evidence_id"]
-                for row in connection.execute("SELECT evidence_id FROM evaluation_evidence_pending")
-            }
-        self.assertEqual(pending_ids, {late})
-
-    def test_more_than_sixty_four_sequential_samples_compact_and_stay_bounded(self):
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        self.publish_more(
-            board,
-            request_id="card-seed",
-            command_id="card-seed",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "bounded card",
-                    "strengths": [],
-                    "limitations": ["narrow but known"],
-                    "risks": ["open risk that never clears"],
-                    "evidenceIds": [],
-                }
-            ],
-        )
-        for index in range(70):
-            board.call(
-                "evaluation_evidence_record",
-                {
-                    "profileId": PROFILE_ID,
-                    "kind": "observation",
-                    "summary": f"sequential observation {index}",
-                    "source": "cli",
-                },
-            )
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 70)
-        first = board.call("evaluation_maintain", {"requestId": "tidy-1"})
-        self.run_worker(board, worker_id="w-compact-1")
-        one = self.decision(board, first["decisionId"])
-        self.assertEqual(one["status"], "completed", one["reason"])
-        self.assertEqual(one["consideredEvidence"], 64)
-        card = board.call("console_snapshot", {})["cards"][0]
-        self.assertEqual(len(card["evidenceIds"]), 64)
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 6)
-        second = board.call("evaluation_maintain", {"requestId": "tidy-2"})
-        self.run_worker(board, worker_id="w-compact-2")
-        two = self.decision(board, second["decisionId"])
-        self.assertEqual(two["status"], "completed", two["reason"])
-        self.assertEqual(two["consideredEvidence"], 6)
-        self.assertEqual(len(two["proposal"]["retiredEvidenceIds"]), 6)
-        card = board.call("console_snapshot", {})["cards"][0]
-        self.assertEqual(len(card["evidenceIds"]), 64, "the current card stays bounded")
-        self.assertEqual(card["risks"], ["open risk that never clears"])
-        self.assertEqual(card["limitations"], ["narrow but known"])
-        # Every processed observation stays consumed: pending is not a re-run queue.
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 0)
-        self.assertEqual(two["pendingEvidenceRemaining"], 0)
-        with board.store.db.read() as connection:
-            archived = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_evidence WHERE profile_id=?", (PROFILE_ID,)
-            ).fetchone()["count"]
-            pending_rows = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_evidence_pending WHERE profile_id=?", (PROFILE_ID,)
-            ).fetchone()["count"]
-            history = board.evaluation.card_history(connection, PROFILE_ID)
-        self.assertEqual(int(archived), 70, "storage limits never delete evidence")
-        self.assertEqual(int(pending_rows), 0)
-        # The pre-compaction snapshot keeps the reference list that was retired.
-        snapshots = {row["tableRevision"]: row for row in history}
-        self.assertEqual(snapshots[two["publishedRevision"]]["summary"], card["summary"])
-        retired = set(two["proposal"]["retiredEvidenceIds"])
-        older = snapshots[one["publishedRevision"]]
-        self.assertTrue(retired.issubset(set(older["evidenceIds"])), "the archive holds every retired ref")
-
-    def test_maintenance_with_nothing_pending_makes_no_model_call(self):
-        board = self.board()
-        self.seed(board, auto_maintain=True)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-none"})
-        self.assertEqual(maintain["status"], "needs-host")
-        self.assertIsNone(maintain["runId"])
-        self.assertIn("no pending evidence", self.decision(board, maintain["decisionId"])["reason"])
-        self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
-
-
 class DecisionSurfaceTests(DecisionTestCase):
     def test_http_cli_and_ctwo_expose_the_same_named_operations(self):
         from buddy.console import CONSOLE_OPERATIONS
@@ -1114,20 +767,31 @@ class DecisionSurfaceTests(DecisionTestCase):
         from buddy.transport import METHOD_MAP
         import buddy.cli as cli
 
-        for operation in ("selection_request", "selection_get", "evaluation_maintain"):
+        for operation in ("selection_request", "selection_get"):
             self.assertIn(operation, CONTROL_OPERATIONS)
-            self.assertIn(operation, CONSOLE_OPERATIONS)
+        # The console keeps the read-only decision history but never starts a
+        # selection or maintenance model call; maintenance is Harness-owned and its
+        # preparation read is never a browser command.
+        self.assertNotIn("selection_request", CONSOLE_OPERATIONS)
+        self.assertIn("selection_get", CONSOLE_OPERATIONS)
+        self.assertNotIn("evaluation_prepare", CONSOLE_OPERATIONS)
         self.assertEqual(METHOD_MAP["selection-request"], ("control", "selection_request"))
         self.assertEqual(METHOD_MAP["selection-get"], ("control", "selection_get"))
-        self.assertEqual(METHOD_MAP["evaluation-maintain"], ("control", "evaluation_maintain"))
-        for method in ("selection-request", "selection-get", "evaluation-maintain"):
+        for method in ("selection-request", "selection-get"):
             self.assertIn(method, cli.METHODS)
         board = self.board()
         self.seed(board)
-        # The console command route calls exactly the same validated operation.
-        created = board.console.command("selection_request", {"requestId": "http-1", "task": "over http"})
+        # A model-calling request is not reachable through the browser surface...
+        self.assert_code(
+            "METHOD_NOT_FOUND",
+            board.console.command,
+            "selection_request",
+            {"requestId": "http-1", "task": "over http"},
+        )
+        # ...while the same named read still reaches exactly the validated operation.
+        created = self.request(board, request_id="surface-1")
         fetched = board.console.command("selection_get", {"decisionId": created["decisionId"]})
-        self.assertEqual(fetched["decision"]["requestId"], "http-1")
+        self.assertEqual(fetched["decision"]["requestId"], "surface-1")
         self.assert_code("METHOD_NOT_FOUND", board.console.command, "task_submit", {})
 
     def test_selection_get_defaults_to_a_compact_host_summary(self):
@@ -1193,7 +857,7 @@ class DecisionSurfaceTests(DecisionTestCase):
             {"requestId": "r", "task": "x", "timeoutSeconds": 4000},
         )
         self.assert_code(
-            "INVALID_ARGUMENT", board.call, "evaluation_maintain", {"requestId": "r", "timeoutSeconds": 4}
+            "INVALID_ARGUMENT", board.call, "selection_request", {"requestId": "r", "task": "x", "timeoutSeconds": 4}
         )
         self.assert_code("INVALID_ARGUMENT", board.call, "selection_request", {"requestId": "r", "task": "x", "extra": 1})
 
@@ -1201,7 +865,7 @@ class DecisionSurfaceTests(DecisionTestCase):
 class DecisionGrowthTests(DecisionTestCase):
     def seed_history(self, board, count: int) -> None:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        self.seed(board, auto_maintain=True)
+        self.seed(board)
         for index in range(count):
             board.call(
                 "evaluation_evidence_record",
@@ -1311,25 +975,8 @@ class DecisionGrowthTests(DecisionTestCase):
             samples = connection.execute("SELECT COUNT(*) AS count FROM evaluation_samples").fetchone()["count"]
             self.assertEqual(board.evaluation._sample_count(connection, PROFILE_ID), int(samples))
 
-    def test_maintenance_batch_stays_bounded_and_reports_the_rest(self):
-        board = self.board()
-        self.seed_history(board, 90)
-        maintain = board.call("evaluation_maintain", {"requestId": "tidy-batch"})
-        self.run_worker(board)
-        decision = self.decision(board, maintain["decisionId"])
-        self.assertEqual(decision["consideredEvidence"], 64)
-        # No card existed for the batch, so the valid empty proposal is a completed
-        # no-op: nothing is adopted and nothing is falsely consumed.
-        self.assertEqual(decision["status"], "completed")
-        self.assertIsNone(decision["publishedRevision"])
-        self.assertEqual(decision["consideredEvidence"], 64)
-        self.assertEqual(decision["pendingEvidenceRemaining"], 90)
-        self.assertLessEqual(len(decision["input"]["evidence"]), 64)
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 90)
-
-
 class DecisionDaemonTests(DecisionTestCase):
-    def test_real_daemon_runs_selection_and_maintenance_through_the_independent_worker(self):
+    def test_real_daemon_runs_selection_through_the_independent_worker(self):
         """The whole path: daemon + detached supervisor + real helper process."""
         helper_env = {"BUDDY_DECISION_HELPER": str(MOCK_HELPER)}
         with self.daemon(env=helper_env):
@@ -1350,7 +997,7 @@ class DecisionDaemonTests(DecisionTestCase):
                         "writerToken": begin["writerToken"],
                         "expectedRevision": 0,
                         "profiles": [PROFILE, SECOND_PROFILE],
-                        "configuration": {"decisionProfileId": PROFILE_ID, "autoMaintain": True},
+                        "configuration": {"decisionProfileId": PROFILE_ID},
                     }
                 ),
             )
@@ -1388,16 +1035,11 @@ class DecisionDaemonTests(DecisionTestCase):
                 decision["expectedRevision"],
             )
 
-            # Maintenance over the same real worker: one pending observation plus a
-            # card to preserve, adopted because autoMaintain is preauthorized.
-            code, evidence = self.cli(
-                "evaluation-evidence-record",
-                json.dumps({"profileId": PROFILE_ID, "kind": "observation", "summary": "cli note", "source": "cli"}),
-            )
-            self.assertEqual(code, 0, evidence)
+            # A card-only patch over the same daemon is an ordinary writer intent:
+            # no second model call and no internal maintenance task.
             code, second_begin = self.cli(
                 "evaluation-write-begin",
-                json.dumps({"requestId": "daemon-card", "expectedRevision": 1, "kind": "human"}),
+                json.dumps({"requestId": "daemon-card", "expectedRevision": 1, "kind": "maintenance"}),
             )
             self.assertEqual(code, 0, second_begin)
             code, card = self.cli(
@@ -1412,7 +1054,7 @@ class DecisionDaemonTests(DecisionTestCase):
                         "cards": [
                             {
                                 "profileId": PROFILE_ID,
-                                "summary": "before daemon maintenance",
+                                "summary": "patched by the external Harness",
                                 "strengths": [],
                                 "limitations": [],
                                 "risks": ["daemon open risk"],
@@ -1423,28 +1065,14 @@ class DecisionDaemonTests(DecisionTestCase):
                 ),
             )
             self.assertEqual(code, 0, card)
-            code, maintain = self.cli("evaluation-maintain", json.dumps({"requestId": "daemon-tidy"}))
-            self.assertEqual(code, 0, maintain)
-
-            def maintained() -> dict | None:
-                code, view = self.cli(
-                    "selection-get", json.dumps({"decisionId": maintain["decisionId"], "includeAudit": True})
-                )
-                if code != 0:
-                    return None
-                return view["decision"] if view["decision"]["status"] not in ("queued", "running") else None
-
-            outcome = wait_for(maintained, timeout=60)
-            self.assertIsNotNone(outcome, "maintenance never reached a terminal state")
-            self.assertEqual(outcome["status"], "completed", outcome.get("reason"))
-            self.assertEqual(outcome["publishedRevision"], 3)
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)
-            self.assertEqual(snapshot["tableRevision"], 3)
-            self.assertEqual(snapshot["cards"][0]["summary"], f"mock maintenance summary for {PROFILE_ID}")
+            self.assertEqual(snapshot["tableRevision"], 2)
+            self.assertEqual(snapshot["cards"][0]["summary"], "patched by the external Harness")
             self.assertEqual(snapshot["cards"][0]["risks"], ["daemon open risk"])
+            self.assertFalse(snapshot["capabilities"]["maintenance"])
             # Nothing on an ordinary refresh calls a model: the decision history is read.
-            self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["maintain", "select"])
+            self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["select"])
 
 
 if __name__ == "__main__":

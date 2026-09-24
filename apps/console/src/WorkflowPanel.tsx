@@ -102,11 +102,13 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           <dt>当前 Host</dt><dd>{value.task.delegation?.currentHostId || value.hostId}</dd>
           <dt>协作版本</dt><dd>V{value.revision}</dd>
           <dt>接续次数</dt><dd>{value.continuationCount}</dd>
+          <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
           <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
           <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
           <dt>等待原因</dt><dd className="wrap">{value.waitReason}</dd>
           <dt>执行停止</dt><dd>{value.shutdown?.selfConfirmed ? "本任务已确认停止" : "本任务尚未确认停止"}{value.shutdown && !value.shutdown.descendantsConfirmed ? `；目标范围内共 ${value.shutdown.unconfirmedCount} 项执行尚未核实` : ""}</dd>
         </dl>
+        <p className="small muted">接续次数来自持久轮次记录，不是模型调用次数；控制台不根据轮询或接续次数推算模型调用。</p>
         <p className="task-description">{excerpt(value.currentTurn?.summary || "本轮尚未提交结构化结果。", 360)}</p>
         {(value.currentTurn?.summary?.length || 0) > 360 && <details><summary>展开回合摘要</summary><p className="task-description">{value.currentTurn?.summary}</p></details>}
         {value.currentTurn?.summaryTruncated && <p className="small muted">当前摘要已截断。完整记录可通过 get 的 includeAudit 选项读取。</p>}

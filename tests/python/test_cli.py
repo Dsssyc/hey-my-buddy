@@ -23,7 +23,8 @@ import buddy.cli as cli
 import buddy.transport as transport
 from buddy.errors import BoardError
 
-#: Every CLI method that was removed by ADR-007; none may remain as an alias.
+#: Every CLI method that was removed by ADR-007, plus the ADR-008 removal of the
+#: internal maintenance call. None may remain as an alias.
 RETIRED_METHODS = (
     "run",
     "start",
@@ -36,6 +37,7 @@ RETIRED_METHODS = (
     "workflow-cancel",
     "workflow-acknowledge",
     "workflow-suggest",
+    "evaluation-maintain",
 )
 
 
@@ -110,7 +112,8 @@ class MethodSurfaceTests(unittest.TestCase):
             ("evaluation-write-publish", "evaluation_write_publish"),
             ("evaluation-reader-begin", "evaluation_reader_begin"),
             ("evaluation-evidence-record", "evaluation_evidence_record"),
-            ("evaluation-maintain", "evaluation_maintain"),
+            ("evaluation-prepare", "evaluation_prepare"),
+            ("evaluation-history", "evaluation_history"),
             ("selection-request", "selection_request"),
             ("selection-get", "selection_get"),
         ):

@@ -77,7 +77,7 @@ export type Workflow = {
     remaining?: string[];
   };
   activeRequest: WorkflowRequest | null;
-  counts?: { openRequests?: number };
+  counts?: { openRequests?: number; turns?: number };
   children: {
     taskId: string;
     state: string;

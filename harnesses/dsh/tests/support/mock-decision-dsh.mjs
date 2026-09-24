@@ -102,22 +102,6 @@ function successPayload() {
     elapsedSeconds: 0.4,
   };
   if (answer !== undefined) return { ...envelope, ...JSON.parse(answer) };
-  if (operation === 'maintain') {
-    return {
-      ...envelope,
-      proposal: {
-        cards: [{
-          profileId: request?.profiles?.[0]?.profileId ?? 'p1',
-          summary: 'shadowed summary',
-          strengths: [],
-          limitations: [],
-          risks: [],
-          evidenceIds: [],
-        }],
-        reason: 'shadowed reason',
-      },
-    };
-  }
   return {
     ...envelope,
     decision: {

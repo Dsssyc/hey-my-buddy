@@ -38,6 +38,15 @@ function fixture() {
 }
 
 describe("governed workflow console", () => {
+  it("shows the recorded turn count without deriving a model-call count", async () => {
+    const f = fixture();
+    Object.assign(f.workflow, { counts: { turns: 3, openRequests: 1 }, continuationCount: 3 });
+    render(<WorkflowPanel {...f.props} />);
+    expect(await screen.findByText("共 3 个回合")).toBeTruthy();
+    expect(screen.getByText(/接续次数来自持久轮次记录，不是模型调用次数/)).toBeTruthy();
+    expect(screen.queryByText(/模型调用次数：/)).toBeNull();
+  });
+
   it("leaves helper model fields absent for automatic routing", async () => {
     const f = fixture();
     f.props.snapshot.profiles = [];

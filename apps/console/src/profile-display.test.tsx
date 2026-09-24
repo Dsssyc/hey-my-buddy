@@ -49,16 +49,15 @@ function catalogSnapshot(): Snapshot {
     configuration: {
       revision: 1,
       decisionProfileId: proMaxId,
-      autoMaintain: false,
     },
     profiles: [flashOff, proMax],
     preferences: [],
     cards: [],
     evidence: [],
     decisions: [],
-    pendingEvidence: 0,
+    sampleCounts: { [flashOffId]: 6 },
     tasks: { runs: [], total: 0 },
-    capabilities: { selection: false, maintenance: false },
+    capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
   };
 }
 
@@ -196,7 +195,7 @@ describe("decision profile selector", () => {
     ]);
     expect(screen.getByText("deepseek-official / max")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "编辑评价表" }));
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await waitFor(() =>
       expect(screen.getByLabelText("决策模型配置")).toHaveProperty(
         "disabled",
@@ -205,10 +204,12 @@ describe("decision profile selector", () => {
     );
     await user.selectOptions(screen.getByLabelText("决策模型配置"), flashOffId);
     expect(await screen.findByText("deepseek-official / 非思考")).toBeTruthy();
+    expect(screen.getByText(/草稿中的决策模型/)).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(published!.configuration.decisionProfileId).toBe(flashOffId);
+    expect(published!.configuration).not.toHaveProperty("autoMaintain");
     expect(published!.profiles).toContainEqual(
       expect.objectContaining({
         profileId: flashOffId,

@@ -10,7 +10,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 | --- | --- | --- | --- |
 | `dsh` | `built-in-worker` | `dsh`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery | Node.js and the `dsh.runner` resource; otherwise `ADAPTER_UNAVAILABLE` |
 | `zcode` | `built-in-worker` | `zcode`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed ZCode CLI and an API-key provider; OAuth account providers are unavailable |
-| `decision` | `built-in-worker` | `decision` (tool-free, DSH-only) | Node.js and the `dsh.decision` resource; used only by `selection-request` and `evaluation-maintain` |
+| `decision` | `built-in-worker` | `decision` (tool-free, DSH-only) | Node.js and `dsh.decision`; used only by `selection-request`, with independently reserved capacity |
 | `command` | `built-in-worker` | `command`, `cancel`, `artifacts`, `deadline`, `argv` | `argv` with 1–256 entries; `argv[0]` must resolve |
 | `external` | `caller-owned-agent` | `external`, `artifacts`, `task-text` | no local process; the caller's agent claims and reports the task itself |
 

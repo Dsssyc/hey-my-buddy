@@ -1,4 +1,4 @@
-import type { Profile, Preference, Task } from "./types";
+import type { Preference, Profile, Snapshot, Task } from "./types";
 import { effortText, profileName } from "./profile-display";
 
 export const familyKey = (p: Profile) => JSON.stringify([p.adapter, p.provider, p.model]);
@@ -32,4 +32,15 @@ export function taskHost(task: Task) {
 export function taskExecutor(task: Task) {
   const config = task.delegation?.configuration;
   return config ? `${config.adapter} · ${config.model} / ${effortText(config.effort)}` : "执行配置待确定";
+}
+
+/**
+ * Recorded verification samples for one profile, read straight from the current
+ * snapshot contract so a count still shows before any card prose is published.
+ * The optional access only keeps a board that has not shipped `sampleCounts` yet
+ * from blanking the page; the legacy per-card field is never read.
+ */
+export function recordedSampleCount(snapshot: Snapshot, profileId: string): number {
+  const recorded = snapshot.sampleCounts?.[profileId];
+  return typeof recorded === "number" && Number.isFinite(recorded) ? recorded : 0;
 }

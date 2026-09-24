@@ -14,9 +14,9 @@ import { describe, test } from 'node:test';
 import {
   BOUNDS, MAX_ANSWER_BYTES, MAX_OUTPUT_TOKENS,
   callDecisionModel, checkAgentRunnerDisabled, extractJsonValue, finishProblem,
-  legalCandidateIds, legalMaintenanceIds,
+  legalCandidateIds,
   normalizeCandidates, normalizeEvidence, readRequest, resolveAnswer,
-  validateMaintainAnswer, validateSelectAnswer, waitForRoute, writeJsonFile,
+  validateSelectAnswer, waitForRoute, writeJsonFile,
 } from '../plugins/decision.mjs';
 import { MAX_PAYLOAD_BYTES, PROMPT_VERSION, buildPayload, instructionsFor, renderUserTurn } from '../scripts/decision-prompt.mjs';
 
@@ -76,25 +76,20 @@ function pluginRequest(overrides = {}) {
 const TEXT_ANSWER = '{"profileId":"p1","reason":"grounded","evidenceIds":["e1"]}';
 
 describe('prompt assembly', () => {
-  test('the instruction prefix is versioned, operation-specific and request-free', () => {
+  test('the instruction prefix is versioned, selection-only and request-free', () => {
     assert.equal(PROMPT_VERSION, 4);
     const select = instructionsFor('select');
-    const maintain = instructionsFor('maintain');
-    assert.notEqual(select, maintain);
     assert.equal(instructionsFor('select'), select, 'the prefix must be stable');
-    for (const text of [select, maintain]) {
-      assert.doesNotMatch(text, /req-1/);
-      assert.doesNotMatch(text, /tableRevision/);
-      assert.match(text, /Return exactly one JSON object/);
-    }
+    assert.doesNotMatch(select, /req-1/);
+    assert.doesNotMatch(select, /tableRevision/);
+    assert.match(select, /Return exactly one JSON object/);
+    assert.throws(() => instructionsFor('maintain'), /unknown decision operation/);
     assert.throws(() => instructionsFor('delete'), /unknown decision operation/);
   });
 
   test('the shared table precedes per-request data and requestId comes last', () => {
     const request = { tableRevision: 1, task: 't', operation: 'select', requestId: 'r', profile: {}, profiles: [], cards: [], preferences: [], evidence: [] };
     assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'task', 'requestId']);
-    // Maintain carries the same table too: its instructions refer to profiles.
-    assert.deepEqual(Object.keys(buildPayload('maintain', { ...request, operation: 'maintain' })), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'requestId']);
   });
 
   test('two requests against one table revision share the whole table prefix', () => {
@@ -307,12 +302,10 @@ describe('answer and candidate validation', () => {
   });
 
   test('model output can never add authorization, preference or extra fields', () => {
-    for (const extra of ['temperature', 'authorization', 'preference', 'accepted', 'verdict', 'tools']) {
+    for (const extra of ['temperature', 'authorization', 'preference', 'accepted', 'verdict', 'tools', 'cards']) {
       const answer = { profileId: 'p1', reason: 'r', evidenceIds: [], [extra]: true };
       assert.equal(validateSelectAnswer(answer, legal()).problem, 'answer-unexpected-field', extra);
     }
-    const maintain = { cards: [], reason: 'r', preferences: [{ profileId: 'p1', mode: 'pin' }] };
-    assert.equal(validateMaintainAnswer(maintain, legal()).problem, 'answer-unexpected-field');
   });
 
   test('evidence ids are bounded, deduplicated and supplied', () => {
@@ -321,35 +314,6 @@ describe('answer and candidate validation', () => {
     assert.equal(validateSelectAnswer({ profileId: 'p1', reason: 'r', evidenceIds: ['e1', 'e1'] }, legal()).problem, 'answer-shape');
     assert.equal(validateSelectAnswer({ profileId: 'p1', reason: 'r', evidenceIds: [''] }, legal()).problem, 'answer-shape');
     assert.equal(validateSelectAnswer({ profileId: 'p1', reason: 'r', evidenceIds: ['invented'] }, legal()).problem, 'answer-evidence-not-supplied');
-  });
-
-  test('maintenance accepts a disabled or unavailable profile so it can record why', () => {
-    const candidates = normalizeCandidates(pluginRequest().profiles).candidates;
-    const index = normalizeEvidence(pluginRequest().evidence).evidence;
-    const maintenance = legalMaintenanceIds(candidates, index);
-    assert.deepEqual([...maintenance.keys()].sort(), ['p1', 'p2', 'p3']);
-    assert.equal(legalCandidateIds(candidates, index).has('p2'), false, 'selection still refuses unavailable profiles');
-    const disabled = { profileId: 'p3', summary: 'disabled after the incident', strengths: [], limitations: ['unavailable'], risks: [], evidenceIds: [] };
-    assert.deepEqual(validateMaintainAnswer({ cards: [disabled], reason: 'r' }, maintenance).proposal.cards[0], disabled);
-    // A profile id that was never supplied is still refused.
-    assert.equal(validateMaintainAnswer({ cards: [{ ...disabled, profileId: 'ghost' }], reason: 'r' }, maintenance).problem, 'answer-profile-not-candidate');
-  });
-
-  test('maintain cards are validated field by field', () => {
-    const card = { profileId: 'p1', summary: 's', strengths: ['a'], limitations: [], risks: [], evidenceIds: ['e1'] };
-    const accepted = validateMaintainAnswer({ cards: [card], reason: 'r' }, legal());
-    assert.equal(accepted.proposal.cards.length, 1);
-    assert.deepEqual(accepted.proposal.cards[0], card);
-    assert.equal(validateMaintainAnswer({ cards: [card, card], reason: 'r' }, legal()).problem, 'answer-duplicate-card');
-    assert.equal(validateMaintainAnswer({ cards: [{ ...card, summary: '' }], reason: 'r' }, legal()).problem, 'answer-shape');
-    assert.equal(validateMaintainAnswer({ cards: [{ ...card, strengths: ['a', 'b', 'c'] }], reason: 'r' }, legal()).proposal.cards[0].strengths.length, 3);
-    assert.equal(validateMaintainAnswer({ cards: [{ ...card, risks: 'no' }], reason: 'r' }, legal()).problem, 'answer-shape');
-    assert.equal(validateMaintainAnswer({ cards: [{ ...card, profileId: 'p2' }], reason: 'r' }, legal()).problem, 'answer-profile-not-candidate');
-  });
-
-  test('an empty maintenance proposal is a valid, explicit answer', () => {
-    const accepted = validateMaintainAnswer({ cards: [], reason: 'nothing to change' }, legal());
-    assert.deepEqual(accepted.proposal, { cards: [], reason: 'nothing to change' });
   });
 
   test('extractJsonValue accepts one bare object or one fenced block only', () => {
@@ -377,7 +341,6 @@ describe('answer and candidate validation', () => {
   test('resolveAnswer refuses a chatty or truncated answer instead of scanning for JSON', () => {
     assert.equal(resolveAnswer('select', 'I chose p1.', legal()).problem, 'answer-not-json');
     assert.equal(resolveAnswer('select', '{"profileId":"p1"', legal()).problem, 'answer-invalid-json');
-    assert.equal(resolveAnswer('maintain', '{"cards":[]', legal()).problem, 'answer-invalid-json');
     assert.deepEqual(resolveAnswer('select', TEXT_ANSWER, legal()).decision.profileId, 'p1');
   });
 });

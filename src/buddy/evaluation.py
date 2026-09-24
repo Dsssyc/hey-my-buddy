@@ -47,6 +47,20 @@ MAX_SUMMARY = 4000
 MAX_POINT = 500
 MAX_REASON = 500
 MAX_DESCRIPTION = 4000
+#: One bounded Harness-owned maintenance packet. ``limit`` bounds how many actual
+#: Host-reviewed facts are prepared per call and ``MAX_PACKET_EVIDENCE`` bounds the
+#: evidence summaries returned with them. A required card reference is never dropped
+#: to fit: exceeding the bound is an explicit, actionable refusal.
+MAX_PREPARE_FACTS = 64
+DEFAULT_PREPARE_FACTS = 32
+MAX_PACKET_EVIDENCE = 256
+#: Bounded artifact provenance frozen onto one prepared fact.
+MAX_FACT_ARTIFACTS = 8
+#: Bounded original task scope frozen onto one prepared fact; truncation is reported.
+MAX_FACT_TASK = 1000
+#: One bounded page of publication history.
+DEFAULT_HISTORY_PAGE = 20
+MAX_HISTORY_PAGE = 100
 
 WRITER_KINDS = ("human", "maintenance")
 READER_KINDS = ("selection",)
@@ -75,6 +89,19 @@ INFRASTRUCTURE_FAILURE_MARKERS = (
     "did not start",
 )
 
+#: The immutable review ledger. Each Host acknowledgement appends exactly one of
+#: these events inside the same transaction that records the verdict, so the event
+#: sequence is a strictly increasing, clock-independent ordering of real reviews.
+REVIEW_EVENT_KINDS = ("task.accepted", "task.rejected", "workflow.acknowledged")
+
+#: The same review kinds as one code-owned literal SQL list. ``events_review_seq_idx``
+#: is a partial index on exactly this predicate; bind parameters would leave SQLite
+#: unable to prove the query implies the partial predicate, so a bounded prepare would
+#: fall back to scanning every unrelated event. The kinds are module constants, never
+#: caller input, and the assert below keeps that guarantee at import time.
+_REVIEW_KIND_LITERALS = "(" + ",".join(f"'{kind}'" for kind in REVIEW_EVENT_KINDS) + ")"
+assert all(kind.replace(".", "").isalpha() for kind in REVIEW_EVENT_KINDS), REVIEW_EVENT_KINDS
+
 PROFILE_FIELDS = frozenset(
     {
         "profileId",
@@ -96,7 +123,15 @@ PROFILE_FIELDS = frozenset(
 #: timestamp are derived by the backend and a supplied one is an unknown field.
 CARD_FIELDS = frozenset({"profileId", "summary", "strengths", "limitations", "risks", "evidenceIds"})
 PREFERENCE_FIELDS = frozenset({"profileId", "mode", "reason"})
-CONFIGURATION_FIELDS = frozenset({"decisionProfileId", "autoMaintain"})
+#: The published configuration carries only the fixed decision profile. There is no
+#: automatic-maintenance or scheduler setting: maintenance synthesis is performed by
+#: an external Harness through ``evaluation_prepare`` and the ordinary writer gate.
+CONFIGURATION_FIELDS = frozenset({"decisionProfileId"})
+#: The Harness-owned maintenance reads. ``evaluation.prepare`` is a bounded,
+#: deterministic fact collection with no model call and no writer lease;
+#: ``evaluation.history`` is a bounded read of the existing publication log.
+PREPARE_FIELDS = frozenset({"requestId", "limit", "profileId", "adapter"})
+HISTORY_FIELDS = frozenset({"limit", "before"})
 PUBLISH_FIELDS = frozenset(
     {
         "commandId",
@@ -476,6 +511,23 @@ class EvaluationStore:
             }
         return resolved
 
+    @staticmethod
+    def _card_entry(row: sqlite3.Row) -> dict:
+        """One stored card as the publishable, counter-free entry a writer submits.
+
+        The derived revision, sample count and timestamp belong to the read view; a
+        maintenance PATCH that re-submits an untouched card must not carry them back
+        into the writer gate as fabricated fields.
+        """
+        return {
+            "profileId": row["profile_id"],
+            "summary": row["summary"],
+            "strengths": json.loads(row["strengths_json"]),
+            "limitations": json.loads(row["limitations_json"]),
+            "risks": json.loads(row["risks_json"]),
+            "evidenceIds": json.loads(row["evidence_ids_json"]),
+        }
+
     def _validate_preferences(self, connection: sqlite3.Connection, entries: list) -> dict:
         resolved: dict[str, dict] = {}
         for index, entry in enumerate(entries):
@@ -508,13 +560,10 @@ class EvaluationStore:
             decision_profile = decision_profile.strip()
             if len(decision_profile) > 128 or not schemas.IDENTIFIER_PATTERN.match(decision_profile):
                 raise BoardError("INVALID_ARGUMENT", "configuration.decisionProfileId has an invalid format")
-        # ``autoMaintain`` is preauthorization for the bounded maintenance policy:
-        # it lets a maintenance run adopt a validated card-only proposal. It never
-        # authorizes profiles, preferences, configuration or execution authority,
-        # and it is not required to *ask* for maintenance — an explicit request
-        # still runs the model and retains its proposal for the Host.
-        auto_maintain = schemas.optional_bool(entry, "autoMaintain", False)
-        return {"decisionProfileId": decision_profile, "autoMaintain": auto_maintain}
+        # The published configuration is the fixed decision profile only. Maintenance
+        # is not a blackboard setting any more: an external Harness prepares bounded
+        # facts and publishes cards through the ordinary writer gate.
+        return {"decisionProfileId": decision_profile}
 
     def _check_resulting_state(
         self,
@@ -533,10 +582,7 @@ class EvaluationStore:
         }
         state = self._state(connection)
         if configuration is None:
-            current_configuration = {
-                "decisionProfileId": state["decision_profile_id"],
-                "autoMaintain": bool(state["auto_maintain"]),
-            }
+            current_configuration = {"decisionProfileId": state["decision_profile_id"]}
         else:
             current_configuration = configuration
 
@@ -612,22 +658,63 @@ class EvaluationStore:
         keep_consumed: frozenset[str] = frozenset(),
     ) -> dict:
         catalog = self._catalog(connection)
+        # A ``maintenance`` writer is the external Harness that prepared a bounded
+        # packet and synthesized card text from real facts. Its publication is a
+        # card-only PATCH: it merges the cards it provides into the current set and
+        # preserves every unrelated card. Profiles, preferences, the configuration
+        # and every code-owned counter stay outside that authority. A ``human``
+        # publication keeps the full replacement semantics the console editor uses.
+        maintenance = writer["kind"] == "maintenance"
         provided = {key for key in ("profiles", "cards", "preferences", "configuration") if key in params}
+        if maintenance:
+            forbidden = sorted(provided - {"cards"})
+            if forbidden or "cards" not in provided:
+                raise BoardError(
+                    "INVALID_ARGUMENT",
+                    (
+                        f"a maintenance publication is card-only and must provide cards; {forbidden[0]} is not part "
+                        "of it"
+                        if forbidden
+                        else "a maintenance publication must provide the cards it is patching"
+                    ),
+                    field=forbidden[0] if forbidden else "cards",
+                )
         for key in provided:
             value = params[key]
             limit = {"profiles": MAX_PROFILES, "cards": MAX_CARDS, "preferences": MAX_PREFERENCES}.get(key)
             if limit is not None and (not isinstance(value, list) or len(value) > limit):
                 raise BoardError("INVALID_ARGUMENT", f"{key} must be a list of at most {limit} entries")
         profiles = self._validate_profiles(connection, params["profiles"], catalog) if "profiles" in provided else None
-        cards = self._validate_cards(connection, params["cards"]) if "cards" in provided else None
+        provided_cards = self._validate_cards(connection, params["cards"]) if "cards" in provided else None
         preferences = (
             self._validate_preferences(connection, params["preferences"]) if "preferences" in provided else None
         )
         configuration = self._validate_configuration(params["configuration"]) if "configuration" in provided else None
-        profiles, cards, preferences, configuration = self._check_resulting_state(
-            connection, profiles=profiles, cards=cards, preferences=preferences, configuration=configuration
+        if maintenance and provided_cards is not None:
+            # The complete post-publish card set: every card this request did not
+            # mention stays byte-identical, and one card cannot be dropped by omission.
+            resulting_cards: dict[str, dict] | None = {
+                row["profile_id"]: self._card_entry(row)
+                for row in connection.execute("SELECT * FROM evaluation_cards")
+            }
+            resulting_cards.update(provided_cards)
+        else:
+            resulting_cards = provided_cards
+        profiles, _, preferences, configuration = self._check_resulting_state(
+            connection, profiles=profiles, cards=resulting_cards, preferences=preferences, configuration=configuration
         )
-        previous_references = self._card_references(connection) if "cards" in provided else {}
+        previous_references = self._card_references(connection) if provided_cards is not None else {}
+        # Retired references are compacted, never requeued: the card that cited them
+        # moved on with their text intact and the archived publication keeps the full
+        # list. Explicit human removal keeps the ordinary reconsider/requeue meaning.
+        retired = frozenset(
+            evidence_id
+            for profile_id, entry in (provided_cards or {}).items()
+            for evidence_id in previous_references.get(profile_id, [])
+            if evidence_id not in set(entry["evidenceIds"])
+        )
+        if maintenance:
+            keep_consumed = keep_consumed | retired
 
         connection.execute(
             "INSERT INTO evaluation_revisions(revision, kind, writer_id, actor, counts_json, created_at)"
@@ -638,7 +725,14 @@ class EvaluationStore:
                 writer["writer_id"],
                 params.get("writerId"),
                 canonical_json(
-                    {"profiles": len(profiles), "cards": len(cards), "preferences": len(preferences), "provided": sorted(provided)}
+                    {
+                        # The size of each collection this revision actually provided;
+                        # a merged maintenance PATCH never claims the preserved cards.
+                        "profiles": len(profiles),
+                        "cards": len(provided_cards or {}),
+                        "preferences": len(preferences),
+                        "provided": sorted(provided),
+                    }
                 ),
                 now,
             ),
@@ -679,9 +773,8 @@ class EvaluationStore:
                 connection.execute("DELETE FROM evaluation_cards WHERE profile_id=?", (profile_id,))
                 connection.execute("DELETE FROM evaluation_preferences WHERE profile_id=?", (profile_id,))
                 connection.execute("DELETE FROM evaluation_profiles WHERE profile_id=?", (profile_id,))
-        if "cards" in provided:
-            keep = set(cards)
-            for profile_id, entry in cards.items():
+        if provided_cards is not None:
+            for profile_id, entry in provided_cards.items():
                 prior = connection.execute(
                     "SELECT * FROM evaluation_cards WHERE profile_id=?", (profile_id,)
                 ).fetchone()
@@ -750,13 +843,18 @@ class EvaluationStore:
                         updated_at,
                     ),
                 )
-            for row in connection.execute("SELECT profile_id FROM evaluation_cards").fetchall():
-                if row["profile_id"] not in keep:
-                    connection.execute("DELETE FROM evaluation_cards WHERE profile_id=?", (row["profile_id"],))
+            if not maintenance:
+                # A full human publication replaces the card collection; a maintenance
+                # PATCH never removes a card it did not mention.
+                for row in connection.execute("SELECT profile_id FROM evaluation_cards").fetchall():
+                    if row["profile_id"] not in provided_cards:
+                        connection.execute("DELETE FROM evaluation_cards WHERE profile_id=?", (row["profile_id"],))
             self._sync_pending(
                 connection,
                 previous=previous_references,
-                resulting={profile_id: entry["evidenceIds"] for profile_id, entry in cards.items()},
+                resulting={
+                    profile_id: entry["evidenceIds"] for profile_id, entry in (resulting_cards or {}).items()
+                },
                 keep_consumed=keep_consumed,
             )
         if "preferences" in provided:
@@ -774,14 +872,9 @@ class EvaluationStore:
         if "configuration" in provided:
             configuration_revision += 1
             connection.execute(
-                "UPDATE evaluation_state SET decision_profile_id=?, auto_maintain=?, configuration_revision=?,"
+                "UPDATE evaluation_state SET decision_profile_id=?, configuration_revision=?,"
                 " updated_at=? WHERE id=1",
-                (
-                    configuration["decisionProfileId"],
-                    1 if configuration["autoMaintain"] else 0,
-                    configuration_revision,
-                    now,
-                ),
+                (configuration["decisionProfileId"], configuration_revision, now),
             )
         connection.execute(
             "UPDATE evaluation_state SET table_revision=?, updated_at=? WHERE id=1", (revision, now)
@@ -1023,6 +1116,13 @@ class EvaluationStore:
                 )
             ]
             pending = self._pending_evidence(connection)
+            # Sample counts come from the existing per-profile aggregate counters, so
+            # they cover every published profile independently of whether a prose card
+            # exists yet: a published profile with accepted attempts is a real count.
+            sample_counts = {
+                row["profile_id"]: self._sample_count(connection, row["profile_id"])
+                for row in connection.execute("SELECT profile_id FROM evaluation_profiles")
+            }
             gate = self._gate_view(connection, now)
         tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
@@ -1032,11 +1132,11 @@ class EvaluationStore:
             "configuration": {
                 "revision": int(state["configuration_revision"]),
                 "decisionProfileId": state["decision_profile_id"],
-                "autoMaintain": bool(state["auto_maintain"]),
             },
             "profiles": profiles,
             "preferences": preferences,
             "cards": cards,
+            "sampleCounts": sample_counts,
             "evidence": evidence,
             "decisions": decisions,
             "pendingEvidence": pending,
@@ -1050,12 +1150,17 @@ class EvaluationStore:
     def capabilities(self) -> dict:
         """Real implemented availability only.
 
-        ``selection`` and ``maintenance`` are true exactly while the bounded decision
-        adapter exists in this build (a helper entrypoint plus Node): when it is
-        absent, a decision request reports an honest adapter-unavailable outcome
-        instead of pretending a model ran. ``modelCatalogDiscovery`` reports that the
-        installed-harness discovery helper is present, not that a discovery
-        succeeded; a successful discovery is visible through ``model_catalog_refresh``.
+        ``selection`` is true exactly while the bounded decision adapter exists in
+        this build (a helper entrypoint plus Node): when it is absent, a selection
+        request reports an honest adapter-unavailable outcome instead of pretending a
+        model ran. ``maintenance`` is false because the
+        blackboard executes no maintenance model call and has no automatic-adoption
+        setting: an external Harness prepares bounded facts through
+        ``evaluation_prepare`` (no model call, no lease), synthesizes card text under
+        the buddy skill, and commits a short card-only patch through the ordinary
+        writer gate. ``modelCatalogDiscovery`` reports that the installed-harness
+        discovery helper is present, not that a discovery succeeded; a successful
+        discovery is visible through ``model_catalog_refresh``.
         """
         from . import catalog
         from .adapters.decision import DecisionAdapter
@@ -1064,7 +1169,8 @@ class EvaluationStore:
         adapter_available, adapter_reason = decision.available()
         return {
             "selection": bool(adapter_available),
-            "maintenance": bool(adapter_available),
+            "maintenance": False,
+            "maintenanceMode": "harness-owned",
             "decisionAdapter": bool(adapter_available),
             "decisionAdapterReason": adapter_reason,
             "evaluationWriteGate": True,
@@ -1498,7 +1604,37 @@ class EvaluationStore:
         attempt = self.board._selected_attempt(connection, task)
         return self._attempt_identity(connection, task, attempt)
 
-    def _attempt_identity(self, connection: sqlite3.Connection, task: sqlite3.Row, attempt: sqlite3.Row | None) -> dict:
+    @staticmethod
+    def _reviewed_attempt_state(attempt: sqlite3.Row | None, result: dict | None) -> str | None:
+        """The terminal state the reviewed attempt itself proves, or ``None``.
+
+        Derived only from the attempt's own committed execution state and result
+        status, so an archived fact can never inherit the current task state of a
+        later attempt. Unknown stays ``None`` instead of being guessed.
+        """
+        if attempt is None:
+            return None
+        status = (result or {}).get("status")
+        state = attempt["execution_state"]
+        if status == "ok":
+            return "completed" if state == "finished" else None
+        if status == "failed":
+            return "failed"
+        if status == "cancelled":
+            return "cancelled"
+        if state == "uncertain":
+            return "reconciliation-needed"
+        return None
+
+    def _attempt_identity(
+        self,
+        connection: sqlite3.Connection,
+        task: sqlite3.Row,
+        attempt: sqlite3.Row | None,
+        *,
+        acceptance: dict | None = None,
+        artifact_binding: dict | None = None,
+    ) -> dict:
         result = json.loads(attempt["result_json"]) if attempt is not None and attempt["result_json"] else None
         report = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else {}
         spec = json.loads(task["spec_json"])
@@ -1513,24 +1649,193 @@ class EvaluationStore:
                 frozen = json.loads(turn["input_json"]).get("context", {}).get("executionConfiguration")
                 spec = frozen if isinstance(frozen, dict) else {}
                 adapter = spec.get("adapter", adapter)
+        # A current review is described by the task's own recorded verdict. An archived
+        # review supplies its matching, immutable task.review_archived record instead:
+        # the task columns now describe another attempt and are never borrowed.
+        acceptance = acceptance or {
+            "acceptedAt": task["accepted_at"],
+            "acceptanceNote": task["acceptance_note"],
+            "acceptanceVerdict": task["acceptance_verdict"],
+            "archived": False,
+        }
+        archived = bool(acceptance.get("archived"))
+        task_state = task["state"]
+        if archived:
+            task_state = self._reviewed_attempt_state(attempt, result)
         return {
             "taskId": task["task_id"],
             "attemptId": attempt["attempt_id"] if attempt is not None else None,
             "generation": int(attempt["generation"]) if attempt is not None else None,
-            "taskState": task["state"],
+            "taskState": task_state,
+            "attemptState": attempt["execution_state"] if attempt is not None else None,
+            "reviewBinding": "archived" if archived else "current",
+            **({"currentTaskState": task["state"]} if archived else {}),
             "resultStatus": (result or {}).get("status"),
             "shutdownConfirmed": bool(attempt["shutdown_confirmed"]) if attempt is not None else False,
             "cancelRequested": bool(attempt["cancel_requested_at"]) if attempt is not None else False,
             "error": (result or {}).get("error"),
             "exitCode": (result or {}).get("exitCode"),
-            "acceptedAt": task["accepted_at"],
-            "acceptanceNote": task["acceptance_note"],
-            "acceptanceVerdict": task["acceptance_verdict"],
+            "acceptedAt": acceptance["acceptedAt"],
+            "acceptanceNote": acceptance["acceptanceNote"],
+            "acceptanceVerdict": acceptance["acceptanceVerdict"],
             "runtimeIdentity": attempt["runtime_identity"] if attempt is not None else None,
+            "delegation": self._delegation_provenance(connection, task),
+            "artifacts": self._artifact_provenance(connection, task, attempt, binding=artifact_binding),
             "adapter": adapter,
             "requested": EvaluationStore._requested_identity(adapter, spec, report),
             "resolved": EvaluationStore._reported_identity(adapter, report.get("resolved")),
             "observed": EvaluationStore._reported_identity(adapter, report.get("observed")),
+        }
+
+    @staticmethod
+    def _delegation_provenance(connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
+        """Bounded original scope and source attribution for one reviewed attempt.
+
+        The recorded admission spec is the original delegated scope; it is truncated
+        rather than expanded into a transcript, and the truncation is reported. The
+        original source Host is derived exactly like the delegation projection: the
+        first governed submission or helper admission, then generation-1 takeover
+        evidence, then a still-generation-1 run row. Unknown stays null.
+        """
+        task_text: str | None = None
+        truncated = False
+        try:
+            spec = json.loads(task["spec_json"])
+        except (TypeError, ValueError):  # pragma: no cover - a stored spec is always JSON
+            spec = {}
+        if isinstance(spec, dict):
+            value = spec.get("task")
+            if isinstance(value, str) and value.strip():
+                text = value.strip()
+                truncated = len(text) > MAX_FACT_TASK
+                task_text = text[:MAX_FACT_TASK]
+        row = connection.execute(
+            "SELECT COALESCE("
+            " (SELECT CASE event.kind"
+            "     WHEN 'task.submitted' THEN json_extract(event.payload_json, '$.governed.sourceHostId')"
+            "     ELSE json_extract(event.payload_json, '$.sourceHostId') END"
+            "    FROM events event WHERE event.task_id=?"
+            "      AND ((event.kind='task.submitted' AND json_type(event.payload_json,'$.governed.sourceHostId')='text'"
+            "            AND length(json_extract(event.payload_json,'$.governed.sourceHostId'))>0)"
+            "        OR (event.kind='workflow.helper_admitted' AND json_type(event.payload_json,'$.sourceHostId')='text'"
+            "            AND length(json_extract(event.payload_json,'$.sourceHostId'))>0))"
+            "    ORDER BY event.seq LIMIT 1),"
+            " (SELECT json_extract(event.payload_json, '$.previousHostId') FROM events event"
+            "    WHERE event.task_id=? AND event.kind='workflow.takeover'"
+            "      AND json_extract(event.payload_json, '$.previousOwnerGeneration')=1"
+            "      AND json_type(event.payload_json, '$.previousHostId')='text'"
+            "      AND length(json_extract(event.payload_json, '$.previousHostId'))>0"
+            "    ORDER BY event.seq LIMIT 1),"
+            " (SELECT CASE WHEN run.owner_generation=1 THEN run.host_id END FROM workflow_runs run WHERE run.run_id=?)"
+            ") AS source_host",
+            (task["task_id"], task["task_id"], task["task_id"]),
+        ).fetchone()
+        source_host = row["source_host"] if row is not None and isinstance(row["source_host"], str) else None
+        return {
+            "task": task_text,
+            "taskTruncated": truncated,
+            "sourceHostId": source_host[:256] if source_host else None,
+        }
+
+    @staticmethod
+    def _artifact_provenance(
+        connection: sqlite3.Connection,
+        task: sqlite3.Row,
+        attempt: sqlite3.Row | None,
+        *,
+        binding: dict | None = None,
+    ) -> dict | None:
+        """Bounded artifact provenance bound to this attempt.
+
+        The review's own binding is authoritative when supplied: the artifact the Host
+        actually reviewed and its verdict decide the reported accepted artifact, never
+        the run's current final columns — an archived review must not be relabelled
+        with a newer attempt's artifact. Without a binding the run's final artifact and
+        final attempt are reported as before. The accepted artifact is listed first, an
+        accepted binding for another attempt is never relabelled as this one, and the
+        exact total plus the truncation signal are always reported.
+        """
+        if attempt is None:
+            return None
+        attempt_id = attempt["attempt_id"]
+        if binding is not None:
+            reviewed = binding.get("artifactId")
+            reviewed = reviewed if isinstance(reviewed, str) and reviewed else None
+            if binding.get("verdict") == "accepted" and reviewed is not None:
+                accepted_artifact, accepted_attempt = reviewed, attempt_id
+            else:
+                accepted_artifact, accepted_attempt = None, None
+        else:
+            run = connection.execute(
+                "SELECT final_artifact_id, final_attempt_id FROM workflow_runs WHERE run_id=?", (task["task_id"],)
+            ).fetchone()
+            accepted_artifact = run["final_artifact_id"] if run is not None else None
+            accepted_attempt = run["final_attempt_id"] if run is not None else None
+        total = int(
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM workflow_artifacts WHERE run_id=? AND (attempt_id=? OR attempt_id IS NULL)",
+                (task["task_id"], attempt_id),
+            ).fetchone()["count"]
+        )
+        rows = connection.execute(
+            "SELECT artifact_id, kind, manifest_sha256 FROM workflow_artifacts"
+            " WHERE run_id=? AND (attempt_id=? OR attempt_id IS NULL) ORDER BY artifact_id LIMIT ?",
+            (task["task_id"], attempt_id, MAX_FACT_ARTIFACTS),
+        ).fetchall()
+        entries = [
+            {"artifactId": row["artifact_id"], "kind": row["kind"], "manifestSha256": row["manifest_sha256"]}
+            for row in rows
+        ]
+        if not entries:
+            # The ordinary artifact ledger is the fallback for non-governed runs.
+            plain_total = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM artifacts WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()["count"]
+            )
+            plain_rows = connection.execute(
+                "SELECT artifact_id, kind, content_hash FROM artifacts WHERE attempt_id=? ORDER BY artifact_id LIMIT ?",
+                (attempt_id, MAX_FACT_ARTIFACTS),
+            ).fetchall()
+            if not plain_rows:
+                return None
+            return {
+                "acceptedArtifactId": None,
+                "acceptedAttemptId": None,
+                "acceptedForThisAttempt": False,
+                "artifacts": [
+                    {"artifactId": row["artifact_id"], "kind": row["kind"], "contentHash": row["content_hash"]}
+                    for row in plain_rows
+                ],
+                "total": plain_total,
+                "truncated": plain_total > len(plain_rows),
+            }
+        if accepted_artifact and all(entry["artifactId"] != accepted_artifact for entry in entries):
+            # The accepted artifact is always named even when it sorts outside the
+            # bounded page; it is fetched by primary key and never invented.
+            bound = connection.execute(
+                "SELECT artifact_id, kind, manifest_sha256 FROM workflow_artifacts WHERE artifact_id=?",
+                (accepted_artifact,),
+            ).fetchone()
+            if bound is not None:
+                entries.insert(
+                    0,
+                    {
+                        "artifactId": bound["artifact_id"],
+                        "kind": bound["kind"],
+                        "manifestSha256": bound["manifest_sha256"],
+                    },
+                )
+        if accepted_artifact:
+            entries.sort(key=lambda entry: 0 if entry["artifactId"] == accepted_artifact else 1)
+        entries = entries[:MAX_FACT_ARTIFACTS]
+        return {
+            "acceptedArtifactId": accepted_artifact,
+            "acceptedAttemptId": accepted_attempt,
+            "acceptedForThisAttempt": bool(accepted_attempt and accepted_attempt == attempt_id),
+            "artifacts": entries,
+            "total": total,
+            "truncated": total > len(entries),
         }
 
     @staticmethod
@@ -1932,6 +2237,783 @@ class EvaluationStore:
                 "made no model call and exposed no credential."
             ),
         }
+
+    # -- Harness-owned maintenance -------------------------------------------
+    @staticmethod
+    def _fact_evidence_id(profile_id: str, attempt_id: str, verdict: str) -> str:
+        """Deterministic identity of one Host-reviewed fact.
+
+        The factual identity is the (profile, attempt, verdict) triple: a repeated
+        preparation of the same batch can never record it twice, while a retried task
+        (a new attempt) or a different published profile is a genuinely new fact. The
+        human-readable summary is presentation only and is never part of the identity.
+        """
+        return "ev-" + sha256_text(
+            canonical_json(
+                {"source": "host-review", "profileId": profile_id, "attemptId": attempt_id, "verdict": verdict}
+            )
+        )[:32]
+
+    @staticmethod
+    def _prepare_scope(profile_id: str | None, adapter: str | None) -> str:
+        """The reported filter of one preparation request.
+
+        Progress itself is durable per assessed profile (``profile:<id>``), never per
+        request filter: a profile published after an earlier pass backfills its own
+        history through the same unfiltered or adapter-filtered request, and a profile
+        that is already current is never rescanned.
+        """
+        if profile_id:
+            return f"profile:{profile_id}"
+        if adapter:
+            return f"adapter:{adapter}"
+        return "all"
+
+    @staticmethod
+    def _checkpoint(connection: sqlite3.Connection, scope: str) -> int | None:
+        row = connection.execute(
+            "SELECT review_seq FROM evaluation_maintenance_checkpoints WHERE scope=?", (scope,)
+        ).fetchone()
+        return None if row is None else int(row["review_seq"])
+
+    @staticmethod
+    def _review_query(*, cursor: bool) -> str:
+        """The bounded review-ledger range in immutable sequence order.
+
+        The kind list is rendered literally from the module constant so SQLite can
+        prove the ``events_review_seq_idx`` partial predicate: a bound ``IN (?,?,?)``
+        list leaves the planner unable to prove it and falls back to scanning every
+        unrelated event. The values are code-owned constants, never caller input.
+        """
+        query = (
+            "SELECT event.seq AS review_seq, event.task_id AS review_task_id,"
+            " event.attempt_id AS review_attempt_id, event.kind AS review_kind,"
+            " event.payload_json AS review_payload, task.*"
+            " FROM events event JOIN tasks task ON task.task_id = event.task_id"
+            f" WHERE event.kind IN {_REVIEW_KIND_LITERALS}"
+        )
+        if cursor:
+            query += " AND event.seq > ?"
+        return query + " ORDER BY event.seq LIMIT ?"
+
+    @staticmethod
+    def _reviewed_batch(connection: sqlite3.Connection, cursor: int | None, limit: int) -> list:
+        """One bounded, indexed page of actual Host acknowledgement events.
+
+        The review ledger is the append-only event stream, not a wall-clock column: an
+        acceptance or rejection appended later always carries a higher ``events.seq``,
+        so a review recorded under a skewed or rolled-back clock cannot be skipped.
+        Each event keeps its own immutable attempt binding and reviewed artifact. The
+        partial index ``events_review_seq_idx`` answers the range in sequence order.
+        """
+        values: list[Any] = []
+        if cursor is not None:
+            values.append(int(cursor))
+        values.append(int(limit))
+        return connection.execute(EvaluationStore._review_query(cursor=cursor is not None), values).fetchall()
+
+    @staticmethod
+    def _reviewed_backlog(connection: sqlite3.Connection, cursor: int | None) -> int:
+        query = f"SELECT COUNT(*) AS count FROM events WHERE kind IN {_REVIEW_KIND_LITERALS}"
+        values: list[Any] = []
+        if cursor is not None:
+            query += " AND seq > ?"
+            values.append(int(cursor))
+        return int(connection.execute(query, values).fetchone()["count"])
+
+    def _reviewed_backlog_for(self, connection: sqlite3.Connection, cursors: dict) -> int:
+        """Review events the slowest assessed profile has not evaluated yet.
+
+        A profile with no cursor has seen nothing, so the complete review ledger is
+        still ahead of it; otherwise the earliest cursor is the honest remainder.
+        """
+        if not cursors:
+            return 0
+        values = [value for value in cursors.values() if value is not None]
+        if len(values) != len(cursors):
+            return self._reviewed_backlog(connection, None)
+        return self._reviewed_backlog(connection, min(values))
+
+    @staticmethod
+    def _review_task_binding(review: sqlite3.Row) -> bool:
+        """Whether this review is still the task's own current recorded verdict.
+
+        Only then may the task's ``accepted_at``/note/verdict describe this review.
+        After a retry or continuation those columns belong to another attempt or are
+        cleared, so the archived record is used instead — the current task state and
+        verdict are never borrowed for an older attempt.
+        """
+        return bool(
+            review["accepted_at"]
+            and review["selected_attempt_id"] == review["review_attempt_id"]
+            and review["acceptance_verdict"] == EvaluationStore._review_verdict(review)
+        )
+
+    @staticmethod
+    def _review_verdict(review: sqlite3.Row) -> str | None:
+        payload = json.loads(review["review_payload"]) if review["review_payload"] else {}
+        verdict = payload.get("verdict") if isinstance(payload, dict) else None
+        if verdict in ("accepted", "rejected"):
+            return verdict
+        if review["review_kind"] == "task.accepted":
+            return "accepted"
+        if review["review_kind"] == "task.rejected":
+            return "rejected"
+        return None
+
+    @staticmethod
+    def _reviewed_artifact(review: sqlite3.Row) -> str | None:
+        payload = json.loads(review["review_payload"]) if review["review_payload"] else {}
+        artifact_id = payload.get("artifactId") if isinstance(payload, dict) else None
+        return artifact_id if isinstance(artifact_id, str) and artifact_id else None
+
+    @staticmethod
+    def _review_note_bytes(review: sqlite3.Row) -> int | None:
+        """The immutable note length the review event itself recorded, when present."""
+        payload = json.loads(review["review_payload"]) if review["review_payload"] else {}
+        value = payload.get("noteBytes") if isinstance(payload, dict) else None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    @staticmethod
+    def _review_archive(connection: sqlite3.Connection, review: sqlite3.Row) -> dict | None:
+        """The matching read-only archive of one superseded review, or ``None``.
+
+        A retry or continuation moves the reviewed attempt's acceptedAt/verdict/note
+        into exactly one immutable ``task.review_archived`` event and clears the task
+        columns. That archived record is the old attempt's own fact, so the reviewed
+        attempt's acceptance stays reachable instead of being lost once a newer review
+        exists. The record is only accepted when it matches the review event's own
+        attempt, verdict and recorded note length; a mismatch is a different review and
+        is reported as unproven rather than merged with this one.
+        """
+        verdict = EvaluationStore._review_verdict(review)
+        attempt_id = review["review_attempt_id"]
+        if verdict is None or not attempt_id:
+            return None
+        expected_note_bytes = EvaluationStore._review_note_bytes(review)
+        rows = connection.execute(
+            "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='task.review_archived'"
+            " ORDER BY seq",
+            (review["review_task_id"], attempt_id),
+        ).fetchall()
+        for row in rows:
+            payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
+            if not isinstance(payload, dict) or payload.get("verdict") != verdict:
+                continue
+            accepted_at, note = payload.get("acceptedAt"), payload.get("note")
+            if not isinstance(accepted_at, str) or not accepted_at or not isinstance(note, str):
+                continue
+            if expected_note_bytes is not None and len(note.encode()) != expected_note_bytes:
+                # The review event recorded its own note length; a mismatched archive
+                # record is a different review and is never merged with this one.
+                continue
+            return {
+                "acceptedAt": accepted_at,
+                "acceptanceNote": note,
+                "acceptanceVerdict": verdict,
+                "archived": True,
+            }
+        return None
+
+    @staticmethod
+    def _artifact_hash_turn_proof(
+        connection: sqlite3.Connection, task_id: str, attempt_id: str, artifact: sqlite3.Row
+    ) -> bool:
+        """Whether one pinned output artifact really is this attempt's sealed output.
+
+        The immutable binding comes from the attempt's own committed result: the sealed
+        ``workspaceSeal`` snapshot hash must be exactly the artifact's manifest hash,
+        and the artifact's turn must be that same attempt's concluded completed turn.
+        An artifact id that merely exists somewhere proves nothing.
+        """
+        attempt = connection.execute(
+            "SELECT result_json FROM attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+        if attempt is None or not attempt["result_json"]:
+            return False
+        try:
+            result = json.loads(attempt["result_json"])
+        except (TypeError, ValueError):
+            return False
+        payload = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else {}
+        seal = payload.get("workspaceSeal") if isinstance(payload.get("workspaceSeal"), dict) else {}
+        snapshot = seal.get("snapshotSha256")
+        if not isinstance(snapshot, str) or not snapshot or snapshot != artifact["manifest_sha256"]:
+            return False
+        turn = connection.execute(
+            "SELECT turn_id FROM workflow_turns WHERE run_id=? AND attempt_id=?"
+            " AND state='concluded' AND disposition='completed' ORDER BY turn_index LIMIT 1",
+            (task_id, attempt_id),
+        ).fetchone()
+        return turn is not None and isinstance(turn["turn_id"], str) and turn["turn_id"] == artifact["turn_id"]
+
+    @staticmethod
+    def _artifact_proof(
+        connection: sqlite3.Connection,
+        *,
+        task_id: str,
+        attempt_id: str,
+        verdict: str,
+        artifact_id: str | None,
+        current: bool,
+    ) -> bool:
+        """Whether an exact immutable output-artifact proof is bound to this review.
+
+        A governed review must name the output artifact the Host actually reviewed, and
+        that artifact must be pinned for exactly this run and attempt: the same
+        ``run_id``, the same ``attempt_id``, ``kind='output'``, and the attempt's own
+        sealed hash/turn binding. A current review must additionally still be the run's
+        final binding (and, for an acceptance, its final artifact). An archived review
+        is proven by its matching archive event instead, so the run's newer final
+        binding is deliberately not borrowed. Without this proof the review is reported
+        as skipped rather than turned into a fact.
+        """
+        artifact = connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE artifact_id=?", (artifact_id,)
+        ).fetchone()
+        if (
+            artifact is None
+            or artifact["run_id"] != task_id
+            or artifact["attempt_id"] != attempt_id
+            or artifact["kind"] != "output"
+        ):
+            return False
+        if not EvaluationStore._artifact_hash_turn_proof(connection, task_id, attempt_id, artifact):
+            return False
+        if not current:
+            return True
+        run = connection.execute(
+            "SELECT final_artifact_id, final_attempt_id FROM workflow_runs WHERE run_id=?", (task_id,)
+        ).fetchone()
+        if run is None or run["final_attempt_id"] != attempt_id:
+            return False
+        if verdict == "accepted" and run["final_artifact_id"] != artifact_id:
+            return False
+        return True
+
+    @staticmethod
+    def _is_pending(connection: sqlite3.Connection, evidence_id: str) -> bool:
+        return (
+            connection.execute(
+                "SELECT 1 FROM evaluation_evidence_pending WHERE evidence_id=?", (evidence_id,)
+            ).fetchone()
+            is not None
+        )
+
+    @staticmethod
+    def _assessed_profiles(
+        connection: sqlite3.Connection, profile_id: str | None, adapter: str | None
+    ) -> list:
+        """Published profiles the caller asked to assess.
+
+        Filters address execution identities only. A source Host or a source project
+        is evidence provenance, never a filter, so experience recorded under another
+        Host or project stays collectable.
+        """
+        if profile_id is not None:
+            row = connection.execute(
+                "SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)
+            ).fetchone()
+            if row is None:
+                raise BoardError(
+                    "NOT_FOUND", "The requested profileId is not published", profileId=profile_id
+                )
+            if adapter is not None and row["adapter"] != adapter:
+                raise BoardError(
+                    "INVALID_ARGUMENT",
+                    f"profileId {profile_id} uses the {row['adapter']} adapter, not {adapter}; the filters name "
+                    "different execution identities",
+                    profileId=profile_id,
+                    adapter=adapter,
+                )
+            return [row]
+        profiles = [row for row in connection.execute("SELECT * FROM evaluation_profiles ORDER BY rowid")]
+        if adapter is not None:
+            profiles = [row for row in profiles if row["adapter"] == adapter]
+        return profiles
+
+    @staticmethod
+    def _pending_evidence_ids(connection: sqlite3.Connection, profile_id: str, limit: int) -> list[str]:
+        return [
+            row["evidence_id"]
+            for row in connection.execute(
+                "SELECT evidence_id FROM evaluation_evidence_pending WHERE profile_id=?"
+                " ORDER BY created_at, evidence_id LIMIT ?",
+                (profile_id, limit),
+            )
+        ]
+
+    @staticmethod
+    def _pending_evidence_count(connection: sqlite3.Connection, profile_id: str) -> int:
+        row = connection.execute(
+            "SELECT COUNT(*) AS count FROM evaluation_evidence_pending WHERE profile_id=?", (profile_id,)
+        ).fetchone()
+        return int(row["count"])
+
+    def _packet_evidence(self, connection: sqlite3.Connection, evidence_id: str) -> dict | None:
+        """One evidence summary plus its exact frozen provenance.
+
+        The Harness needs the real attempt, verdict, acceptance note, original task
+        scope, source Host and sealed artifact reference to write evidenced prose; it
+        must never have to re-run a task or invent an outcome it cannot see.
+        """
+        row = connection.execute(
+            "SELECT * FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        identity = json.loads(row["identity_json"]) if row["identity_json"] else {}
+        delegation = identity.get("delegation") if isinstance(identity.get("delegation"), dict) else {}
+        view = self._evidence_view(row)
+        view["fact"] = {
+            "attemptId": identity.get("attemptId"),
+            "generation": identity.get("generation"),
+            # ``taskState`` is the state the reviewed attempt itself proves when the
+            # review is archived; ``currentTaskState`` is what the task is now and is
+            # never used as the old attempt's fact.
+            "taskState": identity.get("taskState"),
+            "reviewBinding": identity.get("reviewBinding"),
+            **({"currentTaskState": identity["currentTaskState"]} if identity.get("currentTaskState") else {}),
+            "resultStatus": identity.get("resultStatus"),
+            "acceptanceVerdict": identity.get("acceptanceVerdict"),
+            "acceptedAt": identity.get("acceptedAt"),
+            "acceptanceNote": identity.get("acceptanceNote"),
+            "shutdownConfirmed": identity.get("shutdownConfirmed"),
+            # Bounded original scope and attribution, never a raw transcript.
+            "task": delegation.get("task"),
+            "taskTruncated": bool(delegation.get("taskTruncated")),
+            "sourceHostId": delegation.get("sourceHostId"),
+            # The exact artifact this review named, kept separate from the run's
+            # accepted binding because a rejection accepts no artifact.
+            "reviewedArtifactId": identity.get("reviewedArtifactId"),
+            "artifacts": identity.get("artifacts"),
+            "requested": identity.get("requested"),
+            "resolved": identity.get("resolved"),
+            "observed": identity.get("observed"),
+            "basis": identity.get("basis"),
+        }
+        return view
+
+    def prepare(self, params: dict) -> dict:
+        """Collect one bounded, deterministic batch of Host-reviewed facts.
+
+        This operation is the Harness-owned maintenance read. It makes **no model
+        call**, takes **no writer or reader lease** and replays no task: it scans the
+        actual review ledger in bounded review order, matches each reviewed attempt to
+        the assessed profiles by its frozen execution identity, and freezes one
+        evidence row per (profile, attempt, verdict) with its exact attempt, config,
+        artifact, verdict, acceptance-note, original-scope and source-Host provenance.
+        A review superseded by a retry or continuation stays collectable through its
+        matching immutable ``task.review_archived`` record and its own
+        attempt-bound artifact proof, so real rejected work is never lost once the
+        task moves on; the current task state and verdict are never borrowed for the
+        old attempt. Existing accepted history is reachable on the first call;
+        cancelled, unreviewed, infrastructure and unknown-identity outcomes are
+        recorded as the non-samples they are. Progress is durable and per assessed
+        profile, so a profile published later still backfills its own history through
+        the same unfiltered request.
+
+        The returned packet is the bounded input for the invoking Harness. It carries
+        the assessed profiles, their current cards and preferences, pending and
+        referenced evidence summaries, the ids recorded by this call, durable progress
+        and any skipped or unproven reasons. Nothing is published here and no task or
+        Host authority is touched: a stable replay returns the recorded packet
+        unchanged, while a changed payload under the same requestId conflicts.
+        """
+        schemas.reject_unknown(params, PREPARE_FIELDS, "evaluation.prepare")
+        request_id = schemas.required_string(
+            params, "requestId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
+        )
+        limit = schemas.optional_int(params, "limit", DEFAULT_PREPARE_FACTS, 1, MAX_PREPARE_FACTS)
+        profile_id = schemas.optional_string(
+            params, "profileId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
+        )
+        adapter = schemas.optional_string(params, "adapter", max_length=32)
+        if adapter is not None and adapter not in schemas.CODING_ADAPTERS:
+            raise BoardError(
+                "INVALID_ARGUMENT", f"adapter must be one of {', '.join(schemas.CODING_ADAPTERS)}", field="adapter"
+            )
+        request = {"requestId": request_id, "limit": limit, "profileId": profile_id, "adapter": adapter}
+        scope = self._prepare_scope(profile_id, adapter)
+        with self.board.db.write() as connection:
+            receipt = self.board._receipt(connection, request_id, "evaluation.prepare", request)
+            if receipt is not None:
+                return receipt
+            now = self._now()
+            state = self._state(connection)
+            revision = int(state["table_revision"])
+            assessed = self._assessed_profiles(connection, profile_id, adapter)
+            assessed_ids = [row["profile_id"] for row in assessed]
+            # Progress is durable per assessed profile, so a profile published after
+            # an earlier maintenance pass still backfills its own history on the same
+            # unfiltered or adapter-filtered request. The scan frontier is the earliest
+            # cursor among them and is never extended past what the slowest one has
+            # seen, so a new profile costs bounded re-reads instead of a full scan and
+            # an up-to-date profile is never rescanned.
+            cursors: dict[str, int | None] = {
+                row["profile_id"]: self._checkpoint(connection, f"profile:{row['profile_id']}") for row in assessed
+            }
+            scan_from = None if any(value is None for value in cursors.values()) else (
+                min(cursors.values()) if cursors else None
+            )
+            batch = self._reviewed_batch(connection, scan_from, limit)
+            new_ids: list[str] = []
+            scheduled: set[str] = set()
+            skipped: dict[str, int] = {}
+            examples: dict[str, list[str]] = {}
+            unproven: list[dict] = []
+
+            def note_skip(reason: str, task_id: str) -> None:
+                skipped[reason] = skipped.get(reason, 0) + 1
+                listed = examples.setdefault(reason, [])
+                if len(listed) < 3 and task_id not in listed:
+                    listed.append(task_id)
+
+            for review in batch:
+                position = int(review["review_seq"])
+                eligible = [
+                    row
+                    for row in assessed
+                    if cursors[row["profile_id"]] is None or cursors[row["profile_id"]] < position
+                ]
+                if not eligible:
+                    continue
+                task_id = review["review_task_id"]
+                verdict = self._review_verdict(review)
+                if verdict not in ("accepted", "rejected"):
+                    note_skip("unknown-verdict", task_id)
+                    continue
+                if not review["review_attempt_id"]:
+                    note_skip("archived-attempt", task_id)
+                    continue
+                current = self._review_task_binding(review)
+                archived = None
+                if not current:
+                    # A later retry or continuation keeps the earlier review in the
+                    # immutable ledger. It stays collectable through its matching
+                    # task.review_archived record; without that proof it is reported,
+                    # never attributed to whatever attempt ran afterwards.
+                    archived = self._review_archive(connection, review)
+                    if archived is None:
+                        note_skip("superseded-review", task_id)
+                        continue
+                attempt = connection.execute(
+                    "SELECT * FROM attempts WHERE attempt_id=?", (review["review_attempt_id"],)
+                ).fetchone()
+                if attempt is None:
+                    # The review is recorded but its attempt evidence is archived: it is
+                    # reported, never guessed onto a profile.
+                    note_skip("archived-attempt", task_id)
+                    continue
+                reviewed_artifact = self._reviewed_artifact(review)
+                acceptance = archived if archived is not None else {
+                    "acceptedAt": review["accepted_at"],
+                    "acceptanceNote": review["acceptance_note"],
+                    "acceptanceVerdict": verdict,
+                    "archived": False,
+                }
+                identity = self._attempt_identity(
+                    connection,
+                    review,
+                    attempt,
+                    acceptance=acceptance,
+                    artifact_binding={"artifactId": reviewed_artifact, "verdict": verdict},
+                )
+                if identity.get("requested") is None:
+                    note_skip("identity-unknown", task_id)
+                    continue
+                if not self._artifact_proof(
+                    connection,
+                    task_id=task_id,
+                    attempt_id=review["review_attempt_id"],
+                    verdict=verdict,
+                    artifact_id=reviewed_artifact,
+                    current=current,
+                ):
+                    note_skip("missing-artifact-proof", task_id)
+                    continue
+                identity["reviewedArtifactId"] = reviewed_artifact
+                matching = [row for row in eligible if self._matches_profile(identity.get("requested"), row)]
+                if not matching:
+                    note_skip("profile-not-assessed", task_id)
+                    continue
+                kind = "task-success" if verdict == "accepted" else "task-failure"
+                for profile in matching:
+                    evidence_id = self._fact_evidence_id(profile["profile_id"], attempt["attempt_id"], verdict)
+                    existing = connection.execute(
+                        "SELECT 1 FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)
+                    ).fetchone()
+                    if existing is not None:
+                        # The factual identity is already recorded: repeat preparation
+                        # adds no duplicate row, no duplicate sample and no recount.
+                        scheduled.add(evidence_id)
+                        continue
+                    verified, counted, _reason, basis = self._classify_evidence(kind, identity, profile)
+                    frozen = canonical_json({**identity, "basis": basis})
+                    summary = (
+                        f"Host-{verdict} task {task_id} attempt {attempt['attempt_id']} on "
+                        f"{profile['adapter']}/{profile['provider']}/{profile['model']}/{profile['effort']}"
+                    )[:MAX_TEXT]
+                    connection.execute(
+                        "INSERT INTO evaluation_evidence(evidence_id, profile_id, kind, summary, project,"
+                        " conditions_json, source, run_id, verified, counted, identity_json, recorded_revision,"
+                        " created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            evidence_id,
+                            profile["profile_id"],
+                            kind,
+                            summary,
+                            EvaluationStore._fact_project(review),
+                            canonical_json([]),
+                            "host-review",
+                            task_id,
+                            1 if verified else 0,
+                            1 if counted else 0,
+                            frozen,
+                            revision,
+                            now,
+                        ),
+                    )
+                    self._mark_pending(connection, evidence_id)
+                    self._record_sample(connection, profile["profile_id"], identity, counted, evidence_id, now, basis)
+                    new_ids.append(evidence_id)
+                    scheduled.add(evidence_id)
+                    if not verified:
+                        # The review exists but the durable record does not corroborate
+                        # it: recorded as an unproven fact, counted nowhere, and listed
+                        # so the operator can see what could not be established.
+                        unproven.append({"reason": "unverified-review", "evidenceId": evidence_id})
+            if batch:
+                frontier = int(batch[-1]["review_seq"])
+                for row in assessed:
+                    profile_key = row["profile_id"]
+                    current = cursors[profile_key]
+                    if current is not None and current >= frontier:
+                        continue
+                    # A cursor moves only inside this transaction, only past reviews the
+                    # profile has actually evaluated, and never backwards: a failure
+                    # above rolls everything back and the same reviews stay eligible.
+                    connection.execute(
+                        "INSERT INTO evaluation_maintenance_checkpoints(scope, review_seq, updated_at)"
+                        " VALUES(?,?,?)"
+                        " ON CONFLICT(scope) DO UPDATE SET review_seq=excluded.review_seq,"
+                        " updated_at=excluded.updated_at"
+                        " WHERE excluded.review_seq > evaluation_maintenance_checkpoints.review_seq",
+                        (f"profile:{profile_key}", frontier, now),
+                    )
+                    cursors[profile_key] = frontier
+            profiles = [self._profile_view(row) for row in assessed]
+            cards = [
+                self._card_view(row)
+                for row in connection.execute("SELECT * FROM evaluation_cards ORDER BY rowid")
+                if row["profile_id"] in set(assessed_ids)
+            ]
+            preferences = [
+                {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
+                for row in connection.execute("SELECT * FROM evaluation_preferences ORDER BY rowid")
+                if row["profile_id"] in set(assessed_ids)
+            ]
+            # Every evidence reference a current card depends on is required input and
+            # is never dropped to fit the packet.
+            referenced_ids: list[str] = []
+            for card in cards:
+                for evidence_id in card["evidenceIds"]:
+                    if evidence_id not in referenced_ids:
+                        referenced_ids.append(evidence_id)
+            required = list(referenced_ids)
+            for evidence_id in new_ids:
+                if evidence_id not in required:
+                    required.append(evidence_id)
+            if len(required) > MAX_PACKET_EVIDENCE:
+                raise BoardError(
+                    "PACKET_TOO_LARGE",
+                    f"the required evidence summaries ({len(required)}) exceed the {MAX_PACKET_EVIDENCE}-entry "
+                    "maintenance packet bound; nothing was truncated and nothing was recorded. Narrow the request "
+                    "with profileId or a smaller limit, or publish the current cards first.",
+                    required=len(required),
+                    bound=MAX_PACKET_EVIDENCE,
+                )
+            included: list[str] = list(required)
+            pending_total = 0
+            for assessed_id in assessed_ids:
+                pending_total += self._pending_evidence_count(connection, assessed_id)
+                room = MAX_PACKET_EVIDENCE - len(included)
+                if room <= 0:
+                    continue
+                for evidence_id in self._pending_evidence_ids(connection, assessed_id, room):
+                    if evidence_id not in included:
+                        included.append(evidence_id)
+            evidence: list[dict] = []
+            missing: list[str] = []
+            for evidence_id in included:
+                view = self._packet_evidence(connection, evidence_id)
+                if view is None:
+                    # A required reference or a pending ledger row without its evidence
+                    # is an inconsistent table: refuse instead of dropping the reference.
+                    missing.append(evidence_id)
+                    continue
+                # Pending is a property of the pending ledger, never of "not referenced":
+                # an intentionally retired reference is archived, not waiting again.
+                view["pending"] = self._is_pending(connection, evidence_id)
+                evidence.append(view)
+            if missing:
+                raise BoardError(
+                    "NOT_FOUND",
+                    f"required evidence {missing[0]!r} is missing from the evidence ledger; nothing was recorded "
+                    "and no reference was dropped",
+                    evidenceId=missing[0],
+                )
+            pending_included = sum(1 for entry in evidence if entry["pending"])
+            backlog = self._reviewed_backlog_for(connection, cursors)
+            frontier = max((value for value in cursors.values() if value is not None), default=None)
+            response = {
+                "requestId": request_id,
+                "tableRevision": revision,
+                "limit": limit,
+                "profiles": profiles,
+                "cards": cards,
+                "preferences": preferences,
+                "evidence": evidence,
+                "pendingEvidenceIds": sorted(entry["evidenceId"] for entry in evidence if entry["pending"]),
+                "referencedEvidenceIds": referenced_ids,
+                "newEvidenceIds": new_ids,
+                "progress": {
+                    "scanned": len(batch),
+                    "newFacts": len(new_ids),
+                    "alreadyPrepared": len(scheduled) - len(new_ids),
+                    "scope": scope,
+                    "cursors": {
+                        profile_key: None if value is None else {"reviewSeq": int(value)}
+                        for profile_key, value in sorted(cursors.items())
+                    },
+                    # A profile whose own cursor is behind the newest one is still
+                    # backfilling its history; later calls continue from here.
+                    "backfilling": (
+                        sorted(
+                            profile_key
+                            for profile_key, value in cursors.items()
+                            if value is None or (frontier is not None and value < frontier)
+                        )
+                        if backlog
+                        else []
+                    ),
+                    "complete": backlog == 0,
+                },
+                "remaining": {
+                    "pendingEvidence": max(0, pending_total - pending_included),
+                    "reviewedBacklog": backlog,
+                },
+                "skipped": [
+                    {"reason": reason, "count": count, "examples": examples.get(reason, [])}
+                    for reason, count in sorted(skipped.items())
+                ],
+                "unproven": unproven,
+                "source": {
+                    # Discovery is the append-only Host acknowledgement event stream,
+                    # ordered by its immutable sequence. A review whose attempt is no
+                    # longer current is collected through its matching immutable
+                    # task.review_archived record; without that proof it is reported,
+                    # never guessed onto the attempt that ran.
+                    "reviewLedger": "events(seq) for task.accepted|task.rejected|workflow.acknowledged",
+                    "covers": "current and archived Host reviews with an exact attempt-bound output-artifact proof",
+                },
+                "note": (
+                    "Deterministic facts and a bounded packet only: no model was called, no card was published, "
+                    "and no task acceptance or Host authority was changed. Synthesize card changes under the skill "
+                    "and commit them with evaluation_write_begin(kind maintenance) plus evaluation_write_publish "
+                    "at this tableRevision."
+                ),
+            }
+            self.board._append_event(
+                connection,
+                "evaluation.prepared",
+                revision=revision,
+                payload={
+                    "requestId": request_id,
+                    "scope": scope,
+                    "scanned": len(batch),
+                    "newEvidenceIds": new_ids,
+                    "remaining": response["remaining"],
+                    "skipped": response["skipped"],
+                },
+            )
+            self.board._store_receipt(connection, request_id, "evaluation.prepare", request, response)
+            head = self.board._head_of(connection)
+        self.board._notify(head)
+        return response
+
+    def history(self, params: dict) -> dict:
+        """One bounded newest-first page of publication history.
+
+        A read of the existing ``evaluation_revisions`` rows only: descending revision
+        keyset, no model call, no lease and no write. A newer publication never pushes
+        an older revision out of reach, and ``total`` is the complete revision count
+        independent of the cursor.
+        """
+        schemas.reject_unknown(params, HISTORY_FIELDS, "evaluation.history")
+        limit = schemas.optional_int(params, "limit", DEFAULT_HISTORY_PAGE, 1, MAX_HISTORY_PAGE)
+        before = schemas.optional_positive_int(params, "before")
+        with self.board.db.read() as connection:
+            total = int(
+                connection.execute("SELECT COUNT(*) AS count FROM evaluation_revisions").fetchone()["count"]
+            )
+            query = "SELECT * FROM evaluation_revisions"
+            values: list[Any] = []
+            if before is not None:
+                query += " WHERE revision<?"
+                values.append(before)
+            query += " ORDER BY revision DESC LIMIT ?"
+            values.append(limit)
+            rows = connection.execute(query, values).fetchall()
+            revisions = [self._revision_view(row) for row in rows]
+            next_cursor = None
+            if len(rows) == limit:
+                last_revision = int(rows[-1]["revision"])
+                more = connection.execute(
+                    "SELECT 1 FROM evaluation_revisions WHERE revision<? LIMIT 1", (last_revision,)
+                ).fetchone()
+                if more is not None:
+                    next_cursor = last_revision
+        return {"revisions": revisions, "nextCursor": next_cursor, "total": total}
+
+    @staticmethod
+    def _fact_project(task: sqlite3.Row) -> str | None:
+        """The recorded source cwd of a reviewed task, or null when it has none.
+
+        Provenance only: a project never filters assessment, and a managed execution
+        worktree is not invented as a project when the original cwd is unknown.
+        """
+        try:
+            spec = json.loads(task["spec_json"])
+        except (TypeError, ValueError):  # pragma: no cover - a stored spec is always JSON
+            return None
+        cwd = spec.get("cwd") if isinstance(spec, dict) else None
+        if not isinstance(cwd, str) or not cwd.strip():
+            return None
+        return cwd.strip()[:200]
+
+    @staticmethod
+    def _revision_view(row: sqlite3.Row) -> dict:
+        counts = json.loads(row["counts_json"]) if row["counts_json"] else {}
+        if not isinstance(counts, dict):
+            counts = {}
+        view = {
+            "revision": int(row["revision"]),
+            "kind": row["kind"],
+            "actor": row["actor"],
+            "counts": {
+                "profiles": int(counts.get("profiles") or 0),
+                "cards": int(counts.get("cards") or 0),
+                "preferences": int(counts.get("preferences") or 0),
+            },
+            "createdAt": row["created_at"],
+        }
+        provided = counts.get("provided")
+        if isinstance(provided, list):
+            view["counts"]["provided"] = [value for value in provided if isinstance(value, str)]
+        return view
 
     # -- views ---------------------------------------------------------------
     @staticmethod

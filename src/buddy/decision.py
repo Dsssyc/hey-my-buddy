@@ -1,26 +1,28 @@
 """Durable decision orchestration over the real Worker/attempt/capacity system.
 
-A decision (a *selection* recommendation or one bounded *evaluation maintenance*
-proposal) is not a second execution engine. The service records a decision, admits
-the admission/lease it needs, and then creates one ordinary task whose adapter is the
-narrow :mod:`buddy.adapters.decision` helper. The existing independent worker claims
-it, consumes real ``BUDDY_MAX_CONCURRENT`` capacity, owns the helper process handle,
-enforces the deadline and reports a durable receipt. Python remains the only writer
-of authoritative state: the decision row, the reader release or writer grant and the
-published evaluation revision are all committed inside the *same* transaction as the
-worker's result, never as a side effect of a GET.
+A *selection* recommendation is not a second execution engine. The service records a
+decision, admits the selection reader lease it needs, and then creates one ordinary
+task whose adapter is the narrow :mod:`buddy.adapters.decision` helper. The existing
+independent worker claims it, consumes real ``BUDDY_MAX_CONCURRENT`` capacity, owns
+the helper process handle, enforces the deadline and reports a durable receipt.
+Python remains the only writer of authoritative state: the decision row and the
+reader release are committed inside the *same* transaction as the worker's result,
+never as a side effect of a GET.
+
+Evaluation maintenance is **not** executed here. An external Harness prepares
+bounded facts through ``EvaluationStore.prepare``, synthesizes card text under the
+buddy skill, and commits a card-only patch through the ordinary evaluation writer
+gate. Historical ``kind='maintain'`` decisions remain read-only history through
+``selection_get``/``selection_list``; no maintenance request spawns an internal
+decision task, holds a writer lease or calls a model.
 
 The split of responsibilities is deliberate:
 
 * selection readers are admitted only when a queued selection can actually execute,
   on a complete current revision, and are fenced with the attempt lifecycle;
-* maintenance uses the fixed configured decision profile, bypasses selection
-  admission, registers a fair writer intent, and holds renewable fenced writer
-  authority so a queued selector can never be starved and a model job can never take
-  the table from a human writer;
-* every helper output is untrusted input: candidates, evidence references, preserved
-  risks and the expected revision are re-validated in Python before one atomic
-  publication, and anything outside the bounded policy becomes ``needs-host``.
+* every helper output is untrusted input: candidates and evidence references are
+  re-validated in Python before one atomic recommendation, and anything outside the
+  bounded policy becomes ``needs-host``.
 """
 from __future__ import annotations
 
@@ -34,9 +36,9 @@ from typing import Any
 from . import schemas
 from .db import canonical_json, sha256_text
 from .errors import BoardError
-from .evaluation import MAX_CARD_POINTS, MAX_EVIDENCE_IDS, MAX_POINT, MAX_SUMMARY
 
 DECISION_ADAPTER = "decision"
+#: ``maintain`` stays a readable historical kind; it is never created any more.
 DECISION_KINDS = ("select", "maintain")
 #: Durable decision states. ``needs-host`` is the honest abstention/out-of-policy
 #: outcome; ``stale`` is a fenced result that may not become a current recommendation.
@@ -44,7 +46,6 @@ DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "
 TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "cancelled", "stale"})
 
 SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds"})
-MAINTAIN_FIELDS = frozenset({"requestId", "timeoutSeconds"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
 LIST_FIELDS = frozenset({"kind", "limit", "before"})
 DEFAULT_LIST_LIMIT = 20
@@ -66,15 +67,9 @@ _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision
 MAX_DECISION_TASK_BYTES = 8192
 MAX_DECISION_REASON = 2000
 MAX_DECISION_EVIDENCE_IDS = 32
-#: One bounded maintenance batch. The helper accepts more, but the service
-#: deliberately sends a small complete batch and reports how many evidence rows
-#: remain pending. A batch is never silently truncated: when even a single pending
-#: row's card references cannot fit the bounded document, the decision reports an
-#: honest oversized-batch outcome instead of dropping a reference.
-MAX_DECISION_BATCH = 64
 #: Harness bounds mirrored from the decision helper's request validation. They are
-#: the hard ceiling for one bounded request, never a silent truncation point: a
-#: complete current table above them becomes an explicit needs-host outcome.
+#: the hard ceiling for one bounded selection request, never a silent truncation
+#: point: a complete current table above them becomes an explicit needs-host outcome.
 MAX_DECISION_PROFILES = 200
 MAX_DECISION_CARDS = 512
 MAX_DECISION_PREFERENCES = 256
@@ -87,14 +82,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 #: Extra room after the helper's own bound: the worker deadline must not fire while
 #: the helper is still shutting its detached child down.
 TIMEOUT_GRACE_SECONDS = 10
-#: How long a queued maintenance intent may wait for admitted readers before its
-#: grant is allowed to expire and the decision fails honestly.
-WRITER_QUEUE_GRACE_SECONDS = 120
 
-QUEUE_WRITER_PENDING = (
-    "waiting for the evaluation writer grant; new selection readers are closed and this selection stays queued and "
-    "cancellable"
-)
 NEEDS_HOST_NO_PROFILE = (
     "no compatible fixed decision profile is configured; publish an available, enabled dsh profile as "
     "configuration.decisionProfileId. The service never guesses one and never selects a selector."
@@ -385,63 +373,6 @@ class DecisionCoordinator:
             task_text=task_text,
         )
 
-    def _pending_batch(self, connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-        return connection.execute(
-            "SELECT e.* FROM evaluation_evidence_pending p JOIN evaluation_evidence e"
-            " ON e.evidence_id = p.evidence_id ORDER BY p.created_at, p.evidence_id LIMIT ?",
-            (limit,),
-        ).fetchall()
-
-    def _maintain_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row) -> tuple[dict | None, str | None, int, int]:
-        """One bounded maintenance batch, shrinking only the *pending* selection.
-
-        The batch's card references are always complete: old risks and evidence
-        references are part of the card the model must preserve, so they are never
-        dropped to make room. When even a single pending row's card references do
-        not fit, the outcome is an explicit oversized-batch reason.
-        """
-        total_pending = self.evaluation._pending_evidence(connection)
-        if total_pending == 0:
-            return None, None, 0, 0
-        limit = min(MAX_DECISION_BATCH, total_pending)
-        last_reason: str | None = None
-        while limit >= 1:
-            pending = self._pending_batch(connection, limit)
-            profile_ids = {row["profile_id"] for row in pending}
-            profiles = [
-                row
-                for row in connection.execute("SELECT * FROM evaluation_profiles ORDER BY rowid")
-                if row["profile_id"] in profile_ids
-            ]
-            cards = [
-                self._card_input(row)
-                for row in connection.execute("SELECT * FROM evaluation_cards ORDER BY rowid")
-                if row["profile_id"] in profile_ids
-            ]
-            referenced = self._referenced_evidence(connection, cards)
-            seen = {row["evidence_id"] for row in pending}
-            evidence = list(pending) + [row for row in referenced if row["evidence_id"] not in seen]
-            table = self._table_input(
-                connection, profiles=profiles, evidence_rows=evidence, include_preferences=True
-            )
-            document, reason = self._assemble_input(
-                connection,
-                kind="maintain",
-                request_id=request_id,
-                revision=revision,
-                profile_row=profile_row,
-                table=table,
-                task_text=None,
-            )
-            if document is not None:
-                remaining = max(0, total_pending - len(pending))
-                return document, None, len(pending), remaining
-            last_reason = reason
-            if limit == 1:
-                break
-            limit = max(1, limit // 2)
-        return None, last_reason, 0, total_pending
-
     # -- lease helpers -------------------------------------------------------
     def _admit_reader(self, connection: sqlite3.Connection, now: str, *, timeout_seconds: int) -> str:
         reader_id = str(uuid.uuid4())
@@ -479,6 +410,12 @@ class DecisionCoordinator:
             self.evaluation._promote(connection, now)
 
     def _release_writer(self, connection: sqlite3.Connection, row: sqlite3.Row, now: str, *, state: str = "aborted") -> None:
+        """Release a historical maintenance decision's writer grant, if one is open.
+
+        New decisions never take writer authority, but a ``kind='maintain'`` row
+        created by an earlier build may still reference a grant; closing it here is
+        what keeps a historical record from blocking the gate forever.
+        """
         if not row["writer_id"]:
             return
         writer = connection.execute(
@@ -517,17 +454,6 @@ class DecisionCoordinator:
         }
         return self._create(request_id, request)
 
-    def request_maintain(self, params: dict) -> dict:
-        schemas.reject_unknown(params, MAINTAIN_FIELDS, "evaluation.maintain")
-        request_id = schemas.required_string(
-            params, "requestId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
-        )
-        timeout = schemas.optional_int(
-            params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
-        )
-        request = {"kind": "maintain", "timeoutSeconds": timeout}
-        return self._create(request_id, request)
-
     def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: str | None = None) -> dict:
         fingerprint = sha256_text(canonical_json(request))
         kind = request["kind"]
@@ -559,11 +485,11 @@ class DecisionCoordinator:
                 ).fetchone()["count"]
             )
             status = "queued"
-            reason = QUEUE_WRITER_PENDING if kind == "maintain" else "queued for a worker; the selection reader is admitted when the run starts"
+            # New decisions are always selection requests; there is no internal
+            # maintenance request path left on the blackboard.
+            reason = "queued for a worker; the selection reader is admitted when the run starts"
             error: str | None = None
-            task_text = request.get("task") if kind == "select" else "evaluation maintenance"
-            writer_id: str | None = None
-            writer_generation: int | None = None
+            task_text = request.get("task") or ""
             expected_revision = int(state["table_revision"])
             if needs_host_reason is not None:
                 status = "needs-host"
@@ -576,25 +502,16 @@ class DecisionCoordinator:
                 status = "needs-host"
                 reason = profile_reason or NEEDS_HOST_NO_PROFILE
             elif (
-                kind == "select"
-                and not writer_pending
+                not writer_pending
                 and not self._select_candidates(connection, request["requiredCapabilities"],
                                                 constraints=request.get("constraints"),
                                                 coding_only=bool(request.get("workflowRouting")))
             ):
                 status = "needs-host"
                 reason = NEEDS_HOST_NO_CANDIDATE
-            elif kind == "maintain" and not writer_pending and self.evaluation._pending_evidence(connection) == 0:
-                status = "needs-host"
-                reason = "no pending evidence needs maintenance; nothing was sent to a model"
             create_task = status == "queued"
             task_id = None
             if create_task:
-                if kind == "maintain":
-                    writer_id, writer_generation = self._queue_writer(
-                        connection, decision_id=decision_id, expected_revision=expected_revision,
-                        now=now, timeout_seconds=request["timeoutSeconds"],
-                    )
                 task_id = self._create_task(
                     connection,
                     decision_id=decision_id,
@@ -631,16 +548,11 @@ class DecisionCoordinator:
                     task_id,
                     expected_revision,
                     canonical_json(request),
-                    1 if (kind == "maintain" and bool(state["auto_maintain"])) else 0,
+                    0,
                     now,
                     now,
                 ),
             )
-            if writer_id:
-                connection.execute(
-                    "UPDATE decision_requests SET writer_id=?, writer_generation=? WHERE decision_id=?",
-                    (writer_id, writer_generation, decision_id),
-                )
             self._append_event(
                 connection,
                 "decision.requested",
@@ -691,49 +603,8 @@ class DecisionCoordinator:
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)
 
-    def _queue_writer(self, connection: sqlite3.Connection, *, decision_id: str, expected_revision: int, now: str, timeout_seconds: int) -> tuple[str, int]:
-        """Register a fair, fenced maintenance writer intent.
-
-        The intent closes admission for new selection readers immediately. It is
-        granted only after every already-admitted reader has settled, so the model
-        never runs against a revision a human writer is still moving.
-        """
-        state = self._state(connection)
-        sequence = int(state["writer_sequence"]) + 1
-        writer_id = str(uuid.uuid4())
-        token = self.db.writer_token(writer_id, sequence)
-        expires_at = self.evaluation._plus(
-            max(self.evaluation.writer_queue_seconds, timeout_seconds + WRITER_QUEUE_GRACE_SECONDS), now
-        )
-        connection.execute(
-            "INSERT INTO evaluation_writers(writer_id, request_id, kind, state, generation, expected_revision,"
-            " token_verifier, requested_at, granted_at, expires_at, released_at)"
-            " VALUES(?,?,?,?,?,?,?,?,NULL,?,NULL)",
-            (
-                writer_id,
-                f"decision:{decision_id}",
-                "maintenance",
-                "waiting",
-                sequence,
-                expected_revision,
-                self.db.writer_token_verifier(token),
-                now,
-                expires_at,
-            ),
-        )
-        connection.execute("UPDATE evaluation_state SET writer_sequence=?, updated_at=? WHERE id=1", (sequence, now))
-        self._append_event(
-            connection,
-            "evaluation.writer_queued",
-            decision_id,
-            {"writerId": writer_id, "generation": sequence, "kind": "maintenance"},
-            revision=expected_revision,
-        )
-        self.evaluation._promote(connection, now)
-        return writer_id, sequence
-
     def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, kind: str, timeout_seconds: int, now: str) -> str:
-        """Admit one ordinary task for this decision, using the real queue and capacity."""
+        """Admit one ordinary selection task, using the real queue and capacity."""
         task_id = str(uuid.uuid4())
         spec = {
             "adapter": DECISION_ADAPTER,
@@ -741,11 +612,7 @@ class DecisionCoordinator:
             # overlaps a project cwd, so a decision run consumes capacity without
             # reserving any workspace a business task needs.
             "cwd": str(self.board.directory / "decisions" / decision_id),
-            "task": (
-                "Bounded selection decision over the current evaluation table."
-                if kind == "select"
-                else "Bounded evaluation maintenance over the pending evidence batch."
-            ),
+            "task": "Bounded selection decision over the current evaluation table.",
             "timeoutSeconds": timeout_seconds + TIMEOUT_GRACE_SECONDS,
             "workspace": False,
             "requiredCapabilities": [DECISION_ADAPTER],
@@ -812,76 +679,48 @@ class DecisionCoordinator:
             return "decision-closed", None
         request = json.loads(row["requested_json"])
         timeout = int(request.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
-        if row["kind"] == "select":
-            waiting = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_writers WHERE state IN ('waiting','active')"
-            ).fetchone()
-            if int(waiting["count"]):
-                return "evaluation-writer-pending", None
-            profile_row, profile_reason = self._decision_profile(connection)
-            if profile_row is None:
-                self._finish(connection, row, status="needs-host", reason=profile_reason, now=now)
-                self._cancel_queued_task(connection, task, now, "the decision had no compatible decision profile")
-                return "decision-closed", None
-            candidates = self._select_candidates(connection, request.get("requiredCapabilities") or [],
-                                                 constraints=request.get("constraints"),
-                                                 coding_only=bool(request.get("workflowRouting")))
-            if not candidates:
-                self._finish(connection, row, status="needs-host", reason=NEEDS_HOST_NO_CANDIDATE, now=now)
-                self._cancel_queued_task(connection, task, now, "the decision had no legal candidate profile")
-                return "decision-closed", None
-            table_revision = int(self._state(connection)["table_revision"])
-            document, oversized = self._select_input(
-                connection,
-                request_id=row["request_id"],
-                revision=table_revision,
-                profile_row=profile_row,
-                task_text=request.get("task") or "",
-                candidates=candidates,
-            )
-            if document is None:
-                self._finish(
-                    connection,
-                    row,
-                    status="needs-host",
-                    reason=oversized or (
-                        "the bounded current table does not fit one decision input; curate the published cards and "
-                        "evidence before asking for a selection"
-                    ),
-                    now=now,
-                )
-                self._cancel_queued_task(connection, task, now, "the bounded decision input would be oversized")
-                return "decision-closed", None
-            reader_id = self._admit_reader(connection, now, timeout_seconds=timeout)
-            self._mark_running(
-                connection, row, attempt_id=attempt_id, generation=generation, reader_id=reader_id,
-                expected_revision=table_revision, document=document, now=now,
-            )
-            return None, document
-        writer = connection.execute(
-            "SELECT * FROM evaluation_writers WHERE writer_id=?", (row["writer_id"],)
-        ).fetchone()
-        if writer is None or writer["state"] in ("aborted", "expired", "published"):
+        if row["kind"] != "select":
+            # Historical maintenance decisions are never executed by the blackboard.
+            # A stray row from an earlier build settles honestly instead of calling a
+            # model, and its retained proposal stays readable through selection_get.
             self._finish(
                 connection,
                 row,
-                status="failed",
-                reason="the maintenance writer grant expired or was released before this run could start",
-                error="WRITER_NOT_ACTIVE",
+                status="needs-host",
+                reason=(
+                    "this is a historical maintenance decision; the blackboard no longer executes maintenance "
+                    "model calls. Prepare bounded facts with evaluation_prepare and publish cards through the "
+                    "ordinary writer gate instead."
+                ),
                 now=now,
             )
-            self._cancel_queued_task(connection, task, now, "the maintenance writer grant is no longer valid")
+            self._cancel_queued_task(connection, task, now, "maintenance decisions are not executed by the blackboard")
             return "decision-closed", None
-        if writer["state"] == "waiting":
+        waiting = connection.execute(
+            "SELECT COUNT(*) AS count FROM evaluation_writers WHERE state IN ('waiting','active')"
+        ).fetchone()
+        if int(waiting["count"]):
             return "evaluation-writer-pending", None
         profile_row, profile_reason = self._decision_profile(connection)
         if profile_row is None:
             self._finish(connection, row, status="needs-host", reason=profile_reason, now=now)
             self._cancel_queued_task(connection, task, now, "the decision had no compatible decision profile")
             return "decision-closed", None
+        candidates = self._select_candidates(connection, request.get("requiredCapabilities") or [],
+                                             constraints=request.get("constraints"),
+                                             coding_only=bool(request.get("workflowRouting")))
+        if not candidates:
+            self._finish(connection, row, status="needs-host", reason=NEEDS_HOST_NO_CANDIDATE, now=now)
+            self._cancel_queued_task(connection, task, now, "the decision had no legal candidate profile")
+            return "decision-closed", None
         table_revision = int(self._state(connection)["table_revision"])
-        document, oversized, considered, remaining = self._maintain_input(
-            connection, request_id=row["request_id"], revision=table_revision, profile_row=profile_row
+        document, oversized = self._select_input(
+            connection,
+            request_id=row["request_id"],
+            revision=table_revision,
+            profile_row=profile_row,
+            task_text=request.get("task") or "",
+            candidates=candidates,
         )
         if document is None:
             self._finish(
@@ -889,24 +728,25 @@ class DecisionCoordinator:
                 row,
                 status="needs-host",
                 reason=oversized or (
-                    "no pending evidence remains for this maintenance batch; nothing was sent to a model"
+                    "the bounded current table does not fit one decision input; curate the published cards and "
+                    "evidence before asking for a selection"
                 ),
                 now=now,
             )
-            self._cancel_queued_task(connection, task, now, "no maintainable evidence batch was available")
+            self._cancel_queued_task(connection, task, now, "the bounded decision input would be oversized")
             return "decision-closed", None
+        reader_id = self._admit_reader(connection, now, timeout_seconds=timeout)
         self._mark_running(
-            connection, row, attempt_id=attempt_id, generation=generation, reader_id=None,
+            connection, row, attempt_id=attempt_id, generation=generation, reader_id=reader_id,
             expected_revision=table_revision, document=document, now=now,
-            considered=considered, remaining=remaining, writer_generation=int(writer["generation"]),
         )
         return None, document
 
-    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, reader_id: str | None, expected_revision: int, document: dict, now: str, considered: int = 0, remaining: int | None = None, writer_generation: int | None = None) -> None:
+    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, reader_id: str | None, expected_revision: int, document: dict, now: str, considered: int = 0, remaining: int | None = None) -> None:
         digest = sha256_text(canonical_json(document))
         connection.execute(
             "UPDATE decision_requests SET configuration_revision=?, attempt_id=?, generation=?, reader_id=?, expected_revision=?,"
-            " input_json=?, input_sha256=?, considered_evidence=?, pending_after=?, writer_generation=?, updated_at=?"
+            " input_json=?, input_sha256=?, considered_evidence=?, pending_after=?, updated_at=?"
             " WHERE decision_id=?",
             (
                 int(self._state(connection)["configuration_revision"]),
@@ -918,7 +758,6 @@ class DecisionCoordinator:
                 digest,
                 considered,
                 remaining,
-                writer_generation,
                 now,
                 row["decision_id"],
             ),
@@ -927,11 +766,7 @@ class DecisionCoordinator:
             "UPDATE evaluation_decisions SET status='running', table_revision=?, reason=? WHERE decision_id=?",
             (
                 expected_revision,
-                (
-                    "the maintenance writer grant is active on this complete revision"
-                    if row["kind"] == "maintain"
-                    else "the selection reader is admitted on this complete revision"
-                ),
+                "the selection reader is admitted on this complete revision",
                 row["decision_id"],
             ),
         )
@@ -949,10 +784,10 @@ class DecisionCoordinator:
         )
 
     def renew(self, connection: sqlite3.Connection, *, task: sqlite3.Row, now: str) -> None:
-        """Renew this decision's reader or writer lease inside a worker renewal.
+        """Renew this decision's selection reader inside a worker renewal.
 
-        Renewal keeps the fenced authority alive across one bounded model call; it
-        never extends a decision whose attempt is already terminal.
+        Renewal keeps the fenced reader authority alive across one bounded model call;
+        it never extends a decision whose attempt is already terminal.
         """
         spec = json.loads(task["spec_json"])
         descriptor = decision_spec(spec)
@@ -970,62 +805,6 @@ class DecisionCoordinator:
                 self._append_event(
                     connection, "evaluation.reader_renewed", row["decision_id"], {"readerId": row["reader_id"]}
                 )
-        if row["writer_id"]:
-            connection.execute(
-                "UPDATE evaluation_writers SET expires_at=? WHERE writer_id=? AND state='active'",
-                (self.evaluation._plus(self.evaluation.writer_lease_seconds, now), row["writer_id"]),
-            )
-
-    def renew_open_writers(self, now: str) -> int:
-        """Daemon sweep: keep live maintenance grants fenced instead of starving them.
-
-        Waiting intents are renewed while their task is still queued and inside the
-        decision's own bounded window; active grants are renewed only while the
-        attempt that holds them is genuinely alive. A dead attempt's grant is left to
-        expire, which reopens the gate instead of blocking every selector forever.
-        """
-        renewed = 0
-        with self.board.db.write() as connection:
-            rows = connection.execute(
-                "SELECT r.decision_id, r.writer_id, r.attempt_id, r.created_at, r.expected_revision, r.requested_json,"
-                " d.status, t.state AS task_state FROM decision_requests r"
-                " JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
-                " LEFT JOIN tasks t ON t.task_id = r.task_id"
-                " WHERE r.writer_id IS NOT NULL AND d.status IN ('queued','running')"
-            ).fetchall()
-            for row in rows:
-                writer = connection.execute(
-                    "SELECT * FROM evaluation_writers WHERE writer_id=?", (row["writer_id"],)
-                ).fetchone()
-                if writer is None or writer["state"] not in ("waiting", "active"):
-                    continue
-                if writer["state"] == "waiting":
-                    if row["task_state"] != "queued":
-                        continue
-                    timeout = int(json.loads(row["requested_json"]).get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
-                    deadline = self.evaluation._plus(timeout + WRITER_QUEUE_GRACE_SECONDS * 2, row["created_at"])
-                    if now > deadline:
-                        continue
-                    connection.execute(
-                        "UPDATE evaluation_writers SET expires_at=? WHERE writer_id=?",
-                        (self.evaluation._plus(self.evaluation.writer_queue_seconds, now), row["writer_id"]),
-                    )
-                else:
-                    attempt = (
-                        connection.execute(
-                            "SELECT * FROM attempts WHERE attempt_id=?", (row["attempt_id"],)
-                        ).fetchone()
-                        if row["attempt_id"]
-                        else None
-                    )
-                    if attempt is None or attempt["execution_state"] not in ("starting", "executing", "finalizing"):
-                        continue
-                    connection.execute(
-                        "UPDATE evaluation_writers SET expires_at=? WHERE writer_id=?",
-                        (self.evaluation._plus(self.evaluation.writer_lease_seconds, now), row["writer_id"]),
-                    )
-                renewed += 1
-        return renewed
 
     def released(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: str, now: str) -> dict | None:
         """The worker gave the attempt back before any model call happened."""
@@ -1196,7 +975,15 @@ class DecisionCoordinator:
         elif row["kind"] == "select":
             self._publish_select(connection, row, output=output, now=now)
         else:
-            self._publish_maintain(connection, row, output=output, now=now)
+            # A historical maintenance result is retained for audit and never adopted
+            # by the blackboard; only the external Harness publishes card patches now.
+            self._finish(
+                connection, row, status="needs-host", output=output, now=now,
+                reason=(
+                    "a historical maintenance result is retained as read-only history; the blackboard no longer "
+                    "adopts maintenance proposals"
+                ),
+            )
         summary["status"] = self._status(connection, row["decision_id"])
         current = self._row(connection, row["decision_id"])
         if current is not None:
@@ -1295,265 +1082,6 @@ class DecisionCoordinator:
             reason=reason, profile_id=profile_id, evidence_ids=evidence_ids, selected=selected,
         )
 
-    def _publish_maintain(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> None:
-        """Validate one bounded card-only proposal, then adopt it or hand it back."""
-        proposal = output.get("proposal")
-        if not isinstance(proposal, dict):
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason="the helper returned no maintenance proposal; the Host decides",
-            )
-            return
-        unexpected = sorted(set(proposal) - {"cards", "reason"})
-        if unexpected:
-            # Automatic adoption touches cards only: a proposal that carries
-            # profiles, preferences, configuration or authority is refused whole.
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    f"the proposal carries an unexpected field {unexpected[0]!r}; automatic adoption is limited to "
-                    "cards and never changes profiles, preferences, configuration or authority"
-                ),
-            )
-            return
-        reason = self._bounded_text(proposal.get("reason"), MAX_DECISION_REASON) or "the model recorded no reason"
-        cards = proposal.get("cards")
-        if not isinstance(cards, list) or len(cards) > MAX_DECISION_CARDS:
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason="the proposal carried no usable card collection; nothing was adopted",
-            )
-            return
-        document = json.loads(row["input_json"]) if row["input_json"] else {}
-        supplied_profiles = {profile["profileId"] for profile in document.get("profiles", [])}
-        supplied_evidence: dict[str, set[str]] = {}
-        for evidence in document.get("evidence", []):
-            supplied_evidence.setdefault(evidence["profileId"], set()).add(evidence["evidenceId"])
-        current_cards = {
-            card_row["profile_id"]: {
-                # Exactly the publishable card fields: the derived revision, sample
-                # count and timestamp belong to the read view, and republishing an
-                # untouched card must not carry them back into the writer gate.
-                "profileId": card_row["profile_id"],
-                "summary": card_row["summary"],
-                "strengths": json.loads(card_row["strengths_json"]),
-                "limitations": json.loads(card_row["limitations_json"]),
-                "risks": json.loads(card_row["risks_json"]),
-                "evidenceIds": json.loads(card_row["evidence_ids_json"]),
-            }
-            for card_row in connection.execute("SELECT * FROM evaluation_cards")
-        }
-        merged: dict[str, dict] = dict(current_cards)
-        seen: set[str] = set()
-        for index, card in enumerate(cards):
-            if not isinstance(card, dict):
-                self._finish(connection, row, status="needs-host", output=output, now=now, reason=f"proposal.cards[{index}] is not an object")
-                return
-            unknown = sorted(set(card) - {"profileId", "summary", "strengths", "limitations", "risks", "evidenceIds"})
-            if unknown:
-                self._finish(
-                    connection, row, status="needs-host", output=output, now=now,
-                    reason=f"proposal.cards[{index}] tried to change {unknown[0]}; automatic adoption touches cards only",
-                )
-                return
-            profile_id = card.get("profileId")
-            if not isinstance(profile_id, str) or profile_id not in supplied_profiles or profile_id in seen:
-                self._finish(
-                    connection, row, status="needs-host", output=output, now=now,
-                    reason=f"proposal.cards[{index}] refers to {profile_id!r}, which was not part of this bounded batch",
-                )
-                return
-            seen.add(profile_id)
-            summary = self._bounded_text(card.get("summary"), MAX_SUMMARY)
-            if summary is None:
-                self._finish(connection, row, status="needs-host", output=output, now=now, reason=f"proposal.cards[{index}] has no usable summary")
-                return
-            points: dict[str, list[str]] = {}
-            for name in ("strengths", "limitations", "risks"):
-                values = card.get(name, [])
-                if not isinstance(values, list) or any(
-                    not isinstance(value, str) or not value.strip() or len(value) > MAX_POINT for value in values
-                ) or len(values) > MAX_CARD_POINTS:
-                    self._finish(
-                        connection, row, status="needs-host", output=output, now=now,
-                        reason=f"proposal.cards[{index}].{name} is not a bounded text list",
-                    )
-                    return
-                points[name] = [value.strip() for value in values]
-            evidence_ids = card.get("evidenceIds", [])
-            if (
-                not isinstance(evidence_ids, list)
-                or len(evidence_ids) > MAX_EVIDENCE_IDS
-                or len(set(evidence_ids)) != len(evidence_ids)
-                or any(not isinstance(value, str) for value in evidence_ids)
-            ):
-                self._finish(
-                    connection, row, status="needs-host", output=output, now=now,
-                    reason=(
-                        f"proposal.cards[{index}].evidenceIds is not a bounded, de-duplicated identifier list of at "
-                        f"most {MAX_EVIDENCE_IDS} real references"
-                    ),
-                )
-                return
-            prior = current_cards.get(profile_id)
-            # The current card's own references plus this batch's supplied evidence for
-            # that profile are the only real references automatic adoption may use.
-            allowed_references = set(supplied_evidence.get(profile_id, set()))
-            if prior is not None:
-                allowed_references |= set(prior["evidenceIds"])
-            fabricated = [value for value in evidence_ids if value not in allowed_references]
-            if fabricated:
-                self._finish(
-                    connection, row, status="needs-host", output=output, now=now,
-                    reason=(
-                        f"proposal.cards[{index}] cites evidence {fabricated[0]!r} that was not supplied for "
-                        f"{profile_id}; nothing was adopted"
-                    ),
-                )
-                return
-            if prior is not None:
-                missing_risks = [risk for risk in prior["risks"] if risk not in points["risks"]]
-                if missing_risks:
-                    self._finish(
-                        connection, row, status="needs-host", output=output, now=now,
-                        reason=(
-                            f"the proposal would drop the unresolved risk {missing_risks[0]!r} from {profile_id}; "
-                            "removing an open risk needs an explicit Host decision"
-                        ),
-                    )
-                    return
-                missing_limitations = [item for item in prior["limitations"] if item not in points["limitations"]]
-                if missing_limitations:
-                    self._finish(
-                        connection, row, status="needs-host", output=output, now=now,
-                        reason=(
-                            f"the proposal would drop the known limitation {missing_limitations[0]!r} from "
-                            f"{profile_id}; automatic adoption preserves unresolved limitations. Old references may "
-                            "be compacted, their text may not be cleared."
-                        ),
-                    )
-                    return
-            merged[profile_id] = {
-                "profileId": profile_id,
-                "summary": summary,
-                "strengths": points["strengths"],
-                "limitations": points["limitations"],
-                "risks": points["risks"],
-                "evidenceIds": evidence_ids,
-            }
-        # References this automatic publication retires are safely compacted: the
-        # risk and limitation text they supported is still on the card, and every
-        # retired id stays archived. They are recorded for audit and are *not*
-        # requeued as pending, which keeps "pending" meaning "not yet processed".
-        retired = sorted(
-            {
-                evidence_id
-                for profile_id, prior in current_cards.items()
-                if profile_id in seen
-                for evidence_id in prior["evidenceIds"]
-                if evidence_id not in set(merged[profile_id]["evidenceIds"])
-            }
-        )
-        incorporated = sorted(
-            {
-                evidence_id
-                for profile_id in seen
-                for evidence_id in merged[profile_id]["evidenceIds"]
-                if connection.execute(
-                    "SELECT 1 FROM evaluation_evidence_pending WHERE evidence_id=?", (evidence_id,)
-                ).fetchone()
-                is not None
-            }
-        )
-        normalized = {
-            "cards": [merged[key] for key in sorted(merged)],
-            "reason": reason,
-            "basisRevision": int(row["expected_revision"]),
-            "retiredEvidenceIds": retired,
-            # Only the cited rows that were actually pending at publication time are
-            # consumed; batch rows the model omitted stay pending and visible.
-            "incorporatedEvidenceIds": incorporated,
-        }
-        changed = merged != current_cards
-        writer = connection.execute(
-            "SELECT * FROM evaluation_writers WHERE writer_id=?", (row["writer_id"],)
-        ).fetchone()
-        current_revision = int(self._state(connection)["table_revision"])
-        if writer is None or writer["state"] != "active" or int(writer["generation"]) != int(row["writer_generation"] or -1):
-            self._finish(
-                connection, row, status="stale", output=output, now=now,
-                reason="the fenced maintenance writer authority is no longer active; the old table stays intact",
-                proposal=normalized,
-            )
-            return
-        if current_revision != int(row["expected_revision"]):
-            self._finish(
-                connection, row, status="stale", output=output, now=now,
-                reason=(
-                    f"the evaluation table moved from revision {row['expected_revision']} to {current_revision} "
-                    "while this proposal ran; the old table stays intact and the proposal is retained"
-                ),
-                proposal=normalized,
-            )
-            return
-        if not bool(self._state(connection)["auto_maintain"]):
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    "configuration.autoMaintain is false: the validated card-only proposal is retained for explicit "
-                    "Host inspection and nothing was published"
-                ),
-                proposal=normalized,
-            )
-            return
-        if not changed:
-            # A valid proposal that changes nothing settles as a completed no-op
-            # rather than a failure; any evidence it declined to incorporate stays
-            # pending and is reported as remaining.
-            self._finish(
-                connection, row, status="completed", output=output, now=now,
-                reason=f"no card change was needed: {reason}",
-                proposal=normalized,
-                published_revision=None,
-            )
-            return
-        published = self.evaluation._publish_revision(
-            connection,
-            revision=current_revision + 1,
-            writer=writer,
-            now=now,
-            params={"cards": normalized["cards"]},
-            keep_consumed=frozenset(retired),
-        )
-        connection.execute(
-            "UPDATE evaluation_writers SET state='published', released_at=? WHERE writer_id=?",
-            (now, writer["writer_id"]),
-        )
-        self.board._append_event(
-            connection,
-            "evaluation.published",
-            revision=published["revision"],
-            payload={
-                "writerId": writer["writer_id"],
-                "generation": int(writer["generation"]),
-                "kind": writer["kind"],
-                "counts": published["counts"],
-                "decisionId": row["decision_id"],
-                "basisRevision": int(row["expected_revision"]),
-                "retiredEvidenceIds": retired,
-            },
-        )
-        self.evaluation._promote(connection, now)
-        connection.execute(
-            "UPDATE evaluation_decisions SET table_revision=? WHERE decision_id=?",
-            (published["revision"], row["decision_id"]),
-        )
-        self._finish(
-            connection, row, status="completed", output=output, now=now,
-            reason=reason, proposal=normalized, published_revision=published["revision"],
-        )
-
-    # -- terminal helpers ----------------------------------------------------
     @staticmethod
     def _reader_open(connection: sqlite3.Connection, row: sqlite3.Row, now: str) -> bool:
         if not row["reader_id"]:

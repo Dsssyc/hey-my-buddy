@@ -213,7 +213,8 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["tableRevision"], 0)
-        self.assertEqual(snapshot["configuration"], {"revision": 0, "decisionProfileId": None, "autoMaintain": False})
+        self.assertEqual(snapshot["configuration"], {"revision": 0, "decisionProfileId": None})
+        self.assertEqual(snapshot["sampleCounts"], {})
         self.assertEqual(snapshot["profiles"], [])
         self.assertEqual(snapshot["preferences"], [])
         self.assertEqual(snapshot["cards"], [])
@@ -222,7 +223,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(snapshot["gate"], {"phase": "open", "readers": 0, "writer": None, "waitingWriters": 0})
         self.assertTrue(snapshot["capabilities"]["selection"])
-        self.assertTrue(snapshot["capabilities"]["maintenance"])
+        self.assertFalse(snapshot["capabilities"]["maintenance"])
         self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
         self.assertIn("runs", snapshot["tasks"])
 
@@ -310,12 +311,12 @@ class EvaluationPublishTests(EvaluationTestCase):
             command_id="c1",
             profiles=[PROFILE, SECOND_PROFILE],
             preferences=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "user pinned"}],
-            configuration={"decisionProfileId": SECOND_PROFILE_ID, "autoMaintain": False},
+            configuration={"decisionProfileId": SECOND_PROFILE_ID},
         )
         # Removing the pinned/decision profile while it is still referenced is refused.
         self.refused_publish(board, "CONFLICT", request_id="w2", command_id="c2", profiles=[PROFILE])
         # Replacing every reference in the same publish is allowed.
-        result = self.publish(board, request_id="w3", command_id="c3", profiles=[PROFILE], preferences=[], configuration={"decisionProfileId": None, "autoMaintain": False})
+        result = self.publish(board, request_id="w3", command_id="c3", profiles=[PROFILE], preferences=[], configuration={"decisionProfileId": None})
         self.assertEqual(result["revision"], 2)
         self.assertEqual([item["profileId"] for item in self.snapshot(board)["profiles"]], [PROFILE_ID])
         # A preference for an unknown profile is refused.
@@ -332,31 +333,41 @@ class EvaluationPublishTests(EvaluationTestCase):
             "CONFLICT",
             request_id="w5",
             command_id="c5",
-            configuration={"decisionProfileId": "dsh:nope:nope:off", "autoMaintain": False},
+            configuration={"decisionProfileId": "dsh:nope:nope:off"},
         )
 
-    def test_configuration_accepts_auto_maintain_as_bounded_preauthorization(self):
+    def test_configuration_is_the_fixed_decision_profile_only(self):
         board = self.board()
         self.seed_profiles(board)
         published = self.publish(
             board,
             request_id="w2",
             command_id="c2",
-            configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True},
+            configuration={"decisionProfileId": PROFILE_ID},
         )
         self.assertEqual(published["revision"], 2)
         self.assertEqual(
             self.snapshot(board)["configuration"],
-            {"revision": 1, "decisionProfileId": PROFILE_ID, "autoMaintain": True},
+            {"revision": 1, "decisionProfileId": PROFILE_ID},
         )
-        # The preauthorization is still bounded to the published table: an unknown
+        # There is no automatic-maintenance setting any more: the external Harness
+        # prepares bounded facts and publishes cards through the ordinary writer gate.
+        error = self.refused_publish(
+            board,
+            "INVALID_ARGUMENT",
+            request_id="w3",
+            command_id="c3",
+            configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True},
+        )
+        self.assertIn("autoMaintain", error.message)
+        # The configuration is still bounded to the published table: an unknown
         # decision profile is refused exactly as before.
         self.refused_publish(
             board,
             "CONFLICT",
-            request_id="w3",
-            command_id="c3",
-            configuration={"decisionProfileId": "dsh:nope:nope:off", "autoMaintain": True},
+            request_id="w4",
+            command_id="c4",
+            configuration={"decisionProfileId": "dsh:nope:nope:off"},
         )
 
     def test_availability_must_be_backed_by_the_discovered_catalog(self):
@@ -1226,7 +1237,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             board,
             request_id="w4",
             command_id="c4",
-            configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": False},
+            configuration={"decisionProfileId": PROFILE_ID},
         )
         self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
 

@@ -135,7 +135,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["csrfToken", "tableRevision", "gate", "configuration", "profiles", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["csrfToken", "tableRevision", "gate", "configuration", "profiles", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
         self.assertTrue(snapshot["csrfToken"])
         self.assertIn("httponly", headers["set-cookie"].lower())
         self.assertIn("samesite=strict", headers["set-cookie"].lower())
@@ -309,63 +309,33 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # Snapshot reads expose no control or session secrets.
         self.assertNotIn("token", json.dumps(snapshot_of(board)).lower().replace("csrftoken", ""))
 
-    def test_browser_decision_operations_are_the_same_bounded_operations(self):
-        """selection_request/selection_get/evaluation_maintain over HTTP and C-Two."""
-        import os
-        from pathlib import Path
-
-        helper = Path(__file__).resolve().parent / "fixtures" / "mock_decision_helper.py"
-        previous = os.environ.get("BUDDY_DECISION_HELPER")
-        os.environ["BUDDY_DECISION_HELPER"] = str(helper)
-
-        def restore() -> None:
-            if previous is None:
-                os.environ.pop("BUDDY_DECISION_HELPER", None)
-            else:
-                os.environ["BUDDY_DECISION_HELPER"] = previous
-
-        self.addCleanup(restore)
+    def test_browser_reads_decisions_but_cannot_launch_maintenance(self):
+        """The console reads facts/history; only a Harness prepares maintenance."""
         board = self.board()
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        board.call("model_catalog_refresh", {"requestId": "cat"})
-        begin = board.call("evaluation_write_begin", {"requestId": "seed", "expectedRevision": 0, "kind": "human"})
-        board.call(
-            "evaluation_write_publish",
-            {
-                "commandId": "seed",
-                "writerId": begin["writerId"],
-                "generation": begin["generation"],
-                "writerToken": begin["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
-                "configuration": {"decisionProfileId": PROFILE_ID, "autoMaintain": False},
-            },
-        )
-        # The browser write reaches the same durable decision the C-Two call reads.
-        status, _headers, data = browser.command(
-            "selection_request", {"requestId": "http-pick", "task": "over http"}, csrf=csrf
-        )
-        self.assertEqual(status, 200, data)
-        created = json.loads(data)["result"]
-        self.assertEqual(created["status"], "queued")
+        created = board.call("selection_request", {"requestId": "host-pick", "task": "inspect routing"})
         status, _headers, data = browser.command(
             "selection_get", {"decisionId": created["decisionId"]}, csrf=csrf
         )
         self.assertEqual(status, 200, data)
-        over_http = json.loads(data)["result"]["decision"]
-        over_ctwo = board.call("selection_get", {"decisionId": created["decisionId"]})["decision"]
-        self.assertEqual(over_http, over_ctwo)
-        status, _headers, data = browser.command("evaluation_maintain", {"requestId": "http-tidy"}, csrf=csrf)
+        self.assertEqual(json.loads(data)["result"]["decision"],
+                         board.call("selection_get", {"decisionId": created["decisionId"]})["decision"])
+        before_tasks = board.store.count_tasks()
+        with board.store.db.read() as connection:
+            before_events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        for operation in ("evaluation_prepare", "evaluation_maintain", "evaluation_evidence_record",
+                          "evaluation_reader_begin", "selection_request"):
+            with self.subTest(operation=operation):
+                status, _headers, data = browser.command(operation, {"requestId": "not-authorized"}, csrf=csrf)
+                self.assertEqual(status, 404, data)
+                self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
+        status, _headers, data = browser.command("evaluation_history", {"limit": 20}, csrf=csrf)
         self.assertEqual(status, 200, data)
-        self.assertEqual(json.loads(data)["result"]["status"], "needs-host")
-        snapshot = browser.bootstrap()
-        self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["maintain", "select"])
-        # A refresh never runs a model: the history is read, not recomputed.
-        self.assertEqual(board.store.count_tasks(), 1)
-
-    def test_snapshot_get_does_not_run_model_discovery(self):
-        board = self.board()
+        self.assertEqual(json.loads(data)["result"], board.call("evaluation_history", {"limit": 20}))
+        self.assertEqual(board.store.count_tasks(), before_tasks)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], before_events)
         _stated, browser = self.open_console(board)
         from buddy import catalog
 
@@ -684,11 +654,12 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertIn("console_snapshot", caps["operations"]["control"])
             # Selection and maintenance are advertised, but only through their real
             # bounded semantics: no silent fallback and a card-only adoption scope.
-            for operation in ("selection_request", "selection_get", "evaluation_maintain"):
+            for operation in ("selection_request", "selection_get", "evaluation_prepare", "evaluation_history"):
                 self.assertIn(operation, caps["operations"]["control"])
+            self.assertNotIn("evaluation_maintain", caps["operations"]["control"])
             self.assertIn("selectionFallback", caps["limitations"])
             self.assertIn("maintenanceScope", caps["limitations"])
-            self.assertIn("cards only", caps["limitations"]["maintenanceScope"])
+            self.assertIn("card-only", caps["limitations"]["maintenanceScope"])
             self.assertIn("not claimed", caps["limitations"]["osIsolation"])
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)
@@ -735,6 +706,20 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(final["pendingEvidence"], 1)
             self.assertEqual(len(final["profiles"]), 1)
             self.assertEqual(len(final["evidence"]), 1)
+            self.assertNotIn("autoMaintain", final["configuration"])
+            self.assertEqual(final["sampleCounts"].get(PROFILE_ID, 0), 0)
+            code, prepared = self.cli("evaluation-prepare", json.dumps({"requestId": "cli-prepare", "limit": 1}))
+            self.assertEqual(code, 0, prepared)
+            self.assertEqual(prepared["tableRevision"], 1)
+            self.assertEqual(prepared["newEvidenceIds"], [])
+            code, repeated = self.cli("evaluation-prepare", json.dumps({"requestId": "cli-prepare", "limit": 1}))
+            self.assertEqual(code, 0, repeated)
+            self.assertEqual(prepared, repeated)
+            code, history = self.cli("evaluation-history", json.dumps({"limit": 1}))
+            self.assertEqual(code, 0, history)
+            self.assertEqual([row["revision"] for row in history["revisions"]], [1])
+            self.assertEqual(history["total"], 1)
+            self.assertIsNone(history["nextCursor"])
 
 
 class ConsoleDecisionBrowseTests(ConsoleTestCase):
@@ -743,7 +728,10 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
     def test_selection_list_is_reachable_over_the_console_boundary(self):
         board = self.board()
         board.call("selection_request", {"requestId": "http-select", "task": "browse over http"})
-        maintain = board.call("evaluation_maintain", {"requestId": "http-maintain"})
+        # A retained maintenance record is historical data, never executable input.
+        with board.store.db.write() as connection:
+            connection.execute("INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,created_at) VALUES('archived-maintenance','needs-host','prior proposal',0,'2026-01-01T00:00:00.000Z')")
+            connection.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,created_at,updated_at) VALUES('archived-maintenance','archived-maintenance','maintain','historical','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')")
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
 
@@ -751,7 +739,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         self.assertEqual(status, 200, data)
         listed = json.loads(data)["result"]
         self.assertEqual(listed["total"], 1)
-        self.assertEqual([item["decisionId"] for item in listed["decisions"]], [maintain["decisionId"]])
+        self.assertEqual([item["decisionId"] for item in listed["decisions"]], ["archived-maintenance"])
         self.assertEqual(listed["decisions"][0]["kind"], "maintain")
         self.assertIsNone(listed["nextCursor"])
 

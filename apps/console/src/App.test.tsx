@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import { ApiError } from "./api";
-import type { Snapshot, TaskQuery, WriterGrant } from "./types";
+import type { Snapshot, TaskQuery } from "./types";
 
 const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf",
@@ -13,7 +12,6 @@ const initial = (): Snapshot => ({
   configuration: {
     revision: 1,
     decisionProfileId: "flash-off",
-    autoMaintain: false,
   },
   profiles: [
     {
@@ -40,134 +38,24 @@ const initial = (): Snapshot => ({
       limitations: [],
       risks: [],
       evidenceIds: [],
-      sampleCount: 0,
       updatedAt: null,
     },
   ],
   preferences: [],
   evidence: [],
   decisions: [],
-  pendingEvidence: 0,
+  sampleCounts: { "flash-off": 3 },
   tasks: { runs: [], total: 0 },
-  capabilities: { selection: false, maintenance: false },
+  capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
 });
 
 afterEach(() => {
   cleanup();
   window.location.hash = "";
+  document.documentElement.dataset.theme = "";
 });
 
 describe("console interactions", () => {
-  it("recovers the same editor intent when the committed grant response was lost", async () => {
-    const state = initial();
-    const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2, expiresAt: new Date(Date.now() + 120000).toISOString() };
-    let calls = 0;
-    const command = vi.fn(async () => {
-      state.gate = { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } };
-      if (++calls === 1) throw new ApiError("INVALID_RESPONSE", "lost grant");
-      return grant;
-    });
-    const api = { snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn(),
-      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })) } as unknown as ConsoleApi;
-    window.location.hash = "#models";
-    const user = userEvent.setup();
-    render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "编辑评价表" }));
-    await screen.findByText("lost grant");
-    await user.click(screen.getByRole("button", { name: "编辑评价表" }));
-    await screen.findByRole("button", { name: "发布新版本" });
-    expect(command).toHaveBeenCalledTimes(2);
-    expect(command.mock.calls[1]).toEqual(command.mock.calls[0]);
-  });
-
-  it("reuses the original maintenance request after an ambiguous network response", async () => {
-    const state = initial();
-    state.capabilities.maintenance = true;
-    state.pendingEvidence = 2;
-    const maintain = vi
-      .fn()
-      .mockRejectedValueOnce(new ApiError("NETWORK", "lost response"))
-      .mockResolvedValueOnce({ decisionId: "durable", runId: "run" });
-    const command = vi.fn(async (operation: string, params: unknown, csrf: string) => {
-      if (operation === "selection_list") return { decisions: [], total: 0, nextCursor: null };
-      if (operation === "evaluation_maintain") return maintain(params, csrf);
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    const api = {
-      snapshot: vi.fn(async () => state),
-      command,
-      task: vi.fn(),
-      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
-    } as unknown as ConsoleApi;
-    window.location.hash = "#models";
-    const user = userEvent.setup();
-    render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "评价维护" }));
-    await user.click(await screen.findByRole("button", { name: "请求整理" }));
-    await screen.findByRole("button", { name: "重试同一整理请求" });
-    await user.click(screen.getByRole("link", { name: "路由配置" }));
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
-    await user.click(
-      await screen.findByRole("button", { name: "重试同一整理请求" }),
-    );
-    await waitFor(() => expect(maintain).toHaveBeenCalledTimes(2));
-    expect(maintain.mock.calls[1]).toEqual(maintain.mock.calls[0]);
-    expect(maintain.mock.calls[0]).toEqual([
-      { requestId: expect.any(String) },
-      "fixture-csrf",
-    ]);
-    expect(command.mock.calls.some(([operation]) => operation === "selection_request")).toBe(false);
-  });
-
-  it("records a scoped observation using the real evidence command contract without taking a writer", async () => {
-    const state = initial();
-    const command = vi.fn(async (operation: string, params: any) => {
-      if (
-        operation !== "evaluation_evidence_record" ||
-        params.kind !== "observation"
-      )
-        throw new Error("unsupported evidence command");
-      state.pendingEvidence = 1;
-      return { verified: false, counted: false };
-    });
-    const api = {
-      snapshot: vi.fn(async () => structuredClone(state)),
-      command,
-      task: vi.fn(),
-      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
-    } as unknown as ConsoleApi;
-    window.location.hash = "#models";
-    const user = userEvent.setup();
-    render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
-    await user.click(screen.getByRole("tab", { name: "证据" }));
-    await user.type(
-      screen.getByLabelText("补充观察"),
-      "一次有边界的观察，不是验收成绩",
-    );
-    await user.type(screen.getByLabelText("项目来源（可选）"), "示例项目");
-    await user.type(
-      screen.getByLabelText("适用条件（每行一条）"),
-      "React 状态管理{Enter}只读调查",
-    );
-    await user.click(screen.getByRole("button", { name: "记录待整理观察" }));
-    await waitFor(() =>
-      expect(screen.getByLabelText("补充观察")).toHaveProperty("value", ""),
-    );
-    expect(command).toHaveBeenCalledExactlyOnceWith(
-      "evaluation_evidence_record",
-      expect.objectContaining({
-        profileId: "flash-off",
-        kind: "observation",
-        summary: "一次有边界的观察，不是验收成绩",
-        source: "user",
-        project: "示例项目",
-        conditions: ["React 状态管理", "只读调查"],
-      }),
-      "fixture-csrf",
-    );
-  });
-
   it("retries a never-claimed cancellation without asking to accept nonexistent output", async () => {
     const state = initial();
     state.tasks = {
@@ -268,9 +156,10 @@ describe("console interactions", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("viewing and switching pages never sends a write or model request", async () => {
+  it("viewing, editing locally and switching pages never sends a write or model request", async () => {
+    const state = initial();
     const api = {
-      snapshot: vi.fn(async () => initial()),
+      snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
@@ -285,81 +174,50 @@ describe("console interactions", () => {
     expect(screen.queryByRole("button", { name: "请求推荐" })).toBeNull();
     expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
+    expect(screen.queryByText(/整理经验/)).toBeNull();
+    // Turning the switch on only creates a local draft shared across pages.
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
+    await user.click(screen.getByRole("tab", { name: "能力评价" }));
+    await user.type(await screen.findByLabelText("当前评价"), "本地草稿");
+    await user.click(screen.getByRole("link", { name: "路由配置" }));
+    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "待积累实际证据本地草稿");
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(await screen.findByRole("button", { name: "放弃修改" }));
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("keeps typed multiline text in the draft across refresh and publishes no fabricated counters", async () => {
-    let state = initial();
-    state.evidence = [
-      {
-        evidenceId: "ev-fixture",
-        profileId: "flash-off",
-        kind: "observation",
-        summary: "单次 React 观察",
-        project: "fixture",
-        conditions: ["React"],
-        source: "user",
-        runId: null,
-        createdAt: "2026-09-22T00:00:00Z",
-      },
-    ];
-    let published: Record<string, any> | null = null;
-    const grant: WriterGrant = {
-      writerId: "fixture-writer",
-      generation: 1,
-      writerToken: "fixture-secret",
-      phase: "writing",
-      tableRevision: 2,
-      expiresAt: new Date(Date.now() + 120000).toISOString(),
-    };
-    const command = vi.fn(async (operation: string, params: any) => {
-      if (operation === "evaluation_write_begin") {
-        state = {
-          ...state,
-          gate: {
-            ...state.gate,
-            phase: "writing",
-            writer: { ...grant, kind: "human" },
-          },
-        };
-        return grant;
-      }
-      if (operation === "evaluation_write_publish") {
-        published = params;
-        state = {
-          ...state,
-          tableRevision: 3,
-          gate: { ...state.gate, phase: "open", writer: null },
-        };
-        return { tableRevision: 3 };
-      }
-      return grant;
+  it("offers no maintenance or evidence-submission action anywhere", async () => {
+    const state = initial();
+    state.evidence = [{ evidenceId: "ev-1", profileId: "flash-off", kind: "observation",
+      summary: "一条只读证据", project: null, conditions: [], source: "user", runId: null,
+      createdAt: "2026-09-22T00:00:00Z" }];
+    const command = vi.fn(async (operation: string) => {
+      if (operation === "evaluation_history") return { revisions: [], nextCursor: null, total: 0 };
+      throw new Error(`Unexpected command: ${operation}`);
     });
     const api = {
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),
-      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
+      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
     } as unknown as ConsoleApi;
-    window.location.hash = "#models";
     const user = userEvent.setup();
+    window.location.hash = "#models";
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "编辑评价表" }));
-    await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    const input = await screen.findByLabelText("适用工作");
-    await waitFor(() => expect(input).toHaveProperty("readOnly", false));
-    await user.type(input, "状态管理{Enter}并发测试");
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("button", { name: /Flash 决策/ }));
     await user.click(screen.getByRole("tab", { name: "证据" }));
-    await user.click(screen.getByLabelText("作为卡片依据"));
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    expect(screen.getByLabelText("适用工作")).toHaveProperty("value", "状态管理\n并发测试");
-    await user.click(screen.getByRole("button", { name: "发布新版本" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
-    expect(published!.cards[0].strengths).toEqual(["状态管理", "并发测试"]);
-    expect(published!.cards[0].evidenceIds).toEqual(["ev-fixture"]);
-    expect(published!.cards[0]).not.toHaveProperty("sampleCount");
-    expect(published!.expectedRevision).toBe(2);
+    expect(await screen.findByText("一条只读证据")).toBeTruthy();
+    expect(screen.queryByLabelText("补充观察")).toBeNull();
+    expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
+    expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "更新记录" }));
+    await screen.findByText("还没有已发布的评价版本。");
+    expect(command.mock.calls.map(([operation]) => operation)).toEqual(["evaluation_history"]);
   });
 });

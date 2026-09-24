@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --canvas: #f5f5f0;
   --surface: #ffffff;
   --subtle: #f5f6f3;
@@ -12,6 +13,7 @@
   --accent-wash: #edf5ee;
   --accent-soft: #f4f8f3;
   --accent-line: #cee2d3;
+  --on-accent: #ffffff;
   --warning: #866022;
   --warning-wash: #fbf5e7;
   --warning-line: #ecdfbf;
@@ -19,5 +21,41 @@
   --danger-wash: #fcf0ee;
   --danger-line: #edcfcb;
   --focus: #81ad90;
+  --edit-surface: #fbfdf9;
+  --edit-line: #a9c9b5;
+  --edit-wash: #f1f7f1;
+  --overlay: rgb(0 0 0 / 35%);
   --radius: 8px;
+}
+
+/* The console keeps an explicit light default; the switch writes the dark values
+   below. Every surface, form, disabled state, error, focus ring and selection
+   reads from these tokens, so both themes stay complete. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #121715;
+  --surface: #1a1f1c;
+  --subtle: #222824;
+  --ink: #e7ece8;
+  --muted: #a6b1aa;
+  --faint: #8c9890;
+  --line: #2e3531;
+  --line-strong: #414a44;
+  --accent: #7cc79f;
+  --accent-dark: #9bd7b4;
+  --accent-wash: #1d2c25;
+  --accent-soft: #1b241f;
+  --accent-line: #33503f;
+  --on-accent: #0e1a14;
+  --warning: #e0bb77;
+  --warning-wash: #322b1b;
+  --warning-line: #564a2d;
+  --danger: #f0a09a;
+  --danger-wash: #3a2321;
+  --danger-line: #5c3733;
+  --focus: #6fb894;
+  --edit-surface: #1e2723;
+  --edit-line: #4a6b58;
+  --edit-wash: #1c2521;
+  --overlay: rgb(0 0 0 / 60%);
 }

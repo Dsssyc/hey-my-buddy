@@ -48,16 +48,10 @@ const ADAPTER_POLL_MS = 100;
 /** Output-token bound for the single bounded call. */
 export const MAX_OUTPUT_TOKENS = 4_096;
 
-/** Bounded string/list limits mirrored from the prompt contract. */
+/** Bounded string/list limits mirrored from the selection prompt contract. */
 export const BOUNDS = Object.freeze({
   reasonChars: 2_000,
-  summaryChars: 2_000,
-  listItemChars: 500,
-  strengths: 20,
-  limitations: 20,
-  risks: 20,
   evidenceIds: 50,
-  cards: 64,
 });
 
 /** Non-empty, bounded, single-line-safe identifier. */
@@ -91,17 +85,6 @@ function checkIdentifierList(value, { limit, allowed, allowEmpty = true, label }
     if (allowed !== undefined && !allowed.has(entry)) return { kind: 'not-supplied', detail: `${label}[${index}] references an id that was not supplied` };
     if (seen.has(entry)) return { kind: 'shape', detail: `${label}[${index}] repeats an id` };
     seen.add(entry);
-  }
-  return null;
-}
-
-/** Validate one bounded string list. */
-function checkTextList(value, maxItems, maxChars, label) {
-  if (!Array.isArray(value)) return `${label} must be an array`;
-  if (value.length > maxItems) return `${label} has ${value.length} entries, above the ${maxItems} bound`;
-  for (const [index, entry] of value.entries()) {
-    if (typeof entry !== 'string') return `${label}[${index}] is not a string`;
-    if (entry.length > maxChars) return `${label}[${index}] is ${entry.length} characters, above the ${maxChars} bound`;
   }
   return null;
 }
@@ -179,24 +162,6 @@ export function legalCandidateIds(candidates, evidence) {
   return legal;
 }
 
-/**
- * The legal MAINTENANCE set: every profile the request supplied, including
- * disabled and unavailable ones.
- *
- * Selection legality and maintenance legality are different questions. A
- * profile that cannot be selected is exactly the profile whose card most needs
- * to record why — refusing maintenance for it would make an exclusion
- * impossible to document. What maintenance may never do is invent a profile
- * id, so membership of the supplied table is the whole test.
- */
-export function legalMaintenanceIds(candidates, evidence) {
-  const legal = new Map();
-  for (const [profileId, candidate] of candidates) {
-    legal.set(profileId, suppliedEvidenceIds(candidate, evidence));
-  }
-  return legal;
-}
-
 /** Evidence ids a request supplied for one profile: request evidence then profile-declared. */
 function suppliedEvidenceIds(candidate, evidence) {
   return new Set([...(evidence.get(candidate.profileId) ?? []), ...candidate.evidenceIds]);
@@ -240,62 +205,6 @@ export function validateSelectAnswer(answer, legal) {
 }
 
 /**
- * Validate one `maintain` answer against the request's legal maintenance set
- * (every supplied profile, including disabled and unavailable ones).
- * @returns `{ proposal }` or `{ problem }` with a machine code.
- */
-export function validateMaintainAnswer(answer, legal) {
-  const record = asRecord(answer);
-  if (record === null) return { problem: 'answer-shape' };
-  const extra = unexpectedKey(record, ['cards', 'reason']);
-  if (extra !== null) return { problem: 'answer-unexpected-field' };
-  const reason = field(record, 'reason');
-  const cards = field(record, 'cards');
-  if (!isText(reason, BOUNDS.reasonChars)) return { problem: 'answer-shape' };
-  if (!Array.isArray(cards)) return { problem: 'answer-shape' };
-  if (cards.length > BOUNDS.cards) return { problem: 'answer-too-many-cards' };
-  const seen = new Set();
-  const accepted = [];
-  for (const [index, card] of cards.entries()) {
-    const cardRecord = asRecord(card);
-    if (cardRecord === null) return { problem: 'answer-shape' };
-    const cardExtra = unexpectedKey(cardRecord, ['profileId', 'summary', 'strengths', 'limitations', 'risks', 'evidenceIds']);
-    if (cardExtra !== null) return { problem: 'answer-unexpected-field' };
-    const profileId = field(cardRecord, 'profileId');
-    const summary = field(cardRecord, 'summary');
-    const strengths = field(cardRecord, 'strengths');
-    const limitations = field(cardRecord, 'limitations');
-    const risks = field(cardRecord, 'risks');
-    const evidenceIds = field(cardRecord, 'evidenceIds');
-    if (!isIdentifier(profileId) || !legal.has(profileId)) return { problem: 'answer-profile-not-candidate' };
-    if (seen.has(profileId)) return { problem: 'answer-duplicate-card' };
-    seen.add(profileId);
-    if (!isText(summary, BOUNDS.summaryChars)) return { problem: 'answer-shape' };
-    for (const [label, list, bound] of [
-      ['strengths', strengths, BOUNDS.strengths],
-      ['limitations', limitations, BOUNDS.limitations],
-      ['risks', risks, BOUNDS.risks],
-    ]) {
-      const listProblem = checkTextList(list, bound, BOUNDS.listItemChars, `${label}[${String(index)}]`);
-      if (listProblem !== null) return { problem: 'answer-shape' };
-    }
-    const evidenceProblem = checkIdentifierList(evidenceIds, { limit: BOUNDS.evidenceIds, allowed: legal.get(profileId), label: 'evidenceIds' });
-    if (evidenceProblem !== null) {
-      return { problem: evidenceProblem.kind === 'not-supplied' ? 'answer-evidence-not-supplied' : 'answer-shape' };
-    }
-    accepted.push({
-      profileId,
-      summary,
-      strengths: [...strengths],
-      limitations: [...limitations],
-      risks: [...risks],
-      evidenceIds: [...evidenceIds],
-    });
-  }
-  return { proposal: { cards: accepted, reason } };
-}
-
-/**
  * Extract the first top-level JSON value from the model's visible text.
  *
  * The model is instructed to answer with one bare JSON object. A single
@@ -330,16 +239,14 @@ export function finishProblem(reason) {
 }
 
 /**
- * Resolve the model's structured answer to a validated decision or proposal.
+ * Resolve the model's structured answer to a validated selection decision.
  *
- * @returns `{ decision }`, `{ proposal }`, or `{ problem }`.
+ * @returns `{ decision }` or `{ problem }`.
  */
 export function resolveAnswer(operation, text, legal) {
   const extracted = extractJsonValue(text);
   if (extracted.problem !== undefined) return { problem: extracted.problem };
-  return operation === 'select'
-    ? validateSelectAnswer(extracted.value, legal)
-    : validateMaintainAnswer(extracted.value, legal);
+  return validateSelectAnswer(extracted.value, legal);
 }
 
 /**
@@ -429,17 +336,14 @@ export async function callDecisionModel(ctx, request, { timeoutMs }) {
     const finishCode = finishProblem(finish);
     if (finishCode !== null) return { ok: false, code: finishCode, ...(field(finish, 'failure') === undefined ? {} : { detail: errorDetail(field(finish, 'failure')) }) };
     if (!sawText) return { ok: false, code: 'answer-empty' };
-    // Selection and maintenance have different legality: see legalMaintenanceIds.
-    const legal = request.operation === 'select'
-      ? legalCandidateIds(request.candidates, request.evidenceIndex)
-      : legalMaintenanceIds(request.candidates, request.evidenceIndex);
+    // Only explicitly enabled and available profiles are legal candidates.
+    const legal = legalCandidateIds(request.candidates, request.evidenceIndex);
     const resolved = resolveAnswer(request.operation, text, legal);
     if (resolved.problem !== undefined) return { ok: false, code: resolved.problem };
     return {
       ok: true,
       operation: request.operation,
-      ...(resolved.decision === undefined ? {} : { decision: resolved.decision }),
-      ...(resolved.proposal === undefined ? {} : { proposal: resolved.proposal }),
+      decision: resolved.decision,
       resolvedConfig: {
         provider: prepared.config.provider,
         model: prepared.config.model,
@@ -545,7 +449,7 @@ export function readRequest(inputFile) {
   }
   const operation = field(value, 'operation');
   const profile = field(value, 'profile');
-  if (operation !== 'select' && operation !== 'maintain') return { problem: 'request-operation' };
+  if (operation !== 'select') return { problem: 'request-operation' };
   if (profile === null || typeof profile !== 'object' || Array.isArray(profile)) return { problem: 'request-profile-invalid' };
   const provider = field(profile, 'provider');
   const model = field(profile, 'model');
@@ -610,8 +514,7 @@ export function apply(ctx, config) {
         ? {
           status: 'ok',
           operation: read.request.operation,
-          ...(called.decision === undefined ? {} : { decision: called.decision }),
-          ...(called.proposal === undefined ? {} : { proposal: called.proposal }),
+          decision: called.decision,
           resolvedConfig: called.resolvedConfig,
           usage: called.usage,
           reasoningBytes: called.reasoningBytes,

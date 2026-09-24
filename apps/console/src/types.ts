@@ -26,7 +26,6 @@ export type Card = {
   limitations: string[];
   risks: string[];
   evidenceIds: string[];
-  sampleCount: number;
   updatedAt: string | null;
 };
 export type Evidence = {
@@ -115,7 +114,6 @@ export type Gate = {
 export type Configuration = {
   revision: number;
   decisionProfileId: string | null;
-  autoMaintain: boolean;
 };
 export type Snapshot = {
   csrfToken: string;
@@ -127,7 +125,8 @@ export type Snapshot = {
   cards: Card[];
   evidence: Evidence[];
   decisions: Decision[];
-  pendingEvidence: number;
+  /** Recorded verification samples per profile; independent of published card prose. */
+  sampleCounts: Record<string, number>;
   tasks: { runs: Task[]; total: number };
   capabilities: Record<string, boolean>;
 };
@@ -135,9 +134,14 @@ export type WriterGrant = {
   writerId: string;
   generation: number;
   writerToken: string;
+  /** Gate phase while the intent waits or holds the table. */
   phase: string;
+  /** Writer state from the board: "waiting", "active", "published", "aborted" or "expired". */
+  state?: string;
   expiresAt: string;
   tableRevision: number;
+  queuePosition?: number;
+  waitingWriters?: number;
 };
 export type Draft = Pick<
   Snapshot,

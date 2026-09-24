@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApi } from "./api";
-import { addProfiles, makeDraft, publication, setPreference } from "./draft";
-import type { Profile, Snapshot } from "./types";
+import {
+  addProfiles,
+  changedProfileIds,
+  configurationChanged,
+  draftDiffers,
+  makeDraft,
+  publication,
+  setPreference,
+} from "./draft";
+import type { Profile, Snapshot, WriterGrant } from "./types";
 
 const profile = {
   profileId: "flash-off",
@@ -17,6 +25,15 @@ const profile = {
   description: "",
   source: "catalog",
 } satisfies Profile;
+const grant = (tableRevision = 4): WriterGrant => ({
+  writerId: "w",
+  generation: 2,
+  writerToken: "private",
+  phase: "writing",
+  state: "active",
+  expiresAt: "",
+  tableRevision,
+});
 const snapshot = {
   tableRevision: 3,
   profiles: [profile],
@@ -25,8 +42,8 @@ const snapshot = {
   configuration: {
     revision: 2,
     decisionProfileId: "flash-off",
-    autoMaintain: false,
   },
+  sampleCounts: { "flash-off": 7 },
 } as unknown as Snapshot;
 
 describe("editing a published snapshot", () => {
@@ -34,21 +51,9 @@ describe("editing a published snapshot", () => {
     const draft = makeDraft(snapshot);
     draft.profiles[0].label = "My preference";
     expect(snapshot.profiles[0].label).toBe("Flash");
-    expect(
-      publication(
-        draft,
-        {
-          writerId: "w",
-          generation: 2,
-          writerToken: "private",
-          phase: "writing",
-          expiresAt: "",
-          tableRevision: 4,
-        },
-        "c",
-      ).expectedRevision,
-    ).toBe(3);
+    expect(publication(draft, grant(), "c").expectedRevision).toBe(3);
   });
+
   it("does not multiply discovered profiles or fabricate samples", () => {
     const draft = addProfiles(makeDraft(snapshot), [
       profile,
@@ -64,24 +69,15 @@ describe("editing a published snapshot", () => {
       limitations: [],
       risks: [],
       evidenceIds: [],
-      sampleCount: 0,
       updatedAt: null,
     });
-    const patch = publication(
-      draft,
-      {
-        writerId: "w",
-        generation: 1,
-        writerToken: "private",
-        phase: "writing",
-        expiresAt: "",
-        tableRevision: 3,
-      },
-      "c",
-    );
+    const patch = publication(draft, grant(3), "c");
     expect(patch.cards[0]).not.toHaveProperty("sampleCount");
     expect(patch.cards[0]).not.toHaveProperty("revision");
+    expect(patch.configuration).toEqual({ decisionProfileId: "flash-off" });
+    expect(patch.configuration).not.toHaveProperty("autoMaintain");
   });
+
   it("replaces a global pin without erasing unrelated soft preferences", () => {
     const draft = {
       ...makeDraft(snapshot),
@@ -95,6 +91,77 @@ describe("editing a published snapshot", () => {
       "b",
       "flash-off",
     ]);
+  });
+
+  it("detects content changes independently of array order and card rewrites", () => {
+    const baseline = makeDraft(snapshot);
+    const reordered: typeof baseline = {
+      ...baseline,
+      cards: [
+        { profileId: "b", revision: 1, summary: "", strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null },
+        { profileId: "a", revision: 0, summary: "A", strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null },
+      ],
+    };
+    const sameOrder: typeof baseline = { ...reordered, cards: [...reordered.cards].reverse() };
+    expect(draftDiffers(baseline, reordered)).toBe(true);
+    expect(draftDiffers(reordered, sameOrder)).toBe(false);
+    const edited = { ...baseline, cards: [{ profileId: "flash-off", revision: 0, summary: "changed", strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null }] };
+    expect(draftDiffers(baseline, edited)).toBe(true);
+  });
+
+  it("separates per-profile content changes from the decision configuration", () => {
+    const baseline = makeDraft(snapshot);
+    const edited: typeof baseline = {
+      ...baseline,
+      profiles: [{ ...baseline.profiles[0], enabled: false }],
+      cards: [{ profileId: "flash-off", revision: 0, summary: "edited", strengths: ["x"], limitations: [], risks: [], evidenceIds: [], updatedAt: null }],
+    };
+    expect(changedProfileIds(baseline, edited)).toEqual(["flash-off"]);
+    expect(configurationChanged(baseline, edited)).toBe(false);
+    const reconfigured: typeof baseline = {
+      ...edited,
+      configuration: { ...edited.configuration, decisionProfileId: "other" },
+    };
+    expect(configurationChanged(baseline, reconfigured)).toBe(true);
+  });
+
+  it("reports enablement and preference edits even when the profile already has a card", () => {
+    const existingCard = {
+      profileId: "flash-off",
+      revision: 4,
+      summary: "已发布的卡片",
+      strengths: ["稳定"],
+      limitations: [],
+      risks: [],
+      evidenceIds: [],
+      updatedAt: null,
+    };
+    const baseline = { ...makeDraft(snapshot), cards: [existingCard] };
+    const enabled = {
+      ...baseline,
+      profiles: [{ ...baseline.profiles[0], enabled: false }],
+    };
+    expect(changedProfileIds(baseline, enabled)).toEqual(["flash-off"]);
+
+    const preferred = {
+      ...baseline,
+      preferences: [{ profileId: "flash-off", mode: "prefer" as const, reason: "更快" }],
+    };
+    expect(changedProfileIds(baseline, preferred)).toEqual(["flash-off"]);
+
+    // All three kinds at once still resolve to the one profile they describe.
+    const combined = {
+      ...enabled,
+      preferences: preferred.preferences,
+      cards: [{ ...existingCard, summary: "重写的卡片" }],
+    };
+    expect(changedProfileIds(baseline, combined)).toEqual(["flash-off"]);
+    // A reordered copy of the same preferences is not a change.
+    const reordered = {
+      ...preferred,
+      preferences: [...preferred.preferences],
+    };
+    expect(changedProfileIds(preferred, reordered)).toEqual([]);
   });
 });
 

@@ -40,11 +40,12 @@ function fixture(records: Task[] = []) {
   const profiles = catalog();
   const snapshot: Snapshot = { csrfToken: "csrf", tableRevision: 2,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
-    configuration: { revision: 1, decisionProfileId: profiles[0].profileId, autoMaintain: false },
+    configuration: { revision: 1, decisionProfileId: profiles[0].profileId },
     profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
-      strengths: [], limitations: [], risks: [], evidenceIds: [], sampleCount: 0, updatedAt: null })),
-    preferences: [], evidence: [], decisions: [], pendingEvidence: 0, tasks: { runs: records, total: records.length },
-    capabilities: { selection: false, maintenance: false } };
+      strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
+    preferences: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
+    tasks: { runs: records, total: records.length },
+    capabilities: { selection: false, maintenance: false, evaluationWriteGate: true } };
   const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,
     expiresAt: new Date(Date.now() + 120000).toISOString() };
   const workflows = new Map<string, Workflow>();
@@ -88,34 +89,30 @@ describe("desktop console", () => {
     const detail = screen.getByRole("complementary", { name: "评价卡片详情" });
     expect(within(within(detail).getByRole("tabpanel")).getByText("原评价 deepseek-flash off")).toBeTruthy();
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
-    expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
+    expect(within(detail).getByRole("button", { name: /非思考，已启用，正在查看/ })).toBeTruthy();
+    expect(within(detail).getByRole("button", { name: /low，未启用/ })).toBeTruthy();
     await user.click(within(detail).getByRole("tab", { name: "能力评价" }));
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
     await user.click(within(detail).getByRole("tab", { name: "证据" }));
-    expect(within(detail).getByRole("textbox", { name: "补充观察" })).toBeTruthy();
+    expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
+    expect(within(detail).queryByRole("checkbox")).toBeNull();
+    expect(within(detail).getByText(/暂无评价证据/)).toBeTruthy();
     await user.click(within(detail).getByRole("tab", { name: "偏好与启用" }));
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("keeps separate assessment and observation drafts across efforts, models, detail tabs and main pages", async () => {
+  it("keeps one assessment draft across efforts, models, detail tabs and main pages without a lease", async () => {
     const f = fixture();
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "编辑评价表" }));
+    await user.click(await screen.findByRole("switch", { name: "编辑模式" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "能力评价" }));
     await user.clear(await screen.findByLabelText("当前评价"));
     await user.type(screen.getByLabelText("当前评价"), "off 评价草稿");
-    await user.click(screen.getByRole("tab", { name: "证据" }));
-    await user.type(screen.getByLabelText("补充观察"), "off 观察草稿");
-    await user.type(screen.getByLabelText("项目来源（可选）"), "off 项目");
-    await user.click(screen.getByRole("button", { name: "max" }));
-    expect(screen.getByLabelText("补充观察")).toHaveProperty("value", "");
-    expect(screen.getByLabelText("项目来源（可选）")).toHaveProperty("value", "");
-    await user.type(screen.getByLabelText("补充观察"), "max 观察草稿");
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
+    await user.click(screen.getByRole("button", { name: /^max，已启用/ }));
     expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 deepseek-flash max");
     await user.clear(screen.getByLabelText("当前评价"));
     await user.type(screen.getByLabelText("当前评价"), "max 评价草稿");
@@ -123,21 +120,26 @@ describe("desktop console", () => {
     expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 GLM-5.3 high");
     await user.clear(screen.getByLabelText("当前评价"));
     await user.type(screen.getByLabelText("当前评价"), "ZCode 评价草稿");
+    await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
+    await user.selectOptions(screen.getByLabelText("用户偏好"), "prefer");
     await user.click(screen.getByRole("link", { name: "路由配置" }));
     expect(screen.queryByRole("textbox", { name: "当前评价" })).toBeNull();
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "ZCode 评价草稿");
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "off 评价草稿");
-    await user.click(screen.getByRole("button", { name: "max" }));
+    await user.click(screen.getByRole("button", { name: /^max/ }));
+    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "max 评价草稿");
+    // A read-only refresh keeps the draft; only Save would take a lease.
+    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "max 评价草稿");
     await user.click(screen.getByRole("tab", { name: "证据" }));
-    expect(screen.getByLabelText("补充观察")).toHaveProperty("value", "max 观察草稿");
-    await user.click(screen.getByRole("button", { name: "非思考" }));
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(screen.getByLabelText("补充观察")).toHaveProperty("value", "off 观察草稿");
-    expect(screen.getByLabelText("项目来源（可选）")).toHaveProperty("value", "off 项目");
-    expect(f.command.mock.calls.map(([op]) => op)).toEqual(["evaluation_write_begin"]);
+    expect(screen.queryByRole("textbox", { name: "补充观察" })).toBeNull();
+    expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(await screen.findByRole("button", { name: "放弃修改" }));
+    await screen.findByText("已放弃未发布的修改。");
+    expect(f.command).not.toHaveBeenCalled();
   });
 
   it("keeps history filters and scroll across main pages and uses backend source attribution", async () => {
@@ -171,6 +173,17 @@ describe("desktop console", () => {
     const detail = screen.getByRole("complementary", { name: "任务详情" });
     expect(within(detail).getByText("/source/source-project")).toBeTruthy();
     expect(within(detail).getByText("alpha")).toBeTruthy();
+  });
+
+  it("labels each project group count explicitly for goals and internal records", async () => {
+    const f = fixture([goal("alpha"), goal("alpine")]);
+    const user = userEvent.setup();
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("button", { name: /目标 alpine/ });
+    expect(screen.getByText("已加载 2 个委派目标")).toBeTruthy();
+    await user.click(screen.getByLabelText("显示协助任务与内部执行"));
+    expect(await screen.findByText("已加载 2 条执行记录")).toBeTruthy();
+    expect(screen.queryByText("已加载 2 个委派目标")).toBeNull();
   });
 
   it("announces new records without inserting them or changing scroll until the user refreshes history", async () => {

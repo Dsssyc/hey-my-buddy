@@ -83,16 +83,17 @@ def parse_task_history_query(query: str) -> dict:
 
 #: The only operations a browser may invoke. Everything else — including any raw SQL
 #: or an unwrapped store call — is not reachable through this surface.
+#:
+#: Evaluation maintenance is Harness-owned: the console may read the publication log
+#: (``evaluation_history``) but never ``evaluation_prepare``, never a maintenance or
+#: selection model call, and no direct evidence entry. The ordinary writer gate stays
+#: so a human can still edit cards, preferences and configuration.
 CONSOLE_OPERATIONS = (
     "evaluation_write_begin",
     "evaluation_write_renew",
     "evaluation_write_publish",
     "evaluation_write_abort",
-    "evaluation_reader_begin",
-    "evaluation_reader_release",
-    "evaluation_evidence_record",
-    "evaluation_maintain",
-    "selection_request",
+    "evaluation_history",
     "selection_get",
     "selection_list",
     "model_catalog_refresh",

@@ -4,8 +4,8 @@
  *
  * One reusable single-decision entrypoint over the already installed dsh
  * model/auth/provider capability. It runs one bounded, tool-free model call
- * through the native harness `llm` service and returns a validated decision
- * or a proposed evaluation patch. It is deliberately NOT an agent run:
+ * through the native harness `llm` service and returns one validated bounded
+ * selection decision. It is deliberately NOT an agent run:
  *
  * - no session, no agent loop, no tool schemas, no repository context, no
  *   skills: the model sees one frozen instruction prefix and one deterministic
@@ -33,7 +33,7 @@
  * false; unknown is never reported as stopped.
  *
  * The Python blackboard remains the only authority: this adapter returns a
- * proposal, and the caller decides whether to adopt it.
+ * recommendation, and the caller decides whether to adopt it.
  *
  * Usage:
  *   node scripts/decision.mjs --input-file request.json --output-file result.json
@@ -232,8 +232,8 @@ export function validateRequest(value) {
     }
   }
   const operation = own(value, 'operation');
-  if (operation !== 'select' && operation !== 'maintain') {
-    throw new DecisionError('request-invalid', '"operation" must be "select" or "maintain"');
+  if (operation !== 'select') {
+    throw new DecisionError('request-invalid', '"operation" must be "select"');
   }
   const requestId = own(value, 'requestId');
   if (!isIdentifier(requestId, 200)) throw new DecisionError('request-invalid', '"requestId" must be a bounded non-empty string');
@@ -259,21 +259,14 @@ export function validateRequest(value) {
     if (seenProfiles.has(profileId)) throw new DecisionError('request-invalid', `"profiles"[${index}].profileId repeats ${profileId}`);
     seenProfiles.add(profileId);
   }
-  if (operation === 'select') {
-    const task = own(value, 'task');
-    if (!isText(task, 20_000)) throw new DecisionError('request-invalid', '"task" must be bounded non-empty text for a select request');
-  } else if (own(value, 'task') !== undefined) {
-    throw new DecisionError('request-invalid', '"task" is not part of a maintain request');
-  }
+  const task = own(value, 'task');
+  if (!isText(task, 20_000)) throw new DecisionError('request-invalid', '"task" must be bounded non-empty text for a select request');
   const cards = own(value, 'cards');
   if (cards !== undefined) checkObjects(cards, { name: 'cards', min: 0, max: MAX_REQUEST_CARDS });
   const preferences = own(value, 'preferences');
   if (preferences !== undefined) checkObjects(preferences, { name: 'preferences', min: 0, max: MAX_REQUEST_PREFERENCES });
   const evidence = own(value, 'evidence');
   if (evidence !== undefined) checkObjects(evidence, { name: 'evidence', min: 0, max: MAX_REQUEST_EVIDENCE });
-  if (operation === 'maintain' && cards === undefined) {
-    throw new DecisionError('request-invalid', '"cards" is required for a maintain request');
-  }
   return value;
 }
 
@@ -670,7 +663,10 @@ function readJsonIfPresent(file) {
   }
 }
 
-/** The public envelope for one operation, in its documented key order. */
+/**
+ * The public envelope for one bounded selection decision, in its documented
+ * key order.
+ */
 export function successEnvelope(request, child, result) {
   const base = {
     status: 'ok',
@@ -685,10 +681,7 @@ export function successEnvelope(request, child, result) {
     elapsedSeconds: roundSeconds(child.elapsedSeconds),
     shutdownConfirmed: child.shutdownConfirmed === true,
   };
-  if (request.operation === 'select') {
-    return { ...base, decision: result.decision };
-  }
-  return { ...base, proposal: result.proposal };
+  return { ...base, decision: result.decision };
 }
 
 /** Round one already-measured duration to 0.1 s. */
@@ -748,59 +741,6 @@ export function interpretSuccess(request, child, payload) {
     }
     return { envelope: { ...successEnvelope(request, child, payload), decision: { profileId, reason, evidenceIds: [...evidenceIds] } } };
   }
-  const proposal = own(payload, 'proposal');
-  if (proposal === null || typeof proposal !== 'object' || Array.isArray(proposal)) {
-    return { error: new DecisionError('child-protocol-error', 'the decision child returned no maintenance proposal') };
-  }
-  if (Object.keys(proposal).some((key) => !['cards', 'reason'].includes(key))) {
-    return { error: new DecisionError('child-protocol-error', 'the maintenance proposal carries an unexpected field') };
-  }
-  const reason = own(proposal, 'reason');
-  const cards = own(proposal, 'cards');
-  if (!isText(reason)) return { error: new DecisionError('child-protocol-error', 'the maintenance proposal carries no usable reason') };
-  if (!Array.isArray(cards)) return { error: new DecisionError('child-protocol-error', 'the maintenance proposal carries no cards array') };
-  const candidates = new Map(own(request, 'profiles').map((entry) => [own(entry, 'profileId'), entry]));
-  const seen = new Set();
-  for (const [index, card] of cards.entries()) {
-    if (card === null || typeof card !== 'object' || Array.isArray(card)) {
-      return { error: new DecisionError('child-protocol-error', `proposal.cards[${index}] must be an object`) };
-    }
-    const allowed = ['profileId', 'summary', 'strengths', 'limitations', 'risks', 'evidenceIds'];
-    if (Object.keys(card).some((key) => !allowed.includes(key))) {
-      return { error: new DecisionError('child-protocol-error', `proposal.cards[${index}] carries an unexpected field`) };
-    }
-    const profileId = own(card, 'profileId');
-    // Maintenance legality is membership of the supplied table, NOT selection
-    // legality: a disabled or unavailable profile is exactly the one whose card
-    // must be able to record why it is excluded.
-    const candidate = candidates.get(profileId);
-    if (candidate === undefined) {
-      return { error: new DecisionError('decision-profile-unknown', `proposal.cards[${index}] refers to ${String(profileId)}, which is not a supplied profile`) };
-    }
-    if (seen.has(profileId)) return { error: new DecisionError('child-protocol-error', `proposal.cards[${index}] repeats ${profileId}`) };
-    seen.add(profileId);
-    if (!isText(own(card, 'summary'), 2_000)) {
-      return { error: new DecisionError('child-protocol-error', `proposal.cards[${index}].summary is not usable text`) };
-    }
-    const suppliedEvidence = new Set([
-      ...evidenceIdsOf(candidate),
-      ...evidenceIdsOfRequest(request, profileId),
-    ]);
-    for (const key of ['strengths', 'limitations', 'risks']) {
-      const list = own(card, key);
-      if (!Array.isArray(list) || list.some((entry) => typeof entry !== 'string' || entry.length > 500)) {
-        return { error: new DecisionError('child-protocol-error', `proposal.cards[${index}].${key} is not a bounded string list`) };
-      }
-    }
-    const cardEvidence = own(card, 'evidenceIds');
-    if (!Array.isArray(cardEvidence) || cardEvidence.some((entry) => !isIdentifier(entry))) {
-      return { error: new DecisionError('child-protocol-error', `proposal.cards[${index}].evidenceIds is not a bounded identifier list`) };
-    }
-    if (cardEvidence.some((entry) => !suppliedEvidence.has(entry))) {
-      return { error: new DecisionError('decision-evidence-unknown', `proposal.cards[${index}] cites evidence that was not supplied`) };
-    }
-  }
-  return { envelope: successEnvelope(request, child, payload) };
 }
 
 /** The candidate record for one profile id, when present. */

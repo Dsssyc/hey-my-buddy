@@ -21,8 +21,8 @@ export const PROMPT_VERSION = 4;
 export const MAX_PAYLOAD_BYTES = 262_144;
 
 /**
- * Instruction prefix. One literal string per operation so the prefix is a pure
- * function of the operation and never of the request.
+ * Instruction prefix for the one bounded selection prompt. It is a literal
+ * string, never a function of the request.
  *
  * The rules below are the contract the adapter enforces after the call; they
  * are stated to the model so a refusal or a malformed answer is the model's
@@ -46,28 +46,9 @@ Rules:
 7. Model prose never means the task succeeded or was accepted.
 8. Abort with {"profileId": null, "reason": "...", "evidenceIds": []} when no candidate is clearly better supported than the others, when the request is ambiguous, or when the supplied evidence is insufficient. Abstention is a correct answer, not a failure.`;
 
-const MAINTAIN_INSTRUCTIONS = `You are a bounded evaluation maintainer for a local coding-agent task board.
-
-Return exactly one JSON object and nothing else. Do not use Markdown code fences, prose, or comments.
-
-Output schema:
-{"cards": [{"profileId": <string>, "summary": <string>, "strengths": <string[]>, "limitations": <string[]>, "risks": <string[]>, "evidenceIds": <string[]>}], "reason": <string>}
-
-Rules:
-1. Every "profileId" MUST be the "profileId" of an entry of the supplied "profiles" array. Never invent a profile, model, provider, or effort. A profile that is disabled or unavailable in the current table may still receive a card: record why it is excluded rather than skipping it.
-2. A card is either an update of a profile already present in the supplied "cards" array or the first card for a supplied profile that has none yet. Both are legal. Creating a profile id that is not in "profiles" is not.
-3. Every id in every "evidenceIds" MUST be one of the supplied evidence ids for that same profile. Never invent evidence. Keep at most 50 current references per card. Include sources of unresolved risks, then prioritize relevant NEW evidence ids absent from the old card; use remaining slots for relevant recent old sources. The caller retains immutable publication history, so older references can remain in that history while the current card stays bounded. Evidence you do not cite remains pending; do not fill the card with old references while omitting the new evidence being incorporated.
-4. "summary" is at most 1000 characters; each list holds at most 10 short items of at most 300 characters.
-5. Copy every existing unresolved risk and limitation VERBATIM into the corresponding output array before appending new items. Keep each original string exactly unchanged, including its applicability conditions, when current references are compacted. Put extra explanation in summary or a new item. Do not delete an unresolved limitation or risk because a later observation succeeded, and do not promote a single observation into a general conclusion.
-6. State only what the supplied evidence supports. Unknown stays unknown; do not fill a gap with a guess or a neutral rating.
-7. You propose only, and only within the card fields above. Never change preferences, authorization, execution permission, task acceptance, or any other persisted field.
-8. Model prose never means the task succeeded or was accepted.
-9. Return {"cards": [], "reason": "..."} when no evidence-supported change is justified. An empty patch is a correct answer, not a failure.`;
-
-/** The frozen instruction prefix for one operation. */
+/** The frozen selection instruction prefix. */
 export function instructionsFor(operation) {
   if (operation === 'select') return SELECT_INSTRUCTIONS;
-  if (operation === 'maintain') return MAINTAIN_INSTRUCTIONS;
   throw new TypeError(`unknown decision operation: ${String(operation)}`);
 }
 
@@ -84,20 +65,19 @@ export function instructionsFor(operation) {
  * the reusable bytes intact and a card edit can still reuse preceding profiles.
  */
 const SELECT_KEYS = ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'task', 'requestId'];
-const MAINTAIN_KEYS = ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'requestId'];
 
 /**
- * Build the deterministic payload object for one request.
+ * Build the deterministic payload object for one selection request.
  *
- * Key order is fixed by the operation (never by input object order), so two
- * runs over equal requests render byte-identical payloads. Array order is the
- * caller's: the Python owner supplies the current table in its own
+ * Key order is fixed by the selection contract (never by input object order),
+ * so two runs over equal requests render byte-identical payloads. Array order
+ * is the caller's: the Python owner supplies the current table in its own
  * deterministic order and this adapter never re-sorts it.
  */
 export function buildPayload(operation, request) {
-  const keys = operation === 'select' ? SELECT_KEYS : MAINTAIN_KEYS;
+  if (operation !== 'select') throw new TypeError(`unknown decision operation: ${String(operation)}`);
   const payload = {};
-  for (const key of keys) {
+  for (const key of SELECT_KEYS) {
     const value = request[key];
     if (value === undefined) continue;
     payload[key] = value;

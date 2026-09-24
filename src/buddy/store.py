@@ -988,7 +988,7 @@ class BoardStore:
                 # is retained and inspected; a new request is an explicit Host choice.
                 raise BoardError(
                     "UNSUPPORTED",
-                    "A decision run is not retried; submit a new selection_request or evaluation_maintain request "
+                    "A decision run is not retried; submit a new selection_request "
                     "with a new requestId. Nothing was re-executed.",
                     taskId=task["task_id"],
                 )

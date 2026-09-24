@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DecisionDetails } from "./DecisionDetails";
-import { Maintenance } from "./Maintenance";
 import { RoutingDetails } from "./RoutingDetails";
 import { ApiError, type ConsoleApi } from "./api";
 import type { Decision, Profile, Snapshot, Task } from "./types";
@@ -21,12 +20,12 @@ function snapshot(records: Task[] = []): Snapshot {
   return {
     csrfToken: "csrf", tableRevision: 99,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
-    configuration: { revision: 9, decisionProfileId: worker.profileId, autoMaintain: false },
+    configuration: { revision: 9, decisionProfileId: worker.profileId },
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
-    cards: [], evidence: [], decisions: [], pendingEvidence: 2,
+    cards: [], evidence: [], decisions: [], sampleCounts: {},
     tasks: { runs: records, total: records.length },
-    capabilities: { selection: true, maintenance: true },
+    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
 }
 function decision(id: string, overrides: Partial<Decision> = {}) {
@@ -92,7 +91,9 @@ describe("routing configuration", () => {
     window.location.hash = "#settings";
     render(<App suppliedApi={apiFor(state, command)} />);
     expect(await screen.findByLabelText("决策模型配置")).toHaveProperty("disabled", true);
-    expect(screen.getByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByText(/用于在智能路由中比较候选执行配置/)).toBeTruthy();
+    expect(screen.queryByText(/整理经验/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
     expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
@@ -153,68 +154,6 @@ describe("recorded decision details", () => {
     expect(disclosure.open).toBe(true);
     expect(within(disclosure).getByText(reason)).toBeTruthy();
     expect(command).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("evaluation maintenance", () => {
-  it("pages independently of the latest global snapshot to inspect an older unpublished proposal", async () => {
-    const state = snapshot();
-    state.decisions = [decision("unrelated-latest")];
-    const recent = Array.from({ length: 20 }, (_, index) => decision(`maintain-${index}`, {
-      kind: "maintain", task: "evaluation maintenance", tableRevision: 21 - index,
-    }));
-    const older = { ...decision("older-maintenance", { kind: "maintain", task: "evaluation maintenance", tableRevision: 1 }),
-      proposal: { cards: [{ profileId: worker.profileId, summary: "旧批次中保留删除文件的风险说明" }] },
-      publishedRevision: null };
-    const command = vi.fn(async (operation: string, params: { before?: number; decisionId?: string }) => {
-      if (operation === "selection_list") return params.before === 81
-        ? { decisions: [older], total: 21, nextCursor: null }
-        : { decisions: recent, total: 21, nextCursor: 81 };
-      if (operation === "selection_get" && params.decisionId === older.decisionId) return { decision: older };
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    const user = userEvent.setup();
-    render(<Maintenance snapshot={state} api={apiFor(state, command)} refresh={vi.fn(async () => state)} active onBack={vi.fn()} />);
-    const history = await screen.findByRole("region", { name: "评价维护记录" });
-    await waitFor(() => expect(within(history).getAllByRole("button", { name: /评价版本 V/ })).toHaveLength(20));
-    expect(command).toHaveBeenCalledExactlyOnceWith("selection_list", { kind: "maintain", limit: 20 }, "csrf");
-    await user.click(within(history).getByRole("button", { name: "加载更早记录" }));
-    await user.click(await within(history).findByRole("button", { name: /评价版本 V1(?!\d)/ }));
-    await screen.findByText("older-maintenance 的持久选择依据");
-    expect(screen.queryByRole("region", { name: "评价维护记录" })).toBeNull();
-    expect(command).toHaveBeenCalledWith("selection_list", { kind: "maintain", limit: 20, before: 81 }, "csrf");
-    expect(command).toHaveBeenCalledWith("selection_get", { decisionId: "older-maintenance", includeAudit: true }, "csrf");
-    const proposal = screen.getByText("查看整理建议").closest("details")!;
-    expect(proposal.open).toBe(false);
-    await user.click(within(proposal).getByText("查看整理建议"));
-    expect(proposal.open).toBe(true);
-    expect(within(proposal).getByText(/旧批次中保留删除文件的风险说明/)).toBeTruthy();
-    expect(within(proposal).getByText(/建议尚未发布/)).toBeTruthy();
-    expect(screen.queryByText("unrelated-latest 的持久选择依据")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "返回整理记录" }));
-    expect(screen.getByRole("button", { name: /评价版本 V1(?!\d)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /评价版本 V21(?!\d)/ })).toBeNull();
-    expect(command.mock.calls.every(([operation]) => ["selection_list", "selection_get"].includes(operation))).toBe(true);
-  });
-
-  it("discards a pending history response after hiding and reopening the maintenance pane", async () => {
-    const state = snapshot();
-    const old = deferred<{ decisions: Decision[]; total: number; nextCursor: null }>();
-    const command = vi.fn()
-      .mockReturnValueOnce(old.promise)
-      .mockResolvedValueOnce({ decisions: [decision("fresh", { kind: "maintain", tableRevision: 8 })], total: 1, nextCursor: null });
-    const props = { snapshot: state, api: apiFor(state, command), refresh: vi.fn(async () => state), onBack: vi.fn() };
-    const { rerender } = render(<Maintenance {...props} active={false} />);
-    expect(command).not.toHaveBeenCalled();
-    rerender(<Maintenance {...props} active />);
-    await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
-    rerender(<Maintenance {...props} active={false} />);
-    rerender(<Maintenance {...props} active />);
-    await screen.findByRole("button", { name: /评价版本 V8(?!\d)/ });
-    await act(async () => { old.resolve({ decisions: [decision("stale", { kind: "maintain", tableRevision: 1 })], total: 1, nextCursor: null }); });
-    expect(screen.getByRole("button", { name: /评价版本 V8(?!\d)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /评价版本 V1(?!\d)/ })).toBeNull();
-    expect(command).toHaveBeenCalledTimes(2);
   });
 });
 

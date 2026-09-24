@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createApi } from "./api";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
-import { makeDraft } from "./draft";
+import { useTheme } from "./theme";
 import { Tasks } from "./Tasks";
 import { Models } from "./Models";
 import { Settings } from "./Settings";
@@ -29,12 +29,25 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
     </main>;
 }
 
+function gateStateText(snapshot: Snapshot) {
+  return snapshot.gate.phase === "draining" ? "写入排队中" : "独占编辑中";
+}
+
 function Connected({ api, snapshot, refresh, connectionError }: {
   api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
 }) {
   const [tab, setTab] = useState<Tab>(currentTab);
   const [visited, setVisited] = useState(() => new Set<Tab>([currentTab()]));
-  const editor = useEditor(api, snapshot, refresh);
+  const theme = useTheme();
+  const editSwitch = useRef<HTMLButtonElement>(null);
+  const exitWasOpen = useRef(false);
+  const mutationsAvailable = !connectionError && snapshot.capabilities.evaluationWriteGate !== false;
+  const unavailableReason = connectionError
+    ? "与本地黑板的连接已中断：保存已停用，草稿仍保留在本页。"
+    : snapshot.capabilities.evaluationWriteGate === false
+      ? "当前会话没有评价表写入资格：保存已停用。"
+      : "";
+  const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason);
   function select(key: Tab) {
     setTab(key);
     setVisited(previous => previous.has(key) ? previous : new Set([...previous, key]));
@@ -44,26 +57,31 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
+  // Closing the exit dialog returns focus to the control that opened it.
+  useEffect(() => {
+    if (editor.exitPrompt) exitWasOpen.current = true;
+    else if (exitWasOpen.current) {
+      exitWasOpen.current = false;
+      editSwitch.current?.focus();
+    }
+  }, [editor.exitPrompt]);
   const pending = new Set(snapshot.tasks.runs.filter(t => t.workflow?.awaitingHost)
     .map(t => t.delegation?.rootRunId || t.runId)).size;
-  const gateLabel = snapshot.gate.phase === "open" ? "评价表可读" :
-    snapshot.gate.phase === "draining" ? "等待决策收束" :
-      snapshot.gate.writer?.kind === "maintenance" ? "评价维护窗口" : "独占编辑中";
-  const editingMine = snapshot.gate.writer?.writerId === editor.grant?.writerId && !!editor.grant;
-  const baseline = useMemo(() => makeDraft(snapshot), [snapshot]);
-  const changed = new Set<string>();
-  if (editor.draft) for (const key of ["profiles", "cards", "preferences"] as const) {
-    const before = new Map(baseline[key].map(p => [p.profileId, JSON.stringify(p)]));
-    const after = new Map(editor.draft[key].map(p => [p.profileId, JSON.stringify(p)]));
-    for (const item of [...baseline[key], ...editor.draft[key]]) {
-      if (before.get(item.profileId) !== after.get(item.profileId)) changed.add(item.profileId);
-    }
+  const saveLabel = editor.confirming ? "确认保存结果" : "保存更改";
+  const draftCount = editor.changedProfiles.length
+    ? ` · ${editor.changedProfiles.length} 个配置`
+    : editor.configurationDirty ? " · 决策模型配置" : "";
+  const saveRefusal = editor.saveBlockedReason
+    || (editor.waiting ? "正在等待编辑资格；可先取消等待。" : "");
+  function requestExit() {
+    if (editor.mode || editor.busy) void editor.requestExit();
+    else editor.enter();
   }
   return <div className="app-shell">
-    <a className="skip-link" href="#main" onClick={event => {
+    <a className="skip-link" href="#main" inert={editor.exitPrompt || undefined} onClick={event => {
       event.preventDefault(); document.getElementById("main")?.focus();
     }}>跳至主要内容</a>
-    <header className="app-header">
+    <header className="app-header" inert={editor.exitPrompt || undefined}>
       <a className="brand" href="#tasks" onClick={() => select("tasks")}><span className="brand-icon">b</span><strong>hey my buddy</strong></a>
       <nav className="primary-tabs" aria-label="主要导航">
         {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + key} onClick={() => select(key)}
@@ -74,39 +92,101 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       </nav>
       <div className="header-status">
         <span className="connection" title="关闭页面不影响后台任务">{connectionError ? "连接中断" : "已连接"}</span>
+        {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
         <span className="small muted">V{snapshot.tableRevision}</span>
+        <div className="edit-cluster">
+          <button ref={editSwitch} type="button" role="switch" aria-checked={editor.mode} className="button small-button edit-switch"
+            aria-disabled={editor.busy || undefined} onClick={requestExit}
+            title={editor.busy ? "保存进行中；结果未确认前不会丢弃草稿" : editor.mode ? "退出编辑模式" : "开启本地草稿，不占用编辑资格"}>
+            <span className="switch-track" aria-hidden="true"><span className="switch-thumb" /></span>
+            <span className="switch-label">编辑模式</span>
+          </button>
+          <span className={"edit-state" + (editor.mode ? editor.dirty ? " unsaved" : " active" : "")} role="status">
+            {editor.mode ? editor.dirty ? `编辑中 · 未保存${draftCount}` : "编辑中" : "只读"}
+          </span>
+          {editor.mode && <button type="button" className="button primary small-button" aria-disabled={!mutationsAvailable || editor.busy}
+            aria-describedby={saveRefusal ? "editor-save-reason" : undefined}
+            onClick={() => void editor.save()}>{editor.busy ? (editor.waiting ? "等待编辑资格…" : "正在保存…") : saveLabel}</button>}
+          {editor.mode && editor.waiting && <button type="button" className="button small-button" onClick={editor.cancelSave}>取消等待</button>}
+        </div>
+        <button type="button" role="switch" aria-checked={theme.theme === "dark"} className="icon-button theme-switch"
+          aria-label="深色主题" title={theme.theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} onClick={theme.toggle}>
+          <Icon name={theme.theme === "dark" ? "moon" : "sun"} />
+        </button>
         <button className="icon-button" aria-label="刷新工作台" title="只读刷新，不调用模型" onClick={() => void refresh()}><Icon name="refresh" /></button>
       </div>
     </header>
-    <main id="main" className="main-content" tabIndex={-1}>
+    <main id="main" className="main-content" tabIndex={-1} inert={editor.exitPrompt || undefined}>
       <h1 className="sr-only">{tabs[tab]}</h1>
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
-      {(tab !== "tasks" || editor.draft || editor.grant || snapshot.gate.phase !== "open") &&
-        <section className={"editor-bar " + (editor.grant ? "editor-active" : "")} aria-label="评价表编辑状态">
-          <div><Badge tone={snapshot.gate.phase === "open" ? "green" : "amber"}>{gateLabel}</Badge>
-            <span>{editor.grant ? editingMine ? "草稿中 · " + changed.size + " 个配置有改动" : "编辑请求已排队" :
-              editor.draft ? "草稿尚未发布" : "配置与评价按版本发布"}</span>
-          </div>
-          <div className="actions">{editor.grant ? <>
-            <button className="button small-button" disabled={editor.busy || editor.uncertain} onClick={() => void editor.discard()}>取消编辑</button>
-            <button className="button primary small-button" disabled={editor.busy || (!editor.hasAuthority && !editor.uncertain)}
-              onClick={() => void editor.save()}>{editor.busy ? "正在处理…" : editor.uncertain ? "确认保存结果" : "发布新版本"}</button>
-          </> : <button className="button small-button" disabled={editor.busy} onClick={() => void editor.begin()}>
-            {snapshot.gate.phase === "open" ? "编辑评价表" : "排队编辑"}</button>}</div>
-        </section>}
-      {editor.draft && !editor.grant && <div className="banner error-banner">
-        <span>草稿未发布，编辑资格已失效。请保留需要的内容，再重新编辑。</span>
-        <button className="button small-button" onClick={() => void editor.discard()}>放弃旧草稿</button>
+      {editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
+        <span>共享评价表已发布 V{editor.conflict.latest}，你的草稿基于 V{editor.conflict.basedOn}。草稿仍保留：重新加载会采用最新发布版本，放弃修改会丢弃本页草稿。</span>
+        <button type="button" className="button small-button" aria-disabled={editor.busy}
+          onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
+        <button type="button" className="button small-button danger" aria-disabled={editor.busy}
+          onClick={() => void editor.discard()}>放弃修改</button>
       </div>}
+      {editor.blocked && <p className="banner guard-banner" role="status">{editor.blocked}</p>}
       {editor.error && <p className="banner error-banner" role="alert">{editor.error}</p>}
       {editor.notice && <p className="publication-notice" role="status">{editor.notice}</p>}
+      {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
-      {(Object.keys(tabs) as Tab[]).map(key => visited.has(key) && <section key={key} hidden={tab !== key} className="view-panel" aria-label={tabs[key]}>
+      {(Object.keys(tabs) as Tab[]).map(key => visited.has(key) && <section key={key} hidden={tab !== key}
+        className={"view-panel" + (key !== "tasks" && editor.mode ? " edit-mode" : "")} aria-label={tabs[key]}>
         {key === "tasks" ? <Tasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key} /> :
-          key === "models" ? <Models snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} /> :
+          key === "models" ? <Models snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings snapshot={snapshot} editor={editor} />}
       </section>)}
     </main>
+    {editor.exitPrompt && <ExitDialog onKeep={editor.keepEditing} onSave={() => void editor.saveAndExit()} onDiscard={() => void editor.discard()} />}
+  </div>;
+}
+
+/**
+ * Modal confirmation with a real focus trap: the background is inert, focus
+ * starts on the safe "continue editing" action so Enter cannot publish, Tab
+ * wraps inside the dialog, and the caller restores focus to the edit switch.
+ */
+function ExitDialog({ onKeep, onSave, onDiscard }: { onKeep: () => void; onSave: () => void; onDiscard: () => void }) {
+  const backdrop = useRef<HTMLDivElement>(null);
+  const initialFocus = useRef<HTMLButtonElement>(null);
+  useEffect(() => { initialFocus.current?.focus(); }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onKeep();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = [...(backdrop.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? [])];
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!backdrop.current?.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onKeep]);
+  return <div className="dialog-backdrop" ref={backdrop}>
+    <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="exit-edit-title" aria-describedby="exit-edit-body">
+      <h2 id="exit-edit-title">有未保存的修改</h2>
+      <p id="exit-edit-body">保存并退出会发布新的评价版本；放弃修改会丢弃本页草稿，不影响已经发布的内容。</p>
+      <div className="actions">
+        <button type="button" className="button primary" onClick={onSave}>保存并退出</button>
+        <button type="button" className="button danger" onClick={onDiscard}>放弃修改</button>
+        <button ref={initialFocus} type="button" className="button" onClick={onKeep}>继续编辑</button>
+      </div>
+    </div>
   </div>;
 }

@@ -102,7 +102,7 @@ class DecisionAdapter(Adapter):
             raise BoardError(
                 "INVALID_ARGUMENT",
                 "this attempt carries no bounded decision input; a decision task is only created by "
-                "selection_request or evaluation_maintain",
+                "selection_request",
                 adapter=self.name,
             )
         encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)

@@ -5,7 +5,15 @@ export function Icon({
   size = 18,
 }: {
   name:
-    "tasks" | "models" | "settings" | "refresh" | "arrow" | "check" | "clock";
+    | "tasks"
+    | "models"
+    | "settings"
+    | "refresh"
+    | "arrow"
+    | "check"
+    | "clock"
+    | "sun"
+    | "moon";
   size?: number;
 }) {
   const paths = {
@@ -17,6 +25,8 @@ export function Icon({
     arrow: "M5 12h14m-6-6 6 6-6 6",
     check: "m5 12 4 4L19 6",
     clock: "M12 8v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+    sun: "M12 4V2M12 22v-2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z",
+    moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
   };
   return (
     <svg

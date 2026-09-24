@@ -5,6 +5,7 @@ import hashlib
 import json
 from unittest.mock import patch
 
+from buddy.db import SCHEMA_VERSION
 from buddy.decision import MAX_DECISION_TASK_BYTES
 from buddy.errors import BoardError
 from buddy.worker.worker import Worker
@@ -50,7 +51,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.submit(board)
         self.assertEqual(submitted["routing"]["status"], "explicit")
         self.assertEqual(submitted["executionConfiguration"], CONFIGURATION)
-        self.assertEqual(board.store.db.meta("schema_version"), "8")
+        self.assertEqual(board.store.db.meta("schema_version"), str(SCHEMA_VERSION))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
         for adapter in (None, "dsh", "zcode"):
@@ -276,7 +277,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board.call("evaluation_write_publish", {
             "commandId": "changed", "writerId": grant["writerId"], "generation": grant["generation"],
             "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
-            "configuration": {"decisionProfileId": SECOND_PROFILE_ID, "autoMaintain": False},
+            "configuration": {"decisionProfileId": SECOND_PROFILE_ID},
         })
         claimed = self.router_claim(board, submitted, claim_id="after-writer")
         self.assertEqual(claimed["claim"]["decisionInput"]["profile"]["model"], SECOND_PROFILE["model"])

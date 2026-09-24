@@ -59,8 +59,40 @@ class RoutingHistoryTestCase(WorkflowTestCase):
     def history(self, board, run_id, **params):
         return board.call("workflow_get", {"runId": run_id, "routingHistory": params})["routingHistory"]
 
-    def maintain(self, board, request_id):
-        return board.call("evaluation_maintain", {"requestId": request_id})
+    def maintain(self, board, request_id: str) -> dict:
+        """One historical ``kind='maintain'`` decision, seeded as read-only history.
+
+        The blackboard no longer executes maintenance requests and there is no
+        ``request_maintain``/``evaluation_maintain`` endpoint to call. The browsing
+        tests therefore establish the historical record directly, exactly like the
+        archived rows a real 0.6 deployment would carry: the row exists, is returned
+        by the compact readers, and can never start work or a model call.
+        """
+        from buddy.db import utc_now
+
+        decision_id = f"dec-{request_id}"
+        now = utc_now()
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO evaluation_decisions(decision_id, status, task, profile_id, table_revision,"
+                " reason, evidence_ids_json, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    decision_id,
+                    "needs-host",
+                    f"historical maintenance {request_id}",
+                    None,
+                    0,
+                    "historical maintenance is read-only; an external Harness owns maintenance now",
+                    "[]",
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO decision_requests(decision_id, request_id, kind, input_fingerprint,"
+                " configuration_revision, expected_revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (decision_id, request_id, "maintain", "historical-maintenance", 0, 0, now, now),
+            )
+        return {"decisionId": decision_id}
 
     def select_decision(self, board, request_id):
         return board.call("selection_request", {"requestId": request_id, "task": f"select for {request_id}"})
@@ -227,7 +259,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.publish_more(
             board, request_id="profiles-changed", command_id="profiles-changed",
             profiles=[SECOND_PROFILE],
-            configuration={"decisionProfileId": SECOND_PROFILE_ID, "autoMaintain": False},
+            configuration={"decisionProfileId": SECOND_PROFILE_ID},
         )
         snapshot = board.call("console_snapshot", {})
         self.assertEqual(snapshot["tableRevision"], 2)

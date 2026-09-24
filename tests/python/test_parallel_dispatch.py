@@ -153,7 +153,7 @@ class LaneTestCase(BoardTestCase):
                 "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
                 "profiles": [PROFILE],
-                "configuration": {"decisionProfileId": PROFILE_ID, "autoMaintain": False},
+                "configuration": {"decisionProfileId": PROFILE_ID},
             },
         )
 
@@ -966,7 +966,7 @@ class DaemonPoolTests(LaneTestCase):
                     "writerToken": grant["writerToken"],
                     "expectedRevision": grant["tableRevision"],
                     "profiles": [PROFILE],
-                    "configuration": {"decisionProfileId": PROFILE_ID, "autoMaintain": False},
+                    "configuration": {"decisionProfileId": PROFILE_ID},
                 },
             )
             selection = client.call("selection_request", {"requestId": "pool-pick", "task": "pick while busy"})

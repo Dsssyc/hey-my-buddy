@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -229,7 +229,6 @@ CREATE TABLE IF NOT EXISTS evaluation_state (
     table_revision          INTEGER NOT NULL DEFAULT 0,
     configuration_revision  INTEGER NOT NULL DEFAULT 0,
     decision_profile_id     TEXT,
-    auto_maintain           INTEGER NOT NULL DEFAULT 0,
     writer_sequence         INTEGER NOT NULL DEFAULT 0,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
@@ -484,6 +483,27 @@ CREATE INDEX IF NOT EXISTS decision_requests_created_idx ON decision_requests(cr
     """
 CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     ON evaluation_decisions(created_at, decision_id);
+""",
+    # Harness-owned maintenance reads actual Host acknowledgement events. This
+    # partial index makes the incremental review scan and its remainder count an
+    # index-only range over the immutable event sequence instead of a table scan,
+    # and `evaluation_maintenance_checkpoints` stores one durable sequence per
+    # assessed profile. The cursor is the append-only event sequence, never a wall
+    # clock: a review recorded later (or under a skewed clock) always has a higher
+    # sequence and can never be skipped. The checkpoint is not a fact ledger: the
+    # facts themselves live in `evaluation_evidence`, deduplicated by their
+    # deterministic identity. A checkpoint advances only inside the same transaction
+    # that records the batch's facts, so a failed preparation consumes no progress.
+    """
+CREATE INDEX IF NOT EXISTS events_review_seq_idx
+    ON events(seq) WHERE kind IN ('task.accepted','task.rejected','workflow.acknowledged');
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_maintenance_checkpoints (
+    scope        TEXT PRIMARY KEY,
+    review_seq   INTEGER NOT NULL,
+    updated_at   TEXT NOT NULL
+);
 """,
 )
 

@@ -101,7 +101,8 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
       {[...groups].map(([id, group]) => <section key={id} className="project-group">
         <button className="group-heading" aria-expanded={!collapsed.has(id)} title={group.project.path || group.project.id} onClick={() => setCollapsed(all => {
           const next = new Set(all); if (next.has(id)) next.delete(id); else next.add(id); return next;
-        })}><span>{collapsed.has(id) ? "▸" : "▾"} {group.project.label}</span><span className="small">{group.runs.length}</span></button>
+        })}><span>{collapsed.has(id) ? "▸" : "▾"} {group.project.label}</span>
+          <span className="small">已加载 {group.runs.length} {internal ? "条执行记录" : "个委派目标"}</span></button>
         {!collapsed.has(id) && <ul className="task-list">{group.runs.map(row => <li key={row.runId} data-run-id={row.runId}>
           <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} disabled={locked && selected !== row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>

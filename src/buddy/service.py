@@ -64,7 +64,8 @@ CONTROL_OPERATIONS = (
     "evaluation_reader_begin",
     "evaluation_reader_release",
     "evaluation_evidence_record",
-    "evaluation_maintain",
+    "evaluation_prepare",
+    "evaluation_history",
     "selection_request",
     "selection_get",
     "selection_list",
@@ -284,9 +285,12 @@ class BoardService(_BaseResource):
                         "needs-host; the service never guesses a profile and never selects a selector"
                     ),
                     "maintenanceScope": (
-                        "bounded: automatic adoption may touch cards only (evidence-backed text and references) and "
-                        "requires configuration.autoMaintain=true; profiles, preferences, configuration, authority "
-                        "and code-owned counters are never changed by a model"
+                        "harness-owned: the blackboard executes no maintenance model call and has no "
+                        "autoMaintain setting. An external Harness collects bounded facts with "
+                        "evaluation_prepare (no model call, no lease), synthesizes card text under the buddy "
+                        "skill, and publishes a short card-only patch with evaluation_write_begin(kind="
+                        "\"maintenance\") plus evaluation_write_publish; profiles, preferences, configuration, "
+                        "authority and code-owned counters are never changed by a model"
                     ),
                     "decisionModelIdentity": (
                         "the bounded decision helper reports the requested and resolved configuration; the served "
@@ -386,6 +390,14 @@ class BoardService(_BaseResource):
     def evaluation_evidence_record(self, request_json: str) -> str:
         return self._guard("evaluation.evidence.record", request_json, self.evaluation.evidence_record)
 
+    def evaluation_prepare(self, request_json: str) -> str:
+        # The Harness-owned maintenance read: bounded, deterministic fact collection
+        # with no model call, no writer lease and no publication.
+        return self._guard("evaluation.prepare", request_json, self.evaluation.prepare)
+
+    def evaluation_history(self, request_json: str) -> str:
+        return self._guard("evaluation.history", request_json, self.evaluation.history)
+
     # -- decisions ----------------------------------------------------------
     def selection_request(self, request_json: str) -> str:
         return self._guard("selection.request", request_json, self.decisions.request_select)
@@ -395,9 +407,6 @@ class BoardService(_BaseResource):
 
     def selection_list(self, request_json: str) -> str:
         return self._guard("selection.list", request_json, self.decisions.list_decisions)
-
-    def evaluation_maintain(self, request_json: str) -> str:
-        return self._guard("evaluation.maintain", request_json, self.decisions.request_maintain)
 
     def model_catalog_refresh(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

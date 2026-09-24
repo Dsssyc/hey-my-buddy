@@ -57,70 +57,6 @@ def select_envelope(request):
     return {"profileId": chosen, "reason": f"mock select chose {chosen}", "evidenceIds": cited}
 
 
-def maintain_proposal(request):
-    style = os.environ.get("MOCK_DECISION_CARD_MODE", "preserve")
-    cards = request.get("cards") or []
-    if style == "empty":
-        return {"cards": [], "reason": "mock found nothing to update"}
-    proposed = []
-    for card in cards:
-        entry = {
-            "profileId": card["profileId"],
-            "summary": f"mock maintenance summary for {card['profileId']}",
-            "strengths": list(card.get("strengths") or []),
-            "limitations": list(card.get("limitations") or []),
-            "risks": list(card.get("risks") or []),
-            "evidenceIds": list(card.get("evidenceIds") or []),
-        }
-        if style in ("preserve", "compact"):
-            # Incorporation plus bounded compaction: the supplied pending evidence for
-            # this profile is appended, then the reference window keeps only the newest
-            # entries, so older references retire while risks and limitations stay.
-            window = 64 if style == "preserve" else int(os.environ.get("MOCK_DECISION_WINDOW", "8"))
-            merged_refs = list(card.get("evidenceIds") or []) + supplied_evidence(request, card["profileId"])
-            entry["evidenceIds"] = list(dict.fromkeys(merged_refs))[-window:]
-        if style == "cite_first_pending":
-            pending_refs = supplied_evidence(request, card["profileId"])
-            if pending_refs:
-                entry["evidenceIds"] = [*entry["evidenceIds"], pending_refs[0]]
-        if style == "no_op":
-            entry["summary"] = card.get("summary") or "unchanged"
-        if style == "drop_risk" and entry["risks"]:
-            entry["risks"] = entry["risks"][1:]
-        if style == "drop_limitation" and entry["limitations"]:
-            entry["limitations"] = entry["limitations"][1:]
-        if style == "drop_evidence" and entry["evidenceIds"]:
-            entry["evidenceIds"] = entry["evidenceIds"][1:]
-        if style == "foreign_evidence":
-            entry["evidenceIds"] = [*entry["evidenceIds"], "ev-not-supplied"]
-        if style == "extra_field":
-            entry["sampleCount"] = 99
-        if style == "noisy" and entry["summary"]:
-            entry["summary"] = entry["summary"] * 40
-        proposed.append(entry)
-    if style == "propose_new" and profiles_available(request):
-        for request_profile in request["profiles"]:
-            if request_profile["profileId"] not in {card["profileId"] for card in cards}:
-                proposed.append(
-                    {
-                        "profileId": request_profile["profileId"],
-                        "summary": "mock proposed a new card from pending evidence",
-                        "strengths": [],
-                        "limitations": [],
-                        "risks": [],
-                        "evidenceIds": supplied_evidence(request, request_profile["profileId"])[:1],
-                    }
-                )
-                break
-    if style == "config_change":
-        return {"cards": proposed, "reason": "mock", "configuration": {"autoMaintain": False}}
-    return {"cards": proposed, "reason": "mock maintenance preserved risks and references"}
-
-
-def profiles_available(request):
-    return bool(request.get("profiles"))
-
-
 def main(argv):
     values = {}
     index = 0
@@ -191,14 +127,12 @@ def main(argv):
             "elapsedSeconds": 0.1,
             "shutdownConfirmed": "false" if MODE == "string_shutdown" else False,
         }
-        envelope["decision" if request["operation"] == "select" else "proposal"] = (
-            select_envelope(request) if request["operation"] == "select" else maintain_proposal(request)
-        )
+        envelope["decision"] = select_envelope(request)
         write_output(output, envelope)
         return 0
     envelope = {
         "status": "ok",
-        "operation": "maintain" if request["operation"] == "select" and MODE == "wrong_operation" else request["operation"],
+        "operation": "select-v2" if request["operation"] == "select" and MODE == "wrong_operation" else request["operation"],
         "tableRevision": request["tableRevision"] + (5 if MODE == "wrong_revision" else 0),
         "requested": request.get("profile"),
         "resolved": {**(request.get("profile") or {}), "reasoningEffort": (request.get("profile") or {}).get("effort")},
@@ -207,10 +141,7 @@ def main(argv):
         "elapsedSeconds": 0.2,
         "shutdownConfirmed": True,
     }
-    if request["operation"] == "select":
-        envelope["decision"] = select_envelope(request)
-    else:
-        envelope["proposal"] = maintain_proposal(request)
+    envelope["decision"] = select_envelope(request)
     write_output(output, envelope)
     return 0
 
