@@ -370,6 +370,16 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(repeat["duplicate"])
         self.assertEqual(repeat["plan"]["planId"], plan["planId"])
 
+    def test_delivered_output_without_integration_yields_a_blocked_cleanup_plan(self):
+        board = self.board()
+        self.register(board)
+        _submitted, _claim, _manifest, checkout, _seal, view, _artifact = self.run_worktree(board)
+        planned = self.plan(board, view)
+        self.assertEqual(planned["plan"]["state"], "blocked")
+        self.assertIn("not-accepted", planned["plan"]["reasons"])
+        self.assertIn("integration-missing", planned["plan"]["reasons"])
+        self.assertTrue(checkout.exists())
+
     def test_cleanup_is_blocked_by_unsealed_changes(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-dirty")
         (checkout / "tracked.txt").write_text("edited after the seal\n")
@@ -1024,6 +1034,34 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotEqual(fresh["plan"]["planId"], plan["planId"])
         self.assertEqual(fresh["plan"]["state"], "planned")
         self.assertEqual(fresh["plan"]["path"], manifest["checkoutRoot"])
+
+    def test_started_cleanup_recovers_after_plan_expiry_without_removing_twice(self):
+        clock = FakeClock()
+        board = self.board(clock=clock)
+        self.register(board)
+        submitted, _claim, _manifest, checkout, _seal, view, artifact = self.run_worktree(board)
+        self.integrate(board, view, artifact, target=self.target_with_artifact(artifact))
+        self.acknowledge(board, view, artifact)
+        planned = self.plan(board, self.view(board, submitted["runId"]))
+        plan = planned["plan"]
+        remove = workspace_module.cleanup_remove
+
+        def crash_after_removal(*args, **kwargs):
+            remove(*args, **kwargs)
+            raise RuntimeError("simulated loss before the completion transaction")
+
+        with mock.patch.object(workspace_module, "cleanup_remove", side_effect=crash_after_removal):
+            with self.assertRaisesRegex(RuntimeError, "simulated loss"):
+                self.apply(board, planned, plan)
+        self.assertFalse(checkout.exists())
+        self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "applying")
+        clock.value = "2099-01-01T00:00:00.000Z"
+        with mock.patch.object(workspace_module, "cleanup_remove", side_effect=AssertionError("second deletion")):
+            recovered = self.apply(board, planned, plan)
+            self.assertEqual(recovered["plan"]["state"], "applied")
+            replay = self.apply(board, recovered, plan, command_id="recheck-applied")
+        self.assertTrue(replay["duplicate"])
+        self.assertTrue(Path(artifact["diffPath"]).is_file())
 
 
 if __name__ == "__main__":

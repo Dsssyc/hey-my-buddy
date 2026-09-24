@@ -4081,9 +4081,11 @@ class WorkflowCoordinator:
                 "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?",
                 (run_row["final_artifact_id"], run_row["run_id"]),
             ).fetchone()
+        integration = (self._find_integration(connection, run_row["run_id"], final_artifact["artifact_id"], None)
+                       if final_artifact is not None else None)
         if final_artifact is None:
             reasons.append("final-artifact-missing")
-        elif self._find_integration(connection, run_row["run_id"], final_artifact["artifact_id"], None) is None:
+        elif integration is None:
             reasons.append("integration-missing")
         summary = self.shutdown_summary(connection, run_row["run_id"])
         if not (summary["selfConfirmed"] and summary["descendantsConfirmed"]):
@@ -4114,8 +4116,7 @@ class WorkflowCoordinator:
                            "verdict": task["acceptance_verdict"]},
             "shutdown": summary,
             "finalArtifactId": run_row["final_artifact_id"],
-            "integrationId": (self._find_integration(connection, run_row["run_id"], final_artifact["artifact_id"], None)["integration_id"]
-                              if final_artifact is not None else None),
+            "integrationId": integration["integration_id"] if integration is not None else None,
         }
         retention = {
             # The physical allocation owns the disposable worktree; the logical
@@ -4375,7 +4376,10 @@ class WorkflowCoordinator:
         if plan["state"] == "blocked":
             raise BoardError("NOT_READY", "This cleanup plan was blocked and never authorized a deletion",
                              reasons=json.loads(plan["reasons_json"]))
-        if self.now() > plan["expires_at"]:
+        # Expiry limits admission of a deletion, not completion of one already
+        # recorded as applying. A crash after removal must still be recoverable;
+        # current authority, identity and dependency checks below remain required.
+        if plan["state"] == "planned" and self.now() > plan["expires_at"]:
             raise BoardError("PLAN_EXPIRED", "This cleanup plan expired; plan again before deleting anything",
                              planId=plan["plan_id"], expiresAt=plan["expires_at"])
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)).fetchone()
