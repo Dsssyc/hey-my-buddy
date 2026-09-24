@@ -71,3 +71,11 @@ class CatalogObservationTests(BoardTestCase):
         active = catalog_store.profiles(self.e, {})
         self.assertEqual([p['model'] for p in active['profiles']], ['c'])
         self.assertFalse(active['profiles'][0]['enabled'])
+
+    def test_history_search_filters_before_paging_and_treats_wildcards_literally(self):
+        self.record(catalog(models=('a', 'b', 'c')))
+        self.record(catalog(models=()))
+        page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True, 'query': 'fixture c', 'adapter': 'dsh'})
+        self.assertEqual([p['model'] for p in page['profiles']], ['c'])
+        self.assertIsNone(page['nextCursor'])
+        self.assertEqual(catalog_store.profiles(self.e, {'includeUnavailable': True, 'query': '%'})['profiles'], [])

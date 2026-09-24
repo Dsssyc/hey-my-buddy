@@ -91,7 +91,7 @@ def record(evaluation, discovered, observation_id=None):
 
 def profiles(evaluation, params):
     from . import schemas
-    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable'}, 'model.profiles')
+    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'adapter'}, 'model.profiles')
     limit = params.get('limit', 100)
     if type(limit) is not int or not 1 <= limit <= 200:
         raise BoardError('INVALID_ARGUMENT', 'limit must be between 1 and 200')
@@ -99,8 +99,21 @@ def profiles(evaluation, params):
     if not isinstance(after, str) or len(after) > 128:
         raise BoardError('INVALID_ARGUMENT', 'after must be a profile cursor')
     include = schemas.optional_bool(params, 'includeUnavailable', False)
+    query = schemas.optional_string(params, 'query', max_length=200) or ''
+    adapter = schemas.optional_string(params, 'adapter', max_length=32)
+    clauses = ['p.profile_id>?', '(? OR p.available=1)']
+    values = [after, int(include)]
+    if adapter:
+        clauses.append('p.adapter=?')
+        values.append(adapter)
+    for term in query.split()[:8]:
+        escaped = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        clauses.append("(p.profile_id LIKE ? ESCAPE '\\' OR p.label LIKE ? ESCAPE '\\' OR p.model LIKE ? ESCAPE '\\' OR p.provider LIKE ? ESCAPE '\\' OR p.adapter LIKE ? ESCAPE '\\')")
+        values.extend(['%' + escaped + '%'] * 5)
+    if len(query.split()) > 8:
+        raise BoardError('INVALID_ARGUMENT', 'query accepts at most 8 search terms')
     with evaluation.db.read() as db:
-        rows = db.execute('SELECT p.*, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE p.profile_id>? AND (? OR p.available=1) ORDER BY p.profile_id LIMIT ?', (after, int(include), limit + 1)).fetchall()
+        rows = db.execute('SELECT p.*, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
         values = [evaluation._profile_view(row) for row in rows[:limit]]
         ids = [value['profileId'] for value in values]
         marks = ','.join('?' for _ in ids) or 'NULL'

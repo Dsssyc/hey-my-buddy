@@ -69,7 +69,8 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         reason = entry.get('reason', '')
         if not isinstance(reason, str) or len(reason) > 500:
             raise BoardError('INVALID_ARGUMENT', 'reason must be a string of at most 500 characters')
-        if mode == 'pin' and not (profiles[profile_id]['available'] and profiles[profile_id]['enabled']):
+        previous = connection.execute('SELECT mode FROM evaluation_preferences WHERE profile_id=?', (profile_id,)).fetchone()
+        if mode == 'pin' and (previous is None or previous['mode'] != 'pin') and not (profiles[profile_id]['available'] and profiles[profile_id]['enabled']):
             raise BoardError('CONFIGURATION_UNAVAILABLE', 'A new pin requires an available enabled configuration', profileId=profile_id)
         if mode is None:
             connection.execute('DELETE FROM evaluation_preferences WHERE profile_id=?', (profile_id,))

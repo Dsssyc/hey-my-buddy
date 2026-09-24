@@ -55,6 +55,13 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['enabled'])
 
+    def test_reason_only_change_does_not_reenable_an_unavailable_pin(self):
+        grant = self.grant()
+        self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'profileId': 'retired', 'mode': 'pin', 'reason': 'Keep this intent while its provider is offline'}]))
+        snapshot = self.board_.call('console_snapshot', {})
+        self.assertEqual(snapshot['preferences'][0]['reason'], 'Keep this intent while its provider is offline')
+        self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['available'])
+
     def test_maintenance_cannot_write_user_fields_and_preserves_them(self):
         human = self.grant()
         self.user('user_policy_publish', self.payload(human, annotationChanges=[{'profileId': 'live', 'text': 'my assessment'}]))
