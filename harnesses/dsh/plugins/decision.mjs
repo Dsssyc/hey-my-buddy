@@ -454,6 +454,7 @@ export function readRequest(inputFile) {
   const provider = field(profile, 'provider');
   const model = field(profile, 'model');
   const effort = field(profile, 'effort');
+  const adapter = field(profile, 'adapter');
   if (!isIdentifier(provider) || !isIdentifier(model) || !isIdentifier(effort)) return { problem: 'request-profile-invalid' };
   const normalized = normalizeCandidates(field(value, 'profiles'));
   if (normalized.problem !== null) return { problem: normalized.problem };
@@ -463,13 +464,15 @@ export function readRequest(inputFile) {
     request: {
       operation,
       requestId: field(value, 'requestId'),
-      profile: { provider, model, effort },
+      profile: { ...(adapter === undefined ? {} : { adapter }), provider, model, effort },
       tableRevision: field(value, 'tableRevision'),
       ...(field(value, 'task') === undefined ? {} : { task: field(value, 'task') }),
       profiles: field(value, 'profiles'),
       ...(field(value, 'cards') === undefined ? {} : { cards: field(value, 'cards') }),
       ...(field(value, 'preferences') === undefined ? {} : { preferences: field(value, 'preferences') }),
       ...(field(value, 'evidence') === undefined ? {} : { evidence: field(value, 'evidence') }),
+      ...(field(value, 'annotations') === undefined ? {} : { annotations: field(value, 'annotations') }),
+      ...(field(value, 'routingPreferences') === undefined ? {} : { routingPreferences: field(value, 'routingPreferences') }),
       candidates: normalized.candidates,
       evidenceIndex: evidenceIndex.evidence,
     },

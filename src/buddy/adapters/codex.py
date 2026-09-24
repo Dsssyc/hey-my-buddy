@@ -26,9 +26,8 @@ class CodexAdapter(Adapter):
     def available(self) -> tuple[bool, str | None]:
         try:
             cli_command()
-            self.discover_models()
             return True, None
-        except (CodexUnavailable, BoardError) as error:
+        except CodexUnavailable as error:
             return False, str(error)
 
     def prepare(self, context: ExecutionContext) -> None:
@@ -119,11 +118,29 @@ class CodexAdapter(Adapter):
         p = record.get("provenance")
         expected = {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
                     "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True}
-        if not isinstance(p, dict) or any(type(p.get(key)) is not type(value) or p.get(key) != value for key, value in expected.items()):
+        if not isinstance(p, dict):
+            return "the Codex turn lacks native provenance"
+        controller_attention = p.get("controllerAttention") is True
+        if controller_attention:
+            expected = {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": False,
+                        "nativeTurnStarted": True, "nativeTurnCompleted": True, "controllerAttention": True}
+            outcome = record.get("outcome")
+            if (not isinstance(outcome, dict) or outcome.get("disposition") != "attention"
+                    or not isinstance(p.get("nativeRequestMethod"), str) or not p["nativeRequestMethod"]
+                    or p.get("nativeRequestThreadId") != record.get("sessionId")
+                    or p.get("nativeRequestTurnId") != p.get("nativeTurnId")):
+                return "the Codex controller attention is not bound to a native request"
+        if any(type(p.get(key)) is not type(value) or p.get(key) != value for key, value in expected.items()):
             return "the Codex turn lacks native completion and structured-result evidence"
         if p.get("nativeThreadId") != record.get("sessionId") or not isinstance(p.get("nativeTurnId"), str) or not p["nativeTurnId"]:
             return "the Codex native thread or turn identity is missing"
-        if not isinstance(p.get("finalItemId"), str) or not p["finalItemId"] or type(p.get("eventSeq")) is not int or p["eventSeq"] < 2:
+        if p.get("nativeRequestMethod") is not None and (
+            p.get("nativeRequestThreadId") != record.get("sessionId") or p.get("nativeRequestTurnId") != p["nativeTurnId"]
+        ):
+            return "the Codex native request is not correlated with this thread and turn"
+        if not controller_attention and (not isinstance(p.get("finalItemId"), str) or not p["finalItemId"]):
+            return "the Codex final message has no native item identity"
+        if type(p.get("eventSeq")) is not int or p["eventSeq"] < 2:
             return "the Codex final message has no native item or event sequence"
         mode, previous = record.get("resumeMode"), record.get("previousSessionId")
         if mode == "native-session" and isinstance(previous, str) and record["sessionId"] == previous:

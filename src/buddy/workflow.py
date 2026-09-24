@@ -851,11 +851,23 @@ class WorkflowCoordinator:
         return spec
 
     def _routing_view(self, connection, run) -> dict:
+        goal = json.loads(run["goal_json"])
+        preferences = goal.get("routingPreferences", [])
         if not run["current_routing_id"]:
             request = self._open_boundary(connection, run)
             needs_host = request is not None and json.loads(request["payload_json"]).get("source") == "routing"
+            override = connection.execute(
+                "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.configuration_overridden' ORDER BY seq DESC LIMIT 1",
+                (run["run_id"],),
+            ).fetchone()
+            override_payload = json.loads(override["payload_json"]) if override else None
+            source = ("host-override" if override_payload and
+                      override_payload.get("configurationRevision") == run["execution_configuration_revision"]
+                      else "original-explicit" if len(schemas.configuration_constraints(goal)) == len(schemas.CONFIGURATION_FIELDS)
+                      else None)
             return {"status": "needs-host" if needs_host else "explicit", "decisionId": None, "taskId": None,
-                    "constraints": schemas.configuration_constraints(json.loads(run["goal_json"]))}
+                    "constraints": schemas.configuration_constraints(goal), "routingPreferences": preferences,
+                    "source": source}
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (run["current_routing_id"],)).fetchone()
         decision = self.board.decisions._row(connection, run["current_routing_id"])
         status = decision["status"] if link["state"] == "pending" else {
@@ -867,7 +879,10 @@ class WorkflowCoordinator:
             "selectedProfile": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
             "tableRevision": decision["table_revision"], "configurationRevision": decision["configuration_revision"],
             "reason": link["reason"] or decision["reason"],
-            "constraints": schemas.configuration_constraints(json.loads(run["goal_json"])),
+            "constraints": schemas.configuration_constraints(goal), "routingPreferences": preferences,
+            "source": "model-selection",
+            "preferenceOutcome": (json.loads(decision["selected_json"]).get("routingPreference")
+                                  if decision["selected_json"] else None),
         }
 
     def _start_routing(self, connection, run_id: str, now: str) -> None:
@@ -889,7 +904,8 @@ class WorkflowCoordinator:
         connection.execute("UPDATE tasks SET adapter='unresolved', queue_reason='awaiting-model-selection' WHERE task_id=?", (run_id,))
         self.board._append_event(connection, "workflow.routing_requested", task_id=run_id,
                                  payload={"decisionId": decision_id, "routingTaskId": response["runId"],
-                                          "ownerGeneration": run["owner_generation"]})
+                                          "ownerGeneration": run["owner_generation"],
+                                          "routingPreferences": json.loads(run["goal_json"]).get("routingPreferences", [])})
         self.routing_settled(connection, decision_id=decision_id, now=now)
 
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
@@ -912,7 +928,8 @@ class WorkflowCoordinator:
             if (len(configuration) == len(schemas.CONFIGURATION_FIELDS)
                     and configuration.get("adapter") in schemas.CODING_ADAPTERS
                     and all(configuration.get(key) == value for key, value in constraints.items())):
-                connection.execute("UPDATE workflow_routes SET state='resolved',updated_at=? WHERE decision_id=?", (now, decision_id))
+                connection.execute("UPDATE workflow_routes SET state='resolved',reason=?,updated_at=? WHERE decision_id=?",
+                                   (decision["reason"], now, decision_id))
                 connection.execute(
                     "UPDATE workflow_runs SET execution_configuration_json=?, execution_configuration_revision=execution_configuration_revision+1,"
                     " validated_configuration_revision=NULL,updated_at=?,revision=revision+1 WHERE run_id=?",
@@ -923,7 +940,9 @@ class WorkflowCoordinator:
                 self.board._append_event(connection, "workflow.routing_resolved", task_id=run["run_id"],
                                          payload={"decisionId": decision_id, "configuration": configuration,
                                                   "profileId": decision["profile_id"], "tableRevision": decision["table_revision"],
-                                                  "configurationRevision": decision["configuration_revision"]})
+                                                  "configurationRevision": decision["configuration_revision"],
+                                                  "source": "model-selection",
+                                                  "preferenceOutcome": selected.get("routingPreference")})
                 return
         self._routing_attention(connection, run, now,
                                 decision["error"] or decision["reason"] or "No legal coding configuration was selected")
@@ -1077,6 +1096,10 @@ class WorkflowCoordinator:
         else:
             connection.execute("UPDATE workflow_runs SET execution_configuration_json=?,execution_configuration_revision=1,validated_configuration_revision=1 WHERE run_id=?",
                                (canonical_json(executionConfiguration), run_id))
+            self.board._append_event(connection, "workflow.configuration_selected", task_id=run_id,
+                                     payload={"source": "original-explicit", "configuration": executionConfiguration,
+                                              "configurationRevision": 1,
+                                              "routingPreferences": spec.get("routingPreferences", [])})
         return run_id
 
     def submit(self, params: dict) -> dict:
@@ -1314,6 +1337,9 @@ class WorkflowCoordinator:
                 ),
                 "taskId": row["decision_task_id"],
                 "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
+                "source": "model-selection",
+                "preferenceOutcome": (json.loads(row["selected_json"]).get("routingPreference")
+                                      if row["selected_json"] else None),
                 "tableRevision": int(row["table_revision"]),
                 "configurationRevision": int(row["configuration_revision"]),
                 "reason": row["reason"] or row["decision_reason"],
@@ -1445,6 +1471,7 @@ class WorkflowCoordinator:
                     "spec": item["spec"],
                     "executionWorkspace": item["executionWorkspace"],
                     "integrator": item["integrator"],
+                    "inheritRoutingPreferences": item["inheritRoutingPreferences"],
                 }
                 for item in helpers
             ],
@@ -1462,7 +1489,11 @@ class WorkflowCoordinator:
         # losing preparation leaves its owned artifact on disk, keyed by requestId.
         prepared: list[dict] = []
         if decision == "approve":
+            with self.db.read() as connection:
+                parent_preferences = json.loads(self._run_row(connection, run_id)["goal_json"]).get("routingPreferences", [])
             for helper in helpers:
+                if helper["inheritRoutingPreferences"]:
+                    helper = {**helper, "spec": {**helper["spec"], "routingPreferences": parent_preferences}}
                 configuration = self._validated_configuration(helper["spec"])
                 manifest = workspace_module().prepare(
                     self.board.directory, helper["requestId"], helper["executionWorkspace"]
@@ -1936,6 +1967,10 @@ class WorkflowCoordinator:
             else:
                 connection.execute("UPDATE workflow_runs SET execution_configuration_json=?,execution_configuration_revision=1,validated_configuration_revision=1 WHERE run_id=?",
                                    (canonical_json(item["executionConfiguration"]), helper_task_id))
+                self.board._append_event(connection, "workflow.configuration_selected", task_id=helper_task_id,
+                                         payload={"source": "original-explicit", "configuration": item["executionConfiguration"],
+                                                  "configurationRevision": 1,
+                                                  "routingPreferences": item["spec"].get("routingPreferences", [])})
             children.append(
                 {
                     "taskId": helper_task_id,
@@ -2071,6 +2106,8 @@ class WorkflowCoordinator:
         supplied_configuration = schemas.normalize_configuration(params["configuration"]) if "configuration" in params else None
         if supplied_configuration is not None and reroute:
             raise BoardError("INVALID_ARGUMENT", "configuration and reroute are mutually exclusive")
+        if supplied_configuration is not None and not reason:
+            raise BoardError("INVALID_ARGUMENT", "a Host configuration override requires an explicit reason")
         request_key = {
             "runId": run_id,
             "targetRunId": target_id,
@@ -2078,6 +2115,7 @@ class WorkflowCoordinator:
             "inputSha256": sha256_text(input_text),
             "helperPolicy": policy,
             "configuration": supplied_configuration,
+            "reason": reason,
             "reroute": reroute,
         }
         # Authenticate/replay before native catalog work. A concurrent takeover is
@@ -2176,6 +2214,14 @@ class WorkflowCoordinator:
                                    "validated_configuration_revision=execution_configuration_revision+1 WHERE run_id=?",
                                    (canonical_json(configuration), run_id))
                 connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (configuration["adapter"], run_id))
+                updated_run = self._run_row(connection, run_id)
+                self.board._append_event(
+                    connection, "workflow.configuration_overridden", task_id=run_id,
+                    payload={"source": "host-override", "actor": actor, "reason": reason,
+                             "configuration": configuration,
+                             "configurationRevision": updated_run["execution_configuration_revision"],
+                             "routingPreferences": json.loads(updated_run["goal_json"]).get("routingPreferences", [])},
+                )
             elif reroute:
                 self._start_routing(connection, run_id, now)
             if run_id != owner_run_id:

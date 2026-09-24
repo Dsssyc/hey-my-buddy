@@ -106,6 +106,15 @@ def _activity(control: dict, evidence: TurnEvidence | None, phase: str, tool: st
     state.update(phase=phase, lastWrite=tick)
 
 
+def _attention_outcome(method: str) -> dict:
+    summary = f"Codex requested Host interaction through {method}"
+    return {"disposition": "attention", "summary": summary, "remaining": [], "decisions": [],
+            "artifacts": [], "request": {"summary": summary,
+            "attempted": "The owned controller declined the correlated native request without granting access",
+            "neededWork": "Host must review the requested action and choose a permitted continuation",
+            "expectedArtifacts": [], "acceptance": "The Host resolves this boundary and starts an authorized continuation"}}
+
+
 def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     directory = Path(control["directory"])
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -132,16 +141,24 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     handle = ProcessHandle(process, own_group=True, log_paths={})
     result = {"status": "error", "mode": "codex", "harnessVersion": version,
               "requested": control.get("spec"), "resolved": None, "observed": None,
-              "nativeSessionStorage": "codex-home", "nativeAppVisible": True}
+              "nativeSessionStorage": "codex-home", "nativeAppVisible": None}
     record = None
     connection = None
     thread_id = turn_id = None
     evidence = None
-    denied_request = False
+    denied_requests = []
     early_notifications = []
     try:
         connection = Connection(process, deadline, cancelled)
         connection.on_notification = lambda message: early_notifications.append(message) if len(early_notifications) < 128 else None
+        def on_request(message):
+            params = message.get("params")
+            method = message.get("method")
+            if isinstance(params, dict) and isinstance(method, str) and len(method) <= 80:
+                denied_requests.append({"method": method, "threadId": params.get("threadId"), "turnId": params.get("turnId")})
+            connection.send({"id": message["id"], "error": {"code": -32601,
+                "message": "This Buddy Worker cannot approve interactive requests; report attention in the structured outcome"}})
+        connection.on_request = on_request
         connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.8.0"}})
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
@@ -197,11 +214,6 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 "This is a governed Buddy root turn. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. Complete your work, then emit exactly the JSON object required by outputSchema as the final answer. Use assistance for bounded help and attention when a Host decision is needed. Do not create another Buddy goal.",
                 Path(control["taskFile"]).read_text(), canonical_json(turn_input),
             ])
-            def on_request(message):
-                nonlocal denied_request
-                denied_request = True
-                connection.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy Worker cannot approve interactive requests; report attention in the structured outcome"}})
-            connection.on_request = on_request
             response = connection.call("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
                                                        "cwd": control["cwd"], "model": requested["model"],
                                                        "effort": requested["effort"], "approvalPolicy": "never",
@@ -232,25 +244,36 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                     evidence.final_item = finals[0]
             if native_turn.get("status") != "completed" or not evidence.started:
                 raise CodexProtocolError("native-turn-failed", "Codex turn did not complete successfully")
+            correlated = next((request for request in denied_requests
+                               if request["threadId"] == thread_id and request["turnId"] == turn_id), None)
             item = evidence.final_item
-            if not isinstance(item, dict) or not isinstance(item.get("text"), str):
-                raise CodexProtocolError("invalid-result", "the native root turn has no completed final message")
-            try:
-                outcome = decode_json(item["text"])
-            except (ValueError, RecursionError):
-                raise CodexProtocolError("invalid-result", "the native final message is not strict JSON") from None
-            error = validate_outcome(outcome)
-            if error:
-                raise CodexProtocolError("invalid-result", error)
-            if denied_request and outcome["disposition"] == "completed":
-                raise CodexProtocolError("native-attention", "Codex requested an unsupported interactive capability")
+            outcome = None
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                try:
+                    candidate = decode_json(item["text"])
+                    if not validate_outcome(candidate):
+                        outcome = candidate
+                except (ValueError, RecursionError):
+                    pass
+            controller_attention = correlated is not None and (outcome is None or outcome["disposition"] == "completed")
+            if controller_attention:
+                outcome = _attention_outcome(correlated["method"])
+            elif outcome is None:
+                raise CodexProtocolError("invalid-result", "the native root turn has no strict structured final outcome")
+            provenance = {"adapter": "codex", "nativeThreadId": thread_id,
+                          "nativeTurnId": turn_id, "finalItemId": item.get("id") if isinstance(item, dict) else None,
+                          "turnEnd": "completed", "outputSchemaValidated": not controller_attention,
+                          "finalMessageCompleted": isinstance(item, dict), "nativeTurnStarted": True,
+                          "nativeTurnCompleted": True, "eventSeq": evidence.event_seq}
+            if correlated:
+                provenance.update(nativeRequestMethod=correlated["method"],
+                                  nativeRequestThreadId=correlated["threadId"], nativeRequestTurnId=correlated["turnId"])
+            if controller_attention:
+                provenance["controllerAttention"] = True
             record = {"version": 1, **identity, "inputSha256": input_hash(turn_input),
                       "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
                       "sessionId": thread_id, "previousSessionId": previous, "resumeMode": mode,
-                      "outcome": outcome, "provenance": {"adapter": "codex", "nativeThreadId": thread_id,
-                      "nativeTurnId": turn_id, "finalItemId": item.get("id"), "turnEnd": "completed",
-                      "outputSchemaValidated": True, "finalMessageCompleted": True,
-                      "nativeTurnStarted": True, "nativeTurnCompleted": True, "eventSeq": evidence.event_seq}}
+                      "outcome": outcome, "provenance": provenance}
             result.update(status="ok", sessionId=thread_id, nativeTurnId=turn_id)
     except CodexProtocolError as error:
         result.update(status="cancelled" if error.code == "user-cancel" else "error", code=error.code, error=str(error))

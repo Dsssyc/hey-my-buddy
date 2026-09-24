@@ -201,6 +201,11 @@ describe('usage and help', () => {
 describe('request validation', () => {
   test('accepts the documented select shape', () => {
     assert.equal(validateRequest(defaultRequest()).operation, 'select');
+    const extended = defaultRequest({
+      annotations: [{ profileId: 'p1', text: 'Useful for this workflow', revision: 3, updatedAt: '2026-09-25T00:00:00Z' }],
+      routingPreferences: [{ match: { adapter: 'dsh', effort: 'off' }, reason: 'Try this route first' }],
+    });
+    assert.equal(validateRequest(extended).routingPreferences[0].match.effort, 'off');
   });
 
   test('rejects malformed requests with a stable code', () => {
@@ -215,6 +220,9 @@ describe('request validation', () => {
       [{ ...defaultRequest(), profiles: [{ profileId: 'a' }, { profileId: 'a' }] }, /repeats a/],
       [{ ...defaultRequest(), task: undefined }, /"task" must be bounded/],
       [{ ...defaultRequest(), evidence: 'nope' }, /"evidence" must be an array/],
+      [{ ...defaultRequest(), routingPreferences: [{ match: {}, reason: 'empty' }] }, /routingPreferences require/],
+      [{ ...defaultRequest(), routingPreferences: Array(9).fill({ match: { model: 'm' }, reason: 'x' }) }, /routingPreferences/],
+      [{ ...defaultRequest(), annotations: [{ profileId: 'p1', text: '', revision: 1, updatedAt: 'now' }] }, /annotations require/],
       [{ ...defaultRequest(), unexpected: 1 }, /unexpected request field/],
     ];
     for (const [value, pattern] of cases) {

@@ -15,7 +15,7 @@
  */
 
 /** Bumped whenever the instruction prefix or payload shape changes meaning. */
-export const PROMPT_VERSION = 4;
+export const PROMPT_VERSION = 5;
 
 /** Hard cap on the rendered payload JSON, in UTF-8 bytes. */
 export const MAX_PAYLOAD_BYTES = 262_144;
@@ -40,11 +40,12 @@ Rules:
 1. "profileId" MUST be the "profileId" of exactly one entry of the supplied "profiles" array, or null to abstain.
 2. Never invent a profile, model, provider, or effort. A profile that is absent, disabled, or unavailable is not a candidate.
 3. "evidenceIds" MUST be a subset of the "evidenceIds" values supplied for the chosen profile. Never invent evidence ids.
-4. "reason" is a short factual justification (at most 500 characters) grounded in the supplied profiles, cards, preferences, evidence, and task.
+4. "reason" is a short factual justification (at most 500 characters) grounded in the supplied profiles, cards, preferences, annotations, evidence, task routing preferences, and task.
 5. The supplied "preferences" are constraints: a "pin" or "exclude" entry narrows the legal candidate set, and a soft "prefer" only orders legal candidates. Never claim to change a preference.
-6. You propose only; you never grant execution permission, authorization, or acceptance.
+6. Apply "routingPreferences" only to this request. Each is a soft preference over its "match" fields; consider entries in order. If no legal candidate matches, choose another legal candidate when justified and explain the fallback. They never override hard candidate filters or published pins/excludes.
 7. Model prose never means the task succeeded or was accepted.
-8. Abort with {"profileId": null, "reason": "...", "evidenceIds": []} when no candidate is clearly better supported than the others, when the request is ambiguous, or when the supplied evidence is insufficient. Abstention is a correct answer, not a failure.`;
+8. A missing card or annotation means unknown capability evidence, not inability. Use declared profile capabilities for compatibility; never infer that DSH or another harness lacks ordinary coding tools because cards are absent.
+9. Abort with {"profileId": null, "reason": "...", "evidenceIds": []} when no candidate is clearly better supported than the others or the request is ambiguous. Abstention is a correct answer, not a failure.`;
 
 /** The frozen selection instruction prefix. */
 export function instructionsFor(operation) {
@@ -64,7 +65,7 @@ export function instructionsFor(operation) {
  * Revision metadata follows the table too, so a no-content publication keeps
  * the reusable bytes intact and a card edit can still reuse preceding profiles.
  */
-const SELECT_KEYS = ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'task', 'requestId'];
+const SELECT_KEYS = ['operation', 'profile', 'profiles', 'cards', 'preferences', 'annotations', 'evidence', 'tableRevision', 'routingPreferences', 'task', 'requestId'];
 
 /**
  * Build the deterministic payload object for one selection request.

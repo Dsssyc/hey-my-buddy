@@ -34,7 +34,7 @@ MAX_ARG_BYTES = 32 * 1024
 MAX_RESOURCES = 32
 MAX_CAPABILITIES = 32
 
-CODING_ADAPTERS = ("dsh", "zcode")
+CODING_ADAPTERS = ("dsh", "zcode", "codex")
 CONFIGURATION_FIELDS = ("adapter", "provider", "model", "effort")
 ADAPTERS = (*CODING_ADAPTERS, "command", "external")
 INQUIRY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -47,6 +47,7 @@ MAX_WORKFLOW_INPUT_BYTES = 64 * 1024
 MAX_WORKFLOW_REASON_BYTES = 4000
 MAX_WORKFLOW_HELPERS = 8
 MAX_WORKFLOW_ARTIFACTS = 32
+MAX_ROUTING_PREFERENCES = 8
 MAX_CONTROL_TOKEN = 256
 
 #: The Host control triple. ``hostId`` is attribution, ``ownerGeneration`` and
@@ -81,6 +82,7 @@ SUBMIT_FIELDS = frozenset(
         "owner",
         "requiredCapabilities",
         "exclusiveResources",
+        "routingPreferences",
     }
 )
 
@@ -89,7 +91,7 @@ TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
 #: Every field ``workflow_submit`` accepts in addition to the ordinary spec, and
 #: every field one explicit helper specification accepts.
 WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "spec", "submissionToken"}
-WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role", "spec"}
+WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role", "spec", "inheritRoutingPreferences"}
 MIN_SUBMISSION_TOKEN = 16
 MAX_SUBMISSION_TOKEN = 256
 
@@ -250,6 +252,8 @@ def normalize_spec(params: dict) -> dict:
         value = optional_string(params, name)
         if value is not None:
             spec[name] = value
+    if "routingPreferences" in params:
+        spec["routingPreferences"] = normalize_routing_preferences(params["routingPreferences"])
     argv = _argv(params, adapter)
     if argv:
         spec["argv"] = argv
@@ -497,12 +501,29 @@ def configuration_constraints(spec: dict) -> dict:
     return {key: spec[key] for key in CONFIGURATION_FIELDS if key in spec}
 
 
+def normalize_routing_preferences(value: Any) -> list[dict]:
+    if not isinstance(value, list) or len(value) > MAX_ROUTING_PREFERENCES:
+        raise BoardError("INVALID_ARGUMENT", f"routingPreferences must be a list of at most {MAX_ROUTING_PREFERENCES} entries")
+    result = []
+    for index, entry in enumerate(value):
+        entry = require_object(entry, f"routingPreferences[{index}]")
+        reject_unknown(entry, {"match", "reason"}, f"routingPreferences[{index}]")
+        match = require_object(entry.get("match"), f"routingPreferences[{index}].match")
+        reject_unknown(match, set(CONFIGURATION_FIELDS), f"routingPreferences[{index}].match")
+        if not match:
+            raise BoardError("INVALID_ARGUMENT", f"routingPreferences[{index}].match requires at least one configuration field")
+        normalized = {key: required_string(match, key, max_length=256) for key in CONFIGURATION_FIELDS if key in match}
+        reason = required_string(entry, "reason", max_length=512)
+        result.append({"match": normalized, "reason": reason})
+    return result
+
+
 def normalize_configuration(value: Any) -> dict:
     value = require_object(value, "configuration")
     reject_unknown(value, set(CONFIGURATION_FIELDS), "configuration")
     result = {key: required_string(value, key, max_length=256) for key in CONFIGURATION_FIELDS}
     if result["adapter"] not in CODING_ADAPTERS:
-        raise BoardError("INVALID_ARGUMENT", "configuration requires a coding adapter: dsh or zcode")
+        raise BoardError("INVALID_ARGUMENT", "configuration requires a coding adapter: dsh, zcode or codex")
     return result
 
 
@@ -528,6 +549,9 @@ def normalize_helpers(params: dict) -> list[dict]:
             entry, nested_key="spec", allowed=WORKFLOW_HELPER_FIELDS, what=f"helpers[{index}]"
         )
         spec = normalize_workflow_spec(spec_params)
+        inherit_preferences = optional_bool(entry, "inheritRoutingPreferences", False)
+        if inherit_preferences and "routingPreferences" in spec:
+            raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] cannot set routingPreferences and inheritRoutingPreferences together")
         workspace_intent = normalize_execution_workspace(entry)
         if workspace_intent:
             if "cwd" not in workspace_intent:
@@ -544,6 +568,7 @@ def normalize_helpers(params: dict) -> list[dict]:
                 "executionWorkspace": workspace_intent,
                 "integrator": bool(integrator) or role == "integrator",
                 "role": role,
+                "inheritRoutingPreferences": inherit_preferences,
             }
         )
     if helpers and sum(1 for helper in helpers if helper["integrator"]) > 1:

@@ -88,12 +88,18 @@ def main():
             if case == "hang":
                 time.sleep(60)
                 continue
+            if case in ("approval", "approval-failed"):
+                send({"id": 99, "method": "item/commandExecution/requestApproval",
+                      "params": {"threadId": thread_id, "turnId": turn_id, "itemId": "tool-1", "startedAtMs": 1}})
+                response = json.loads(sys.stdin.readline())
+                if response.get("id") != 99 or "error" not in response:
+                    raise RuntimeError("the controller unexpectedly approved the native request")
             item = {"type": "agentMessage", "id": "final-1", "phase": "final_answer",
                     "text": json.dumps(outcome(case)) if case != "invalid-json" else "not json"}
             if case != "no-final":
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
                                                             "item": item, "completedAtMs": 1}})
-            status = "failed" if case == "failed" else "completed"
+            status = "failed" if case in ("failed", "approval-failed") else "completed"
             turn = {"id": turn_id, "status": status, "items": [] if case == "no-final" else [item]}
             send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
             state["threads"][thread_id]["turns"].append(turn)

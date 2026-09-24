@@ -59,7 +59,7 @@ class DecisionAdapter(Adapter):
             raise BoardError("ADAPTER_UNAVAILABLE", "the bounded decision helper is not available", adapter=self.name)
         return [node, str(self.helper_path())]
 
-    def available(self) -> tuple[bool, str | None]:
+    def helper_available(self) -> tuple[bool, str | None]:
         override = os.environ.get(HELPER_ENV)
         if override:
             path = Path(override).expanduser()
@@ -77,6 +77,18 @@ class DecisionAdapter(Adapter):
         if not script.is_file():
             return False, "the bounded decision helper is missing from this distribution"
         return True, None
+
+    def available(self) -> tuple[bool, str | None]:
+        from . import adapters
+        reasons = []
+        for implementation in adapters().values():
+            if implementation.decision_execution:
+                usable, reason = implementation.decision_available()
+                if usable:
+                    return True, None
+                if reason:
+                    reasons.append(reason)
+        return False, reasons[0] if reasons else "no installed adapter declares a verified tool-free decision capability"
 
     # -- paths ---------------------------------------------------------------
     def input_path(self, context: ExecutionContext) -> Path:
@@ -135,6 +147,20 @@ class DecisionAdapter(Adapter):
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
         self.prepare(context)
+        from . import adapter
+        profile = context.decision_input.get("profile") or {}
+        name = profile.get("adapter")
+        if not isinstance(name, str) or not name:
+            raise BoardError("INVALID_ARGUMENT", "the decision input has no selected native adapter", adapter=self.name)
+        implementation = adapter(name)
+        if not implementation.decision_execution:
+            raise BoardError("UNSUPPORTED_ADAPTER", "the selected adapter has no verified tool-free decision capability", adapter=name)
+        usable, reason = implementation.decision_available()
+        if not usable:
+            raise BoardError("ADAPTER_UNAVAILABLE", reason or "the selected decision adapter is unavailable", adapter=name)
+        return implementation.start_decision(context)
+
+    def _start_helper(self, context: ExecutionContext) -> ProcessHandle:
         log_paths = context.log_paths()
         stdout, stderr = open_logs(log_paths)
         try:

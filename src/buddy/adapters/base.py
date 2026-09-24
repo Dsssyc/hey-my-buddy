@@ -120,9 +120,16 @@ class Adapter:
     capabilities: tuple[str, ...] = ()
     native_resume = False
     model_discovery = False
+    decision_execution = False
 
     def discover_models(self) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")
+
+    def decision_available(self) -> tuple[bool, str | None]:
+        return False, f"{self.name} has no verified tool-free decision execution"
+
+    def start_decision(self, context: ExecutionContext) -> "ProcessHandle":
+        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} cannot execute a tool-free decision", adapter=self.name)
 
     @staticmethod
     def validate_turn_provenance(record: dict) -> str | None:

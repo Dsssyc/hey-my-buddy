@@ -77,19 +77,20 @@ const TEXT_ANSWER = '{"profileId":"p1","reason":"grounded","evidenceIds":["e1"]}
 
 describe('prompt assembly', () => {
   test('the instruction prefix is versioned, selection-only and request-free', () => {
-    assert.equal(PROMPT_VERSION, 4);
+    assert.equal(PROMPT_VERSION, 5);
     const select = instructionsFor('select');
     assert.equal(instructionsFor('select'), select, 'the prefix must be stable');
     assert.doesNotMatch(select, /req-1/);
     assert.doesNotMatch(select, /tableRevision/);
     assert.match(select, /Return exactly one JSON object/);
+    assert.match(select, /missing card or annotation means unknown capability evidence/);
     assert.throws(() => instructionsFor('maintain'), /unknown decision operation/);
     assert.throws(() => instructionsFor('delete'), /unknown decision operation/);
   });
 
   test('the shared table precedes per-request data and requestId comes last', () => {
-    const request = { tableRevision: 1, task: 't', operation: 'select', requestId: 'r', profile: {}, profiles: [], cards: [], preferences: [], evidence: [] };
-    assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'task', 'requestId']);
+    const request = { tableRevision: 1, task: 't', operation: 'select', requestId: 'r', profile: {}, profiles: [], cards: [], preferences: [], annotations: [], evidence: [], routingPreferences: [] };
+    assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'annotations', 'evidence', 'tableRevision', 'routingPreferences', 'task', 'requestId']);
   });
 
   test('two requests against one table revision share the whole table prefix', () => {

@@ -78,6 +78,8 @@ export const MAX_REQUEST_PROFILES = 200;
 export const MAX_REQUEST_CARDS = 512;
 export const MAX_REQUEST_PREFERENCES = 256;
 export const MAX_REQUEST_EVIDENCE = 512;
+export const MAX_REQUEST_ANNOTATIONS = 200;
+export const MAX_REQUEST_ROUTING_PREFERENCES = 8;
 /** Bounded stdout/stderr diagnostics kept from the child. */
 const MAX_CHILD_STDOUT_BYTES = 16 * 1024;
 const MAX_CHILD_STDERR_BYTES = 8 * 1024;
@@ -225,7 +227,7 @@ export function validateRequest(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new DecisionError('request-invalid', 'the request document must be a JSON object');
   }
-  const allowedTopLevel = ['operation', 'requestId', 'profile', 'tableRevision', 'task', 'profiles', 'cards', 'preferences', 'evidence'];
+  const allowedTopLevel = ['operation', 'requestId', 'profile', 'tableRevision', 'task', 'profiles', 'cards', 'preferences', 'evidence', 'annotations', 'routingPreferences'];
   for (const key of Object.keys(value)) {
     if (!allowedTopLevel.includes(key)) {
       throw new DecisionError('request-invalid', `unexpected request field "${key}"`);
@@ -244,9 +246,11 @@ export function validateRequest(value) {
   const provider = own(profile, 'provider');
   const model = own(profile, 'model');
   const effort = own(profile, 'effort');
+  const adapter = own(profile, 'adapter');
   if (!isIdentifier(provider) || !isIdentifier(model) || !isIdentifier(effort)) {
     throw new DecisionError('request-invalid', '"profile" must carry bounded non-empty provider, model and effort strings');
   }
+  if (adapter !== undefined && !isIdentifier(adapter, 32)) throw new DecisionError('request-invalid', '"profile.adapter" must be a bounded identifier');
   const tableRevision = own(value, 'tableRevision');
   if (!Number.isSafeInteger(tableRevision) || tableRevision < 0) {
     throw new DecisionError('request-invalid', '"tableRevision" must be a non-negative integer');
@@ -267,6 +271,29 @@ export function validateRequest(value) {
   if (preferences !== undefined) checkObjects(preferences, { name: 'preferences', min: 0, max: MAX_REQUEST_PREFERENCES });
   const evidence = own(value, 'evidence');
   if (evidence !== undefined) checkObjects(evidence, { name: 'evidence', min: 0, max: MAX_REQUEST_EVIDENCE });
+  const annotations = own(value, 'annotations');
+  if (annotations !== undefined) {
+    checkObjects(annotations, { name: 'annotations', min: 0, max: MAX_REQUEST_ANNOTATIONS });
+    for (const entry of annotations) {
+      if (!isIdentifier(own(entry, 'profileId')) || !isText(own(entry, 'text'), 4_000) ||
+          !Number.isSafeInteger(own(entry, 'revision')) || own(entry, 'revision') < 0 ||
+          !isIdentifier(own(entry, 'updatedAt'), 80)) {
+        throw new DecisionError('request-invalid', 'annotations require bounded profileId, text, revision and updatedAt');
+      }
+    }
+  }
+  const routingPreferences = own(value, 'routingPreferences');
+  if (routingPreferences !== undefined) {
+    checkObjects(routingPreferences, { name: 'routingPreferences', min: 0, max: MAX_REQUEST_ROUTING_PREFERENCES });
+    for (const entry of routingPreferences) {
+      const match = own(entry, 'match');
+      if (match === null || typeof match !== 'object' || Array.isArray(match) || Object.keys(match).length === 0 ||
+          Object.keys(match).some((key) => !['adapter', 'provider', 'model', 'effort'].includes(key) || !isIdentifier(match[key])) ||
+          !isText(own(entry, 'reason'), 512)) {
+        throw new DecisionError('request-invalid', 'routingPreferences require a nonempty bounded match and reason');
+      }
+    }
+  }
   return value;
 }
 

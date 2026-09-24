@@ -1,0 +1,228 @@
+"""Task-local soft routing preferences and decision capability boundaries."""
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from buddy import schemas
+from buddy.adapters.base import Adapter, ExecutionContext
+from buddy.adapters.decision import DecisionAdapter
+from buddy.adapters.dsh import DshAdapter
+from buddy.adapters.codex import CodexAdapter
+from buddy.errors import BoardError
+from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+from test_workflow import CONFIGURATION, WorkflowTestCase
+
+NONCE = "n" * 16
+
+
+class RoutingPreferenceSchemaTests(unittest.TestCase):
+    def test_soft_preferences_are_canonical_goal_input_without_hard_constraints(self):
+        with tempfile.TemporaryDirectory() as root:
+            spec = schemas.normalize_workflow_spec({
+                "requestId": "goal-soft", "task": "Inspect this checkout", "cwd": root,
+                "routingPreferences": [{"match": {"adapter": "zcode", "model": "candidate"}, "reason": "prefer this route for the task"}],
+            })
+            self.assertNotIn("adapter", schemas.configuration_constraints(spec))
+            self.assertEqual(spec["routingPreferences"][0]["match"], {"adapter": "zcode", "model": "candidate"})
+            self.assertEqual(schemas.normalize_workflow_spec({**spec, "requestId": "goal-soft"})["routingPreferences"], spec["routingPreferences"])
+
+    def test_rejects_unbounded_or_unexplained_preferences(self):
+        invalid = [[{"match": {"adapter": "dsh"}, "reason": "x"}] * 9,
+                   [{"match": {}, "reason": "x"}],
+                   [{"match": {"model": "m"}, "reason": ""}],
+                   [{"match": {"efforts": "high"}, "reason": "x"}]]
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(BoardError):
+                schemas.normalize_routing_preferences(value)
+
+    def test_helper_inheritance_must_be_explicit(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
+                    "executionWorkspace": {"kind": "existing", "cwd": root}}
+            helper = schemas.normalize_helpers({"helpers": [base]})[0]
+            self.assertFalse(helper["inheritRoutingPreferences"])
+            inherited = schemas.normalize_helpers({"helpers": [{**base, "inheritRoutingPreferences": True}]})[0]
+            self.assertTrue(inherited["inheritRoutingPreferences"])
+            with self.assertRaises(BoardError):
+                schemas.normalize_helpers({"helpers": [{**base, "inheritRoutingPreferences": True,
+                    "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "explicit"}]}]})
+
+
+class DecisionCapabilityTests(unittest.TestCase):
+    def test_only_verified_native_adapters_declare_decision_execution(self):
+        self.assertTrue(DshAdapter.decision_execution)
+        self.assertFalse(CodexAdapter.decision_execution)
+        self.assertFalse(Adapter.decision_execution)
+
+    def test_decision_attempt_dispatches_through_registered_capability(self):
+        class Native(Adapter):
+            name = "native-fixture"
+            decision_execution = True
+
+            def decision_available(self):
+                return True, None
+
+            def start_decision(self, context):
+                return "native-handle"
+
+        context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
+                                   spec={"cwd": "/tmp", "timeoutSeconds": 10}, directory=Path("/tmp/unused"),
+                                   runtime={}, environment={}, decision_input={"profile": {"adapter": "native-fixture"}})
+        with mock.patch.object(DecisionAdapter, "prepare"), mock.patch("buddy.adapters.adapter", return_value=Native()):
+            self.assertEqual(DecisionAdapter().start(context), "native-handle")
+
+
+class RoutingPreferenceWorkflowTests(WorkflowTestCase):
+    seed = DecisionTestCase.seed
+    use_helper = DecisionTestCase.use_helper
+
+    def setUp(self):
+        super().setUp()
+        self.catalog_fixture()
+        self.use_helper()
+        self.enterContext(mock.patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)))
+
+    @staticmethod
+    def annotations(board):
+        # The branch baseline is schema 9; Host's integration supplies this table in schema 10.
+        with board.store.db.write() as connection:
+            connection.execute("CREATE TABLE evaluation_annotations(profile_id TEXT PRIMARY KEY, text TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL)")
+            connection.execute("INSERT INTO evaluation_annotations VALUES(?,?,?,?)",
+                               (PROFILE_ID, "Human preference for this workflow", 2, "2026-09-25T00:00:00Z"))
+
+    def routed(self, board, *, request_id, preferences, **constraints):
+        result = board.call("workflow_submit", {
+            "requestId": request_id, "hostId": "host-1", "submissionToken": "submission-secret-1",
+            "task": "Implement and verify the requested change", "cwd": str(self.workdir(request_id)),
+            "executionWorkspace": {"kind": "existing", "access": "write"},
+            "routingPreferences": preferences, **constraints,
+        })
+        if result.get("control"):
+            self.controls[result["runId"]] = result["control"]
+        return result
+
+    def select(self, board, view, profile_id):
+        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="route-claim")
+        claim = owned["claim"]
+        board.call("worker_result", {
+            "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
+            "generation": claim["attempt"]["generation"], "nonce": NONCE,
+            "status": "ok", "shutdownConfirmed": True,
+            "result": {"status": "ok", "operation": "select", "tableRevision": claim["decisionInput"]["tableRevision"],
+                       "decision": {"profileId": profile_id, "reason": "fixture selection", "evidenceIds": []}},
+        })
+        return claim["decisionInput"]
+
+    def test_soft_preference_falls_back_without_changing_goal_or_global_preferences(self):
+        board = self.board()
+        self.annotations(board)
+        self.seed(board)
+        prefs = [{"match": {"provider": "not-current"}, "reason": "Try this provider if available"}]
+        view = self.routed(board, request_id="route-soft", preferences=prefs)
+        document = self.select(board, view, PROFILE_ID)
+        self.assertEqual(document["routingPreferences"], prefs)
+        self.assertEqual(document["annotations"][0]["text"], "Human preference for this workflow")
+        routed = board.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "fallback")
+        self.assertEqual(routed["routing"]["source"], "model-selection")
+        self.assertEqual(routed["routing"]["routingPreferences"], prefs)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM evaluation_preferences").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT reason FROM workflow_routes WHERE run_id=?", (view["runId"],)).fetchone()[0].find("task preference: fallback") > 0, True)
+
+    def test_direct_selection_request_freezes_preferences_in_decision_input(self):
+        board = self.board()
+        self.annotations(board)
+        self.seed(board)
+        prefs = [{"match": {"adapter": "dsh"}, "reason": "Use installed DSH when suitable"}]
+        response = board.call("selection_request", {"requestId": "select-soft", "task": "Choose a coding profile",
+                                                    "routingPreferences": prefs})
+        self.assertEqual(response["status"], "queued")
+        audit = board.call("selection_get", {"decisionId": response["decisionId"], "includeAudit": True})["decision"]
+        self.assertEqual(audit["requested"]["routingPreferences"], prefs)
+        with self.assertRaises(BoardError):
+            board.call("selection_request", {"requestId": "select-soft", "task": "Choose a coding profile",
+                                             "routingPreferences": [{"match": {"adapter": "codex"}, "reason": "Different request"}]})
+
+    def test_hard_constraint_remains_filter_when_soft_preference_disagrees(self):
+        board = self.board()
+        self.annotations(board)
+        self.seed(board)
+        prefs = [{"match": {"effort": "off"}, "reason": "Try the cheaper effort"}]
+        view = self.routed(board, request_id="route-hard", preferences=prefs, effort="high")
+        document = self.select(board, view, SECOND_PROFILE_ID)
+        self.assertEqual([entry["profileId"] for entry in document["profiles"]], [SECOND_PROFILE_ID])
+        routed = board.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "fallback")
+
+    def test_legal_soft_preference_bypass_is_audited_as_alternative(self):
+        board = self.board()
+        self.annotations(board)
+        self.seed(board)
+        prefs = [{"match": {"model": "deepseek-flash"}, "reason": "Prefer the flash model"}]
+        view = self.routed(board, request_id="route-alternative", preferences=prefs)
+        self.select(board, view, SECOND_PROFILE_ID)
+        routed = board.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "alternative")
+        self.assertEqual(routed["routing"]["preferenceOutcome"]["ruleIndex"], 0)
+
+    def test_helper_gets_parent_soft_preferences_only_on_explicit_inherit(self):
+        board = self.board()
+        self.annotations(board)
+        self.seed(board)
+        prefs = [{"match": {"model": "deepseek-flash"}, "reason": "Same model for helper"}]
+        parent = self.submit(board, routingPreferences=prefs)
+        self.register(board)
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        current = board.call("workflow_get", {"runId": parent["runId"]})
+        approved = board.call("workflow_decide", {"runId": parent["runId"],
+            "requestId": current["activeRequest"]["requestId"], "commandId": "helper-preference",
+            "expectedRevision": current["revision"], "decision": "approve", **self.control(parent),
+            "helpers": [
+                {"requestId": "inherit-helper", "task": "Inspect first dependency", "cwd": str(self.workdir("inherit-helper")),
+                 "executionWorkspace": {"kind": "existing", "access": "write"}, "inheritRoutingPreferences": True},
+                {"requestId": "plain-helper", "task": "Inspect second dependency", "cwd": str(self.workdir("plain-helper")),
+                 "executionWorkspace": {"kind": "existing", "access": "write"}},
+            ]})
+        with board.store.db.read() as connection:
+            children = {row["request_id"]: row["task_id"] for row in connection.execute(
+                "SELECT request_id,task_id FROM tasks WHERE task_id IN (SELECT child_task_id FROM workflow_children WHERE parent_run_id=?)",
+                (parent["runId"],),
+            )}
+        inherited = board.call("workflow_get", {"runId": children["inherit-helper"], "includeAudit": True})
+        plain = board.call("workflow_get", {"runId": children["plain-helper"], "includeAudit": True})
+        self.assertEqual(inherited["audit"]["goal"]["routingPreferences"], prefs)
+        self.assertNotIn("routingPreferences", plain["audit"]["goal"])
+
+    def test_host_override_requires_reason_and_retains_original_preference_audit(self):
+        board = self.board()
+        self.annotations(board)
+        prefs = [{"match": {"adapter": "zcode"}, "reason": "Try ZCode when available"}]
+        view = self.routed(board, request_id="route-override", preferences=prefs)
+        self.assertEqual(view["routing"]["status"], "needs-host")
+        with self.assertRaises(BoardError):
+            self.continue_run(board, view, configuration=CONFIGURATION)
+        updated = self.continue_run(board, view, configuration=CONFIGURATION, reason="Host selected the installed configuration")
+        self.assertEqual(updated["routing"]["source"], "host-override")
+        self.assertEqual(updated["routing"]["routingPreferences"], prefs)
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.configuration_overridden'",
+                                     (view["runId"],)).fetchone()
+            payload = json.loads(row["payload_json"])
+        self.assertEqual(payload["reason"], "Host selected the installed configuration")
+        self.assertEqual(payload["routingPreferences"], prefs)
+
+    def test_original_complete_configuration_records_explicit_source(self):
+        board = self.board()
+        self.annotations(board)
+        view = self.submit(board, routingPreferences=[{"match": {"adapter": "dsh"}, "reason": "Prefer this"}])
+        self.assertEqual(view["routing"]["source"], "original-explicit")
+
+
+if __name__ == "__main__":
+    unittest.main()

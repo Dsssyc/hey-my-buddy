@@ -45,7 +45,7 @@ DECISION_KINDS = ("select", "maintain")
 DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "cancelled", "stale")
 TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "cancelled", "stale"})
 
-SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds"})
+SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds", "routingPreferences"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
 LIST_FIELDS = frozenset({"kind", "limit", "before"})
 DEFAULT_LIST_LIMIT = 20
@@ -74,6 +74,7 @@ MAX_DECISION_PROFILES = 200
 MAX_DECISION_CARDS = 512
 MAX_DECISION_PREFERENCES = 256
 MAX_DECISION_EVIDENCE = 512
+MAX_DECISION_ANNOTATIONS = 200
 MAX_DECISION_INPUT_BYTES = 128 * 1024
 MIN_TIMEOUT_SECONDS = 5
 #: The helper refuses a value above 1800, so the service never forwards one.
@@ -84,7 +85,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 TIMEOUT_GRACE_SECONDS = 10
 
 NEEDS_HOST_NO_PROFILE = (
-    "no compatible fixed decision profile is configured; publish an available, enabled dsh profile as "
+    "no compatible fixed decision profile is configured; publish an available, enabled decision-capable profile as "
     "configuration.decisionProfileId. The service never guesses one and never selects a selector."
 )
 NEEDS_HOST_NO_CANDIDATE = (
@@ -161,11 +162,16 @@ class DecisionCoordinator:
                 f"the configured decision profile {profile_id} is not an available, enabled profile; fix the "
                 "configuration before asking for a decision"
             )
-        if row["adapter"] != "dsh":
-            return None, (
-                f"the configured decision profile {profile_id} uses the {row['adapter']} adapter; the bounded "
-                "decision helper only invokes the installed dsh model path"
-            )
+        from .adapters import adapter
+        try:
+            implementation = adapter(row["adapter"])
+        except BoardError:
+            return None, f"the configured decision profile {profile_id} has no installed native adapter"
+        if not implementation.decision_execution:
+            return None, f"the configured decision profile {profile_id} has no verified tool-free decision capability"
+        usable, reason = implementation.decision_available()
+        if not usable:
+            return None, reason or f"the configured decision profile {profile_id} is unavailable for decision execution"
         if not row["provider"] or not row["model"] or not row["effort"]:
             return None, f"the configured decision profile {profile_id} has no complete provider/model/effort identity"
         return row, None
@@ -293,6 +299,14 @@ class DecisionCoordinator:
             "cards": cards,
             "preferences": preferences,
             "evidence": evidence,
+            "annotations": [
+                {"profileId": row["profile_id"], "text": row["text"],
+                 "revision": int(row["revision"]), "updatedAt": row["updated_at"]}
+                for row in connection.execute(
+                    f"SELECT profile_id,text,revision,updated_at FROM evaluation_annotations WHERE profile_id IN ({markers}) ORDER BY profile_id",
+                    profile_ids,
+                )
+            ],
         }
 
     def _referenced_evidence(self, connection: sqlite3.Connection, cards: list[dict]) -> list[sqlite3.Row]:
@@ -323,6 +337,7 @@ class DecisionCoordinator:
             ("cards", MAX_DECISION_CARDS),
             ("preferences", MAX_DECISION_PREFERENCES),
             ("evidence", MAX_DECISION_EVIDENCE),
+            ("annotations", MAX_DECISION_ANNOTATIONS),
         ):
             if len(table[name]) > limit:
                 return None, (
@@ -334,6 +349,7 @@ class DecisionCoordinator:
             "operation": kind,
             "requestId": request_id,
             "profile": {
+                "adapter": profile_row["adapter"],
                 "provider": profile_row["provider"],
                 "model": profile_row["model"],
                 "effort": profile_row["effort"],
@@ -352,7 +368,7 @@ class DecisionCoordinator:
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row]) -> tuple[dict | None, str | None]:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None) -> tuple[dict | None, str | None]:
         candidate_ids = {candidate["profile_id"] for candidate in candidates}
         cards = [
             self._card_input(row)
@@ -363,6 +379,7 @@ class DecisionCoordinator:
         table = self._table_input(
             connection, profiles=candidates, evidence_rows=evidence, include_preferences=True
         )
+        table["routingPreferences"] = routing_preferences or []
         return self._assemble_input(
             connection,
             kind="select",
@@ -443,6 +460,7 @@ class DecisionCoordinator:
         )
         task_text, _size = schemas.bounded_text(params, "task", max_bytes=MAX_DECISION_TASK_BYTES)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
+        routing_preferences = schemas.normalize_routing_preferences(params.get("routingPreferences", []))
         timeout = schemas.optional_int(
             params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
         )
@@ -450,6 +468,7 @@ class DecisionCoordinator:
             "kind": "select",
             "task": task_text,
             "requiredCapabilities": capabilities,
+            "routingPreferences": routing_preferences,
             "timeoutSeconds": timeout,
         }
         return self._create(request_id, request)
@@ -587,6 +606,7 @@ class DecisionCoordinator:
             "kind": "select", "task": task_text,
             "requiredCapabilities": spec.get("requiredCapabilities", []),
             "constraints": schemas.configuration_constraints(spec),
+            "routingPreferences": spec.get("routingPreferences", []),
             "workflowRouting": True, "timeoutSeconds": DEFAULT_TIMEOUT_SECONDS,
         }
         needs_host_reason = None
@@ -721,6 +741,7 @@ class DecisionCoordinator:
             profile_row=profile_row,
             task_text=request.get("task") or "",
             candidates=candidates,
+            routing_preferences=request.get("routingPreferences", []),
         )
         if document is None:
             self._finish(
@@ -1077,6 +1098,24 @@ class DecisionCoordinator:
             (dict(profile) for profile in document.get("profiles", []) if profile.get("profileId") == profile_id),
             None,
         )
+        routing_preferences = document.get("routingPreferences") or []
+        if selected is not None and routing_preferences:
+            first_legal_match = next((index for index, preference in enumerate(routing_preferences)
+                                      if any(all(profile.get(key) == value for key, value in preference["match"].items())
+                                             for profile in document["profiles"])), None)
+            selected_match = next((index for index, preference in enumerate(routing_preferences)
+                                   if all(selected.get(key) == value for key, value in preference["match"].items())), None)
+            if first_legal_match is None:
+                preference_outcome = {"status": "fallback", "ruleIndex": None,
+                                      "reason": "No task preference matched a legal candidate"}
+            elif selected_match != first_legal_match:
+                preference_outcome = {"status": "alternative", "ruleIndex": first_legal_match,
+                                      "reason": "The selector chose another legal candidate despite a matching task preference"}
+            else:
+                preference_outcome = {"status": "matched", "ruleIndex": selected_match,
+                                      "reason": routing_preferences[selected_match]["reason"]}
+            selected["routingPreference"] = preference_outcome
+            reason = f"{reason[:MAX_DECISION_REASON - 160]} [task preference: {preference_outcome['status']}; rule {preference_outcome['ruleIndex']}]"
         self._finish(
             connection, row, status="completed", output=output, now=now,
             reason=reason, profile_id=profile_id, evidence_ids=evidence_ids, selected=selected,

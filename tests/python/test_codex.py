@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from buddy.adapters.base import ExecutionContext
 from buddy.adapters.codex import CodexAdapter
@@ -51,6 +53,8 @@ class CodexAdapterTests(unittest.TestCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
+        self.assertIsNone(outcome.result["nativeAppVisible"])
+        self.assertEqual(outcome.result["nativeSessionStorage"], "codex-home")
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"]["disposition"], "completed")
         self.assertEqual(turn["provenance"]["nativeThreadId"], turn["sessionId"])
@@ -85,6 +89,11 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "account-plan-required")
         self.assertNotIn("turn", outcome.result)
 
+    def test_capability_readiness_does_not_start_a_native_probe(self):
+        with mock.patch("buddy.adapters.codex.cli_command", return_value=[str(FIXTURE)]), \
+             mock.patch.object(CodexAdapter, "discover_models", side_effect=AssertionError("native probe")):
+            self.assertEqual(self.adapter.available(), (True, None))
+
     def test_inherited_api_key_is_removed_before_native_account_check(self):
         context = self.context()
         context.environment["OPENAI_API_KEY"] = "fixture-secret"
@@ -92,12 +101,40 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertNotIn("fixture-secret", json.dumps(outcome.to_report()))
 
+    def test_attempt_scoped_credential_stays_private_and_out_of_result(self):
+        context = self.context()
+        context.agent_credential = "private-attempt-secret"
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
+        self.assertEqual(context.environment["BUDDY_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+        self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
+
     def test_invalid_final_or_failed_native_turn_cannot_be_imported(self):
         for index, case in enumerate(("invalid-json", "no-final", "failed"), 1):
             with self.subTest(case=case):
                 outcome = self.execute(self.context(case, index=index))
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertNotIn("turn", outcome.result)
+
+    def test_correlated_denied_request_yields_honest_controller_attention(self):
+        outcome = self.execute(self.context("approval"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        turn = outcome.result["turn"]
+        self.assertEqual(turn["outcome"]["disposition"], "attention")
+        provenance = turn["provenance"]
+        self.assertTrue(provenance["controllerAttention"])
+        self.assertFalse(provenance["outputSchemaValidated"])
+        self.assertEqual(provenance["nativeRequestThreadId"], turn["sessionId"])
+        self.assertEqual(provenance["nativeRequestTurnId"], provenance["nativeTurnId"])
+        self.assertEqual(provenance["nativeRequestMethod"], "item/commandExecution/requestApproval")
+        forged = {**turn, "provenance": {**provenance, "nativeRequestTurnId": "unrelated-turn"}}
+        self.assertIsNotNone(self.adapter.validate_turn_provenance(forged))
+
+    def test_denied_request_with_failed_native_turn_is_not_a_completed_attention(self):
+        outcome = self.execute(self.context("approval-failed"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertNotIn("turn", outcome.result)
 
     def test_deadline_ends_native_process_group(self):
         outcome = self.execute(self.context("hang", timeout=1))
