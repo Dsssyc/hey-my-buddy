@@ -229,6 +229,7 @@ class BoardService(_BaseResource):
         def handler(params: dict) -> dict:
             schemas.reject_unknown(params, set(), "health")
             identity = runtime.resolve_runtime()
+            pool = self.control.get("worker_pool") or {}
             return {
                 "status": "ok",
                 "protocol": PROTOCOL_VERSION,
@@ -241,7 +242,17 @@ class BoardService(_BaseResource):
                 "runtimeIdentity": identity.get("identity"),
                 "runtimeStable": bool(identity.get("stable")),
                 "runtimeContentId": identity.get("contentId"),
-                "maxConcurrent": self.store.max_concurrent,
+                # The aggregate execution limit is the two lanes added together; the
+                # lane limits themselves are explicit so a caller never has to infer
+                # which capacity refused a claim.
+                "maxConcurrent": self.store.max_concurrent + self.store.decision_concurrent,
+                "capacity": self.store.capacity_report(),
+                "managedWorkerIds": list(pool.get("workerIds") or []),
+                "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
+                "stoppedWorkerIds": list(pool.get("stoppedWorkerIds") or []),
+                "surplusWorkerIds": list(pool.get("surplusWorkerIds") or []),
+                "surplusDraining": list(pool.get("surplusDraining") or []),
+                "surplusRetained": [dict(row) for row in pool.get("surplusRetained") or []],
                 "waitCapacity": self.control.get("wait_capacity"),
                 "persistenceError": self.store.persistence_error,
                 "integrity": self.store.integrity(),

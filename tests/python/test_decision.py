@@ -473,6 +473,10 @@ class DecisionGateTests(DecisionTestCase):
 
     def test_admitted_reader_drains_before_the_writer_and_the_released_reader_fails_honestly(self):
         board = self.board(max_concurrent=2)
+        # Two decision slots so this test exercises the reader/writer gate itself,
+        # not the independently reserved decision-lane limit: the admitted reader
+        # holds one slot and the queued maintenance writer must still reach the gate.
+        board.store.decision_concurrent = 2
         self.seed(board, auto_maintain=True)
         self.card_with_pending_evidence(board)
         selection = self.request(board)

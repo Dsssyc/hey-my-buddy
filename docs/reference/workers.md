@@ -136,13 +136,13 @@ For recovery, load the recorded identity and replay its claim; restarting this s
 
 ## Worker supervisors
 
-The daemon starts one detached supervisor for `BUDDY_WORKER_ID` (default `local`) at startup. An operator can start another, or ask one to stop cooperatively:
+The daemon starts a detached supervisor pool sized to business plus decision capacity: `local`, `local-2` and `local-3` by default, with `BUDDY_WORKER_ID` as the configurable prefix. An operator can start an independently named worker or ask a specific worker to stop cooperatively:
 
 ```sh
 "$BUDDY" worker-start '{"workerId":"local"}'
 "$BUDDY" worker-stop  '{"workerId":"local"}'
 ```
 
-`worker-start` selects or materializes the stable runtime first, runs `python -m buddy.worker.supervisor` in its own session with file-backed logs at `<state>/worker.log`, and returns `workerId`, `supervisorPid`, `logPath` and `stateDir`. The supervisor holds an exclusive lock (`workers/<workerId>/supervisor.lock`), so liveness is decided by lock ownership rather than a stored PID. It restarts the Worker loop after an exception with bounded backoff and observes `workers/<workerId>/stop.request`; it cannot restart itself after its entire OS process exits. `worker-stop` only writes that durable request; it never signals a process the CLI did not create.
+`worker-start` selects or materializes the stable runtime first, runs `python -m buddy.worker.supervisor` in its own session with file-backed logs at `<state>/worker.log`, and returns `workerId`, `supervisorPid`, `logPath` and `stateDir`. The supervisor holds an exclusive lock (`workers/<workerId>/supervisor.lock`), so liveness is decided by lock ownership rather than a stored PID. It restarts the Worker loop after an exception with bounded backoff and observes `workers/<workerId>/stop.request`; the daemon reconciles crashed members of its recorded pool. `worker-stop` writes a durable request only for the specified ID and never signals a process the CLI did not create. Pool scale-down uses a separate `retire.request`, observed between attempts after receipt/startup reconciliation; it does not cancel an active child. Pending results and uncertain attempts remain accounted for even when a supervisor is missing.
 
 Workers keep an immutable local completion receipt under `<state>/workers/<workerId>/receipts/<attemptId>.json` until the service confirms the result transaction, and a `spawn.intent`/`spawn.marker` pair under `<state>/attempts/<runId>/<attemptId>/` makes the crash window explicit. Unsatisfied receipts are replayed by the next supervisor start, and a durable receipt is never executed a second time. A startup intent left by a previous process is preserved as orphaned evidence: the new process holds no child handle, so the attempt stays `uncertain` with its claims retained. `buddy workers` lists registered workers with their state (`starting`, `idle`, `busy`, `stopping`, `lost`), adapter, capabilities and current attempt. A worker polls durable cancel intent every two seconds and renews its lease at `max(5 s, lease_seconds / 3)`.

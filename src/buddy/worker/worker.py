@@ -22,6 +22,12 @@ from ..errors import BoardError
 DEFAULT_RETRY_SECONDS = 120
 CLAIM_IDLE_SECONDS = 2.0
 
+#: Durable scale-down intent, observed by the owning Worker between attempts only.
+#: It is deliberately a different file from ``stop.request``: a stop may cancel the
+#: child this worker owns, while a retire intent must never interrupt an attempt that
+#: is already running or waiting to deliver its receipt.
+RETIRE_REQUEST_NAME = "retire.request"
+
 
 def fsync_json(path: Path, value: dict) -> None:
     """Write one small JSON file durably: temp + fsync + rename + fsync parent."""
@@ -139,6 +145,8 @@ class Worker:
         self._log = log or (lambda message: None)
         self.heartbeat_path = self.spool.directory / "heartbeat.json"
         self.stop_request_path = self.spool.directory / "stop.request"
+        #: Scale-down intent. Read only between attempts, after receipt replay.
+        self.retire_request_path = self.spool.directory / RETIRE_REQUEST_NAME
 
     def log(self, message: str) -> None:
         self._log(f"[worker {self.worker_id}] {message}")
@@ -147,11 +155,49 @@ class Worker:
     def stop_requested(self) -> bool:
         return self.stop.is_set() or self.stop_request_path.exists()
 
+    def retire_requested(self) -> bool:
+        """A scale-down intent, never a cancel signal for an owned child."""
+        return self.retire_request_path.exists()
+
+    def recovery_pending(self) -> list[str]:
+        """Durable evidence this worker still owes the service.
+
+        A scale-down may complete only when this is empty. A pending completion
+        receipt and a startup intent that still names an attempt are exactly the
+        evidence a restarted surplus owner must replay or reconcile first; a missing
+        process never proves an attempt stopped, so neither is dropped to let a
+        retire intent win.
+        """
+        pending: list[str] = []
+        if self.spool.pending():
+            pending.append("pending-receipts")
+        intent = self.spool.read_startup()
+        if isinstance(intent, dict) and intent.get("attemptId"):
+            pending.append(f"startup-intent:{intent['attemptId']}")
+        return pending
+
     def heartbeat(self, state: str, **extra: Any) -> None:
         fsync_json(
             self.heartbeat_path,
             {"workerId": self.worker_id, "pid": os.getpid(), "state": state, "at": _now(), **extra},
         )
+
+    def preserve_orphan_startup(self, intent: dict) -> None:
+        """Record a previous process's intent as orphaned evidence and clear it.
+
+        The nonce is not this process's to present and its child handle is gone, so
+        the attempt stays explicitly uncertain instead of being adopted or silently
+        released. The orphan record is durable before the intent is cleared.
+        """
+        fsync_json(
+            self.spool.directory / "orphaned.json",
+            {**intent, "orphanedAt": _now(), "orphanedReason": "the worker process that owned this intent exited"},
+        )
+        self.log(
+            f"found an orphaned startup intent for attempt {intent.get('attemptId')}; it stays uncertain and is "
+            "not adopted by this process"
+        )
+        self.spool.clear_startup()
 
     def startup_intent(self) -> dict:
         self.spool.ensure()
@@ -160,15 +206,7 @@ class Worker:
             # A leftover intent from a previous worker process. Its nonce is not
             # ours to present and its child handle is gone, so it is preserved as
             # orphaned evidence instead of being adopted or silently released.
-            fsync_json(
-                self.spool.directory / "orphaned.json",
-                {**intent, "orphanedAt": _now(), "orphanedReason": "the worker process that owned this intent exited"},
-            )
-            self.log(
-                f"found an orphaned startup intent for attempt {intent.get('attemptId')}; it stays uncertain and is "
-                "not adopted by this process"
-            )
-            self.spool.clear_startup()
+            self.preserve_orphan_startup(intent)
             intent = None
         if intent is None or not intent.get("nonce") or not intent.get("claimRequestId"):
             intent = {
@@ -182,8 +220,8 @@ class Worker:
             self.spool.write_startup(intent)
         return intent
 
-    def reattach(self) -> None:
-        """Reconcile anything this worker owned before it or the daemon restarted.
+    def reconcile_startup_intent(self, intent: dict) -> bool:
+        """Reconcile one attempt this process owns; ``True`` when it is resolved.
 
         Three durable states decide this, never the database's ``starting`` row and
         never a PID check:
@@ -195,8 +233,83 @@ class Worker:
         * ``spawn.marker`` -> a child definitely existed and its fate is unknown.
 
         The last two never release anything: a survivor must not lose its resource
-        claims just because this worker restarted.
+        claims just because this worker restarted, and ``False`` keeps the intent as
+        evidence for the next reconciliation instead of retiring past it.
         """
+        attempt_id = intent["attemptId"]
+        attempted = self.spawn_intent_path(intent).exists()
+        if not attempted:
+            # Durable proof from this worker's own disk that the spawn boundary was
+            # never reached: an authenticated release, never a PID inference.
+            try:
+                self.client.release(
+                    self.worker_id,
+                    attempt_id,
+                    intent.get("generation", 0),
+                    intent["nonce"],
+                    "no durable spawn intent exists for this attempt, so no process was ever created",
+                    evidence={"spawnIntentWritten": False},
+                    worker_instance=self.instance_id,
+                )
+                self.log(f"released never-spawned attempt {attempt_id} with spawn-intent evidence")
+                self.spool.clear_startup()
+                return True
+            except BoardError as error:
+                if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
+                    self.log(f"release of {attempt_id} unavailable ({error.code}); keeping the intent")
+                    return False
+                self.log(f"evidence-based release refused ({error.code}); falling back to reconcile")
+        try:
+            response = self.client.reconcile(
+                self.worker_id,
+                attempt_id,
+                intent.get("generation", 0),
+                intent["nonce"],
+                worker_instance=self.instance_id,
+            )
+        except BoardError as error:
+            if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
+                # A transport failure says nothing about ownership: keep the recovery
+                # identity and try again later instead of discarding it.
+                self.log(f"reconcile of {attempt_id} unavailable ({error.code}); keeping the intent")
+                return False
+            self.log(f"reconcile of {attempt_id} refused: {error.code}")
+            self.spool.clear_startup()
+            return True
+        state = response["attempt"]["executionState"]
+        if response.get("finished") or response.get("immutable"):
+            self.log(f"attempt {attempt_id} is terminal; nothing to reconcile")
+            self.spool.clear_startup()
+            return True
+        # The spawn boundary may have been crossed, so this process has no evidence
+        # and the attempt keeps its uncertain ownership and claims.
+        self.log(
+            f"attempt {attempt_id} is {state} and its spawn boundary was possibly crossed; its process "
+            "handle is gone, so it stays explicitly uncertain with its resource claims retained"
+        )
+        return False
+
+    def settle_retirement(self) -> list[str]:
+        """Replay what is already durable without claiming anything new.
+
+        Returns the evidence that remains unresolved, so the caller keeps retrying
+        instead of retiring past a receipt or a startup intent. Retirement is the
+        only time this worker runs without claiming: a scale-down can therefore
+        never start an attempt it would have to abandon.
+        """
+        for receipt in self.spool.pending():
+            self.log(f"replaying receipt for attempt {receipt.get('attemptId')} before retiring")
+            self.deliver(receipt)
+        intent = self.spool.read_startup()
+        if isinstance(intent, dict) and intent.get("attemptId"):
+            if intent.get("instanceId") not in (None, self.instance_id):
+                self.preserve_orphan_startup(intent)
+            else:
+                self.reconcile_startup_intent(intent)
+        return self.recovery_pending()
+
+    def reattach(self) -> None:
+        """Reconcile anything this worker owned before it or the daemon restarted."""
         for receipt in self.spool.pending():
             self.log(f"replaying receipt for attempt {receipt.get('attemptId')}")
             self.deliver(receipt)
@@ -209,61 +322,7 @@ class Worker:
                 "no handle for it, so it stays explicitly uncertain with its resource claims retained"
             )
             return
-        attempted = self.spawn_intent_path(intent).exists()
-        if not attempted:
-            # Durable proof from this worker's own disk that the spawn boundary was
-            # never reached: an authenticated release, never a PID inference.
-            try:
-                self.client.release(
-                    self.worker_id,
-                    intent["attemptId"],
-                    intent.get("generation", 0),
-                    intent["nonce"],
-                    "no durable spawn intent exists for this attempt, so no process was ever created",
-                    evidence={"spawnIntentWritten": False},
-                    worker_instance=self.instance_id,
-                )
-                self.log(f"released never-spawned attempt {intent['attemptId']} with spawn-intent evidence")
-                self.spool.clear_startup()
-                return
-            except BoardError as error:
-                if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
-                    self.log(f"release of {intent['attemptId']} unavailable ({error.code}); keeping the intent")
-                    return
-                self.log(f"evidence-based release refused ({error.code}); falling back to reconcile")
-        try:
-            response = self.client.reconcile(
-                self.worker_id,
-                intent["attemptId"],
-                intent.get("generation", 0),
-                intent["nonce"],
-                worker_instance=self.instance_id,
-            )
-        except BoardError as error:
-            if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
-                # A transport failure says nothing about ownership: keep the recovery
-                # identity and try again later instead of discarding it.
-                self.log(f"reconcile of {intent['attemptId']} unavailable ({error.code}); keeping the intent")
-                return
-            self.log(f"reconcile of {intent['attemptId']} refused: {error.code}")
-            self.spool.clear_startup()
-            return
-        state = response["attempt"]["executionState"]
-        if response.get("finished") or response.get("immutable"):
-            self.log(f"attempt {intent['attemptId']} is terminal; nothing to reconcile")
-            self.spool.clear_startup()
-            return
-        if False:
-            pass
-        else:
-            # The spawn boundary may have been crossed, so this process has no
-            # evidence and the attempt keeps its uncertain ownership and claims.
-            self.log(
-                f"attempt {intent['attemptId']} is {state} and its spawn boundary was possibly crossed; its process "
-                "handle is gone, so it stays explicitly uncertain with its resource claims retained"
-            )
-            return
-        self.spool.clear_startup()
+        self.reconcile_startup_intent(intent)
 
     def attempt_directory(self, task_id: str | None, attempt_id: str) -> Path:
         return self.state_dir / "attempts" / (task_id or "unknown") / attempt_id
@@ -291,6 +350,18 @@ class Worker:
         self.heartbeat("idle")
         iterations = 0
         while not self.stop_requested():
+            if self.retire_requested():
+                # Retirement mode: a scale-down may complete only once every durable
+                # receipt and startup intent is reconciled, and it never claims new
+                # work. A retire intent therefore cannot cancel an owned child or
+                # race a claim into an abandoned attempt.
+                remaining = self.settle_retirement()
+                if not remaining:
+                    self.log("retire intent observed with no unreconciled evidence; retiring")
+                    return
+                self.log(f"retire intent observed with unreconciled evidence {remaining}; retrying reconciliation")
+                self.stop.wait(CLAIM_IDLE_SECONDS)
+                continue
             if max_iterations is not None and iterations >= max_iterations:
                 return
             iterations += 1
@@ -677,4 +748,4 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-__all__ = ["ReceiptSpool", "Worker", "fsync_json"]
+__all__ = ["ReceiptSpool", "RETIRE_REQUEST_NAME", "Worker", "fsync_json"]

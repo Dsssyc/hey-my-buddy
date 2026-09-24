@@ -15,6 +15,8 @@ Include the objective, permitted files, required inputs, expected artifacts and 
 
 Choose `executionWorkspace` explicitly. Sequential ownership may use `existing`; parallel writers need separate `worktree` checkouts, an exact base/input snapshot, declared write scope and an integrator. Preserve the same boundary for Host edits. A checkout is not an OS sandbox.
 
+The daemon starts a worker pool automatically: two business attempts and one independently reserved decision attempt by default. Await each delegated goal by its own `runId`; a capacity wait does not authorize duplicate submission. `health.capacity` identifies the full lane. Workspace conflicts and unconfirmed shutdown still retain capacity; use [runtime settings](../../docs/reference/operations.md#private-state-and-environment) to set startup limits.
+
 Honor explicit adapter/provider/model/effort constraints. A complete tuple is validated and dispatched without a selector call. Partial fields are hard filters; omitted fields use the configured decision Buddy and the bounded current table. `submit` records the goal before routing and returns its durable identity. Never substitute a DSH default, scan the entire history, or select the selector recursively. With no selector/legal candidate, the goal waits for Host input. The user chooses the initial fixed decision profile; see [evaluation](../../docs/reference/evaluation.md).
 
 ```sh

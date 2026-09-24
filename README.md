@@ -50,6 +50,8 @@ The returned loopback URL opens three top tabs: delegation records, model cards 
 
 ## Execution and recovery
 
+Independent work runs in parallel by default: two business attempts plus one reserved routing decision. The daemon starts the corresponding worker pool automatically. Workspace overlap and exclusive resources still serialize conflicting work; parallel editors need separate worktrees. See [capacity settings](docs/reference/operations.md#private-state-and-environment) and inspect `health.capacity` for lane limits and occupancy.
+
 A wait timeout, a closed terminal or a lost connection never cancels work. Recover the same `runId` with `await`, `get` or `status`; only an explicit `cancel` stops a goal, and shutdown is reported only with real stop evidence. Each continuation gets a new attempt. DSH reconstructs a fresh session; ZCode resumes a proven native session only when its goal, checkout and configuration binding matches. Without a proven previous session or after a configuration change, ZCode reconstructs a new root session. Keep requested, resolved and actually observed model identity distinct.
 
 The service and its Workers run from that stable private runtime. A fresh board lives under `~/.local/share/hey-my-buddy/state`; an older board directory at the previous default location is retained as an archive and is never read, converted or imported. Directories and Git worktrees are not OS sandboxes.

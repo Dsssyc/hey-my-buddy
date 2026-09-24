@@ -293,7 +293,7 @@ class BoardTestCase(unittest.TestCase):
                 endpoint = _read_endpoint(self.directory)
                 if endpoint:
                     try:
-                        _request(endpoint, "health", {})
+                        health = _request(endpoint, "health", {})
                         break
                     except ServiceError:
                         pass
@@ -306,6 +306,30 @@ class BoardTestCase(unittest.TestCase):
                 raise AssertionError(
                     f"daemon did not become healthy: {(self.directory / 'test-daemon.log').read_text()[-2000:]}"
                 )
+            # A healthy endpoint can precede pool startup. Observe each managed
+            # supervisor taking its lifetime lock before a short test can finish;
+            # otherwise cleanup may delete stop requests before late children boot.
+            for worker_id in health.get("managedWorkerIds", []):
+                lock = self.directory / "workers" / worker_id / "supervisor.lock"
+                deadline = time.monotonic() + 20
+                while True:
+                    held = False
+                    if lock.exists():
+                        fd = os.open(lock, os.O_RDWR)
+                        try:
+                            try:
+                                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                held = True
+                            else:
+                                fcntl.flock(fd, fcntl.LOCK_UN)
+                        finally:
+                            os.close(fd)
+                    if held:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(f"Managed test worker did not start: {worker_id}")
+                    time.sleep(0.05)
             yield process
         finally:
             if process.poll() is None:

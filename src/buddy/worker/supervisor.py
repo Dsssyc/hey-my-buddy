@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..client import BoardClient
 from ..transport import get_state_dir
-from .worker import Worker, fsync_json
+from .worker import RETIRE_REQUEST_NAME, Worker, fsync_json
 
 RESTART_BACKOFF_SECONDS = 2.0
 MAX_BACKOFF_SECONDS = 30.0
@@ -35,6 +35,9 @@ class Supervisor:
         self.stop = threading.Event()
         self.directory = state_dir / "workers" / worker_id
         self.stop_request = self.directory / "stop.request"
+        #: Scale-down intent owned by the pool: this supervisor exits only after the
+        #: Worker returns, which happens between attempts and after receipt replay.
+        self.retire_request = self.directory / RETIRE_REQUEST_NAME
         self.status_path = self.directory / "supervisor.json"
 
     def request_stop(self) -> None:
@@ -76,6 +79,10 @@ class Supervisor:
         backoff = RESTART_BACKOFF_SECONDS
         restarts = 0
         while not self.stop.is_set() and not self.stop_request.exists():
+            # A retire intent does not skip Worker creation: a restarted surplus
+            # owner must still replay its receipts and reconcile its startup intents
+            # before it may leave. The Worker itself observes the intent only between
+            # attempts, so no owned child is ever interrupted.
             worker = Worker(
                 self.worker_id,
                 self.state_dir,
@@ -89,17 +96,29 @@ class Supervisor:
                 worker.run()
             except Exception as error:  # a worker crash must not take the supervisor down
                 self.publish("restarting", lastError=repr(error))
-                self.stop.wait(backoff)
                 backoff = min(MAX_BACKOFF_SECONDS, backoff * 2)
             else:
                 backoff = RESTART_BACKOFF_SECONDS
             if self.stop.is_set() or self.stop_request.exists():
                 break
+            if self.retire_request.exists():
+                pending = worker.recovery_pending()
+                if not pending:
+                    break
+                # A crash before reconciliation must not abandon durable evidence: a
+                # retain/replay intent keeps retrying until the receipt or startup
+                # intent is settled, however long that takes.
+                self.publish("retiring", pendingRecovery=pending)
+                self.stop.wait(backoff)
+                continue
             restarts += 1
             if max_restarts is not None and restarts >= max_restarts:
                 break
             self.stop.wait(backoff)
-        self.publish("stopped")
+        if self.retire_request.exists() and not self.stop_request.exists():
+            self.publish("retired")
+        else:
+            self.publish("stopped")
         return 0
 
 

@@ -56,7 +56,7 @@ Buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.5.
 - **Changing any hashed asset changes the runtime.** `packaging/runtime-assets.json`, `pyproject.toml`, `uv.lock`, `bin/buddy`, `src/buddy` (including the console build) and `harnesses/dsh/scripts` and `harnesses/dsh/plugins` are hashed, so a code or dependency change produces a new content-addressed directory on the next cold start. A daemon already running keeps its own runtime and code until it is restarted or stopped.
 - **A named C-Two surface change advances `CONTRACT_VERSION`.** Version 0.6.1 adds `selection_list`; schema 8 remains unchanged and existing data is retained. Finish and verify owned work before switching contracts, then use the old service's matching launcher/runtime to request `restart` and the new launcher to cold-start its replacement. Refresh idle supervisors too. A new client cannot control a daemon registered with a different interface; retain the old stable runtime until this switch is complete. No compatibility facade or schema conversion is used.
 - **`restart` is the detach without cancellation.** It writes a resume file, returns, and preserves every independent worker; the next autostart-capable CLI call starts a fresh daemon (which reconciles existing attempts). Use it when the host should move to new code but owned work must survive. It is not a schema upgrade.
-- **`stop` is the explicit "cancel owned work and stop" operation**, not a required cache-refresh step: it cancels queued tasks, writes durable cancel intent for active attempts, drains for a bounded interval and reports `unresolvedAttempts`. It stops the daemon-owned supervisor; a supervisor started explicitly with `worker-start` is a separate process and needs its own cooperative `worker-stop`.
+- **`stop` is the explicit "cancel owned work and stop" operation**, not a required cache-refresh step: it cancels queued tasks, writes durable cancel intent for active attempts, drains for a bounded interval and reports `unresolvedAttempts`. It cooperatively stops every supervisor recorded in the daemon-managed pool; an independently named supervisor started with `worker-start` needs its own exact-ID `worker-stop`.
 - **Verify after any upgrade:** start a new Codex task so the upgraded plugin skill is loaded, then use its bundled launcher to check that `health` and `runtime` report the expected identity and stability before new work is delegated.
 - **A mismatched database is refused, never migrated.** Startup accepts schema 8 only; any other version, an unreadable board or a failed integrity/foreign-key check refuses to start and asks for a clean state directory, preserving the existing directory as an archive.
 
@@ -99,7 +99,8 @@ All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default `~/.loc
 - `control.json` — the private endpoint address and service token (never group/world readable);
 - `control-daemon.lock`, `board-owner.lock` — lifetime ownership locks: one daemon per state directory;
 - `controls/<runId>.g<generation>.json`, `submissions/` — CLI-private Host control files and submission-recovery tokens (`0600`);
-- `workers/<workerId>/` — supervisor lock and status, cooperative stop request, startup intent and the receipt spool;
+- `workers/<workerId>/` — supervisor lock and status, cooperative stop/retirement requests, startup intent and the receipt spool;
+- `worker-pool.json` — exact daemon-managed worker IDs; similarly named custom workers are not inferred as members;
 - `attempts/<runId>/<attemptId>/` — task text, turn input/output, spawn intent/marker, adapter logs, per-attempt inquiry credentials and, for ZCode, the provider snapshot and finish bridge;
 - `harnesses/zcode/<taskHash>/` — private native ZCode session database, storage and session bindings;
 - `decisions/<decisionId>/` — private decision workspace;
@@ -111,10 +112,11 @@ All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default `~/.loc
 | `BUDDY_RUNTIME_ROOT` | `~/.local/share/hey-my-buddy/runtime` | parent of content-addressed runtimes |
 | `BUDDY_RUNTIME` | unset | pin one READY runtime directory; an explicit pin always wins |
 | `BUDDY_DEV_SOURCE` | unset | suppress automatic materialization; an already selected READY runtime still wins |
-| `BUDDY_MAX_CONCURRENT` | `1` | simultaneous active attempts, clamped 1–8 |
+| `BUDDY_MAX_CONCURRENT` | `2` | simultaneous business attempts, clamped 1–8 |
+| `BUDDY_MAX_DECISIONS` | `1` | independently reserved internal decision attempts, clamped 1–4 |
 | `BUDDY_WAIT_CAPACITY` | `32` | admitted waits on the dedicated wait resource |
 | `BUDDY_LEASE_SECONDS` | `120` | attempt lease, clamped 15–3600 |
-| `BUDDY_WORKER_ID` | `local` | worker supervisor id started with the daemon |
+| `BUDDY_WORKER_ID` | `local` | pool prefix: this ID, then `<prefix>-2`, `<prefix>-3`, up to the sum of both lane limits |
 | `BUDDY_NODE` / `BUDDY_RUNNER_PATH` | unset | DSH adapter node binary / runner entrypoint overrides |
 | `BUDDY_DECISION_HELPER` | unset | executable override for the bounded decision helper |
 | `BUDDY_ZCODE_CLI` | unset | ZCode CLI path when it is not on `PATH` (the macOS bundle default is used otherwise) |

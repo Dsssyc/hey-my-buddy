@@ -27,7 +27,7 @@ The CLI injects Host authority locally. For any mutation that requires it, `cont
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
-| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, `maxConcurrent`, `waitCapacity`, `persistenceError`, integrity and active work |
+| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, aggregate `maxConcurrent`, lane `capacity`, `managedWorkerIds`, `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, integrity and active work |
 | `capabilities` / `adapters` | `includeUnavailable` | Adapter report (`adapter`, `available`, `reason`, `capabilities`, `executedBy`), `localCapabilities`, named operations, wait admission and the honest `limitations` map |
 | `runtime` | optional `destination` | Runtime identity, installed-runtime description and source-leak report |
 | `restart` | optional `reason`, `drainSeconds` 0–120 (default 10) | Detaches the daemon without cancelling owned work; independent workers survive. With no running daemon returns `alreadyStopped` and starts nothing |
@@ -201,7 +201,8 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | Decision timeout | 300 s | 5–1800 s, plus a 10 s Worker shutdown margin |
 | Compact governed view | 5 requests / 10 turns / 32 children / 32 artifacts | `counts`/`truncated` describe omissions |
 | Attempt lease `BUDDY_LEASE_SECONDS` | 120 s | 15–3600 s |
-| Active attempts `BUDDY_MAX_CONCURRENT` | 1 | 1–8 |
+| Business attempts `BUDDY_MAX_CONCURRENT` | 2 | 1–8 |
+| Decision attempts `BUDDY_MAX_DECISIONS` | 1 | 1–4, independent of business capacity |
 | Wait capacity `BUDDY_WAIT_CAPACITY` | 32 | server-side admission |
 
 ## Error codes

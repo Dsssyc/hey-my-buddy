@@ -24,6 +24,7 @@ from pathlib import Path
 from . import runtime, transport
 from .errors import BoardError
 from .transport import METHOD_MAP, call_service, get_state_dir
+from .worker.worker import RETIRE_REQUEST_NAME
 
 METHODS = [
     "health",
@@ -246,7 +247,10 @@ def _worker_command(action: str, params: dict) -> dict:
         environment.pop("UV_PROJECT_ENVIRONMENT", None)
         environment["PATH"] = str(Path(target["python"]).parent) + os.pathsep + environment.get("PATH", os.defpath)
     (directory).mkdir(mode=0o700, parents=True, exist_ok=True)
+    # A deliberate start is authoritative for this exact id: prior cooperative
+    # stop/retire intents are cleared before the new supervisor can observe them.
     (directory / "stop.request").unlink(missing_ok=True)
+    (directory / RETIRE_REQUEST_NAME).unlink(missing_ok=True)
     log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         child = subprocess.Popen(

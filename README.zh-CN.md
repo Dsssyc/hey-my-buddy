@@ -50,6 +50,8 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 ## 执行与恢复
 
+独立任务默认可以并行：两个业务执行槽位，另加一个独立的路由决策槽位，服务会自动启动相应的 worker 池。工作区重叠和独占资源仍会让冲突任务排队；并行修改代码需要使用不同 worktree。可在[容量配置](docs/reference/operations.md#private-state-and-environment)中调整上限，并用 `health.capacity` 查看各槽位的容量和占用。
+
 等待超时、关闭终端或连接中断都不会取消任务。可以用同一个 `runId` 通过 `await`、`get` 或 `status` 接回；只有显式 `cancel` 才会停止目标，并且只有拿到真实停止证据才报告已关闭。每次接续都会创建新的 attempt。DSH 重建新会话；ZCode 仅在目标、checkout 和配置绑定都匹配时恢复已有证据确认的原生会话。没有已确认的前一会话或配置发生变化时，ZCode 会重建新的根会话。请区分请求的、已解析的和实际观测到的模型身份。
 
 服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。

@@ -1,5 +1,6 @@
 """Explicit supervisors must survive replacement of their staged CLI package."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -91,6 +92,27 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             load_stage_plugin().stage(ROOT, self.stage)
         self.launcher = self.stage / "bin" / "buddy"
+        # Controlled ownership: the daemon pool sizes itself from the configured
+        # limits (two business slots plus one reserved decision slot). This test
+        # holds the lifetime locks of the two spare slots, so the pool sees them as
+        # served, `local` stays the only daemon worker, and the probe below can only
+        # be claimed by the explicit worker this test starts. No safety is weakened:
+        # the owner is still asserted exactly, it is just no longer raced.
+        self.spare_locks = []
+        for worker_id in ("local-2", "local-3"):
+            directory = self.state / "workers" / worker_id
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor = os.open(directory / "supervisor.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.spare_locks.append(descriptor)
+
+    def _release_spare_locks(self):
+        while self.spare_locks:
+            descriptor = self.spare_locks.pop()
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
     def tearDown(self):
         (self.work / "release-local").touch()
@@ -100,6 +122,9 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         except ServiceError as error:
             if error.code != "SERVICE_UNAVAILABLE":
                 raise
+        finally:
+            # Release after the stop request so the daemon never respawns a spare.
+            self._release_spare_locks()
         stop_private_workers(self.state)
         self.temp.cleanup()
 
@@ -138,6 +163,8 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         probe = "import pathlib,time,json,os; gate=pathlib.Path(" + repr(str(self.work / "release-extra")) + "); end=time.monotonic()+35\nwhile not gate.exists() and time.monotonic()<end: time.sleep(0.05)\nfrom buddy import runtime\nr=runtime.resolve_runtime(); print(json.dumps({k:r[k] for k in ('identity','stable','actual','leaks','resourcesMissing')} | {'bridgePython':os.environ.get('BUDDY_PYTHON'),'virtualEnv':os.environ.get('VIRTUAL_ENV'),'uvEnvironment':os.environ.get('UV_PROJECT_ENVIRONMENT')}))"
         submitted = self.staged_cli("execution-submit", {"requestId": "probe-extra", "task": "report only local runtime paths", "cwd": str(self.extra_work),
                                               "adapter": "command", "argv": ["python", "-c", probe], "timeoutSeconds": 60})
+        # `local` is busy and the spare pool slots are lock-held by this test, so the
+        # probe has exactly one possible owner: the explicit worker just started.
         self.assertEqual(self.wait_status(submitted["runId"], "running")["workerId"], "acceptance-extra")
         extra_status = json.loads((self.state / "workers/acceptance-extra/supervisor.json").read_text())
         self.assertEqual(extra_status["supervisorPid"], started["supervisorPid"])

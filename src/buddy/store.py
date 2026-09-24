@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import delegation
+from . import scheduling
 from . import schemas
 from .db import (
     ACTIVE_ATTEMPT_STATES,
@@ -79,14 +80,20 @@ class BoardStore:
         self,
         directory: str | Path,
         *,
-        max_concurrent: int = 1,
+        max_concurrent: int = 2,
+        decision_concurrent: int = 1,
         lease_seconds: int = DEFAULT_LEASE_SECONDS,
         wait_capacity: int = 32,
         clock: Callable[[], str] = utc_now,
     ):
         self.directory = Path(directory)
         self.db = Database(self.directory)
+        #: The business lane's own limit. Every adapter except ``decision`` is
+        #: business work, including external and command execution.
         self.max_concurrent = max(1, min(int(max_concurrent), 8))
+        #: The decision lane's independently reserved limit, so a saturated business
+        #: queue can never starve routing/selection work and vice versa.
+        self.decision_concurrent = max(1, min(int(decision_concurrent), 4))
         self.lease_seconds = max(15, min(int(lease_seconds), 3600))
         self.wait_capacity = max(1, int(wait_capacity))
         self._clock = clock
@@ -510,9 +517,61 @@ class BoardStore:
         " OR (result_json IS NOT NULL AND shutdown_confirmed = 0)"
     )
 
-    def _active_attempt_count(self, connection: sqlite3.Connection) -> int:
-        row = connection.execute(f"SELECT COUNT(*) AS count FROM attempts WHERE {self.UNRESOLVED_SQL}").fetchone()
-        return int(row["count"])
+    #: One lane's bounded candidate scan. The scan is scoped to its lane *before*
+    #: this LIMIT, so a deep queue in one lane can never hide runnable work in the
+    #: other: >100 business rows blocked by a full business lane cannot hide a
+    #: runnable decision, and >100 decision rows cannot hide a runnable business task.
+    CLAIM_CANDIDATE_LIMIT = 50
+
+    def _lane_active_counts(self, connection: sqlite3.Connection) -> tuple[int, int]:
+        """Unresolved attempts per lane, ``(business, decision)``.
+
+        Both lanes use the same :data:`UNRESOLVED_SQL` rule, so an uncertain attempt
+        or an unconfirmed result keeps its lane slot exactly as before.
+        """
+        row = connection.execute(
+            "SELECT COUNT(*) AS total,"
+            " SUM(CASE WHEN adapter IS ? THEN 1 ELSE 0 END) AS decision_count"
+            f" FROM attempts WHERE {self.UNRESOLVED_SQL}",
+            (scheduling.DECISION_ADAPTER,),
+        ).fetchone()
+        decision = int(row["decision_count"] or 0)
+        return int(row["total"]) - decision, decision
+
+    def capacity_report(self) -> dict:
+        """The two lane limits with their current unresolved occupancy.
+
+        ``totalLimit`` is the aggregate execution limit the daemon must reserve
+        worker slots for; it is deliberately separate from the WAIT admission counts.
+        """
+        with self.db.read() as connection:
+            business, decision = self._lane_active_counts(connection)
+        return {
+            "business": {"limit": self.max_concurrent, "active": business},
+            "decision": {"limit": self.decision_concurrent, "active": decision},
+            "totalLimit": self.max_concurrent + self.decision_concurrent,
+        }
+
+    def unresolved_worker_attempts(self, worker_id: str) -> list[str]:
+        """Every attempt ``worker_id`` still owns under :data:`UNRESOLVED_SQL`.
+
+        Used by pool reconciliation to decide whether a surplus supervisor may be
+        asked to drain: while it owns an unresolved attempt (or holds a pending local
+        receipt), its slot and receipts are retained rather than lost. A missing
+        process is never inferred to have stopped any of these attempts.
+        """
+        with self.db.read() as connection:
+            rows = connection.execute(
+                f"SELECT attempt_id FROM attempts WHERE worker_id = ? AND ({self.UNRESOLVED_SQL})"
+                " ORDER BY created_at DESC",
+                (worker_id,),
+            ).fetchall()
+        return [row["attempt_id"] for row in rows]
+
+    def unresolved_worker_attempt(self, worker_id: str) -> str | None:
+        """The newest attempt ``worker_id`` still owns, or ``None``."""
+        attempts = self.unresolved_worker_attempts(worker_id)
+        return attempts[0] if attempts else None
 
     def _held_claims(self, connection: sqlite3.Connection) -> list[sqlite3.Row]:
         return connection.execute(
@@ -520,9 +579,19 @@ class BoardStore:
         ).fetchall()
 
     def _admission_blocker(self, connection: sqlite3.Connection, spec: dict, *, exclude_task: str | None = None) -> str | None:
-        """Why this specification cannot start right now, or ``None`` when it can."""
-        if self._active_attempt_count(connection) >= self.max_concurrent:
-            return "capacity"
+        """Why this specification cannot start right now, or ``None`` when it can.
+
+        Capacity is checked in the specification's own lane, so the queue reason
+        names the limit that is actually full. Workspace and exclusive-resource
+        admission applies to both lanes unchanged.
+        """
+        lane = scheduling.lane_for_adapter(spec.get("adapter"))
+        business, decision = self._lane_active_counts(connection)
+        if lane == scheduling.LANE_DECISION:
+            if decision >= self.decision_concurrent:
+                return scheduling.capacity_reason(lane)
+        elif business >= self.max_concurrent:
+            return scheduling.capacity_reason(lane)
         resources = {"cwd": [spec["cwd"]], "exclusive": list(spec.get("exclusiveResources", []))}
         for claim in self._held_claims(connection):
             if exclude_task and claim["task_id"] == exclude_task:
@@ -532,6 +601,34 @@ class BoardStore:
             if claim["kind"] == "exclusive" and claim["resource"] in resources["exclusive"]:
                 return "exclusive-resource"
         return None
+
+    def _claim_candidates(self, connection: sqlite3.Connection) -> tuple[list[sqlite3.Row], bool, bool]:
+        """Bounded queued candidates, scanned per lane and merged by arrival order.
+
+        A lane at its limit is filtered out *before* the candidate LIMIT instead of
+        letting its queued rows occupy the whole bounded window and hide the other
+        lane. The returned flags report whether each lane still has room, so an empty
+        claim names the full lane instead of pretending there is no work.
+        """
+        business_active, decision_active = self._lane_active_counts(connection)
+        business_open = business_active < self.max_concurrent
+        decision_open = decision_active < self.decision_concurrent
+        predicates = []
+        if business_open:
+            predicates.append("adapter IS NOT ?")
+        if decision_open:
+            predicates.append("adapter IS ?")
+        rows: list[sqlite3.Row] = []
+        for predicate in predicates:
+            rows.extend(
+                connection.execute(
+                    f"SELECT * FROM tasks WHERE state='queued' AND {predicate}"
+                    " ORDER BY created_at, task_id LIMIT ?",
+                    (scheduling.DECISION_ADAPTER, self.CLAIM_CANDIDATE_LIMIT),
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
+        return rows, business_open, decision_open
 
     def _retain_claims(self, connection: sqlite3.Connection, attempt_id: str) -> None:
         connection.execute(
@@ -1225,10 +1322,12 @@ class BoardStore:
                 candidates = [
                     connection.execute("SELECT * FROM tasks WHERE task_id=?", (explicit_task,)).fetchone()
                 ]
+                # An explicit target is examined by ``_admission_blocker`` in its own
+                # lane below, so no lane pre-filter applies to it.
+                lanes_open = (True, True)
             else:
-                candidates = connection.execute(
-                    "SELECT * FROM tasks WHERE state='queued' ORDER BY created_at, task_id LIMIT 50"
-                ).fetchall()
+                candidates, business_open, decision_open = self._claim_candidates(connection)
+                lanes_open = (business_open, decision_open)
             chosen: sqlite3.Row | None = None
             chosen_generation = 0
             chosen_attempt_id: str | None = None
@@ -1306,6 +1405,16 @@ class BoardStore:
                 chosen_input = claim_input
                 break
             if chosen is None:
+                if not candidates:
+                    # Nothing was even scannable. Name the limit that is holding work
+                    # instead of reporting that the board is idle.
+                    business_open, decision_open = lanes_open
+                    if not business_open:
+                        blocker = scheduling.REASON_BUSINESS_CAPACITY
+                    elif not decision_open:
+                        blocker = scheduling.REASON_DECISION_CAPACITY
+                    else:
+                        blocker = "no-queued-work"
                 head = self._head_of(connection)
                 response = {"claim": None, "reason": blocker, "retryAfterMs": 1000 if blocker != "no-queued-work" else 2000}
                 self._store_receipt(
