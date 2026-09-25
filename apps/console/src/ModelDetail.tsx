@@ -187,7 +187,7 @@ export function ModelDetail({
               onChange={e => editor.setDraft(d => d ? { ...d, profiles: d.profiles.map(p => p.profileId === profile.profileId ? { ...p, enabled: e.target.checked } : p) } : d)} />允许后续选择使用此配置</label>
             <ConcurrencyField key={familyKey(profile)} editor={editor} family={profile}
               draftLimit={draftLimit} occupancy={occupancy} />
-            <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；保存后立即对后续任务生效，调低上限不会中断正在运行的任务，只会等占用回落后再放行新任务。{concurrencyUnsaved && <span className="unsaved-mark">并发上限未保存</span>}</p>
+            <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；保存后立即对后续任务生效，调低上限不会中断正在运行的任务，只会等占用回落后再放行新任务。计数不包含 Harness 内部子代理、重试或其他应用的 API 请求。{concurrencyUnsaved && <span className="unsaved-mark">并发上限未保存</span>}</p>
             {!profile.available && (profile.enabled
               ? <p className="small muted">此配置当前不在目录中。你仍可以停用它、修改意见或偏好依据；重新启用需要它再次被发现。</p>
               : <p className="small muted">此配置当前不在目录中，不能新启用；可以修改意见或保留历史。</p>)}
@@ -198,7 +198,7 @@ export function ModelDetail({
               <dt>偏好依据</dt><dd>{preference?.reason || "未记录"}</dd>
               <dt>启用状态</dt><dd>{profile.enabled ? "允许后续选择使用此配置" : "已停用"}</dd>
               <dt>并发任务上限</dt><dd>{recordedLimit ?? `${MODEL_CONCURRENCY_DEFAULT}（默认）`}{occupancy !== null ? ` · 当前占用 ${occupancy}` : ""}</dd></dl>
-            <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；当前占用是只读观察，调低上限不会中断正在运行的任务。</p>
+            <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；当前占用是只读观察，调低上限不会中断正在运行的任务。计数不包含 Harness 内部子代理、重试或其他应用的 API 请求。</p>
             <p className="small muted">开启右上角“编辑模式”后可以修改偏好与启用状态；发布不会改变运行中任务的配置。</p>
           </>)}
           {panel === "evidence" && <section className="evidence-readonly" aria-label="评价证据（只读）">
