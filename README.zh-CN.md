@@ -60,7 +60,9 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
 
-当前限制：仅支持 POSIX；本地单用户 SQLite 状态；ZCode 支持 API-key 提供方和只读原生活动观察，但已核查的 ZCode 3.14.3 协议不能安全投递关联的实时询问。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。本 checkout 是 0.9.0 源码候选版本（contract 0.9.0、schema 11：共享模型并发与全目标产物校验），这是源码陈述而非安装声明——日常安装的服务可能仍是 0.8.1/schema 10，交付记录见 [0.9.0 运行时精炼验收](docs/acceptance/runtime-refinement-0.9.0.md)，[0.8.1 验收记录](docs/acceptance/optional-deadline-0.8.1.md)保留可选执行期限的证据。用 `health` 和 `runtime` 核对实际运行的安装。
+当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+
+当前源码使用 contract 0.9.0、schema 11。源码验证与实际安装分别记录于 [0.9.0 验收记录](docs/acceptance/runtime-refinement-0.9.0.md)；用 `health` 和 `runtime` 核对实际运行的安装。
 
 ## 文档与开发
 

@@ -95,7 +95,7 @@ Advanced execution records back the `command` and `external` adapters and the in
 
 ## Execution observation
 
-Observation stays separate from the governed boundary. `status`, `result`, `list`, `artifacts` and `events` read execution records; `wait` and `watch` use the dedicated bounded wait resource; `inquire` is bounded read-only observation or one correlated question to a live DSH agent.
+Observation stays separate from the governed boundary. `status`, `result`, `list`, `artifacts` and `events` read execution records; `wait` and `watch` use the dedicated bounded wait resource; `inquire` is bounded read-only observation or one correlated question to a live DSH or ZCode root.
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
@@ -135,7 +135,7 @@ Inquiry rules:
 - A bounded question can return in state `delivered` before any answer exists; check `inquiry.answer.available` (and `message.state`) before reporting an answer. An `answered` journal record without usable text is downgraded to `delivered` with a reason rather than reported as answered.
 - The no-question form reports durable state plus a bounded `live` observation (`agentStatus`, inbox depth, `lastEvent` and up to 20 activity entries); fields it cannot observe are named in `live.unavailable` instead of being reported as zero. For a positive duration, `deadline` is explicitly an estimate: `estimated: true`, `kind: "estimated-runner-deadline-from-record-createdAt"`, `deadlineBasis: "createdAt + timeoutSeconds"`, plus clock origin, start/deadline timestamps, remaining seconds and `exactTimingAvailable: false`. A task with `timeoutSeconds: 0` reports `deadline: {"available":false,"unlimited":true,"reason":"this execution has no deadline"}` and never invents an expiry.
 - `live.agentStatus: "running"` means an agent driver is active, not that it is making progress; raw model reasoning is never exposed. Bridge transport failures report `bridge-unreachable`, `bridge-timeout`, `bridge-refused`, `bridge-invalid-response` or `bridge-mismatched-response`, and a recorded answer carries its provenance (`live-bridge` or `bridge-journal`).
-- DSH declares `inquiry`. ZCode declares only `observe`: the no-question form reads bounded live activity, while a question is recorded as unavailable without sending native input. The checked native protocol lacks a safe turn-bound input command. `command`, `external` and `codex` mount no inquiry bridge; task status and any recorded activity remain readable. `bridge.canObserve` and `bridge.canAsk` distinguish observation from correlated questions.
+- DSH declares `inquiry`. ZCode declares `observe` and cooperative `inquiry`: `live.deliveryMode: "cooperative-checkpoint"` means the question waits for the root's next checkpoint or finish attempt. Root-native tool evidence and signed receipts bind the answer; settlement makes unanswered questions unavailable, without injected native input. A journal write refusal is also recorded as unavailable (`journal-unavailable`). `command`, `external` and `codex` mount no inquiry bridge; task status and any recorded activity remain readable. `bridge.canObserve` and `bridge.canAsk` distinguish observation from correlated questions.
 
 ## Workers
 
