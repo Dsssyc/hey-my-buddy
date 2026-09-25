@@ -365,6 +365,17 @@ class InquiryEvidenceTests(unittest.TestCase):
 
 
 class NativeFailureAttributionTests(unittest.TestCase):
+    def test_structured_labels_cannot_smuggle_urls_prose_or_credential_prefixes(self):
+        failure = decode_native_failure({"error": {
+            "type": "https://private.invalid/path", "code": "Bearer-private-token",
+            "attribution": {"source": {"bad": "shape"}, "reason": "private prompt text",
+                            "providerId": "sk-private-key", "providerErrorCode": "1308", "statusCode": 429},
+        }})
+        self.assertIsNone(failure["errorType"])
+        self.assertIsNone(failure["code"])
+        self.assertEqual(failure["attribution"], {"providerErrorCode": "1308", "statusCode": 429})
+        self.assertNotIn("private", json.dumps(failure))
+
     """Only whitelisted exported turn.failed fields become observable."""
 
     QUOTA_ERROR = {"type": "AiSdkModelAdapterError", "code": "model_rate_limited",

@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import queue
+import re
 import select
 import subprocess
 import threading
@@ -256,6 +257,10 @@ def _failure_text(value: object, *, truncate: bool = False) -> str | None:
     text = value.strip()
     if not text:
         return None
+    # Exported identifier fields must not become a second free-text error
+    # channel. Reject URLs, prose and recognizable credential prefixes.
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", text) or text.lower().startswith(("sk-", "sk_", "bearer", "eyj")):
+        return None
     if len(text) > MAX_NATIVE_FAILURE_TEXT:
         return text[:MAX_NATIVE_FAILURE_TEXT] if truncate else None
     return text
@@ -296,7 +301,7 @@ def decode_native_failure(payload: object) -> dict | None:
     raw = raw if isinstance(raw, dict) else {}
     attribution = {}
     for key, allowed in NATIVE_ATTRIBUTION_ENUMS.items():
-        if raw.get(key) in allowed:
+        if isinstance(raw.get(key), str) and raw[key] in allowed:
             attribution[key] = raw[key]
     for key in NATIVE_ATTRIBUTION_TEXT:
         text = _failure_text(raw.get(key))
