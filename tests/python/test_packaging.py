@@ -158,6 +158,13 @@ class CheckHarnessTests(unittest.TestCase):
         self.assertTrue((ROOT / "src" / "buddy" / "checks.py").is_file())
         self.assertTrue(sorted((ROOT / "harnesses" / "dsh" / "tests").glob("*.test.mjs")))
 
+    def test_unrelated_checks_cannot_inherit_a_real_claude_cli(self):
+        from buddy import checks
+        with patch.dict(os.environ, {"BUDDY_CLAUDE_CLI": "/real-user-installation/claude"}):
+            env = checks.test_environment(ROOT)
+        self.assertNotEqual(env["BUDDY_CLAUDE_CLI"], "/real-user-installation/claude")
+        self.assertFalse(Path(env["BUDDY_CLAUDE_CLI"]).exists())
+
 
 class StagedPluginInventoryTests(unittest.TestCase):
     """Staging ships the supported layout only, and never writes into the source."""

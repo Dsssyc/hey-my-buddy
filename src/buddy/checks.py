@@ -40,6 +40,9 @@ def test_environment(root: Path) -> dict:
     values["BUDDY_PYTHON"] = sys.executable
     # Tests must exercise this checkout, not a stable runtime install.
     values["BUDDY_DEV_SOURCE"] = "1"
+    # Claude availability reads native account metadata. Unrelated tests must not
+    # launch the user's CLI; Claude fixtures override this sentinel explicitly.
+    values["BUDDY_CLAUDE_CLI"] = str(root / "tests/python/fixtures/claude-not-installed")
     return values
 
 
