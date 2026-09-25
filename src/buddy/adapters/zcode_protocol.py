@@ -1,6 +1,7 @@
 """Bounded NDJSON transport and root-turn evidence for ZCode's native app server."""
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import json
@@ -41,9 +42,10 @@ MAX_RETAINED_INQUIRY_CALLS = 64
 
 
 class NativeError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, failure: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.failure = failure
 
 
 def decode_json(raw: str | bytes) -> object:
@@ -187,8 +189,133 @@ def _valid_inquiry_id(value: object) -> bool:
     return isinstance(value, str) and 0 < len(value.encode()) <= MAX_INQUIRY_ID_BYTES
 
 
+def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
+    """One bounded, shared-locked read of the inquiry journal file.
+
+    This is the reader side of the journal's cross-process barrier (POSIX flock,
+    the same primitive the service uses for its lifetime locks): while the
+    controller writer holds the exclusive side through its append/fsync/commit
+    transaction, this read waits, so a reader can never observe a record that
+    the writer has not fully committed — neither an in-flight append nor the
+    remains of a failed one. Returns ``None`` when the file cannot be opened and
+    ``b""`` when it exceeds its byte bound.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        if os.fstat(fd).st_size > max_bytes:
+            return b""
+        chunks = bytearray()
+        while len(chunks) <= max_bytes:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            chunks.extend(block)
+        return bytes(chunks[:max_bytes + 1])
+    finally:
+        os.close(fd)  # closing releases the shared lock
+
+
 def _valid_question_sha(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+#: The failure attribution this adapter imports from the exported native
+#: ``turn.failed`` session event. The whitelist mirrors the installed
+#: app-server's strict exported ``error.attribution`` schema: enum members,
+#: bounded identifiers, ``statusCode`` 100..599 and ``retryable``. Every other
+#: member of the native error object — ``message``, ``detail``, ``stack``,
+#: ``underlyingErrorMessage``, ``underlyingErrorDetail`` and the opaque
+#: ``data`` — can carry raw provider text, credentials, URLs or prompt
+#: fragments and is never read into a result, log or summary.
+NATIVE_ATTRIBUTION_ENUMS = {
+    "source": {"provider", "runtime", "tool", "network"},
+    "errorPhase": {"prepare", "configuration", "connect", "response", "stream", "parse", "validation", "unhandled"},
+    "exceptionKind": {"api_call", "generic", "protocol", "provider_business", "transport", "type_error", "validation"},
+    "transport": {"http", "sse", "websocket"},
+}
+NATIVE_ATTRIBUTION_TEXT = ("reason", "providerId", "modelId", "providerKind", "providerErrorCode")
+#: The exported schema bounds each attribution identifier to 160 characters;
+#: this decoder enforces the same bound on values it did not see validated.
+MAX_NATIVE_FAILURE_TEXT = 160
+MAX_NATIVE_FAILURE_SUMMARY = 240
+
+
+def _failure_text(value: object, *, truncate: bool = False) -> str | None:
+    """One bounded, printable failure identifier.
+
+    Values the exported schema bounds to 160 characters are dropped rather than
+    truncated when they exceed that bound (a longer value could not have come
+    from the live protocol); natively unbounded strings are truncated.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > MAX_NATIVE_FAILURE_TEXT:
+        return text[:MAX_NATIVE_FAILURE_TEXT] if truncate else None
+    return text
+
+
+def _failure_summary(failure: dict) -> str:
+    attribution = failure["attribution"]
+    parts = []
+    for key in ("source", "reason"):
+        if attribution.get(key):
+            parts.append(str(attribution[key]))
+    if failure.get("code"):
+        parts.append(f"code {failure['code']}")
+    for key, label in (("statusCode", "status"), ("providerErrorCode", "providerCode"), ("errorPhase", "phase")):
+        if attribution.get(key) is not None:
+            parts.append(f"{label} {attribution[key]}")
+    if attribution.get("retryable") is not None:
+        parts.append("retryable" if attribution["retryable"] else "not-retryable")
+    return " ".join(parts)[:MAX_NATIVE_FAILURE_SUMMARY]
+
+
+def decode_native_failure(payload: object) -> dict | None:
+    """Whitelisted attribution from one exported native ``turn.failed`` payload.
+
+    The exported event supplies ``error`` (with ``type``, ``code``,
+    ``attribution`` and ``retryable``) and ``turnPhase``; only those fields are
+    imported, re-validated against the exported schema's own bounds, and
+    composed into a bounded summary built exclusively from whitelisted values.
+    When the event carries no attribution — the documented shape of a
+    ``state.updated`` ``prompt_failed``, whose envelope has only a reason
+    string and an opaque patch — the summary states that absence instead of
+    manufacturing a cause, and no raw provider message is ever surfaced.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return None
+    error = payload["error"]
+    raw = error.get("attribution")
+    raw = raw if isinstance(raw, dict) else {}
+    attribution = {}
+    for key, allowed in NATIVE_ATTRIBUTION_ENUMS.items():
+        if raw.get(key) in allowed:
+            attribution[key] = raw[key]
+    for key in NATIVE_ATTRIBUTION_TEXT:
+        text = _failure_text(raw.get(key))
+        if text is not None:
+            attribution[key] = text
+    status = raw.get("statusCode")
+    if type(status) is int and 100 <= status <= 599:
+        attribution["statusCode"] = status
+    retryable = raw.get("retryable")
+    if type(retryable) is not bool:
+        retryable = error.get("retryable")
+    if type(retryable) is bool:
+        attribution["retryable"] = retryable
+    failure = {"errorType": _failure_text(error.get("type"), truncate=True),
+               "code": _failure_text(error.get("code"), truncate=True),
+               "turnPhase": _failure_text(payload.get("turnPhase"), truncate=True),
+               "attribution": attribution}
+    failure["summary"] = _failure_summary(failure) or "no structured failure attribution was exported"
+    return failure
 
 
 def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
@@ -438,7 +565,11 @@ class RootTurnEvidence:
         if not self.turn_id or p.get("turnId") != self.turn_id:
             return
         if p.get("type") == "turn.failed":
-            raise NativeError("native-turn-failed", "the native root turn failed")
+            # Only the exported turn.failed event carries structured failure
+            # attribution; the summary is composed of whitelisted values only.
+            failure = decode_native_failure(data)
+            detail = f" ({failure['summary']})" if failure is not None else ""
+            raise NativeError("native-turn-failed", f"the native root turn failed{detail}", failure=failure)
         if p.get("type") == "turn.completed":
             if self.completed_ordinal or data.get("resultType") != "success" or data.get("inputId") != self.input_id:
                 raise NativeError("native-turn-failed", "the native root turn did not complete successfully")

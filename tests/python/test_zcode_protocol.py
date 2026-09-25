@@ -12,7 +12,8 @@ from unittest import mock
 from buddy.adapters.base import ProcessHandle
 from buddy.adapters.zcode_mcp import respond
 from buddy.adapters.zcode_protocol import (NativeConnection, NativeError, RootTurnEvidence, decode_json,
-                                           sign_receipt, verify_inquiry_receipt, verify_receipt)
+                                           decode_native_failure, sign_receipt, verify_inquiry_receipt,
+                                           verify_receipt)
 from buddy.adapters.zcode_runner import catalog, configure_session, execution_deadline
 
 
@@ -361,6 +362,91 @@ class InquiryEvidenceTests(unittest.TestCase):
                                                    "result": {"success": True, "truncated": False,
                                                               "content": content}})
         self.assertEqual(len(self.deliveries), total + 1)
+
+
+class NativeFailureAttributionTests(unittest.TestCase):
+    """Only whitelisted exported turn.failed fields become observable."""
+
+    QUOTA_ERROR = {"type": "AiSdkModelAdapterError", "code": "model_rate_limited",
+                   "message": "raw provider detail with sk-fixture-secret and https://models.example.com/v1",
+                   "attribution": {"source": "provider", "reason": "rate_limited", "errorPhase": "stream",
+                                   "exceptionKind": "provider_business", "providerId": "zai-api",
+                                   "modelId": "GLM-5.3", "providerKind": "anthropic", "transport": "sse",
+                                   "statusCode": 429, "providerErrorCode": "1308", "retryable": False}}
+
+    def test_the_quota_attribution_is_decoded_and_the_summary_is_safe(self):
+        failure = decode_native_failure({"error": self.QUOTA_ERROR, "turnPhase": "stream"})
+        self.assertEqual(failure["errorType"], "AiSdkModelAdapterError")
+        self.assertEqual(failure["code"], "model_rate_limited")
+        self.assertEqual(failure["turnPhase"], "stream")
+        self.assertEqual(failure["attribution"]["statusCode"], 429)
+        self.assertEqual(failure["attribution"]["providerErrorCode"], "1308")
+        self.assertEqual(failure["attribution"]["reason"], "rate_limited")
+        self.assertIs(failure["attribution"]["retryable"], False)
+        for fragment in ("provider rate_limited", "code model_rate_limited", "status 429",
+                         "providerCode 1308", "phase stream", "not-retryable"):
+            self.assertIn(fragment, failure["summary"])
+        dumped = json.dumps(failure)
+        for secret in ("sk-fixture-secret", "models.example.com", "raw provider detail"):
+            self.assertNotIn(secret, dumped)
+
+    def test_missing_attribution_states_its_absence_instead_of_inventing_a_cause(self):
+        for payload in ({"error": {"type": "UnknownError", "message": "quiet failure"},
+                         "turnPhase": "model"},
+                        {"error": {"type": "QuietError"}, "turnPhase": "model"},
+                        {"error": "not-an-object", "turnPhase": "model"},
+                        {"turnPhase": "model"},
+                        "not-an-object"):
+            with self.subTest(payload=payload):
+                failure = decode_native_failure(payload)
+                if failure is None:
+                    continue
+                self.assertEqual(failure["attribution"], {})
+                self.assertEqual(failure["summary"], "no structured failure attribution was exported")
+                self.assertIsNone(failure["code"])
+
+    def test_values_outside_the_exported_schema_are_dropped_not_guessed(self):
+        failure = decode_native_failure({"error": {"type": "E" * 400, "code": 7, "retryable": "yes",
+                                                    "attribution": {"source": "vendor", "reason": "r" * 400,
+                                                                    "statusCode": 42, "transport": "grpc",
+                                                                    "errorPhase": "telemetry",
+                                                                    "providerId": None, "modelId": 5}},
+                                         "turnPhase": b"bytes"})
+        self.assertEqual(failure["errorType"], "E" * 160)
+        self.assertEqual(failure["attribution"], {})
+        self.assertIsNone(failure["code"])
+        self.assertIsNone(failure["turnPhase"])
+        self.assertNotIn("vendor", json.dumps(failure))
+        # A boolean retryable on the error itself is still in the exported schema.
+        fallback = decode_native_failure({"error": {"type": "T", "retryable": True}, "turnPhase": "p"})
+        self.assertIs(fallback["attribution"]["retryable"], True)
+
+    def test_a_root_turn_failed_event_carries_attribution_a_prompt_failure_does_not(self):
+        bridge = {"identity": {"taskId": "g", "attemptId": "a", "generation": 1, "turnId": "t"},
+                  "inputSha256": "a" * 64, "key": "b" * 64}
+
+        def turn_event(kind, payload):
+            return {"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
+                                                          "seq": 2, "type": kind, "payload": payload}}
+
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", bridge)
+        tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
+                        "seq": 1, "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
+        with self.assertRaises(NativeError) as error:
+            tracker.observe(turn_event("turn.failed", {"error": self.QUOTA_ERROR, "turnPhase": "stream"}), 2)
+        self.assertEqual(error.exception.code, "native-turn-failed")
+        self.assertEqual(error.exception.failure["attribution"]["statusCode"], 429)
+        self.assertIn("rate_limited", str(error.exception))
+        # The state.updated prompt_failed envelope exports only a reason string
+        # and an opaque patch, so no attribution is manufactured for it.
+        quiet = RootTurnEvidence("sess-root", "input-root", "finish", bridge)
+        quiet.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
+                       "seq": 1, "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
+        with self.assertRaises(NativeError) as prompt_error:
+            quiet.observe({"method": "state.updated", "params": {"sessionId": "sess-root",
+                           "reason": "prompt_failed", "patch": {"anything": "opaque"}}}, 2)
+        self.assertEqual(prompt_error.exception.code, "native-turn-failed")
+        self.assertIsNone(prompt_error.exception.failure)
 
 
 class ConfigurationTests(unittest.TestCase):

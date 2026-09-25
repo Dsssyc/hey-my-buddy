@@ -127,6 +127,44 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "failed")
         self.assertIsNone(outcome.result["resolved"])
 
+    def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
+        from buddy.worker.worker import classify_termination
+
+        for index, case in enumerate(("turn-failed-quota", "turn-failed-quiet"), 1):
+            with self.subTest(case=case):
+                _, outcome = self.execute(self.context(case, index=index))
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertTrue(outcome.shutdown_confirmed)
+                self.assertEqual(outcome.result["code"], "native-turn-failed")
+                failure = outcome.result["nativeFailure"]
+                report = json.dumps(outcome.to_report())
+                self.assertNotIn("sk-fixture-never-public", report)
+                self.assertNotIn("models.example.com", report)
+                if case == "turn-failed-quota":
+                    self.assertEqual(failure["errorType"], "AiSdkModelAdapterError")
+                    self.assertEqual(failure["code"], "model_rate_limited")
+                    self.assertEqual(failure["attribution"]["reason"], "rate_limited")
+                    self.assertEqual(failure["attribution"]["source"], "provider")
+                    self.assertEqual(failure["attribution"]["statusCode"], 429)
+                    self.assertEqual(failure["attribution"]["providerErrorCode"], "1308")
+                    self.assertIs(failure["attribution"]["retryable"], False)
+                    self.assertIn("rate_limited", outcome.result["error"])
+                    # A provider-side native failure keeps the distinct harness-error
+                    # termination; it is never relabelled deadline, user-cancel or transport.
+                    self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=False),
+                                     "harness-error")
+                else:
+                    self.assertEqual(failure["summary"], "no structured failure attribution was exported")
+                    self.assertEqual(failure["attribution"], {})
+
+    def test_a_prompt_failure_never_manufactures_attribution(self):
+        # The state.updated prompt_failed envelope exports only a reason string
+        # and an opaque patch, so no attribution is invented for it.
+        _, outcome = self.execute(self.context("prompt-failure"))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.result.get("code"), "native-turn-failed")
+        self.assertNotIn("nativeFailure", outcome.result)
+
     def test_duplicate_protocol_members_fail_without_work(self):
         _, outcome = self.execute(self.context("invalid-json"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import math
@@ -24,7 +25,7 @@ from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 from .zcode_config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
 from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES,
                              MAX_INQUIRY_ID_BYTES, MAX_QUESTION_BYTES, ActivityProjection, NativeConnection,
-                             NativeError, RootTurnEvidence, decode_json)
+                             NativeError, RootTurnEvidence, decode_json, read_shared_snapshot)
 
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
@@ -84,6 +85,7 @@ class InquiryBridge:
         self.attention: list[dict] = []
         self.started_at = _now()
         self.error: str | None = None
+        self.truncated = False
         self._torn_line = False
 
     # -- lifecycle -----------------------------------------------------------
@@ -177,13 +179,17 @@ class InquiryBridge:
                    for key in ("taskId", "attemptId", "generation", "turnId"))
 
     def _load_journal(self) -> None:
-        try:
-            if self.journal_path.stat().st_size > MAX_JOURNAL_BYTES:
-                return
-            text = self.journal_path.read_text(errors="replace")
-        except OSError:
+        # The shared-locked read is the reader side of the journal barrier: it
+        # waits for any in-flight writer transaction instead of observing a
+        # record the writer has not committed (see read_shared_snapshot).
+        raw = read_shared_snapshot(self.journal_path, MAX_JOURNAL_BYTES)
+        if raw is None or not raw or len(raw) > MAX_JOURNAL_BYTES:
             return
-        for line in text.splitlines():
+        # A tail without its newline is the remains of an append that died with
+        # the process (the rollback path truncates cleanly): the next append
+        # isolates that one unparseable line instead of merging into it.
+        self._torn_line = not raw.endswith(b"\n")
+        for line in raw.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -204,49 +210,73 @@ class InquiryBridge:
     def _journal(self, record: dict) -> bool:
         """Durably append one transport record, then commit it in memory.
 
-        The append (every byte written, then fsynced) happens before the merged
-        entry is committed to ``self.entries``; a refused or failed append
-        leaves the in-memory state untouched, so an ``ask`` can never report a
-        question as queued that the MCP tools cannot read, and a delivery or
-        answer is never fabricated on a failed write. A partial write is driven
-        to completion or failed, and the remains of a failed append are
-        isolated by a leading newline so at most that one line is lost. The
+        The whole transaction — byte-cap check, append, fsync — runs under an
+        exclusive ``flock`` on the journal file, the writer side of the
+        cross-process barrier whose reader side is ``read_shared_snapshot``:
+        while it is held, the MCP session tools' shared-locked reads wait, so a
+        reader can never observe an in-flight append. A failed append is rolled
+        back to the pre-transaction length under the same still-held lock
+        (truncate + fsync), so no torn fragment survives either; only when the
+        rollback itself fails are the remains marked torn and isolated by the
+        next append's leading newline, losing at most that one line. The
+        in-memory entry commits only after the durable append, so an ``ask``
+        can never report a question as queued that the MCP tools cannot read,
+        and a delivery or answer is never fabricated on a failed write. The
         caller learns the outcome from the return value and surfaces a bounded
         ``journal-unavailable`` error instead of inventing success.
         """
         inquiry_id = record["inquiryId"]
         merged = {**self.entries.get(inquiry_id, {}), **record}
         raw = (canonical_json({"version": INQUIRY_JOURNAL_VERSION, **record}) + "\n").encode()
-        written_any = False
         try:
-            if self.journal_path.exists() and self.journal_path.stat().st_size + len(raw) > MAX_JOURNAL_BYTES:
-                self.truncated = True
-                raise OSError("the inquiry journal reached its byte cap")
             fd = os.open(self.journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-            try:
-                if getattr(self, "_torn_line", False):
-                    # Isolate the remains of a previously failed append so only
-                    # that one unreadable line is ever lost.
-                    os.write(fd, b"\n")
-                view = memoryview(raw)
-                written_any = False
-                while view:
-                    count = os.write(fd, view)
-                    if count <= 0:
-                        raise OSError("the inquiry journal accepted a short write")
-                    written_any = True
-                    view = view[count:]
-                os.fsync(fd)
-            finally:
-                os.close(fd)
         except OSError:
-            if written_any:
-                self._torn_line = True
             self.error = self.error or "journal-unavailable: the inquiry record could not be appended durably"
             return False
+        committed_length: int | None = None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            committed_length = os.fstat(fd).st_size
+            if committed_length + len(raw) > MAX_JOURNAL_BYTES:
+                self.truncated = True
+                raise OSError("the inquiry journal reached its byte cap")
+            if self._torn_line:
+                # Isolate the remains of an append whose rollback also failed,
+                # so at most that one unreadable line is ever lost.
+                os.write(fd, b"\n")
+                committed_length = os.fstat(fd).st_size
+            view = memoryview(raw)
+            while view:
+                count = os.write(fd, view)
+                if count <= 0:
+                    raise OSError("the inquiry journal accepted a short write")
+                view = view[count:]
+            os.fsync(fd)
+        except OSError:
+            if committed_length is not None:
+                # A failure before the lock was taken wrote nothing; otherwise
+                # the append is rolled back while the barrier is still held.
+                self._rollback_append(fd, committed_length)
+            self.error = self.error or "journal-unavailable: the inquiry record could not be appended durably"
+            return False
+        finally:
+            os.close(fd)  # closing releases the exclusive barrier
         self._torn_line = False
         self.entries[inquiry_id] = merged
         return True
+
+    def _rollback_append(self, fd: int, committed_length: int) -> None:
+        """Truncate a failed append back to the committed length, still locked.
+
+        A rollback that itself fails leaves the fragment in place and marks the
+        line torn; the next append isolates it with a leading newline, and every
+        reader already ignores an unparseable line instead of failing.
+        """
+        try:
+            os.ftruncate(fd, committed_length)
+            os.fsync(fd)
+        except OSError:
+            self._torn_line = True
 
     def describe_answer(self, inquiry_id: str) -> dict:
         """The live view of one inquiry, including its correlated answer."""
@@ -366,7 +396,7 @@ class InquiryBridge:
                           "delivery": "cooperative-checkpoint"},
             "attention": attention,
             "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
-            "journal": {"enabled": True, "truncated": bool(getattr(self, "truncated", False)), "entries": len(entries)},
+            "journal": {"enabled": True, "truncated": self.truncated, "entries": len(entries)},
             "capability": "inquiry",
             "supported": True,
             "deliveryMode": "cooperative-checkpoint",
@@ -842,6 +872,13 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         result.update(status="cancelled" if error.code == "cancelled" else "error", code=error.code, error=str(error))
         if error.code == "native-disconnected":
             result["failureKind"] = "transport"
+        # Whitelisted native failure attribution (only the exported turn.failed
+        # event supplies it) is observable on the failed result; it never
+        # changes the status, code or failureKind, so this stays a harness
+        # error distinct from a deadline, a user cancel or a transport break.
+        failure = getattr(error, "failure", None)
+        if isinstance(failure, dict):
+            result["nativeFailure"] = failure
         record = None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         result.update(status="error", code="invalid-native-result", error="the native execution returned invalid or incomplete data")

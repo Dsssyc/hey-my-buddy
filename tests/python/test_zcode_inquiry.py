@@ -4,14 +4,22 @@ The first half drives the controller's private bridge directly: it proves that
 a question is queued with one committed identity, that only the controller's
 verified transitions move it to delivered/answered/unavailable, and that no
 code path can send a native command. The second half exercises the real MCP
-tool surface (checkpoint, answer, finish refusal) against a private journal.
-End-to-end turn flows with the real runner and fixture live in
-``test_zcode_checkpoint.py``.
+tool surface (checkpoint, answer, finish refusal) against a private journal,
+and the journal barrier suite proves the cross-process flock protocol between
+the controller writer and the session-tool readers. End-to-end turn flows with
+the real runner and fixture live in ``test_zcode_checkpoint.py``.
 """
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
+import os
+import select
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -21,7 +29,7 @@ from test_zcode import ZcodeFixtureCase
 from buddy import activity as activity_module
 from buddy import inquiry as inquiry_module
 from buddy.adapters import turn_io
-from buddy.adapters.zcode_mcp import attention_requests, pending_inquiries, respond
+from buddy.adapters.zcode_mcp import attention_requests, pending_inquiries, read_inquiry_entries, respond
 from buddy.adapters.zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES,
                                             NativeError, verify_inquiry_receipt, verify_receipt)
 from buddy.adapters.zcode_runner import MAX_JOURNAL_BYTES, InquiryBridge
@@ -491,6 +499,134 @@ class BridgeQueueTests(unittest.TestCase):
         written = json.loads(self.harness.attention_path.read_text())
         self.assertEqual(written["requests"][-1]["method"], "interaction/9")
         self.assertEqual(written["attemptId"], "attempt-1")
+
+
+class JournalBarrierTests(unittest.TestCase):
+    """The journal's cross-process flock barrier between writer and readers.
+
+    The controller's append transaction (cap check, append, fsync) holds the
+    exclusive side; the session tools' reads take the shared side and wait, so
+    no reader can observe an in-flight or rolled-back record.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-journal-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.journal = self.root / "inquiry.results.jsonl"
+        self.config = {"identity": IDENTITY, "inputSha256": "a" * 64, "key": "b" * 64,
+                       "inquiryJournalPath": str(self.journal)}
+
+    def queued_record(self, inquiry_id: str, question: str = "barrier question?") -> bytes:
+        return (json.dumps({"version": 1, "inquiryId": inquiry_id, "state": "queued", "question": question,
+                            "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
+                            "askedAt": "2026-01-01T00:00:00Z", **IDENTITY}) + "\n").encode()
+
+    def bridge(self) -> InquiryBridge:
+        return InquiryBridge({"socketPath": str(self.root / "bridge.sock"), "resultsPath": str(self.journal),
+                              "errorPath": str(self.root / "inquiry.error.json"), "token": "a" * 64},
+                             identity=IDENTITY, journal_path=str(self.journal))
+
+    def test_a_shared_reader_waits_for_the_exclusive_writer_transaction(self):
+        record = self.queued_record("q-barrier")
+        fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        observed: list[dict] = []
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.write(fd, record[:24])  # a deliberately in-flight, uncommitted record
+            reader = threading.Thread(target=lambda: observed.append(read_inquiry_entries(self.config)))
+            reader.start()
+            reader.join(0.3)
+            self.assertTrue(reader.is_alive(), "a reader observed the journal mid-transaction")
+            os.write(fd, record[24:])
+            os.fsync(fd)
+        finally:
+            os.close(fd)  # closing releases the exclusive barrier
+        reader.join(5)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(observed[0]["q-barrier"]["state"], "queued")
+
+    def test_the_mcp_reader_in_a_real_other_process_waits_for_the_barrier(self):
+        config_path = self.root / "bridge.json"
+        config_path.write_text(json.dumps(self.config))
+        record = self.queued_record("q-cross-process")
+        fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("BUDDY_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.zcode_mcp", "--config", str(config_path)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=environment)
+
+        def stop():
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+            process.wait(timeout=5)
+            process.stdout.close()
+
+        self.addCleanup(stop)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                            "params": {"name": "buddy_checkpoint", "arguments": {}}}).encode() + b"\n")
+            process.stdin.flush()
+            ready, _, _ = select.select([process.stdout], [], [], 0.4)
+            self.assertFalse(ready, "the session tool observed the journal while the writer held the barrier")
+            os.write(fd, record)
+            os.fsync(fd)
+        finally:
+            os.close(fd)  # closing releases the barrier for the other process
+        ready, _, _ = select.select([process.stdout], [], [], 10)
+        self.assertTrue(ready, "the session tool never answered after the barrier was released")
+        result = json.loads(process.stdout.readline().decode())["result"]
+        receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
+        self.assertEqual(receipt["inquiries"][0]["inquiryId"], "q-cross-process")
+
+    def test_a_failed_append_rolls_back_its_partial_bytes_under_the_barrier(self):
+        from unittest import mock
+
+        harness = BridgeHarness(self.root / "harness")
+        self.addCleanup(harness.close)
+        bridge = harness.bridge
+        real_write = os.write
+
+        def flaky_write(fd, data):
+            if not flaky_write.triggered:
+                flaky_write.triggered = True
+                return max(1, real_write(fd, bytes(data[:5])))
+            raise OSError("disk gone mid-record")
+
+        flaky_write.triggered = False
+        record = {**bridge._identity_fields(), "inquiryId": "q-rollback", "state": "queued",
+                  "question": "rolled back?", "questionSha256": "a" * 64, "askedAt": "t"}
+        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=flaky_write):
+            self.assertFalse(bridge._journal(record))
+        path = Path(harness.credentials["resultsPath"])
+        self.assertEqual(path.read_bytes(), b"", "a failed append must leave no fragment behind")
+        self.assertFalse(bridge._torn_line, "a clean rollback must not mark the journal torn")
+        # After the fault clears the same record commits as one clean line that
+        # the session tools can read back.
+        self.assertTrue(bridge._journal(record))
+        lines = [line for line in path.read_text().splitlines() if line.strip()]
+        self.assertEqual([json.loads(line)["inquiryId"] for line in lines], ["q-rollback"])
+
+    def test_a_crash_torn_tail_is_isolated_by_the_next_append_and_ignored_by_readers(self):
+        torn = b'{"version":1,"inquiryId":"q-torn","state":"que'  # no trailing newline
+        self.journal.write_bytes(self.queued_record("q-good") + torn)
+        bridge = self.bridge()
+        bridge._load_journal()
+        self.assertTrue(bridge._torn_line, "a journal tail without its newline is a torn append")
+        self.assertEqual(set(bridge.entries), {"q-good"})
+        # The session tools ignore the torn tail and still see the committed record.
+        self.assertEqual(set(read_inquiry_entries(self.config)), {"q-good"})
+        # The next append isolates the remains so only that one line is lost.
+        self.assertTrue(bridge._journal({**bridge._identity_fields(), "inquiryId": "q-after",
+                                         "state": "queued", "question": "after the crash?",
+                                         "questionSha256": "b" * 64, "askedAt": "t"}))
+        restarted = self.bridge()
+        restarted._load_journal()
+        self.assertEqual(set(restarted.entries), {"q-good", "q-after"})
+        self.assertEqual(set(read_inquiry_entries(self.config)), {"q-good", "q-after"})
 
 
 class FinishToolTests(unittest.TestCase):

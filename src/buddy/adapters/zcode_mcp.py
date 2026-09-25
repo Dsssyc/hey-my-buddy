@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .turn_io import MAX_OUTCOME_BYTES, canonical_json, validate_outcome
 from .zcode_protocol import (INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES, MAX_INQUIRY_ID_BYTES,
-                             decode_json, sign_receipt)
+                             decode_json, read_shared_snapshot, sign_receipt)
 
 MAX_ATTENTION_BYTES = 64 * 1024
 MAX_JOURNAL_BYTES = 1024 * 1024
@@ -111,23 +111,24 @@ def read_inquiry_entries(configuration: dict) -> dict[str, dict] | None:
 
     The controller is the only writer; this merge replays its linear records so
     a committed question hash, delivery or answer survives every later record.
-    Replay is strictly attempt-bound: a record replays only with the current
-    journal version and an exact ``taskId``/``attemptId``/``generation``/
-    ``turnId`` binding to this configuration's identity, so malformed, foreign
-    and unbound lines — including a stale journal from another attempt — are
-    ignored rather than exposed to the session tools.
+    The read takes the shared side of the journal's cross-process ``flock``
+    barrier (see ``read_shared_snapshot``), so while the controller holds the
+    exclusive side through an append/fsync/commit transaction this read waits
+    instead of observing an in-flight or rolled-back record. Replay is strictly
+    attempt-bound: a record replays only with the current journal version and
+    an exact ``taskId``/``attemptId``/``generation``/``turnId`` binding to this
+    configuration's identity, so malformed, foreign and unbound lines —
+    including a stale journal from another attempt — are ignored rather than
+    exposed to the session tools.
     """
     journal = configuration.get("inquiryJournalPath")
     identity = configuration.get("identity")
     if not isinstance(journal, str) or not journal or not isinstance(identity, dict):
         return None
-    try:
-        path = Path(journal)
-        if path.stat().st_size > MAX_JOURNAL_BYTES:
-            return {}
-        text = path.read_text(errors="replace")
-    except OSError:
+    raw = read_shared_snapshot(journal, MAX_JOURNAL_BYTES)
+    if raw is None or not raw or len(raw) > MAX_JOURNAL_BYTES:
         return {}
+    text = raw.decode("utf-8", errors="replace")
     entries: dict[str, dict] = {}
     for line in text.splitlines():
         line = line.strip()
