@@ -124,15 +124,16 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                           target={"path": str(target["path"]), "ref": "HEAD"}, reason=reason)
         return board.store.workflow.integration_record(params)
 
-    def target_with_artifact(self, artifact, *, name="target"):
+    def target_with_artifact(self, artifact, *, name="target", previous=()):
         target = self.directory / name
         git(self.directory, "clone", "-q", str(self.repo), str(target))
         before = git(target, "rev-parse", "HEAD").strip()
-        completed = subprocess.run(
-            ["git", "-C", str(target), "apply", "--binary", artifact["diffPath"]],
-            env={**os.environ, **GIT_ENV}, capture_output=True, text=True,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        for item in (*previous, artifact):
+            completed = subprocess.run(
+                ["git", "-C", str(target), "apply", "--binary", item["diffPath"]],
+                env={**os.environ, **GIT_ENV}, capture_output=True, text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
         git(target, "add", ".")
         git(target, "commit", "-qm", "integrate")
         after = git(target, "rev-parse", "HEAD").strip()
@@ -278,6 +279,119 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             })
         self.assertEqual(raised.exception.code, "NOT_FOUND")
 
+    def test_retained_output_without_path_summary_uses_fixed_git_objects(self):
+        board = self.board()
+        self.register(board)
+        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+            board, request_id="old-path-summary"
+        )
+        target = self.target_with_artifact(artifact)
+        # Model a retained 0.7 output whose optional summary was never published.
+        with board.store.db.write() as connection:
+            row = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?",
+                                     (artifact["artifactId"],)).fetchone()
+            retained = json.loads(row["manifest_json"])
+            retained["snapshot"].pop("changedEntries")
+            retained["snapshot"].pop("changedEntriesTruncated")
+            retained["snapshotSha256"] = workspace_module._sha(workspace_module._json(retained["snapshot"]))
+            connection.execute("UPDATE workflow_artifacts SET manifest_json=?,manifest_sha256=? WHERE artifact_id=?",
+                               (canonical_json(retained), retained["snapshotSha256"], artifact["artifactId"]))
+        recorded = self.integrate(board, view, artifact, target=target)
+        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["tracked.txt"])
+        accepted = self.acknowledge(board, recorded, artifact)
+        self.assertEqual(accepted["state"], "accepted")
+        planned = self.plan(board, self.view(board, submitted["runId"]))
+        self.assertEqual(planned["plan"]["state"], "planned")
+        (checkout / "tracked.txt").write_text("unsealed edit\n")
+        inspected = workspace_module.cleanup_inspect(self.directory, manifest, sealed=retained, retained=[manifest])
+        self.assertIn("unsealed-changes", inspected["reasons"])
+        with self.assertRaises(BoardError) as raised:
+            self.apply(board, planned, planned["plan"], command_id="old-path-summary-dirty")
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertTrue(checkout.exists())
+
+    def test_missing_or_spoofed_source_objects_cannot_verify(self):
+        board = self.board()
+        self.register(board)
+        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+            board, request_id="object-binding"
+        )
+        target = self.target_with_artifact(artifact)
+        with self.assertRaises(BoardError):
+            workspace_module.integration_verify(
+                {**seal, "commit": "0" * 40}, original_input=manifest, final_input=manifest,
+                path=str(target["path"]), ref="HEAD", strategy="patch", before_commit=target["before"],
+            )
+        with mock.patch.object(workspace_module, "OUTPUT_ENTRY_LIMIT", 0):
+            with self.assertRaises(BoardError) as oversized:
+                self.integrate(board, view, artifact, target=target, command_id="object-binding-oversized")
+        self.assertEqual(oversized.exception.code, "WORKSPACE_UNSUPPORTED")
+        git(self.repo, "update-ref", "-d", manifest["snapshot"]["inputRef"])
+        with self.assertRaises(BoardError) as raised:
+            self.integrate(board, view, artifact, target=target)
+        self.assertEqual(raised.exception.code, "WORKSPACE_REF_INVALID")
+
+    def test_final_noop_continuation_still_requires_earlier_goal_change(self):
+        board = self.board()
+        self.register(board)
+        submitted, first_claim, first_manifest, checkout, first_seal, yielded, first = self.run_worktree(
+            board, request_id="noop-final", output="first output\n", disposition="assistance"
+        )
+        continued = board.call("workflow_continue", {
+            "runId": submitted["runId"], "commandId": "noop-continue", "expectedRevision": yielded["revision"],
+            "input": "finish", **self.control(yielded),
+        })
+        second = self.claim(board, submitted["runId"], request_id="noop-claim", nonce="q" * 16)
+        second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
+        final_seal = workspace_module.seal(self.directory, second_manifest, submitted["runId"],
+                                           second["claim"]["attempt"]["attemptId"])
+        self.assertEqual(final_seal["changedPaths"], [])
+        self.finish_turn(board, second, final_seal, nonce="q" * 16)
+        delivered = self.view(board, submitted["runId"])
+        final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
+        blank = self.directory / "noop-blank"
+        git(self.directory, "clone", "-q", str(self.repo), str(blank))
+        before = git(blank, "rev-parse", "HEAD").strip()
+        with self.assertRaises(BoardError) as raised:
+            self.integrate(board, delivered, final, target={"path": blank, "before": before})
+        self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
+        self.assertIn("tracked.txt", [row["path"] for row in raised.exception.details["verification"]["differingPaths"]])
+        with self.assertRaises(BoardError) as unreasoned:
+            self.integrate(board, delivered, final, target={"path": blank, "before": before},
+                           command_id="noop-unreasoned-adjustment", adjustedPaths=["tracked.txt"])
+        self.assertEqual(unreasoned.exception.code, "INVALID_WORKSPACE")
+        target = self.target_with_artifact(first, name="noop-integrated")
+        recorded = self.integrate(board, delivered, final, target=target, command_id="noop-correct")
+        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["tracked.txt"])
+
+    def test_deletion_and_mode_change_are_bound_to_final_tree(self):
+        (self.repo / "mode.txt").write_text("executable content\n")
+        git(self.repo, "add", "mode.txt")
+        git(self.repo, "commit", "-qm", "add mode fixture")
+        board = self.board()
+        self.register(board)
+        submitted = board.call("workflow_submit", {
+            **CONFIGURATION, "requestId": "delete-mode", "hostId": "host-1", "task": "delete and chmod",
+            "cwd": str(self.repo), "submissionToken": "t" * 32,
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        self.controls[submitted["runId"]] = submitted["control"]
+        claimed = self.claim(board, submitted["runId"], request_id="delete-mode-claim")
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        (checkout / "tracked.txt").unlink()
+        (checkout / "mode.txt").chmod(0o755)
+        seal = workspace_module.seal(self.directory, manifest, submitted["runId"],
+                                     claimed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, claimed, seal)
+        view = self.view(board, submitted["runId"])
+        artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
+        target = self.target_with_artifact(artifact, name="delete-mode-target")
+        recorded = self.integrate(board, view, artifact, target=target)
+        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["mode.txt", "tracked.txt"])
+        self.assertEqual(git(target["path"], "ls-tree", "HEAD", "mode.txt").split()[0], "100755")
+        self.assertEqual(git(target["path"], "ls-tree", "HEAD", "tracked.txt"), "")
+
     # -- cleanup -------------------------------------------------------------
     def accepted_worktree(self, *, request_id="cleanup-1"):
         board = self.board()
@@ -324,7 +438,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         delivered = self.view(board, run_id)
         self.assertEqual(delivered["state"], "delivered")
         final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
-        target = self.target_with_artifact(final)
+        target = self.target_with_artifact(final, previous=(first_artifact,))
         self.integrate(board, delivered, final, target=target, command_id=f"{request_id}-integration",
                        reason="verified the sealed second stage")
         accepted = self.acknowledge(board, delivered, final)
@@ -798,7 +912,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         root_view = self.view(board, run_id)
         self.assertEqual(root_view["state"], "delivered")
         parent_artifact = next(row for row in root_view["artifacts"] if row["kind"] == "output")
-        parent_target = self.target_with_artifact(parent_artifact, name="parent-target")
+        first_parent_artifact = next(row for row in flow["rootView"]["artifacts"] if row["kind"] == "output")
+        parent_target = self.target_with_artifact(parent_artifact, name="parent-target",
+                                                  previous=(first_parent_artifact,))
         board.store.workflow.integration_record({
             "runId": run_id, "commandId": "parent-int", "expectedRevision": root_view["revision"],
             "artifactId": parent_artifact["artifactId"], "strategy": "patch", "beforeCommit": parent_target["before"],

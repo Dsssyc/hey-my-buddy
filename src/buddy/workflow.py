@@ -3991,6 +3991,27 @@ class WorkflowCoordinator:
                 raise BoardError("NOT_FOUND", "No sealed output artifact of this run has that identity",
                                  artifactId=artifact_id)
             manifest = json.loads(artifact["manifest_json"])
+            if manifest.get("snapshotSha256") != artifact["manifest_sha256"]:
+                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The retained output identity changed")
+            original = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            turn = connection.execute(
+                "SELECT * FROM workflow_turns WHERE run_id=? AND turn_id=? AND attempt_id=?",
+                (run_id, artifact["turn_id"], artifact["attempt_id"]),
+            ).fetchone()
+            if (original is None or turn is None
+                    or (turn["input_sha256"] is not None
+                        and sha256_text(turn["input_json"]) != turn["input_sha256"])):
+                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output has no proven input manifest")
+            original_manifest = json.loads(original["manifest_json"])
+            final_manifest = json.loads(turn["input_json"]).get("executionWorkspace")
+            if not isinstance(final_manifest, dict):
+                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final turn has no execution workspace")
+            if (original_manifest.get("manifestSha256") != original["manifest_sha256"]
+                    or final_manifest.get("manifestSha256") != manifest.get("manifestSha256")):
+                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A retained input manifest identity changed")
         verification: dict = {}
         binding: dict = {"runId": run_id, "artifactId": artifact_id, "strategy": strategy,
                          "sourceCommit": manifest.get("commit"), "sourceTree": manifest.get("tree")}
@@ -4001,7 +4022,8 @@ class WorkflowCoordinator:
             if not before_commit:
                 raise BoardError("INVALID_ARGUMENT", "beforeCommit is required for a verified integration")
             verification = workspace_module().integration_verify(
-                manifest, path=target["path"], ref=target["ref"], strategy=strategy, before_commit=before_commit,
+                manifest, original_input=original_manifest, final_input=final_manifest,
+                path=target["path"], ref=target["ref"], strategy=strategy, before_commit=before_commit,
                 repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
                 adjusted_paths=adjusted, reason=reason,
             )

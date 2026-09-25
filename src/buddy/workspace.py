@@ -1205,7 +1205,78 @@ def _is_ancestor(root, ancestor, descendant):
     return True
 
 
-def integration_verify(artifact: dict, *, path: str, ref: str, strategy: str, before_commit: str,
+def _tree_changes(root, before_tree, after_tree):
+    """Derive a bounded path binding from two proven immutable Git trees."""
+    names = [_relative(os.fsdecode(name)) for name in _git(
+        root, "diff-tree", "-r", "--no-renames", "--name-only", "-z", before_tree, after_tree, "--"
+    ).split(b"\0") if name]
+    if len(names) > OUTPUT_ENTRY_LIMIT or len(set(names)) != len(names):
+        raise BoardError("WORKSPACE_UNSUPPORTED", "The artifact has too many changed paths to verify",
+                         limit=OUTPUT_ENTRY_LIMIT)
+    return {name: (_tree_entry(root, after_tree, name) or None) for name in names}
+
+
+def _artifact_binding(original_input, final_input, artifact):
+    """Prove both input manifests and the final output against fixed Git objects."""
+    _validate_manifest(original_input)
+    _validate_manifest(final_input)
+    if not isinstance(artifact, dict) or not isinstance(artifact.get("snapshot"), dict):
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed output snapshot is missing")
+    repository = Path(original_input["snapshot"]["repositoryPath"])
+    if (_identity(repository) != original_input["repositoryId"]
+            or final_input["repositoryId"] != original_input["repositoryId"]
+            or final_input["checkoutId"] != original_input["checkoutId"]
+            or final_input["snapshot"]["repositoryPath"] != str(repository)):
+        raise BoardError("WORKSPACE_CHANGED", "The artifact input repository or checkout identity changed")
+    for manifest in (original_input, final_input):
+        snapshot = manifest["snapshot"]
+        for ref, commit in ((snapshot["inputRef"], manifest["inputCommit"]),
+                            (snapshot["stagedRef"], snapshot["stagedCommit"])):
+            if _commit(repository, ref) != commit:
+                raise BoardError("WORKSPACE_CONFLICT", "An immutable input reference changed", ref=ref)
+        if (_line(repository, "rev-parse", manifest["inputCommit"] + "^{tree}") != manifest["inputTree"]
+                or _line(repository, "rev-parse", snapshot["stagedCommit"] + "^{tree}") != snapshot["stagedTree"]):
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A pinned input tree is inconsistent")
+    snapshot = artifact["snapshot"]
+    bindings = ("workspaceId", "taskId", "attemptId", "manifestSha256", "baseCommit", "inputCommit",
+                "commit", "tree", "changedPaths", "includedUntracked", "diffSha256")
+    if (_sha(_json(snapshot)) != artifact.get("snapshotSha256")
+            or any(artifact.get(key) != snapshot.get(key) for key in bindings)
+            or artifact.get("manifestSha256") != final_input["manifestSha256"]
+            or artifact.get("workspaceId") != final_input["workspaceId"]
+            or artifact.get("inputCommit") != final_input["inputCommit"]):
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output does not bind its input manifest")
+    commit = artifact.get("commit")
+    ref = artifact.get("ref")
+    output_id = _sha(_json([artifact.get("taskId"), artifact.get("attemptId")]))
+    if artifact.get("kind") == "resolution" and artifact.get("action") in ("restore", "adopt"):
+        expected_ref = (f"refs/buddy/workspaces/{final_input['workspaceId']}/resolutions/"
+                        f"{output_id}-{artifact['action']}")
+    elif artifact.get("kind") is None:
+        expected_ref = f"refs/buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}"
+    else:
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record kind is invalid")
+    patch_path = artifact.get("diffPath")
+    patch = _read(Path(patch_path)) if isinstance(patch_path, str) and Path(patch_path).is_absolute() else None
+    if (not isinstance(commit, str) or not isinstance(ref, str)
+            or ref != expected_ref
+            or _commit(repository, ref) != commit
+            or _line(repository, "rev-parse", commit + "^{tree}") != artifact.get("tree")
+            or patch is None or _sha(patch) != artifact.get("diffSha256")
+            or _sha(_diff(repository, final_input["inputCommit"], commit)) != artifact.get("diffSha256")):
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output Git objects or patch changed")
+    if commit != final_input["inputCommit"]:
+        parents = _line(repository, "rev-list", "--parents", "-n", "1", commit).split()
+        if parents != [commit, final_input["inputCommit"]]:
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output commit has the wrong input parent")
+    own_changes = _tree_changes(repository, final_input["inputTree"], artifact["tree"])
+    if sorted(own_changes) != artifact.get("changedPaths"):
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output path list differs from its Git trees")
+    return repository, _tree_changes(repository, original_input["inputTree"], artifact["tree"])
+
+
+def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
+                       path: str, ref: str, strategy: str, before_commit: str,
                        repository_id: str | None = None, checkout_id: str | None = None,
                        adjusted_paths=None, reason: str | None = None) -> dict:
     """Verify that one immutable artifact is actually present in a real target.
@@ -1221,10 +1292,7 @@ def integration_verify(artifact: dict, *, path: str, ref: str, strategy: str, be
             raise BoardError("INVALID_WORKSPACE", "A verified integration uses patch, cherry-pick or merge")
         if not isinstance(artifact, dict):
             raise BoardError("INVALID_WORKSPACE", "The integration source artifact is missing")
-        snapshot = artifact.get("snapshot") if isinstance(artifact.get("snapshot"), dict) else {}
-        changed = snapshot.get("changedEntries")
-        if not isinstance(changed, dict) or snapshot.get("changedEntriesTruncated"):
-            raise BoardError("WORKSPACE_UNSUPPORTED", "The artifact carries no bounded per-path output binding to verify")
+        _repository, changed = _artifact_binding(original_input, final_input, artifact)
         if not isinstance(before_commit, str) or not before_commit:
             raise BoardError("INVALID_WORKSPACE", "beforeCommit is required to bind a verified integration")
         adjustments = sorted({_relative(value) for value in (adjusted_paths or [])})
@@ -1256,7 +1324,9 @@ def integration_verify(artifact: dict, *, path: str, ref: str, strategy: str, be
                 artifact_ancestor = _is_ancestor(root, source, after)
         matching, differing, missing = [], [], []
         for name in sorted(changed):
-            expected = changed.get(name)
+            expected = changed[name]
+            if expected is not None:
+                expected = [expected["mode"], expected["oid"]]
             actual = _tree_entry(root, after, name)
             if expected is None:
                 if actual is None:
@@ -1437,32 +1507,30 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
             return result
         snapshot = sealed["snapshot"]
         result["sealedObservation"] = snapshot.get("observationSha256")
-        # The dirty check is against the latest sealed handoff *of the current input
-        # snapshot*. A later stage's changedEntries are a delta from the latest
-        # prepared input, never the original-to-final difference, so a handoff that
-        # belongs to another input must block instead of being compared loosely.
+        # Cleanup compares the latest seal with its own prepared input. Integration
+        # separately compares the run's original input with this final output.
         if (sealed.get("manifestSha256") != manifest["manifestSha256"]
                 or snapshot.get("inputCommit") != manifest["inputCommit"]):
             result["reasons"].append("unsealed-handoff")
             return result
-        observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"])
+        try:
+            _artifact_binding(manifest, manifest, sealed)
+        except BoardError:
+            result["reasons"].append("sealed-output-invalid")
+            return result
+        observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"], write=True)
         unsealed = []
         try:
-            entries_now, changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation)
-            # Compare the actual per-path output bindings: a modified file that was
-            # already part of the sealed change set is still a new unsealed change.
-            changed_entries, truncated = _changed_entries(entries_now, changed)
-            expected_entries = snapshot.get("changedEntries") if isinstance(snapshot.get("changedEntries"), dict) else {}
-            if truncated or snapshot.get("changedEntriesTruncated"):
-                unsealed = sorted(set(changed) | set(snapshot.get("changedPaths") or []))
-            else:
-                unsealed = sorted(
-                    path for path in set(changed_entries) | set(expected_entries)
-                    if changed_entries.get(path) != expected_entries.get(path)
-                )
+            entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation)
+            current_tree = _tree(checkout_root, entries_now)
+            if current_tree != sealed["tree"]:
+                unsealed = sorted(_tree_changes(checkout_root, sealed["tree"], current_tree))
             if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
                 unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
         except BoardError as error:
+            if error.code == "WORKSPACE_UNSUPPORTED":
+                result["reasons"].append("unsealed-changes")
+                return result
             if error.code != "WORKSPACE_SCOPE_VIOLATION":
                 raise
             unsealed = list(error.details.get("paths") or [])
