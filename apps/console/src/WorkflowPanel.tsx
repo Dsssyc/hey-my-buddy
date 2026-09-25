@@ -83,7 +83,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         return {
           requestId: crypto.randomUUID(), task: h.task.trim(), cwd: h.cwd,
           ...(profile ? { adapter: profile.adapter, provider: profile.provider, model: profile.model, effort: profile.effort } : {}),
-          timeoutSeconds: 28800, workspace: task.spec?.workspace !== false,
+          timeoutSeconds: value.task.timeoutSeconds === 0 ? 0 : 28800, workspace: task.spec?.workspace !== false,
           executionWorkspace: {
             kind: h.kind, cwd: h.cwd, access: h.access, base: { kind: "working-tree" },
             includeUntracked: lines(h.includeUntracked), writeScope: h.access === "read" ? [] : lines(h.writeScope),
@@ -158,6 +158,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
             onChange={next => setHelpers(all => all.map(h => h.id === next.id ? next : h))}
             onRemove={() => setHelpers(all => all.filter(h => h.id !== helper.id))} />)}
           <button className="button small-button" disabled={helpers.length >= 8} onClick={addHelper}>添加协助任务</button>
+          {value.task.timeoutSeconds === 0 && <p className="small muted">当前任务无执行期限；新增协助任务沿用该设置，仍可主动取消。</p>}
           {!profiles.length && <p className="small muted">未指定配置时将请求自动路由；若未启用候选配置，任务会等待 Host 补齐。</p>}
           <label className="check-field"><input type="checkbox" checked={autoContinue} onChange={e => setAutoContinue(e.target.checked)} />结果返回后自动接续一次</label>
           <div className="actions"><button className="button primary" disabled={!reason.trim() || !canApprove} onClick={() => decide("approve")}>批准所列协助</button>

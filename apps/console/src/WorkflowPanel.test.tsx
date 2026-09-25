@@ -236,6 +236,22 @@ describe("governed workflow console", () => {
     expect(params).not.toHaveProperty("consoleAuthority");
   });
 
+  it("preserves an unlimited execution when approving a helper", async () => {
+    const f = fixture();
+    f.workflow.task.timeoutSeconds = 0;
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    expect(await screen.findByText(/新增协助任务沿用该设置/)).toBeTruthy();
+    await user.type(screen.getByLabelText("决定理由"), "需要核对测试");
+    await user.click(screen.getByRole("button", { name: "添加协助任务" }));
+    await user.type(screen.getByLabelText("工作内容与验收条件"), "完成额外测试");
+    await user.type(screen.getByLabelText("允许写入的相对路径（每行一项）"), "tests/extra.py");
+    await user.click(screen.getByRole("button", { name: "批准所列协助" }));
+    const [op, params] = f.mutation.mock.calls[0] as [string, Record<string, any>];
+    expect(op).toBe("workflow_decide");
+    expect(params.helpers[0].timeoutSeconds).toBe(0);
+  });
+
   it("freezes an uncertain command and replays its original identity and version", async () => {
     const f = fixture();
     f.mutation.mockRejectedValueOnce(new ApiError("NETWORK", "lost reply"));
