@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress on 2026-09-25 from source 689e901. The daily installation remains contract 0.8.1/schema 10 while these isolated changes are being verified. Nothing in this record establishes installation of the candidate.
+Source and staged-package verification completed on 2026-09-25 from source 689e901. The daily installation remains contract 0.8.1/schema 10; no production schema cutover is claimed. The last daily health check still reported one in-flight attempt belonging to other work.
 
 ## Verified corrections
 
@@ -36,3 +36,13 @@ The checkpoint inquiry implementation passed a real private native app-server pr
 The failed third repair attempt e4109121-a469-4780-9d38-129af3708d39 was a real provider failure: the private native record reports model_rate_limited, HTTP 429, provider code 1308, retryable false and a five-hour usage limit. timeoutSeconds was 0 and its immutable termination reason remains harness-error. The recovered fourth attempt reconstructed a new native session and completed. The runtime now exposes only bounded structured native failure attribution; it never reads the private native SQLite database to diagnose an active run. Host validation additionally rejects URLs, prose and recognizable credential prefixes in identifier fields.
 
 The first integrated full check ran 885 Python tests in 1084.316 seconds with one failure: a stopped old supervisor still holding its lifetime lock retained stop.request during the new daemon's startup, later leaving local-6 unfilled. A deterministic regression reproduced this genuine startup race. The fix withdraws the predecessor stop at explicit startup while preserving lock-based single ownership; the pool can refill the slot after the old owner exits. Six worker-pool tests, the formerly failing real restart test and 27 dispatch/lifecycle tests passed after correction. Final whole-package verification is being rerun after all source changes.
+
+## Final verification
+
+The final uv run --frozen python -m buddy.checks completed on source 3b0bc91: 897 Python tests passed in 1076.161 seconds, followed by 198 Node tests across 25 suites in 30.947 seconds, with zero failures or skips. Frontend logic had separately passed 208 tests across 18 files; the final explanatory-copy update passed TypeScript and Vite build. The final JavaScript/CSS pair is index-BZWJG2NU.js and index-CZU-CAXh.css.
+
+The separate staged plugin passed both plugin and skill validators. A fresh private installation cold-started a stable contract-0.9.0/schema-11 runtime with content ID cc23655e2be17db1917fa4335b158ee3 and no source leaks. Served asset hashes matched the packaged files. An authenticated console publication changed a fixture model's concurrent-task limit to 4, immediately observable under the same service ID. Explicit zero-duration command tasks completed normally and cancelled with the real user-cancel reason. After the staged source directory was renamed, the stable launcher and served assets still worked. The private service and its supervisors then stopped with their locks released. No model was called. The first smoke fixture omitted legal efforts and was correctly refused with CATALOG_INVALID; after correcting that fixture, the complete smoke check passed.
+
+The final checkpoint goal was accepted under integration int-42bbfc1a-4d67-4ca7-b52c-676dcb79cdea after full-delta verification and its original physical checkout was removed through the governed cleanup API, despite its three continuations. Its failed third-attempt receipt, all successful artifacts, fixed refs, patches and native probe evidence remain retained. All six Buddy goals used for this repair are accepted and their managed checkouts reclaimed; the two additional isolated implementation/test checkouts were also removed after integration and verification. The CodeBuddy branch and the original user's dirty checkout were not changed.
+
+This record establishes readiness of the 0.9.0 source and package. Installing it on the daily blackboard still requires a verified retained-data schema-11 copy and an idle coordinated client/daemon/worker cutover. It does not authorize cancelling another project's work or silently changing shared user preferences.
