@@ -1,8 +1,8 @@
 """Shared test support: private state directories and an in-process board harness.
 
-Every service test uses a unique private state directory. Nothing here touches the
-default state directory, the installed plugin or any process this test did not
-create, and every child handle is retained so cleanup only stops test-owned work.
+Every service test uses a unique private state directory. Cleanup addresses only
+that directory through its authenticated service endpoint and lifetime locks,
+including a replacement daemon that the CLI may have started after a restart.
 """
 from __future__ import annotations
 
@@ -127,6 +127,72 @@ def stop_private_workers(directory: Path, timeout: float = 35.0) -> None:
         time.sleep(0.05)
 
 
+def _lock_held(path: Path) -> bool:
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
+    """Stop the daemon attached to this exact test directory and await its locks."""
+    from buddy.transport import ServiceError, _read_endpoint, _request
+
+    directory = Path(directory)
+    deadline = time.monotonic() + timeout
+    requested = False
+    while True:
+        starting = _lock_held(directory / "control-start.lock")
+        running = any(_lock_held(directory / name) for name in ("control-daemon.lock", "board-owner.lock"))
+        if not starting and not running:
+            return
+        if running and not requested:
+            endpoint = _read_endpoint(directory)
+            if endpoint is not None:
+                try:
+                    reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 20,
+                                                                    "reason": "private test cleanup"})
+                except ServiceError:
+                    # The endpoint may have disappeared during a restart. Recheck
+                    # the lifetime locks and attach to its replacement if needed.
+                    pass
+                else:
+                    if not reply.get("stopped") or reply.get("unresolvedAttempts"):
+                        raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
+                    requested = True
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Test service still owns state; preserved {directory}")
+        time.sleep(0.05)
+
+
+_INHERITED_CHILD_KEYS = {
+    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
+    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
+    "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+}
+
+
+def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS}
+    environment.update(overrides or {})
+    environment.update(
+        BUDDY_STATE_DIR=str(directory),
+        BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
+        PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
+    )
+    environment.setdefault("BUDDY_DEV_SOURCE", "1")
+    return environment
+
+
 @contextmanager
 def private_state_dir(prefix: str = "buddy-test-"):
     directory = Path(tempfile.mkdtemp(prefix=prefix))
@@ -134,7 +200,9 @@ def private_state_dir(prefix: str = "buddy-test-"):
     try:
         yield directory
     finally:
-        shutil.rmtree(directory, ignore_errors=True)
+        stop_private_service(directory)
+        stop_private_workers(directory)
+        shutil.rmtree(directory)
 
 
 class InProcessBoard:
@@ -223,6 +291,8 @@ class BoardTestCase(unittest.TestCase):
         self.addCleanup(self._cleanup)
 
     def _cleanup(self) -> None:
+        stop_private_service(self.directory)
+        stop_private_workers(self.directory)
         for board in getattr(self, "_stack", []):
             try:
                 board.close()
@@ -236,8 +306,7 @@ class BoardTestCase(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     handle.kill()
                     handle.wait(timeout=5)
-        stop_private_workers(self.directory)
-        shutil.rmtree(self.directory, ignore_errors=True)
+        shutil.rmtree(self.directory)
 
     def board(self, **options) -> InProcessBoard:
         board = InProcessBoard(self.directory, **options)
@@ -270,18 +339,7 @@ class BoardTestCase(unittest.TestCase):
         """Start the real daemon in a child process and wait for health."""
         from buddy.transport import _request, _read_endpoint, ServiceError
 
-        environment = {
-            **os.environ,
-            "BUDDY_STATE_DIR": str(self.directory),
-            "PYTHONPATH": str(PYTHON_ROOT) + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
-            "VIRTUAL_ENV": "",
-            # Tests exercise the interpreter under test; the packaging gate covers the
-            # default stable-runtime install separately. The runtime root is private so
-            # a test never installs into (or reads from) the operator's default one.
-            "BUDDY_DEV_SOURCE": "1",
-            "BUDDY_RUNTIME_ROOT": str(self.directory / "runtime-root"),
-        }
-        environment.update(env or {})
+        environment = _child_environment(self.directory, env)
         log = open(self.directory / "test-daemon.log", "ab")
         process = subprocess.Popen(
             [sys.executable, "-m", "buddy.daemon"],
@@ -348,15 +406,7 @@ class BoardTestCase(unittest.TestCase):
 
     def cli(self, *arguments: str, env: dict | None = None, timeout: int = 90) -> tuple[int, dict]:
         """Run the real CLI in a child process; returns (exit code, parsed stdout)."""
-        environment = {
-            **os.environ,
-            "BUDDY_STATE_DIR": str(self.directory),
-            "PYTHONPATH": str(PYTHON_ROOT) + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
-            "VIRTUAL_ENV": "",
-            "BUDDY_DEV_SOURCE": "1",
-            "BUDDY_RUNTIME_ROOT": str(self.directory / "runtime-root"),
-        }
-        environment.update(env or {})
+        environment = _child_environment(self.directory, env)
         completed = subprocess.run(
             [sys.executable, "-m", "buddy.cli", *arguments],
             env=environment,
