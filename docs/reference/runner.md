@@ -36,7 +36,7 @@ cat "$DELEGATE_DEMO_DIR/result.json"
 | `--model <id>` | see precedence | model id for this run |
 | `--provider <id>` | see precedence | provider id for this run |
 | `--effort <name>` | `max` | reasoning effort for this run |
-| `--timeout <seconds>` | `1800` | whole-process-group execution limit, integer 10–86400 |
+| `--timeout <seconds>` | `1800` | whole-process-group execution limit, explicit `0` for no deadline or integer 10–86400; active cancellation still stops the owned group |
 | `--log-dir <dir>` | OS temp dir | parent directory for this run's private log directory |
 | `--dsh-bin <path>` | see precedence | dsh launcher to execute |
 | `--settings-file <path>` | see precedence | settings document to copy and override |

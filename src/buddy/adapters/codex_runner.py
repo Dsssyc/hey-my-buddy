@@ -167,7 +167,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             connection.send({"id": message["id"], "error": {"code": -32601,
                 "message": "This Buddy Worker cannot approve interactive requests; report attention in the structured outcome"}})
         connection.on_request = on_request
-        connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.8.0"}})
+        connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.8.1"}})
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         if not isinstance(account, dict) or account.get("type") != "chatgpt":

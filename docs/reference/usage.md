@@ -39,6 +39,8 @@ Independent of grouping, governed coding work names its Git isolation contract i
 
 A good packet lets the worker finish without guessing:
 
+Long work may explicitly set `"timeoutSeconds": 0` to run without an overall execution deadline. An omitted value still defaults to 1800 seconds; a positive value must be 10–86400 seconds. The no-deadline choice belongs to that task and any helper explicitly configured the same way. `await` remains a bounded, resumable caller wait; its window does not end an active execution. Observe long work and use the Host's ordinary `cancel` command if it must stop.
+
 - goal and why; expected inputs and outputs;
 - the working directory and the commands that check the work;
 - files/areas that may change, plus explicit non-goals and the expected final artifact;

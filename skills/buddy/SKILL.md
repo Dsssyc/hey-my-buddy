@@ -9,9 +9,11 @@ Use Buddy to assign coherent work to an appropriate local harness/model while th
 
 ## Start a bounded goal
 
-Read [usage](../../docs/reference/usage.md) for installation and task packets. Resolve the plugin root from this skill and invoke `bin/buddy` with one JSON argument. Check `health`, `runtime` and `capabilities` on setup or recovery; this package uses contract 0.8.0 and schema 10, and every client must match the running service. Startup never converts older records. Retain incompatible state as an archive or prepare an explicitly authorized, verified offline copy. Finish owned work and switch clients, daemon and idle workers together as described in [runtime lifecycle](../../docs/reference/operations.md#runtime-lifecycle).
+Read [usage](../../docs/reference/usage.md) for installation and task packets. Resolve the plugin root from this skill and invoke `bin/buddy` with one JSON argument. Check `health`, `runtime` and `capabilities` on setup or recovery; this package uses contract 0.8.1 and schema 10, and every client must match the running service. Startup never converts older records. Retain incompatible state as an archive or prepare an explicitly authorized, verified offline copy. Finish owned work and switch clients, daemon and idle workers together as described in [runtime lifecycle](../../docs/reference/operations.md#runtime-lifecycle).
 
 Include the objective, permitted files, required inputs, expected artifacts and acceptance commands. Keep reusable instructions stable and task facts concise; a higher cache-hit percentage alone does not establish lower total cost.
+
+For a long C-Two coding goal that the user wants to run without a wall-clock execution deadline, pass `"timeoutSeconds": 0` explicitly on its `submit` request. The default remains 1800 seconds when omitted; finite values are 10–86400 seconds. A zero-duration goal still occupies one Worker while active and is stopped only by an actual outcome such as completion or an authorized cancellation. Use bounded `await` calls and resume the same `runId` when a caller wait expires; never treat a wait timeout as a reason to submit the task again. Give any authorized helper its own explicit duration, or let the console copy a zero-duration parent's choice.
 
 Choose `executionWorkspace` explicitly. Sequential ownership may use `existing`; parallel writers need separate `worktree` checkouts, an exact base/input snapshot, declared write scope and an integrator. Preserve the same boundary for Host edits. A checkout is not an OS sandbox.
 

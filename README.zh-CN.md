@@ -56,9 +56,11 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 等待超时、关闭终端或连接中断都不会取消任务。可以用同一个 `runId` 通过 `await`、`get` 或 `status` 接回；只有显式 `cancel` 才会停止目标，并且只有拿到真实停止证据才报告已关闭。每次接续都会创建新的 attempt。DSH 重建新会话；ZCode 仅在目标、checkout 和配置绑定都匹配时恢复已有证据确认的原生会话，Codex 也只恢复其精确绑定的原生线程；没有已确认的会话或配置发生变化时，harness 会重建新的根会话。守护服务重启后，仍持有子进程的同一 Worker 会按身份重连不确定的 attempt 并清除重启等待原因，其他进程无权接管；已落盘的不变完成收据只重放、不重新执行。结果会记录真实终止原因（正常完成、用户取消、执行到期、harness 错误或传输故障），到期不会被显示成用户取消。有界活动投影展示当前阶段、最后原生活动时间和诚实计数；空日志、缺失 PID 或静态会话列表都不能证明进程已停止。请区分请求的、已解析的和实际观测到的模型身份。
 
+用户授权的长任务可显式设置 `"timeoutSeconds": 0`，使执行没有总时限；省略该字段仍默认 1800 秒。Host 仍可主动取消，单次 `await` 等待结束也不会停止任务。选择该配置前可查阅[执行期限与等待窗口](docs/reference/cli.md#defaults-and-bounds)。
+
 服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
 
-当前限制：仅支持 POSIX；本地单用户 SQLite 状态；ZCode 支持 API-key 提供方和只读原生活动观察，但已核查的 ZCode 3.14.3 协议不能安全投递关联的实时询问。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。已验证行为和安装状态见 [0.8 源码验收记录](docs/acceptance/production-repairs-0.8.0.md)；用 `health` 和 `runtime` 核对实际运行的安装。
+当前限制：仅支持 POSIX；本地单用户 SQLite 状态；ZCode 支持 API-key 提供方和只读原生活动观察，但已核查的 ZCode 3.14.3 协议不能安全投递关联的实时询问。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。新的执行期限配置和安装状态见 [0.8.1 源码验收记录](docs/acceptance/optional-deadline-0.8.1.md)；用 `health` 和 `runtime` 核对实际运行的安装。
 
 ## 文档与开发
 

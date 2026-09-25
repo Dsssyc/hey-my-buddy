@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the implemented 0.8 source under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.8.0, transport protocol is 2, and startup accepts schema 10 only. Design records live in `docs/decisions/`; source verification, plugin installation and the running runtime are separate facts. See the [0.8 acceptance record](../acceptance/production-repairs-0.8.0.md) for installation status.
+This page describes the implemented 0.8.1 source under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.8.1, transport protocol is 2, and startup accepts schema 10 only. Design records live in `docs/decisions/`; source verification, plugin installation and the running runtime are separate facts. See the [0.8.1 acceptance record](../acceptance/optional-deadline-0.8.1.md) for delivery status.
 
 ## Process topology
 
@@ -17,7 +17,7 @@ Codex skill / CLI / private console / external worker
 
 Independent supervisor process -- C-Two --> daemon
   Worker.run() executes inside this supervisor process
-    | owns the child process handle, deadline and local receipt
+    | owns the child process handle, optional deadline and local receipt
     +-- dsh adapter ------> harnesses/dsh/scripts/run.mjs -> dsh (Node)
     +-- zcode adapter ----> buddy.adapters.zcode_runner -> zcode app-server
     +-- decision adapter -> harnesses/dsh/scripts/decision.mjs (tool-free call)
@@ -27,7 +27,7 @@ Caller-owned external agent -- BoardClient / C-Two --> daemon
   claims external tasks and reports its own results
 ```
 
-The daemon and each supervisor are separate OS processes. A supervisor runs the Worker object in its own process and restarts that execution loop after an exception. The Worker owns the adapter child handles and enforces the execution deadline while the daemon is unavailable. External agents participate directly through RPC. Stored PIDs are diagnostic values, never sufficient authority to signal a process.
+The daemon and each supervisor are separate OS processes. A supervisor runs the Worker object in its own process and restarts that execution loop after an exception. The Worker owns the adapter child handles and enforces positive execution deadlines while the daemon is unavailable. An explicit `timeoutSeconds: 0` leaves the attempt running until completion, explicit cancellation or another actual process outcome; the Worker still renews its lease and keeps durable receipts. External agents participate directly through RPC. Stored PIDs are diagnostic values, never sufficient authority to signal a process.
 
 ## C-Two surface
 

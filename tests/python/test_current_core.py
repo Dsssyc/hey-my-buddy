@@ -32,7 +32,7 @@ class CurrentCoreTests(BoardTestCase):
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         self.assertEqual(SCHEMA_VERSION, 10)
-        self.assertEqual(CONTRACT_VERSION, "0.8.0")
+        self.assertEqual(CONTRACT_VERSION, "0.8.1")
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "10")

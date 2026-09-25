@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the 0.8 source in this checkout (contract 0.8.0, schema 10). Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and the [0.8 acceptance record](acceptance/production-repairs-0.8.0.md). Source capacity defaults to two business attempts plus one decision; a deployed board may use different limits.
+These pages describe the 0.8.1 source in this checkout (contract 0.8.1, schema 10). Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and the [0.8.1 acceptance record](acceptance/optional-deadline-0.8.1.md). Source capacity defaults to two business attempts plus one decision; a deployed board may use different limits.
 
 | Document | Role |
 | --- | --- |
@@ -67,7 +67,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## History and evidence
 
-Current delivery evidence: [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The installation record identifies the running version, retained state and unresolved old-artifact integration boundary; the source record preserves candidate verification, and the 0.7 record retains earlier installation evidence.
+Current delivery evidence: [0.8.1 optional execution duration](acceptance/optional-deadline-0.8.1.md), [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.8.1 record owns the new contract's source and installation checks; the earlier installation record identifies the preserved data and unresolved old-artifact integration boundary.
 
 | Document | Role |
 | --- | --- |

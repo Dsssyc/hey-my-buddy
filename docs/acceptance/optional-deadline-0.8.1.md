@@ -1,0 +1,9 @@
+# Optional unbounded execution — 0.8.1
+
+This acceptance record tracks the user's request to let long C-Two Buddy coding work run without an arbitrary overall execution deadline. The source candidate uses contract 0.8.1 with the existing schema 10. The daily installed service remains 0.8.0 until a verified idle cutover is recorded below.
+
+`timeoutSeconds: 0` is the explicit no-deadline value for a coding or ordinary execution task. Omitting it retains the 1800-second default, and a positive value retains the 10–86400-second bound. Internal model-selection calls, CLI `await` windows, worker leases, native request/handshake waits and confirmed shutdown remain independently bounded. A zero-duration attempt still occupies capacity, continues lease renewal and can be cancelled through its Host control. The UI copies this option to a helper approved under a zero-duration parent.
+
+The source implementation is staged in `socu/buddy-timeout`. Core regression evidence: the zero-duration command attempt completed after a real delay, a separate zero-duration command attempt stopped on Host cancellation with `terminationReason: user-cancel`, a governed task persisted zero, and inquiry reported the absence of a deadline without inventing an expiry. Native adapter and DSH runner validation, package checks, first-install/runtime identity, and any daily cutover are recorded after their outcomes are inspected.
+
+The 0.8.0 installation's separate retained-artifact integration gap remains documented in [daily installation](installed-0.8.0.md); this duration change does not grant an old delivery a new verification binding or rewrite its receipt. The concurrently added ZCode inquiry feasibility note in the other source checkout was reviewed separately and is not evidence that Host-initiated live inquiry has shipped.
