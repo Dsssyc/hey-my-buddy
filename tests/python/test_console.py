@@ -277,6 +277,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         csrf = browser.bootstrap()["csrfToken"]
         # A writer holds the table; task control through the console still works.
         refreshed = board.call("model_catalog_refresh", {"requestId": "cat"})
+        profile = next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)
+        family = {key: profile[key] for key in ("adapter", "provider", "model")}
         status, _h, data = browser.command("evaluation_write_begin", {"requestId": "w1", "expectedRevision": refreshed["tableRevision"], "kind": "human"}, csrf=csrf)
         self.assertEqual(status, 200, data)
         begin = json.loads(data)["result"]
@@ -294,6 +296,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                 "writerToken": begin["writerToken"],
                 "expectedRevision": refreshed["tableRevision"],
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+                "modelConcurrency": [{**family, "limit": 4}],
             },
             csrf=csrf,
         )
@@ -301,6 +304,11 @@ class ConsoleSecurityTests(ConsoleTestCase):
         result = json.loads(data)["result"]
         self.assertEqual(result["revision"], refreshed["tableRevision"] + 1)
         self.assertTrue(next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+        status, _headers, data = browser.get("/api/console")
+        self.assertEqual(status, 200)
+        capacity = next(row for row in json.loads(data)["modelConcurrency"]
+                        if all(row[key] == value for key, value in family.items()))
+        self.assertEqual(capacity, {**family, "limit": 4, "active": 0})
         # Invalid input is a safe 4xx envelope, never a traceback.
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "nonsense": True}, csrf=csrf)
         self.assertEqual(status, 400, data)
