@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - exercised by tests without the module
 #: Operations an attempt-scoped credential may call at all.
 AGENT_OPERATIONS = frozenset(
     {
+        "ping",
         "health",
         "capabilities",
         "workflow_get",

@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 """
 import c_two as cc
 
-CONTRACT_VERSION = "0.9.0"
+CONTRACT_VERSION = "0.10.0"
 CONTROL_NAME = "buddy-control"
 WAIT_NAME = "buddy-wait"
 
@@ -24,6 +24,9 @@ class BuddyControl:
     """Authoritative board operations. Each returns a bounded JSON response string."""
 
     # -- service ------------------------------------------------------------
+    def ping(self, request_json: str) -> str:
+        ...
+
     def health(self, request_json: str) -> str:
         ...
 

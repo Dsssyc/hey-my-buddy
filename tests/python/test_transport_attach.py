@@ -1,7 +1,7 @@
 """Focused transport tests: attaching to a healthy private service must not mutate anything.
 
 Every fixture is an isolated local directory. Nothing here contacts a real C-Two
-endpoint, the network, or a native App pipe: the health RPC is patched at the
+endpoint, the network, or a native App pipe: the ping RPC is patched at the
 ``_request`` boundary so the tests observe exactly which filesystem operations
 the attach path performs.
 """
@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
@@ -24,6 +25,8 @@ from buddy.transport import (
 )
 
 ENDPOINT = {"address": "ipc://buddy-attach-fixture", "token": "fixture-secret", "pid": 4242}
+LAUNCH_TARGET = {"python": sys.executable, "pythonPath": None,
+                 "identity": "source:attach-fixture", "stable": False, "installed": False}
 
 
 def snapshot(directory):
@@ -61,13 +64,17 @@ class MutationRecorder:
 class AttachFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-attach-")
+        self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
         self.directory.mkdir(mode=0o700)
         self.directory.chmod(0o700)
         self.endpoint_file = self.directory / "control.json"
         self.write_endpoint(ENDPOINT, 0o600)
-        # The health RPC is the only thing that may be touched: never the network.
+        # The ping RPC is the only thing that may be touched: never the network.
         self.request = patch("buddy.transport._request", return_value={"status": "ready"}).start()
+        # This fixture observes bootstrap I/O, not runtime installation. Never
+        # resolve an operator's runtime or create environments from a unit test.
+        patch("buddy.runtime.launch_target", return_value=LAUNCH_TARGET).start()
         self.addCleanup(patch.stopall)
 
     def write_endpoint(self, value, mode):
@@ -82,6 +89,7 @@ class ReadOnlyAttachTests(AttachFixture):
             endpoint = ensure_service(self.directory)
         self.assertEqual(endpoint, ENDPOINT)
         self.request.assert_called_once()
+        self.assertEqual(self.request.call_args.args[1], "ping")
         recorder.assert_no_mutation()
         self.assertEqual(before, snapshot(self.directory), "read-only attach changed the filesystem")
 
@@ -280,12 +288,14 @@ class ColdStartTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-cold-")
+        self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
         self.spawn = patch("buddy.transport.subprocess.Popen", autospec=True).start()
         child = Mock()
         child.poll.return_value = None
         child.wait.return_value = 0
         self.spawn.return_value = child
+        patch("buddy.runtime.launch_target", return_value=LAUNCH_TARGET).start()
         self.addCleanup(patch.stopall)
 
     def test_cold_start_creates_private_state_directory_and_spawns_daemon(self):

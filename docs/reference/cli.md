@@ -27,6 +27,7 @@ The CLI injects Host authority locally. For any mutation that requires it, `cont
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
+| `ping` | none | Authenticated process liveness: status, protocol/contract/schema versions, service id, PID and the stored persistence error; no integrity or runtime inspection. Internal client attachment uses this operation |
 | `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, model `capacity` (`totalLimit`, `totalActive`, `models` entries `{adapter, provider, model, limit, active}`), `managedWorkerIds`, `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, integrity and active work |
 | `capabilities` / `adapters` | `includeUnavailable` | Adapter report (`adapter`, `available`, `reason`, `capabilities`, `executedBy`), `localCapabilities`, named operations, wait admission and the honest `limitations` map |
 | `runtime` | optional `destination` | Runtime identity, installed-runtime description and source-leak report |

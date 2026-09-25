@@ -17,6 +17,7 @@ from typing import Any, Callable
 from . import runtime, schemas
 from . import workflow as workflow_module
 from .adapters import capability_report
+from .contracts import CONTRACT_VERSION
 from .db import SCHEMA_VERSION, utc_now
 from .errors import BoardError
 from .evaluation import EvaluationStore
@@ -28,6 +29,7 @@ WAIT_CAPACITY_DEFAULT = 32
 #: Operations each resource exposes. Used for health/capability reporting and to
 #: reject a typo loudly instead of silently ignoring it.
 CONTROL_OPERATIONS = (
+    "ping",
     "health",
     "capabilities",
     "service_control",
@@ -233,6 +235,22 @@ class BoardService(_BaseResource):
         self.started_at = utc_now()
 
     # -- service ------------------------------------------------------------
+    def ping(self, request_json: str) -> str:
+        """Authenticated process liveness; deliberately no storage/runtime scan."""
+        def handler(params: dict) -> dict:
+            schemas.reject_unknown(params, set(), "ping")
+            return {
+                "status": "ok",
+                "protocol": PROTOCOL_VERSION,
+                "contractVersion": self.control.get("contract_version", CONTRACT_VERSION),
+                "schemaVersion": SCHEMA_VERSION,
+                "serviceId": self.control.get("service_id"),
+                "pid": os.getpid(),
+                "persistenceError": self.store.persistence_error,
+            }
+
+        return self._guard("ping", request_json, handler)
+
     def health(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             schemas.reject_unknown(params, set(), "health")

@@ -51,6 +51,8 @@ Requirements are macOS or Linux, uv with Python 3.12–3.14, Node.js 20+ for the
 
 ## Runtime lifecycle
 
+Contract 0.10.0 introduces the lightweight `ping` operation for routine client attachment; explicit `health` still performs current storage diagnostics. The database remains schema 11. A 0.9.0-to-0.10.0 installation therefore requires a matching client/daemon/idle-worker cutover and a recoverable backup, but no schema conversion. The [0.10.0 acceptance record](../acceptance/runtime-efficiency-0.10.0.md) owns the actual source and installation status.
+
 Buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.5.1` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the plugin cache, so replacing the plugin does not disturb a running service.
 
 - **A cold start installs the runtime automatically.** With no READY runtime, the first command that needs the service copies the runtime assets declared by `packaging/runtime-assets.json` into `BUDDY_RUNTIME_ROOT/<contentId>`, runs `uv sync --frozen --no-dev --python 3.12` there, rewrites environment paths and writes `READY.json` last. Credentials, user data, tests, `node_modules`, the React source and any existing virtual environment are never copied. The first start can therefore take noticeably longer.

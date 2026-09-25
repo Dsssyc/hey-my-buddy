@@ -33,6 +33,7 @@ PROTOCOL_VERSION = 2
 #: ``execution-*`` names reach the ordinary task records that the command/external
 #: adapters and the internal decision infrastructure own.
 METHOD_MAP: dict[str, tuple[str, str]] = {
+    "ping": ("control", "ping"),
     "health": ("control", "health"),
     "capabilities": ("control", "capabilities"),
     "adapters": ("control", "capabilities"),
@@ -231,7 +232,7 @@ def _healthy(directory: Path) -> dict | None:
     endpoint = _read_endpoint(directory)
     if endpoint:
         try:
-            _request(endpoint, "health", {})
+            _request(endpoint, "ping", {})
             return endpoint
         except ServiceError:
             pass

@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the 0.9.0 source candidate in this checkout (contract 0.9.0, schema 11). The installed daily runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime`, the [0.9.0 delivery record](acceptance/runtime-refinement-0.9.0.md) and the retained [0.8.1 acceptance record](acceptance/optional-deadline-0.8.1.md). Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
+These pages describe the 0.10.0 source candidate in this checkout (contract 0.10.0, schema 11). The installed daily runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime`, the [0.10.0 delivery record](acceptance/runtime-efficiency-0.10.0.md) and the retained [0.9.0 installation](acceptance/runtime-refinement-0.9.0.md). Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
 
 | Document | Role |
 | --- | --- |
@@ -46,6 +46,8 @@ These pages describe the 0.9.0 source candidate in this checkout (contract 0.9.0
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
 ## Accepted design direction
+
+[ADR-012: Bounded control overhead](decisions/012-bounded-control-overhead.md) records light liveness, transient empty polls versus durable allocations, and the user-approved order of subsequent reliability and routing repairs. The [0.10.0 acceptance record](acceptance/runtime-efficiency-0.10.0.md) owns progress and installation evidence.
 
 [ADR-011: Shared model concurrency and verified native interaction](decisions/011-runtime-refinement.md) defines the 0.9.0 source candidate: one machine-wide attempt ceiling with user-owned per-model-family concurrency limits replacing the separate business and decision lanes, and whole-goal artifact verification over immutable Git objects. Its delivery status is owned by the [0.9.0 acceptance record](acceptance/runtime-refinement-0.9.0.md).
 

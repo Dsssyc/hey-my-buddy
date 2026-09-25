@@ -62,7 +62,7 @@ The service and its Workers run from that stable private runtime. A fresh board 
 
 Current limits: POSIX only; local single-user SQLite state. ZCode supports API-key providers, activity observation and cooperative inquiry: questions wait for the root's next tool checkpoint or finish attempt, and cannot interrupt a running tool or open a new turn. Native permission requests and long Host decisions still use the governed attention/assistance boundary. Codex uses the experimental App Server and does not declare inquiry or tool-free routing. No monetary budgets, automatic community research, built-in periodic maintenance or native App post-turn wakeup are provided. A background follow-up requires an explicit user request.
 
-This source uses contract 0.9.0 and schema 11. Source verification and installation are recorded separately in [0.9.0 acceptance](docs/acceptance/runtime-refinement-0.9.0.md); use `health` and `runtime` to identify the running installation.
+This source uses contract 0.10.0 and schema 11. Routine attachment uses lightweight `ping`; explicit `health` retains full storage diagnostics. Source verification and installation are recorded separately in [0.10.0 acceptance](docs/acceptance/runtime-efficiency-0.10.0.md); use `health` and `runtime` to identify the running installation.
 
 ## Documentation and development
 

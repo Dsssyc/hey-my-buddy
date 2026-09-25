@@ -27,6 +27,7 @@ from .transport import METHOD_MAP, call_service, get_state_dir
 from .worker.worker import RETIRE_REQUEST_NAME
 
 METHODS = [
+    "ping",
     "health",
     "capabilities",
     "adapters",

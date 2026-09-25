@@ -38,6 +38,10 @@ class TestNamedContract(BoardTestCase):
         with self.daemon():
             endpoint = self._endpoint()
             with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
+                ping = json.loads(board.ping(json.dumps({"token": endpoint["token"]})))
+                self.assertEqual(ping["contractVersion"], CONTRACT_VERSION)
+                self.assertEqual(ping["serviceId"], endpoint["serviceId"])
+                self.assertNotIn("integrity", ping)
                 health = json.loads(board.health(json.dumps({"token": endpoint["token"]})))
                 self.assertEqual(health["status"], "ok")
                 self.assertEqual(health["contractVersion"], CONTRACT_VERSION)

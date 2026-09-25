@@ -66,6 +66,9 @@ class BoardClient:
         return transport.call_board(operation, params or {}, self.state_dir, resource=resource)
 
     # -- service ------------------------------------------------------------
+    def ping(self) -> dict:
+        return self.call("ping")
+
     def health(self) -> dict:
         return self.call("health")
 
