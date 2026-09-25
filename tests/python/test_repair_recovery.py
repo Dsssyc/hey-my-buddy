@@ -484,7 +484,6 @@ class RealDaemonRestart(RecoveryBase):
             self.directory,
             BUDDY_LEASE_SECONDS="15",
             BUDDY_MAX_CONCURRENT="1",
-            BUDDY_MAX_DECISIONS="1",
         )
         supervisor = None
         pgid = None

@@ -520,9 +520,8 @@ class RealDaemonControlTests(unittest.TestCase):
             self.work,
             BUDDY_STATE_DIR=str(self.state),
             BUDDY_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
-            # Two business attempts so the waited and the renewable attempt coexist.
+            # Two total slots so the waited and the renewable attempt coexist.
             BUDDY_MAX_CONCURRENT="2",
-            BUDDY_MAX_DECISIONS="1",
         )
         log_path = self.work / "daemon.log"
         log = open(log_path, "ab")

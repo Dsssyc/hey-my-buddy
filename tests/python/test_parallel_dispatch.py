@@ -1,16 +1,15 @@
-"""Production parallel dispatch: two business lanes plus one reserved decision lane.
+"""Production parallel dispatch under one total and per-model capacity ceilings.
 
 The service keeps exactly one queue and one worker pool. These tests pin the
 production rules of the priority slice:
 
-* business work overlaps up to ``BUDDY_MAX_CONCURRENT`` and the next task queues
-  with a lane-specific reason instead of being rejected;
-* the decision lane makes progress while both business slots are held, and business
-  work makes progress while the decision lane is held;
-* a full lane is filtered out *before* the bounded candidate LIMIT, so more than one
-  hundred blocked rows in one lane can never hide runnable work in the other;
+* command work overlaps up to ``BUDDY_MAX_CONCURRENT`` and the next task queues;
+* routing decisions consume the same total ceiling and their fixed model family's
+  limit, while model-free command work has no family limit;
+* a full family is filtered out before the bounded candidate LIMIT, so more than one
+  hundred blocked rows cannot hide a runnable task from another family;
 * workspace and exclusive-resource admission and the ``UNRESOLVED_SQL`` slot rule
-  survive the split unchanged;
+  continue to apply;
 * a fresh private daemon starts the real managed pool, a restart keeps the same
   supervisor IDs and attempts, stop reaches every managed worker, and lowering the
   limits retains a busy surplus supervisor with its receipt and drains it later;
@@ -62,6 +61,7 @@ PROFILE = {
     "description": "fixture decision model",
     "source": "manual",
 }
+PROFILE_FAMILY = {"adapter": PROFILE["adapter"], "provider": PROFILE["provider"], "model": PROFILE["model"]}
 
 NONCE = "n" * 32
 #: The adapters one generic worker can honestly serve. The real pool advertises the
@@ -80,6 +80,8 @@ INHERITED_BUDDY_KEYS = (
     "BUDDY_WORKER_ID",
     "BUDDY_AGENT_CREDENTIAL",
     "BUDDY_AGENT_CREDENTIAL_FILE",
+    "VIRTUAL_ENV",
+    "UV_PROJECT_ENVIRONMENT",
 )
 
 
@@ -109,7 +111,7 @@ def lock_is_free(path: Path) -> bool:
         os.close(fd)
 
 
-class LaneTestCase(BoardTestCase):
+class CapacityTestCase(BoardTestCase):
     """Shared fixtures: the offline decision catalog, helper and claim helpers."""
 
     def setUp(self) -> None:
@@ -138,24 +140,24 @@ class LaneTestCase(BoardTestCase):
 
         self.addCleanup(restore)
 
-    def seed_evaluation(self, board) -> dict:
+    def seed_evaluation(self, board, *, model_limit: int | None = None) -> dict:
         """Enable one discovered profile through a registered console session."""
         refreshed = board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
         grant = board.console_call(
             "evaluation_write_begin", {"requestId": "seed", "expectedRevision": refreshed["tableRevision"], "kind": "human"}
         )
-        return board.console_call(
-            "user_policy_publish",
-            {
-                "commandId": "seed-1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": grant["tableRevision"],
-                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
-                "configuration": {"decisionProfileId": PROFILE_ID},
-            },
-        )
+        params = {
+            "commandId": "seed-1",
+            "writerId": grant["writerId"],
+            "generation": grant["generation"],
+            "writerToken": grant["writerToken"],
+            "expectedRevision": grant["tableRevision"],
+            "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+            "configuration": {"decisionProfileId": PROFILE_ID},
+        }
+        if model_limit is not None:
+            params["modelConcurrency"] = [{**PROFILE_FAMILY, "limit": model_limit}]
+        return board.console_call("user_policy_publish", params)
 
     def selection(self, board, request_id: str) -> dict:
         return board.call(
@@ -265,7 +267,7 @@ class LaneTestCase(BoardTestCase):
         return starts, start
 
 
-class RetireStartupTests(LaneTestCase):
+class RetireStartupTests(CapacityTestCase):
     """A restarted surplus owner replays its receipts before it may retire."""
 
     def _startup_intent(self, worker: Worker, attempt: dict, claim_request_id: str) -> dict:
@@ -425,13 +427,12 @@ class SupervisorRetirementTests(BoardTestCase):
         self.assertEqual(status["state"], "retired")
 
 
-class BusinessLaneTests(LaneTestCase):
-    """Two independent business attempts, and the third saying why it waits."""
+class TotalCapacityTests(CapacityTestCase):
+    """Two independent attempts consume the whole machine ceiling."""
 
     def test_two_business_attempts_overlap_and_the_third_reports_capacity(self):
         board = self.board()
         self.assertEqual(board.store.max_concurrent, 2)
-        self.assertEqual(board.store.decision_concurrent, 1)
         first = self.business_task(board, "biz-1", self.workdir("a"))
         second = self.business_task(board, "biz-2", self.workdir("b"))
         for worker_id in ("w1", "w2", "w3"):
@@ -444,11 +445,9 @@ class BusinessLaneTests(LaneTestCase):
         self.assertNotEqual(
             claimed["claim"]["attempt"]["attemptId"], claimed_two["claim"]["attempt"]["attemptId"]
         )
-        # Two distinct workers now own two unresolved business attempts at once.
+        # Two distinct workers now own two unresolved attempts at once.
         busy = board.store.capacity_report()
-        self.assertEqual(busy["business"], {"limit": 2, "active": 2})
-        self.assertEqual(busy["decision"], {"limit": 1, "active": 0})
-        self.assertEqual(busy["totalLimit"], 3)
+        self.assertEqual(busy, {"totalLimit": 2, "totalActive": 2, "models": []})
 
         # A third business task is admitted and states the real reason it waits.
         third = self.business_task(board, "biz-3", self.workdir("c"))
@@ -457,7 +456,7 @@ class BusinessLaneTests(LaneTestCase):
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "capacity")
 
-    def test_workspace_and_exclusive_resources_stay_serialized_across_both_lanes(self):
+    def test_workspace_and_exclusive_resources_stay_serialized_with_free_capacity(self):
         board = self.board(max_concurrent=3)
         holder = self.business_task(board, "res-holder", self.workdir("repo"))
         nested = self.business_task(board, "res-nested", self.workdir("repo/nested"))
@@ -466,7 +465,7 @@ class BusinessLaneTests(LaneTestCase):
             self.register(board, worker_id)
         self.claim(board, "w1", request_id="claim-holder", run_id=holder["runId"])
 
-        # A second business slot is free, but the workspace overlap still refuses it.
+        # A second slot is free, but the workspace overlap still refuses it.
         refused = self.claim(board, "w2", request_id="claim-nested", run_id=nested["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "cwd-overlap")
@@ -480,12 +479,12 @@ class BusinessLaneTests(LaneTestCase):
         self.assertEqual(refused["reason"], "exclusive-resource")
 
 
-class LaneFairnessTests(LaneTestCase):
-    """Lane-aware claim candidates: no head-of-line starvation either way."""
+class ModelFamilyFairnessTests(CapacityTestCase):
+    """A full model family cannot hide other eligible work."""
 
-    def test_decision_progresses_while_both_business_slots_are_held(self):
-        board = self.board()
-        self.seed_evaluation(board)
+    def test_decision_waits_for_total_capacity_then_completes(self):
+        board = self.board(max_concurrent=2)
+        self.seed_evaluation(board, model_limit=2)
         first = self.business_task(board, "hold-1", self.workdir("h1"))
         second = self.business_task(board, "hold-2", self.workdir("h2"))
         self.register(board, "w1")
@@ -495,9 +494,14 @@ class LaneFairnessTests(LaneTestCase):
 
         selection = self.selection(board, "pick-while-busy")
         self.assertEqual(selection["status"], "queued")
-        self.assertEqual(self.queue_reason(board, selection["runId"]), "awaiting-worker")
-        # The real Worker and the real tool-free helper run the decision to completion
-        # while both business attempts stay unresolved.
+        self.assertEqual(self.queue_reason(board, selection["runId"]), "capacity")
+        refused = self.claim(board, "w-decision", request_id="full-total", run_id=selection["runId"])
+        self.assertIsNone(refused["claim"])
+        self.assertEqual(refused["reason"], "capacity")
+        # Release one command attempt so the real Worker and helper can finish the
+        # routing decision while the other command attempt stays unresolved.
+        held = board.call("task_get", {"runId": first["runId"]})["task"]
+        board.client().release("w1", held["selectedAttemptId"], held["attemptGeneration"], NONCE, "test release")
         worker = Worker("w-decision", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
         self.assertEqual(worker.run_once(), "ran")
@@ -505,59 +509,44 @@ class LaneFairnessTests(LaneTestCase):
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
         self.assertEqual(decision["profileId"], PROFILE_ID)
         capacity = board.store.capacity_report()
-        self.assertEqual(capacity["business"]["active"], 2)
-        self.assertEqual(capacity["decision"]["active"], 0)
-        self.assertEqual(self.status(board, first["runId"]), "running")
+        self.assertEqual(capacity["totalActive"], 1)
+        self.assertIn({**PROFILE_FAMILY, "limit": 2, "active": 0}, capacity["models"])
+        self.assertEqual(self.status(board, first["runId"]), "failed")
         self.assertEqual(self.status(board, second["runId"]), "running")
 
-    def test_business_progresses_while_the_decision_lane_is_held(self):
-        board = self.board()
-        self.seed_evaluation(board)
+    def test_model_free_command_progresses_while_decision_family_is_full(self):
+        board = self.board(max_concurrent=3)
+        self.seed_evaluation(board, model_limit=1)
         first = self.selection(board, "pick-hold")
         self.register(board, "w-decision")
         self.claim(board, "w-decision", request_id="decision-claim", run_id=first["runId"])
-        self.assertEqual(board.store.capacity_report()["decision"]["active"], 1)
+        self.assertEqual(board.store.capacity_report()["models"][0]["active"], 1)
 
-        # A business task is still claimable: the lanes are independent.
+        # A model-free task can claim another total slot.
         business = self.business_task(board, "biz-free", self.workdir("free"))
         self.register(board, "w-business")
         claimed = self.claim(board, "w-business", request_id="business-claim")
         self.assertEqual(claimed["claim"]["task"]["runId"], business["runId"])
 
         second = self.selection(board, "pick-queued")
-        self.assertEqual(self.queue_reason(board, second["runId"]), "decision-capacity")
         refused = self.claim(board, "w-decision-2", request_id="decision-claim-2", run_id=second["runId"])
         self.assertIsNone(refused["claim"])
-        self.assertEqual(refused["reason"], "decision-capacity")
+        self.assertEqual(refused["reason"], "model-capacity")
+        self.assertEqual(self.queue_reason(board, second["runId"]), "model-capacity")
 
-    def test_more_than_hundred_blocked_business_rows_cannot_hide_a_decision(self):
-        board = self.board()
-        self.seed_evaluation(board)
-        holder = self.business_task(board, "blocked-holder", self.workdir("held"))
-        self.register(board, "w-holder")
-        self.claim(board, "w-holder", request_id="blocked-holder-claim", run_id=holder["runId"])
-        # 120 business rows whose workspace overlaps the active attempt: every one is
-        # queued, none is runnable, and a global LIMIT 50 could only ever see them.
-        for index in range(120):
-            self.business_task(board, f"blocked-{index}", self.workdir(f"held/nested-{index}"))
-        selection = self.selection(board, "pick-behind-business")
-        self.assertEqual(self.queue_reason(board, selection["runId"]), "awaiting-worker")
-
-        self.register(board, "w-runner")
-        claimed = self.claim(board, "w-runner", request_id="pick-behind-business-claim")
-        self.assertIsNotNone(claimed["claim"])
-        self.assertEqual(claimed["claim"]["task"]["adapter"], "decision")
-        self.assertEqual(claimed["claim"]["task"]["runId"], selection["runId"])
-
-    def test_more_than_hundred_blocked_decision_rows_cannot_hide_business_work(self):
-        board = self.board()
-        self.seed_evaluation(board)
+    def test_more_than_hundred_full_family_rows_cannot_hide_other_work(self):
+        board = self.board(max_concurrent=3)
+        self.seed_evaluation(board, model_limit=1)
         held = self.selection(board, "decision-hold")
         self.register(board, "w-decision")
         self.claim(board, "w-decision", request_id="decision-hold-claim", run_id=held["runId"])
+        blocked_run_id = None
         for index in range(120):
             queued = self.selection(board, f"decision-blocked-{index}")
-            self.assertEqual(self.queue_reason(board, queued["runId"]), "decision-capacity")
+            blocked_run_id = queued["runId"]
+        refused = self.claim(board, "w-blocked", request_id="full-family", run_id=blocked_run_id)
+        self.assertIsNone(refused["claim"])
+        self.assertEqual(refused["reason"], "model-capacity")
         business = self.business_task(board, "runnable-business", self.workdir("runnable"))
 
         self.register(board, "w-business")
@@ -566,54 +555,59 @@ class LaneFairnessTests(LaneTestCase):
         self.assertEqual(claimed["claim"]["task"]["runId"], business["runId"])
 
 
-class UncertainSlotTests(LaneTestCase):
-    """An uncertain attempt keeps its own lane slot, exactly as before."""
+class UncertainCapacityTests(CapacityTestCase):
+    """An uncertain attempt keeps its total and model family capacity."""
 
-    def test_uncertain_attempts_keep_their_lane_slot(self):
-        board = self.board(max_concurrent=1)
-        self.seed_evaluation(board)
+    def test_uncertain_attempts_keep_their_total_and_family_slots(self):
+        board = self.board(max_concurrent=2)
+        self.seed_evaluation(board, model_limit=1)
+        selection_one = self.selection(board, "uncertain-pick-1")
+        self.register(board, "w-decision")
+        self.claim(board, "w-decision", request_id="uncertain-pick-claim", run_id=selection_one["runId"])
+        self.assertEqual(board.store.reconcile_startup()["uncertain"], 1)
+        self.assertEqual(
+            board.call("task_get", {"runId": selection_one["runId"]})["task"]["attemptState"], "uncertain"
+        )
         business_one = self.business_task(board, "uncertain-biz-1", self.workdir("u1"))
         business_two = self.business_task(board, "uncertain-biz-2", self.workdir("u2"))
         self.register(board, "w-biz")
         self.claim(board, "w-biz", request_id="uncertain-biz-claim", run_id=business_one["runId"])
-        self.assertEqual(board.store.reconcile_startup()["uncertain"], 1)
-        self.assertEqual(
-            board.call("task_get", {"runId": business_one["runId"]})["task"]["attemptState"], "uncertain"
-        )
-        refused = self.claim(board, "w-biz-2", request_id="uncertain-biz-claim-2", run_id=business_two["runId"])
-        self.assertIsNone(refused["claim"])
-        self.assertEqual(refused["reason"], "capacity")
-
-        selection_one = self.selection(board, "uncertain-pick-1")
-        self.register(board, "w-decision")
-        self.claim(board, "w-decision", request_id="uncertain-pick-claim", run_id=selection_one["runId"])
         selection_two = self.selection(board, "uncertain-pick-2")
-        self.assertEqual(self.queue_reason(board, selection_two["runId"]), "decision-capacity")
-        self.assertEqual(board.store.reconcile_startup()["uncertain"], 1)
+        self.assertEqual(self.queue_reason(board, selection_two["runId"]), "capacity")
         refused = self.claim(
             board, "w-decision-2", request_id="uncertain-pick-claim-2", run_id=selection_two["runId"]
         )
         self.assertIsNone(refused["claim"])
-        self.assertEqual(refused["reason"], "decision-capacity")
+        self.assertEqual(refused["reason"], "capacity")
         capacity = board.store.capacity_report()
-        self.assertEqual(capacity["business"]["active"], 1)
-        self.assertEqual(capacity["decision"]["active"], 1)
+        self.assertEqual(capacity["totalActive"], 2)
+        self.assertEqual(capacity["models"][0]["active"], 1)
+
+        # Release the unspawned command attempt. The selector's uncertain family
+        # claim must still hold its own quota even though a total slot is free.
+        held = board.call("task_get", {"runId": business_one["runId"]})["task"]
+        board.client().release("w-biz", held["selectedAttemptId"], held["attemptGeneration"], NONCE, "test release")
+        refused = self.claim(board, "w-decision-3", request_id="uncertain-pick-claim-3", run_id=selection_two["runId"])
+        self.assertIsNone(refused["claim"])
+        self.assertEqual(refused["reason"], "model-capacity")
+        self.assertEqual(self.queue_reason(board, selection_two["runId"]), "model-capacity")
+        claimed = self.claim(board, "w-biz-2", request_id="uncertain-biz-claim-2", run_id=business_two["runId"])
+        self.assertEqual(claimed["claim"]["task"]["runId"], business_two["runId"])
 
 
-class HealthShapeTests(LaneTestCase):
-    """Health states both lane limits, their occupancy and the aggregate limit."""
+class HealthShapeTests(CapacityTestCase):
+    """Health reports the single ceiling and model observations."""
 
-    def test_health_reports_lane_limits_and_managed_worker_ids(self):
+    def test_health_reports_total_limit_and_managed_worker_ids(self):
         board = self.board(max_concurrent=3)
-        board.store.decision_concurrent = 2
         health = board.call("health", {})
-        self.assertEqual(health["maxConcurrent"], 5)
+        self.assertEqual(health["maxConcurrent"], 3)
         self.assertEqual(
             health["capacity"],
             {
-                "business": {"limit": 3, "active": 0},
-                "decision": {"limit": 2, "active": 0},
-                "totalLimit": 5,
+                "totalLimit": 3,
+                "totalActive": 0,
+                "models": [],
             },
         )
         # In-process resources have no daemon-managed pool and say so honestly.
@@ -621,7 +615,7 @@ class HealthShapeTests(LaneTestCase):
         self.assertEqual(health["surplusWorkerIds"], [])
 
 
-class RetireRaceTests(LaneTestCase):
+class RetireRaceTests(CapacityTestCase):
     """A scale-down intent must never cancel an attempt that raced it."""
 
     def test_a_retire_intent_written_during_an_attempt_never_cancels_it(self):
@@ -657,7 +651,7 @@ class RetireRaceTests(LaneTestCase):
         self.assertEqual(board.store.active_work()["attempts"], [])
 
 
-class WorkerPoolManifestTests(LaneTestCase):
+class WorkerPoolManifestTests(CapacityTestCase):
     """The pool owns exactly the IDs it recorded, and reclaims a wanted slot."""
 
     def _hold_lock(self, worker_id: str, held: list[int]) -> int:
@@ -699,7 +693,7 @@ class WorkerPoolManifestTests(LaneTestCase):
             spawned.append(handle.worker_id)
             return True
 
-        pool = daemon_module.WorkerPool(self.directory, prefix="local", business_limit=2, decision_limit=1)
+        pool = daemon_module.WorkerPool(self.directory, prefix="local", total_limit=3)
         with patch.object(daemon_module.SupervisorHandle, "start", autospec=True, side_effect=fake_start):
             pool.start()
             self.assertEqual(sorted(spawned), ["local", "local-2"], "only desired slots may be started")
@@ -718,7 +712,7 @@ class WorkerPoolManifestTests(LaneTestCase):
         self.assertEqual(self.pool_manifest()["workerIds"], ["local", "local-2", "local-3"])
 
 
-class SurplusRetentionTests(LaneTestCase):
+class SurplusRetentionTests(CapacityTestCase):
     """A missing surplus owner is never forgotten while evidence remains."""
 
     def test_missing_surplus_with_pending_receipt_is_retained_and_replayed_in_retirement_mode(self):
@@ -747,7 +741,7 @@ class SurplusRetentionTests(LaneTestCase):
             },
         )
         starts, start = self.fake_start()
-        pool = daemon_module.WorkerPool(self.directory, prefix="local", business_limit=1, decision_limit=1)
+        pool = daemon_module.WorkerPool(self.directory, prefix="local", total_limit=2)
         with patch.object(daemon_module.SupervisorHandle, "start", autospec=True, side_effect=start):
             for _ in range(3):
                 # Clear both backoffs: the point is that the manifest entry and the
@@ -783,7 +777,7 @@ class SurplusRetentionTests(LaneTestCase):
         self.assertIsNotNone(claim["claim"])
         self.write_pool_manifest(["local", "local-2", "local-3"])
         starts, start = self.fake_start()
-        pool = daemon_module.WorkerPool(self.directory, prefix="local", business_limit=1, decision_limit=1)
+        pool = daemon_module.WorkerPool(self.directory, prefix="local", total_limit=2)
         with patch.object(daemon_module.SupervisorHandle, "start", autospec=True, side_effect=start):
             for _ in range(3):
                 pool._spawn_backoff.clear()
@@ -809,7 +803,7 @@ class SurplusRetentionTests(LaneTestCase):
 
     def test_an_explicit_stop_is_honored_and_the_slot_is_reported_unavailable(self):
         board = self.board()
-        pool = daemon_module.WorkerPool(self.directory, prefix="local", business_limit=1, decision_limit=1)
+        pool = daemon_module.WorkerPool(self.directory, prefix="local", total_limit=2)
         stop_path = self.worker_dir("local-2") / "stop.request"
         stop_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         stop_path.write_text(json.dumps({"workerId": "local-2", "requestedBy": "cli"}))
@@ -836,7 +830,7 @@ class SurplusRetentionTests(LaneTestCase):
         self.write_pool_manifest(
             ["local", 7, None, {"path": "../evil"}, "../evil", ".", "..", ["local-2"], "local-2", "a/b"]
         )
-        pool = daemon_module.WorkerPool(self.directory, prefix="..", business_limit=1, decision_limit=1)
+        pool = daemon_module.WorkerPool(self.directory, prefix="..", total_limit=2)
         self.assertEqual(pool.worker_ids, ["local", "local-2"])
         self.assertEqual(pool.prefix, "local", "an invalid configured prefix falls back to the default")
         self.assertFalse(pool.configured_prefix_valid)
@@ -868,7 +862,7 @@ class SurplusRetentionTests(LaneTestCase):
 
     def test_missing_desired_slot_is_restarted_after_backoff_without_duplicate_spawns(self):
         board = self.board()
-        pool = daemon_module.WorkerPool(self.directory, prefix="local", business_limit=1, decision_limit=1)
+        pool = daemon_module.WorkerPool(self.directory, prefix="local", total_limit=2)
         starts, start = self.fake_start()
         with patch.object(daemon_module.SupervisorHandle, "start", autospec=True, side_effect=start):
             first = pool.reconcile(board.store)
@@ -885,22 +879,22 @@ class SurplusRetentionTests(LaneTestCase):
         self.assertEqual(self.pool_manifest()["workerIds"], ["local", "local-2"])
 
 
-class DaemonPoolTests(LaneTestCase):
+class DaemonPoolTests(CapacityTestCase):
     """The real daemon-managed pool: start, overlap, decision, restart, stop, drain."""
 
     def test_fresh_private_daemon_launches_the_pool_and_overlaps_two_business_attempts(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2", "BUDDY_MAX_DECISIONS": "1"}
+        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()
             health = client.health()
-            self.assertEqual(health["maxConcurrent"], 3)
+            self.assertEqual(health["maxConcurrent"], 2)
             self.assertEqual(
                 health["capacity"],
-                {"business": {"limit": 2, "active": 0}, "decision": {"limit": 1, "active": 0}, "totalLimit": 3},
+                {"totalLimit": 2, "totalActive": 0, "models": []},
             )
-            self.assertEqual(health["managedWorkerIds"], ["local", "local-2", "local-3"])
+            self.assertEqual(health["managedWorkerIds"], ["local", "local-2"])
             self.assertEqual(health["surplusWorkerIds"], [])
-            self.wait_worker_ids(client, ["local", "local-2", "local-3"])
+            self.wait_worker_ids(client, ["local", "local-2"])
 
             first = self.gate_task(client, "overlap-1")
             second = self.gate_task(client, "overlap-2")
@@ -916,7 +910,7 @@ class DaemonPoolTests(LaneTestCase):
             self.assertEqual(len(claimed_workers), 2)
             self.assertLessEqual(claimed_workers, set(health["managedWorkerIds"]))
             self.assertEqual(len({view["selectedAttemptId"] for view in views}), 2)
-            self.assertEqual(client.health()["capacity"]["business"], {"limit": 2, "active": 2})
+            self.assertEqual(client.health()["capacity"]["totalActive"], 2)
 
             third = self.gate_task(client, "overlap-3")
             self.assertEqual(self.queue_reason(client, third), "capacity")
@@ -933,12 +927,11 @@ class DaemonPoolTests(LaneTestCase):
             self.release_gate("overlap-3")
             self.assertTrue(wait_for(lambda: client.get(runId=third)["status"] == "completed", timeout=90))
 
-    def test_decision_completes_on_the_pool_while_both_business_slots_are_held(self):
+    def test_decision_completes_on_the_pool_with_a_free_total_slot(self):
         catalog = self.catalog_fixture()
         env = {
             "BUDDY_WORKER_ID": "local",
-            "BUDDY_MAX_CONCURRENT": "2",
-            "BUDDY_MAX_DECISIONS": "1",
+            "BUDDY_MAX_CONCURRENT": "3",
             "BUDDY_MODEL_CATALOG_FILE": str(catalog),
             "BUDDY_DECISION_HELPER": str(MOCK_HELPER),
         }
@@ -971,6 +964,7 @@ class DaemonPoolTests(LaneTestCase):
                 "expectedRevision": grant["tableRevision"],
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
                 "configuration": {"decisionProfileId": PROFILE_ID},
+                "modelConcurrency": [{**PROFILE_FAMILY, "limit": 2}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
             selection = client.call("selection_request", {"requestId": "pool-pick", "task": "pick while busy"})
@@ -985,17 +979,18 @@ class DaemonPoolTests(LaneTestCase):
             self.assertEqual(decision["status"], "completed", decision.get("reason"))
             self.assertEqual(decision["profileId"], PROFILE_ID)
             capacity = client.health()["capacity"]
-            self.assertEqual(capacity["business"], {"limit": 2, "active": 2})
-            self.assertEqual(capacity["decision"], {"limit": 1, "active": 0})
+            self.assertEqual(capacity["totalLimit"], 3)
+            self.assertEqual(capacity["totalActive"], 2)
+            self.assertIn({**PROFILE_FAMILY, "limit": 2, "active": 0}, capacity["models"])
             self.release_gate("decision-1")
             self.release_gate("decision-2")
 
     def test_restart_preserves_pool_ids_and_the_same_attempt(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2", "BUDDY_MAX_DECISIONS": "1"}
+        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env) as first:
             client = self.daemon_client()
             worker_ids = client.health()["managedWorkerIds"]
-            self.assertEqual(worker_ids, ["local", "local-2", "local-3"])
+            self.assertEqual(worker_ids, ["local", "local-2"])
             self.wait_worker_ids(client, worker_ids)
 
             def pids_published():
@@ -1039,11 +1034,11 @@ class DaemonPoolTests(LaneTestCase):
             self.assertTrue(client.get(runId=task)["resultAvailable"])
 
     def test_stop_reaches_every_managed_worker_and_confirms_shutdown(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2", "BUDDY_MAX_DECISIONS": "1"}
+        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env) as process:
             client = self.daemon_client()
             worker_ids = client.health()["managedWorkerIds"]
-            self.assertEqual(worker_ids, ["local", "local-2", "local-3"])
+            self.assertEqual(worker_ids, ["local", "local-2"])
             self.wait_worker_ids(client, worker_ids)
             task = self.gate_task(client, "stop-hold")
             self.assertTrue(wait_for(lambda: self.running(client, task), timeout=60))
@@ -1071,9 +1066,9 @@ class DaemonPoolTests(LaneTestCase):
         self.assertTrue(view["shutdownConfirmed"], "the cancelled attempt must have confirmed shutdown")
 
     def test_lowering_limits_retains_a_busy_surplus_worker_and_drains_it_later(self):
-        high = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "3", "BUDDY_MAX_DECISIONS": "1"}
-        low = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1", "BUDDY_MAX_DECISIONS": "1"}
-        pool_high = ["local", "local-2", "local-3", "local-4"]
+        high = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "5"}
+        low = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1"}
+        pool_high = ["local", "local-2", "local-3", "local-4", "local-5"]
         with isolated_buddy_environment(), self.daemon(env=high) as first:
             client = self.daemon_client()
             self.wait_worker_ids(client, pool_high)
@@ -1097,25 +1092,31 @@ class DaemonPoolTests(LaneTestCase):
         with isolated_buddy_environment(), self.daemon(env=low) as second:
             client = self.daemon_client()
             health = client.health()
-            self.assertEqual(health["managedWorkerIds"], ["local", "local-2"])
-            self.assertEqual(set(health["surplusWorkerIds"]), {"local-3", "local-4"})
+            self.assertEqual(health["managedWorkerIds"], ["local"])
+            surplus_ids = pool_high[1:]
             retained = {row["workerId"]: row for row in health["surplusRetained"]}
-            busy_surplus = [worker_id for worker_id in ("local-3", "local-4") if worker_id in attempts]
-            idle_surplus = [worker_id for worker_id in ("local-3", "local-4") if worker_id not in attempts]
-            self.assertEqual(len(busy_surplus), 1, f"exactly one surplus worker must be busy: {attempts}")
-            busy = busy_surplus[0]
-            idle = idle_surplus[0]
-            self.assertEqual(busy_surplus, list(retained), health)
-            self.assertEqual(retained[busy]["attemptId"], attempts[busy])
-            # The idle surplus is retired, while the busy one keeps its slot, attempt
+            busy_surplus = [worker_id for worker_id in surplus_ids if worker_id in attempts]
+            idle_surplus = [worker_id for worker_id in surplus_ids if worker_id not in attempts]
+            self.assertTrue(busy_surplus, f"a surplus worker must own an attempt: {attempts}")
+            self.assertTrue(idle_surplus, f"a surplus worker must be idle: {attempts}")
+            self.assertTrue(set(busy_surplus).issubset(health["surplusWorkerIds"]))
+            self.assertEqual(set(busy_surplus), set(retained), health)
+            for busy in busy_surplus:
+                self.assertEqual(retained[busy]["attemptId"], attempts[busy])
+            # Idle surplus workers retire, while busy ones keep their slots, attempts
             # and receipt until its work settles. Lowering cancelled nothing.
             self.assertTrue(
-                wait_for(lambda: lock_is_free(self.worker_dir(idle) / "supervisor.lock"), timeout=40),
-                "the idle surplus supervisor was never drained",
+                wait_for(
+                    lambda: all(lock_is_free(self.worker_dir(worker_id) / "supervisor.lock") for worker_id in idle_surplus),
+                    timeout=40,
+                ),
+                "idle surplus supervisors were never drained",
             )
-            self.assertTrue(self.retire_file(idle).is_file(), "scale-down must use the retire intent")
-            self.assertFalse((self.worker_dir(idle) / "stop.request").exists())
-            self.assertFalse(lock_is_free(self.worker_dir(busy) / "supervisor.lock"))
+            for idle in idle_surplus:
+                self.assertTrue(self.retire_file(idle).is_file(), "scale-down must use the retire intent")
+                self.assertFalse((self.worker_dir(idle) / "stop.request").exists())
+            for busy in busy_surplus:
+                self.assertFalse(lock_is_free(self.worker_dir(busy) / "supervisor.lock"))
             for run_id in tasks:
                 view = client.get(runId=run_id)
                 self.assertEqual(view["status"], "running")
@@ -1124,7 +1125,8 @@ class DaemonPoolTests(LaneTestCase):
             # The exact race the bounded reconcile can hit: the intent lands while the
             # busy surplus is executing. It must neither cancel the child nor drop the
             # receipt — the worker finishes the attempt and retires afterwards.
-            self.retire_file(busy).write_text(json.dumps({"workerId": busy, "requestedBy": "test-race"}))
+            for busy in busy_surplus:
+                self.retire_file(busy).write_text(json.dumps({"workerId": busy, "requestedBy": "test-race"}))
             time.sleep(2.5)
             for run_id in tasks:
                 self.assertEqual(client.get(runId=run_id)["status"], "running")
@@ -1137,8 +1139,11 @@ class DaemonPoolTests(LaneTestCase):
                 )
                 self.assertTrue(client.get(runId=run_id)["resultAvailable"])
             self.assertTrue(
-                wait_for(lambda: lock_is_free(self.worker_dir(busy) / "supervisor.lock"), timeout=40),
-                "the busy surplus supervisor never drained after delivering",
+                wait_for(
+                    lambda: all(lock_is_free(self.worker_dir(worker_id) / "supervisor.lock") for worker_id in busy_surplus),
+                    timeout=40,
+                ),
+                "busy surplus supervisors never drained after delivering",
             )
             restart = client.call("service_control", {"action": "restart", "drainSeconds": 1})
             self.assertTrue(restart["restarting"])
@@ -1147,17 +1152,17 @@ class DaemonPoolTests(LaneTestCase):
         with isolated_buddy_environment(), self.daemon(env=low) as third:
             self.assertIsNotNone(third.pid)
             client = self.daemon_client()
-            self.assertEqual(client.health()["managedWorkerIds"], ["local", "local-2"])
-            for worker_id in ("local", "local-2"):
+            self.assertEqual(client.health()["managedWorkerIds"], ["local"])
+            for worker_id in ("local",):
                 self.assertFalse(
                     lock_is_free(self.worker_dir(worker_id) / "supervisor.lock"),
                     f"{worker_id} is a configured slot and must stay running",
                 )
 
     def test_scale_up_withdraws_the_retire_intent_and_restores_desired_slots(self):
-        high = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "3", "BUDDY_MAX_DECISIONS": "1"}
-        low = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1", "BUDDY_MAX_DECISIONS": "1"}
-        pool_high = ["local", "local-2", "local-3", "local-4"]
+        high = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "3"}
+        low = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1"}
+        pool_high = ["local", "local-2", "local-3"]
         with isolated_buddy_environment(), self.daemon(env=high) as first:
             client = self.daemon_client()
             self.wait_worker_ids(client, pool_high)
@@ -1170,7 +1175,7 @@ class DaemonPoolTests(LaneTestCase):
                 wait_for(
                     lambda: all(
                         lock_is_free(self.worker_dir(worker_id) / "supervisor.lock")
-                        for worker_id in ("local-3", "local-4")
+                        for worker_id in ("local-2", "local-3")
                     ),
                     timeout=40,
                 ),
@@ -1194,15 +1199,15 @@ class DaemonPoolTests(LaneTestCase):
                 )
             self.assertTrue(
                 wait_for(
-                    lambda: self.supervisor_pid("local-3") is not None
-                    and self.supervisor_pid("local-4") is not None,
+                    lambda: self.supervisor_pid("local-2") is not None
+                    and self.supervisor_pid("local-3") is not None,
                     timeout=30,
                 ),
                 "the restored supervisors never published their status",
             )
 
     def test_a_desired_slot_that_disappears_is_restarted_by_the_pool(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1", "BUDDY_MAX_DECISIONS": "1"}
+        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()
             self.wait_worker_ids(client, ["local", "local-2"])
@@ -1229,7 +1234,7 @@ class DaemonPoolTests(LaneTestCase):
             self.wait_worker_ids(client, ["local", "local-2"])
 
     def test_an_explicitly_stopped_slot_stays_down_until_explicitly_restarted(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1", "BUDDY_MAX_DECISIONS": "1"}
+        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()
             self.wait_worker_ids(client, ["local", "local-2"])
@@ -1273,7 +1278,7 @@ class DaemonPoolTests(LaneTestCase):
             self.wait_worker_ids(client, ["local", "local-2"])
 
     def test_custom_worker_ids_outside_the_manifest_are_never_touched(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1", "BUDDY_MAX_DECISIONS": "1"}
+        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env) as first:
             client = self.daemon_client()
             self.assertEqual(client.health()["managedWorkerIds"], ["local", "local-2"])
