@@ -1142,6 +1142,12 @@ class BoundedViewTests(WorkflowTestCase):
 
 
 class NestedSpecTests(WorkflowTestCase):
+    def test_governed_goal_can_explicitly_omit_an_execution_deadline(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="no-deadline", timeoutSeconds=0)
+        self.assertEqual(submitted["task"]["timeoutSeconds"], 0)
+        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["task"]["timeoutSeconds"], 0)
+
     def test_nested_spec_shape_is_accepted_and_must_agree(self):
         board = self.board()
         nested = {

@@ -190,6 +190,8 @@ def read_journal(results_path: str | None) -> dict:
 def _deadline(view: dict) -> dict:
     created = view.get("createdAt")
     timeout_seconds = view.get("timeoutSeconds")
+    if type(timeout_seconds) is int and timeout_seconds == schemas.UNLIMITED_TIMEOUT_SECONDS:
+        return {"available": False, "unlimited": True, "reason": "this execution has no deadline"}
     if not created or not isinstance(timeout_seconds, int):
         return {"available": False, "reason": "no recorded deadline for this task"}
     from datetime import datetime, timezone

@@ -374,6 +374,37 @@ class CompletionDuringOutage(RecoveryBase):
 
 
 class TerminationTruth(RecoveryBase):
+    def test_explicit_zero_deadline_runs_to_completion_and_can_still_be_cancelled(self):
+        board = self.board(lease_seconds=15)
+        client = board.client()
+        finished = client.submit(
+            requestId="unlimited-complete", task="finish after a short delay", cwd=str(self.workdir()),
+            adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(.6)"],
+            timeoutSeconds=0,
+        )["task"]
+        worker = Worker("w-unlimited", self.directory, client=client, lease_seconds=15, log=silent)
+        worker.register()
+        worker.run_once()
+        result = client.result(runId=finished["runId"])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_COMPLETED)
+        self.assertEqual(client.get(runId=finished["runId"])["timeoutSeconds"], 0)
+
+        pending = client.submit(
+            requestId="unlimited-cancel", task="keep running until Host cancellation", cwd=str(self.workdir("cancel")),
+            adapter="command", argv=["/bin/sh", "-c", "sleep 60"], timeoutSeconds=0,
+        )["task"]
+        outcome: dict = {}
+        thread = threading.Thread(target=lambda: outcome.update(result=worker.run_once()), name="unlimited-run")
+        thread.start()
+        self.assertTrue(wait_for(lambda: client.get(runId=pending["runId"])["status"] == "running", 20))
+        client.cancel(runId=pending["runId"], reason="operator request")
+        thread.join(timeout=40)
+        self.assertFalse(thread.is_alive(), "an unlimited execution must remain cancellable")
+        cancelled = client.result(runId=pending["runId"])
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(cancelled["resultMeta"]["terminationReason"], TERMINATION_USER_CANCEL)
+
     def test_the_classification_keeps_every_real_reason_distinct(self):
         completed = AdapterOutcome(status="ok", result={"status": "ok"}, shutdown_confirmed=True)
         failed = AdapterOutcome(status="failed", result={"status": "nonzero"}, error="boom")

@@ -24,6 +24,9 @@ MAX_METADATA = 256
 MIN_TIMEOUT_SECONDS = 10
 MAX_TIMEOUT_SECONDS = 86400
 DEFAULT_TIMEOUT_SECONDS = 1800
+#: An explicit execution-only sentinel. Caller wait windows and internal
+#: decision requests retain their independent finite bounds.
+UNLIMITED_TIMEOUT_SECONDS = 0
 MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES_PER_RUN = 32
@@ -143,6 +146,13 @@ def optional_int(params: dict, name: str, default: int, minimum: int, maximum: i
     return value
 
 
+def execution_timeout(params: dict) -> int:
+    value = params.get("timeoutSeconds")
+    if type(value) is int and value == UNLIMITED_TIMEOUT_SECONDS:
+        return UNLIMITED_TIMEOUT_SECONDS
+    return optional_int(params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
+
+
 def optional_positive_int(params: dict, name: str) -> int | None:
     """An optional positive integer cursor (or row key); absent means not provided."""
     value = params.get(name)
@@ -239,9 +249,7 @@ def normalize_spec(params: dict) -> dict:
         "adapter": adapter,
         "cwd": _canonical_cwd(params.get("cwd")),
         "task": task_text,
-        "timeoutSeconds": optional_int(
-            params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
-        ),
+        "timeoutSeconds": execution_timeout(params),
         "workspace": optional_bool(params, "workspace", True),
         "requiredCapabilities": string_list(params, "requiredCapabilities", limit=MAX_CAPABILITIES),
         "exclusiveResources": string_list(

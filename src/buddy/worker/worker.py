@@ -640,7 +640,8 @@ class Worker:
         renewal = _Renewal(self, claim, handle, implementation)
         renewal.start()
         try:
-            deadline = started + int(spec["timeoutSeconds"])
+            timeout_seconds = int(spec["timeoutSeconds"])
+            deadline = started + timeout_seconds if timeout_seconds else None
             timed_out = False
             while True:
                 if self.stop_requested() and not handle.cancel_requested:
@@ -648,7 +649,7 @@ class Worker:
                     implementation.cancel(handle)
                 if handle.wait(timeout=0.25) is not None:
                     break
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     timed_out = True
                     self.log("worker deadline reached; cancelling this owned process group")
                     implementation.cancel(handle)

@@ -333,6 +333,17 @@ class TestInquiry(BoardTestCase):
         self.assertEqual(result["deadline"]["estimated"], True)
         self.assertEqual(result["deadline"]["exact"], False)
 
+    def test_explicit_unlimited_execution_never_reports_an_expired_deadline(self):
+        board = self.board()
+        task = board.client().submit(
+            requestId="unlimited-inquiry", task="a long task", cwd=str(self.workdir()),
+            adapter="command", argv=["/bin/true"], timeoutSeconds=0,
+        )["task"]
+        result = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertEqual(result["deadline"], {
+            "available": False, "unlimited": True, "reason": "this execution has no deadline",
+        })
+
     def test_bridge_request_reports_unreachable_sockets(self):
         result = bridge_request({"socketPath": str(self.workdir() / "missing.sock"), "token": "x"}, "observe", {})
         self.assertFalse(result["ok"])
