@@ -176,7 +176,12 @@ def validate_outcome(outcome: object) -> str | None:
         return "an assistance or attention outcome requires the current request fields"
     if any(not text(request[k]) for k in ("summary", "attempted", "neededWork", "acceptance")):
         return "the turn request requires nonblank summary, attempted, neededWork and acceptance"
-    if not strings(request["expectedArtifacts"]) or ("suggestedProfileId" in request and not text(request["suggestedProfileId"], 256)):
+    # An explicit ``suggestedProfileId: null`` is the honest spelling of "no
+    # suggestion" and equals an absent key; every other non-string value stays
+    # refused so the field can never smuggle an unbounded payload.
+    if not strings(request["expectedArtifacts"]) or (
+            "suggestedProfileId" in request and request["suggestedProfileId"] is not None
+            and not text(request["suggestedProfileId"], 256)):
         return "the turn request references are invalid"
     return None
 

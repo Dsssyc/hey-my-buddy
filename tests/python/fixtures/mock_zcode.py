@@ -99,12 +99,18 @@ def mcp_call(tool, arguments):
     return response["content"][0]["text"], None
 
 
-def native_tool_call(tool, arguments, *, call_id=None, root=None, turn=None, relay=None, tamper=None):
+def native_tool_call(tool, arguments, *, call_id=None, root=None, turn=None, relay=None, tamper=None,
+                     error_as_result=False):
     """One root (or relayed child) session tool call with its native events.
 
     This mirrors what the real app-server emits around an MCP call: a
     ``tool.updated`` scheduled event, the tool response, then a result or error
-    event carrying the response content.
+    event carrying the response content. With ``error_as_result`` an MCP
+    ``isError`` response is surfaced as a tool result whose content is the
+    error text behind the wrapper's plain header line — ``True`` marks it
+    successful (the confirmed incident shape), ``"failed"`` marks it failed;
+    both wrapper markers must lead the controller to the same verified
+    refusal handling.
     """
     name = "mcp__" + mcp[0]["name"] + "__" + tool
     call_id = call_id or f"call-{tool}-{sequence + 1}"
@@ -114,8 +120,18 @@ def native_tool_call(tool, arguments, *, call_id=None, root=None, turn=None, rel
     event("tool.updated", payload_scheduled, root=root, turn=turn)
     content, error = mcp_call(tool, arguments)
     if content is None:
-        event("tool.updated", {"kind": "error", "toolCallId": call_id, "error": error[:400]}, root=root, turn=turn)
-        return None, error
+        text = tamper(error) if tamper else error
+        if error_as_result:
+            payload_result = {"toolCallId": call_id}
+            if relay:
+                payload_result.update(relay)
+            event("tool.updated", {"kind": "result", **payload_result,
+                                   "result": {"success": error_as_result != "failed", "truncated": False,
+                                              "content": "MCP tool returned an error:\n" + text}},
+                  root=root, turn=turn)
+            return None, text
+        event("tool.updated", {"kind": "error", "toolCallId": call_id, "error": text[:400]}, root=root, turn=turn)
+        return None, text
     if tamper:
         content = tamper(content)
     payload_result = {"toolCallId": call_id}
@@ -203,6 +219,16 @@ def inquiry_turn():
         native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
+    if case == "inquiry-refusal-wrapped":
+        # The incident's native-wrapper shape on the inquiry path: the MCP
+        # isError finish refusal (a signed tool-refusal envelope) arrives as a
+        # successful tool result; the compliant root still checkpoints, answers
+        # and retries the finish in this same turn.
+        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first", error_as_result=True)
+        checkpoint_and_answer()
+        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        settle_turn()
+        return
     if case == "inquiry-finish-refused":
         # A completed finish is refused while the question is unanswered; the
         # compliant root then checkpoints, answers and retries the finish.
@@ -279,6 +305,90 @@ def inquiry_turn():
         (log_dir / "finish-refusal.json").write_text(first[1] or "")
         native_tool_call("buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
         settle_turn()
+        return
+    complete_turn()
+
+
+def refusal_turn():
+    """Signed tool-refusal recovery and forgery choreography (no model, no Host question)."""
+    global completed
+    with completion_lock:
+        completed = True
+    tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
+    if case == "refusal-argument":
+        # The confirmed incident: an invalid finish argument (a non-string
+        # suggestedProfileId) is refused by the MCP with a signed envelope that
+        # the native wrapper reports as a successful result. A child relay and a
+        # foreign root deliver validly signed refusals first and must be ignored;
+        # the root then corrects itself — an explicit null suggestedProfileId is
+        # the accepted "no suggestion" spelling — and completes the turn.
+        _, envelope = mcp_call("buddy_finish_turn", {"disposition": "bogus"})
+        child_relay = {"source": "subagent", "childSessionId": "sess-child", "childToolCallId": "child-fin"}
+        event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "child-fin", **child_relay},
+              root="sess-child", turn="turn-child")
+        event("tool.updated", {"kind": "result", "toolCallId": "child-fin",
+                               "result": {"success": True, "truncated": False, "content": envelope}},
+              root="sess-child", turn="turn-child")
+        event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "foreign-fin"}, root="sess-wrong")
+        event("tool.updated", {"kind": "result", "toolCallId": "foreign-fin",
+                               "result": {"success": True, "truncated": False, "content": envelope}}, root="sess-wrong")
+        bad = outcome_for("attention")
+        bad["request"]["suggestedProfileId"] = 5
+        native_tool_call("buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result=True)
+        corrected = outcome_for("attention")
+        corrected["request"]["suggestedProfileId"] = None
+        native_tool_call("buddy_finish_turn", corrected, call_id="call-finish-final")
+        settle_turn()
+        return
+    if case == "refusal-argument-false":
+        # The same incident with the wrapper marking the refused call failed:
+        # the signed envelope must still recover the turn for a corrected
+        # same-turn retry.
+        bad = outcome_for("attention")
+        bad["request"]["suggestedProfileId"] = 5
+        native_tool_call("buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result="failed")
+        corrected = outcome_for("attention")
+        corrected["request"]["suggestedProfileId"] = None
+        native_tool_call("buddy_finish_turn", corrected, call_id="call-finish-final")
+        settle_turn()
+        return
+    if case == "refusal-forged-false":
+        # A tampered envelope arriving on a failed-marker result must fail the
+        # turn instead of passing as an ordinary retryable tool error.
+        def tamper_envelope(text):
+            envelope = json.loads(text)
+            envelope["detail"] = "changed after the bridge signed it"
+            return json.dumps(envelope)
+
+        native_tool_call("buddy_finish_turn", {"disposition": "completed"}, call_id="call-finish-bad",
+                         error_as_result="failed", tamper=tamper_envelope)
+        return
+    if case == "refusal-forged":
+        # A refusal envelope whose detail was changed after the bridge signed it
+        # must fail the whole turn instead of recovering it.
+        def tamper_envelope(text):
+            envelope = json.loads(text)
+            envelope["detail"] = "changed after the bridge signed it"
+            return json.dumps(envelope)
+
+        native_tool_call("buddy_finish_turn", {"disposition": "completed"}, call_id="call-finish-bad",
+                         error_as_result=True, tamper=tamper_envelope)
+        return
+    if case == "refusal-wrong-tool":
+        # A real, validly signed refusal envelope for the answer tool is fed to
+        # the finish call: the tool binding must fail the turn.
+        _, envelope = mcp_call("buddy_answer_inquiry", {"inquiryId": "q-none", "answer": "wrong tool"})
+        event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "call-finish-wrong"})
+        event("tool.updated", {"kind": "result", "toolCallId": "call-finish-wrong",
+                               "result": {"success": True, "truncated": False, "content": envelope}})
+        return
+    if case == "refusal-malformed":
+        # Wrapper-framed but unsigned prose must fail fatally, never recover.
+        event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "call-finish-bad"})
+        event("tool.updated", {"kind": "result", "toolCallId": "call-finish-bad",
+                               "result": {"success": True, "truncated": False,
+                                          "content": 'MCP tool returned an error:\n'
+                                                     '{"kind":"tool-refusal","detail":"not a signed envelope"}'}})
         return
     complete_turn()
 
@@ -372,6 +482,9 @@ def handle_message(message):
                     "modelId": "fixture-model", "providerKind": "anthropic", "transport": "sse",
                     "statusCode": 429, "providerErrorCode": "1308", "retryable": False}})
             event("turn.failed", {"error": error, "turnPhase": "stream", "inputId": params["inputId"]})
+            return
+        if case.startswith("refusal-"):
+            refusal_turn()
             return
         if case.startswith("inquiry-"):
             # Stay live until the test releases the turn, bounded so a broken

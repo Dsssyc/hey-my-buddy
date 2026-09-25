@@ -37,6 +37,15 @@ test('record verification fences stale identities, missing PTC acceptance, and i
   assert.doesNotThrow(() => validateTurnRecord({ ...record, provenance: { ...record.provenance, toolCallId: 'call-1:ptc:1', toolResultSeq: 7, ptcDispatchSeq: 6 } }, expected));
 });
 
+test('attention may explicitly have no model suggestion without accepting malformed suggestions', () => {
+  const request = { summary: 'Need a decision', attempted: 'Inspected the API', neededWork: 'Resolve ambiguity', expectedArtifacts: [], acceptance: 'A supported boundary is chosen.', suggestedProfileId: null };
+  const attention = { ...outcome, disposition: 'attention', request };
+  assert.equal(validateTurnOutcome(attention), attention);
+  for (const suggestedProfileId of ['', ' ', 42, false, [], {}]) {
+    assert.throws(() => validateTurnOutcome({ ...attention, request: { ...request, suggestedProfileId } }), /suggestedProfileId/);
+  }
+});
+
 test('private files preserve raw-byte hashes, publish atomically, and refuse unsafe existing targets', () => {
   const dir = mkdtempSync(join(tmpdir(), 'buddy-turn-contract-'));
   try {

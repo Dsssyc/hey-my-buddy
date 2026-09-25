@@ -57,6 +57,26 @@ class SharedTurnIOTests(ZcodeFixtureCase):
             turn_io.private_json(path, {"accepted": 2}, exclusive=True)
         self.assertEqual(json.loads(path.read_text()), {"accepted": 1})
 
+    def test_request_suggestion_null_means_no_suggestion_and_other_values_stay_refused(self):
+        # The incident's invalid argument is valid now: an explicit null
+        # suggestedProfileId is the honest spelling of "no suggestion" and
+        # validates exactly like an absent key; non-string values still fail
+        # the shared turn contract every adapter imports.
+        def outcome(value=None, *, include: bool) -> dict:
+            request = {"summary": "help", "attempted": "tried", "neededWork": "decide",
+                       "expectedArtifacts": [], "acceptance": "decided"}
+            if include:
+                request["suggestedProfileId"] = value
+            return {"disposition": "attention", "summary": "fixture", "remaining": [], "decisions": [],
+                    "artifacts": [], "request": request}
+
+        self.assertIsNone(turn_io.validate_outcome(outcome(include=False)))
+        self.assertIsNone(turn_io.validate_outcome(outcome(None, include=True)))
+        for invalid in (5, True, 1.5, "", " ", ["x"], {"id": 1}, b"bytes"):
+            with self.subTest(invalid=invalid):
+                self.assertIsNotNone(turn_io.validate_outcome(outcome(invalid, include=True)))
+        self.assertIsNone(turn_io.validate_outcome(outcome("coder-helper", include=True)))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,16 @@ to conclude with attention instead, so a refused native request can never be
 silently delivered as completed work. A queued and still-unanswered Host
 question blocks a ``completed`` outcome the same way until it is answered or
 explicitly withdrawn.
+
+Every expected refusal — invalid tool arguments, an outstanding native
+attention request, a pending inquiry, an unknown or terminal inquiry — is
+returned as an ``isError`` result whose text is a signed, attempt/input/tool-
+bound tool-refusal envelope (see ``zcode_protocol.verify_tool_refusal``): the
+native wrapper may surface such an error as a *successful* tool result, and the
+controller recovers the turn for a corrected same-turn retry only after the
+envelope's signature, identity and tool binding verify. A success receipt, the
+native root completion, the session close and the real shutdown evidence remain
+the separate facts they were; a refusal never carries an outcome.
 """
 from __future__ import annotations
 
@@ -27,7 +37,9 @@ from pathlib import Path
 
 from .turn_io import MAX_OUTCOME_BYTES, canonical_json, validate_outcome
 from .zcode_protocol import (INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES, MAX_INQUIRY_ID_BYTES,
-                             decode_json, read_shared_snapshot, sign_receipt)
+                             MAX_INQUIRY_RECEIPT_BYTES, MAX_QUESTION_BYTES, MAX_TOOL_REFUSAL_BYTES,
+                             MAX_TOOL_REFUSAL_DETAIL_BYTES, MAX_TOOL_REFUSAL_PREFIX_BYTES, decode_json,
+                             read_shared_snapshot, serialized_footprint, sign_receipt)
 
 MAX_ATTENTION_BYTES = 64 * 1024
 MAX_JOURNAL_BYTES = 1024 * 1024
@@ -48,7 +60,9 @@ OUTCOME_SCHEMA = {
              "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
              "properties": {"summary": {"type": "string"}, "attempted": {"type": "string"},
                             "neededWork": {"type": "string"}, "expectedArtifacts": STRINGS,
-                            "acceptance": {"type": "string"}, "suggestedProfileId": {"type": "string"}}},
+                            "acceptance": {"type": "string"},
+                            "suggestedProfileId": {"description": "Optional profile suggestion the Host may ignore; an explicit null means no suggestion.",
+                                                   "type": ["string", "null"], "maxLength": 256}}},
         ]},
     },
 }
@@ -68,12 +82,15 @@ FINISH_DESCRIPTION = (
     "disposition, summary, remaining, decisions, artifacts, request. For completed, request must be null. "
     "Correct validation errors and retry; stop after one successful receipt, once your work and internal "
     "subagents have settled. A completed outcome is refused while a Host inquiry is still unanswered. "
-    "This tool does not dispatch other tasks."
+    "A refused call returns a signed JSON refusal envelope whose detail names the correction; read it, fix "
+    "the call and retry in this same turn. This tool does not dispatch other tasks."
 )
 CHECKPOINT_DESCRIPTION = (
-    "Pick up queued Host inquiries for this governed turn. Returns a signed receipt listing every question "
-    "still awaiting an answer (nothing pending returns an empty list). Call it at natural work milestones and "
-    "again just before buddy_finish_turn; it is never required on a timer. Answer each listed question with "
+    "Pick up queued Host inquiries for this governed turn. Returns a signed receipt listing the questions "
+    "still awaiting an answer (nothing pending returns an empty list); when the serialized receipt budget "
+    "cannot carry every pending question, morePending names how many stayed queued — answer the listed ones "
+    "and checkpoint again to pick up the rest. Call it at natural work milestones and again just before "
+    "buddy_finish_turn; it is never required on a timer. Answer each listed question with "
     "buddy_answer_inquiry using its exact inquiryId."
 )
 ANSWER_DESCRIPTION = (
@@ -167,12 +184,37 @@ def pending_inquiries(configuration: dict) -> list[dict] | None:
     return pending[:MAX_INQUIRIES]
 
 
+def _footprint_bounded(text: str, budget: int) -> str:
+    """Longest prefix of ``text`` whose serialized footprint fits ``budget``.
+
+    A prefix's footprint is monotone in its length, so a binary search keeps
+    the largest fitting prefix even when control characters, quotes and
+    backslashes expand under JSON escaping.
+    """
+    if serialized_footprint(text) <= budget:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if serialized_footprint(text[:middle]) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
+
+
 def inquiry_refusal(pending: list[dict]) -> str | None:
-    """The bounded finish refusal naming the pending questions."""
+    """The bounded finish refusal naming the pending questions.
+
+    Each listed question is shown within its serialized question budget so a
+    pathological journal entry can never crowd out the correction guidance:
+    the checkpoint/answer instructions at the tail always survive, and the
+    final envelope budgeting in :func:`_refusal` remains the hard guarantee.
+    """
     if not pending:
         return None
     listed = [
-        f"[{item['inquiryId']}] {item['question']}"
+        f"[{item['inquiryId']}] {_footprint_bounded(item['question'], MAX_QUESTION_BYTES)}"
         for item in pending[:MAX_PENDING_IN_FINISH_REFUSAL] if isinstance(item.get("question"), str)
     ]
     more = f" (+{len(pending) - len(listed)} more)" if len(pending) > len(listed) else ""
@@ -181,13 +223,82 @@ def inquiry_refusal(pending: list[dict]) -> str | None:
         + " | ".join(listed)
         + f"{more}. Call buddy_checkpoint to pick them up, answer each with buddy_answer_inquiry, then retry "
           "the finish; a withdrawn or explicitly unavailable question no longer blocks completion."
-    )[:MAX_OUTCOME_BYTES - 1]
+    )
 
 
 def _signed(payload: dict, configuration: dict) -> str:
     receipt = {**payload, "receiptId": secrets.token_hex(16)}
     receipt["signature"] = sign_receipt(receipt, configuration["key"])
     return canonical_json(receipt)
+
+
+def _refusal(configuration: dict, tool: str, reason: str, detail: str) -> dict:
+    """One signed, attempt/input/tool-bound refusal envelope as an MCP error.
+
+    The native wrapper can surface an ``isError`` response as a *successful*
+    tool result whose content is exactly this text, so the refusal must be
+    verifiable by the controller on that path too: the signature binds the
+    attempt identity, the turn input and the session tool, and the detail is
+    the same bounded correction text the plain error carried. A verified
+    refusal tells the root to correct the call and retry in this same turn; it
+    never carries an outcome and never mutates state.
+
+    The detail is fitted to the envelope's verified wire budget by measuring
+    the exact serialized envelope — fixed-length receipt and signature members
+    included — plus the wrapper-header prefix the controller tolerates. Raw
+    UTF-8 length alone cannot bound canonical JSON escaping (a control
+    character costs six bytes, a quote or backslash two), so every minted
+    envelope passes :func:`zcode_protocol.verify_tool_refusal` byte for byte.
+    A prefix's fitness is monotone in its length, so a binary search keeps the
+    largest fitting prefix — the leading correction guidance survives intact
+    and only a pathological input reduced to blanks falls back to the fixed
+    retry instruction.
+    """
+
+    def fits(value: str) -> bool:
+        probe = {"version": 1, "kind": "tool-refusal", "identity": configuration["identity"],
+                 "inputSha256": configuration["inputSha256"], "tool": tool, "reason": reason,
+                 "detail": value, "receiptId": "0" * 32, "signature": "0" * 64}
+        return (len(canonical_json(probe).encode()) + MAX_TOOL_REFUSAL_PREFIX_BYTES <= MAX_TOOL_REFUSAL_BYTES
+                and len(value.encode()) <= MAX_TOOL_REFUSAL_DETAIL_BYTES)
+
+    text = detail
+    if not fits(text):
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if fits(text[:middle]):
+                low = middle
+            else:
+                high = middle - 1
+        text = text[:low]
+    if not text.strip():
+        text = f"the {tool} call was refused ({reason}); correct it and retry in this turn"
+    return {"isError": True, "content": [{"type": "text", "text": _signed(
+        {"version": 1, "kind": "tool-refusal", "identity": configuration["identity"],
+         "inputSha256": configuration["inputSha256"], "tool": tool, "reason": reason,
+         "detail": text}, configuration)}]}
+
+
+def _checkpoint_batch(pending: list[dict]) -> tuple[list[dict], int]:
+    """Fit the pending questions into one verifiable checkpoint receipt.
+
+    The receipt budget bounds the serialized wire, and JSON escaping can
+    inflate an accepted 4000-byte question far beyond its raw length, so the
+    batch is the longest prefix whose serialized entries fit the budget with
+    the envelope framing reserved. Questions beyond the batch are not lost:
+    they stay queued in the journal, block a completed finish by name, and are
+    delivered on a later checkpoint once earlier ones are answered. The
+    returned ``morePending`` count makes the batching explicit inside the
+    signed receipt itself.
+    """
+    budget = MAX_INQUIRY_RECEIPT_BYTES - 1024  # fixed members: identity, ids, signature
+    batch: list[dict] = []
+    for item in pending:
+        if len(canonical_json(batch + [item]).encode()) > budget:
+            break
+        batch.append(item)
+    return batch, len(pending) - len(batch)
 
 
 def respond(message: dict, configuration: dict) -> dict | None:
@@ -211,28 +322,29 @@ def respond(message: dict, configuration: dict) -> dict | None:
         if name == "buddy_checkpoint":
             pending = pending_inquiries(configuration)
             if pending is None:
-                result = {"isError": True, "content": [{"type": "text", "text": INQUIRY_CHANNEL_ABSENT}]}
+                result = _refusal(configuration, "buddy_checkpoint", "inquiry-channel-absent", INQUIRY_CHANNEL_ABSENT)
             else:
+                batch, more = _checkpoint_batch(pending)
                 receipt = _signed({"version": 1, "kind": "inquiry-checkpoint", "identity": configuration["identity"],
-                                   "inquiries": pending}, configuration)
+                                   "inquiries": batch, "morePending": more}, configuration)
                 result = {"content": [{"type": "text", "text": receipt}]}
         elif name == "buddy_answer_inquiry":
             result = _answer_inquiry(arguments, configuration)
         elif name == "buddy_finish_turn":
             error = validate_outcome(arguments)
             if error:
-                result = {"isError": True, "content": [{"type": "text", "text": error}]}
+                result = _refusal(configuration, "buddy_finish_turn", "invalid-arguments", error)
             elif arguments["disposition"] == "completed" and attention_requests(configuration):
                 # A refused native approval must reach the Host as attention, never
                 # as silently completed work. The root is still live and can issue
                 # the attention receipt in this same turn.
-                result = {"isError": True, "content": [{"type": "text", "text": ATTENTION_REFUSAL}]}
+                result = _refusal(configuration, "buddy_finish_turn", "attention-outstanding", ATTENTION_REFUSAL)
             elif arguments["disposition"] == "completed":
                 refusal = inquiry_refusal(pending_inquiries(configuration) or [])
                 if refusal:
                     # Same contract as a refused native approval: the root is still
                     # live, so it can checkpoint, answer and retry in this turn.
-                    result = {"isError": True, "content": [{"type": "text", "text": refusal}]}
+                    result = _refusal(configuration, "buddy_finish_turn", "inquiry-pending", refusal)
                 else:
                     result = _finish_receipt(arguments, configuration)
             else:
@@ -259,29 +371,33 @@ def _answer_inquiry(arguments: object, configuration: dict) -> dict:
 
     This only mints the tentative receipt: the controller verifies the native
     root tool evidence and the receipt binding before the journal records the
-    answer, so this handler never writes inquiry state itself.
+    answer, so this handler never writes inquiry state itself. Every expected
+    refusal is a signed tool-refusal envelope, so a wrapper-successful result
+    still recovers as a correctable refusal controller-side.
     """
-    def failure(text: str) -> dict:
-        return {"isError": True, "content": [{"type": "text", "text": text}]}
+    def failure(reason: str, text: str) -> dict:
+        return _refusal(configuration, "buddy_answer_inquiry", reason, text)
     if not isinstance(arguments, dict) or set(arguments) != {"inquiryId", "answer"}:
-        return failure("buddy_answer_inquiry requires exactly inquiryId and answer")
+        return failure("invalid-arguments", "buddy_answer_inquiry requires exactly inquiryId and answer")
     inquiry_id, answer = arguments["inquiryId"], arguments["answer"]
     if not isinstance(inquiry_id, str) or not inquiry_id or len(inquiry_id.encode()) > MAX_INQUIRY_ID_BYTES:
-        return failure("buddy_answer_inquiry requires a bounded nonempty inquiryId")
+        return failure("invalid-arguments", "buddy_answer_inquiry requires a bounded nonempty inquiryId")
     if not isinstance(answer, str) or not answer.strip():
-        return failure("buddy_answer_inquiry requires a nonblank answer")
+        return failure("invalid-arguments", "buddy_answer_inquiry requires a nonblank answer")
     if len(answer.encode()) > MAX_ANSWER_BYTES:
-        return failure(f"the answer exceeds its {MAX_ANSWER_BYTES}-byte UTF-8 bound")
+        return failure("invalid-arguments", f"the answer exceeds its {MAX_ANSWER_BYTES}-byte UTF-8 bound")
     entries = read_inquiry_entries(configuration)
     if entries is None:
-        return failure(INQUIRY_CHANNEL_ABSENT)
+        return failure("inquiry-channel-absent", INQUIRY_CHANNEL_ABSENT)
     entry = entries.get(inquiry_id)
     if entry is None:
-        return failure(f"unknown inquiryId {inquiry_id}: no Host question with that id was queued in this turn")
+        return failure("unknown-inquiry",
+                       f"unknown inquiryId {inquiry_id}: no Host question with that id was queued in this turn")
     if entry.get("state") == "answered":
-        return failure(f"inquiry {inquiry_id} already has its recorded answer; it cannot be replaced")
+        return failure("inquiry-state",
+                       f"inquiry {inquiry_id} already has its recorded answer; it cannot be replaced")
     if entry.get("state") not in ("queued", "delivered"):
-        return failure(f"inquiry {inquiry_id} is {entry.get('state')} and can no longer be answered")
+        return failure("inquiry-state", f"inquiry {inquiry_id} is {entry.get('state')} and can no longer be answered")
     receipt = _signed({"version": 1, "kind": "inquiry-answer", "identity": configuration["identity"],
                        "inquiryId": inquiry_id, "questionSha256": entry.get("questionSha256"),
                        "answer": answer}, configuration)

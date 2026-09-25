@@ -11,9 +11,11 @@ from unittest import mock
 
 from buddy.adapters.base import ProcessHandle
 from buddy.adapters.zcode_mcp import respond
-from buddy.adapters.zcode_protocol import (NativeConnection, NativeError, RootTurnEvidence, decode_json,
-                                           decode_native_failure, sign_receipt, verify_inquiry_receipt,
-                                           verify_receipt)
+from buddy.adapters.zcode_protocol import (MAX_INQUIRY_RECEIPT_BYTES, MAX_TOOL_REFUSAL_BYTES,
+                                           MAX_TOOL_REFUSAL_DETAIL_BYTES, MAX_TOOL_REFUSAL_PREFIX_BYTES,
+                                           NativeConnection, NativeError, RootTurnEvidence, decode_json,
+                                           decode_native_failure, refusal_shaped, sign_receipt,
+                                           verify_inquiry_receipt, verify_receipt, verify_tool_refusal)
 from buddy.adapters.zcode_runner import catalog, configure_session, execution_deadline
 
 
@@ -131,6 +133,114 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaises(NativeError):
             self.root_event(tracker, 5, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "duplicate"})
 
+    def test_a_wrapper_successful_refusal_result_recovers_for_a_corrected_retry(self):
+        # The incident shape: the MCP isError refusal (a signed envelope) is
+        # surfaced by the native wrapper as a successful result. Only the fully
+        # verified envelope recovers the turn; the corrected call then succeeds.
+        finish = "mcp__buddy_x__buddy_finish_turn"
+        refusal = json.dumps(self._signed_refusal())
+        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+        self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
+            "result": {"success": True, "truncated": False, "content": refusal}})
+        self.assertIsNone(tracker.receipt)
+        self.assertTrue(tracker.finish_failed)
+        self.root_event(tracker, 4, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "corrected"})
+        self.root_event(tracker, 5, "tool.updated", {"kind": "result", "toolCallId": "corrected",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 6, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        tracker.observe({"method": "state.updated", "params": {"sessionId": "sess-root", "reason": "prompt_completed"}}, 7)
+        tracker.close_ordinal = 8
+        self.assertEqual(tracker.provenance()["toolCallId"], "corrected")
+
+    def test_an_unverified_refusal_shaped_finish_result_stays_fatal(self):
+        finish = "mcp__buddy_x__buddy_finish_turn"
+        for content in (json.dumps({"kind": "tool-refusal", "detail": "unsigned prose"}),
+                        json.dumps(self._signed_refusal(tool="buddy_checkpoint")),
+                        json.dumps(self._signed_refusal(identity={"taskId": "goal", "attemptId": "other",
+                                                                 "generation": 1, "turnId": "logical"}))):
+            with self.subTest(content=content[:60]):
+                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+                self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+                self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
+                with self.assertRaises(NativeError) as error:
+                    self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
+                        "result": {"success": True, "truncated": False, "content": content}})
+                self.assertEqual(error.exception.code, "invalid-tool-refusal")
+                self.assertIsNone(tracker.receipt)
+
+    def test_a_failed_marker_result_verifies_the_refusal_envelope_first(self):
+        # A result marked success:false still examines a refusal-shaped content
+        # before any ordinary retryable-error path, so the same envelope both
+        # recovers when genuine and fails the turn when forged or wrong-tool.
+        finish = "mcp__buddy_x__buddy_finish_turn"
+        header = "MCP tool returned an error:\n"
+        verified = header + json.dumps(self._signed_refusal())
+        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+        self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
+            "result": {"success": False, "truncated": False, "content": verified}})
+        self.assertTrue(tracker.finish_failed)
+        self.assertIsNone(tracker.receipt)
+        for content in (header + json.dumps({**self._signed_refusal(), "detail": "changed after signing"}),
+                        header + json.dumps(self._signed_refusal(tool="buddy_answer_inquiry"))):
+            with self.subTest(content=content[:60]):
+                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+                self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+                self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
+                with self.assertRaises(NativeError) as error:
+                    self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
+                        "result": {"success": False, "truncated": False, "content": content}})
+                self.assertEqual(error.exception.code, "invalid-tool-refusal")
+                self.assertIsNone(tracker.receipt)
+
+    def test_receipt_failures_distinguish_malformed_signature_identity_and_outcome(self):
+        # Safe, bounded diagnostics: each stage names its own failure without
+        # ever quoting the raw content.
+        raw = self.receipt()
+        malformed = {
+            "prose": "the tool says no",
+            "wrong object": json.dumps({"version": 1, "identity": {}, "not": "a receipt"}),
+            "trailing data": raw + " trailing",
+        }
+        for name, content in malformed.items():
+            with self.subTest(case=name):
+                with self.assertRaises(NativeError) as error:
+                    verify_receipt(content, self.bridge)
+                self.assertEqual(error.exception.code, "invalid-finish")
+                message = str(error.exception)
+                self.assertTrue(any(fragment in message for fragment in
+                                    ("no bounded JSON receipt", "not the current signed receipt object", "malformed")), message)
+        tampered = json.loads(raw)
+        tampered["outcome"] = {**tampered["outcome"], "summary": "forged"}
+        with self.assertRaises(NativeError) as error:
+            verify_receipt(json.dumps(tampered), self.bridge)
+        self.assertIn("signature verification", str(error.exception))
+        rekeyed = json.loads(raw)
+        rekeyed.pop("signature")
+        rekeyed["identity"] = {**rekeyed["identity"], "attemptId": "other"}
+        rekeyed["signature"] = sign_receipt(rekeyed, self.bridge["key"])
+        with self.assertRaises(NativeError) as error:
+            verify_receipt(json.dumps(rekeyed), self.bridge)
+        self.assertIn("attempt-identity binding", str(error.exception))
+        reoutcomed = json.loads(raw)
+        reoutcomed.pop("signature")
+        reoutcomed["outcome"]["disposition"] = "unknown"
+        reoutcomed["signature"] = sign_receipt(reoutcomed, self.bridge["key"])
+        with self.assertRaises(NativeError) as error:
+            verify_receipt(json.dumps(reoutcomed), self.bridge)
+        self.assertIn("outcome validation", str(error.exception))
+
+    def _signed_refusal(self, *, tool: str = "buddy_finish_turn", reason: str = "invalid-arguments",
+                        detail: str = "the turn request references are invalid", identity: dict | None = None) -> dict:
+        envelope = {"version": 1, "kind": "tool-refusal", "identity": identity or self.bridge["identity"],
+                    "inputSha256": self.bridge["inputSha256"], "tool": tool, "reason": reason,
+                    "detail": detail, "receiptId": "f" * 32}
+        envelope["signature"] = sign_receipt(envelope, self.bridge["key"])
+        return envelope
+
 
 class InquiryReceiptTests(unittest.TestCase):
     def setUp(self):
@@ -190,6 +300,178 @@ class InquiryReceiptTests(unittest.TestCase):
                 raw = self.receipt("inquiry-checkpoint", {"inquiries": [{**base, **mutation}]})
                 with self.assertRaises(NativeError):
                     verify_inquiry_receipt(raw, self.bridge, "inquiry-checkpoint")
+
+
+class ToolRefusalEnvelopeTests(unittest.TestCase):
+    """The signed refusal envelope itself: exact binding, fatal forgery, dispatch."""
+
+    def setUp(self):
+        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+                       "inputSha256": "a" * 64, "key": "b" * 64}
+        self.names = {"buddy_finish_turn": "mcp__buddy_x__buddy_finish_turn",
+                      "buddy_checkpoint": "mcp__buddy_x__buddy_checkpoint",
+                      "buddy_answer_inquiry": "mcp__buddy_x__buddy_answer_inquiry"}
+
+    def refusal(self, **overrides) -> str:
+        envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
+                    "inputSha256": self.bridge["inputSha256"], "tool": "buddy_finish_turn",
+                    "reason": "invalid-arguments", "detail": "the turn request references are invalid",
+                    "receiptId": "f" * 32}
+        key = overrides.pop("key", None) or self.bridge["key"]
+        envelope.update(overrides)
+        envelope["signature"] = sign_receipt(envelope, key)
+        return json.dumps(envelope)
+
+    def test_a_well_bound_envelope_verifies_for_exactly_its_tool(self):
+        raw = self.refusal()
+        self.assertTrue(refusal_shaped(raw))
+        envelope = verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"])
+        self.assertEqual(envelope["reason"], "invalid-arguments")
+        self.assertEqual(envelope["tool"], "buddy_finish_turn")
+        for bare, native in self.names.items():
+            if bare == "buddy_finish_turn":
+                continue
+            with self.subTest(native=native):
+                with self.assertRaises(NativeError) as error:
+                    verify_tool_refusal(raw, self.bridge, native)
+                self.assertEqual(error.exception.code, "invalid-tool-refusal")
+                self.assertIn("different session tool", str(error.exception))
+
+    def test_the_native_wrapper_error_header_is_tolerated_but_only_bounded(self):
+        # The installed wrapper delivers an MCP isError text as a successful
+        # result prefixed with one plain header line. Dispatch tolerates exactly
+        # that bounded framing; the signature still decides everything else.
+        raw = self.refusal()
+        framed = "MCP tool returned an error:\n" + raw
+        self.assertTrue(refusal_shaped(framed))
+        envelope = verify_tool_refusal(framed, self.bridge, self.names["buddy_finish_turn"])
+        self.assertEqual(envelope["reason"], "invalid-arguments")
+        tampered = "MCP tool returned an error:\n" + json.dumps({**json.loads(raw), "detail": "changed after signing"})
+        with self.assertRaises(NativeError) as error:
+            verify_tool_refusal(tampered, self.bridge, self.names["buddy_finish_turn"])
+        self.assertIn("signature", str(error.exception))
+        for not_shaped in ("x" * 300 + raw, framed + " trailing", "error: {" + raw,
+                           "MCP tool returned an error:\nnot json", " ", ""):
+            with self.subTest(case=not_shaped[:40]):
+                self.assertFalse(refusal_shaped(not_shaped))
+
+    def test_tampered_foreign_or_unbounded_envelopes_stay_fatal(self):
+        cases = {
+            "changed detail": json.dumps({**json.loads(self.refusal()), "detail": "changed after signing"}),
+            "changed signature": json.dumps({**json.loads(self.refusal()), "signature": "0" * 64}),
+            "foreign identity": self.refusal(identity={"taskId": "goal", "attemptId": "other",
+                                                       "generation": 1, "turnId": "logical"}),
+            "foreign input": self.refusal(inputSha256="c" * 64),
+            "unknown reason": self.refusal(reason="quota-exhausted"),
+            "blank detail": self.refusal(detail="  "),
+            "oversized detail": self.refusal(detail="x" * 65537),
+            "extra field": json.dumps({**json.loads(self.refusal()), "extra": 1}),
+            "missing field": json.dumps({k: v for k, v in json.loads(self.refusal()).items() if k != "reason"}),
+            "not an object": json.dumps([1, 2, 3]),
+        }
+        for name, raw in cases.items():
+            with self.subTest(case=name):
+                if name == "not an object":
+                    self.assertFalse(refusal_shaped(raw))
+                with self.assertRaises(NativeError) as error:
+                    verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"])
+                self.assertEqual(error.exception.code, "invalid-tool-refusal")
+        # Prose before a genuinely signed envelope is just framing: the prefix
+        # never enters the signature, so the envelope still verifies and can
+        # only ever mean "correct the call and retry".
+        prose_framed = "the tool refused: " + self.refusal()
+        self.assertTrue(refusal_shaped(prose_framed))
+        self.assertEqual(verify_tool_refusal(prose_framed, self.bridge,
+                                             self.names["buddy_finish_turn"])["reason"], "invalid-arguments")
+        with self.assertRaises(NativeError):
+            verify_tool_refusal(self.refusal(), {**self.bridge, "key": "d" * 64}, self.names["buddy_finish_turn"])
+        with self.assertRaises(NativeError):
+            verify_tool_refusal("x" * 70001, self.bridge, self.names["buddy_finish_turn"])
+
+    def test_dispatch_never_treats_a_receipt_or_prose_as_a_refusal(self):
+        outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
+                   "artifacts": [], "request": None}
+        result = respond({"id": 1, "method": "tools/call", "params": {"name": "buddy_finish_turn",
+                                                                      "arguments": outcome}}, self.bridge)["result"]
+        self.assertFalse(refusal_shaped(result["content"][0]["text"]))
+        self.assertFalse(refusal_shaped(None))
+        self.assertFalse(refusal_shaped("plain tool error text"))
+        # A genuine MCP refusal is both isError and refusal-shaped, and verifies.
+        refused = respond({"id": 1, "method": "tools/call", "params": {"name": "buddy_finish_turn",
+                                                                       "arguments": {"disposition": "completed"}}}, self.bridge)["result"]
+        self.assertTrue(refused.get("isError"))
+        self.assertTrue(refusal_shaped(refused["content"][0]["text"]))
+        envelope = verify_tool_refusal(refused["content"][0]["text"], self.bridge, self.names["buddy_finish_turn"])
+        self.assertEqual(envelope["reason"], "invalid-arguments")
+
+
+class RefusalWireBudgetTests(unittest.TestCase):
+    """Every envelope this MCP mints fits the wire budget its verification enforces.
+
+    The review reproduced a real mismatch: raw UTF-8 length does not bound
+    canonical JSON escaping (a control character costs six bytes, a quote or
+    backslash two) and the native wrapper adds its error header, so a minted
+    refusal could exceed the very budget ``verify_tool_refusal`` enforces.
+    """
+
+    def setUp(self):
+        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+                       "inputSha256": "a" * 64, "key": "b" * 64}
+        self.finish = "mcp__buddy_x__buddy_finish_turn"
+
+    def mint(self, detail: str, *, tool: str = "buddy_finish_turn", reason: str = "invalid-arguments") -> str:
+        from buddy.adapters.zcode_mcp import _refusal
+        return _refusal(self.bridge, tool, reason, detail)["content"][0]["text"]
+
+    def test_pathological_details_mint_envelopes_that_verify_byte_for_byte(self):
+        cases = {
+            "quotes (review repro)": '"' * 65536,
+            "backslashes": "\\" * 65536,
+            "c0 controls": chr(1) * 65536,
+            "mixed escapes": '\\"世🎉\x01\x1f' * 6000,
+            "non-ascii literal": "世" * 21845,
+            "plain at the raw bound": "x" * MAX_TOOL_REFUSAL_DETAIL_BYTES,
+            "plain past the raw bound": "x" * (MAX_TOOL_REFUSAL_DETAIL_BYTES + 5000),
+        }
+        for name, detail in cases.items():
+            with self.subTest(case=name):
+                text = self.mint(detail)
+                self.assertLessEqual(len(text.encode()) + MAX_TOOL_REFUSAL_PREFIX_BYTES, MAX_TOOL_REFUSAL_BYTES)
+                envelope = verify_tool_refusal(text, self.bridge, self.finish)
+                self.assertTrue(envelope["detail"].strip())
+                # The kept detail is a prefix of the original, so the leading
+                # correction guidance survives and nothing is rewritten.
+                self.assertTrue(detail.startswith(envelope["detail"]), name)
+
+    def test_the_review_repro_wire_sizes_now_verify(self):
+        text = self.mint('"' * 65536)
+        envelope = verify_tool_refusal(text, self.bridge, self.finish)
+        # The unfixed mint emitted 131,450 wire bytes and was refused; the
+        # fitted mint now uses most of the budget without exceeding it.
+        self.assertGreater(len(text.encode()), MAX_TOOL_REFUSAL_BYTES // 2)
+        self.assertEqual(envelope["reason"], "invalid-arguments")
+
+    def test_a_whitespace_detail_falls_back_to_the_retry_instruction(self):
+        envelope = verify_tool_refusal(self.mint(" " * 70000), self.bridge, self.finish)
+        self.assertIn("correct it and retry", envelope["detail"])
+
+    def test_checkpoint_receipts_batch_serialized_overflow_explicitly(self):
+        from buddy.adapters.zcode_mcp import _checkpoint_batch
+        from buddy.adapters.turn_io import canonical_json
+        # 32 accepted-but-pathological questions (control characters expand
+        # sixfold) cannot fit one receipt: the batch is the longest serialized
+        # prefix and the overflow is counted, never silently dropped.
+        pathological = [{"inquiryId": f"q-{index}", "question": chr(1) * 4000, "questionSha256": "c" * 64,
+                         "state": "queued", "askedAt": "t"} for index in range(32)]
+        batch, more = _checkpoint_batch(pathological)
+        self.assertLess(len(batch), 32)
+        self.assertEqual(more, 32 - len(batch))
+        self.assertLessEqual(len(canonical_json(batch).encode()), MAX_INQUIRY_RECEIPT_BYTES - 1024)
+        # Realistic questions at the question budget all fit one receipt.
+        realistic = [{"inquiryId": f"q-{index}", "question": "y" * 3990, "questionSha256": "c" * 64,
+                      "state": "queued", "askedAt": "t"} for index in range(32)]
+        batch, more = _checkpoint_batch(realistic)
+        self.assertEqual((len(batch), more), (32, 0))
 
 
 class InquiryEvidenceTests(unittest.TestCase):
@@ -273,6 +555,85 @@ class InquiryEvidenceTests(unittest.TestCase):
                                        "result": {"success": True, "truncated": False, "content": content}})
         self.assertEqual(len(self.deliveries), 1)
 
+    def refusal_text(self, tool: str, reason: str, detail: str = "correction text") -> str:
+        envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
+                    "inputSha256": self.bridge["inputSha256"], "tool": tool, "reason": reason,
+                    "detail": detail, "receiptId": "f" * 32}
+        envelope["signature"] = sign_receipt(envelope, self.bridge["key"])
+        return json.dumps(envelope)
+
+    def test_failed_marker_results_verify_inquiry_refusals_first(self):
+        # The checkpoint and answer tools get the same contract as finish: a
+        # refusal-shaped content on a success:false result is verified before
+        # the ordinary retryable-error path, so a forged or wrong-tool envelope
+        # is fatal even on the failed-marker path.
+        header = "MCP tool returned an error:\n"
+        self.started()
+        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                       "toolCallId": "ckpt-false"})
+        self.event(3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-false",
+                                       "result": {"success": False, "truncated": False,
+                                                  "content": header + self.refusal_text("buddy_checkpoint", "inquiry-channel-absent")}})
+        self.assertEqual(self.tracker.checkpoint_calls["ckpt-false"]["result"], "tool-refusal")
+        self.assertEqual(self.deliveries, [])
+        self.event(4, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_answer_inquiry",
+                                       "toolCallId": "ans-false"})
+        self.event(5, "tool.updated", {"kind": "result", "toolCallId": "ans-false",
+                                       "result": {"success": False, "truncated": False,
+                                                  "content": header + self.refusal_text("buddy_answer_inquiry", "unknown-inquiry")}})
+        self.assertEqual(self.tracker.answer_calls["ans-false"]["result"], "tool-refusal")
+        self.assertEqual(self.answers, [])
+        with self.assertRaises(NativeError) as error:
+            self.event(6, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                           "toolCallId": "ckpt-forged"})
+            self.event(7, "tool.updated", {"kind": "result", "toolCallId": "ckpt-forged",
+                                           "result": {"success": False, "truncated": False,
+                                                      "content": header + self.refusal_text("buddy_answer_inquiry", "unknown-inquiry")}})
+        self.assertEqual(error.exception.code, "invalid-tool-refusal")
+        forged = json.loads(self.refusal_text("buddy_checkpoint", "inquiry-channel-absent"))
+        forged["detail"] = "changed after signing"
+        with self.assertRaises(NativeError) as error:
+            self.event(8, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_answer_inquiry",
+                                           "toolCallId": "ans-forged"})
+            self.event(9, "tool.updated", {"kind": "result", "toolCallId": "ans-forged",
+                                           "result": {"success": False, "truncated": False,
+                                                      "content": header + json.dumps(forged)}})
+        self.assertEqual(error.exception.code, "invalid-tool-refusal")
+
+    def test_wrapper_successful_refusals_keep_the_inquiry_turn_alive(self):
+        # The incident's native-wrapper shape on the checkpoint and answer tools:
+        # the MCP isError refusal arrives as a successful result. A verified
+        # envelope must not deliver or answer anything, and an unverified one
+        # (here: signed for another tool) fails the turn.
+        self.started()
+        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                       "toolCallId": "ckpt-bad"})
+        self.event(3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-bad",
+                                       "result": {"success": True, "truncated": False,
+                                                  "content": self.refusal_text("buddy_checkpoint", "inquiry-channel-absent")}})
+        self.assertEqual(self.tracker.checkpoint_calls["ckpt-bad"]["result"], "tool-refusal")
+        self.event(4, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_answer_inquiry",
+                                       "toolCallId": "ans-bad"})
+        self.event(5, "tool.updated", {"kind": "result", "toolCallId": "ans-bad",
+                                       "result": {"success": True, "truncated": False,
+                                                  "content": self.refusal_text("buddy_answer_inquiry", "unknown-inquiry")}})
+        self.assertEqual(self.tracker.answer_calls["ans-bad"]["result"], "tool-refusal")
+        self.assertEqual(self.deliveries, [])
+        self.assertEqual(self.answers, [])
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
+        self.event(6, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                       "toolCallId": "ckpt-good"})
+        self.event(7, "tool.updated", {"kind": "result", "toolCallId": "ckpt-good",
+                                       "result": {"success": True, "truncated": False, "content": content}})
+        self.assertEqual(len(self.deliveries), 1)
+        with self.assertRaises(NativeError) as error:
+            self.event(8, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_answer_inquiry",
+                                           "toolCallId": "ans-forged"})
+            self.event(9, "tool.updated", {"kind": "result", "toolCallId": "ans-forged",
+                                           "result": {"success": True, "truncated": False,
+                                                      "content": self.refusal_text("buddy_checkpoint", "inquiry-channel-absent")}})
+        self.assertEqual(error.exception.code, "invalid-tool-refusal")
+
     def test_forged_truncated_or_duplicate_results_fail_the_turn(self):
         content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
         for case, result in (
@@ -339,7 +700,7 @@ class InquiryEvidenceTests(unittest.TestCase):
                                                                   "content": content}})
         self.assertEqual(len(self.deliveries), total)
         self.assertLessEqual(len(self.tracker.checkpoint_calls), MAX_RETAINED_INQUIRY_CALLS)
-        self.assertTrue(all(call["result"] in (None, "tool-error", "receipt-verified")
+        self.assertTrue(all(call["result"] in (None, "tool-error", "tool-refusal", "receipt-verified")
                             for call in self.tracker.checkpoint_calls.values()),
                         "a verified checkpoint receipt payload must never be retained")
         self.assertFalse(any(isinstance(call["result"], dict) for call in self.tracker.checkpoint_calls.values()))

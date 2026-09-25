@@ -71,7 +71,8 @@ export const TURN_OUTCOME_SCHEMA = {
       { type: 'null' },
       { type: 'object', additionalProperties: false, required: ['summary', 'attempted', 'neededWork', 'expectedArtifacts', 'acceptance'], properties: {
         summary: { type: 'string' }, attempted: { type: 'string' }, neededWork: { type: 'string' },
-        expectedArtifacts: stringArray, acceptance: { type: 'string' }, suggestedProfileId: { type: 'string' },
+        expectedArtifacts: stringArray, acceptance: { type: 'string' },
+        suggestedProfileId: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Optional suggestion; null means no suggested profile.' },
       } },
     ] },
   },
@@ -96,7 +97,7 @@ export function validateTurnOutcome(outcome) {
     fields(request, ['summary', 'attempted', 'neededWork', 'expectedArtifacts', 'acceptance'], ['suggestedProfileId'], 'turn request');
     for (const key of ['summary', 'attempted', 'neededWork', 'acceptance']) text(request[key], `request.${key}`);
     strings(request.expectedArtifacts, 'request.expectedArtifacts');
-    if (Object.hasOwn(request, 'suggestedProfileId')) text(request.suggestedProfileId, 'suggestedProfileId', 256);
+    if (Object.hasOwn(request, 'suggestedProfileId') && request.suggestedProfileId !== null) text(request.suggestedProfileId, 'suggestedProfileId', 256);
   }
   json(outcome, TURN_LIMITS.outcomeBytes, 'turn outcome');
   return outcome;
