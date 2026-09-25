@@ -37,7 +37,7 @@ MAX_ARG_BYTES = 32 * 1024
 MAX_RESOURCES = 32
 MAX_CAPABILITIES = 32
 
-CODING_ADAPTERS = ("dsh", "zcode", "codex")
+CODING_ADAPTERS = ("dsh", "zcode", "codex", "claude")
 CONFIGURATION_FIELDS = ("adapter", "provider", "model", "effort")
 ADAPTERS = (*CODING_ADAPTERS, "command", "external")
 INQUIRY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")

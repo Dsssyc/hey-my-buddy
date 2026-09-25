@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Buddy 让 Host agent 把边界明确的工作交给本地编码 harness，同时保留对整体目标的责任。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）。
+Buddy 让 Host agent 把边界明确的工作交给本地编码 harness，同时保留对整体目标的责任。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude.md)）作为尚待原生验证的 0.11.0 源码候选加入，执行前需要显式配置。
 
 目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好、模型并发设置和评价卡片。
 
@@ -60,9 +60,9 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
 
-当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。Claude Code 适配器仅为候选实现：完成 Anthropic 第一方认证后才可用，执行前必须显式选择设置来源策略，每次接续都重建会话，沙箱是否实际生效仍待验证。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
-当前源码使用 contract 0.10.0、schema 11。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。源码验证与实际安装分别记录于 [0.10.0 验收记录](docs/acceptance/runtime-efficiency-0.10.0.md)；用 `health` 和 `runtime` 核对实际运行的安装。
+当前源码使用 contract 0.11.0、schema 11；该版本的切片是已获授权的 Claude Worker P1 候选，实际安装的日常服务在用户授权升级前仍为 0.10.0。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。源码验证与实际安装分别记录于 [0.10.0 验收记录](docs/acceptance/runtime-efficiency-0.10.0.md)和 [Claude P1 记录](docs/acceptance/claude-worker-p1-0.11.0.md)；用 `health` 和 `runtime` 核对实际运行的安装。
 
 ## 文档与开发
 

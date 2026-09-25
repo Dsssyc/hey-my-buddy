@@ -59,6 +59,7 @@ def run(args) -> dict:
     from buddy import workspace
     from buddy.adapters.base import ExecutionContext
     from buddy.adapters.claude import ClaudeAdapter
+    from buddy.adapters.claude_config import cli_command, native_environment
 
     root = args.root.resolve()
     if root.exists():
@@ -76,6 +77,18 @@ def run(args) -> dict:
     (root/"approval.json").write_text(json.dumps(approval,indent=2)+"\n")
     (root/"approval.json").chmod(0o600)
     with patch.dict(os.environ, env, clear=True):
+        # This probe is explicitly for the user's subscription. Do not silently
+        # spend a separately billed API key after subscription approval.
+        if env.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError("A subscription probe refuses inherited ANTHROPIC_API_KEY")
+        auth_check = subprocess.run([*cli_command(env), "auth", "status", "--json"],
+                                    env=native_environment(env), capture_output=True, text=True, timeout=15)
+        auth = json.loads(auth_check.stdout)
+        if auth_check.returncode or auth.get("loggedIn") is not True or auth.get("subscriptionType") not in ("pro", "max"):
+            report = {"started": False, "reason": "Authenticate the native CLI with the approved Pro/Max subscription first",
+                      "modelMessagesSent": 0, "approval": approval}
+            (root/"report.json").write_text(json.dumps(report,indent=2)+"\n")
+            return report
         adapter = ClaudeAdapter()
         available, reason = adapter.available()
         if not available:
@@ -121,7 +134,24 @@ def run(args) -> dict:
                 adapter.cancel(handle,grace_seconds=8)
             result=adapter.collect(handle,context)
             record=result.result.get("turn") or {}
+            provenance=record.get("provenance") or {}
+            outcome=record.get("outcome") or {}
+            checked = result.shutdown_confirmed
+            if args.mode == "structured":
+                checked = checked and result.status == "ok" and outcome.get("disposition") == "completed" \
+                    and outcome.get("summary") == nonce and provenance.get("structuredOutputValidated") is True
+            elif args.mode == "permission":
+                checked = checked and result.status == "ok" and outcome.get("disposition") == "attention" \
+                    and result.result.get("attentionRequired") is True
+            elif args.mode == "cancel":
+                checked = checked and cancel_sent and result.status == "cancelled" and not record
+            else:
+                # An unchanged sentinel alone cannot prove Bash attempted the
+                # denial or that either network rule was enforced. Host review
+                # of the actual native observations is mandatory for this mode.
+                checked = False
             report={"started":True,"approval":approval,"status":result.status,
+                    "probeChecksPassed":bool(checked),"requiresHostInspection":args.mode=="sandbox",
                     "shutdownConfirmed":result.shutdown_confirmed,"cancelRequested":cancel_sent,
                     "outsideUnchanged":outside.read_text()=="original\n",
                     "disposition":(record.get("outcome") or {}).get("disposition"),
@@ -169,5 +199,5 @@ if __name__=="__main__":
         finally:
             fcntl.flock(lock_fd,fcntl.LOCK_UN)
             os.close(lock_fd)
-        print(json.dumps({k:report.get(k) for k in ("started","status","shutdownConfirmed","cancelRequested","outsideUnchanged","disposition","reason")}))
-        raise SystemExit(0 if report.get("shutdownConfirmed") else 1)
+        print(json.dumps({k:report.get(k) for k in ("started","status","shutdownConfirmed","probeChecksPassed","requiresHostInspection","cancelRequested","outsideUnchanged","disposition","reason")}))
+        raise SystemExit(0 if report.get("probeChecksPassed") else 1)

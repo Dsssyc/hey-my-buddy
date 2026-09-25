@@ -7,12 +7,13 @@ from __future__ import annotations
 
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle
 from .command import CommandAdapter
+from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .decision import DecisionAdapter
 from .dsh import DshAdapter
 from .zcode import ZcodeAdapter
 
-BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter)
+BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
 #: ``external`` is a first-class adapter whose execution is owned by the caller's
 #: own agent, not by a built-in worker. That agent claims the task through the
@@ -95,6 +96,7 @@ __all__ = [
     "Adapter",
     "AdapterOutcome",
     "CommandAdapter",
+    "ClaudeAdapter",
     "CodexAdapter",
     "DecisionAdapter",
     "DshAdapter",

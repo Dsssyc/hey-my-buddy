@@ -26,7 +26,10 @@ CLEAN_ENV = {
 
 @contextmanager
 def clean_buddy_env(**overrides):
-    with patch.dict(os.environ, {**CLEAN_ENV, **overrides}, clear=True):
+    environment = {**CLEAN_ENV,
+                   "BUDDY_CLAUDE_CLI": str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
+                   **overrides}
+    with patch.dict(os.environ, environment, clear=True):
         yield
 
 

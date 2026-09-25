@@ -117,6 +117,7 @@ def private_runtime_root(directory: Path):
         BUDDY_STATE_DIR=str(directory.parent / "state"),
         BUDDY_RUNTIME_ROOT=str(directory),
         BUDDY_DEV_SOURCE="1",
+        BUDDY_CLAUDE_CLI=str(directory / "claude-not-installed"),
     )
     with patch.dict(os.environ, environment, clear=True):
         yield
