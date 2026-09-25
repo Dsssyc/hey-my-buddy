@@ -14,6 +14,10 @@ the exact argv, the child ``DSH_HOME`` and the per-run patch document.
 A second class binds the reported session identity to the adapter's validated
 turn import: an ungrouped governed run has no capture observer, so the turn
 record is the only proven id, and a rejected turn must stay uncaptured.
+
+A third class covers the normalized no-deadline sentinel: ``timeoutSeconds=0``
+must reach the runner as ``--timeout 0``, must not stamp an already-expired
+adapter deadline, and must stay cancellable through the owned process group.
 """
 from __future__ import annotations
 
@@ -25,8 +29,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from buddy.adapters import turn_io
 from buddy.adapters.base import ExecutionContext, ProcessHandle
@@ -281,6 +287,167 @@ class NativeSessionBindingTests(unittest.TestCase):
         self.assertEqual(native["sessionId"], "grouped-session-9")
         self.assertEqual(native["sessionIdSource"], "native-session-observer")
         self.assertEqual(native["storageOwner"], "harness-user-store")
+
+
+#: Stub dsh that outlives a real delay, then finishes normally. If the adapter or
+#: the runner turned ``timeoutSeconds=0`` into an immediate deadline, this child
+#: is signalled long before it prints, so the run can never report ok.
+DELAY_STUB = textwrap.dedent(
+    """\
+    #!/bin/sh
+    sleep "${MOCK_STUB_SLEEP_SECONDS:-3}"
+    printf 'stub dsh completed\\n'
+    exit 0
+    """
+)
+
+#: Stub dsh that leaves a long-lived descendant in its own group. A cancel that
+#: signalled only the direct child would orphan that descendant, so its death is
+#: the observable proof that the whole owned group was stopped.
+HANG_STUB = textwrap.dedent(
+    """\
+    #!/bin/sh
+    artifact_dir="${MOCK_ARTIFACT_DIR:?}"
+    sleep 300 &
+    printf '%s' "$!" > "$artifact_dir/grandchild.txt"
+    wait
+    """
+)
+
+
+def process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+@unittest.skipUnless(shutil.which("node") and RUNNER.is_file(), "Node.js and the dsh runner are required")
+class DshNoDeadlineSentinelTests(unittest.TestCase):
+    """``timeoutSeconds=0`` is a real no-deadline attempt, not an expired one.
+
+    These tests drive the real runner through the production adapter with a stub
+    dsh, so the sentinel is proven end to end: it reaches the runner verbatim, no
+    adapter deadline is stamped, a zero-duration attempt survives a real delay,
+    and it stays cancellable through the owned process group.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="bdd-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.checkout = self.root / "cwd"
+        self.checkout.mkdir()
+        self.artifacts = self.root / "artifacts"
+        self.artifacts.mkdir()
+        self.attempt = self.root / "attempt"
+        self.handles: list[ProcessHandle] = []
+        overrides = mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)})
+        overrides.start()
+        self.addCleanup(overrides.stop)
+
+    def tearDown(self):
+        # A failing assertion must never leave a stub or the runner behind.
+        for handle in self.handles:
+            if handle.process.poll() is None:
+                handle.terminate(grace_seconds=1.0)
+
+    def stub(self, script: str) -> Path:
+        path = self.root / "dsh"
+        path.write_text(script)
+        path.chmod(0o700)
+        return path
+
+    def environment(self) -> dict:
+        env = {key: value for key, value in os.environ.items() if key not in CLEARED_ENV}
+        node_binary = shutil.which("node") or ""
+        env.update({
+            "PATH": os.pathsep.join([str(Path(node_binary).parent), env.get("PATH", "")]),
+            "DSH_HOME": str(self.home),
+            "MOCK_ARTIFACT_DIR": str(self.artifacts),
+            "MOCK_STUB_SLEEP_SECONDS": "3",
+            "BUDDY_PYTHON": sys.executable,
+            "PYTHONPATH": os.pathsep.join([str(ROOT / "src"), str(ROOT / "tests" / "python")]),
+        })
+        return env
+
+    def context(self, *, timeout_seconds: int, stub: Path, workspace: bool = False) -> ExecutionContext:
+        return ExecutionContext(
+            task_id="task", attempt_id="attempt", generation=1,
+            spec={"cwd": str(self.checkout), "task": TASK, "timeoutSeconds": timeout_seconds, "workspace": workspace},
+            directory=self.attempt, runtime={}, environment={**self.environment(), "DSH_BIN": str(stub)}, turn=None,
+        )
+
+    def start(self, context: ExecutionContext) -> tuple[DshAdapter, ProcessHandle]:
+        adapter = DshAdapter()
+        handle = adapter.start(context)
+        self.handles.append(handle)
+        return adapter, handle
+
+    def wait_for_artifact(self, name: str, timeout: float = 10.0) -> str:
+        deadline = time.monotonic() + timeout
+        path = self.artifacts / name
+        while time.monotonic() < deadline:
+            if path.is_file() and path.read_text().strip():
+                return path.read_text().strip()
+            time.sleep(0.05)
+        self.fail(f"the stub dsh never recorded {name}")
+
+    def test_the_runner_receives_the_zero_sentinel_verbatim(self):
+        arguments = DshAdapter().arguments(
+            self.context(timeout_seconds=0, stub=self.stub(DELAY_STUB)),
+            {"socketPath": "/tmp/unused.sock", "token": "0" * 64, "resultsPath": "/tmp/unused.jsonl"},
+        )
+        self.assertEqual(arguments[arguments.index("--timeout") + 1], "0")
+
+    def test_a_zero_timeout_attempt_survives_a_real_delay_and_completes(self):
+        context = self.context(timeout_seconds=0, stub=self.stub(DELAY_STUB))
+        adapter, handle = self.start(context)
+        self.assertIsNone(handle.deadline, "timeoutSeconds=0 must not stamp an already-expired deadline")
+        time.sleep(0.6)
+        self.assertIsNone(handle.process.poll(), "a 0-deadline attempt must still run after a real delay")
+        self.assertEqual(handle.wait(timeout=30), 0)
+
+        outcome = adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.error)
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.result["status"], "ok")
+        self.assertEqual(outcome.result["timeoutSeconds"], 0, "the sentinel is reported verbatim")
+
+    def test_a_positive_timeout_still_stamps_a_future_deadline(self):
+        context = self.context(timeout_seconds=30, stub=self.stub(DELAY_STUB))
+        adapter, handle = self.start(context)
+        stamped = handle.deadline
+        self.assertIsNotNone(stamped)
+        self.assertGreater(stamped, time.monotonic(), "a positive timeout keeps a future deadline")
+        self.assertLessEqual(stamped, time.monotonic() + 31)
+        self.assertEqual(handle.wait(timeout=30), 0)
+
+        outcome = adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.error)
+        self.assertEqual(outcome.result["timeoutSeconds"], 30)
+
+    def test_a_zero_timeout_attempt_stays_cancellable_through_its_owned_group(self):
+        context = self.context(timeout_seconds=0, stub=self.stub(HANG_STUB))
+        adapter, handle = self.start(context)
+        self.assertIsNone(handle.deadline)
+        grandchild = int(self.wait_for_artifact("grandchild.txt"))
+        self.assertTrue(process_alive(grandchild), "the stub descendant must be running before the cancel")
+
+        adapter.cancel(handle)
+
+        self.assertTrue(handle.cancel_requested)
+        self.assertIsNotNone(handle.process.poll(), "cancellation stops the owned runner")
+        self.assertTrue(handle.shutdown_confirmed(), "the whole owned group must be confirmed stopped")
+        self.assertFalse(process_alive(grandchild), "a descendant of the owned group must not outlive the cancel")
+        outcome = adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.error)
+        self.assertTrue(outcome.shutdown_confirmed)
 
 
 if __name__ == "__main__":

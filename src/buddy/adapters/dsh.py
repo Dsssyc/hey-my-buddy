@@ -179,7 +179,13 @@ class DshAdapter(Adapter):
             "inquiryError": inquiry["errorPath"],
         }})
         handle.inquiry = inquiry  # type: ignore[attr-defined]
-        handle.deadline = time.monotonic() + context.timeout_seconds
+        # ``timeoutSeconds=0`` is the normalized no-deadline sentinel: the runner
+        # installs no headless termination timer for it. Stamping ``now + 0``
+        # would publish an already-expired deadline for a run that is still
+        # allowed to finish, so an unbounded attempt reports no deadline rather
+        # than a misleading immediate one. Positive values are unchanged.
+        timeout_seconds = context.timeout_seconds
+        handle.deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:

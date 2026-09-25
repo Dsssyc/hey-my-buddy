@@ -45,6 +45,13 @@ const DEFAULTS = Object.freeze({
 const DEFAULT_TIMEOUT_SECONDS = 1800;
 const MIN_TIMEOUT_SECONDS = 10;
 const MAX_TIMEOUT_SECONDS = 86400;
+/**
+ * Explicit no-deadline sentinel. The normalized Buddy spec uses
+ * ``timeoutSeconds=0`` for a task the Host deliberately left unbounded, so this
+ * runner must accept it and install no termination timer at all. Omission still
+ * defaults to 1800 and the positive 10-86400 range is unchanged.
+ */
+const NO_TIMEOUT_SECONDS = 0;
 /** Task text above this many bytes travels as a file reference instead of argv. */
 const FILE_REFERENCE_BYTES = 32000;
 /** stdout is summarized as at most this many bytes taken from the log head. */
@@ -92,7 +99,8 @@ const USAGE = [
   '                          the settings document, then deepseek-official)',
   '  --effort <name>         reasoning effort (default: DSH_DELEGATE_EFFORT,',
   '                          then max)',
-  '  --timeout <seconds>     headless time limit, 10-86400 (default 1800)',
+  '  --timeout <seconds>     headless time limit: 0 disables the deadline, or',
+  '                          10-86400 (default 1800)',
   '  --log-dir <dir>         parent directory for this run\'s private log dir',
   '  --dsh-bin <path>        dsh launcher (default: DSH_BIN, then PATH lookup,',
   '                          then ~/.local/bin/dsh)',
@@ -423,11 +431,13 @@ if (activityRawFile !== undefined) {
 }
 const activityFile = activityRawFile === undefined ? undefined : resolve(activityRawFile);
 if (!/^\d+$/.test(values.timeout)) {
-  fail(`--timeout must be an integer between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds`);
+  fail(`--timeout must be an integer: 0 disables the deadline, or ${MIN_TIMEOUT_SECONDS}-${MAX_TIMEOUT_SECONDS} seconds`);
 }
 const timeoutSeconds = Number(values.timeout);
-if (timeoutSeconds < MIN_TIMEOUT_SECONDS || timeoutSeconds > MAX_TIMEOUT_SECONDS) {
-  fail(`--timeout must be an integer between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds`);
+// 0 is the explicit no-deadline sentinel and never enters the positive range,
+// which keeps rejecting 1-9, out-of-range and malformed values unchanged.
+if (timeoutSeconds !== NO_TIMEOUT_SECONDS && (timeoutSeconds < MIN_TIMEOUT_SECONDS || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
+  fail(`--timeout must be an integer: 0 disables the deadline, or ${MIN_TIMEOUT_SECONDS}-${MAX_TIMEOUT_SECONDS} seconds`);
 }
 if (!/^\d+$/.test(values['workspace-timeout'])) {
   fail(`--workspace-timeout must be an integer between ${MIN_WORKSPACE_TIMEOUT_SECONDS} and ${MAX_WORKSPACE_TIMEOUT_SECONDS} seconds`);
@@ -1045,4 +1055,10 @@ child.on('close', (code, signal) => {
   }
   void settle(code === 0 ? 'ok' : 'nonzero', code, signal, null);
 });
-timeoutTimer = setTimeout(() => beginTermination('timeout', 'SIGTERM'), timeoutSeconds * 1000);
+// `--timeout 0` installs no timer at all: an unbounded run ends only when its
+// owned child exits, or when the owning service cancels it through the same
+// owned-process-group path every other run uses. Positive deadlines keep their
+// unchanged timer.
+if (timeoutSeconds !== NO_TIMEOUT_SECONDS) {
+  timeoutTimer = setTimeout(() => beginTermination('timeout', 'SIGTERM'), timeoutSeconds * 1000);
+}

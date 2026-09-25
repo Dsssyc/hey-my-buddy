@@ -69,10 +69,11 @@ describe('help and usage errors', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Usage: node scripts\/run\.mjs/);
     assert.match(result.stdout, /--dsh-bin/);
+    assert.match(result.stdout, /0 disables the deadline/, 'the no-deadline sentinel is documented');
     assert.equal(result.stderr, '');
   });
 
-  test('missing required flags and out-of-range timeouts exit 2 on stderr', () => {
+  test('missing required flags and invalid timeouts exit 2 on stderr', () => {
     const s = scenario('usage-errors');
     const cases = [
       [[], /--cwd is required/],
@@ -80,6 +81,7 @@ describe('help and usage errors', () => {
       [['--cwd', s.cwd, '--task-file', s.taskFile, '--timeout', '9'], /--timeout must be an integer/],
       [['--cwd', s.cwd, '--task-file', s.taskFile, '--timeout', '86401'], /--timeout must be an integer/],
       [['--cwd', s.cwd, '--task-file', s.taskFile, '--timeout', '1.5'], /--timeout must be an integer/],
+      [['--cwd', s.cwd, '--task-file', s.taskFile, '--timeout', ''], /--timeout must be an integer/],
       [['--cwd', join(s.dir, 'missing'), '--task-file', s.taskFile], /--cwd is not a directory/],
       [['--cwd', s.cwd, '--task-file', join(s.dir, 'missing.md')], /--task-file is not a file/],
     ];
@@ -537,6 +539,67 @@ describe('outcomes and process lifecycle', () => {
     const pids = readArtifactJson(s.artifacts, 'pids.json');
     await waitForProcessExit(pids.self, 5000);
     assert.equal(existsSync(readArtifact(s.artifacts, 'settings-copy-dir.txt')), false);
+  });
+
+  test('--timeout 0 installs no deadline and a slow run still completes', { timeout: 30000 }, () => {
+    const s = scenario('no-deadline');
+    const delayMs = 1500;
+    const result = runCli([...s.args, '--timeout', '0'], {
+      env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, MOCK_MODE: 'sleep', MOCK_SLEEP_MS: String(delayMs) }),
+      timeoutMs: 30000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assertSingleJsonLine(result.stdout);
+    const payload = parsePayload(result);
+    assert.equal(payload.status, 'ok', 'an unbounded run ends by its own child exiting');
+    assert.equal(payload.exitCode, 0);
+    assert.equal(payload.timeoutSeconds, 0, 'the no-deadline sentinel is reported verbatim');
+    assert.equal(payload.error, null);
+    assert.ok(
+      payload.elapsedSeconds >= delayMs / 1000 - 0.1,
+      `a 0-deadline run must survive the real delay, elapsed ${payload.elapsedSeconds}s`,
+    );
+    assert.equal(existsSync(readArtifact(s.artifacts, 'settings-copy-dir.txt')), false);
+  });
+
+  test('--timeout 0 keeps supervision and still cancels through the owned process group', { timeout: 30000 }, async () => {
+    const s = scenario('no-deadline-cancel');
+    const { child, done } = startCli([...s.args, '--timeout', '0'], {
+      env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, MOCK_MODE: 'exit0-on-term' }),
+    });
+    await waitFor(() => existsSync(join(s.artifacts, 'pids.json')), 'mock dsh to record its pids');
+    // Nothing may stop an unbounded run by itself: after a real delay the runner
+    // is still alive and still supervises its child.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.equal(child.exitCode, null, 'a 0-deadline run must not terminate itself');
+    const pids = readArtifactJson(s.artifacts, 'pids.json');
+    assert.equal(isAlive(pids.self), true);
+
+    child.kill('SIGTERM');
+    const result = await done;
+
+    assert.equal(result.code, 1);
+    assertSingleJsonLine(result.stdout);
+    const payload = parsePayload(result);
+    assert.equal(payload.status, 'cancelled');
+    assert.equal(payload.timeoutSeconds, 0);
+    assert.match(payload.error, /cancelled by SIGTERM/);
+    assert.ok(pids.grandchild !== null);
+    await waitForProcessExit(pids.self, 5000);
+    await waitForProcessExit(pids.grandchild, 5000);
+    assert.equal(existsSync(readArtifact(s.artifacts, 'settings-copy-dir.txt')), false);
+  });
+
+  test('positive deadlines keep the unchanged 10-86400 range', () => {
+    const s = scenario('positive-deadlines');
+    for (const value of ['10', '86400']) {
+      const artifacts = makeDir(s.dir, `artifacts-${value}`);
+      const result = runCli([...s.args, '--timeout', value], { env: testEnv({ MOCK_ARTIFACT_DIR: artifacts }) });
+      assert.equal(result.status, 0, result.stderr);
+      const payload = parsePayload(result);
+      assert.equal(payload.status, 'ok');
+      assert.equal(payload.timeoutSeconds, Number(value));
+    }
   });
 
   test('cancellation is reported even when the child exits 0 afterwards', { timeout: 30000 }, async () => {

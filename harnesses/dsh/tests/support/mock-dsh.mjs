@@ -11,6 +11,7 @@
  * Behavior is driven by MOCK_* environment variables and MOCK_MODE:
  *   ok             print MOCK_STDOUT (default "mock dsh completed") and exit 0
  *   big            print MOCK_BYTES bytes (default 200000) and exit 0
+ *   sleep          outlive an immediate deadline, then print and exit 0
  *   nonzero        print MOCK_STDERR and exit MOCK_EXIT_CODE (default 3)
  *   hang           stay alive until signalled (default SIGTERM handling)
  *   ignore         ignore SIGTERM/SIGINT, with a grandchild that also ignores them
@@ -149,6 +150,12 @@
   if (mode === 'nonzero') {
     process.stderr.write(process.env.MOCK_STDERR || 'mock dsh failed\n');
     process.exit(Number(process.env.MOCK_EXIT_CODE || 3));
+  }
+  if (mode === 'sleep') {
+    // A real delay a wrong immediate deadline could not survive.
+    await new Promise((resolve) => setTimeout(resolve, Number(process.env.MOCK_SLEEP_MS || 1500)));
+    process.stdout.write(process.env.MOCK_STDOUT || 'mock dsh completed\n');
+    process.exit(0);
   }
   if (mode === 'hang' || mode === 'ignore' || mode === 'exit0-on-term' || mode === 'orphan') {
     // Install handlers before recording pids so a test that reacts to the
