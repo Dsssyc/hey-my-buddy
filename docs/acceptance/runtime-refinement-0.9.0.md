@@ -1,8 +1,8 @@
-# Runtime refinement: 0.9.0 candidate
+# Runtime refinement: 0.9.0
 
 ## Status
 
-Source and staged-package verification completed on 2026-09-25 from source 689e901. The daily installation remains contract 0.8.1/schema 10; no production schema cutover is claimed. The daily board was busy during verification and reported activeWork 0 at 08:22 UTC. Installation of the schema-11 package is awaiting the user's cutover choice.
+Source and staged-package verification completed on 2026-09-25; the final full-check source is 3b0bc91. Following the user's explicit installation request, the daily blackboard switched to contract 0.9.0/schema 11 at 09:05:50 UTC (17:05:50 Asia/Shanghai). The retained-data copy, installed plugin, stable runtime and authenticated console passed the post-installation checks below.
 
 ## Verified corrections
 
@@ -45,7 +45,21 @@ The separate staged plugin passed both plugin and skill validators. A fresh priv
 
 The final checkpoint goal was accepted under integration int-42bbfc1a-4d67-4ca7-b52c-676dcb79cdea after full-delta verification and its original physical checkout was removed through the governed cleanup API, despite its three continuations. Its failed third-attempt receipt, all successful artifacts, fixed refs, patches and native probe evidence remain retained. All six Buddy goals used for this repair are accepted and their managed checkouts reclaimed; the two additional isolated implementation/test checkouts were also removed after integration and verification. The CodeBuddy branch and the original user's dirty checkout were not changed.
 
-This record establishes readiness of the 0.9.0 source and package. Installing it on the daily blackboard still requires a verified retained-data schema-11 copy and an idle coordinated client/daemon/worker cutover. It does not authorize cancelling another project's work or silently changing shared user preferences.
+The source and package checks established readiness before installation. The subsequent daily cutover below used a separately verified retained-data copy after actual execution had stopped; no other project's work was cancelled and no shared user preference was changed.
+
+## Daily installation
+
+The first live check found one active ZCode task, ee13444b-142a-4c7f-80db-c58e078f4df3. Preparation proceeded without stopping it. After its attempt finished with confirmed shutdown, its governed goal remained at awaiting-host; that passive decision boundary was retained unchanged. An initial installation guard counted its durable queued row as runnable and refused before detaching anything. The final guard explicitly distinguishes a queued awaiting-host goal from executable queued work, still requires zero unresolved attempts, and rechecks the database after acquiring the daemon ownership locks.
+
+The cutover held control-start.lock, detached the matching 0.8.1 daemon through restart, acquired both daemon ownership locks, cooperatively stopped the seven idle supervisors and acquired their lifetime locks. The complete original state and plugin source were retained in /Users/soku/.local/share/hey-my-buddy/archive-before-0.9.0-20260925-170455, alongside independent schema-10 and schema-11 database copies and the migration verification report. This archive includes private data and is not a distributable artifact. The old content-addressed runtime 76c43f9da2e2eea4b538acaca49a2f4a remains available for a coordinated rollback; restoring an old database over newly admitted work is not authorized.
+
+The offline schema copy added the three nullable attempt model-identity columns and the canonical model_concurrency table/index, then verified all 44 original tables by original columns, row IDs, row counts and content digests; the only changed old value is the schema marker from 10 to 11. SQLite sequence values, column definitions, keys, indexes, integrity and foreign-key checks were also verified against the current schema. Historical attempt model identities remain unknown rather than being inferred from mutable configuration, and activation required every old attempt to have confirmed shutdown. The new concurrency table is empty, so model families use the code-defined default of 2 without fabricating user policy rows. There is no runtime migration or compatibility parser.
+
+The personal marketplace plugin was installed through the Codex CLI with matching manifest versions 0.9.0+codex.20260925090310. Its resolved skill is /Users/soku/.codex/plugins/cache/personal/hey-my-buddy/0.9.0+codex.20260925090310/skills/buddy/SKILL.md and its launcher is bin/buddy under that same plugin root. The running service is ae292a3d-bbef-47ef-8abb-5f8785d33232 with stable runtime cc23655e2be17db1917fa4335b158ee3, contract 0.9.0 and schema 11; health reports integrity ok, zero foreign-key violations, no persistence error and no unstarted or stopped managed workers. The previous total ceiling of 7 was retained as the new shared routing/execution ceiling; all 17 retained model families report the default limit of 2.
+
+Post-installation readback retained 89 task records, 62 governed goals, 82 turns and 183 workflow artifacts. Evaluation revision 13, all 72 profile configurations, two preferences and five user annotations matched the archive; existing cards and evidence were empty and remain empty. Authentication-backed HTTP snapshot and CLI snapshot agreed, both served asset hashes matched the staged verification, runtime reported no source leaks, and the installed version was confirmed by codex plugin list. The C-Two Windows automation's version-specific skill reference was updated through the app tool; its PAUSED state and 30-minute schedule were preserved. Installation and post-installation verification made no model calls and used no Computer Use.
+
+One-off installation and verification scripts, installation-0.9.0.json and post-installation-verification.json are retained under .dsh-skill-build/runtime-refinement-0.9.0-20260925/. New Codex tasks load the installed skill version; existing tasks must resolve that current skill and matching launcher before continuing Buddy operations.
 
 ## Retained handoff
 
