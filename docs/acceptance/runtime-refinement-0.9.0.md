@@ -2,7 +2,7 @@
 
 ## Status
 
-Source and staged-package verification completed on 2026-09-25 from source 689e901. The daily installation remains contract 0.8.1/schema 10; no production schema cutover is claimed. The last daily health check still reported one in-flight attempt belonging to other work.
+Source and staged-package verification completed on 2026-09-25 from source 689e901. The daily installation remains contract 0.8.1/schema 10; no production schema cutover is claimed. The daily board was busy during verification and reported activeWork 0 at 08:22 UTC. Installation of the schema-11 package is awaiting the user's cutover choice.
 
 ## Verified corrections
 
