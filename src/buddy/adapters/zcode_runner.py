@@ -602,11 +602,12 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
 
             def observe(message: dict, ordinal: int) -> None:
                 evidence.observe(message, ordinal)
-                changed = projection.note(message, ordinal)
+                projection.note(message, ordinal)
                 if inquiry_bridge is not None:
                     inquiry_bridge.note_event(message, projection.phase)
-                if changed:
-                    publish_activity()
+                # Native events in a long phase still advance the observation.
+                # The sidecar coalesces token-level updates within its own window.
+                publish_activity()
 
             connection.observe = observe
             connection.attention = (lambda record: inquiry_bridge.note_attention(record)) if inquiry_bridge else (lambda _record: None)

@@ -221,6 +221,31 @@ class FinishToolTests(unittest.TestCase):
 
 
 class ActivitySidecarTests(ZcodeFixtureCase):
+    def test_running_same_phase_native_events_refresh_the_published_observation(self):
+        context = self.context("live-activity", timeout=30)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        path = activity_module.sidecar_path(context.directory)
+        first = latest = None
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            current = activity_module.read_sidecar(path, task_id="goal-1", attempt_id="attempt-1", generation=1)
+            if current and current["phase"] == "streaming-model":
+                if first is None:
+                    first = current
+                elif current["eventSeq"] > first["eventSeq"]:
+                    latest = current
+                    break
+            time.sleep(0.05)
+        (context.directory / "native-logs" / "release-turn").touch()
+        self.assertIsNotNone(handle.wait(10), "controller did not settle")
+        self.assertEqual(self.adapter.collect(handle, context).status, "ok")
+        self.assertIsNotNone(first, "no initial streaming observation")
+        self.assertIsNotNone(latest, "native events in the same phase left the published observation frozen")
+        self.assertGreater(latest["lastNativeActivityAt"], first["lastNativeActivityAt"])
+        self.assertEqual(latest["counts"], first["counts"])
+        self.assertNotIn("fixture-private-progress", json.dumps(latest))
+
     def test_the_runner_publishes_a_real_bound_metadata_only_sidecar(self):
         context = self.context(timeout=20)
         _, outcome = self.execute(context)

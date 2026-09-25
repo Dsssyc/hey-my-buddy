@@ -201,12 +201,16 @@ def handle_message(message):
         if case == "hang":
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})
-        if case == "live":
+        if case in ("live", "live-activity"):
             # Stay live until the test releases the turn, bounded so a broken test
             # can never hang the suite. No question may end or restart this turn.
             release = log_dir / "release-turn"
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline and not release.exists():
+                if case == "live-activity":
+                    send({"method": "v4/telemetry/event", "params": {
+                        "kind": "model-delta", "text": "fixture-private-progress",
+                    }})
                 time.sleep(0.05)
             complete_turn()
             return
