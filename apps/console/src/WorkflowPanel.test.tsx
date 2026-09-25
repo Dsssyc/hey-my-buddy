@@ -318,7 +318,7 @@ describe("governed workflow console", () => {
     const accept = screen.getByRole("button", { name: "接受最终交付" });
     expect(accept).toHaveProperty("disabled", true);
     // The Host is pointed at the real recorded operation; nothing is auto-created.
-    expect(screen.getByText(/workflow_integration_record/)).toBeTruthy();
+    expect(screen.getByText(/integration-record/)).toBeTruthy();
     expect(f.mutation).not.toHaveBeenCalled();
     // Rejection stays a reviewed outcome that needs no integration record.
     await user.click(screen.getByRole("button", { name: "记录验收问题" }));
