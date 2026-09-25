@@ -17,7 +17,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 
 `localCapabilities` lists capabilities advertised by the local built-in workers; `external` is deliberately absent. Coding profiles carry `execution:<adapter>`, so clients do not maintain their own harness allowlist. DSH declares correlated `inquiry`; ZCode declares read-only `observe`. Codex exposes bounded activity in task records but does not mount an inquiry socket or declare tool-free decision execution. Capability declarations and native behavior are checked separately in the [source acceptance record](../acceptance/production-repairs-0.8.0.md).
 
-For a task with explicit `timeoutSeconds: 0`, the Worker and DSH/ZCode/Codex runners omit the overall execution deadline. This does not change the finite selection request, native handshake, per-request, cancellation or shutdown waits. The Worker retains its child handle, renews the attempt lease and records a real receipt when the process actually ends; the Host may cancel it at any time. A `buddy await` wait window ending does not affect the running task.
+For a task with explicit `timeoutSeconds: 0`, the Worker and DSH/ZCode/Codex runners omit the overall execution deadline. Model selection, the optional native version probe, DSH workspace bridge requests, short socket poll steps, cancellation and shutdown keep their separate bounds; a ZCode/Codex native operation using the overall deadline can now wait until a response or an explicit cancellation. The Worker retains its child handle, renews the attempt lease and records a real receipt when the process actually ends; the Host may cancel it at any time. A `buddy await` wait window ending does not affect the running task.
 
 ### DSH
 

@@ -210,8 +210,13 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
         prefs = [{"match": {"adapter": "zcode"}, "reason": "Try ZCode when available"}]
         view = self.routed(board, request_id="route-override", preferences=prefs)
         self.assertEqual(view["routing"]["status"], "needs-host")
-        with self.assertRaises(BoardError):
-            self.continue_run(board, view, configuration=CONFIGURATION)
+        # The shared fixture helper supplies a default reason for explicit
+        # configurations; exercise the public request without that field.
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_continue", {"runId": view["runId"], "commandId": "override-no-reason",
+                "expectedRevision": view["revision"], "input": "keep going", "helperPolicy": "keep",
+                "configuration": CONFIGURATION, **self.control(view)})
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         updated = self.continue_run(board, view, configuration=CONFIGURATION, reason="Host selected the installed configuration")
         self.assertEqual(updated["routing"]["source"], "host-override")
         self.assertEqual(updated["routing"]["routingPreferences"], prefs)
