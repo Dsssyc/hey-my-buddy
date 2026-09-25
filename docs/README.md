@@ -67,7 +67,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## History and evidence
 
-Current delivery evidence: [0.8 production repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.8 record owns the current verification and deferred-installation status; the 0.7 record retains the earlier installation evidence.
+Current delivery evidence: [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The installation record identifies the running version, retained state and unresolved old-artifact integration boundary; the source record preserves candidate verification, and the 0.7 record retains earlier installation evidence.
 
 | Document | Role |
 | --- | --- |
