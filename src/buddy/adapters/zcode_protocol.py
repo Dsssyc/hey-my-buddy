@@ -43,19 +43,15 @@ def sign_receipt(payload: dict, key: str) -> str:
 
 
 #: Why this adapter cannot ask correlated questions, stated once and reported
-#: verbatim. The installed ZCode bundle has no wire-level in-turn input method:
-#: the v4 method table exposes only ``v4/command``, and the ``sendText`` command is
-#: the sole steer-capable input. Its ``requestedDelivery:"guide"`` is decided by
-#: the gateway's ``admitPrompt``: on an unsteerable or already-settled turn the
-#: command is queued as a deferred pending input, and with no live turn at all it
-#: starts (or with ``startNow`` preempts) a NEW turn. The bundle's internal
-#: ``steerTurn`` is the only path that accepts ``expectedTurnId``, and it is not
-#: reachable from any client request. A runtime check of the ack cannot make the
-#: race safe, so no question is ever injected.
+#: verbatim. This adapter uses app-server: its strict ``session/send`` schema
+#: has no delivery/expectedTurnId fields and rejects a send during an active
+#: prompt. The separate v4 sendText gateway can defer unbound guide input or
+#: start a new turn. Neither exposes the internal expected-turn-fenced steerTurn.
+#: An acknowledgement check after sending cannot make that race safe.
 NATIVE_INQUIRY_UNSUPPORTED = (
-    "the installed ZCode v4 protocol has no turn-bound in-turn input method: sendText "
-    "requestedDelivery=guide is unbound, can be deferred to a later new turn, and starts or "
-    "preempts a turn when none is live; the internal steerTurn expectedTurnId is not exposed "
+    "the installed ZCode app-server session/send has no turn-bound in-turn input and "
+    "rejects input while a prompt is active; the separate v4 sendText guide can defer "
+    "input or open a new turn, and the internal steerTurn expectedTurnId is not exposed "
     "to clients, so this adapter observes only and never injects a question"
 )
 
