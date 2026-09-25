@@ -101,6 +101,11 @@ class SupervisorHandle:
         return True
 
     def start(self, state_dir: Path, log_path: Path, *, retirement: bool = False) -> bool:
+        if not retirement:
+            # An explicit start/new daemon supersedes the previous stop even if
+            # that owner still holds its lock. It may finish exiting afterward;
+            # reconcile must then be able to refill the slot without a duplicate.
+            self.stop_request.unlink(missing_ok=True)
         if self.running():
             # The slot is already served. If this pool had asked it to retire under a
             # lower limit, that intent is withdrawn here instead of losing the worker.
@@ -114,7 +119,6 @@ class SupervisorHandle:
             if not self.retire_request.exists():
                 self.request_retire()
         else:
-            self.stop_request.unlink(missing_ok=True)
             self.retire_request.unlink(missing_ok=True)
         target = runtime.launch_target()
         environment = {

@@ -8,7 +8,11 @@ until their evidence is settled.
 from __future__ import annotations
 
 import json
+import fcntl
+import os
+import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from support import BoardTestCase
@@ -17,6 +21,30 @@ from buddy.daemon import WorkerPool
 
 
 class WorkerPoolSizingTests(BoardTestCase):
+    def test_new_start_reclaims_a_slot_whose_old_stopped_owner_exits_late(self):
+        board = self.board()
+        pool = WorkerPool(self.directory, prefix="local", total_limit=1)
+        handle = pool.handle("local")
+        handle.prepare()
+        fd = os.open(handle.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        process = mock.Mock()
+        process.poll.return_value = None
+        try:
+            handle.request_stop()  # the previous daemon's owner has not exited yet
+            with mock.patch("buddy.daemon.subprocess.Popen", return_value=process) as spawn, mock.patch(
+                "buddy.daemon.runtime.launch_target", return_value={"python": sys.executable, "pythonPath": None}
+            ):
+                pool.start()
+                spawn.assert_not_called()  # never duplicate a live owner
+                self.assertFalse(handle.stop_request.exists(), "new startup must withdraw its predecessor's stop")
+                fcntl.flock(fd, fcntl.LOCK_UN)  # the old owner now finishes exiting
+                report = pool.reconcile(board.store)
+                self.assertEqual(spawn.call_count, 1)
+                self.assertEqual(report["stoppedWorkerIds"], [])
+        finally:
+            os.close(fd)
+
     def test_the_pool_has_one_supervisor_slot_per_machine_wide_slot(self):
         pool = WorkerPool(self.directory, prefix="local", total_limit=3)
         self.assertEqual(pool.worker_ids, ["local", "local-2", "local-3"])
