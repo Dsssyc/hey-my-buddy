@@ -77,13 +77,15 @@ const TEXT_ANSWER = '{"profileId":"p1","reason":"grounded","evidenceIds":["e1"]}
 
 describe('prompt assembly', () => {
   test('the instruction prefix is versioned, selection-only and request-free', () => {
-    assert.equal(PROMPT_VERSION, 5);
+    assert.equal(PROMPT_VERSION, 6);
     const select = instructionsFor('select');
     assert.equal(instructionsFor('select'), select, 'the prefix must be stable');
     assert.doesNotMatch(select, /req-1/);
     assert.doesNotMatch(select, /tableRevision/);
     assert.match(select, /Return exactly one JSON object/);
     assert.match(select, /missing card or annotation means unknown capability evidence/);
+    assert.match(select, /adapter names the harness that will run the Buddy, not the codebase or files it may edit/);
+    assert.match(select, /honor that preference unless concrete supplied capability or evidence favors another candidate/);
     assert.throws(() => instructionsFor('maintain'), /unknown decision operation/);
     assert.throws(() => instructionsFor('delete'), /unknown decision operation/);
   });

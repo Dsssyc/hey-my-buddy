@@ -15,7 +15,7 @@
  */
 
 /** Bumped whenever the instruction prefix or payload shape changes meaning. */
-export const PROMPT_VERSION = 5;
+export const PROMPT_VERSION = 6;
 
 /** Hard cap on the rendered payload JSON, in UTF-8 bytes. */
 export const MAX_PAYLOAD_BYTES = 262_144;
@@ -45,7 +45,9 @@ Rules:
 6. Apply "routingPreferences" only to this request. Each is a soft preference over its "match" fields; consider entries in order. If no legal candidate matches, choose another legal candidate when justified and explain the fallback. They never override hard candidate filters or published pins/excludes.
 7. Model prose never means the task succeeded or was accepted.
 8. A missing card or annotation means unknown capability evidence, not inability. Use declared profile capabilities for compatibility; never infer that DSH or another harness lacks ordinary coding tools because cards are absent.
-9. Abort with {"profileId": null, "reason": "...", "evidenceIds": []} when no candidate is clearly better supported than the others or the request is ambiguous. Abstention is a correct answer, not a failure.`;
+9. A profile's adapter names the harness that will run the Buddy, not the codebase or files it may edit. A task about DSH, ZCode, Codex or another harness does not require that harness unless the legal candidates were already filtered by an explicit hard constraint. Do not invent such a restriction in the reason.
+10. When a legal preferred profile fits the task's recorded conditions, honor that preference unless concrete supplied capability or evidence favors another candidate. Explain any deviation using the supplied facts.
+11. Abort with {"profileId": null, "reason": "...", "evidenceIds": []} when no candidate is clearly better supported than the others or the request is ambiguous. Abstention is a correct answer, not a failure.`;
 
 /** The frozen selection instruction prefix. */
 export function instructionsFor(operation) {
