@@ -30,6 +30,9 @@ class ModelFamilyTests(unittest.TestCase):
         for spec in (
             {"adapter": "command", "cwd": "/tmp", "argv": ["/bin/true"]},
             {"adapter": "external", "cwd": "/tmp"},
+            {"adapter": "command", "provider": "p", "model": "incidental-metadata"},
+            {"adapter": "external", "provider": "p", "model": "incidental-metadata"},
+            {"adapter": "decision", "provider": "p", "model": "not-the-frozen-selector"},
             {"adapter": "dsh", "provider": "deepseek-official"},  # no model
             {"adapter": "dsh", "model": "deepseek-flash"},  # no provider
             {"adapter": "unresolved", "cwd": "/tmp"},

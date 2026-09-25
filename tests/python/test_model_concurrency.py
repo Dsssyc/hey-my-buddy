@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from test_store import StoreConcurrencyTestCase
@@ -109,6 +110,26 @@ class PublicationInterfaceTests(ModelConcurrencyTestCase):
             {FAMILY_A, FAMILY_B},
         )
 
+    def test_profile_page_and_limit_are_from_the_same_published_revision(self):
+        from buddy import catalog_store
+        original = catalog_store.profiles
+        old_revision = self.board_.call("console_snapshot", {})["tableRevision"]
+
+        def concurrent_save(evaluation, params):
+            page = original(evaluation, params)
+            self.publish_limits(self.board_, {
+                "adapter": FAMILY_A[0], "provider": FAMILY_A[1], "model": FAMILY_A[2], "limit": 5,
+            }, command="save-between-page-and-response")
+            return page
+
+        with mock.patch.object(catalog_store, "profiles", side_effect=concurrent_save):
+            page = self.board_.call("model_profiles", {"limit": 200})
+        self.assertEqual(page["tableRevision"], old_revision)
+        self.assertEqual(self.family_row(page, FAMILY_A)["limit"], 2)
+        fresh = self.board_.call("console_snapshot", {})
+        self.assertEqual(self.family_row(fresh, FAMILY_A)["limit"], 5)
+        self.assertGreater(fresh["tableRevision"], old_revision)
+
     def test_active_counts_unresolved_attempts_of_the_family(self):
         board = self.board_
         self.register(board, "w-obs1")
@@ -196,6 +217,20 @@ class PolicyPatchTests(ModelConcurrencyTestCase):
             )
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
+    def test_unknown_family_is_rejected_but_retained_unavailable_family_is_editable(self):
+        with self.assertRaises(BoardError) as caught:
+            self.publish_limits(self.board_, {
+                "adapter": "zcode", "provider": "misspelled-provider", "model": "unknown", "limit": 3,
+            })
+        self.assertEqual(caught.exception.code, "NOT_FOUND")
+        with self.board_.store.db.write() as connection:
+            connection.execute("UPDATE evaluation_profiles SET available=0 WHERE model=?", (FAMILY_B[2],))
+        self.publish_limits(self.board_, {
+            "adapter": FAMILY_B[0], "provider": FAMILY_B[1], "model": FAMILY_B[2], "limit": 3,
+        })
+        page = self.board_.call("model_profiles", {"includeUnavailable": True})
+        self.assertEqual(self.family_row(page, FAMILY_B)["limit"], 3)
+
     def test_maintenance_publications_cannot_touch_model_concurrency(self):
         board = self.board_
         revision = board.call("console_snapshot", {})["tableRevision"]
@@ -263,6 +298,7 @@ class SaveAppliesAtClaimTests(ModelConcurrencyTestCase):
     def setUp(self):
         super().setUp()
         self.board_ = self.board(max_concurrent=8)
+        self.board_.call("model_catalog_refresh", {"requestId": "catalog-for-live-limits"})
         # Two live family-A attempts hold the default limit exactly.
         for index in range(2):
             self.register(self.board_, f"w-live{index}")

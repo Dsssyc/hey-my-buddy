@@ -120,7 +120,9 @@ def profiles(evaluation, params):
         cards = [evaluation._card_view(row) for row in db.execute(f'SELECT * FROM evaluation_cards WHERE profile_id IN ({marks})', ids)]
         annotations = [{'profileId': r['profile_id'], 'text': r['text'], 'revision': r['revision'], 'updatedAt': r['updated_at']} for r in db.execute(f'SELECT * FROM evaluation_annotations WHERE profile_id IN ({marks})', ids)]
         preferences = [{'profileId': r['profile_id'], 'mode': r['mode'], 'reason': r['reason']} for r in db.execute(f'SELECT * FROM evaluation_preferences WHERE profile_id IN ({marks})', ids)]
+        families = {(value['adapter'], value['provider'], value['model']) for value in values}
         return {'profiles': values, 'cards': cards, 'annotations': annotations, 'preferences': preferences,
+                'modelConcurrency': evaluation.board.model_capacity_rows(db, families),
                 'sampleCounts': {profile_id: evaluation._sample_count(db, profile_id) for profile_id in ids},
                 'tableRevision': int(evaluation._state(db)['table_revision']),
                 'nextCursor': rows[limit - 1]['profile_id'] if len(rows) > limit else None}

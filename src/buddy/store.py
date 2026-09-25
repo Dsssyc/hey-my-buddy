@@ -625,11 +625,16 @@ class BoardStore:
             f" {self._QUEUED_FAMILY_PROVIDER} AS provider, {self._QUEUED_FAMILY_MODEL} AS model"
             " FROM tasks t LEFT JOIN workflow_runs r ON r.run_id = t.task_id WHERE t.state='queued'"
         ).fetchall()
-        return {
+        families = {
             (row["adapter"], row["provider"], row["model"])
             for row in rows
-            if row["provider"] and row["model"] and row["adapter"]
+            if row["provider"] and row["model"] and row["adapter"] in schemas.CODING_ADAPTERS
         }
+        if any(row["adapter"] == scheduling.DECISION_ADAPTER for row in rows):
+            selector = self.decisions.selector_family(connection)
+            if selector is not None:
+                families.add(selector)
+        return families
 
     def _full_families(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
         """Families whose unresolved attempts already hold their effective limit."""

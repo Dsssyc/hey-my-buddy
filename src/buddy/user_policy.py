@@ -115,6 +115,11 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
             connection.execute('INSERT INTO evaluation_annotations(profile_id,text,revision,updated_at) VALUES(?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET text=excluded.text,revision=excluded.revision,updated_at=excluded.updated_at', (entry['profileId'], text, revision, now))
     configuration_revision = int(evaluation._state(connection)['configuration_revision'])
     for entry in model_limits:
+        if connection.execute(
+            'SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? LIMIT 1',
+            (entry['adapter'], entry['provider'], entry['model']),
+        ).fetchone() is None:
+            raise BoardError('NOT_FOUND', 'Unknown model family')
         # A family setting is independent of profile availability: it survives
         # discovery marking a model unavailable and applies again when the family
         # returns. Only the named families are touched; unrelated settings and
