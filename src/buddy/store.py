@@ -1439,7 +1439,11 @@ class BoardStore:
         The worker persists ``claimRequestId`` and its ``nonce`` before calling
         this, so a committed claim whose reply is lost is recoverable: the stored
         command receipt replays the identical attempt, generation and capability
-        instead of minting a second generation.
+        instead of minting a second generation. A claim that admits no work is a
+        transient observation, not an allocation receipt: nothing is written to
+        commands, so the same ``claimRequestId`` can return and observe work
+        queued later, while a committed claim still rejects a different worker,
+        nonce or payload under its id.
         """
         schemas.reject_unknown(
             params,
@@ -1624,16 +1628,12 @@ class BoardStore:
                         blocker = scheduling.REASON_MODEL_CAPACITY
                     else:
                         blocker = "no-queued-work"
-                head = self._head_of(connection)
                 response = {"claim": None, "reason": blocker, "retryAfterMs": 1000 if blocker != "no-queued-work" else 2000}
-                self._store_receipt(
-                    connection,
-                    claim_request_id,
-                    "worker.claim",
-                    request,
-                    response,
-                    subject=self._subject(worker_id, nonce, explicit_task),
-                )
+                head = self._head_of(connection)
+                # An empty claim is a transient observation, never an allocation
+                # receipt: no commands row exists to replay, so a retried
+                # claimRequestId scans the board again and can observe newly
+                # queued work. Only a committed (nonempty) claim stores one.
                 self._notify(head)
                 return response
             spec = self.workflow.effective_spec(connection, chosen)
