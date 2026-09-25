@@ -5,9 +5,17 @@ frames with reannounce, runtime preferences, session lifecycle) so the probe's
 accept path, its strict reply schema, wrong-identity refusals and the honest
 no-question limit are all exercised with no model network, no real bundle and no
 shared board. Live-bundle evidence lives in the acceptance record, not here.
+
+The fake's controller reads all go through one owned ``BoundedLineReader`` shared
+by the outer frame loop and every nested response wait: the probe's pump answers
+back-to-back reannounced frames in a burst, so both replies can reach a single
+read, and a reader that splits reads between ``select()`` and buffered
+``sys.stdin`` loses every line an earlier fill already buffered.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -20,23 +28,78 @@ PROBE_PATH = Path(__file__).resolve().parent.parent / "probes" / "zcode_request_
 QUESTION_TEXT = "Which release codename should the probe echo?"
 
 FAKE_SERVER = r'''#!/usr/bin/env python3
-"""Scripted fake ZCode app-server: one deterministic probe turn, no model."""
+"""Scripted fake ZCode app-server: one deterministic probe turn, no model.
+
+All controller reads go through one owned BoundedLineReader so the outer frame
+loop and every nested response wait see the same buffered bytes: a burst of
+back-to-back replies that reaches a single read is never partially lost.
+"""
 import json, os, select, sys, time
 
-case = os.environ.get("PROBE_FAKE_CASE", "ok")
-report_path = os.environ["PROBE_FAKE_REPORT"]
-if "--version" in sys.argv:
-    print("fixture-0.16.9")
-    raise SystemExit(0)
+case = "ok"
+report_path, nonce, reader = None, None, None
 
 session_id, turn_id = "sess-probe-fixture", "turn-probe-fixture"
 input_id, tool_call_id, request_id = None, "call-fixture-1", "perm-fixture-1"
 workspace_cwd = "."
 question_text = "Which release codename should the probe echo?"
-nonce = os.environ["PROBE_FAKE_NONCE"]
 selection = {"providerId": "fixture-api", "modelId": "fixture-model", "options": {"reasoningLevel": "low"}}
 state = {"preferences": None, "frames": [], "replies": [], "methods": [], "turns": 0, "closed": False,
-         "nativePins": {k: v for k, v in os.environ.items() if k.startswith(("BUDDY_", "ZCODE_"))}}
+         "nativePins": {}}
+
+
+class BoundedLineReader:
+    """Single owner of stdin reads for this fixture.
+
+    ``select()`` sees only the operating-system pipe, while a buffered
+    ``sys.stdin`` readline pulls whole chunks into an internal buffer that
+    select() cannot observe; mixing both loses every reply an earlier fill has
+    already buffered. select() is therefore consulted only when the owned buffer
+    holds no complete line, so any line already read stays visible to the next
+    waiter in the outer loop and in nested response waits alike.
+    """
+
+    MAX_LINE_BYTES = 8 * 1024 * 1024  # mirrors the transport's frame bound
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._buffer = bytearray()
+        self._eof = False
+
+    @property
+    def eof(self):
+        return self._eof and not self._buffer
+
+    def readline(self, timeout=None):
+        """Next newline-terminated line as bytes, the final unterminated tail at
+        EOF, or None on timeout or EOF with nothing buffered; timeout None
+        blocks until a line or EOF."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            index = self._buffer.find(b"\n")
+            if index >= 0:
+                if index >= self.MAX_LINE_BYTES:
+                    raise ValueError(f"stdin line exceeds {self.MAX_LINE_BYTES} bytes")
+                line = bytes(self._buffer[:index + 1])
+                del self._buffer[:index + 1]
+                return line
+            if len(self._buffer) > self.MAX_LINE_BYTES:
+                raise ValueError(f"stdin line exceeds {self.MAX_LINE_BYTES} bytes")
+            if self._eof:
+                tail = bytes(self._buffer)
+                self._buffer.clear()
+                return tail or None
+            wait = None if deadline is None else deadline - time.monotonic()
+            if wait is not None and wait <= 0:
+                return None
+            ready, _, _ = select.select([self._stream], [], [], wait)
+            if not ready:
+                return None
+            chunk = os.read(self._stream.fileno(), 65536)
+            if chunk:
+                self._buffer.extend(chunk)
+            else:
+                self._eof = True
 
 
 def send(value):
@@ -62,12 +125,11 @@ def read_reply(frame_ids, wait):
     """Read controller frames until one answers a listed reverse-request id."""
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
-        ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-        if not ready:
+        line = reader.readline(deadline - time.monotonic())
+        if line is None:
+            if reader.eof:
+                return None
             continue
-        line = sys.stdin.readline()
-        if not line:
-            return None
         message = json.loads(line)
         if message.get("id") in frame_ids:
             state["replies"].append(message)
@@ -174,9 +236,32 @@ def handle(message):
         send({"id": request_id, "error": {"code": -32601, "message": "unknown method"}})
 
 
-for line in sys.stdin:
-    handle(json.loads(line))
-write_report()
+def serve():
+    """Run the fake app server until controller EOF, then write the report."""
+    global case, report_path, nonce, reader
+    case = os.environ.get("PROBE_FAKE_CASE", "ok")
+    report_path = os.environ["PROBE_FAKE_REPORT"]
+    nonce = os.environ["PROBE_FAKE_NONCE"]
+    state["nativePins"] = {k: v for k, v in os.environ.items() if k.startswith(("BUDDY_", "ZCODE_"))}
+    reader = BoundedLineReader(sys.stdin)
+    while True:
+        line = reader.readline()
+        if line is None:
+            break
+        handle(json.loads(line))
+    write_report()
+
+
+def main():
+    if "--version" in sys.argv:
+        print("fixture-0.16.9")
+        return 0
+    serve()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 '''
 
 
@@ -186,6 +271,85 @@ def load_probe():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_fake_namespace():
+    """Exec the fixture source as an import-safe module for reader-level tests."""
+    namespace = {"__name__": "fake-app-server-under-test", "__file__": "fake-app-server.py"}
+    exec(compile(FAKE_SERVER, "fake-app-server.py", "exec"), namespace)
+    return namespace
+
+
+class FakeServerLineReaderTests(unittest.TestCase):
+    """Deterministic regression for the reannounced-frame flake.
+
+    The probe's pump answers back-to-back reverse frames from its reader queue,
+    so both replies can reach one read before the single-threaded fake observes
+    them. The previous fixture read through buffered ``sys.stdin`` while guarding
+    the wait with ``select()``: one buffered fill swallowed both replies, the
+    next wait saw an empty pipe, and server-2 was never recorded. These tests
+    exec the fixture's own reader — the exact code the subprocess runs — and
+    hold it to that burst condition.
+    """
+
+    def setUp(self):
+        self.namespace = load_fake_namespace()
+
+    def reader_over_pipe(self):
+        read_fd, write_fd = os.pipe()
+        stream = os.fdopen(read_fd, "rb", buffering=0)
+        self.addCleanup(stream.close)
+
+        def close_write():
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+        self.addCleanup(close_write)
+        return self.namespace["BoundedLineReader"](stream), write_fd, close_write
+
+    def test_both_replies_reaching_one_read_are_both_served(self):
+        reader, write_fd, _close_write = self.reader_over_pipe()
+        os.write(write_fd, (json.dumps({"id": "server-1", "result": {"action": "accept"}}) + "\n"
+                            + json.dumps({"id": "server-2", "result": {"action": "accept"}}) + "\n").encode())
+        first = reader.readline(5.0)
+        self.assertIsNotNone(first)
+        self.assertEqual(json.loads(first)["id"], "server-1")
+        # The write end stays open and nothing more is written, so only the line
+        # already inside the reader's owned buffer can satisfy this read — the
+        # exact read the old select() + buffered stdin split lost its deadline on.
+        second = reader.readline(0.25)
+        self.assertIsNotNone(second, "a reply already inside the reader buffer was lost")
+        self.assertEqual(json.loads(second)["id"], "server-2")
+
+    def test_new_lines_are_still_read_after_the_buffer_drains(self):
+        reader, write_fd, _close_write = self.reader_over_pipe()
+        os.write(write_fd, b'{"id": "server-1"}\n')
+        self.assertEqual(json.loads(reader.readline(5.0))["id"], "server-1")
+        os.write(write_fd, b'{"id": "server-2"}\n')
+        self.assertEqual(json.loads(reader.readline(5.0))["id"], "server-2")
+
+    def test_eof_ends_the_stream_and_returns_the_final_partial_tail(self):
+        reader, _write_fd, close_write = self.reader_over_pipe()
+        os.write(_write_fd, b'{"id": "server-1"}\n{"trailing": true}')
+        close_write()
+        self.assertEqual(json.loads(reader.readline(5.0))["id"], "server-1")
+        self.assertEqual(json.loads(reader.readline(5.0)), {"trailing": True})
+        self.assertIsNone(reader.readline(5.0))
+        self.assertTrue(reader.eof)
+
+    def test_nested_response_waits_share_the_outer_reader(self):
+        namespace = self.namespace
+        namespace["reader"], write_fd, _close_write = self.reader_over_pipe()
+        os.write(write_fd, (json.dumps({"id": "cap-1", "method": "runtime/capabilities", "params": {}}) + "\n"
+                            + json.dumps({"id": "server-1", "result": {"action": "accept"}}) + "\n").encode())
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = namespace["read_reply"]({"server-1"}, 5.0)
+        self.assertIsNotNone(reply, "the buffered reply was lost to the wait")
+        self.assertEqual(reply["id"], "server-1")
+        # The method frame that shared the burst was dispatched, not dropped:
+        # nested waits consume the same owned buffer as the outer loop.
+        self.assertIn("runtime/capabilities", namespace["state"]["methods"])
 
 
 class ProbeFixtureCase(unittest.TestCase):

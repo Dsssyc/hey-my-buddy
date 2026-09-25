@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation in progress after the user approved the ordered repairs on 2026-09-25. Source uses contract 0.10.0/schema 11; the daily installation remains the separately verified [0.9.0 installation](runtime-refinement-0.9.0.md). Source changes do not update that running service. No production CPU reduction is claimed here until an actual coordinated installation is recorded.
+The user approved these ordered repairs on 2026-09-25. Source uses contract 0.10.0/schema 11; the [0.9.0 installation](runtime-refinement-0.9.0.md) is the historical comparison baseline. Source validation, private measurements and an actual installation are separate facts recorded below. Check health/runtime for the current installation rather than inferring it from this packaged document.
 
 ## Liveness slice
 
@@ -42,6 +42,28 @@ Host rejected the first artifact after reproducing Python accepting false and 0.
 
 Host inspected the complete delta from original input 9b78cb1 through final output 1f7a66452ccac42b9228eb68c2fd326d7145cbe7, including both turns. All 92 affected Python tests and all 68 decision helper/plugin Node tests passed in the combined source. Final artifact 9d4c8eac-baf7-4f4e-a341-d03a7807b52a retains the immutable output. Tests cover supported alternatives, false policy claims, malformed types, unknown or unrelated references, cancellation, restart and reader fencing; model-specific live routing behavior is recorded separately when exercised.
 
+Host acceptance of the routing slice is bound to verified integration int-1eda5fec-94f1-4fce-bd64-93cc2c77ab5d. Its registered physical worktree was removed through the verified plan/apply flow after acceptance; the earlier rejected output, final patch, fixed Git refs and receipts remain available.
+
+A bounded native DSH 0.1.5-rc.1 prompt-7 probe used the supplied table/card facts for an easy documentation task and an explicit task-local GLM Flash preference. The native call returned call-failed with the sanitized detail code MISSING_CREDENTIAL after 3.7 seconds, with confirmed shutdown and no recommendation. This is a provider-credential boundary; the probe does not establish live selector quality. No global credential, selector, preference or policy was changed and no coding goal was launched. The user was asked to restore the provider credential through DSH itself before another live probe; no automatic retry loop was created.
+
+## Shared assessment publication
+
+Three bounded preparation calls collected 52 verified Host-reviewed facts across DSH Flash max (21), ZCode Z.ai GLM-5.3-Flash max (16), ZCode Z.ai GLM-5.3 max (13) and Codex GPT-6-Sol max (2). These are review facts, not independent successful goals: three rejected reviews remain included. An unavailable historical provider configuration and one unproven artifact binding were not promoted to current verified evidence. Preparation and publication used the matching daily 0.9.0 client; no schema or contract switch was needed for maintenance.
+
+GLM Flash supplied a read-only four-card draft in goal ddb47f21-30a4-43b8-a56d-023d2ed3609e. Host inspected every cited fact and the remaining bounded evidence, removed claims of general reliability or success rates, corrected attribution of combined CPU improvements, and retained material Host corrections and both models' review risks. The proposal was accepted as a draft requiring those corrections, under no-code integration int-f00c2ed8-7266-47f8-80c6-0672a838c5bd; its managed worktree was then cleaned while artifacts and receipts were retained.
+
+Card-only publication overhead-repair-model-cards-20260925-1 advanced the shared table from revision 15 to 16, read back all four exact cards and all 52 evidence references, and left zero pending facts in this prepared batch. Before/after checks confirmed user preferences, annotations, enabled configurations, selector configuration and per-model capacity were unchanged. Provider rate limits, missing served-model identity, narrower task conditions and the absence of effort/cost comparisons remain explicit limitations. The publication report is retained in the ignored repair directory; its replay credentials are private and are not documentation artifacts.
+
+## Combined verification
+
+The first complete Python invocation ran 957 tests in 1,045.904 seconds with two failures: a current-contract assertion still expected 0.9.0, and a scripted ZCode request-input fixture failed to observe the second of two replies. The contract assertion was updated to 0.10.0 and all six current-core tests passed. The initial failed log remains retained; it is not represented as a green whole-suite run.
+
+GLM Flash repaired the isolated test fixture in goal a69d517c-17db-470f-b479-ba0bc22c6987. Host independently reproduced the buffered-read/select mismatch: both replies entered Python's stream buffer, while the second select call saw an empty OS pipe. The replacement reader shares one bounded byte buffer between outer and nested waits, with four additional regressions for bursts, refill, EOF and nested handling; original acceptance/refusal assertions remain unchanged. Host passed all 16 probe tests and verified the tested Git blob cb697179d9d10f1801b107b6c8ff86a6cd12ebd8 against sealed output 87ad25da42fec0c68cb29b27922a89f65d69fe63. The artifact is baa15e77-d824-4c45-9768-8361696c7214. No product source changed after the full Python run, and no broad rerun is claimed from this focused correction.
+
+All 207 DSH Node tests passed with Node 24 and the repository check harness's sanitized environment. A preceding standalone Node invocation omitted that environment and failed at the Python YAML bridge; the prescribed environment supplies the uv interpreter and source import path. All 208 console tests passed, and TypeScript plus the Vite production build succeeded without changing the built asset bytes. Skill frontmatter, plugin manifest and documentation checks passed (49 Markdown files, 274 local links, 51 JSON examples and 38 shell snippets).
+
+The staged bundle passed a private cold start on schema 11 and contract 0.10.0: content identity 5fca752b179e5ed7ca471f111dfdae94, stable interpreter/resources without source leaks, named ping, authenticated HTTP asset-byte equality, hot model-family capacity changes, no-deadline command completion and cancellation, and continued service after the staged source directory was moved. This probe used no model and shut down its own private service/workers through ownership checks. It is distinct from the daily-board installation.
+
 ## Remaining verification
 
-Bounded card maintenance and final package verification remain in progress. The final artifact and installation identities will be recorded here after those checks, without overwriting earlier failure evidence or user-owned policy.
+Actual installation is a separate coordinated operation. Its identity and observed daily-board CPU measurements are recorded after verification, without overwriting earlier failure evidence or user-owned policy.
