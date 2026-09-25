@@ -29,6 +29,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { dirname, join } from 'node:path';
 import { instructionsFor, renderUserTurn } from '../scripts/decision-prompt.mjs';
+import { POLICY_FACTS_MISMATCH, derivePolicyFacts, jsonEqual, validateDecision } from '../scripts/selection-policy.mjs';
 
 /** Stable Cordis plugin name; the run's patch row mirrors it. */
 export const name = 'deepseek-delegate-decision';
@@ -182,13 +183,15 @@ function unexpectedKey(record, allowed) {
 }
 
 /**
- * Validate one `select` answer against the request's legal candidate set.
+ * Validate one `select` answer's base shape against the request's legal
+ * candidate set. The typed `policyCheck`/`support` acknowledgment is validated
+ * separately by {@link validateDecision} in `scripts/selection-policy.mjs`.
  * @returns `{ decision }` or `{ problem }` with a machine code.
  */
 export function validateSelectAnswer(answer, legal) {
   const record = asRecord(answer);
   if (record === null) return { problem: 'answer-shape' };
-  const extra = unexpectedKey(record, ['profileId', 'reason', 'evidenceIds']);
+  const extra = unexpectedKey(record, ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support']);
   if (extra !== null) return { problem: 'answer-unexpected-field' };
   const profileId = field(record, 'profileId');
   const reason = field(record, 'reason');
@@ -241,12 +244,24 @@ export function finishProblem(reason) {
 /**
  * Resolve the model's structured answer to a validated selection decision.
  *
- * @returns `{ decision }` or `{ problem }`.
+ * When a `policy` context is supplied, the answer's typed `policyCheck` and
+ * `support` are additionally validated against the program-derived facts; a
+ * violation carries a stable `policy-*` machine code that Python settles
+ * needs-host. The qualitative reason text is never parsed.
+ *
+ * @returns `{ decision }` or `{ problem, detail? }`.
  */
-export function resolveAnswer(operation, text, legal) {
+export function resolveAnswer(operation, text, legal, policy) {
   const extracted = extractJsonValue(text);
   if (extracted.problem !== undefined) return { problem: extracted.problem };
-  return validateSelectAnswer(extracted.value, legal);
+  const base = validateSelectAnswer(extracted.value, legal);
+  if (base.problem !== undefined) return base;
+  if (policy === undefined) return base;
+  // The typed check reads the answer as the model wrote it (policyCheck and
+  // support included); the returned decision keeps the validated base fields.
+  const verdict = validateDecision(extracted.value, policy.facts, policy.routingPreferences, policy.scope);
+  if (!verdict.ok) return { problem: verdict.code, detail: verdict.detail };
+  return { decision: { ...base.decision, policyCheck: verdict.policyCheck, support: verdict.support } };
 }
 
 /**
@@ -273,6 +288,31 @@ export async function callDecisionModel(ctx, request, { timeoutMs }) {
   let text = '';
   let reasoningBytes = 0;
   try {
+    // Independent re-derivation of the request's policy facts from its own table
+    // data, BEFORE any provider I/O: a payload whose facts disagree with the
+    // table they claim to describe is a caller error, never a model call.
+    const facts = derivePolicyFacts({
+      profiles: request.profiles,
+      routingPreferences: request.routingPreferences ?? [],
+      preferences: request.preferences ?? [],
+      hardConstraints: field(request.policyFacts, 'hardConstraints') ?? {},
+    });
+    if (!jsonEqual(facts, request.policyFacts)) {
+      return {
+        ok: false,
+        code: POLICY_FACTS_MISMATCH,
+        detail: { code: POLICY_FACTS_MISMATCH, description: 'the request policy facts disagree with the table they were derived from' },
+      };
+    }
+    // Card/annotation support is scoped to actually supplied references.
+    const suppliedIds = (entries) => new Set((Array.isArray(entries) ? entries : [])
+      .map((entry) => field(entry, 'profileId'))
+      .filter((value) => typeof value === 'string' && value.length > 0));
+    const policy = {
+      facts,
+      routingPreferences: Array.isArray(request.routingPreferences) ? request.routingPreferences : [],
+      scope: { cardProfileIds: suppliedIds(request.cards), annotationProfileIds: suppliedIds(request.annotations) },
+    };
     await waitForRoute(ctx, profile, controller.signal);
     // Two prepare passes: one to read the adapter's materialized defaults, one
     // that additionally requests the bounded short-JSON output. The prepared
@@ -338,8 +378,14 @@ export async function callDecisionModel(ctx, request, { timeoutMs }) {
     if (!sawText) return { ok: false, code: 'answer-empty' };
     // Only explicitly enabled and available profiles are legal candidates.
     const legal = legalCandidateIds(request.candidates, request.evidenceIndex);
-    const resolved = resolveAnswer(request.operation, text, legal);
-    if (resolved.problem !== undefined) return { ok: false, code: resolved.problem };
+    const resolved = resolveAnswer(request.operation, text, legal, policy);
+    if (resolved.problem !== undefined) {
+      return {
+        ok: false,
+        code: resolved.problem,
+        ...(resolved.detail === undefined ? {} : { detail: { code: resolved.problem, description: String(resolved.detail).slice(0, 500) } }),
+      };
+    }
     return {
       ok: true,
       operation: request.operation,
@@ -460,6 +506,10 @@ export function readRequest(inputFile) {
   if (normalized.problem !== null) return { problem: normalized.problem };
   const evidenceIndex = normalizeEvidence(field(value, 'evidence'));
   if (evidenceIndex.problem !== null) return { problem: evidenceIndex.problem };
+  const policyFacts = field(value, 'policyFacts');
+  if (policyFacts === null || typeof policyFacts !== 'object' || Array.isArray(policyFacts)) {
+    return { problem: 'request-policy-invalid' };
+  }
   return {
     request: {
       operation,
@@ -473,6 +523,7 @@ export function readRequest(inputFile) {
       ...(field(value, 'evidence') === undefined ? {} : { evidence: field(value, 'evidence') }),
       ...(field(value, 'annotations') === undefined ? {} : { annotations: field(value, 'annotations') }),
       ...(field(value, 'routingPreferences') === undefined ? {} : { routingPreferences: field(value, 'routingPreferences') }),
+      policyFacts,
       candidates: normalized.candidates,
       evidenceIndex: evidenceIndex.evidence,
     },

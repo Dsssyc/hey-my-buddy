@@ -15,6 +15,7 @@ from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
 class TestWorkflowRouting(WorkflowTestCase):
     seed = DecisionTestCase.seed
+    valid_decision = DecisionTestCase.valid_decision
 
     def setUp(self):
         super().setUp()
@@ -42,7 +43,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
             "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
-                       "decision": {"profileId": profile_id, "reason": "fixture selection", "evidenceIds": []}},
+                       "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
     def test_explicit_validated_and_no_selection_or_coding_bypass(self):

@@ -79,6 +79,7 @@ class DecisionCapabilityTests(unittest.TestCase):
 class RoutingPreferenceWorkflowTests(WorkflowTestCase):
     seed = DecisionTestCase.seed
     use_helper = DecisionTestCase.use_helper
+    valid_decision = DecisionTestCase.valid_decision
 
     def setUp(self):
         super().setUp()
@@ -114,14 +115,15 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="route-claim")
         claim = owned["claim"]
+        document = claim["decisionInput"]
         board.call("worker_result", {
             "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
             "generation": claim["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "operation": "select", "tableRevision": claim["decisionInput"]["tableRevision"],
-                       "decision": {"profileId": profile_id, "reason": "fixture selection", "evidenceIds": []}},
+            "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+                       "decision": self.valid_decision(document, profile_id)},
         })
-        return claim["decisionInput"]
+        return document
 
     def test_soft_preference_falls_back_without_changing_goal_or_global_preferences(self):
         board = self.board()

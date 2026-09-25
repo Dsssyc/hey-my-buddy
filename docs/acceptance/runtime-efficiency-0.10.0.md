@@ -20,10 +20,6 @@ The same private synthetic benchmark seeded 120,000 empty claim receipts, no tas
 
 Test fixture cleanup was repaired separately and integrated as f8a2f33 and 1a928b8. It stops the service in the exact private directory through its authenticated endpoint, including a replacement daemon that a CLI started after restart, waits for real lifetime-lock release, and preserves state on an unconfirmed shutdown before removing any files. Inherited runtime/worker credentials are removed while explicit private test overrides remain usable. The new five-test cleanup suite passed in the integrated 0.10.0 source. The originating isolated regression was also observed to fail with the old cleanup. Existing unrelated processes were not signalled or adopted.
 
-## Remaining verification
-
-Routing-policy evidence, Host guidance, bounded card maintenance and final package verification remain under implementation or verification. The final artifact and installation identities will be recorded here after those checks, without overwriting earlier failure evidence or user-owned policy.
-
 ## ZCode same-turn recovery
 
 GLM-5.3 implemented the bridge repair in goal aaaccd65-63b8-4ee9-aa22-5e1eec11b956. A real installed ZCode app-server was driven by a loopback-only model fixture, with private state/storage and shared harness writes denied. The probe reproduced the native wrapper marking a refused MCP call successful and adding an error header, then verified that the signed refusal reached the model, a corrected finish completed in the same admitted turn, provenance named only the corrected tool call, and both owned process groups stopped. Native session sess_0654e083-e5bb-44ed-8749-2e1dd814191b and turn turn_29845354-097a-4e07-b71b-10ee1ad99208 identify that probe. It made no paid model call. Its script and bounded observations were retained under .dsh-skill-build/overhead-repair-0.10.0-20260925/zcode-native-refusal/ before workspace cleanup.
@@ -37,3 +33,15 @@ Host acceptance is bound to integration int-e186b314-4009-4aa7-aaf4-b5d03472449f
 ## Host guidance
 
 The skill entrypoint was reduced from 2,113 to 1,221 whitespace-delimited words, with detailed command and recovery guidance kept in its owning references. It keeps user authority, artifact verification, native-subagent freedom and explicit scheduling boundaries, while making detailed reading conditional, discouraging duplicate submissions and repetitive full-state polling, and recording specific rejected reviews and material Host corrections for later batch maintenance. Maintenance synthesis may use a credential-free delegated proposal, but preparation, verification and publication remain Host-owned. Frontmatter and local documentation checks passed; the reduced entrypoint size is not a measured monetary saving or a counterfactual token benchmark.
+
+## Routing policy facts
+
+GLM-5.3-Flash implemented this slice in goal 36110ca1-856e-4406-9cfe-8419dc624bdf. Its initial automatic routing on the daily 0.9.0 service failed with call-failed before coding began. Host preserved that decision record and continued the same goal with an explicitly justified complete GLM Flash configuration; no shared preference or selector was changed. The helper and Python owner now independently validate the bounded program-computed facts, exact typed preference outcomes and supplied support references. A supported alternative remains possible; free-form reason text is not claimed to be semantically verified.
+
+Host rejected the first artifact after reproducing Python accepting false and 0.0 as rule index 0; the float reached list indexing and raised instead of settling the decision. The same goal's corrective continuation now requires an actual non-bool integer or null before comparison or indexing, independently refuses abstentions with evidence, and tests the real coordinator path for reader release, needs-host settlement and no coding launch. Node rejects booleans and strings; JSON numeric 0.0 is normalized to integer 0 by JavaScript before reserialization, while Python also rejects a direct helper payload containing a float. This is an explicit parser representation boundary, not a promise that both languages retain number lexemes.
+
+Host inspected the complete delta from original input 9b78cb1 through final output 1f7a66452ccac42b9228eb68c2fd326d7145cbe7, including both turns. All 92 affected Python tests and all 68 decision helper/plugin Node tests passed in the combined source. Final artifact 9d4c8eac-baf7-4f4e-a341-d03a7807b52a retains the immutable output. Tests cover supported alternatives, false policy claims, malformed types, unknown or unrelated references, cancellation, restart and reader fencing; model-specific live routing behavior is recorded separately when exercised.
+
+## Remaining verification
+
+Bounded card maintenance and final package verification remain in progress. The final artifact and installation identities will be recorded here after those checks, without overwriting earlier failure evidence or user-owned policy.

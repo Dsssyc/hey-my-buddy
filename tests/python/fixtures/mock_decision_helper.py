@@ -37,10 +37,73 @@ def supplied_evidence(request, profile_id):
     ]
 
 
+def stated_policy_check(request, profile_id):
+    """The typed policy acknowledgment for one selection, from the input facts."""
+    facts = request.get("policyFacts") or {}
+    task = facts.get("taskPreference") or {}
+    rule_index = task.get("ruleIndex")
+    if rule_index is None:
+        outcome = "fallback" if request.get("routingPreferences") else "none"
+    elif profile_id in (task.get("matchingProfileIds") or []):
+        outcome = "matched"
+    else:
+        outcome = "alternative"
+    user_preferred = facts.get("userPreferredProfileIds") or []
+    if not user_preferred:
+        user = "none"
+    elif profile_id in user_preferred:
+        user = "matched"
+    else:
+        user = "alternative"
+    return {
+        "hardConstraints": facts.get("hardConstraints") or {},
+        "taskPreference": {"ruleIndex": rule_index, "outcome": outcome},
+        "userPreference": user,
+    }
+
+
+def stated_support(request, profile_id, policy_check, cited):
+    """Eligible support for an alternative; empty unless one is required."""
+    support = {"cardProfileIds": [], "annotationProfileIds": []}
+    if "alternative" not in (policy_check["taskPreference"]["outcome"], policy_check["userPreference"]) or cited:
+        return support
+    facts = request.get("policyFacts") or {}
+    scoped = {profile_id, *(facts.get("taskPreference") or {}).get("matchingProfileIds", []),
+              *facts.get("userPreferredProfileIds", [])}
+    for key, collection in (("annotationProfileIds", "annotations"), ("cardProfileIds", "cards")):
+        seen = []
+        for entry in request.get(collection) or []:
+            candidate = entry.get("profileId")
+            if candidate in scoped and candidate not in seen:
+                seen.append(candidate)
+            if len(seen) >= 32:
+                break
+        support[key] = seen
+        if seen:
+            break
+    return support
+
+
 def select_envelope(request):
     profiles = request.get("profiles") or []
+    if MODE == "policy_bad_abstention":
+        # A malformed abstention: profileId null but evidence cited. Python must
+        # refuse it at publication and settle the decision needs-host.
+        return {
+            "profileId": None,
+            "reason": "no candidate is clearly better; defer to the Host",
+            "evidenceIds": ["ev-not-allowed-for-an-abstention"],
+            "policyCheck": None,
+            "support": {"cardProfileIds": [], "annotationProfileIds": []},
+        }
     if MODE == "abstain" or not profiles:
-        return {"profileId": None, "reason": "no candidate is clearly better; defer to the Host", "evidenceIds": []}
+        return {
+            "profileId": None,
+            "reason": "no candidate is clearly better; defer to the Host",
+            "evidenceIds": [],
+            "policyCheck": None,
+            "support": {"cardProfileIds": [], "annotationProfileIds": []},
+        }
     chosen = os.environ.get("MOCK_DECISION_PROFILE_ID") or profiles[0]["profileId"]
     evidence = supplied_evidence(request, chosen)
     style = os.environ.get("MOCK_DECISION_EVIDENCE", "first")
@@ -54,7 +117,35 @@ def select_envelope(request):
         cited = evidence[:2]
     if MODE == "out_of_candidate":
         chosen = "dsh:not-a-candidate:model:off"
-    return {"profileId": chosen, "reason": f"mock select chose {chosen}", "evidenceIds": cited}
+    if MODE == "policy_false_fallback":
+        # The historical inversion: a legal preference match reported as if no
+        # rule matched. Python must settle this needs-host, never adopt it.
+        policy_check = {"hardConstraints": {}, "taskPreference": {"ruleIndex": None, "outcome": "fallback"}, "userPreference": "none"}
+    elif MODE == "policy_invented_constraint":
+        # A constraint invented from outside the request (e.g. from a filename).
+        policy_check = {"hardConstraints": {"adapter": "dsh"}, "taskPreference": {"ruleIndex": None, "outcome": "none"}, "userPreference": "none"}
+    elif MODE == "policy_bad_index":
+        # A typed index that JSON allows as a value but the contract forbids:
+        # False (bool), 0.0 (float) or "0" (string) where an integer belongs.
+        policy_check = stated_policy_check(request, chosen)
+        malformed = {"false": False, "float": 0.0, "string": "0"}
+        key = os.environ.get("MOCK_DECISION_RULE_INDEX", "false")
+        policy_check["taskPreference"] = {
+            "ruleIndex": malformed[key],
+            "outcome": policy_check["taskPreference"]["outcome"],
+        }
+    else:
+        policy_check = stated_policy_check(request, chosen)
+    support = stated_support(request, chosen, policy_check, cited)
+    if MODE == "policy_unsupported_alternative":
+        support = {"cardProfileIds": [], "annotationProfileIds": []}
+    return {
+        "profileId": chosen,
+        "reason": f"mock select chose {chosen}",
+        "evidenceIds": cited,
+        "policyCheck": policy_check,
+        "support": support,
+    }
 
 
 def main(argv):
@@ -115,6 +206,23 @@ def main(argv):
             },
         )
         return 3
+    if MODE == "policy_error":
+        # A bounded machine code from the helper's own policy check. The decision
+        # settles needs-host; the Worker receipt keeps its real outcome.
+        write_output(
+            output,
+            {
+                "status": "error",
+                "operation": request.get("operation"),
+                "tableRevision": request.get("tableRevision"),
+                "code": "policy-outcome-false",
+                "message": "the decision answer violated the routing policy",
+                "details": {"code": "policy-outcome-false", "description": "the program-derived task outcome disagrees"},
+                "elapsedSeconds": 0.2,
+                "shutdownConfirmed": True,
+            },
+        )
+        return 1
     if MODE in ("no_shutdown", "string_shutdown"):
         envelope = {
             "status": "ok",

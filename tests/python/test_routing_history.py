@@ -23,6 +23,7 @@ ROUTING_TASK_TEXT = "Produce a verified implementation"
 class RoutingHistoryTestCase(WorkflowTestCase):
     seed = DecisionTestCase.seed
     publish_user_patch = DecisionTestCase.publish_user_patch
+    valid_decision = DecisionTestCase.valid_decision
 
     def setUp(self) -> None:
         super().setUp()
@@ -53,7 +54,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
             "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
-                       "decision": {"profileId": profile_id, "reason": "fixture selection", "evidenceIds": []}},
+                       "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
     def history(self, board, run_id, **params):

@@ -20,6 +20,7 @@ from support import BoardTestCase, wait_for
 from test_evaluation import EvaluationTestCase as EvaluationFixtures
 
 from buddy.errors import BoardError
+from buddy import selection_policy
 from buddy.worker.worker import Worker
 
 MOCK_HELPER = Path(__file__).resolve().parent / "fixtures" / "mock_decision_helper.py"
@@ -214,6 +215,63 @@ class DecisionTestCase(BoardTestCase):
             callable_(*args, **kwargs)
         self.assertEqual(caught.exception.code, code, caught.exception.message)
         return caught.exception
+
+    @classmethod
+    def valid_decision(
+        cls,
+        document: dict,
+        profile_id: str | None,
+        *,
+        reason: str = "fixture selection",
+        evidence_ids: list[str] | None = None,
+        policy_check: dict | None = None,
+        support: dict | None = None,
+    ) -> dict:
+        """One strict-shape decision carrying the program-derived policy check.
+
+        The derived ``policyCheck`` is exactly what the helper's typed contract
+        requires for ``profile_id``; when the derived outcome is an alternative,
+        eligible annotation/card support is cited from the frozen document so the
+        answer is adoptable. Tests pass ``policy_check``/``support`` explicitly
+        to exercise refusal paths.
+        """
+        empty = {"cardProfileIds": [], "annotationProfileIds": []}
+        if profile_id is None:
+            return {"profileId": None, "reason": reason, "evidenceIds": [], "policyCheck": None, "support": empty}
+        facts = document["policyFacts"]
+        routing_preferences = document.get("routingPreferences") or []
+        check = policy_check if policy_check is not None else selection_policy.expected_policy_check(
+            facts, routing_preferences, profile_id
+        )
+        built = dict(empty)
+        evidence = list(evidence_ids or [])
+        if support is not None:
+            built = dict(support)
+        elif selection_policy.alternative_requires_support(check) and not evidence:
+            scoped = {
+                profile_id,
+                *facts["taskPreference"]["matchingProfileIds"],
+                *facts["userPreferredProfileIds"],
+            }
+            annotations: list[str] = []
+            for entry in document.get("annotations") or []:
+                if entry["profileId"] in scoped and entry["profileId"] not in annotations:
+                    annotations.append(entry["profileId"])
+            if annotations:
+                built["annotationProfileIds"] = annotations[: selection_policy.MAX_SUPPORT_IDS]
+            else:
+                cards: list[str] = []
+                for entry in document.get("cards") or []:
+                    if entry["profileId"] in scoped and entry["profileId"] not in cards:
+                        cards.append(entry["profileId"])
+                built["cardProfileIds"] = cards[: selection_policy.MAX_SUPPORT_IDS]
+        return {
+            "profileId": profile_id,
+            "reason": reason,
+            "evidenceIds": evidence,
+            "policyCheck": check,
+            "support": built,
+        }
 
 
 class SelectionRequestTests(DecisionTestCase):
@@ -625,6 +683,138 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["status"], "needs-host")
         self.assertIn("not supplied", decision["reason"])
 
+    def test_positive_dsh_task_preference_is_matched_and_never_an_exclusion(self):
+        """The historical inversion: a positive match.adapter=dsh rule must be
+        honored as a match when a legal DSH candidate exists, never restated as
+        an avoid/fallback, and no constraint may be invented from the task text."""
+        board = self.board()
+        self.seed(board)
+        request = board.call("selection_request", {
+            "requestId": "pick-positive", "task": "work on the DSH harness source files",
+            "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness"}],
+        })
+        self.run_worker(board)
+        decision = self.decision(board, request["decisionId"])
+        self.assertEqual(decision["status"], "completed", decision.get("reason"))
+        self.assertEqual(decision["profileId"], PROFILE_ID)
+        facts = decision["input"]["policyFacts"]
+        self.assertEqual(facts["hardConstraints"], {})
+        self.assertEqual(facts["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [PROFILE_ID, SECOND_PROFILE_ID]})
+        self.assertEqual(facts["userPreferredProfileIds"], [])
+        check = decision["output"]["decision"]["policyCheck"]
+        self.assertEqual(check["hardConstraints"], {})
+        self.assertEqual(check["taskPreference"], {"ruleIndex": 0, "outcome": "matched"})
+        self.assertEqual(check["userPreference"], "none")
+        self.assertNotIn("avoid", decision["reason"].lower())
+
+    def test_false_fallback_and_invented_constraints_settle_needs_host(self):
+        board = self.board()
+        self.seed(board)
+        false_fallback = self.outcome(board, "policy_false_fallback", request_id="pick-false-fb")
+        self.assertEqual(false_fallback["status"], "needs-host")
+        self.assertIn("policy-outcome-false", false_fallback["reason"])
+        invented = self.outcome(board, "policy_invented_constraint", request_id="pick-invented")
+        self.assertEqual(invented["status"], "needs-host")
+        self.assertIn("policy-constraint-mismatch", invented["reason"])
+        # The last complete revision is unchanged and nothing was retried: each
+        # boundary is one finished decision the Host resolves on the same goal.
+        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
+        self.assertEqual(
+            [run["runId"] for run in board.call("task_list", {"limit": 10})["runs"]],
+            [invented["runId"], false_fallback["runId"]],
+        )
+
+    def test_unsupported_alternative_is_needs_host_and_support_completes_it(self):
+        board = self.board()
+        self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "user prefers the flash model"}])
+        self.use_helper(profile_id=SECOND_PROFILE_ID, mode="policy_unsupported_alternative")
+        request = self.request(board, request_id="pick-unsup")
+        self.run_worker(board, worker_id="w-unsup")
+        unsupported = self.decision(board, request["decisionId"])
+        self.assertEqual(unsupported["status"], "needs-host")
+        self.assertIn("policy-alternative-unsupported", unsupported["reason"])
+        self.publish_user_patch(
+            board, request_id="annot-1", command_id="annot-1",
+            annotationChanges=[{"profileId": PROFILE_ID, "text": "economical and adequate for this user"}],
+        )
+        # The same alternative with eligible supplied annotation support completes.
+        self.use_helper(profile_id=SECOND_PROFILE_ID, mode="select_first")
+        supported_request = self.request(board, request_id="pick-sup")
+        self.run_worker(board, worker_id="w-sup")
+        supported = self.decision(board, supported_request["decisionId"])
+        self.assertEqual(supported["status"], "completed", supported.get("reason"))
+        self.assertEqual(supported["profileId"], SECOND_PROFILE_ID)
+        check = supported["output"]["decision"]["policyCheck"]
+        self.assertEqual(check["userPreference"], "alternative")
+        self.assertEqual(
+            supported["output"]["decision"]["support"],
+            {"cardProfileIds": [], "annotationProfileIds": [PROFILE_ID]},
+        )
+        self.assertEqual(supported["output"]["decision"]["evidenceIds"], [])
+
+    def test_helper_policy_error_settles_needs_host_without_hiding_the_worker_outcome(self):
+        board = self.board()
+        self.seed(board)
+        decision = self.outcome(board, "policy_error", request_id="pick-policy-error")
+        self.assertEqual(decision["status"], "needs-host")
+        self.assertIn("policy-outcome-false", decision["reason"])
+        task = board.call("task_get", {"runId": decision["runId"]})["task"]
+        # The Worker receipt keeps its real outcome: the helper exited nonzero.
+        self.assertEqual(task["status"], "failed")
+        self.assertTrue(task["shutdownConfirmed"])
+        self.assertIn("policy-outcome-false", task["selectedAttempt"]["error"])
+
+    def test_malformed_rule_index_through_publication_is_needs_host_without_exception(self):
+        """bool/float/string rule indexes from the helper must never compare equal
+        to the derived integer index nor reach list indexing: each settles
+        needs-host inside the result transaction, releases the reader and starts
+        no coding work."""
+        board = self.board()
+        self.seed(board)
+        for variant in ("false", "float", "string"):
+            with self.subTest(variant=variant):
+                self.use_helper(mode="policy_bad_index", rule_index=variant)
+                request = board.call("selection_request", {
+                    "requestId": f"pick-index-{variant}",
+                    "task": "work on the DSH harness source files",
+                    "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness"}],
+                })
+                self.run_worker(board, worker_id=f"w-index-{variant}")
+                decision = self.decision(board, request["decisionId"])
+                self.assertEqual(decision["status"], "needs-host", decision.get("reason"))
+                self.assertIn("policy-index-mismatch", decision["reason"])
+                self.assertIsNone(decision["profileId"])
+                self.assertEqual(
+                    decision["output"]["decision"]["policyCheck"]["taskPreference"]["ruleIndex"],
+                    {"false": False, "float": 0.0, "string": "0"}[variant],
+                    "the malformed helper answer is retained in the audit unchanged",
+                )
+                # The selection reader was released inside the same settlement.
+                self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
+                # No coding launch: every task on this board is a decision run.
+                self.assertEqual(
+                    sorted(task["adapter"] for task in board.call("task_list", {"limit": 20})["runs"]),
+                    ["decision"] * (["false", "float", "string"].index(variant) + 1),
+                )
+
+    def test_malformed_abstention_through_publication_is_needs_host(self):
+        board = self.board()
+        self.seed(board)
+        self.use_helper(mode="policy_bad_abstention")
+        request = self.request(board, request_id="pick-bad-abstain")
+        self.run_worker(board, worker_id="w-bad-abstain")
+        decision = self.decision(board, request["decisionId"])
+        self.assertEqual(decision["status"], "needs-host", decision.get("reason"))
+        self.assertIn("policy-check-shape", decision["reason"])
+        self.assertIn("must not cite evidence", decision["reason"])
+        self.assertIsNone(decision["profileId"])
+        self.assertEqual(decision["evidenceIds"], [])
+        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
+        self.assertEqual(
+            [task["adapter"] for task in board.call("task_list", {"limit": 20})["runs"]],
+            ["decision"],
+        )
+
     def test_unconfirmed_shutdown_is_never_reported_as_stopped(self):
         board = self.board()
         self.seed(board)
@@ -722,7 +912,7 @@ class DecisionFailureTests(DecisionTestCase):
             "usage": None,
             "elapsedSeconds": 0.1,
             "shutdownConfirmed": True,
-            "decision": {"profileId": PROFILE_ID, "reason": "too late", "evidenceIds": []},
+            "decision": self.valid_decision(claim["decisionInput"], PROFILE_ID, reason="too late"),
         }
         restarted.client().submit_result(
             "w-restart",
@@ -755,7 +945,7 @@ class DecisionFailureTests(DecisionTestCase):
             "usage": None,
             "elapsedSeconds": 0.1,
             "shutdownConfirmed": True,
-            "decision": {"profileId": PROFILE_ID, "reason": "replayed once", "evidenceIds": []},
+            "decision": self.valid_decision(document, PROFILE_ID, reason="replayed once"),
         }
         report = {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0}
         first = client.submit_result(

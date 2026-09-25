@@ -47,6 +47,7 @@ import { homedir, tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { POLICY_FACTS_MISMATCH, derivePolicyFacts, jsonEqual, validateDecision } from './selection-policy.mjs';
 
 /** Absolute path of the in-process plugin this adapter mounts. */
 export const PLUGIN_PATH = fileURLToPath(new URL('../plugins/decision.mjs', import.meta.url));
@@ -217,6 +218,49 @@ function checkObjects(value, { name, min, max }) {
 }
 
 /**
+ * Validate the request's program-computed policy facts.
+ *
+ * The full derivation cross-check runs in {@link verifyRequestPolicyFacts}
+ * before any child starts; this bounds the shape so the derivation always has
+ * well-formed material.
+ */
+function checkPolicyFacts(value) {
+  const policyFacts = own(value, 'policyFacts');
+  if (policyFacts === null || typeof policyFacts !== 'object' || Array.isArray(policyFacts)) {
+    throw new DecisionError('request-invalid', '"policyFacts" must be an object');
+  }
+  for (const key of Object.keys(policyFacts)) {
+    if (!['hardConstraints', 'taskPreference', 'userPreferredProfileIds'].includes(key)) {
+      throw new DecisionError('request-invalid', `unexpected policyFacts field "${key}"`);
+    }
+  }
+  const hardConstraints = own(policyFacts, 'hardConstraints');
+  if (hardConstraints === null || typeof hardConstraints !== 'object' || Array.isArray(hardConstraints) ||
+      Object.keys(hardConstraints).some((key) => !['adapter', 'provider', 'model', 'effort'].includes(key) || !isIdentifier(hardConstraints[key]))) {
+    throw new DecisionError('request-invalid', '"policyFacts.hardConstraints" must carry bounded configuration fields');
+  }
+  const taskPreference = own(policyFacts, 'taskPreference');
+  if (taskPreference === null || typeof taskPreference !== 'object' || Array.isArray(taskPreference) ||
+      Object.keys(taskPreference).some((key) => !['ruleIndex', 'matchingProfileIds'].includes(key))) {
+    throw new DecisionError('request-invalid', '"policyFacts.taskPreference" must carry ruleIndex and matchingProfileIds');
+  }
+  const ruleIndex = own(taskPreference, 'ruleIndex');
+  if (ruleIndex !== null && (!Number.isSafeInteger(ruleIndex) || ruleIndex < 0)) {
+    throw new DecisionError('request-invalid', '"policyFacts.taskPreference.ruleIndex" must be null or a non-negative integer');
+  }
+  const matching = own(taskPreference, 'matchingProfileIds');
+  if (!Array.isArray(matching) || matching.length > MAX_REQUEST_PROFILES || matching.some((entry) => !isIdentifier(entry)) ||
+      new Set(matching).size !== matching.length) {
+    throw new DecisionError('request-invalid', '"policyFacts.taskPreference.matchingProfileIds" must be unique bounded profile ids');
+  }
+  const userPreferred = own(policyFacts, 'userPreferredProfileIds');
+  if (!Array.isArray(userPreferred) || userPreferred.length > MAX_REQUEST_PROFILES || userPreferred.some((entry) => !isIdentifier(entry)) ||
+      new Set(userPreferred).size !== userPreferred.length) {
+    throw new DecisionError('request-invalid', '"policyFacts.userPreferredProfileIds" must be unique bounded profile ids');
+  }
+}
+
+/**
  * Validate the whole request document before any process starts.
  *
  * Every failure here is a caller error: the adapter never invents a decision
@@ -227,7 +271,7 @@ export function validateRequest(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new DecisionError('request-invalid', 'the request document must be a JSON object');
   }
-  const allowedTopLevel = ['operation', 'requestId', 'profile', 'tableRevision', 'task', 'profiles', 'cards', 'preferences', 'evidence', 'annotations', 'routingPreferences'];
+  const allowedTopLevel = ['operation', 'requestId', 'profile', 'tableRevision', 'task', 'profiles', 'cards', 'preferences', 'evidence', 'annotations', 'routingPreferences', 'policyFacts'];
   for (const key of Object.keys(value)) {
     if (!allowedTopLevel.includes(key)) {
       throw new DecisionError('request-invalid', `unexpected request field "${key}"`);
@@ -294,7 +338,26 @@ export function validateRequest(value) {
       }
     }
   }
+  checkPolicyFacts(value);
   return value;
+}
+
+/**
+ * Re-derive the request's policy facts from its own table data and refuse a
+ * payload whose stored facts disagree. This runs BEFORE any child starts: a
+ * mismatching document is a caller error, never a model call.
+ */
+export function verifyRequestPolicyFacts(request) {
+  const facts = derivePolicyFacts({
+    profiles: request.profiles,
+    routingPreferences: request.routingPreferences ?? [],
+    preferences: request.preferences ?? [],
+    hardConstraints: request.policyFacts.hardConstraints,
+  });
+  if (!jsonEqual(facts, request.policyFacts)) {
+    throw new DecisionError(POLICY_FACTS_MISMATCH, 'the request policy facts disagree with the table they were derived from');
+  }
+  return facts;
 }
 
 /** Read and validate the request file. */
@@ -739,7 +802,7 @@ export function interpretSuccess(request, child, payload) {
     if (decision === null || typeof decision !== 'object' || Array.isArray(decision)) {
       return { error: new DecisionError('child-protocol-error', 'the decision child returned no select decision') };
     }
-    const allowed = ['profileId', 'reason', 'evidenceIds'];
+    const allowed = ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support'];
     if (Object.keys(decision).some((key) => !allowed.includes(key))) {
       return { error: new DecisionError('child-protocol-error', 'the select decision carries an unexpected field') };
     }
@@ -766,8 +829,41 @@ export function interpretSuccess(request, child, payload) {
     } else if (evidenceIds.length > 0) {
       return { error: new DecisionError('decision-evidence-unknown', 'an abstention must not cite evidence') };
     }
-    return { envelope: { ...successEnvelope(request, child, payload), decision: { profileId, reason, evidenceIds: [...evidenceIds] } } };
+    // Independent second Node-side check of the typed policy acknowledgment,
+    // against the same frozen request the plugin saw. Python re-checks a third
+    // time against its own immutable input before adopting anything.
+    const verdict = validateDecision(
+      decision,
+      derivePolicyFacts({
+        profiles: own(request, 'profiles'),
+        routingPreferences: own(request, 'routingPreferences') ?? [],
+        preferences: own(request, 'preferences') ?? [],
+        hardConstraints: own(request.policyFacts, 'hardConstraints') ?? {},
+      }),
+      own(request, 'routingPreferences') ?? [],
+      {
+        cardProfileIds: suppliedProfileIds(request, 'cards'),
+        annotationProfileIds: suppliedProfileIds(request, 'annotations'),
+      },
+    );
+    if (!verdict.ok) {
+      return { error: new DecisionError(verdict.code, `the decision answer violated the routing policy: ${verdict.detail}`) };
+    }
+    return {
+      envelope: {
+        ...successEnvelope(request, child, payload),
+        decision: { profileId, reason, evidenceIds: [...evidenceIds], policyCheck: verdict.policyCheck, support: verdict.support },
+      },
+    };
   }
+}
+
+/** Profile ids actually supplied in one bounded request collection. */
+function suppliedProfileIds(request, name) {
+  const entries = own(request, name);
+  return new Set((Array.isArray(entries) ? entries : [])
+    .map((entry) => own(entry, 'profileId'))
+    .filter((entry) => typeof entry === 'string' && entry.length > 0));
 }
 
 /** The candidate record for one profile id, when present. */
@@ -829,6 +925,9 @@ function classifyChildFailure(child) {
 export async function runDecision({ inputFile, outputFile, dshBin, settingsFile, timeoutSeconds }, { env = process.env, signal } = {}) {
   const started = performance.now();
   const request = readRequestFile(inputFile);
+  // Fail-closed consistency gate, BEFORE any process starts: the policy facts
+  // must describe exactly the table the request carries.
+  verifyRequestPolicyFacts(request);
   if (settingsFile !== undefined && !existsSync(settingsFile)) {
     throw new DecisionError('settings-file-missing', `--settings-file ${settingsFile} does not exist`, { exitCode: EXIT.usage });
   }

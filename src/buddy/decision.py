@@ -34,6 +34,7 @@ import uuid
 from typing import Any
 
 from . import schemas
+from . import selection_policy
 from .db import canonical_json, sha256_text
 from .errors import BoardError
 
@@ -380,7 +381,7 @@ class DecisionCoordinator:
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None) -> tuple[dict | None, str | None]:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None, hard_constraints: dict | None = None) -> tuple[dict | None, str | None]:
         if len(candidates) > MAX_DECISION_PROFILES:
             return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
         candidate_ids = {candidate["profile_id"] for candidate in candidates}
@@ -394,6 +395,17 @@ class DecisionCoordinator:
             connection, profiles=candidates, evidence_rows=evidence, include_preferences=True
         )
         table["routingPreferences"] = routing_preferences or []
+        # The program-computed preference truth for this request. It is request-local
+        # (it depends on this candidate slice and this task's preferences), so it is
+        # part of the variable suffix the model sees after the stable table snapshot.
+        table["policyFacts"] = selection_policy.policy_facts(
+            profiles=table["profiles"],
+            routing_preferences=table["routingPreferences"],
+            prefer_profile_ids=[
+                entry["profileId"] for entry in table["preferences"] if entry["mode"] == "prefer"
+            ],
+            hard_constraints=hard_constraints or {},
+        )
         return self._assemble_input(
             connection,
             kind="select",
@@ -756,6 +768,7 @@ class DecisionCoordinator:
             task_text=request.get("task") or "",
             candidates=candidates,
             routing_preferences=request.get("routingPreferences", []),
+            hard_constraints=request.get("constraints") or {},
         )
         if document is None:
             self._finish(
@@ -981,10 +994,30 @@ class DecisionCoordinator:
             and isinstance(output, dict)
             and output.get("status") == "ok"
         )
+        policy_code = (
+            output.get("code")
+            if isinstance(output, dict)
+            and output.get("status") == "error"
+            and isinstance(output.get("code"), str)
+            and output.get("code").startswith("policy-")
+            else None
+        )
         if status == "cancelled" or task["state"] == "cancelling":
             self._finish(
                 connection, row, status="cancelled", output=output, now=now,
                 reason="the decision run was cancelled; no recommendation is published",
+            )
+        elif policy_code is not None:
+            # A routing-policy refusal is a Host boundary on the same goal, not a
+            # failure to retry: the helper answered, the answer is out of policy,
+            # and the Worker's own receipt keeps its real outcome.
+            self._finish(
+                connection, row, status="needs-host", output=output, now=now,
+                reason=(
+                    f"the decision helper refused the recommendation under the routing policy "
+                    f"({policy_code}); the Host decides on the same goal"
+                ),
+                error=f"{policy_code}: routing policy boundary"[:2000],
             )
         elif not helper_ok:
             detail = error or (output or {}).get("error") or (output or {}).get("message") or "the decision helper failed"
@@ -1032,7 +1065,14 @@ class DecisionCoordinator:
         return summary
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> None:
-        """Validate one select recommendation against the frozen candidate set."""
+        """Validate one select recommendation against the frozen candidate set.
+
+        The model's typed ``policyCheck`` and ``support`` are re-validated here
+        against this service's own immutable input — independently of the helper's
+        Node-side check — before adoption. Any policy violation settles
+        ``needs-host`` on the same goal with the precise machine code; nothing is
+        retried and the qualitative reason text is never parsed.
+        """
         document = json.loads(row["input_json"]) if row["input_json"] else {}
         supplied = {
             profile["profileId"]: {
@@ -1049,10 +1089,18 @@ class DecisionCoordinator:
                 reason="the helper returned no select decision; the Host decides",
             )
             return
+        if set(decision) != {"profileId", "reason", "evidenceIds", "policyCheck", "support"}:
+            # The current strict shape only; there is no legacy result fallback.
+            self._finish(
+                connection, row, status="needs-host", output=output, now=now,
+                reason=(
+                    "the recommendation does not carry the current decision shape "
+                    "{profileId, reason, evidenceIds, policyCheck, support}; nothing was adopted"
+                ),
+            )
+            return
         reason = self._bounded_text(decision.get("reason"), MAX_DECISION_REASON) or "the model recorded no reason"
         evidence_ids = decision.get("evidenceIds")
-        if evidence_ids is None:
-            evidence_ids = []
         if not isinstance(evidence_ids, list) or any(not isinstance(value, str) for value in evidence_ids):
             self._finish(
                 connection, row, status="needs-host", output=output, now=now,
@@ -1072,6 +1120,13 @@ class DecisionCoordinator:
             return
         profile_id = decision.get("profileId")
         if profile_id is None:
+            _, _, failure = selection_policy.validate_decision(decision, {}, [], set(), set())
+            if failure is not None:
+                self._finish(
+                    connection, row, status="needs-host", output=output, now=now,
+                    reason=f"the abstention violated the routing policy ({failure[0]}: {failure[1]}); the Host decides",
+                )
+                return
             self._finish(connection, row, status="needs-host", output=output, now=now, reason=reason)
             return
         if not isinstance(profile_id, str) or profile_id not in supplied:
@@ -1099,6 +1154,46 @@ class DecisionCoordinator:
                 ),
             )
             return
+        routing_preferences = document.get("routingPreferences") or []
+        expected_facts = selection_policy.policy_facts(
+            profiles=document.get("profiles") or [],
+            routing_preferences=routing_preferences,
+            prefer_profile_ids=[
+                entry["profileId"]
+                for entry in document.get("preferences") or []
+                if isinstance(entry, dict) and entry.get("mode") == "prefer"
+            ],
+            # Re-derived from the frozen request, independent of the input document's
+            # own stored copy: an invented or drifted constraint cannot pass here.
+            hard_constraints=json.loads(row["requested_json"]).get("constraints") or {},
+        )
+        if document.get("policyFacts") != expected_facts:
+            self._finish(
+                connection, row, status="needs-host", output=output, now=now,
+                reason=(
+                    "the frozen decision input carries policy facts that disagree with its own bounded table "
+                    "and request; nothing was adopted and the Host decides"
+                ),
+            )
+            return
+        card_profile_ids = {
+            entry.get("profileId") for entry in document.get("cards") or [] if isinstance(entry, dict)
+        }
+        annotation_profile_ids = {
+            entry.get("profileId") for entry in document.get("annotations") or [] if isinstance(entry, dict)
+        }
+        policy_check, _, failure = selection_policy.validate_decision(
+            decision, expected_facts, routing_preferences, card_profile_ids, annotation_profile_ids
+        )
+        if failure is not None:
+            self._finish(
+                connection, row, status="needs-host", output=output, now=now,
+                reason=(
+                    f"the recommendation violated the routing policy ({failure[0]}: {failure[1]}); "
+                    "the Host decides on the same goal"
+                ),
+            )
+            return
         if not self._reader_open(connection, row, now):
             self._finish(
                 connection, row, status="stale", output=output, now=now,
@@ -1112,24 +1207,21 @@ class DecisionCoordinator:
             (dict(profile) for profile in document.get("profiles", []) if profile.get("profileId") == profile_id),
             None,
         )
-        routing_preferences = document.get("routingPreferences") or []
+        outcome = policy_check["taskPreference"]["outcome"]
+        rule_index = policy_check["taskPreference"]["ruleIndex"]
+        if outcome == "matched":
+            preference_reason = routing_preferences[rule_index]["reason"]
+        elif outcome == "alternative":
+            preference_reason = "The selector chose another legal candidate despite a matching task preference"
+        elif outcome == "fallback":
+            preference_reason = "No task preference matched a legal candidate"
+        else:
+            preference_reason = "No task preference applies to this request"
         if selected is not None and routing_preferences:
-            first_legal_match = next((index for index, preference in enumerate(routing_preferences)
-                                      if any(all(profile.get(key) == value for key, value in preference["match"].items())
-                                             for profile in document["profiles"])), None)
-            selected_match = next((index for index, preference in enumerate(routing_preferences)
-                                   if all(selected.get(key) == value for key, value in preference["match"].items())), None)
-            if first_legal_match is None:
-                preference_outcome = {"status": "fallback", "ruleIndex": None,
-                                      "reason": "No task preference matched a legal candidate"}
-            elif selected_match != first_legal_match:
-                preference_outcome = {"status": "alternative", "ruleIndex": first_legal_match,
-                                      "reason": "The selector chose another legal candidate despite a matching task preference"}
-            else:
-                preference_outcome = {"status": "matched", "ruleIndex": selected_match,
-                                      "reason": routing_preferences[selected_match]["reason"]}
-            selected["routingPreference"] = preference_outcome
-            reason = f"{reason[:MAX_DECISION_REASON - 160]} [task preference: {preference_outcome['status']}; rule {preference_outcome['ruleIndex']}]"
+            selected["routingPreference"] = {
+                "status": outcome, "ruleIndex": rule_index, "reason": preference_reason,
+            }
+            reason = f"{reason[:MAX_DECISION_REASON - 160]} [task preference: {outcome}; rule {rule_index}]"
         self._finish(
             connection, row, status="completed", output=output, now=now,
             reason=reason, profile_id=profile_id, evidence_ids=evidence_ids, selected=selected,

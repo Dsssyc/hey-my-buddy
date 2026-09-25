@@ -20,6 +20,7 @@ import {
   DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS,
   composePatch, isEntrypoint, parseArgs, resolveDshBin, validateRequest,
 } from '../scripts/decision.mjs';
+import { derivePolicyFacts } from '../scripts/selection-policy.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../scripts/decision.mjs', import.meta.url));
 const PLUGIN_PATH = fileURLToPath(new URL('../plugins/decision.mjs', import.meta.url));
@@ -96,20 +97,31 @@ function scenario({ request, scenarioName = 'ok', answer, code, timeout, setting
 
 /** The canonical valid `select` request used by most scenarios. */
 function defaultRequest(overrides = {}) {
-  return {
+  const profiles = [
+    { profileId: 'p1', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off', available: true, enabled: true, evidenceIds: ['e1'] },
+    { profileId: 'p2', provider: 'deepseek-official', model: 'deepseek-pro', effort: 'high', available: false, enabled: true, evidenceIds: [] },
+    { profileId: 'p3', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off', available: true, enabled: false, evidenceIds: [] },
+  ];
+  const cards = [];
+  const preferences = [];
+  const routingPreferences = [];
+  const annotations = [];
+  const base = {
     operation: 'select',
     requestId: 'req-1',
     profile: { provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off' },
     tableRevision: 7,
     task: 'Choose a model profile for the bounded task.',
-    profiles: [
-      { profileId: 'p1', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off', available: true, enabled: true, evidenceIds: ['e1'] },
-      { profileId: 'p2', provider: 'deepseek-official', model: 'deepseek-pro', effort: 'high', available: false, enabled: true, evidenceIds: [] },
-      { profileId: 'p3', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off', available: true, enabled: false, evidenceIds: [] },
-    ],
-    cards: [],
-    preferences: [],
+    profiles,
+    cards,
+    preferences,
     evidence: [{ evidenceId: 'e2', profileId: 'p1', kind: 'human', summary: 'ok', source: 'test' }],
+    annotations,
+    routingPreferences,
+  };
+  return {
+    ...base,
+    policyFacts: derivePolicyFacts({ profiles, preferences, routingPreferences, hardConstraints: {} }),
     ...overrides,
   };
 }
@@ -288,8 +300,14 @@ describe('select success path', () => {
     assert.equal(envelope.observed, null, 'the adapter must not invent observed identity');
     assert.deepEqual(envelope.usage, { inputTokens: 11, outputTokens: 7, totalTokens: 18, cacheReadTokens: 0, cacheWriteTokens: null, reasoningTokens: null });
     assert.equal(envelope.shutdownConfirmed, true);
+    assert.deepEqual(Object.keys(envelope.decision), ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support']);
     assert.equal(envelope.decision.profileId, 'p1');
     assert.deepEqual(envelope.decision.evidenceIds, []);
+    assert.deepEqual(
+      envelope.decision.policyCheck,
+      { hardConstraints: {}, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' },
+    );
+    assert.deepEqual(envelope.decision.support, { cardProfileIds: [], annotationProfileIds: [] });
     // The child received the profile, the private request path, and a bounded ms timeout.
     assert.equal(readRecordText(s, 'profile.txt'), 'headless');
     const request = readRecord(s, 'request.json');
@@ -368,6 +386,100 @@ describe('bounded output validation', () => {
     const extra = scenario({ answer: JSON.stringify({ decision: { profileId: 'p1', reason: 'ok', evidenceIds: [], temperature: 1 } }) });
     assert.equal(runDecisionCli(extra).status, 1);
     assert.equal(readEnvelope(extra).code, 'child-protocol-error');
+  });
+
+  test('a stated fallback while a legal preference match exists is refused', () => {
+    // The historical inversion: a positive rule matching p1 must be stated as
+    // matched, never as an avoid/fallback while the candidate is legal.
+    const request = defaultRequest({
+      routingPreferences: [{ match: { provider: 'deepseek-official' }, reason: 'Prefer the installed provider' }],
+    });
+    request.policyFacts = derivePolicyFacts({
+      profiles: request.profiles, routingPreferences: request.routingPreferences, preferences: [], hardConstraints: {},
+    });
+    const s = scenario({ request, answer: JSON.stringify({
+      decision: {
+        profileId: 'p1', reason: 'avoiding the preference', evidenceIds: [],
+        policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome: 'fallback' }, userPreference: 'none' },
+        support: { cardProfileIds: [], annotationProfileIds: [] },
+      },
+    }) });
+    const result = runDecisionCli(s);
+    assert.equal(result.status, 1);
+    assert.equal(readEnvelope(s).code, 'policy-outcome-false');
+  });
+
+  test('an invented hard constraint is refused', () => {
+    const s = scenario({ answer: JSON.stringify({
+      decision: {
+        profileId: 'p1', reason: 'assuming a dsh constraint', evidenceIds: [],
+        policyCheck: { hardConstraints: { adapter: 'dsh' }, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' },
+        support: { cardProfileIds: [], annotationProfileIds: [] },
+      },
+    }) });
+    const result = runDecisionCli(s);
+    assert.equal(result.status, 1);
+    assert.equal(readEnvelope(s).code, 'policy-constraint-mismatch');
+  });
+
+  test('an unsupported alternative and unknown support references are refused', () => {
+    const request = defaultRequest({
+      routingPreferences: [{ match: { model: 'deepseek-flash' }, reason: 'Prefer the flash model' }],
+      annotations: [{ profileId: 'p1', text: 'user annotation', revision: 1, updatedAt: '2026-09-25T00:00:00Z' }],
+    });
+    request.policyFacts = derivePolicyFacts({
+      profiles: request.profiles, routingPreferences: request.routingPreferences, preferences: [], hardConstraints: {},
+    });
+    // p1 is the matching candidate, so selecting it is 'matched'; selecting p3
+    // (disabled, hence not legal) is refused as a non-candidate before policy.
+    const stated = (profileId, outcome) => JSON.stringify({
+      decision: {
+        profileId, reason: 'deviating', evidenceIds: [],
+        policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome }, userPreference: 'none' },
+        support: { cardProfileIds: [], annotationProfileIds: [] },
+      },
+    });
+    // A supported alternative: selecting p1 with outcome alternative is false
+    // (p1 IS the match), so the false outcome is what gets refused here.
+    const falseOutcome = scenario({ request, answer: stated('p1', 'alternative') });
+    assert.equal(runDecisionCli(falseOutcome).status, 1);
+    assert.equal(readEnvelope(falseOutcome).code, 'policy-outcome-false');
+    // Unknown support references are refused even when the outcome is honest.
+    const unknownSupport = scenario({ request, answer: JSON.stringify({
+      decision: {
+        profileId: 'p1', reason: 'deviating with invented support', evidenceIds: [],
+        policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome: 'matched' }, userPreference: 'none' },
+        support: { cardProfileIds: ['ghost'], annotationProfileIds: [] },
+      },
+    }) });
+    assert.equal(runDecisionCli(unknownSupport).status, 1);
+    assert.equal(readEnvelope(unknownSupport).code, 'policy-support-unknown');
+  });
+
+  test('a request whose policy facts disagree with its table never reaches a child', () => {
+    const request = defaultRequest();
+    request.policyFacts = { ...request.policyFacts, userPreferredProfileIds: ['p1'] };
+    const s = scenario({ request });
+    const result = runDecisionCli(s);
+    assert.equal(result.status, 1);
+    assert.equal(readEnvelope(s).code, 'policy-facts-mismatch');
+    assert.equal(existsSync(join(s.records, 'argv.json')), false, 'no child may be spawned');
+    assert.equal(existsSync(join(s.records, 'dump-config-seen.txt')), false, 'not even the boot gate runs');
+  });
+
+  test('policy facts must carry the documented bounded shape', () => {
+    const cases = [
+      [defaultRequest({ policyFacts: null }), /"policyFacts" must be an object/],
+      [defaultRequest({ policyFacts: { hardConstraints: {} } }), /taskPreference/],
+      [defaultRequest({ policyFacts: { hardConstraints: { budget: 'low' }, taskPreference: { ruleIndex: null, matchingProfileIds: [] }, userPreferredProfileIds: [] } }), /hardConstraints/],
+      [defaultRequest({ policyFacts: { hardConstraints: {}, taskPreference: { ruleIndex: -1, matchingProfileIds: [] }, userPreferredProfileIds: [] } }), /ruleIndex/],
+      [defaultRequest({ policyFacts: { hardConstraints: {}, taskPreference: { ruleIndex: null, matchingProfileIds: ['p1', 'p1'] }, userPreferredProfileIds: [] } }), /matchingProfileIds/],
+      [defaultRequest({ policyFacts: { hardConstraints: {}, taskPreference: { ruleIndex: null, matchingProfileIds: [] }, userPreferredProfileIds: 'p1' } }), /userPreferredProfileIds/],
+      [{ ...defaultRequest(), extraFacts: true }, /unexpected request field/],
+    ];
+    for (const [value, pattern] of cases) {
+      assert.throws(() => validateRequest(value), pattern, JSON.stringify(value.policyFacts ?? value));
+    }
   });
 });
 

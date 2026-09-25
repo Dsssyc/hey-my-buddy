@@ -19,6 +19,11 @@ import {
   validateSelectAnswer, waitForRoute, writeJsonFile,
 } from '../plugins/decision.mjs';
 import { MAX_PAYLOAD_BYTES, PROMPT_VERSION, buildPayload, instructionsFor, renderUserTurn } from '../scripts/decision-prompt.mjs';
+import {
+  POLICY_ALTERNATIVE_UNSUPPORTED, POLICY_CHECK_SHAPE, POLICY_CONSTRAINT_MISMATCH, POLICY_FACTS_MISMATCH,
+  POLICY_INDEX_MISMATCH, POLICY_OUTCOME_FALSE, POLICY_SUPPORT_UNKNOWN,
+  derivePolicyFacts, expectedPolicyCheck, validateDecision,
+} from '../scripts/selection-policy.mjs';
 
 /** A fake `ctx.llm` recording every call it receives. */
 function fakeLlm({ chunks, prepareConfig, providers = [{ id: 'deepseek-official', name: 'DeepSeek' }], failPrepare } = {}) {
@@ -55,9 +60,12 @@ function pluginRequest(overrides = {}) {
     { profileId: 'p2', available: false, enabled: true, evidenceIds: [] },
     { profileId: 'p3', available: true, enabled: false, evidenceIds: [] },
   ];
+  const evidence = [{ evidenceId: 'e2', profileId: 'p1' }];
   const candidates = normalizeCandidates(profiles).candidates;
-  const evidence = normalizeEvidence([{ evidenceId: 'e2', profileId: 'p1' }]).evidence;
-  return {
+  const evidenceIndex = normalizeEvidence(evidence).evidence;
+  const routingPreferences = [];
+  const preferences = [];
+  const base = {
     operation: 'select',
     requestId: 'req-1',
     profile: { provider: 'deepseek-official', model: 'deepseek-flash', effort: 'off' },
@@ -65,19 +73,40 @@ function pluginRequest(overrides = {}) {
     task: 'choose a profile',
     profiles,
     cards: [],
-    preferences: [],
-    evidence: [{ evidenceId: 'e2', profileId: 'p1' }],
+    preferences,
+    evidence,
+    annotations: [],
+    routingPreferences,
     candidates,
-    evidenceIndex: evidence,
+    evidenceIndex,
+  };
+  return {
+    ...base,
+    policyFacts: derivePolicyFacts({ profiles, preferences, routingPreferences, hardConstraints: {} }),
     ...overrides,
   };
 }
 
-const TEXT_ANSWER = '{"profileId":"p1","reason":"grounded","evidenceIds":["e1"]}';
+const EMPTY_SUPPORT = { cardProfileIds: [], annotationProfileIds: [] };
+
+/** A complete strict-shape answer whose policy check is derived, not invented. */
+function statedAnswer(request, profileId, overrides = {}) {
+  const check = expectedPolicyCheck(request.policyFacts, request.routingPreferences ?? [], profileId);
+  return {
+    profileId,
+    reason: 'grounded in the supplied table',
+    evidenceIds: [],
+    policyCheck: check,
+    support: EMPTY_SUPPORT,
+    ...overrides,
+  };
+}
+
+const TEXT_ANSWER = JSON.stringify(statedAnswer(pluginRequest(), 'p1', { evidenceIds: ['e1'] }));
 
 describe('prompt assembly', () => {
   test('the instruction prefix is versioned, selection-only and request-free', () => {
-    assert.equal(PROMPT_VERSION, 6);
+    assert.equal(PROMPT_VERSION, 7);
     const select = instructionsFor('select');
     assert.equal(instructionsFor('select'), select, 'the prefix must be stable');
     assert.doesNotMatch(select, /req-1/);
@@ -85,14 +114,21 @@ describe('prompt assembly', () => {
     assert.match(select, /Return exactly one JSON object/);
     assert.match(select, /missing card or annotation means unknown capability evidence/);
     assert.match(select, /adapter names the harness that will run the Buddy, not the codebase or files it may edit/);
-    assert.match(select, /honor that preference unless concrete supplied capability or evidence favors another candidate/);
+    assert.match(select, /Working on the source, scripts, or tests of DSH, ZCode, Codex or another harness does not require running on that harness/);
+    assert.match(select, /Task routing preferences are POSITIVE/);
+    assert.match(select, /never an avoid or exclude instruction/);
+    assert.match(select, /does not prove live quota/);
+    assert.match(select, /prefer economical, user-supported configurations over premium ones/);
+    assert.doesNotMatch(select, /deepseek-flash/);
+    assert.doesNotMatch(select, /deepseek-official/);
+    assert.match(select, /there is no avoid, exclude, or reject outcome/);
     assert.throws(() => instructionsFor('maintain'), /unknown decision operation/);
     assert.throws(() => instructionsFor('delete'), /unknown decision operation/);
   });
 
   test('the shared table precedes per-request data and requestId comes last', () => {
-    const request = { tableRevision: 1, task: 't', operation: 'select', requestId: 'r', profile: {}, profiles: [], cards: [], preferences: [], annotations: [], evidence: [], routingPreferences: [] };
-    assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'annotations', 'evidence', 'tableRevision', 'routingPreferences', 'task', 'requestId']);
+    const request = { tableRevision: 1, task: 't', operation: 'select', requestId: 'r', profile: {}, profiles: [], cards: [], preferences: [], annotations: [], evidence: [], routingPreferences: [], policyFacts: { hardConstraints: {}, taskPreference: { ruleIndex: null, matchingProfileIds: [] }, userPreferredProfileIds: [] } };
+    assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'annotations', 'evidence', 'tableRevision', 'routingPreferences', 'policyFacts', 'task', 'requestId']);
   });
 
   test('two requests against one table revision share the whole table prefix', () => {
@@ -258,13 +294,120 @@ describe('native llm call composition', () => {
         { type: 'finish', reason: { kind: 'stop' } },
       ],
     });
-    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    const request = pluginRequest();
+    const result = await callDecisionModel({ llm }, request, { timeoutMs: 5_000 });
     assert.equal(result.ok, true);
-    assert.deepEqual(result.decision, { profileId: 'p1', reason: 'grounded', evidenceIds: ['e1'] });
+    assert.deepEqual(result.decision, {
+      profileId: 'p1',
+      reason: 'grounded in the supplied table',
+      evidenceIds: ['e1'],
+      policyCheck: expectedPolicyCheck(request.policyFacts, request.routingPreferences, 'p1'),
+      support: EMPTY_SUPPORT,
+    });
     assert.deepEqual(result.resolvedConfig, { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'off' });
     assert.equal('observed' in result, false, 'the plugin must not claim observed identity');
     assert.deepEqual(result.usage, { inputTokens: 3, outputTokens: 4, totalTokens: 7, cacheReadTokens: null, cacheWriteTokens: null, reasoningTokens: 2 });
     assert.equal(result.reasoningBytes, 8);
+  });
+
+  test('a request whose policy facts disagree with its table is refused before any model call', async () => {
+    const request = pluginRequest({ policyFacts: { hardConstraints: {}, taskPreference: { ruleIndex: null, matchingProfileIds: ['p1'] }, userPreferredProfileIds: ['p1'] } });
+    const { llm, calls } = fakeLlm({ chunks: [{ type: 'finish', reason: { kind: 'stop' } }] });
+    const result = await callDecisionModel({ llm }, request, { timeoutMs: 5_000 });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, POLICY_FACTS_MISMATCH);
+    assert.equal(calls.prepare.length, 0, 'no provider resolution may happen');
+    assert.equal(calls.stream.length, 0, 'no model call may happen');
+    assert.equal(calls.listed, 0, 'not even the route wait may start');
+  });
+
+  test('policy violations carry bounded machine codes and are never adopted', async () => {
+    const chunks = (text) => [{ type: 'text-delta', index: 0, text }, { type: 'finish', reason: { kind: 'stop' } }];
+    // A preference rule that legally matches p1 (the model field is present).
+    const flashRule = [{ match: { model: 'deepseek-flash' }, reason: 'Prefer the flash model' }];
+    const withFlashModel = (overrides = {}) => {
+      const profiles = [
+        { profileId: 'p1', available: true, enabled: true, evidenceIds: ['e1'], model: 'deepseek-flash' },
+        { profileId: 'p4', available: true, enabled: true, model: 'deepseek-pro' },
+      ];
+      const request = pluginRequest({
+        profiles,
+        candidates: normalizeCandidates(profiles).candidates,
+        routingPreferences: flashRule,
+        ...overrides,
+      });
+      request.policyFacts = derivePolicyFacts({ profiles: request.profiles, routingPreferences: request.routingPreferences, preferences: [], hardConstraints: {} });
+      return request;
+    };
+    // The historical inversion: a legal match stated as fallback.
+    const inverted = withFlashModel();
+    assert.deepEqual(inverted.policyFacts.taskPreference, { ruleIndex: 0, matchingProfileIds: ['p1'] });
+    const invertedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":0,"outcome":"fallback"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, inverted, { timeoutMs: 5_000 });
+    assert.equal(invertedResult.code, POLICY_OUTCOME_FALSE);
+
+    // An invented hard constraint.
+    const invented = pluginRequest();
+    const inventedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{"adapter":"dsh"},"taskPreference":{"ruleIndex":null,"outcome":"none"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, invented, { timeoutMs: 5_000 });
+    assert.equal(inventedResult.code, POLICY_CONSTRAINT_MISMATCH);
+
+    // An abstention that carries a policyCheck.
+    const abstain = pluginRequest();
+    const abstainResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":null,"reason":"defer","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":null,"outcome":"none"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, abstain, { timeoutMs: 5_000 });
+    assert.equal(abstainResult.code, POLICY_CHECK_SHAPE);
+
+    // Support referencing a profile that was never supplied.
+    const ghostSupport = pluginRequest();
+    const ghostResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":null,"outcome":"none"},"userPreference":"none"},"support":{"cardProfileIds":["ghost"],"annotationProfileIds":[]}}') }).llm }, ghostSupport, { timeoutMs: 5_000 });
+    assert.equal(ghostResult.code, POLICY_SUPPORT_UNKNOWN);
+
+    // An alternative without evidence or eligible support: p4 is legal but not
+    // the preferred candidate, so an unsupported deviation is refused.
+    const unsupported = withFlashModel({ annotations: [] });
+    const unsupportedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p4","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":0,"outcome":"alternative"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, unsupported, { timeoutMs: 5_000 });
+    assert.equal(unsupportedResult.code, POLICY_ALTERNATIVE_UNSUPPORTED);
+
+    // A ruleIndex that disagrees with the input facts.
+    const wrongIndex = withFlashModel();
+    const wrongIndexResult = await callDecisionModel({
+      llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":1,"outcome":"matched"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm,
+    }, wrongIndex, { timeoutMs: 5_000 });
+    assert.equal(wrongIndexResult.code, POLICY_INDEX_MISMATCH);
+
+    // JSON values that Python would conflate with the integer 0 (bool) or refuse
+    // as a type error: both are index mismatches here, matching Python's
+    // explicit null-or-non-bool-integer rule.
+    for (const malformed of ['false', '"0"']) {
+      const answer = '{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":' + malformed + ',"outcome":"matched"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}';
+      const typedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks(answer) }).llm }, withFlashModel(), { timeoutMs: 5_000 });
+      assert.equal(typedResult.code, POLICY_INDEX_MISMATCH, malformed);
+    }
+
+    // An abstention that cites evidence: the plugin's base candidate/evidence
+    // layer refuses first with its established code; the typed module enforces
+    // the same empty-evidenceIds rule directly (asserted below).
+    const citingAbstain = pluginRequest();
+    const citingAbstainResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":null,"reason":"defer","evidenceIds":["ev-1"],"policyCheck":null,"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, citingAbstain, { timeoutMs: 5_000 });
+    assert.equal(citingAbstainResult.code, 'answer-evidence-not-supplied');
+    const directAbstention = { profileId: null, reason: 'defer', evidenceIds: ['ev-1'], policyCheck: null, support: { cardProfileIds: [], annotationProfileIds: [] } };
+    assert.equal(validateDecision(directAbstention, citingAbstain.policyFacts, [], { cardProfileIds: new Set(), annotationProfileIds: new Set() }).code, POLICY_CHECK_SHAPE);
+  });
+
+  test('a supported alternative is adopted with the cited support', async () => {
+    const flashRule = [{ match: { model: 'deepseek-flash' }, reason: 'Prefer the flash model' }];
+    const prefer = pluginRequest({
+      profiles: [
+        { profileId: 'p1', available: true, enabled: true, evidenceIds: ['e1'], model: 'deepseek-pro' },
+        { profileId: 'p4', available: true, enabled: true, model: 'deepseek-flash' },
+      ],
+      routingPreferences: flashRule,
+      annotations: [{ profileId: 'p1', text: 'economical and adequate', revision: 1, updatedAt: '2026-09-25T00:00:00Z' }],
+    });
+    prefer.policyFacts = derivePolicyFacts({ profiles: prefer.profiles, routingPreferences: prefer.routingPreferences, preferences: [], hardConstraints: {} });
+    assert.deepEqual(prefer.policyFacts.taskPreference, { ruleIndex: 0, matchingProfileIds: ['p4'] });
+    const chunks = [{ type: 'text-delta', index: 0, text: '{"profileId":"p1","reason":"supported by the annotation","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":0,"outcome":"alternative"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":["p1"]}}' }, { type: 'finish', reason: { kind: 'stop' } }];
+    const result = await callDecisionModel({ llm: fakeLlm({ chunks }).llm }, prefer, { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.decision.support, { cardProfileIds: [], annotationProfileIds: ['p1'] });
   });
 });
 
@@ -376,13 +519,15 @@ describe('request reading and result writing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'decision-plugin-'));
     try {
       const good = join(dir, 'good.json');
+      const profiles = [{ profileId: 'p1', available: true, enabled: true }];
       writeFileSync(good, JSON.stringify({
         operation: 'select', requestId: 'r', profile: { provider: 'p', model: 'm', effort: 'off' }, tableRevision: 1,
-        task: 't', profiles: [{ profileId: 'p1', available: true, enabled: true }], evidence: [],
+        task: 't', profiles, evidence: [], policyFacts: derivePolicyFacts({ profiles }),
       }));
       const read = readRequest(good);
       assert.equal(read.request.operation, 'select');
       assert.equal(read.request.candidates.get('p1').available, true);
+      assert.deepEqual(read.request.policyFacts, derivePolicyFacts({ profiles }));
       const bad = join(dir, 'bad.json');
       writeFileSync(bad, '{');
       assert.equal(readRequest(bad).problem, 'request-invalid-json');
@@ -393,6 +538,10 @@ describe('request reading and result writing', () => {
       assert.equal(readRequest(bad).problem, 'request-profile-invalid');
       writeFileSync(bad, JSON.stringify({ operation: 'select', profile: { provider: 'p', model: 'm', effort: 'off' }, profiles: [{ profileId: 'p1' }], evidence: 'no' }));
       assert.equal(readRequest(bad).problem, 'request-evidence-invalid');
+      writeFileSync(bad, JSON.stringify({ operation: 'select', profile: { provider: 'p', model: 'm', effort: 'off' }, profiles: [{ profileId: 'p1', available: true, enabled: true }], policyFacts: 'no' }));
+      assert.equal(readRequest(bad).problem, 'request-policy-invalid');
+      writeFileSync(bad, JSON.stringify({ operation: 'select', profile: { provider: 'p', model: 'm', effort: 'off' }, profiles: [{ profileId: 'p1', available: true, enabled: true }] }));
+      assert.equal(readRequest(bad).problem, 'request-policy-invalid', 'the policy facts are part of the current request contract');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

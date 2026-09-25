@@ -89,6 +89,59 @@ try {
 }
 record('request.json', request);
 
+/**
+ * The typed policy acknowledgment for one selection, derived from the request's
+ * own policy facts — the same facts a compliant plugin would state.
+ */
+function policyCheckFor(request, profileId) {
+  const facts = request?.policyFacts ?? {};
+  const task = facts.taskPreference ?? {};
+  const ruleIndex = task.ruleIndex ?? null;
+  const routingPreferences = request?.routingPreferences ?? [];
+  let outcome;
+  if (ruleIndex === null) outcome = routingPreferences.length > 0 ? 'fallback' : 'none';
+  else if ((task.matchingProfileIds ?? []).includes(profileId)) outcome = 'matched';
+  else outcome = 'alternative';
+  const userPreferred = facts.userPreferredProfileIds ?? [];
+  const userPreference = userPreferred.length === 0
+    ? 'none'
+    : (userPreferred.includes(profileId) ? 'matched' : 'alternative');
+  return { hardConstraints: facts.hardConstraints ?? {}, taskPreference: { ruleIndex, outcome }, userPreference };
+}
+
+/** Eligible supplied support; nonempty only when an alternative must be grounded. */
+function supportFor(request, profileId, policyCheck) {
+  const empty = { cardProfileIds: [], annotationProfileIds: [] };
+  if (policyCheck.taskPreference.outcome !== 'alternative' && policyCheck.userPreference !== 'alternative') return empty;
+  const facts = request?.policyFacts ?? {};
+  const scoped = new Set([
+    profileId,
+    ...(facts.taskPreference?.matchingProfileIds ?? []),
+    ...(facts.userPreferredProfileIds ?? []),
+  ]);
+  for (const [key, collection] of [['annotationProfileIds', 'annotations'], ['cardProfileIds', 'cards']]) {
+    const ids = [];
+    for (const entry of request?.[collection] ?? []) {
+      if (scoped.has(entry?.profileId) && !ids.includes(entry.profileId)) ids.push(entry.profileId);
+    }
+    if (ids.length > 0) return { cardProfileIds: key === 'cardProfileIds' ? ids.slice(0, 32) : [], annotationProfileIds: key === 'annotationProfileIds' ? ids.slice(0, 32) : [] };
+  }
+  return empty;
+}
+
+/** The complete default decision for one request, in the current strict shape. */
+function defaultDecision(request) {
+  const profileId = request?.profiles?.[0]?.profileId ?? 'p1';
+  const policyCheck = policyCheckFor(request, profileId);
+  return {
+    profileId,
+    reason: 'shadowed reason',
+    evidenceIds: [],
+    policyCheck,
+    support: supportFor(request, profileId, policyCheck),
+  };
+}
+
 /** The valid synthetic success payload for one request. */
 function successPayload() {
   const answer = process.env.MOCK_DECISION_ANSWER;
@@ -101,15 +154,20 @@ function successPayload() {
     reasoningBytes: 0,
     elapsedSeconds: 0.4,
   };
-  if (answer !== undefined) return { ...envelope, ...JSON.parse(answer) };
-  return {
-    ...envelope,
-    decision: {
-      profileId: request?.profiles?.[0]?.profileId ?? 'p1',
-      reason: 'shadowed reason',
-      evidenceIds: [],
-    },
-  };
+  if (answer === undefined) return { ...envelope, decision: defaultDecision(request) };
+  const parsed = JSON.parse(answer);
+  // An overridden decision keeps the current strict shape: an abstention is
+  // normalized to a null check and empty support (a rogue evidence override is
+  // left in place so the adapter's refusal path stays exercisable).
+  if (parsed.decision !== undefined) {
+    const merged = { ...defaultDecision(request), ...parsed.decision };
+    if (merged.profileId === null) {
+      merged.policyCheck = null;
+      merged.support = { cardProfileIds: [], annotationProfileIds: [] };
+    }
+    parsed.decision = merged;
+  }
+  return { ...envelope, ...parsed };
 }
 
 switch (scenario) {
