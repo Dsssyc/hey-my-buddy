@@ -45,15 +45,15 @@ BRIDGE_ERRORS = (
     "not-ready",
     "agent-gone",
     "agent-not-running",
+    "journal-unavailable",
     "conflict",
     "too-many",
     "internal",
 )
 
-#: A bridge refuses a *new* question with these codes when the owned agent has
-#: already ended. A refused question is recorded as unavailable instead of staying
-#: queued forever; the question is never injected into a new or idle turn.
-TERMINAL_BRIDGE_ERRORS = ("agent-gone", "agent-not-running")
+#: These refusals cannot leave a question queued: either its turn ended or the
+#: bridge could not record it for delivery. No new native turn is started.
+TERMINAL_BRIDGE_ERRORS = ("agent-gone", "agent-not-running", "journal-unavailable")
 
 LIMITS = {
     "maxQuestionBytes": schemas.MAX_QUESTION_BYTES,
@@ -379,7 +379,7 @@ def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: st
                 "inquiryId": inquiry_id,
                 "actor": "live-bridge",
                 "state": "unavailable",
-                "reason": (reason or f"the owned agent already ended; the bridge refused this question ({code})")[:MAX_REASON_CHARS],
+            "reason": (reason or f"the bridge cannot deliver this question ({code})")[:MAX_REASON_CHARS],
             }
         )
     except BoardError:
@@ -554,6 +554,7 @@ def _live(value: Any) -> dict:
         "replyTool": value.get("replyTool"),
         "capability": value.get("capability") or ("inquiry" if value.get("replyTool") else "observe"),
         "supported": value.get("supported") is not False,
+        "deliveryMode": "cooperative-checkpoint" if value.get("deliveryMode") == "cooperative-checkpoint" else None,
         "limitation": value.get("limitation") if isinstance(value.get("limitation"), str) else None,
         "journal": value.get("journal"),
         # Bounded, metadata-only evidence that the native harness asked for an

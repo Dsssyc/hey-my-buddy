@@ -14,6 +14,7 @@ import socket
 import subprocess
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from support import FIXTURE_CATALOG, BoardTestCase
@@ -47,6 +48,7 @@ class FakeBridge:
         self.answer: dict | None = None
         self.refusal: str | None = None
         self.activity = []
+        self.delivery_mode = None
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(self.path))
         self.listener.listen(4)
@@ -76,7 +78,8 @@ class FakeBridge:
                             "version": 1,
                             "id": request["id"],
                             "ok": True,
-                            "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running", "activity": self.activity},
+                            "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running",
+                                      "activity": self.activity, "deliveryMode": self.delivery_mode},
                         }
                     elif request.get("method") == "ask":
                         if self.refusal:
@@ -165,10 +168,12 @@ class TestInquiry(BoardTestCase):
         client = board.client()
         task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
         try:
+            bridge.delivery_mode = "cooperative-checkpoint"
             result = board.call("inquiry_observe", {"runId": task["runId"]})
             self.assertTrue(result["bridge"]["observed"])
             self.assertTrue(result["live"]["available"])
             self.assertEqual(result["live"]["sessionId"], "s-1")
+            self.assertEqual(result["live"]["deliveryMode"], "cooperative-checkpoint")
             self.assertEqual(result["phase"], "active")
             self.assertEqual(result["inflight"] if "inflight" in result else result["execution"]["attemptState"], "starting")
             self.assertEqual(bridge.requests[-1]["method"], "observe")
@@ -364,18 +369,33 @@ class TestInquiry(BoardTestCase):
 
         from buddy.inquiry import observe_capable
 
-        # dsh mounts a private bridge with correlated inquiry; ZCode observes
-        # native activity but deliberately cannot ask, because the installed
-        # protocol has no turn-bound in-turn input. Adapters without a bridge keep
-        # answering honestly instead of half-observing.
+        # DSH supports live injection; ZCode delivers at cooperative tool
+        # checkpoints. Neither capability is inferred by probing a native CLI.
         self.assertTrue(inquiry_capable("dsh"))
         self.assertTrue(observe_capable("dsh"))
-        self.assertFalse(inquiry_capable("zcode"))
+        self.assertTrue(inquiry_capable("zcode"))
         self.assertTrue(observe_capable("zcode"))
         for name in ("command", "external", "not-an-adapter"):
             with self.subTest(adapter=name):
                 self.assertFalse(inquiry_capable(name))
                 self.assertFalse(observe_capable(name))
+
+    def test_journal_failure_refuses_the_question_without_ending_execution(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        try:
+            bridge.refusal = "journal-unavailable"
+            result = board.call("inquiry_observe", {
+                "runId": task["runId"], "inquiryId": "q-journal-failed", "question": "Status?",
+            })
+            self.assertEqual(result["bridge"]["error"], "journal-unavailable")
+            message = client.get_message("q-journal-failed", runId=task["runId"])
+            self.assertEqual(message["state"], "unavailable")
+            self.assertIn("journal-unavailable", message["reason"])
+            self.assertEqual(client.get(runId=task["runId"])["state"], "running")
+        finally:
+            bridge.close()
 
     def test_a_question_refused_after_the_turn_ended_is_recorded_unavailable(self):
         board = self.board()
@@ -415,7 +435,8 @@ class TestInquiry(BoardTestCase):
         finally:
             bridge.close()
 
-    def test_an_observe_only_adapter_refuses_a_question_without_asking_the_bridge(self):
+    @mock.patch("buddy.inquiry.adapter_capabilities", return_value=frozenset({"zcode", "observe"}))
+    def test_an_observe_only_adapter_refuses_a_question_without_asking_the_bridge(self, _capabilities):
         import copy
 
         payload = copy.deepcopy(FIXTURE_CATALOG)
