@@ -183,13 +183,18 @@ _INHERITED_CHILD_KEYS = {
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
     environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS}
-    environment.update(overrides or {})
     environment.update(
         BUDDY_STATE_DIR=str(directory),
         BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
         PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
+        BUDDY_DEV_SOURCE="1",
     )
-    environment.setdefault("BUDDY_DEV_SOURCE", "1")
+    environment.update(overrides or {})
+    # Test-supplied paths may vary within the fixture, but must not redirect its
+    # daemon or installed runtime into another board's state.
+    environment["BUDDY_STATE_DIR"] = str(directory)
+    if not Path(environment["BUDDY_RUNTIME_ROOT"]).resolve().is_relative_to(directory.resolve()):
+        raise ValueError("Test runtime root must be inside its private state directory")
     return environment
 
 

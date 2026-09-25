@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from support import (
-    BoardTestCase, _child_environment, _lock_held, private_state_dir,
+    BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
     stop_private_service, stop_private_workers, wait_for,
 )
 from buddy.transport import _read_endpoint
@@ -59,6 +59,21 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual(environment["BUDDY_RUNTIME_ROOT"], str(directory / "runtime-root"))
             for key in inherited.keys() - {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT"}:
                 self.assertNotIn(key, environment)
+
+    def test_child_environment_preserves_explicit_private_paths(self):
+        with private_state_dir() as directory:
+            runtime_root = directory / "alternate-runtime"
+            python_path = os.pathsep.join((str(PYTHON_ROOT), str(directory / "helpers")))
+            environment = _child_environment(directory, {
+                "BUDDY_STATE_DIR": "/wrong-state",
+                "BUDDY_RUNTIME_ROOT": str(runtime_root),
+                "PYTHONPATH": python_path,
+            })
+            self.assertEqual(environment["BUDDY_STATE_DIR"], str(directory))
+            self.assertEqual(environment["BUDDY_RUNTIME_ROOT"], str(runtime_root))
+            self.assertEqual(environment["PYTHONPATH"], python_path)
+            with self.assertRaisesRegex(ValueError, "private state directory"):
+                _child_environment(directory, {"BUDDY_RUNTIME_ROOT": "/wrong-runtime"})
 
     def test_cleanup_stops_cli_started_replacement_after_restart(self):
         fixture = BoardTestCase("runTest")
