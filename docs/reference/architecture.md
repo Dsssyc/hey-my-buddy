@@ -63,6 +63,8 @@ Task states: `queued`, `running`, `cancelling`, `completed`, `failed`, `cancelle
 
 ## Identity and idempotency
 
+An empty `worker_claim` is a transient queue observation and is not inserted in the commands ledger. Retrying it may observe a task that became eligible later. Once a claim allocates an attempt, its durable identity-bound receipt is immutable and all the replay guarantees below apply. Existing receipts remain untouched; the service performs no pruning or startup conversion.
+
 - `requestId` is the idempotency key. The request is normalized to a canonical specification (canonical realpath cwd, validated fields, defaults) and fingerprinted (version 2). The same `requestId` with an identical fingerprint recovers the existing task; changed input is a `CONFLICT`, including after completion or restart. A governed run additionally compares a request fingerprint covering the execution workspace and Host.
 - `runId` equals `taskId` and selects exactly one task. Read and wait operations never launch a replacement.
 - An attempt is identified by `(attempt_id, generation, worker, nonce)`. The claim capability is derived from a service secret; only a verifier for the nonce is persisted, never the capability in plaintext. A worker persists its nonce and `claimRequestId` **before** claiming, so a committed claim whose reply is lost replays the identical attempt, generation and capability instead of minting a second one.

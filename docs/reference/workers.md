@@ -11,7 +11,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 | `dsh` | `built-in-worker` | `dsh`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery and the verified `decision_execution` flag | Node.js and the `dsh.runner` resource; otherwise `ADAPTER_UNAVAILABLE` |
 | `zcode` | `built-in-worker` | `zcode`, `observe`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed ZCode CLI and an API-key provider; OAuth account providers are unavailable |
 | `codex` | `built-in-worker` | `codex`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed Codex App Server and an existing native account-plan login; API-key accounts are refused |
-| `decision` | `built-in-worker` | `decision` (tool-free, DSH-only) | Node.js and `dsh.decision`; used only by `selection-request`, with independently reserved capacity |
+| `decision` | `built-in-worker` | `decision` (tool-free, DSH-only) | Node.js and `dsh.decision`; used only by `selection-request`, sharing the machine ceiling and selected model-family counter |
 | `command` | `built-in-worker` | `command`, `cancel`, `artifacts`, `deadline`, `argv` | `argv` with 1–256 entries; `argv[0]` must resolve |
 | `external` | `caller-owned-agent` | `external`, `artifacts`, `task-text` | no local process; the caller's agent claims and reports the task itself |
 
@@ -142,6 +142,8 @@ Persisting the nonce and `claimRequestId` **before** claiming is what makes a co
 For recovery, load the recorded identity and replay its claim; restarting this short example generates a fresh identity. A long-running agent must also renew its lease, observe cancellation, enforce its own execution deadline, and persist/replay completion receipts as described below. The demonstration does not implement that supervisor loop.
 
 ## Worker identity and receipts
+
+In contract 0.10.0, an empty claim is a transient observation: it writes no command receipt, and retrying the same request may observe a newly eligible task. The first actual allocation remains durable and replays the same attempt and capability under the original identity. Existing recorded responses are preserved; no historical receipt is deleted or rewritten. This prevents idle polling from growing the work ledger while retaining exactly-once allocation and completion recovery.
 
 - `worker-register` accepts `workerId` (required), `identity` (default `worker:<id>`), `adapter` (default `dsh`), `capabilities` (≤32), `host`, `pid`, `state` and a `commandId` receipt. Re-registering refreshes the record.
 - `worker-claim` requires `workerId`, `claimRequestId` and a `nonce` (16–256 chars), and may target a `taskId`/`runId`. A worker that is unregistered, `stopping`, or already running an attempt is refused (`NOT_REGISTERED`, `WORKER_STOPPING`, `WORKER_BUSY`). An empty claim returns `claim: null` with a `reason` (`no-queued-work`, `not-queued`, `adapter-mismatch`, `capability-mismatch`, `capacity`, `cwd-overlap`, `exclusive-resource`, `awaiting-workspace-preparation`) and a retry delay.
