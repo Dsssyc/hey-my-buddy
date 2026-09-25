@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -243,7 +244,8 @@ class CatalogView:
             for model in entry["models"]:
                 for effort in model["efforts"]:
                     identity = ":".join((entry["adapter"], entry["provider"], model["id"], effort))
-                    profile_id = identity if len(identity) <= 128 else identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
+                    safe_identity = re.sub(r"[^A-Za-z0-9._:-]", "-", identity)
+                    profile_id = identity if safe_identity == identity and len(identity) <= 128 else safe_identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
                     proposals.append({
                         "profileId": profile_id, "label": f"{model['name']} · {effort}"[:200],
                         "adapter": entry["adapter"], "provider": entry["provider"], "model": model["id"], "effort": effort,

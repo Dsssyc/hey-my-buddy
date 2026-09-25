@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from buddy import catalog
+from buddy import catalog, schemas
 from buddy.errors import BoardError
 from support import FIXTURE_CATALOG
 
@@ -48,6 +48,25 @@ class CatalogTests(unittest.TestCase):
         view = catalog.CatalogView.from_payload(self.payload())
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "basic"), ["off"])
         self.assertNotIn("max", view.efforts_for("zcode", "deepseek-official", "deepseek-flash"))
+
+    def test_native_ids_with_context_suffixes_keep_legal_distinct_profile_ids(self):
+        payload = {"source": "claude-native-fixture", "providers": [{
+            "adapter": "claude", "provider": "anthropic", "models": [
+                {"id": "claude-opus-5-5[1m]", "efforts": ["high"]},
+                {"id": "claude-opus-5-5-1m-", "efforts": ["high"]},
+                {"id": "claude-haiku-4-5-20251001", "efforts": ["default"]},
+            ],
+        }]}
+        profiles = catalog.CatalogView.from_payload(payload).proposed_profiles()
+        self.assertEqual([p["model"] for p in profiles], [m["id"] for m in payload["providers"][0]["models"]])
+        self.assertEqual(len({p["profileId"] for p in profiles}), 3)
+        for profile in profiles:
+            # These IDs must survive card/preference/evidence publication, whose
+            # identifier contract is deliberately narrower than native model IDs.
+            schemas.required_string(profile, "profileId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
+        self.assertEqual(profiles, catalog.CatalogView.from_payload(payload).proposed_profiles())
+        self.assertEqual(profiles[2]["effort"], "default")
+        self.assertEqual(profiles[2]["profileId"], "claude:anthropic:claude-haiku-4-5-20251001:default")
 
     def test_duplicate_harness_provider_is_rejected_instead_of_shadowed(self):
         payload = self.payload()
