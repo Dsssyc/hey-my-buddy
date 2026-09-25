@@ -39,6 +39,8 @@ Independent of grouping, governed coding work names its Git isolation contract i
 
 A good packet lets the worker finish without guessing:
 
+Delegate a coherent work unit with a verifiable output. A deterministic file listing, status query or already-known calculation usually belongs in a script; open-ended diagnosis and implementation may benefit from a coding Buddy. A read-only cross-platform artifact audit can still be complex. Give the worker the owning reference and relevant evidence, rather than automatically loading every design document or the complete project history. Choose native subagents and Buddy independently: context isolation and comparative cost/capability solve different problems.
+
 Long work may explicitly set `"timeoutSeconds": 0` to run without an overall execution deadline. An omitted value still defaults to 1800 seconds; a positive value must be 10–86400 seconds. The no-deadline choice belongs to that task and any helper explicitly configured the same way. `await` remains a bounded, resumable caller wait; its window does not end an active execution. Observe long work and use the Host's ordinary `cancel` command if it must stop.
 
 - goal and why; expected inputs and outputs;
@@ -73,6 +75,8 @@ The normal boundary is `outcome: "waiting-host"`: a routing boundary may have no
 
 ### 6. Decide, continue or reroute at the boundary
 
+Keep supervision bounded. Use the durable await path for unchanged external state, and read one compact boundary/result before inspecting the relevant fixed files. A worker can run deterministic CI waiting or artifact collection inside its authorized scope and report a new failure as attention; there is no need for a new high-level model decision on every unchanged poll. Distinguish a failed selector call, provider rate limit, native tool error, scope refusal and an actual failed acceptance check. A fixed selector failure can be resolved on the same goal with an authorized complete configuration and a reason; never hide the failure by creating a duplicate or rewriting shared preferences. A configured effort must be legal and user-enabled for normal routing; do not enable lower efforts or revise preferences just to make a cost claim.
+
 Read `activeRequest`, the routing object, the current turn summary and fixed artifacts with `get`. The Host can approve concrete helper work, decline with a reason, provide new continuation input, supply a complete configuration at a routing boundary, or reroute the same goal after fixing the selector. Use the current revision and saved control file. A helper that depends on the parent's changes should start from the parent's sealed output commit, not an unrelated copy of the original checkout.
 
 The [assistance examples](workflow.md#host-boundaries-and-requests) provide complete helper packets and explain one-use automatic continuation. The [continuation and takeover examples](workflow.md#manual-continuation-and-takeover) cover new Host input, active-helper policy, `targetRunId` for an owned descendant, and transfer of control. Re-read after each decision: another pending request can become active. Nested requests retain their origin and are authorized by the Host.
@@ -88,6 +92,8 @@ Each continuation gets a fresh attempt and recorded resume mode: DSH reconstruct
 ```
 
 Once the goal is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Inspect the actual output commit/diff, changed paths, hashes and logs yourself, then record what you really checked. Artifact verification covers the whole governed goal — the service checks immutable Git objects for the delta from the original goal input tree to the final output tree, including earlier continuation changes, and missing or mismatched objects fail instead of being skipped. An `accepted` verdict requires a verified integration record or an explicit `notRequired` record bound to that artifact; the service resolves the target commit/tree relationship from the repository itself rather than trusting a client hash, and `get` exposes the recorded `integrations`. A task with no repository change records `{"notRequired": true, "reason": "..."}` instead. Acceptance is separate from execution, is tied to that artifact rather than to whichever branch or directory exists later, and never converts a failed execution into a success. A governed wait's `shutdownConfirmed` requires both self and descendant stop evidence, so a delivered or cancelled goal whose descendants are unconfirmed keeps waiting instead of inventing a stopped state.
+
+If a deliverable fails acceptance, record `acknowledge` with `verdict: "rejected"`, the artifact ID and concrete findings before requesting a correction through `continue`. A later accepted review should name any material Host correction or extra verification it required; avoid implying first-pass success from the final status alone. These review records do not invoke an evaluation model. A user-requested batch maintenance can later use them without regenerating cards after every task. Choose checks that exercise the changed boundary; expand or repeat them when code changes or a failure warrants it, not merely because another inspection occurred.
 
 ### 8. Reclaim the managed checkout
 
