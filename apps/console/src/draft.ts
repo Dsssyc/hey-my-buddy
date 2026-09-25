@@ -602,6 +602,12 @@ export function rebaseDraft(
   const baselineLimits = new Map(
     baseline.modelConcurrency.map((entry) => [familyKey(entry), entry.limit]),
   );
+  for (const entry of draft.modelConcurrency) {
+    if (concurrencyLimit(entry.limit) === null) {
+      fail("changed", "modelConcurrency", `${entry.adapter}/${entry.provider}/${entry.model}`,
+        "（请先修正草稿中的无效值）");
+    }
+  }
   for (const change of modelConcurrencyChanges(baseline, draft)) {
     const key = familyKey(change);
     const subject = `${change.adapter}/${change.provider}/${change.model}`;

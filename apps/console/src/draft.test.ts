@@ -578,6 +578,16 @@ describe("model family concurrency", () => {
     expect("active" in adopted.draft.modelConcurrency[0]).toBe(false);
   });
 
+  it("retains invalid local limits during a rebase instead of discarding the input", () => {
+    const baseline = basedAt(1);
+    for (const limit of [33, NaN]) {
+      const draft = setConcurrencyLimit(baseline, flash, limit);
+      const rebased = rebaseDraft(draft, baseline, tableAt(3, 2));
+      expect(rebased.conflicts.some(conflict => conflict.field === "modelConcurrency")).toBe(true);
+      expect(Object.is(flashLimit(rebased.draft), limit)).toBe(true);
+    }
+  });
+
   it("rebases a changed limit three ways against the refreshed table", () => {
     const baseline = basedAt(1);
     const draft = setConcurrencyLimit(baseline, flash, 6);

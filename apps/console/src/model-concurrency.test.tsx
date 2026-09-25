@@ -181,17 +181,21 @@ describe("model family concurrency", () => {
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     const input = concurrencyInput();
     await user.clear(input);
-    await user.type(input, "0");
-    expect(input).toHaveProperty("value", "0");
+    await user.type(input, "33");
+    expect(input).toHaveProperty("value", "33");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByText(/需要输入 1–32 的整数，当前修改不会保存/)).toBeTruthy();
-    expect(screen.queryByText("并发上限未保存")).toBeNull();
-    // Leaving the field restores the committed limit instead of the typed text.
+    // Blurring must not silently publish the intermediate valid prefix (3).
     await user.tab();
-    expect(input).toHaveProperty("value", "2");
+    expect(input).toHaveProperty("value", "33");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    await screen.findByText("没有需要保存的用户修改。");
     expect(f.published).toHaveLength(0);
+    expect(f.operations).not.toContain("evaluation_write_begin");
+    await user.clear(input);
+    await user.type(input, "4");
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published[0].modelConcurrency[0].limit).toBe(4);
   });
 
   it("edits the concurrency limit of an unavailable family", async () => {

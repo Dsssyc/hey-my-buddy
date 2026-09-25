@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { annotationText, emptyCard, setAnnotation, setConcurrencyLimit, setPreference } from "./draft";
 import type { Editor } from "./use-editor";
@@ -23,37 +22,25 @@ const sections = [["overview", "概览"], ["assessment", "评价与意见"], ["p
 const EMPTY_EVIDENCE = "暂无评价证据。你可以让已配置 hey-my-buddy skill 的 Harness 执行一次模型评价更新，或在该 Harness 中设置定时更新任务。";
 
 /**
- * The one shared concurrent-task limit of a model family. Only a valid integer
- * in 1–32 is committed to the draft; anything else stays a visible, unsaved
- * input. The field is remounted per family (keyed by the caller), so switching
- * variants never shows a stale typed value, and an external draft change
- * (rebase or reload) resets the buffer to the committed limit.
+ * Invalid input stays in the local draft so Save cannot silently publish an
+ * earlier valid prefix. NaN represents an empty number field; policy validation
+ * blocks it before acquiring any publication grant.
  */
 function ConcurrencyField({ editor, family, draftLimit, occupancy }: {
   editor: Editor; family: ModelFamily; draftLimit: number; occupancy: number | null;
 }) {
-  const [text, setText] = useState<string | null>(null);
-  useEffect(() => { setText(null); }, [draftLimit]);
-  const parsed = text === null ? NaN : Number(text);
-  const committed = text !== null && Number.isInteger(parsed) && parsed === draftLimit;
-  const shown = text === null || committed ? String(draftLimit) : text;
-  const invalid = !Number.isInteger(Number(shown))
-    || Number(shown) < MODEL_CONCURRENCY_MIN || Number(shown) > MODEL_CONCURRENCY_MAX;
+  const invalid = !Number.isInteger(draftLimit)
+    || draftLimit < MODEL_CONCURRENCY_MIN || draftLimit > MODEL_CONCURRENCY_MAX;
   return <div className="form-pair concurrency-row">
     <label className="field concurrency-value">
       <span>并发任务上限</span>
       <input type="number" inputMode="numeric" min={MODEL_CONCURRENCY_MIN} max={MODEL_CONCURRENCY_MAX}
-        step={1} value={shown} aria-invalid={invalid || undefined} aria-describedby="concurrency-note"
-        onBlur={() => setText(null)}
+        step={1} value={Number.isNaN(draftLimit) ? "" : draftLimit}
+        aria-invalid={invalid || undefined} aria-describedby="concurrency-note"
         onChange={(event) => {
           const raw = event.target.value;
-          setText(raw === String(draftLimit) ? null : raw);
-          const value = Number(raw);
-          if (raw !== "" && Number.isInteger(value)
-            && value >= MODEL_CONCURRENCY_MIN && value <= MODEL_CONCURRENCY_MAX
-            && value !== draftLimit) {
-            editor.setDraft((draft) => (draft ? setConcurrencyLimit(draft, family, value) : draft));
-          }
+          const value = raw === "" ? NaN : Number(raw);
+          editor.setDraft((draft) => (draft ? setConcurrencyLimit(draft, family, value) : draft));
         }} />
     </label>
     <p className="small muted concurrency-occupancy" id="concurrency-note">
