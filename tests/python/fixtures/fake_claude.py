@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 # The exact native shapes the Host verified on the real 2.1.282 CLI through an
@@ -76,7 +77,45 @@ def initialize_response(case):
         account = {"apiProvider": "firstParty", "tokenSource": "none"}
     if case == "third-party":
         account = {"apiProvider": "bedrock", "tokenSource": "api-key"}
+    if case == "null-token":
+        # The real 2.1.283 readback after a claude.ai login: a first-party
+        # provider whose tokenSource is null (Host-verified, 2026-09-26).
+        account = {"apiProvider": "firstParty", "tokenSource": None}
+    if case == "missing-token":
+        account = {"apiProvider": "firstParty"}
     return {"models": DEFAULT_MODELS, "account": account}
+
+
+# The auth status shape the Host verified on the real 2.1.283 CLI after user
+# login (2026-09-26), plus the shapes the bounded readback must refuse.
+AUTH_STATUS_RESPONSES = {
+    "ok": {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
+           "subscriptionType": "pro"},
+    "logged-out": {"loggedIn": False},
+    "third-party": {"loggedIn": True, "authMethod": "api_key", "apiProvider": "bedrock"},
+    "missing-provider": {"loggedIn": True},
+}
+
+
+def auth_status():
+    """The bounded ``auth status --json`` subcommand; state and exit only."""
+    state = read_state()
+    state["authStatusRuns"] = state.get("authStatusRuns", 0) + 1
+    write_state(state)
+    case = os.environ.get("BUDDY_CLAUDE_FIXTURE_AUTH_STATUS", "ok")
+    if case == "nonzero":
+        raise SystemExit(3)
+    if case == "timeout":
+        time.sleep(60)
+    if case == "malformed":
+        sys.stdout.write("{not json\n")
+        sys.stdout.flush()
+        return
+    payload = AUTH_STATUS_RESPONSES.get(case)
+    if payload is None:
+        sys.stderr.write("unknown fixture auth status case\n")
+        raise SystemExit(2)
+    send(payload)
 
 
 def result_frame(case, session_id):
@@ -216,6 +255,9 @@ def run_turn(case):
 def main():
     if "--version" in sys.argv:
         print("2.1.282 (Claude Code fixture)")
+        return
+    if "auth" in sys.argv and "status" in sys.argv:
+        auth_status()
         return
     case = os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "ok")
     state = read_state()

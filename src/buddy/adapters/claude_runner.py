@@ -24,8 +24,8 @@ from pathlib import Path
 
 from .base import ProcessHandle
 from .claude_config import (DEFAULT_EFFORT, DEFAULT_MODEL_ALIAS, TOOL_DENIAL_MESSAGE, account_problem,
-                            cli_command, discovery_args, execution_args, native_environment, sandbox_settings,
-                            settings_policy, third_party_overrides)
+                            cli_command, discovery_args, execution_args, native_environment, read_auth_status,
+                            sandbox_settings, settings_policy, third_party_overrides, token_source_missing)
 from .claude_protocol import (ClaudeProtocolError, Connection, QUOTA_REJECTED_ERROR, QuotaRejected, TurnEvidence,
                               decode_json, model_usage_keys, parse_structured_output, result_quota_denial,
                               total_cost_usd)
@@ -41,12 +41,21 @@ HARNESS_PREAMBLE = (
 )
 
 
-def _catalog(initialize: dict, version: str) -> tuple[dict, dict]:
-    """The catalog from initialize only: no user message, no model turn."""
+def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, dict]:
+    """The catalog from initialize only: no user message, no model turn.
+
+    ``verify_login`` is the bounded auth-status fallback for the one eligible
+    shape (first-party provider, tokenSource absent or null); any other account
+    problem, or a failed readback, is refused with its bounded reason.
+    """
     account = initialize.get("account")
     problem = account_problem(account)
     if problem:
-        raise ClaudeProtocolError("first-party-auth-required", problem)
+        if verify_login is None or not token_source_missing(account):
+            raise ClaudeProtocolError("first-party-auth-required", problem)
+        auth_problem = verify_login()
+        if auth_problem:
+            raise ClaudeProtocolError("first-party-auth-required", auth_problem)
     entries = initialize.get("models")
     if not isinstance(entries, list):
         raise ClaudeProtocolError("invalid-catalog", "Claude returned no model list")
@@ -253,7 +262,11 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         connection.on_request = on_request
 
         initialize = connection.call({"subtype": "initialize"})
-        catalog, account = _catalog(initialize, version)
+        # A missing/null tokenSource is verified through the SAME resolved
+        # executable, allowlisted child environment and cwd as this execution;
+        # every other account problem is refused outright.
+        catalog, account = _catalog(initialize, version, verify_login=lambda: read_auth_status(
+            command, cwd=control["cwd"], environment=environment))
         if discover:
             result.update(status="ok", catalog=catalog, account=account)
         else:

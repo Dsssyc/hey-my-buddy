@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
-from .claude_protocol import OUTCOME_SCHEMA
+from .claude_protocol import OUTCOME_SCHEMA, decode_json
 from .turn_io import canonical_json
 
 #: The effort spelling used for models without native effort levels. Execution
@@ -117,6 +118,20 @@ class ClaudeUnavailable(Exception):
     pass
 
 
+#: The bounded non-interactive auth readback. ``auth status --json`` prints the
+#: local account state and exits; it never opens a prompt, a login flow or a
+#: model turn.
+AUTH_STATUS_ARGUMENTS = ("auth", "status", "--json")
+
+#: The bounded wait for one auth status readback. The probe inspects local login
+#: state only; a CLI that cannot answer within the wait fails closed.
+AUTH_STATUS_TIMEOUT_SECONDS = 10.0
+
+#: The auth status stdout bound. A real status object is far smaller; larger
+#: output is refused unparsed so no unbounded payload is ever copied onward.
+AUTH_STATUS_MAX_BYTES = 1 << 16
+
+
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
     value = env.get("BUDDY_CLAUDE_CLI") or shutil.which("claude", path=env.get("PATH"))
@@ -135,7 +150,12 @@ def third_party_overrides(environment: dict | None = None) -> list[str]:
 
 
 def account_problem(account: object) -> str | None:
-    """Reject any initialize account readback that is not first-party Anthropic."""
+    """Reject any initialize account readback that is not first-party Anthropic.
+
+    A first-party account whose ``tokenSource`` is absent or null also fails
+    here; ``token_source_missing`` marks it as the one shape the runner may
+    re-verify through one bounded auth status readback before refusing.
+    """
     if not isinstance(account, dict):
         return "Claude Code returned no account identity in initialize"
     provider = account.get("apiProvider")
@@ -145,6 +165,67 @@ def account_problem(account: object) -> str | None:
     if not isinstance(token_source, str) or not token_source or token_source == "none":
         return "Claude Code reports no first-party login (tokenSource none)"
     return None
+
+
+def token_source_missing(account: object) -> bool:
+    """The only fallback-eligible shape: first-party provider, tokenSource absent or null.
+
+    The real CLI reports this after a claude.ai login (Host-verified 2.1.283,
+    2026-09-26). An explicit ``"none"`` is a decision rather than an absence
+    and stays refused without any readback, as does every other non-string,
+    empty or non-first-party shape.
+    """
+    return (isinstance(account, dict)
+            and account.get("apiProvider") in FIRST_PARTY_API_PROVIDERS
+            and account.get("tokenSource") is None)
+
+
+def auth_status_problem(payload: object) -> str | None:
+    """Accept only a parsed status with loggedIn exactly true and a first-party provider.
+
+    The provider must stay inside the same first-party set initialize already
+    reported, so the readback corroborates the initialize account identity;
+    anything unknown, logged out or third-party fails closed.
+    """
+    if not isinstance(payload, dict):
+        return "Claude auth status returned no readable status object"
+    if payload.get("loggedIn") is not True:
+        return "Claude auth status does not report an active first-party login"
+    if payload.get("apiProvider") not in FIRST_PARTY_API_PROVIDERS:
+        return "Claude auth status is not first-party; Bedrock, Vertex and Foundry are unsupported in P1"
+    return None
+
+
+def read_auth_status(command: list[str], *, cwd: str, environment: dict,
+                     timeout: float | None = None) -> str | None:
+    """Prove a missing-tokenSource account through the same native CLI only.
+
+    One bounded ``auth status --json`` child with the native execution's exact
+    resolved executable, allowlisted environment and cwd; no prompt, no login
+    attempt, no model call. Returns a bounded refusal reason, or None when the
+    readback proves an explicit first-party login. Raw stdout, stderr and every
+    parsed account field stay inside this function.
+    """
+    overrides = third_party_overrides(environment)
+    if overrides:
+        return "Claude refuses third-party provider overrides: " + ", ".join(overrides)
+    try:
+        completed = subprocess.run([*command, *AUTH_STATUS_ARGUMENTS], cwd=cwd, env=environment,
+                                   capture_output=True,
+                                   timeout=AUTH_STATUS_TIMEOUT_SECONDS if timeout is None else timeout)
+    except subprocess.TimeoutExpired:
+        return "the Claude auth status readback exceeded its time bound"
+    except OSError:
+        return "the Claude auth status readback could not start"
+    if completed.returncode != 0:
+        return "the Claude auth status readback exited nonzero"
+    if len(completed.stdout) > AUTH_STATUS_MAX_BYTES:
+        return "the Claude auth status readback exceeded its output bound"
+    try:
+        payload = decode_json(completed.stdout)
+    except (ValueError, RecursionError):
+        return "the Claude auth status readback was not valid JSON"
+    return auth_status_problem(payload)
 
 
 def settings_policy(environment: dict | None = None) -> str | None:

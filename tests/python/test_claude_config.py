@@ -1,4 +1,4 @@
-"""Claude configuration policy unit tests; no native process is started."""
+"""Claude configuration policy unit tests; no real Claude Code CLI process is started."""
 from __future__ import annotations
 
 import os
@@ -8,12 +8,14 @@ from pathlib import Path
 from unittest import mock
 
 from buddy.adapters import claude_config
-from buddy.adapters.claude_config import (ClaudeUnavailable, DEFAULT_EFFORT, EMPTY_MCP_CONFIG,
-                                          MODEL_FALLBACK_VARIABLES, NATIVE_ENVIRONMENT_ALLOWLIST,
+from buddy.adapters.claude_config import (AUTH_STATUS_ARGUMENTS, AUTH_STATUS_MAX_BYTES,
+                                          AUTH_STATUS_TIMEOUT_SECONDS, ClaudeUnavailable, DEFAULT_EFFORT,
+                                          EMPTY_MCP_CONFIG, MODEL_FALLBACK_VARIABLES, NATIVE_ENVIRONMENT_ALLOWLIST,
                                           PACKAGE_REGISTRY_DOMAINS, READONLY_TOOLS, THIRD_PARTY_OVERRIDE_VARIABLES,
-                                          WRITABLE_TOOLS, account_problem, cli_command, discovery_args, execution_args,
-                                          native_environment, sandbox_settings, settings_policy,
-                                          third_party_overrides)
+                                          WRITABLE_TOOLS, account_problem, auth_status_problem, cli_command,
+                                          discovery_args, execution_args, native_environment, read_auth_status,
+                                          sandbox_settings, settings_policy, third_party_overrides,
+                                          token_source_missing)
 from buddy.adapters.claude_protocol import OUTCOME_SCHEMA
 from buddy.adapters.turn_io import canonical_json
 
@@ -63,6 +65,90 @@ class ClaudeConfigTests(unittest.TestCase):
         self.assertIn("first-party", account_problem({"apiProvider": "bedrock", "tokenSource": "api-key"}))
         self.assertIn("tokenSource none", account_problem({"apiProvider": "firstParty", "tokenSource": "none"}))
         self.assertIsNotNone(account_problem(None))
+
+    def test_missing_or_null_token_source_is_the_only_fallback_shape(self):
+        self.assertTrue(token_source_missing({"apiProvider": "firstParty", "tokenSource": None}))
+        self.assertTrue(token_source_missing({"apiProvider": "firstParty"}))
+        self.assertTrue(token_source_missing({"apiProvider": "anthropic"}))
+        for account in ({"apiProvider": "firstParty", "tokenSource": "subscription"},
+                        {"apiProvider": "firstParty", "tokenSource": "none"},
+                        {"apiProvider": "firstParty", "tokenSource": ""},
+                        {"apiProvider": "firstParty", "tokenSource": 7},
+                        {"apiProvider": "bedrock", "tokenSource": None},
+                        {}, None):
+            self.assertFalse(token_source_missing(account))
+        # The gate itself keeps refusing every non-login shape; only the runner
+        # re-checks the eligible shape through the bounded readback.
+        self.assertIn("tokenSource none", account_problem({"apiProvider": "firstParty", "tokenSource": None}))
+
+    def test_auth_status_problem_requires_exactly_logged_in_first_party(self):
+        self.assertIsNone(auth_status_problem({"loggedIn": True, "authMethod": "claude.ai",
+                                               "apiProvider": "firstParty", "subscriptionType": "pro"}))
+        self.assertIsNone(auth_status_problem({"loggedIn": True, "apiProvider": "anthropic"}))
+        for payload in (None, [], "logged in", 3, {}, {"loggedIn": False, "apiProvider": "firstParty"},
+                        {"loggedIn": "true", "apiProvider": "firstParty"},
+                        {"loggedIn": 1, "apiProvider": "firstParty"},
+                        {"loggedIn": True, "apiProvider": "bedrock"},
+                        {"loggedIn": True, "apiProvider": None}, {"loggedIn": True}):
+            reason = auth_status_problem(payload)
+            self.assertTrue(reason)
+            self.assertLessEqual(len(reason), 200)
+
+    def test_read_auth_status_fails_closed_with_bounded_reasons(self):
+        with tempfile.TemporaryDirectory(prefix="buddy-claude-auth-") as temp:
+            made = [0]
+
+            def fake_cli(body: str) -> list[str]:
+                made[0] += 1
+                path = Path(temp) / f"cli-{made[0]}"
+                path.write_text("#!/bin/sh\n" + body + "\n")
+                path.chmod(0o755)
+                return [str(path)]
+
+            environment = {"PATH": "/usr/bin:/bin", "HOME": temp}
+            self.assertIsNone(read_auth_status(
+                fake_cli('printf \'%s\' \'{"loggedIn":true,"authMethod":"claude.ai",'
+                         '"apiProvider":"firstParty","subscriptionType":"pro"}\''),
+                cwd=temp, environment=environment))
+            for body, expected in (("exit 3", "exited nonzero"),
+                                   ("printf '%s' '{not json'", "not valid JSON"),
+                                   ("printf '%s' '{\"loggedIn\":false,\"apiProvider\":\"firstParty\"}'",
+                                    "active first-party login"),
+                                   ("printf '%s' '{\"loggedIn\":true,\"apiProvider\":\"bedrock\"}'",
+                                    "not first-party"),
+                                   ("printf '%s' '{}'", "active first-party login")):
+                reason = read_auth_status(fake_cli(body), cwd=temp, environment=environment)
+                self.assertIn(expected, reason)
+                self.assertLessEqual(len(reason), 200)
+            self.assertIn("output bound", read_auth_status(fake_cli("yes x | head -c 1048577"),
+                                                           cwd=temp, environment=environment))
+            self.assertIn("time bound", read_auth_status(fake_cli("sleep 5"), cwd=temp,
+                                                         environment=environment, timeout=0.3))
+            secret = read_auth_status(fake_cli("printf '%s' '{}'"), cwd=temp,
+                                      environment={"PATH": "/usr/bin:/bin",
+                                                   "ANTHROPIC_BASE_URL": "https://secret-gateway.example.invalid"})
+            self.assertIn("third-party provider overrides", secret)
+            self.assertNotIn("secret-gateway", secret)
+
+    def test_auth_status_probe_arguments_and_bounds_are_fixed(self):
+        self.assertEqual(AUTH_STATUS_ARGUMENTS, ("auth", "status", "--json"))
+        self.assertGreaterEqual(AUTH_STATUS_TIMEOUT_SECONDS, 5)
+        self.assertLessEqual(AUTH_STATUS_TIMEOUT_SECONDS, 30)
+        self.assertGreaterEqual(AUTH_STATUS_MAX_BYTES, 1 << 16)
+
+    def test_ambiguous_or_nonfinite_auth_status_cannot_prove_login(self):
+        malformed = [
+            b'{"loggedIn":false,"loggedIn":true,"apiProvider":"firstParty"}',
+            b'{"loggedIn":true,"apiProvider":"firstParty","unused":NaN}',
+        ]
+        for payload in malformed:
+            with self.subTest(size=len(payload)), mock.patch.object(
+                    claude_config.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=payload)):
+                self.assertEqual(read_auth_status(["/fixture/claude"], cwd="/", environment={}),
+                                 "the Claude auth status readback was not valid JSON")
+        with mock.patch.object(claude_config.subprocess, "run", return_value=mock.Mock(
+                returncode=0, stdout=b'[' * 30000 + b']' * 30000)):
+            self.assertIsNotNone(read_auth_status(["/fixture/claude"], cwd="/", environment={}))
 
     def test_settings_policy_requires_exact_isolated_value(self):
         self.assertEqual(settings_policy({"BUDDY_CLAUDE_SETTINGS_POLICY": "isolated"}), "isolated")

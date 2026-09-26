@@ -315,6 +315,67 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
         self.assertNotIn("--session-id", state["argv"])
 
+    def test_discovery_accepts_missing_or_null_token_source_with_verified_auth(self):
+        for case in ("null-token", "missing-token"):
+            with self.subTest(case=case):
+                (self.root / "fixture.json").unlink(missing_ok=True)
+                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case,
+                               "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": "ok"}
+                with mock.patch.dict("os.environ", environment, clear=False):
+                    catalog = self.adapter.discover_models()
+                self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
+                                 ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
+                                  "claude-haiku-4-5-20251001"])
+                state = self.fixture_state()
+                self.assertTrue(state["initialize"])
+                self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
+                self.assertEqual(state["authStatusRuns"], 1,
+                                 "the missing tokenSource is verified by exactly one bounded auth status readback")
+
+    def test_governed_turn_accepts_null_token_source_with_verified_auth(self):
+        context = self.context("null-token")
+        context.environment["BUDDY_CLAUDE_FIXTURE_AUTH_STATUS"] = "ok"
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        state = self.fixture_state()
+        self.assertEqual(state["userTurns"], 1)
+        self.assertEqual(state["authStatusRuns"], 1)
+
+    def test_explicit_none_stays_refused_without_an_auth_status_process(self):
+        (self.root / "fixture.json").unlink(missing_ok=True)
+        environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "no-auth",
+                       "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": "ok"}
+        with mock.patch.dict("os.environ", environment, clear=False):
+            with self.assertRaises(BoardError) as caught:
+                self.adapter.discover_models()
+        self.assertIn("tokenSource none", caught.exception.message)
+        state = self.fixture_state()
+        self.assertEqual(state.get("authStatusRuns", 0), 0,
+                         "an explicit none is a decision; no auth status readback may run")
+        self.assertEqual(state["userTurns"], 0)
+
+    def test_unverified_auth_status_fails_closed_with_bounded_reasons(self):
+        for proof, expected in (("logged-out", "active first-party login"),
+                                ("third-party", "not first-party"),
+                                ("missing-provider", "not first-party"),
+                                ("malformed", "not valid JSON"),
+                                ("nonzero", "exited nonzero"),
+                                ("timeout", "time bound")):
+            with self.subTest(proof=proof):
+                (self.root / "fixture.json").unlink(missing_ok=True)
+                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "null-token",
+                               "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": proof}
+                with mock.patch.dict("os.environ", environment, clear=False):
+                    with self.assertRaises(BoardError) as caught:
+                        self.adapter.discover_models()
+                reason = caught.exception.message
+                self.assertIn(expected, reason)
+                self.assertLessEqual(len(reason), 200, "the refusal reason stays bounded")
+                for leak in ("claude.ai", "subscriptionType", "{not json"):
+                    self.assertNotIn(leak, reason)
+                self.assertEqual(self.fixture_state()["userTurns"], 0)
+
     def test_available_uses_cached_metadata_and_reports_missing_first_party_auth(self):
         with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}, clear=False):
             self.assertEqual(self.adapter.available(), (True, None))

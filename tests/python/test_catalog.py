@@ -13,6 +13,48 @@ from support import FIXTURE_CATALOG
 
 
 class CatalogTests(unittest.TestCase):
+    def test_missing_harness_is_not_started_by_explicit_discovery(self):
+        from buddy.adapters.base import Adapter
+
+        class MissingHarness(Adapter):
+            model_discovery = True
+
+            def available(self):
+                return False, "fixture executable missing"
+
+            def discover_models(self):
+                raise AssertionError("No controller should be spawned for a missing executable")
+
+        with patch("buddy.adapters.adapters", return_value={"missing": MissingHarness()}), \
+             patch.object(catalog, "_override", return_value=None):
+            result = catalog.discover()
+        self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown",
+                                                  "reason": "fixture executable missing"}])
+
+    def test_explicit_discovery_refreshes_cached_unavailable_authentication(self):
+        from buddy.adapters import claude
+        native = {"source": "claude-fixture", "providers": [{"adapter": "claude", "provider": "anthropic",
+                  "models": [{"id": "fixture-opus", "efforts": ["high"]}]}]}
+        instance = claude.ClaudeAdapter()
+        claude._reset_metadata_cache()
+        self.addCleanup(claude._reset_metadata_cache)
+        with patch.object(claude, "cli_command", return_value=["/fixture/claude"]), \
+             patch.object(claude, "third_party_overrides", return_value=[]), \
+             patch.object(claude, "_probe_native_metadata", side_effect=[
+                 BoardError("ADAPTER_UNAVAILABLE", "fixture not logged in"), {"catalog": native}]) as probe, \
+             patch("buddy.adapters.adapters", return_value={"claude": instance}), \
+             patch.object(catalog, "_override", return_value=None):
+            self.assertFalse(instance.available()[0])
+            self.assertFalse(instance.available()[0])
+            self.assertEqual(probe.call_count, 1)
+            refreshed = catalog.discover()
+            self.assertEqual(refreshed["discoveries"], [{"adapter": "claude", "status": "complete", "reason": None}])
+            self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")
+            self.assertTrue(instance.available()[0])
+            profiles = catalog.CatalogView.from_payload(refreshed).proposed_profiles()
+            self.assertEqual(len(profiles), 1)
+            self.assertFalse(profiles[0]["enabled"], "Discovery cannot grant execution permission")
+
     def payload(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
         payload["providers"].append({

@@ -39,6 +39,18 @@ class ClaudeAdapter(Adapter):
     model_discovery = True
 
     def available(self) -> tuple[bool, str | None]:
+        usable, reason = self.discovery_available()
+        if not usable:
+            return False, reason
+        try:
+            _cached_native_metadata()
+        except BoardError as error:
+            return False, error.message
+        return True, None
+
+    def discovery_available(self) -> tuple[bool, str | None]:
+        # Explicit discovery must be able to recheck login even when a previous
+        # execution-readiness query cached an unauthenticated result.
         try:
             cli_command()
         except ClaudeUnavailable as error:
@@ -46,10 +58,6 @@ class ClaudeAdapter(Adapter):
         overrides = third_party_overrides()
         if overrides:
             return False, "Claude refuses third-party provider overrides: " + ", ".join(overrides)
-        try:
-            _cached_native_metadata()
-        except BoardError as error:
-            return False, error.message
         return True, None
 
     def prepare(self, context: ExecutionContext) -> None:

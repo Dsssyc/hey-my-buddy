@@ -145,7 +145,7 @@ def discovery_available() -> bool:
     if os.environ.get(CATALOG_FILE_ENV):
         return Path(os.environ[CATALOG_FILE_ENV]).expanduser().is_file()
     from .adapters import adapters
-    return any(item.model_discovery and item.available()[0] for item in adapters().values())
+    return any(item.model_discovery and item.discovery_available()[0] for item in adapters().values())
 
 
 def discover() -> dict:
@@ -157,7 +157,7 @@ def discover() -> dict:
     for name, instance in adapters().items():
         if not instance.model_discovery:
             continue
-        usable, reason = instance.available()
+        usable, reason = instance.discovery_available()
         if not usable:
             warnings.append(f"{name}: {reason or 'harness unavailable'}")
             discoveries.append({"adapter": name, "status": "unknown", "reason": reason or "harness unavailable"})

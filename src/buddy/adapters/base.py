@@ -124,6 +124,10 @@ class Adapter:
     def discover_models(self) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")
 
+    def discovery_available(self) -> tuple[bool, str | None]:
+        """Whether fresh metadata can be queried; execution readiness may be stricter."""
+        return self.available()
+
     def decision_available(self) -> tuple[bool, str | None]:
         return False, f"{self.name} has no verified tool-free decision execution"
 
