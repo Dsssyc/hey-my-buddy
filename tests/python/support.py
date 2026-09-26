@@ -260,12 +260,12 @@ class InProcessBoard:
             assets_dir=options.get("console_assets", self.directory / "console-assets"),
         )
 
-    def console_action(self, action: str) -> dict:
+    def console_action(self, params: dict) -> dict:
         if self.console is None:  # pragma: no cover - only during construction
             return {"url": None, "running": False, "readOnly": False}
-        if action == "close":
-            return self.console.close()
-        if action == "status":
+        if params["action"] == "close":
+            return self.console.close(expected_console_id=params.get("expectedConsoleId"))
+        if params["action"] == "status":
             return self.console.status()
         return self.console.start()
 

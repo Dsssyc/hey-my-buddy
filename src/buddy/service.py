@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+import re
+
 from . import runtime, schemas
 from . import workflow as workflow_module
 from .adapters import capability_report
@@ -209,7 +211,7 @@ class BoardService(_BaseResource):
         control: dict,
         on_stop: Callable[[dict], dict],
         on_restart: Callable[[dict], dict],
-        console_factory: Callable[[str], dict] | None = None,
+        console_factory: Callable[[dict], dict] | None = None,
         runtime_directory: Path | None = None,
         evaluation: EvaluationStore | None = None,
     ):
@@ -373,13 +375,17 @@ class BoardService(_BaseResource):
     # -- console and evaluation ---------------------------------------------
     def console(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"action"}, "console")
+            schemas.reject_unknown(params, {"action", "expectedConsoleId"}, "console")
             action = schemas.optional_string(params, "action") or "open"
             if action not in ("open", "close", "status"):
                 raise BoardError("INVALID_ARGUMENT", "action must be 'open', 'close' or 'status'")
+            if "expectedConsoleId" in params:
+                if action != "close":
+                    raise BoardError("INVALID_ARGUMENT", "expectedConsoleId is only valid for close")
+                params["expectedConsoleId"] = schemas.required_string(params, "expectedConsoleId", max_length=24, pattern=re.compile(r"^[0-9a-f]{24}$"))
             if self.console_factory is None:
                 raise BoardError("UNSUPPORTED", "This service build has no console")
-            return self.console_factory(action)
+            return self.console_factory({**params, "action": action})
 
         return self._guard("console", request_json, handler)
 

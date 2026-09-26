@@ -51,13 +51,18 @@ def http_call(host: str, port: int, method: str, path: str, *, body=None, header
 class Browser:
     """A minimal same-origin browser client that keeps the private session cookie."""
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, *, redeem: bool = True):
         parts = urlsplit(url)
         self.host = parts.hostname or "127.0.0.1"
         self.port = parts.port or 80
         self.prefix = parts.path.rstrip("/")
         self.origin = f"http://{self.host}:{self.port}"
         self.cookie: str | None = None
+        self.entry_headers: dict = {}
+        if redeem and parts.path.startswith("/launch/"):
+            status, self.entry_headers, body = self.call("GET", parts.path)
+            assert status == 303, body[:400]
+            self.prefix = self.entry_headers["location"].rstrip("/")
 
     # -- raw ----------------------------------------------------------------
     def call(self, method: str, path: str, *, body=None, headers=None):
@@ -135,10 +140,11 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["csrfToken", "tableRevision", "gate", "configuration", "profiles", "modelConcurrency", "unavailableProfileCount", "preferences", "annotations", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "csrfToken", "tableRevision", "gate", "configuration", "profiles", "modelConcurrency", "unavailableProfileCount", "preferences", "annotations", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
         self.assertTrue(snapshot["csrfToken"])
-        self.assertIn("httponly", headers["set-cookie"].lower())
-        self.assertIn("samesite=strict", headers["set-cookie"].lower())
+        self.assertIn("httponly", browser.entry_headers["set-cookie"].lower())
+        self.assertIn("samesite=strict", browser.entry_headers["set-cookie"].lower())
+        self.assertNotIn("set-cookie", headers)
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertIn("content-security-policy", headers)
         self.assertNotIn("access-control-allow-origin", headers)
@@ -166,7 +172,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             body=body,
             headers={"Host": f"{browser.host}:{browser.port}", "Origin": browser.origin, "X-Buddy-CSRF": csrf},
         )
-        self.assertEqual(status, 403, data)
+        self.assertEqual(status, 401, data)
         # Session cookie but no CSRF header.
         status, _headers, _data = browser.call("POST", browser.prefix + "/api/command", body=body)
         self.assertEqual(status, 403)
@@ -177,7 +183,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             body=body,
             headers={"Cookie": "buddy_console_session=forged", "X-Buddy-CSRF": csrf},
         )
-        self.assertEqual(status, 403)
+        self.assertEqual(status, 401)
         # Wrong CSRF value.
         status, _headers, _data = browser.call(
             "POST", browser.prefix + "/api/command", body=body, headers={"X-Buddy-CSRF": "nope"}
@@ -425,7 +431,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertIn("application/json", headers["content-type"])
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertNotIn("access-control-allow-origin", headers)
-        self.assertIn("set-cookie", headers)
+        self.assertNotIn("set-cookie", headers)
         payload = json.loads(body)
         self.assertEqual(sorted(payload), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
         self.assertEqual(payload["runs"], payload["tasks"])
@@ -435,12 +441,11 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         direct = board.call("task_list", {"limit": 5})
         self.assertEqual([row["runId"] for row in payload["runs"]], [row["runId"] for row in direct["runs"]])
         self.assertEqual(payload["total"], direct["total"])
-        # Reads stay on the ordinary GET trust boundary: no cookie or CSRF header is
-        # needed, and the write allowlist is untouched.
-        anonymous = Browser(board.console.url)
+        # A public URL is not a credential. History reads require a cookie, but no
+        # CSRF header or write permission; task_list is not a POST command.
+        anonymous = Browser(browser.origin + browser.prefix + "/")
         status, _headers, body = anonymous.get("/api/tasks")
-        self.assertEqual(status, 200, body[:300])
-        self.assertEqual(json.loads(body)["total"], 1)
+        self.assertEqual(status, 401, body[:300])
         csrf = browser.bootstrap()["csrfToken"]
         status, _headers, body = browser.command("task_list", {}, csrf=None)
         self.assertEqual(status, 403, body[:300])
@@ -634,14 +639,8 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(code, 0, opened)
             self.assertFalse(opened["readOnly"])
             self.assertTrue(opened["url"].startswith("http://127.0.0.1:"))
-            parts = urlsplit(opened["url"])
-            status, headers, body = http_call(
-                parts.hostname,
-                parts.port,
-                "GET",
-                parts.path + "api/console",
-                headers={"Host": f"{parts.hostname}:{parts.port}"},
-            )
+            browser = Browser(opened["url"])
+            status, headers, body = browser.get("/api/console")
             self.assertEqual(status, 200, body[:300])
             snapshot = json.loads(body)
             self.assertEqual(snapshot["tableRevision"], 0)

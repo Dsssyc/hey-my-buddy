@@ -653,12 +653,12 @@ class Daemon:
             ),
         }
 
-    def on_console(self, action: str) -> dict:
+    def on_console(self, params: dict) -> dict:
         if self.console is None:  # pragma: no cover - the console exists once run() registered the resource
             raise ServiceError("SERVICE_UNAVAILABLE", "The console is not available in this service state")
-        if action == "close":
-            return self.console.close()
-        if action == "status":
+        if params["action"] == "close":
+            return self.console.close(expected_console_id=params.get("expectedConsoleId"))
+        if params["action"] == "status":
             return self.console.status()
         return self.console.start()
 
