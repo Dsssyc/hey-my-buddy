@@ -74,11 +74,9 @@ class ClaudeAdapter(Adapter):
         if mode not in ("initial", "reconstructed-new-session"):
             raise BoardError("INVALID_ARGUMENT", "Claude requires an explicit initial or reconstructed turn mode", adapter=self.name)
         if settings_policy(context.environment) is None:
-            # The settings-source selection is a user decision still pending; the
-            # strict isolated policy must be an explicit input, never a silent default.
             raise BoardError("ADAPTER_UNAVAILABLE",
-                             "Claude execution requires BUDDY_CLAUDE_SETTINGS_POLICY=isolated; "
-                             "the settings-source selection is user-pending", adapter=self.name)
+                             "Claude P1 supports only BUDDY_CLAUDE_SETTINGS_POLICY=isolated; "
+                             "an explicit unsupported settings policy was supplied", adapter=self.name)
         overrides = third_party_overrides(context.environment)
         if overrides:
             raise BoardError("ADAPTER_UNAVAILABLE", "Claude refuses third-party provider overrides: " + ", ".join(overrides), adapter=self.name)

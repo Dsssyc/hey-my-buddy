@@ -35,6 +35,33 @@ def git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def process_identity(pid: int) -> dict | None:
+    """Diagnostic only: never signal a process by a PID read from a marker."""
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "pid=,ppid=,lstart="],
+                            capture_output=True, text=True, timeout=5)
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        return None
+    parts = result.stdout.split(maxsplit=2)
+    if result.returncode or len(parts) != 3 or int(parts[0]) != pid:
+        raise RuntimeError("The probe process could not be inspected")
+    return {"pid": pid, "parentPid": int(parts[1]), "started": " ".join(parts[2].split())}
+
+
+def belongs_to_controller(pid: int, controller_pid: int) -> bool:
+    seen = set()
+    for _ in range(32):
+        if pid == controller_pid:
+            return bool(seen)
+        if pid <= 1 or pid in seen:
+            return False
+        seen.add(pid)
+        identity = process_identity(pid)
+        if identity is None:
+            return False
+        pid = identity["parentPid"]
+    return False
+
+
 def prompt(mode: str, nonce: str, outside: Path) -> str:
     if mode == "structured":
         return f"Protocol acceptance probe. Return a completed structured outcome whose summary is {nonce}. No file edits, Bash, network, subagents, or other work; use the supplied structured result mechanism."
@@ -42,17 +69,17 @@ def prompt(mode: str, nonce: str, outside: Path) -> str:
         return ("Permission acceptance probe in a disposable worktree. Request writing the private project file "
                 ".claude/settings.local.json with the harmless object {} using the native file-writing tool. "
                 "This deliberately exercises Host approval. Do not bypass a refusal or try another tool. "
-                f"If refused, return structured attention with summary {nonce}. Do not touch any global configuration.")
+                f"If refused, return structured attention with summary {nonce}. Do not use Bash or touch any global configuration.")
     if mode == "cancel":
-        return ("Cancellation acceptance probe. Use the sandboxed Bash tool to run sleep 45 in this worktree, "
+        return ("Cancellation acceptance probe. Use the sandboxed Bash tool to run exactly "
+                "`echo $$ > probe-output.txt; sleep 45` in this worktree (write the shell PID, then wait). "
                 f"then return completed summary {nonce}. Make no other file, network or subagent requests.")
-    return ("Sandbox acceptance probe in a disposable worktree. With sandboxed Bash, write the word inside "
-            "to probe-output.txt. Next attempt to write the word forbidden to the explicitly provided test "
-            f"sentinel {outside}; it must be denied and its original contents retained. Then try HEAD requests "
-            "with a five-second client timeout to https://registry.npmjs.org/ (registry allowlist) and "
-            "https://example.com/ (must be denied). Do not disable the sandbox, request a new domain, retry "
-            "a denial, or launch subagents. Report the actual observations and any inability to test as "
-            f"structured attention/complete as appropriate, with summary containing {nonce}.")
+    return ("Sandbox acceptance probe in a disposable worktree. Using sandboxed Bash, run exactly "
+            "`python3 sandbox-check.py` once. The Host-prepared immutable script tests an inside write, "
+            "one write to a Host-owned outside sentinel, and short HEAD requests to registry.npmjs.org "
+            "and example.com. Do not edit the script/input or manufacture observations; do not disable "
+            "the sandbox, request new domains, retry, or launch subagents. Then return the supplied "
+            f"structured outcome with summary containing {nonce} and report the actual observations.")
 
 
 def run(args) -> dict:
@@ -98,16 +125,24 @@ def run(args) -> dict:
         native = adapter.discover_models()
         candidates=[m for p in native["providers"] if p["provider"]=="anthropic" for m in p["models"]]
         assert any(m["id"]==args.model and args.effort in m["efforts"] for m in candidates), "Model/effort absent from authenticated native catalog"
+        nonce="claude-probe-"+uuid.uuid4().hex
+        outside=root/"outside-sentinel.txt";outside.write_text("original\n")
         source=root/"source";source.mkdir()
         git(source,"init","-q")
         (source/"README.md").write_text("Disposable Claude P1 protocol acceptance fixture.\n")
-        git(source,"add","README.md")
+        if args.mode=="sandbox":
+            (source/"sandbox-check.py").write_bytes((REPO/"tests/probes/claude_sandbox_check.py").read_bytes())
+            (source/"sandbox-input.json").write_text(json.dumps({"outside":str(outside),"nonce":nonce})+"\n")
+        git(source,"add",".")
         git(source,"-c","user.name=Buddy Probe","-c","user.email=probe@localhost","commit","-qm","fixture")
-        nonce="claude-probe-"+uuid.uuid4().hex
-        manifest=workspace.prepare(root/"state",nonce,{"kind":"worktree","cwd":str(source),"access":"write",
+        manifest=workspace.prepare(root/"state",nonce,{"kind":"worktree","cwd":str(source),
+            "access":"read" if args.mode=="structured" else "write",
             "base":{"kind":"commit","ref":git(source,"rev-parse","HEAD")},"includeUntracked":[],
-            "writeScope":["probe-output.txt"],"integrator":"claude-p1-probe"})
-        outside=root/"outside-sentinel.txt";outside.write_text("original\n")
+            "writeScope":(["probe-output.txt","probe-observations.json"] if args.mode=="sandbox" else
+                          [".claude/settings.local.json" if args.mode=="permission" else "probe-output.txt"]),
+            "integrator":"claude-p1-probe"})
+        if args.mode=="permission":
+            (Path(manifest["path"])/".claude").mkdir(exist_ok=True)
         identity={"taskId":nonce,"attemptId":nonce+"-attempt","generation":1,"turnId":nonce+"-turn"}
         turn_input={"version":1,**identity,"resumeMode":"initial","previousSessionId":None,"context":{},
                     "executionWorkspace":manifest}
@@ -116,20 +151,29 @@ def run(args) -> dict:
                   "timeoutSeconds":180,"provider":"anthropic","model":args.model,"effort":args.effort},
             directory=root/"attempt",runtime={},environment=env,
             turn={"turnId":identity["turnId"],"input":turn_input})
-        handle=None; cancel_sent=False
+        handle=None; cancel_sent=False; probe_child=None; child_bound=False
         try:
             handle=adapter.start(context)
             if args.mode=="cancel":
                 deadline=time.monotonic()+45
                 while handle.process.poll() is None and time.monotonic()<deadline:
-                    sidecar=context.directory/"activity.json"
-                    if sidecar.exists():
+                    marker=Path(manifest["path"])/"probe-output.txt"
+                    if marker.exists():
                         try:
-                            phase=json.loads(sidecar.read_text()).get("activity",{}).get("phase")
-                        except (ValueError,OSError):phase=None
-                        if phase in ("waiting-model","streaming-model","tool-running"):
+                            with marker.open("rb") as stream:
+                                value=stream.read(128).strip()
+                            pid=int(value) if value.isdigit() and len(value)<=10 else 0
+                            candidate=process_identity(pid) if pid>1 else None
+                            child_bound=bool(candidate and belongs_to_controller(pid,handle.process.pid))
+                        except (ValueError,OSError):child_bound=False
+                        if child_bound:
+                            probe_child=candidate
                             adapter.cancel(handle,grace_seconds=8);cancel_sent=True;break
                     time.sleep(.1)
+                if handle.process.poll() is None and not cancel_sent:
+                    # End the authorized probe if the required live marker never
+                    # became observable. Cancellation alone cannot make it pass.
+                    adapter.cancel(handle,grace_seconds=8);cancel_sent=True
             if handle.wait(195) is None:
                 adapter.cancel(handle,grace_seconds=8)
             result=adapter.collect(handle,context)
@@ -137,6 +181,7 @@ def run(args) -> dict:
             provenance=record.get("provenance") or {}
             outcome=record.get("outcome") or {}
             checked = result.shutdown_confirmed
+            sandbox_observations=None; sandbox_checks=None
             if args.mode == "structured":
                 checked = checked and result.status == "ok" and outcome.get("disposition") == "completed" \
                     and outcome.get("summary") == nonce and provenance.get("structuredOutputValidated") is True
@@ -144,15 +189,32 @@ def run(args) -> dict:
                 checked = checked and result.status == "ok" and outcome.get("disposition") == "attention" \
                     and result.result.get("attentionRequired") is True
             elif args.mode == "cancel":
-                checked = checked and cancel_sent and result.status == "cancelled" and not record
+                child_absent=bool(probe_child and process_identity(probe_child["pid"]) is None)
+                checked = checked and cancel_sent and result.status == "cancelled" and not record \
+                    and result.result.get("nativeInterruptAcknowledged") is True and child_bound and child_absent
             else:
-                # An unchanged sentinel alone cannot prove Bash attempted the
-                # denial or that either network rule was enforced. Host review
-                # of the actual native observations is mandatory for this mode.
-                checked = False
+                try:
+                    sandbox_observations=json.loads((Path(manifest["path"])/"probe-observations.json").read_text())
+                    registry=sandbox_observations["registry"]; blocked=sandbox_observations["nonRegistry"]
+                    sandbox_checks={
+                        "insideWrite":sandbox_observations["insideWritten"] is True and
+                            (Path(manifest["path"])/"probe-output.txt").read_text()=="inside\n",
+                        "outsideDenied":sandbox_observations["outsideDenied"] is True and outside.read_text()=="original\n",
+                        "registryReachable":registry["observed"] is True and registry["exitCode"]==0 and
+                            200<=registry["httpStatus"]<400 and registry["tlsVerify"]==0,
+                        "nonRegistryDenied":blocked["observed"] is True and blocked["exitCode"]!=0 and
+                            blocked["httpStatus"]==0 and blocked["connectStatus"]==403,
+                    }
+                    checked = checked and result.status=="ok" and sandbox_observations["nonce"]==nonce \
+                        and all(sandbox_checks.values())
+                except (OSError,ValueError,KeyError,TypeError):
+                    checked = False
             report={"started":True,"approval":approval,"status":result.status,
                     "probeChecksPassed":bool(checked),"requiresHostInspection":args.mode=="sandbox",
+                    "sandboxObservations":sandbox_observations,"sandboxChecks":sandbox_checks,
                     "shutdownConfirmed":result.shutdown_confirmed,"cancelRequested":cancel_sent,
+                    "probeChild":probe_child,"probeChildBoundBeforeCancel":child_bound,
+                    "probeChildAbsentAfterStop":child_absent if args.mode=="cancel" else None,
                     "outsideUnchanged":outside.read_text()=="original\n",
                     "disposition":(record.get("outcome") or {}).get("disposition"),
                     "provenance":record.get("provenance"),"result":result.to_report()}

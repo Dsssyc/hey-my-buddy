@@ -131,18 +131,19 @@ def _attention_outcome(denied_requests: list[dict], result_denials: int) -> dict
             "expectedArtifacts": [], "acceptance": "The Host resolves this boundary and starts an authorized continuation"}}
 
 
-def _interrupt(connection: Connection | None):
+def _interrupt(connection: Connection | None) -> bool:
     if connection is None:
-        return
+        return False
     try:
         # A fresh short control budget permits a native interrupt after the main deadline.
         connection.cancelled = threading.Event()
         connection.deadline = time.monotonic() + 2
         connection.call({"subtype": "interrupt"})
+        return True
     except (ClaudeProtocolError, QuotaRejected, OSError, ValueError):
         # A late quota frame while awaiting interrupt acknowledgement must not
         # escape the cleanup path and suppress the controller's stop receipt.
-        pass
+        return False
 
 
 def _latest_rejected(rate_limits: dict) -> tuple[str, object]:
@@ -184,9 +185,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             raise ClaudeProtocolError("third-party-provider",
                                       "Claude execution refuses third-party provider overrides: " + ", ".join(overrides))
         if not control.get("discover") and settings_policy(incoming) is None:
-            raise ClaudeProtocolError("settings-policy-required",
-                                      "Claude execution requires BUDDY_CLAUDE_SETTINGS_POLICY=isolated; "
-                                      "the settings-source selection is user-pending")
+            raise ClaudeProtocolError("settings-policy-unsupported",
+                                      "Claude P1 supports only BUDDY_CLAUDE_SETTINGS_POLICY=isolated; "
+                                      "an explicit unsupported settings policy was supplied")
         command = cli_command(incoming)
         environment = native_environment(incoming)
         discover = bool(control.get("discover"))
@@ -393,12 +394,12 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         result.update(status="error", code="quota-rejected", error=QUOTA_REJECTED_ERROR,
                       quotaFailure={"rateLimitType": error.rate_limit_type, "resetsAt": error.resets_at})
         record = None
-        _interrupt(connection)
+        result["nativeInterruptAcknowledged"] = _interrupt(connection)
     except ClaudeProtocolError as error:
         result.update(status="cancelled" if error.code == "user-cancel" else "error", code=error.code, error=str(error))
         record = None
         if error.code in ("user-cancel", "deadline"):
-            _interrupt(connection)
+            result["nativeInterruptAcknowledged"] = _interrupt(connection)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         result.update(status="error", code="invalid-native-result", error="Claude returned invalid or incomplete native data")
         record = None

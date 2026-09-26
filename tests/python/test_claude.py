@@ -201,6 +201,8 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
         self.assertTrue(self.fixture_state()["interrupted"], "the interrupt control request must precede group stop")
+        self.assertTrue(outcome.result.get("nativeInterruptAcknowledged"),
+                        "the receipt must distinguish a native interrupt reply from forced shutdown")
 
     def test_deadline_ends_the_native_process_group(self):
         outcome = self.execute(self.context("hang", timeout=1))
@@ -223,6 +225,8 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
+        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), False,
+                      "a quota frame that interrupts the acknowledgement wait is not an acknowledgement")
 
     def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
         context = self.context(timeout=0)
@@ -424,21 +428,27 @@ class ClaudeAdapterTests(unittest.TestCase):
                              [(False, "fixture unauthenticated")] * 8)
             self.assertEqual(discover.call_count, 1)
 
-    def test_settings_policy_is_required_before_any_model_input(self):
-        for policy in (None, "global"):
+    def test_default_policy_executes_with_private_settings_and_empty_sources(self):
+        context = self.context()
+        context.environment.pop("BUDDY_CLAUDE_SETTINGS_POLICY", None)
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        argv = self.fixture_state()["argv"]
+        self.assertEqual(flag_value(argv, "--setting-sources"), "")
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context.directory.resolve()))
+
+    def test_unsupported_settings_policy_is_refused_before_any_model_input(self):
+        for policy in ("", "global"):
             with self.subTest(policy=policy):
                 context = self.context()
-                environment = dict(context.environment)
-                environment.pop("BUDDY_CLAUDE_SETTINGS_POLICY", None)
-                if policy:
-                    environment["BUDDY_CLAUDE_SETTINGS_POLICY"] = policy
-                context.environment.clear()
-                context.environment.update(environment)
+                context.environment["BUDDY_CLAUDE_SETTINGS_POLICY"] = policy
                 with self.assertRaises(BoardError) as caught:
                     self.adapter.prepare(context)
                 self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
                 self.assertIn("BUDDY_CLAUDE_SETTINGS_POLICY=isolated", caught.exception.message)
-        self.assertFalse((self.root / "fixture.json").exists(), "no native child may start without the policy")
+        self.assertFalse((self.root / "fixture.json").exists(), "no native child may start with an unsupported policy")
 
     def test_third_party_env_override_is_refused_before_any_model_input(self):
         context = self.context()
@@ -532,7 +542,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(state["seenBuddyEnv"], ["BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"])
         self.assertEqual(state["seenAnthropicEnv"], [])
 
-    def test_runner_refuses_overrides_and_missing_policy_before_the_native_child(self):
+    def test_runner_refuses_overrides_and_unsupported_policy_before_the_native_child(self):
         control = {"directory": str(self.root / "runner-direct"), "nativeRoot": str(self.root / "runner-direct" / "native"),
                    "cwd": str(self.cwd), "timeoutSeconds": 5, "sessionId": str(uuid.uuid4()),
                    "inputFile": str(self.root / "in.json"), "outputFile": str(self.root / "out.json"),
@@ -541,12 +551,10 @@ class ClaudeAdapterTests(unittest.TestCase):
         path = self.root / "runner-control.json"
         path.write_text(json.dumps(control))
         cases = {"third-party-provider": {"ANTHROPIC_AWS_BASE_URL": "https://aws.example.invalid"},
-                 "settings-policy-required": {}}
+                 "settings-policy-unsupported": {"BUDDY_CLAUDE_SETTINGS_POLICY": "global"}}
         for code, extra in cases.items():
             with self.subTest(code=code):
                 environment = {**self.environment, **extra}
-                if code == "settings-policy-required":
-                    environment.pop("BUDDY_CLAUDE_SETTINGS_POLICY", None)
                 completed = subprocess.run([sys.executable, "-m", "buddy.adapters.claude_runner",
                                             "--control", str(path)], capture_output=True, text=True,
                                            env=environment, timeout=30)

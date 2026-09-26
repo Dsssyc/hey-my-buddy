@@ -1,8 +1,7 @@
 """Claude Code executable selection and the strict isolated execution policy.
 
-Nothing here writes global Claude settings: every execution flag is composed
-explicitly, and the settings-source selection stays a user decision expressed
-through ``BUDDY_CLAUDE_SETTINGS_POLICY`` (ADR-012 section six, user-pending).
+Nothing here writes global Claude settings. The user-approved P1 default is
+isolated; an explicit unsupported override is refused rather than inherited.
 """
 from __future__ import annotations
 
@@ -230,7 +229,7 @@ def read_auth_status(command: list[str], *, cwd: str, environment: dict,
 
 def settings_policy(environment: dict | None = None) -> str | None:
     env = os.environ if environment is None else environment
-    value = env.get("BUDDY_CLAUDE_SETTINGS_POLICY")
+    value = env.get("BUDDY_CLAUDE_SETTINGS_POLICY", "isolated")
     return value if value == "isolated" else None
 
 

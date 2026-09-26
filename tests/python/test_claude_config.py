@@ -150,9 +150,9 @@ class ClaudeConfigTests(unittest.TestCase):
                 returncode=0, stdout=b'[' * 30000 + b']' * 30000)):
             self.assertIsNotNone(read_auth_status(["/fixture/claude"], cwd="/", environment={}))
 
-    def test_settings_policy_requires_exact_isolated_value(self):
+    def test_settings_policy_defaults_to_isolated_and_rejects_other_values(self):
         self.assertEqual(settings_policy({"BUDDY_CLAUDE_SETTINGS_POLICY": "isolated"}), "isolated")
-        self.assertIsNone(settings_policy({}))
+        self.assertEqual(settings_policy({}), "isolated")
         self.assertIsNone(settings_policy({"BUDDY_CLAUDE_SETTINGS_POLICY": "global"}))
         self.assertIsNone(settings_policy({"BUDDY_CLAUDE_SETTINGS_POLICY": ""}))
 
