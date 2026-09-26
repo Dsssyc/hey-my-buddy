@@ -290,4 +290,44 @@ describe("desktop console", () => {
     expect(within(detail).getByRole("heading", { name: "目标 historical" })).toBeTruthy();
     expect(within(detail).getByText("委派方：codex-source")).toBeTruthy();
   });
+
+  it("renders projected summaries without fetching a workflow for each list row", async () => {
+    const first = goal("first-summary"), second = goal("second-summary");
+    first.workflow!.resultSummary = "第一项的现有结果";
+    second.workflow!.resultSummary = "第二项的现有结果";
+    const f = fixture([first, second]);
+    render(<App suppliedApi={f.api} />);
+    expect(await screen.findByRole("button", { name: /第一项的现有结果/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /第二项的现有结果/ })).toBeTruthy();
+    expect(f.command).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  });
+
+  it("keeps the list row and detail title in step when the newest concluded result arrives", async () => {
+    const record = goal("older");
+    record.task = "目标 older\n不该成为标题";
+    // The record exists only in paged history, outside the snapshot window.
+    const f = fixture();
+    f.tasks.mockImplementation(async query => ({ runs: query.query ? [] : [structuredClone(record)],
+      total: query.query ? 0 : 1, nextCursor: null }));
+    const value = workflow(record);
+    Object.assign(value, { revision: 7, state: "delivered", awaitingHost: false, activeRequest: null });
+    value.task = { runId: record.runId, revision: 7, status: "completed", shutdownConfirmed: true,
+      task: record.task,
+      workflow: { state: "delivered", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 7,
+        resultSummary: "历史记录的最新结论结果" } };
+    f.workflows.set(record.runId, value);
+    const user = userEvent.setup();
+    render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: /目标 older/ }));
+    const detail = screen.getByRole("complementary", { name: "任务详情" });
+    // The bounded workflow_get refresh carries the newest concluded summary; the
+    // open detail heading and its list row adopt the same title.
+    expect(await within(detail).findByRole("heading", { name: "历史记录的最新结论结果" })).toBeTruthy();
+    const row = screen.getByRole("button", { name: /历史记录的最新结论结果/ });
+    expect(row.querySelector("strong.task-title")!.textContent).toBe("历史记录的最新结论结果");
+    // The raw task text keeps its detail access and tooltip.
+    expect(within(detail).getByRole("heading", { level: 2 }).getAttribute("title")).toBe(record.task);
+    expect(within(detail).getByText(/不该成为标题/)).toBeTruthy();
+  });
 });

@@ -5,7 +5,7 @@ import type { Snapshot, Task } from "./types";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { useRecordDraft } from "./record-drafts";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
-import { canRetry, excerpt, needsReview, resultText, taskStatus } from "./task-state";
+import { canRetry, excerpt, needsReview, resultText, taskStatus, taskTitle } from "./task-state";
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
@@ -47,7 +47,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
     <header className="detail-header">
       <div className="row-between"><button className="button small-button mobile-back" disabled={busy || navigationLocked} onClick={() => selectTask(null)}>返回委派列表</button>
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
-      <h2 title={task.task}>{excerpt(task.task.split("\n", 1)[0], 100)}</h2>
+      <h2 title={task.task}>{excerpt(taskTitle(task), 100)}</h2>
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
         {task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={taskExecutor(task)} onClick={() => setRoutingRequest(n => n + 1)}>
           <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>

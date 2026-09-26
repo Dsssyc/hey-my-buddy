@@ -117,6 +117,12 @@ A workspace preparation failure opens an attention request and invalidates that 
 
 For history paging, pass the previous page's opaque `nextCursor` as `before` (at most 512 characters); it is distinct from the integer event `cursor`. Rows are ordered by descending creation time and run ID, and the strict keyset remains stable when newer rows arrive. A nonzero `offset` cannot be combined with `before`. `rootsOnly:true` restricts the list to main governed goals; the default remains all execution records. `query` (at most 200 characters) searches goal text, run ID, source project, recorded Hosts and execution adapter/model; `%` and `_` are literal text. `projectId` (at most 4096 characters) matches the recorded project ID, and `hostId` (at most 256) matches original or current Host. `filter` is `all`, `active` (including reconciliation-needed), `host` or `review`. Filtering happens before the limit, `total` counts all matching records independently of the cursor, and `nextCursor:null` marks the last page. Every task read includes the [delegation metadata](evaluation.md#console-http-surface); missing original attribution remains unknown.
 
+### Display summary
+
+Contract 0.12.0 adds nullable `workflow.resultSummary` to governed task reads, including history rows, console snapshots and the bounded `workflow_get.task` view. It contains at most 2000 Unicode characters from this run's latest concluded turn with a persisted outcome, ordered by `turn_index`. A newer prepared/running turn does not erase that result; an empty or whitespace-only latest summary becomes null. Helper, routing and request summaries are not substituted. This projection reads existing rows and changes neither schema 11 nor the original task specification.
+
+The console derives list and detail titles from that nonempty summary, then the trimmed first line of the original task, then `未命名委派`. Display whitespace is normalized and headings use a 100-character Unicode-safe excerpt. The original task and recorded execution/acceptance status remain independently visible. Search still matches the original task and existing history fields; no submitted `title` or macro-task field is introduced by this slice.
+
 ## Messages and inquiry
 
 | Command | Parameters | Behavior |

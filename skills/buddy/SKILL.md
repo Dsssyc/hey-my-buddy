@@ -15,7 +15,7 @@ Use a Buddy when its comparative advantage reduces the work or cost needed to re
 - For installation or recovery, read [operations](../../docs/reference/operations.md). Read [architecture](../../docs/reference/architecture.md) before changing service ownership, storage, worker or recovery contracts.
 - Before delegating to Claude P1, read [Claude](../../docs/reference/claude.md) for its verified boundaries, isolated settings and the user's initial design/review division, including the single-Claude-task limit. Every further native model probe needs per-run approval.
 
-Resolve the plugin root from this file and use its `bin/buddy` with one JSON argument. This source uses contract 0.11.0/schema 11; source and installed runtime are separate facts. Check `health`, `runtime` and `capabilities` on setup or recovery and use a matching launcher. Routine attachment uses lightweight `ping`; `health` is an explicit deep diagnostic, not a progress poll. Runtime installation never converts old state. Retained-data upgrades use a verified backup and a coordinated idle client/daemon/worker cutover.
+Resolve the plugin root from this file and use its `bin/buddy` with one JSON argument. This source uses contract 0.12.0/schema 11; source and installed runtime are separate facts. Check `health`, `runtime` and `capabilities` on setup or recovery and use a matching launcher. Routine attachment uses lightweight `ping`; `health` is an explicit deep diagnostic, not a progress poll. Runtime installation never converts old state. Retained-data upgrades use a verified backup and a coordinated idle client/daemon/worker cutover.
 
 ## Delegate through acceptance
 

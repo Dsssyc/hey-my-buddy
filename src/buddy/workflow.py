@@ -83,6 +83,9 @@ MAX_REQUEST_VIEW = 5
 MAX_CONTEXT_HELPERS = 8
 MAX_CONTEXT_ARTIFACTS = 8
 MAX_CONTEXT_TEXT = 4000
+#: The governed task-title fallback is bounded like the turn-view summary it
+#: projects; the stored outcome itself may be longer and stays intact in audit.
+MAX_RESULT_SUMMARY = 2000
 
 #: Bounded views of the lifecycle records added by the workspace-lifecycle slice.
 MAX_CONFLICT_VIEW = 8
@@ -4510,9 +4513,20 @@ class WorkflowCoordinator:
 
     # -- task-view extension -------------------------------------------------
     def task_extension(self, connection, task_row) -> dict | None:
-        run_row = self._run_optional(connection, task_row["task_id"])
+        # Share the existing run read; the indexed subquery returns at most one
+        # own outcome. json_type distinguishes text from serialized objects/arrays.
+        run_row = connection.execute(
+            "SELECT r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,"
+            " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
+            " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
+            " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
+            " ORDER BY t.turn_index DESC LIMIT 1) AS result_summary"
+            " FROM workflow_runs r WHERE r.run_id=?", (task_row["task_id"],)
+        ).fetchone()
         if run_row is None:
             return None
+        summary = run_row["result_summary"]
+        summary = summary.strip()[:MAX_RESULT_SUMMARY] if isinstance(summary, str) else ""
         extension = {
             "state": run_row["state"],
             "awaitingHost": run_row["state"] == "awaiting-host",
@@ -4521,6 +4535,7 @@ class WorkflowCoordinator:
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
             "activeRequestId": run_row["active_request_id"],
+            "resultSummary": summary or None,
         }
         if run_row["active_request_id"]:
             request = connection.execute(

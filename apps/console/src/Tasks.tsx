@@ -3,7 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
 import { Empty, formatDate, Status } from "./ui";
-import { excerpt, needsReview, taskStatus } from "./task-state";
+import { excerpt, needsReview, taskStatus, taskTitle } from "./task-state";
 import { TaskDetails } from "./TaskDetails";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { RecordDrafts } from "./record-drafts";
@@ -103,14 +103,20 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
           const next = new Set(all); if (next.has(id)) next.delete(id); else next.add(id); return next;
         })}><span>{collapsed.has(id) ? "▸" : "▾"} {group.project.label}</span>
           <span className="small">已加载 {group.runs.length} {internal ? "条执行记录" : "个委派目标"}</span></button>
-        {!collapsed.has(id) && <ul className="task-list">{group.runs.map(row => <li key={row.runId} data-run-id={row.runId}>
+        {!collapsed.has(id) && <ul className="task-list">{group.runs.map(row => {
+          // The selected row shows the title from the freshest read (the bounded
+          // workflow refresh merges it here), so an older row outside the snapshot
+          // window agrees with the open detail; badges and filters keep the row.
+          const rowTask = task && row.runId === task.runId ? task : row;
+          return <li key={row.runId} data-run-id={row.runId}>
           <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} disabled={locked && selected !== row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
-            <strong className="task-title">{excerpt(row.task.trim().split("\n", 1)[0] || "未命名委派", 100)}</strong>
+            <strong className="task-title">{excerpt(taskTitle(rowTask), 100)}</strong>
             <span className="small truncate" title={taskHost(row) + " → " + taskExecutor(row)}>{taskHost(row)} → {taskExecutor(row)}</span>
             {row.delegation?.kind !== "goal" && <span className="small muted">{row.delegation?.kind === "helper" ? "协助任务" : row.delegation?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
           </button>
-        </li>)}</ul>}
+        </li>;
+        })}</ul>}
       </section>)}
       {!visible.length && !history.loading && !history.error && <Empty title="没有匹配的委派">调整筛选或搜索项目名称；内部计算默认收起。</Empty>}
       {history.loading && <p className="loading-row" role="status">正在读取委派记录…</p>}

@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the 0.11.0 source under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.11.0, transport protocol is 2, and startup accepts schema 11 only. The Claude Worker P1 slice has native adapter/controller probe evidence and simulated-CLI service integration evidence; the [Claude P1 record](../acceptance/claude-worker-p1-0.11.0.md) identifies the tested boundaries and the separately installed daily runtime. Design records live in `docs/decisions/`. See also the [0.10.0 acceptance record](../acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](../acceptance/runtime-refinement-0.9.0.md).
+This page describes the 0.12.0 source candidate under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.12.0, transport protocol is 2, and startup accepts schema 11 only. The Claude Worker P1 slice has native adapter/controller probe evidence and simulated-CLI service integration evidence; the [Claude P1 record](../acceptance/claude-worker-p1-0.11.0.md) identifies the tested boundaries and the separately installed daily runtime. Design records live in `docs/decisions/`. See also the [0.10.0 acceptance record](../acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](../acceptance/runtime-refinement-0.9.0.md).
 
 ## Process topology
 

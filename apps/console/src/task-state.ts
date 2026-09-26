@@ -9,6 +9,23 @@ export function excerpt(text: string, limit = 120): string {
   return result;
 }
 
+/** Display whitespace: every whitespace run, CRLF included, becomes one space. */
+function normalizeDisplay(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * ADR-012 X title fallback for delegation rows and headings: the run's own
+ * newest concluded result summary wins, then the first task line, then an
+ * explicit unnamed marker. A request, helper or route summary is never read
+ * here, and the raw task text stays available in the detail view.
+ */
+export function taskTitle(task: Task): string {
+  const summary = task.workflow?.resultSummary;
+  const firstLine = typeof task.task === "string" ? task.task.trim().split("\n", 1)[0] ?? "" : "";
+  return normalizeDisplay(typeof summary === "string" ? summary : "") || normalizeDisplay(firstLine) || "未命名委派";
+}
+
 export function needsReview(task: Task): boolean {
   return (
     (!task.workflow || task.workflow.state === "delivered") &&

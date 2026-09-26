@@ -109,6 +109,11 @@ export type Task = {
     ownerGeneration: number;
     revision: number;
     requestSummary?: string;
+    /**
+     * Read-only newest concluded own turn outcome summary (ADR-012 X title
+     * fallback); null or absent means no usable result yet, never a guess.
+     */
+    resultSummary?: string | null;
   };
   workflowShutdown?: Shutdown;
   [key: string]: unknown;
