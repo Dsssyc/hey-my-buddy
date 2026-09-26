@@ -105,7 +105,8 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
 
             def delivered_view():
                 nonlocal latest
-                code, latest = self.cli("get", json.dumps({"runId": run_id}), env=self.env())
+                # This test inspects the complete evidence, not the brief Host view.
+                code, latest = self.cli("get", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
                 self.assertEqual(code, 0, latest)
                 if latest.get("state") in ("failed", "cancelled", "awaiting-host"):
                     self.fail(self.execution_diagnostics(run_id, latest))
@@ -126,7 +127,7 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             # Git isolation and native session storage are separate facts: the
             # grouped default keeps the owning harness store so membership stays
             # verifiable, and the metadata says exactly that.
-            _, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())
+            _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             native = (receipt.get("result") or {}).get("nativeSession") or {}
             self.assertEqual(native.get("storageScope"), "harness-user-store")
             self.assertEqual(native.get("storageOwner"), "harness-user-store")
@@ -186,7 +187,8 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             )
             self.assertEqual(code, 0, acknowledged)
             self.assertEqual(acknowledged["state"], "accepted")
-            self.assertEqual(acknowledged["task"]["acceptanceVerdict"], "accepted")
+            self.assertEqual(acknowledged["view"], "receipt")
+            self.assertEqual(acknowledged["acceptanceVerdict"], "accepted")
 
     def test_cli_fails_closed_for_an_agent_scoped_caller(self):
         with self.daemon(env=self.env()):

@@ -32,7 +32,12 @@ SANITIZED_VARIABLES = (
 
 def test_environment(root: Path) -> dict:
     """The child environment every test suite runs with: checkout first, no pins."""
-    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
+    from .adapters.claude_config import THIRD_PARTY_OVERRIDE_VARIABLES
+
+    # A Claude Code Host session exports ANTHROPIC_BASE_URL. Claude fixtures model the
+    # first-party account explicitly, so an inherited gateway must not decide them.
+    removed = {*SANITIZED_VARIABLES, *THIRD_PARTY_OVERRIDE_VARIABLES}
+    values = {key: value for key, value in os.environ.items() if key not in removed}
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")

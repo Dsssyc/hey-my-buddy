@@ -154,6 +154,17 @@ Killing the waiting CLI process (Ctrl-C, closed terminal, `waitSeconds` expiry) 
 
 Never describe a wait timeout as an execution failure, never restart work the user stopped, and never relaunch because a result was delayed. Recovery invariants are in [operations.md](operations.md#cancellation-and-recovery).
 
+## Waiting from Claude Code
+
+The user chose this Claude Code Host flow on 2026-09-26. Codex keeps the foreground `await` above. Claude Code runs each wait as its own background command and keeps working:
+
+1. `submit` the goal and keep `runId` and `controlFile`.
+2. Run `"$BUDDY" await '{"runId":"<runId>"}'` with the Bash tool's `run_in_background: true`. Start one background wait per running goal; concurrent goals each have their own.
+3. Continue with other Host work, including reviewing goals that already finished. The harness delivers a notification when the command exits: during an active turn it arrives with the next step, and an idle session is woken. The notification carries the brief `await` envelope.
+4. At the notification read `get`, verify the artifact, then `integration-record` and `acknowledge` as usual. An `outcome` of `wait-timeout` or `unavailable` ends only that wait; start another background `await` for the same `runId`.
+
+Claude Code exports `ANTHROPIC_BASE_URL` to its commands, so a service cold-started from a Claude Code session cannot run Claude Workers ([Claude](claude.md)); attaching to an already running service is unaffected. Do not add a polling loop of `get`, `status` or `wait` beside the background wait. The background command belongs to the Claude Code session: if the session or app closes, the goal keeps running and is resumed by awaiting the same `runId` later. This is a bounded wait, not a scheduler, and it gives no wakeup to a session that no longer exists.
+
 ## Background work that outlives the turn
 
 `submit` is not reserved for background work: it is the first half of the default foreground flow, which keeps the current turn waiting with `await`. When the user explicitly wants the work to outlive the turn:

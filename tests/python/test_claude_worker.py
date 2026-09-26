@@ -46,14 +46,15 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
 
         def settled():
             nonlocal last
-            code, last = self.cli("get", json.dumps({"runId": run_id}), env=self.env())
+            # These tests inspect the complete evidence, not the brief Host view.
+            code, last = self.cli("get", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             self.assertEqual(code, 0, last)
             task = last.get("task") or {}
             return last if task.get("resultAvailable") and task.get("shutdownConfirmed") else None
 
         view = wait_for(settled, timeout=60)
         self.assertIsNotNone(view, last)
-        code, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())
+        code, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
         self.assertEqual(code, 0, receipt)
         return view, receipt
 

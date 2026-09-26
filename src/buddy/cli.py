@@ -21,7 +21,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import runtime, transport
+from . import cli_views, runtime, transport
 from .errors import BoardError
 from .transport import METHOD_MAP, call_service, get_state_dir
 from .worker.worker import RETIRE_REQUEST_NAME
@@ -546,6 +546,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         params = json.loads(args.params)
+        # `output` is CLI-local: it selects the printed projection and never reaches RPC.
+        # Console validates its own local options, so it keeps its complete response.
+        mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)
         if args.method in LOCAL_METHODS:
             result = _worker_command(args.method, params)
         elif args.method == "console":
@@ -562,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 result = await_run(params)
             except WaitAbandoned as abandoned:
-                print(json.dumps(_abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id)), ensure_ascii=False))
+                print(_dumps(_abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id))))
                 return 1
         else:
             credential = _agent_credential()
@@ -578,11 +581,16 @@ def main(argv: list[str] | None = None) -> int:
             result = call_service(args.method, prepared)
             if isinstance(result, dict):
                 _scrub_and_save(result)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(_dumps(cli_views.render(args.method, result, mode)))
         return 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope
-        print(json.dumps({"error": {"code": getattr(error, "code", "SERVICE_ERROR"), "message": str(error)}}))
+        print(_dumps({"error": {"code": getattr(error, "code", "SERVICE_ERROR"), "message": str(error)}}))
         return 1
+
+
+def _dumps(value) -> str:
+    """One compact JSON object: indentation is whitespace a Host model re-reads on every request."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 if __name__ == "__main__":
