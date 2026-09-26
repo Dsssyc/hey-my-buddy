@@ -2,7 +2,7 @@
 
 ## Current design
 
-The current 0.12.0 source candidate implements only the no-schema title-fallback slice of the [Claude proposal](docs/decisions/012-claude-code-distribution-and-evidence-routing.md), following the installed P1 baseline. Contract 0.12.0 adds a read-only task summary projection; schema remains 11. The [title-fallback record](docs/acceptance/title-fallback-0.12.0.md) owns verification and installation status. This does not authorize the other proposal phases or section XII choices. Use the installed 0.11.0 launcher for the daily board until a coordinated upgrade is authorized; source tests use private state/runtime roots.
+The current 0.12.0 source implements only the no-schema title-fallback slice of the [Claude proposal](docs/decisions/012-claude-code-distribution-and-evidence-routing.md), following the installed P1 baseline. Contract 0.12.0 adds a read-only task summary projection; schema remains 11. The [title-fallback record](docs/acceptance/title-fallback-0.12.0.md) owns verification and the user-authorized 2026-09-26 installation. This does not authorize the other proposal phases or section XII choices. Use the matching installed 0.12.0 launcher for the daily board and verify the live identity before recovery; source tests use private state/runtime roots.
 
 [ADR-012](docs/decisions/012-bounded-control-overhead.md) defines the user-approved efficiency repair: light authenticated liveness, transient empty claims with durable real allocations, and subsequent ZCode/routing/Host-supervision repairs. That repair's source is contract 0.10.0/schema 11. Use the [0.10.0 acceptance record](docs/acceptance/runtime-efficiency-0.10.0.md) to distinguish implemented slices, verified behavior and actual installation.
 
