@@ -109,4 +109,6 @@ All 80 Claude-focused tests passed after the default change in 34.127 seconds, i
 
 GLM-5.3-Flash supplied the bounded six-file documentation artifact ceab360d-4f0f-4027-940d-a064488dc935 in governed goal adcdbd49-dfac-42cf-a187-5179842c4060, sealed at 9549d63c4f4f2ec8ab9b1949d1278962b34c2617. The Host inspected the actual diff, synchronized the owning reference and acceptance record, shortened repeated evidence in entrypoints and adjusted the six files for the user's later policy decision. Installation identity remains owned by this report rather than duplicated in the READMEs.
 
+Source and documentation were committed as 45ebf15 on socu/buddy-core. The documentation artifact has verified whole-goal integration int-65272194-5abf-464e-b183-b15b6767ff1f with all six Host-adjusted paths and the later user decision recorded. It was acknowledged as accepted and its managed checkout was removed through cleanup plan cln-4502e090-15ed-4400-b786-e98e7c1b6bb2. Fixed refs, output patch, manifests and receipts remain recoverable. This leaves no new active probe or documentation worktree from this validation follow-up.
+
 These follow-up source changes have not replaced the daily 0.11.0+codex.20260926013054 runtime. Its older explicit-policy gate remains in force until an authorized, coordinated installation; this turn performed no daily service restart or upgrade.
