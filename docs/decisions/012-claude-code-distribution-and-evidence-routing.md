@@ -2,6 +2,8 @@
 
 ## 状态
 
+实施进展（2026-09-26）：Claude Worker P1 与标题回退已经分别验收并安装，日常运行时为 0.12.0。用户随后授权继续控制台入口，并选择新会话接管写权限、旧会话只读；该切片在 0.13.0 源码候选中实现，验收和安装状态见[控制台入口记录](../acceptance/console-entry-0.13.0.md)。下面保留初稿时的设计背景；除这些已授权切片外，其余部分及第十二节未决选项仍为提案。
+
 提案，2026-09-25 由用户与 Host 讨论形成，尚未实现、未验收，不改变当前契约（0.9.0、schema 11）。讨论中用户已确认的方向：以一台机器上的 `buddy` CLI 加单一 skill 取代按 Host 维护的 plugin，并允许 agent 执行升级；没有 effort 档位的模型使用 `default`；智能路由继续由黑板负责，不交还 Host，也不改为确定性排序；采用 Host 提供的 `routingBrief` 和预授权的升级阶梯；以被动方式统计 Host 注意力消耗；把宏任务放上黑板，只用于归档和面向人的浏览，并以时间轴呈现；先由 Codex 实现 Claude Code Worker，再由 Codex 作为 Host 把前端设计与审查委派给 Claude Code；用户使用额度有限的 Claude Pro 套餐，Claude 只用于设计与视觉审查，额度耗尽作为基础设施失败单独归类（见第六、十一节）。其余内容是本 ADR 的提议，待决事项见第十二节。
 
 第二节列出的原生事实来自同日在本机 Claude Code 2.1.278 上的检查，全程没有发起模型回合；需要真实模型回合才能确认的能力均未验证，不得据此声明支持。本提案接受后，将取代 [ADR-007](007-neutral-core-and-single-current-contract.md) 中“唯一的 agent 入口是 plugin 内的 `skills/buddy/SKILL.md`、唯一的启动器是 `bin/buddy`”的分发表述及 AGENTS.md 的对应规则，单一 skill、单一 CLI 的原则保留。路由部分补充 [ADR-004](004-buddy-decision-support-and-console.md) 与 [ADR-010](010-production-workflow-repair-plan.md) 的选择输入，维持 [ADR-008](008-harness-owned-evaluation-maintenance.md) 的维护归属和 [ADR-011](011-runtime-refinement.md) 的模型族并发。

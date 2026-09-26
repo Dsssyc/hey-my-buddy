@@ -8,13 +8,19 @@ The candidate issues a one-use 60-second link, sets an HttpOnly session cookie o
 
 The CLI alone launches the browser. browser:false provides the entry for manual opening; wait:true observes the exact console instance without autostart and requests only an identity-fenced console close on Ctrl-C. Session/console inactivity is five minutes; live entry/session collections are bounded. Close and expiry leave ordinary tasks running.
 
-## Verification to date
+## Verification
 
 The Host independently passed 90 focused Python tests covering the CLI, request validation, real daemon console operations, HTTP session/CSRF/origin checks and unchanged schema 11. An additional real-process Ctrl-C test and the complete session test module passed 13 tests: the waiting CLI returned a confirmed console close while the daemon kept its service ID and an existing command task remained active or completed naturally. These use private state/runtime roots, HTTP clients and owned subprocess handles, with no real browser or model probe.
 
 The Host reproduced a frontend stale-handler regression before correcting it: a sibling hook could use its cached writable flag after another component revoked the shared session latch. Dispatch now consults the live latch in the editor, ordinary task and workflow paths. The new regression failed before the correction. The focused frontend run passed 78 tests; the full Vitest suite then passed 244 tests across 22 files, and Node 24 tsc/Vite production build succeeded. npm audit --omit=dev reported zero production dependency vulnerabilities. The bundle hashes are JavaScript index-htL3kjq9.js: 6417ce39b2778c8de97f0245c399e32a067b3f8307502438ee16e38407380154 and CSS index-DPIw79D8.css: 58c86b1bab970f371545e7d3b33f23436c4d99fa1cc3250b4c8283c45cbd8f29.
 
-The required complete buddy.checks run and isolated staged-runtime check are still in progress at this record's initial commit. Their terminal results must be added before claiming complete candidate verification. Raw logs and deterministic probe scripts belong in .dsh-skill-build/console-entry-20260926-S1lA0U/. No Computer Use was performed; HTTP/component verification does not claim Chrome, Firefox or Safari visual acceptance.
+The required uv run --frozen python -m buddy.checks completed with exit 0: all 1,104 Python tests passed in 990.781 seconds, followed by all 207 Node tests in 25 suites with no failures, cancellations or skips. Raw logs and deterministic probe scripts are in .dsh-skill-build/console-entry-20260926-S1lA0U/. No Computer Use was performed; HTTP/component verification does not claim Chrome, Firefox or Safari visual acceptance.
+
+## Packaged runtime
+
+Committed candidate 427c744 was independently exported and staged, excluding the user's uncommitted document. A private board cold-started stable runtime a35e56a9d144824625c7a5cdf0cfaffe on contract 0.13.0/schema 11, with no source-path leaks. Real CLI and HTTP checks confirmed one-use entry, denied unauthenticated access to the final URL, handoff within one shared cookie jar, retained read-only POST reads and refused mutations, close preserving an ordinary task and the service identity, stale close fencing, and exact served JavaScript/CSS bytes. Moving the staged source directory away did not affect the stable runtime or served assets. This check made zero model calls.
+
+The private service and its two supervisors were stopped after validation. The Host separately verified that control-daemon.lock, board-owner.lock and both supervisor locks were released. The daily board was only read: its final ping still reported contract 0.12.0/schema 11 and service dc230b94-8706-423a-99fb-12e8a72dde20. Candidate verification did not install or restart it.
 
 ## Collaboration and integration
 
