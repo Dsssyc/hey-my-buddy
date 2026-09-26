@@ -8,13 +8,13 @@ The Python blackboard owns one current evaluation table per state directory (sou
 "$BUDDY" console '{"action":"open"}'
 ```
 
-`console` accepts `open` (default), `status` and `close`, and serves the built React/Vite bundle over a private loopback HTTP surface. Open returns a fresh unguessable URL of the form `http://127.0.0.1:<port>/<token>/`, a `readOnly: false` flag, whether the built assets exist and an `alreadyRunning` flag; closing the console rotates its token, session and CSRF values and never stops a task. The older read-only `dashboard` command no longer exists, and no separate read-only surface is shipped.
+`console` accepts `open` (default), `status` and `close`, and serves the built React/Vite bundle over private loopback HTTP. The CLI opens the browser; pass `browser:false` to obtain the link without launching it. Open returns a 60-second single-use launch URL. Its redemption establishes an HttpOnly session cookie, transfers write access from the previous session and redirects to a credential-free session path. Old sessions retain read-only access and local drafts. The [console entry contract](console.md) owns tickets, multi-session authority, inactivity, client-side wait and identity-fenced close; closing the console never stops a task.
 
-`console-snapshot '{}'` reads the same authoritative data without a browser session, and `console` status reports the current URL, running flag and asset directory. Neither makes a model call or admits a selection reader.
+`console-snapshot '{}'` reads the same authoritative data without a browser session. Console status reports the public instance ID, running flag and asset metadata, without an entry URL or credential. Neither makes a model call or admits a selection reader.
 
 ## Console HTTP surface
 
-Everything lives under the token-scoped prefix `/<token>/`; unknown paths return 404. The console uses four routes:
+After the one-use launch route, authenticated pages and APIs live under the public prefix `/console/<consoleId>/<sessionId>/`; the path identifies a session but does not authorize access. Unknown paths return 404. The data routes are:
 
 | Route | Purpose |
 | --- | --- |
@@ -23,7 +23,9 @@ Everything lives under the token-scoped prefix `/<token>/`; unknown paths return
 | `GET <prefix>/api/tasks/<runId>` | Existing detailed task/result view for one run |
 | `POST <prefix>/api/command` | `{operation, params}` dispatched through the same validated Python business operations the C-Two surface uses |
 
-A command success is `{ok:true,result:...}`; a failure is `{ok:false,error:{code,message,details?}}` with a matching 4xx/5xx status and no traceback. Requests require the exact loopback `Host`, the exact console `Origin` when present, and `Sec-Fetch-Site` of `same-origin` or `none`; there is no wildcard CORS. Writes additionally require the per-session `X-Buddy-CSRF` header and the HttpOnly, `SameSite=Strict` session cookie scoped to the token prefix. The request body is bounded to 1 MiB. User text is rendered as text, and service credentials, provider keys and worker claim secrets are never returned.
+A command success is `{ok:true,result:...}`; a failure is `{ok:false,error:{code,message,details?}}` with a matching 4xx/5xx status and no traceback. Reads and commands require the session cookie, the exact loopback `Host`, the exact console `Origin` when present, and `Sec-Fetch-Site` of `same-origin` or `none`; there is no wildcard CORS. POST commands additionally require the per-session `X-Buddy-CSRF` header and exact Origin. Mutations require the current writer session, checked again at dispatch; the five read-only POST commands listed in [console.md](console.md) remain available to superseded sessions. Cookies are HttpOnly and SameSite=Strict, with a path unique to the launch-created session. The request body is bounded to 1 MiB. User text is rendered as text, and service credentials, provider keys and worker claim secrets are never returned.
+
+HTTP snapshots additionally carry `consoleSession: {id, canWrite, reason}`. This descriptor is per browser session and never grants authority to a C-Two snapshot reader. Superseded pages disable mutation controls and preserve local drafts; read-only browsing and theme controls remain available.
 
 The browser command allowlist is defined in `console.CONSOLE_OPERATIONS`. It permits authenticated `user_policy_publish`, writer begin/renew/abort, bounded profile/history reads, catalog refresh and task controls. It never permits `assessment_publish`, `evaluation_prepare`, direct evidence entry or a maintenance model call. Ordinary service-token Hosts cannot claim `kind: human`; they publish model assessments only. Session authority is attached by the authenticated console server, not trusted from browser JSON: a caller-supplied `consoleAuthority`, `userOverride`, `consoleUser` or `adminOverride` is refused, and a fabricated console authority over C-Two is `UNAUTHORIZED`. There is no generic Host `evaluation_write_publish` operation; user policy and assessment publication are the only write paths.
 

@@ -4,6 +4,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import http.cookiejar
 import json
+import select
+import signal
+import subprocess
+import sys
 import threading
 from unittest import mock
 import urllib.request
@@ -12,6 +16,7 @@ from urllib.parse import urlsplit
 from buddy.console_sessions import MAX_ENTRIES, MAX_SESSIONS
 from buddy.errors import BoardError
 from test_console import Browser, ConsoleTestCase, http_call
+from support import _child_environment
 
 
 class ConsoleSessionTests(ConsoleTestCase):
@@ -198,3 +203,46 @@ class ConsoleSessionTests(ConsoleTestCase):
                 board.call('console', params)
             self.assertEqual(error.exception.code, 'INVALID_ARGUMENT')
         self.assertFalse(board.console.status()['running'])
+
+
+class ConsoleForegroundTests(ConsoleTestCase):
+    def test_real_cli_interrupt_closes_only_its_console_and_preserves_work(self):
+        with self.daemon():
+            code, before = self.cli('ping')
+            self.assertEqual(code, 0)
+            code, task = self.cli('execution-submit', json.dumps({
+                'requestId': 'console-wait-owned-task', 'task': 'outlive the browser',
+                'cwd': str(self.workdir()), 'adapter': 'command',
+                'argv': ['/bin/sleep', '30'], 'timeoutSeconds': 0,
+            }))
+            self.assertEqual(code, 0, task)
+            child = subprocess.Popen([sys.executable, '-m', 'buddy.cli', 'console',
+                '{"browser":false,"wait":true}'], env=_child_environment(self.directory),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, start_new_session=True)
+            try:
+                self.assertTrue(select.select([child.stderr], [], [], 20)[0], 'CLI did not report the entry')
+                notice = child.stderr.readline()
+                self.assertTrue(notice.startswith('buddy console: the browser was not opened; entry URL: '))
+                browser = Browser(notice.partition('entry URL: ')[2].strip())
+                self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
+                child.send_signal(signal.SIGINT)
+                stdout, stderr = child.communicate(timeout=15)
+                self.assertEqual(child.returncode, 0, stderr)
+                result = json.loads(stdout)
+                self.assertEqual(result['wait']['status'], 'interrupted')
+                self.assertTrue(result['wait']['close']['closed'])
+                self.assertEqual(result['consoleId'], result['wait']['close']['consoleId'])
+                code, after = self.cli('ping')
+                self.assertEqual(code, 0)
+                self.assertEqual(after['serviceId'], before['serviceId'])
+                code, viewed = self.cli('status', json.dumps({'runId': task['runId']}))
+                self.assertEqual(code, 0)
+                self.assertIn(viewed['status'], ('queued', 'running', 'completed'))
+                self.assertFalse(self.cli('console', '{"action":"status"}')[1]['running'])
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.communicate(timeout=10)
+                self.cli('execution-cancel', json.dumps({'runId': task['runId'], 'reason': 'private test cleanup'}))
+                self.cli('await', json.dumps({'runId': task['runId'], 'waitSeconds': 15}))

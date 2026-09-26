@@ -46,6 +46,8 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 "$BUDDY" console
 ```
 
+0.13.0 源码候选通过有效期 60 秒的一次性入口打开默认浏览器。新打开的会话接管写权限，旧会话保持只读并保留本地草稿。使用 `console '{"browser":false}'` 可自行打开链接；使用 `console '{"wait":true}'` 可让 CLI 留在前台，Ctrl-C 只关闭对应控制台。[控制台入口说明](docs/reference/console.md)记录会话过期行为与独立的安装边界。
+
 打开命令返回的 loopback 地址，顶部提供“委派记录 / 模型卡片 / 路由配置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据。模型按家族聚合，各思考档位保留独立评价；已启用档位有勾选标记，与当前查看的档位分开显示。右上角“编辑模式”创建本地草稿，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑模式只修改你自己的意见、偏好、启用状态、模型并发设置和路由配置：自动评价、证据和目录事实始终只读。每个模型家族在模型卡片上还有一个用户拥有的并发上限，走同样的本地草稿与短时发布流程；它在下一次认领时生效，调低上限不会停止正在运行的任务。同一入口可以显示不可用配置并分页查看保留历史；失效的 pin 或决策配置只给出提示，不阻止保存其他修改。证据区始终只读，并提示通过具备 skill 的 Harness 更新；“更新记录”显示已发布版本。深浅主题开关只记住显示偏好。查看、刷新和编辑草稿都不调用模型。
 
 可以直接让具备 skill 的 Harness“更新 Buddy 黑板的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工意见。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
@@ -62,7 +64,7 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。[参考文档](docs/reference/claude.md) 记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
-当前源码候选使用 contract 0.12.0、schema 11，新增[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)：优先展示最近一轮已结束的 Worker 摘要，其次使用任务首行。源码改动与日常运行时的实际安装分别记录。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。源码验证与实际安装分别记录于 [0.10.0 验收记录](docs/acceptance/runtime-efficiency-0.10.0.md)和 [Claude P1 记录](docs/acceptance/claude-worker-p1-0.11.0.md)；用 `health` 和 `runtime` 核对实际运行的安装。
+当前源码候选使用 contract 0.13.0、schema 11，新增[控制台入口与单写会话](docs/reference/console.md)，保留已安装的[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)。源码改动与日常运行时的实际安装分别记录。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。用 `health` 和 `runtime` 核对实际运行的安装；新契约需要协调空闲切换。
 
 ## 文档与开发
 

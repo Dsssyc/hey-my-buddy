@@ -163,11 +163,11 @@ Actor fields are `workerId`, `attemptId`, `generation` and `nonce`. Normally the
 
 ## Evaluation, routing and console
 
-`console` opens the private writable loopback surface; `console-snapshot` reads its authoritative data without a browser session and without invoking a model. The browser supplies its session-specific CSRF token separately. See [evaluation.md](evaluation.md) for editing, preferences, evidence and routing semantics.
+`console` opens the private loopback surface with a 60-second single-use entry link. The CLI launches the browser by default; `browser:false` suppresses launch, while `wait:true` keeps the CLI attached to the exact console instance and requests an identity-fenced console close on Ctrl-C. These booleans are local to open and never reach the service. Status/close and the wait observer never cold-start a daemon. `console-snapshot` reads authoritative data without a browser session or model invocation. See [console.md](console.md) for browser sessions and [evaluation.md](evaluation.md) for policy and evidence semantics.
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
-| `console` | `action`: `open` (default), `status`, `close` | Private writable console lifecycle; reports URL, running/read-only flags and whether the built assets exist |
+| `console` | `action`: `open` (default), `status`, `close`; CLI-only `browser` (default true) and `wait` (default false) for open; optional `expectedConsoleId` for close | Open returns a single-use `url`, `expiresAt`, public `consoleId`, `running`, `alreadyRunning`, asset metadata and CLI `browserOpened`. Status has no entry URL. Fenced close refuses to close a replacement instance |
 | `console-snapshot` | none | Current revision, gate, configuration, bounded active profiles and configured selector with their `modelConcurrency`, cards/preferences/annotations and per-profile counters, latest 200 evidence records, latest 50 decisions and latest 100 tasks; unavailable profile count is separate |
 | `model-catalog-refresh` | optional `requestId` (≤128) | Explicit native metadata discovery; one monotone `observationId` per request publishes per-harness facts and preserves existing human state. Each harness reports `status: complete\|unknown` with a reason, plus `appliedAdapters` and `staleAdapters`; only a complete result may confirm absence, and a late older response is skipped. New profiles are disabled and enabled state is never reset. No model call |
 | `model-profiles` | optional `includeUnavailable`, `limit` (1–200, default 100), `after` profile cursor, `query` (≤200 characters, at most 8 terms), `adapter` | Bounded active/unavailable profile page with associated cards/annotations/preferences/sampleCounts, per-family `modelConcurrency` (`active` occupancy is read-only observation), tableRevision and nextCursor; unavailable entries are hidden unless requested |
@@ -265,6 +265,9 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | `FORBIDDEN` | An attempt-scoped credential tried to use Host authority |
 | `MESSAGE_TOO_LARGE` / `INVALID_RESPONSE` | The request or the service response exceeded the transport bound / was malformed |
 | `INTERNAL_ERROR` | Unexpected service failure; set `BUDDY_DEBUG` for detail |
+| `CONSOLE_READ_ONLY` | A newer console session owns write authority; this session may still browse |
+| `CONSOLE_SESSION_EXPIRED` / `CONSOLE_ENTRY_EXPIRED` | The browser session is unavailable / the one-use entry is used or expired; reopen through the CLI |
+| `CONSOLE_LIMIT` | The bounded collection of pending entries or active browser sessions is full |
 
 ## `await` envelope
 

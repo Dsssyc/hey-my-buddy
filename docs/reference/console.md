@@ -1,6 +1,6 @@
 # Console entry and browser sessions
 
-This is the implementation contract for the next console-entry slice, under development after installed 0.12.0. The target named contract is 0.13.0, with schema 11 unchanged. It implements section V of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) and the user's choice that a newly opened session takes write access while older sessions remain readable. Source verification and installation will be recorded separately.
+This is the implementation contract for the 0.13.0 console-entry candidate, with schema 11 unchanged. It implements section V of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) and the user's choice that a newly opened session takes write access while older sessions remain readable. The installed daily service stays at 0.12.0 until a separately authorized cutover. Source verification and installation are recorded separately.
 
 ## Entry and ownership
 
@@ -21,6 +21,8 @@ Authenticated HTTP snapshots add `consoleSession: {id, canWrite, reason}`. `id` 
 `CONSOLE_READ_ONLY` refuses a mutation from an older authenticated session. `CONSOLE_SESSION_EXPIRED` means the session no longer exists or its cookie is absent/invalid. `CONSOLE_ENTRY_EXPIRED` means the launch ticket is unavailable. Errors do not return the ticket, cookie, CSRF value, service token or a replacement writer credential.
 
 The UI keeps the existing three pages, selections, local drafts and read-only history/detail/routing reads. A superseded window displays a clear read-only message, stops save/renew/retry mutations and disables edit, discovery and task-control actions; it never discards drafts or reloads to gain authority. Theme and navigation remain usable. Opening a fresh entry is the explicit way to acquire a new writer session.
+
+A lost mutation reply remains an unknown outcome after handoff. A later read-only refusal proves only that the later request was denied; it cannot establish whether an earlier request with that command ID committed. Keep its staged identity, draft and uncertainty visible without replaying it from the old session. The user can inspect the published state in the new window; a permission change never implies a rollback or a failed publication.
 
 ## Lifetime and bounds
 
