@@ -197,6 +197,8 @@ def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "ownerGeneration",
                 "continuationCount",
                 "executionConfiguration",
+                "objectiveId",
+                "title",
             ),
         )
     )
@@ -342,6 +344,8 @@ _KNOWN_GOVERNED_FIELDS = frozenset(
         "targetRevision",
         "integration",
         "plan",
+        "objectiveId",
+        "title",
     }
 )
 
@@ -399,7 +403,9 @@ def task_brief(view: dict) -> dict:
     workflow = view.get("workflow")
     if isinstance(workflow, dict):
         brief["workflow"] = _pick(
-            workflow, ("state", "awaitingHost", "ownerGeneration", "revision", "continuationCount", "activeRequestId", "resultSummary")
+            workflow,
+            ("state", "awaitingHost", "ownerGeneration", "revision", "continuationCount", "activeRequestId",
+             "resultSummary", "objectiveId", "title"),
         )
     if "workflowShutdown" in view:
         brief["workflowShutdown"] = _shutdown(view["workflowShutdown"])
@@ -431,8 +437,13 @@ def list_brief(response: dict) -> dict:
             entry.update(_pick(delegation, ("kind", "parentRunId", "currentHostId")))
         workflow = row.get("workflow") if isinstance(row.get("workflow"), dict) else {}
         title = _title(row.get("task") or (row.get("spec") or {}).get("task"), workflow.get("resultSummary"))
+        explicit = workflow.get("title")
+        if isinstance(explicit, str) and explicit.strip():
+            title = explicit.strip()[:_TITLE_LIMIT]
         if title:
             entry["title"] = title
+        if workflow.get("objectiveId"):
+            entry["objectiveId"] = workflow["objectiveId"]
         brief_rows.append(entry)
     brief = {"view": OUTPUT_BRIEF, "runs": brief_rows}
     brief.update(_pick(response, ("total", "cursor", "nextCursor")))

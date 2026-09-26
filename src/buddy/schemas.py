@@ -93,7 +93,7 @@ TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
 
 #: Every field ``workflow_submit`` accepts in addition to the ordinary spec, and
 #: every field one explicit helper specification accepts.
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "spec", "submissionToken"}
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "spec", "submissionToken", "title", "objective", "objectiveId"}
 WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role", "spec", "inheritRoutingPreferences"}
 MIN_SUBMISSION_TOKEN = 16
 MAX_SUBMISSION_TOKEN = 256
@@ -438,17 +438,34 @@ def _spec_fields(params: dict, *, nested_key: str, allowed: frozenset[str], what
     return spec_params
 
 
-def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str) -> str:
+def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None) -> str:
     """The governed idempotency identity: goal, execution workspace and Host.
 
     The task fingerprint stays the ordinary spec fingerprint; this one additionally
     fences a replay whose workspace intent, base or Host changed, so a stable
     requestId can never silently reuse a different prepared snapshot.
     """
-    return sha256_text(
-        "workflow-v1:"
-        + canonical_json({"spec": spec, "executionWorkspace": execution_workspace, "hostId": host_id})
-    )
+    request = {"spec": spec, "executionWorkspace": execution_workspace, "hostId": host_id}
+    if presentation:
+        request["presentation"] = presentation
+    return sha256_text("workflow-v1:" + canonical_json(request))
+
+
+def normalize_presentation(params: dict) -> dict:
+    """Human display metadata is separate from every execution/selector spec."""
+    result = {}
+    if "objective" in params and "objectiveId" in params:
+        raise BoardError("INVALID_ARGUMENT", "Supply objective or objectiveId, not both")
+    if "title" in params:
+        result["title"] = " ".join(required_string(params, "title", max_length=200).split())
+    if "objectiveId" in params:
+        result["objectiveId"] = required_string(params, "objectiveId", max_length=128,
+                                                pattern=re.compile(r"^obj-[A-Za-z0-9-]+$"))
+    if "objective" in params:
+        objective = require_object(params["objective"], "objective")
+        reject_unknown(objective, {"title"}, "objective")
+        result["objective"] = {"title": " ".join(required_string(objective, "title", max_length=200).split())}
+    return result
 
 
 def normalize_submission_token(params: dict) -> str | None:
@@ -489,6 +506,7 @@ def normalize_workflow_submit(params: dict) -> dict:
         "spec": spec,
         "executionWorkspace": workspace_intent,
         "owner": spec_params.get("owner"),
+        "presentation": normalize_presentation(params),
     }
 
 

@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the 0.13.0 source candidate under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.13.0, transport protocol is 2, and startup accepts schema 11 only. The Claude Worker P1 slice has native adapter/controller probe evidence and simulated-CLI service integration evidence; the [Claude P1 record](../acceptance/claude-worker-p1-0.11.0.md) identifies the tested boundaries and the separately installed daily runtime. Design records live in `docs/decisions/`. See also the [0.10.0 acceptance record](../acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](../acceptance/runtime-refinement-0.9.0.md).
+This page describes the 0.14.0 source candidate under `src/buddy/`, `harnesses/dsh/` and `apps/console/`. Release and named C-Two contract versions are 0.14.0, transport protocol is 2, and startup accepts schema 12 only; schema 12 adds the `objectives` table and nullable objective, display-title and latest-activity columns on `workflow_runs` ([objectives](objectives.md)). The Claude Worker P1 slice has native adapter/controller probe evidence and simulated-CLI service integration evidence; the [Claude P1 record](../acceptance/claude-worker-p1-0.11.0.md) identifies the tested boundaries and the separately installed daily runtime. Design records live in `docs/decisions/`. See also the [0.10.0 acceptance record](../acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](../acceptance/runtime-refinement-0.9.0.md).
 
 ## Process topology
 
@@ -9,7 +9,7 @@ Codex skill / CLI / private console / external worker
                   |  named C-Two RPC (private token)
         Python blackboard daemon  <-- only writer of authoritative state
           state machine + transactions + events
-                  |  SQLite WAL (board.sqlite3, schema 11)
+                  |  SQLite WAL (board.sqlite3, schema 12)
         tasks / attempts / workers / messages / artifacts
         events / command receipts / resource claims
         model_concurrency / frozen claimed-model identity

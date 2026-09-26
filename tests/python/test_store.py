@@ -66,11 +66,11 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
         )
 
 
-class SchemaElevenTests(BoardTestCase):
-    def test_fresh_board_is_schema_11_with_the_model_concurrency_table(self):
+class CurrentSchemaTests(BoardTestCase):
+    def test_fresh_board_is_the_current_schema_with_the_model_concurrency_table(self):
         board = self.board()
         integrity = board.store.integrity()
-        self.assertEqual(integrity["schemaVersion"], 11)
+        self.assertEqual(integrity["schemaVersion"], 12)
         with board.store.db.read() as connection:
             columns = {
                 row["name"]

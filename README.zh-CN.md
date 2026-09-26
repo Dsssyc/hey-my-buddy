@@ -64,7 +64,7 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。[参考文档](docs/reference/claude.md) 记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
-当前源码候选使用 contract 0.13.0、schema 11，新增[控制台入口与单写会话](docs/reference/console.md)，保留已安装的[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)。源码改动与日常运行时的实际安装分别记录。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。用 `health` 和 `runtime` 核对实际运行的安装；新契约需要协调空闲切换。
+当前源码候选使用 contract 0.14.0、schema 12，新增[工作目标与委派时间轴](docs/reference/objectives.md)，并包含[控制台入口与单写会话](docs/reference/console.md)与已安装的[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)。已有的 schema 11 看板需先按该文档执行显式离线准备，再进行切换。源码改动与日常运行时的实际安装分别记录。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。用 `health` 和 `runtime` 核对实际运行的安装；新契约需要协调空闲切换。
 
 ## 文档与开发
 

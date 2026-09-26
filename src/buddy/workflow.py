@@ -613,6 +613,8 @@ class WorkflowCoordinator:
             "shutdown": self.shutdown_summary(connection, run_row["run_id"]),
             "task": self._task_summary(connection, task_row),
         }
+        if (current_scope() or {}).get("kind") != AGENT_KIND:
+            view.update(title=run_row["title"], objectiveId=run_row["objective_id"])
         return view
 
     @staticmethod
@@ -1237,6 +1239,7 @@ class WorkflowCoordinator:
         requestFingerprint: str,
         executionConfiguration: dict | None = None,
         submissionToken: str | None = None,
+        presentation: dict | None = None,
         now: str,
     ) -> str:
         """Insert the run, its reservation and its pinned input manifest.
@@ -1246,6 +1249,9 @@ class WorkflowCoordinator:
         """
         run_id = task_row["task_id"]
         access = executionWorkspace.get("access", "write")
+        from .objectives import attach_objective
+        presentation = presentation or {}
+        objective_id = attach_objective(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, goal_json,"
             " goal_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
@@ -1267,6 +1273,8 @@ class WorkflowCoordinator:
                 now,
             ),
         )
+        connection.execute("UPDATE workflow_runs SET objective_id=?,title=? WHERE run_id=?",
+                           (objective_id, presentation.get("title"), run_id))
         if manifest:
             # The column tracks the effective execution checkout (a prepared worktree
             # path), while spec_json/input_fingerprint keep the immutable original
@@ -1330,7 +1338,7 @@ class WorkflowCoordinator:
         submission_token = normalized["submissionToken"]
         fingerprint = schemas.spec_fingerprint(spec)
         request_fingerprint = schemas.workflow_request_fingerprint(
-            spec, normalized["executionWorkspace"], host_id
+            spec, normalized["executionWorkspace"], host_id, presentation=normalized["presentation"]
         )
 
         # Recovery first: an idempotent submit must recover the original prepared
@@ -1391,6 +1399,7 @@ class WorkflowCoordinator:
                     "requestFingerprint": request_fingerprint,
                     "submissionToken": submission_token,
                     "executionConfiguration": configuration,
+                    "presentation": normalized["presentation"],
                 },
             )
         except BoardError as error:
@@ -2264,6 +2273,7 @@ class WorkflowCoordinator:
         )
         # A helper is a current-contract run too: its own scope version 1 is recorded
         # with its admission so no creation path can exist without a real scope row.
+        connection.execute("UPDATE workflow_runs SET objective_id=? WHERE run_id=?", (run_row["objective_id"], helper_task_id))
         connection.execute(
             "INSERT INTO workflow_scope_versions(run_id, scope_version, actor, reason, write_scope_json,"
             " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?)",
@@ -4516,7 +4526,7 @@ class WorkflowCoordinator:
         # Share the existing run read; the indexed subquery returns at most one
         # own outcome. json_type distinguishes text from serialized objects/arrays.
         run_row = connection.execute(
-            "SELECT r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,"
+            "SELECT r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.objective_id,"
             " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
             " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
             " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
@@ -4537,6 +4547,8 @@ class WorkflowCoordinator:
             "activeRequestId": run_row["active_request_id"],
             "resultSummary": summary or None,
         }
+        if (current_scope() or {}).get("kind") != AGENT_KIND:
+            extension.update(title=run_row["title"], objectiveId=run_row["objective_id"])
         if run_row["active_request_id"]:
             request = connection.execute(
                 "SELECT kind, summary, payload_json FROM workflow_requests WHERE request_id=?", (run_row["active_request_id"],)

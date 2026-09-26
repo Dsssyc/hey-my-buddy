@@ -89,6 +89,8 @@ CONTROL_OPERATIONS = (
     "workspace_cleanup_plan",
     "workspace_cleanup_apply",
     "workflow_suggest",
+    "objective_list",
+    "objective_timeline",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
 
@@ -556,6 +558,21 @@ class BoardService(_BaseResource):
             return self.store.workflow.suggest(params, scope=workflow_module.current_scope())
 
         return self._guard("workflow.suggest", request_json, handler)
+
+    # -- work objectives ----------------------------------------------------
+    def objective_list(self, request_json: str) -> str:
+        # Read-only: no lease, no model call; an attempt-scoped credential is refused
+        # by the agent operation allowlist before this handler runs.
+        from . import objectives
+
+        return self._guard("objective.list", request_json, lambda params: objectives.objective_list(self.store, params))
+
+    def objective_timeline(self, request_json: str) -> str:
+        from . import objectives
+
+        return self._guard(
+            "objective.timeline", request_json, lambda params: objectives.objective_timeline(self.store, params)
+        )
 
     # -- console-user authority --------------------------------------------
     def register_console_authority(self, session_id: str) -> None:

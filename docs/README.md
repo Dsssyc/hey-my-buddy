@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the 0.13.0 source candidate in this checkout (contract 0.13.0, schema 11), adding [console entry and single-writer sessions](reference/console.md) on top of the installed [0.12.0 title fallback](acceptance/title-fallback-0.12.0.md) and Claude Worker P1 baseline. Its native adapter/controller probes, simulated-CLI service integration and separately installed daily runtime are recorded in the [Claude P1 record](acceptance/claude-worker-p1-0.11.0.md); use `buddy health` and `buddy runtime` to identify the running installation. The [0.10.0 delivery record](acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](acceptance/runtime-refinement-0.9.0.md) preserve their historical evidence. Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
+These pages describe the 0.14.0 source candidate in this checkout (contract 0.14.0, schema 12), adding [work objectives and delegation timelines](reference/objectives.md) and [console entry and single-writer sessions](reference/console.md) on top of the installed [0.12.0 title fallback](acceptance/title-fallback-0.12.0.md) and Claude Worker P1 baseline. Its native adapter/controller probes, simulated-CLI service integration and separately installed daily runtime are recorded in the [Claude P1 record](acceptance/claude-worker-p1-0.11.0.md); use `buddy health` and `buddy runtime` to identify the running installation. The [0.10.0 delivery record](acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](acceptance/runtime-refinement-0.9.0.md) preserve their historical evidence. Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
 
 | Document | Role |
 | --- | --- |
@@ -39,11 +39,12 @@ These pages describe the 0.13.0 source candidate in this checkout (contract 0.13
 | [reference/operations.md](reference/operations.md) | Installation, runtime lifecycle, private state and environment, the DSH workspace bridge, recovery and removal |
 | [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, preferences, evidence, the reader/writer gate, the private console HTTP surface and the fixed decision profile |
 | [reference/console.md](reference/console.md) | One-time console entry, authenticated browser sessions, single-writer handoff, inactivity and CLI lifecycle |
+| [reference/objectives.md](reference/objectives.md) | Work-objective grouping, `objective-list`/`objective-timeline` read shapes, timeline presentation and the schema-12 offline preparation tool |
 | [reference/evaluation-maintenance.md](reference/evaluation-maintenance.md) | Harness-owned bounded fact preparation, archived reviews, shared card updates, publication and history |
 | [reference/decision.md](reference/decision.md) | The bounded tool-free DSH routing helper: selection input/output, cache layout and process ownership |
 | [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`codex`/`command`/`external` adapters, the public `BoardClient` contract, worker identity, reconciliation, bounded activity and receipts, and supervisors |
 | [reference/runner.md](reference/runner.md) | DSH-specific `harnesses/dsh/scripts/run.mjs` runner and bridge scripts: options, precedence, governed turn protocol, exit codes and attach mode |
-| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 11, the shared attempt ceiling and model-family concurrency, identity, recovery, catalog observation and packaging |
+| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 12, the shared attempt ceiling and model-family concurrency, identity, recovery, catalog observation and packaging |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 

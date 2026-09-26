@@ -85,6 +85,35 @@ def parse_task_history_query(query: str) -> dict:
     return params
 
 
+#: Exact parameter whitelists of the read-only objective routes; they reach the
+#: same named ``objective_list``/``objective_timeline`` operations as the CLI.
+OBJECTIVE_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
+OBJECTIVE_TIMELINE_PARAMETERS = frozenset({"limit", "query", "filter"})
+_OBJECTIVE_ID = re.compile(r"^(obj-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})$")
+
+
+def parse_objective_query(query: str, allowed: frozenset[str]) -> dict:
+    """Parse one objective route query string; unknown or repeated names are refused."""
+    entries = parse_qs(query, keep_blank_values=True)
+    params: dict[str, Any] = {}
+    for name in sorted(entries):
+        if name not in allowed:
+            raise BoardError("INVALID_ARGUMENT", f"Unknown objective parameter: {name}", field=name)
+        values = entries[name]
+        if len(values) != 1:
+            raise BoardError("INVALID_ARGUMENT", f"Duplicate objective parameter: {name}", field=name)
+        value = values[0]
+        if name == "limit":
+            if not _QUERY_INTEGER.match(value):
+                raise BoardError("INVALID_ARGUMENT", "limit must be a nonnegative integer", field=name)
+            params[name] = int(value)
+        else:
+            if not value:
+                raise BoardError("INVALID_ARGUMENT", f"{name} must be a nonempty value", field=name)
+            params[name] = value
+    return params
+
+
 #: The only operations a browser may invoke. Everything else — including any raw SQL
 #: or an unwrapped store call — is not reachable through this surface.
 #:
@@ -631,6 +660,16 @@ class Console:
                     return self._json(200, snapshot)
                 if relative == "/api/tasks":
                     return self._task_history()
+                if relative == "/api/objectives":
+                    return self._objective_read("objective_list", {}, OBJECTIVE_LIST_PARAMETERS)
+                if relative.startswith("/api/objectives/") and relative.endswith("/timeline"):
+                    # The request path is already percent-decoded once by _path().
+                    identifier = relative[len("/api/objectives/"):-len("/timeline")]
+                    if not _OBJECTIVE_ID.match(identifier):
+                        return self._error(404, "NOT_FOUND", "Not found")
+                    return self._objective_read(
+                        "objective_timeline", {"objectiveId": identifier}, OBJECTIVE_TIMELINE_PARAMETERS
+                    )
                 if relative.startswith("/api/tasks/"):
                     return self._task(relative[len("/api/tasks/"):])
                 if relative.startswith("/api/"):
@@ -691,6 +730,17 @@ class Console:
                     return self._board_error(error)
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary
                     return self._error(500, "INTERNAL_ERROR", "The task history could not be read")
+                self._json(200, result)
+
+            def _objective_read(self, operation: str, fixed: dict, allowed: frozenset[str]) -> None:
+                """Authenticated read-only objective browsing; no lease, write authority or model call."""
+                try:
+                    params = {**parse_objective_query(urlsplit(self.path).query, allowed), **fixed}
+                    result = call_operation(console.service, operation, params)
+                except BoardError as error:
+                    return self._board_error(error)
+                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
+                    return self._error(500, "INTERNAL_ERROR", "The work objectives could not be read")
                 self._json(200, result)
 
             def _task(self, run_id: str) -> None:

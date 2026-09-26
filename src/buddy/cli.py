@@ -47,6 +47,9 @@ METHODS = [
     "workspace-cleanup-apply",
     "await",
     "suggest",
+    # -- work objectives: read-only browsing of grouped delegations ----------
+    "objective-list",
+    "objective-timeline",
     # -- execution records for command/external/decision infrastructure -----
     "execution-submit",
     "execution-cancel",

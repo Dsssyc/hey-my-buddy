@@ -20,7 +20,7 @@ class LivenessTests(BoardTestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["serviceId"], "fixture-service")
         self.assertEqual(result["contractVersion"], CONTRACT_VERSION)
-        self.assertEqual(result["schemaVersion"], 11)
+        self.assertEqual(result["schemaVersion"], 12)
 
     def test_each_client_attach_uses_light_ping(self):
         board = self.board()

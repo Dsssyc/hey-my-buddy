@@ -22,6 +22,29 @@ Timeline parameters are objectiveId, limit (default 100, maximum 200), query and
 
 Unfinished attempts extend visually to observedAt only with an explicit active/unknown state. A finished attempt without confirmed shutdown remains unknown. Missing or reversed timestamps are marked and not repaired into invented durations. Historical configurations come from the exact turn input/attempt, never a run's current configuration. The timer observes activity; it is not an execution clock or a cost metric.
 
+## Read shapes
+
+The response types are mirrored in `apps/console/src/objective-types.ts`.
+
+Groups contain governed delegation trees only: a root with an objective belongs to `obj-<id>`, and every other root forms `run:<rootRunId>`. Helpers inherit their root's group, and a routing decision task belongs to the run it routed; plain `command`/`external` execution records belong to no group and stay in task history. A `run:` identifier whose root has an objective is `NOT_FOUND`, because that root is read through its objective.
+
+An objective summary carries `objectiveId`, `kind` (`objective` or `standalone`), `title` with `titleSource` (`objective`, `title`, `summary`, `task` or `none` for the 未命名委派 fallback), `project` `{id, path, label}`, `sourceHostId`, `currentHostIds`, `createdAt`, `lastActivityAt`/`lastActivitySeq`, overall `counts` `{roots, helpers, host, active, review, ended}`, the summary `state` (the highest-priority category present), `matchingRuns` for the current filters and `rootRunIds`. Categories are disjoint: `host` is an awaiting-Host run; `active` is queued, running, cancelling or reconciliation-needed work, or a governed run executing or waiting for helpers; `review` is the console's unaccepted-review condition, which requires proven stop; everything else is `ended`.
+
+The list cursor encodes the last activity sequence, group identifier, a fingerprint of the filters and the event head of the first page. Reusing it with other filters is `INVALID_ARGUMENT`. `changed` is true when a matching group recorded activity after that first page, so the client offers a refresh instead of silently reordering.
+
+Timeline rows arrive in tree order (roots by creation, each followed depth-first by its helpers) with `depth`, `title`/`titleSource`, workflow `state`, task `status`, `category`, `kind`, the current `configuration`, acceptance fields and `shutdownConfirmed`, which is true only when every recorded attempt finished with confirmed stop and a running task without any attempt record is never counted as stopped. Spans carry `startAt`/`endAt`, `state`, attempt/turn/request identity, the frozen `configuration` from the turn input (or the claimed model identity), `shutdownConfirmed`, `uncertain` and `clockSkew`:
+
+| Kind | Interval | State |
+| --- | --- | --- |
+| `queue` | submission or continuation to the attempt's claim; a still-queued task has an open span | `claimed`, or `queued` while open |
+| `execution` | attempt start (or claim) to finish; unfinished attempts have no end | the attempt execution state: `starting`, `executing`, `finalizing`, `uncertain` or `finished`; `uncertain` is set for uncertain ownership or a finish without confirmed stop |
+| `routing` | a routing decision task's attempts, shown on the routed run's row | as for execution |
+| `host` | a recorded request from creation to decision; an open request has no end | `open`, `approved`, `declined`, `superseded` or `cancelled` |
+
+Host markers come from `task.submitted` (dispatch, 派发), `workflow.request_approved`/`request_declined` (decide, 决定), `workflow.continued` (continue, 续接), `workflow.integration_recorded` (integrate, 整合), `workflow.acknowledged` (accept 验收, or reject 验收问题 for a rejected verdict), `workflow.cancelled` (cancel, 取消) and `workflow.takeover` (takeover, 接管). Each carries `seq`, `runId`, `kind`, `at`, `label`, a bounded `summary`, `actor` and the record identities it names; raw payloads, notes and credentials are not copied. Automatic continuations are Worker-side and not Host markers.
+
+`totals.rows` counts the filtered scope and `totals.allRows` every delegation of the group; `truncated` has one boolean per collection and `filtered` reports a query or filter. `scopeComplete` is true only without filters or truncation.
+
 ## Presentation
 
 The UI says 工作目标 and groups the left list by source project. The detail shows the objective's bounded timeline, nested helpers and a legend based on recorded configurations. Selecting a span reuses the existing run/turn detail and mutation controls. Existing local drafts, ambiguous-command identities and read-only session restrictions remain in force; timeline navigation must not silently discard them.
@@ -30,6 +53,12 @@ Idle gaps longer than 30 minutes fold by default and may be expanded. A gap can 
 
 ## Schema and verification
 
-Startup accepts schema 12 only and contains no automatic schema conversion or version facade. An explicit offline preparation tool may copy an idle, verified schema-11 board into a separate destination, add the grouping/display columns and derive activity indexes while preserving all original rows, secrets and relationships. It must refuse an active source or existing destination and never overwrite the original. The production switch remains separate; this candidate is tested with private boards and synthetic historical fixtures.
+Startup accepts schema 12 only and contains no automatic schema conversion or version facade. The explicit offline preparation tool copies an idle, verified schema-11 board into a separate new destination, adds the grouping/display columns and derives activity indexes while preserving all original rows, secrets and relationships:
+
+```sh
+uv run --frozen python -m buddy.board_prepare --source <schema-11 state dir> --destination <new state dir>
+```
+
+It refuses a source whose daemon owner locks are held, a source with open tasks or attempts without confirmed stop, a source that is not schema 11 or fails its integrity/foreign-key checks, an existing destination and a destination inside the source. It reads the source through a read-only connection and the SQLite backup API, applies the schema-12 additions to the copy only, replays the recorded event order through the same activity projection the runtime maintains, and then verifies integrity, foreign keys, the exact schema shape of a fresh schema-12 board, unchanged per-table row counts, the preserved capability secret and the unchanged source file hash. It creates no objectives: historical roots stay standalone delegations. The production switch remains separate; this candidate is tested with private boards and synthetic historical fixtures.
 
 Verification covers grouping/replay conflicts, cross-project and source-Host checks, helper inheritance, Worker/selector isolation, event-derived ordering, filters/keysets/truncation, recorded attempts/requests/markers, cancellation with uncertain shutdown, and idle folding across overlapping or incomplete data. The old records and the new grouping must survive explicit offline preparation without reconstructing missing history. Claude supplies the design; implementation and final correctness review remain separate verified work.

@@ -74,7 +74,7 @@ class DaemonHealthTests(BoardTestCase):
                 self.assertNotEqual(process.poll(), 0)
                 endpoint = _read_endpoint(self.directory)
                 health = _request(endpoint, "health", {})
-                self.assertEqual(health["schemaVersion"], 11)
+                self.assertEqual(health["schemaVersion"], 12)
                 self.assertEqual(health["maxConcurrent"], 2)
                 self.assertEqual(set(health["capacity"]), {"totalLimit", "totalActive", "models"})
                 self.assertEqual(health["capacity"]["totalLimit"], 2)

@@ -792,3 +792,35 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConsoleObjectiveTests(ConsoleTestCase, WorkflowTestCase):
+    """Authenticated read-only objective routes over the named objective operations."""
+
+    def test_objective_list_and_timeline_routes(self):
+        board = self.board()
+        first = self.submit(board, request_id="objective-http-1", kind="worktree", objective={"title": "HTTP group"})
+        loose = self.submit(board, request_id="objective-http-2", kind="worktree", task="loose root")
+        _stated, browser = self.open_console(board)
+        status, headers, body = browser.get("/api/objectives?limit=5&filter=all")
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(headers["cache-control"], "no-store")
+        page = json.loads(body)
+        self.assertEqual(page, json.loads(json.dumps(board.call("objective_list", {"limit": 5, "filter": "all"}))))
+        self.assertEqual({item["objectiveId"] for item in page["objectives"]},
+                         {first["objectiveId"], f"run:{loose['runId']}"})
+        status, _headers, body = browser.get(f"/api/objectives/{first['objectiveId']}/timeline?limit=10")
+        self.assertEqual(status, 200, body[:300])
+        timeline = json.loads(body)
+        self.assertEqual([row["runId"] for row in timeline["rows"]], [first["runId"]])
+        encoded = f"/api/objectives/run%3A{loose['runId']}/timeline"
+        status, _headers, body = browser.get(encoded)
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(json.loads(body)["rows"][0]["runId"], loose["runId"])
+        for path, code in (("/api/objectives?unknown=1", 400), ("/api/objectives?limit=1&limit=2", 400),
+                           ("/api/objectives/obj-missing/timeline", 404), ("/api/objectives/bad%20id/timeline", 404),
+                           ("/api/objectives/obj-x/timeline?before=1", 400)):
+            with self.subTest(path=path):
+                self.assertEqual(browser.get(path)[0], code)
+        anonymous = Browser(browser.origin + browser.prefix + "/")
+        self.assertEqual(anonymous.get("/api/objectives")[0], 401)

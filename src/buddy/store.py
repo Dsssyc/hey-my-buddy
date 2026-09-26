@@ -147,10 +147,13 @@ class BoardStore:
         revision: int | None = None,
         payload: dict | None = None,
     ) -> int:
+        at = self.now()
         cursor = connection.execute(
             "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, created_at) VALUES(?,?,?,?,?,?)",
-            (task_id, attempt_id, revision, kind, canonical_json(payload or {}), self.now()),
+            (task_id, attempt_id, revision, kind, canonical_json(payload or {}), at),
         )
+        from .objectives import record_activity
+        record_activity(connection, task_id, int(cursor.lastrowid), at)
         return int(cursor.lastrowid)
 
     def head(self) -> int:
@@ -1723,6 +1726,9 @@ class BoardStore:
             # Only the execution projection travels to a Worker. The original
             # partial request remains immutable in tasks/spec and workflow audit.
             response["claim"]["task"]["spec"] = spec
+            # Display grouping does not travel to a Worker or its native context.
+            for key in ("title", "objectiveId"):
+                response["claim"]["task"].get("workflow", {}).pop(key, None)
             turn_claim = self.workflow.begin_turn(
                 connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now
             )
