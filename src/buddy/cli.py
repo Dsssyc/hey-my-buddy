@@ -548,6 +548,14 @@ def main(argv: list[str] | None = None) -> int:
         params = json.loads(args.params)
         if args.method in LOCAL_METHODS:
             result = _worker_command(args.method, params)
+        elif args.method == "console":
+            # Console keeps its one canonical JSON argument, but `browser` and `wait`
+            # are CLI-local: console_cli validates and strips them, launches the
+            # default browser and waits without ever cold-starting a service. An
+            # attempt-scoped credential is refused before any local action or RPC.
+            from . import console_cli
+
+            result = console_cli.run(params, credential=_agent_credential())
         elif args.method == "await":
             from .blocking import WaitAbandoned, await_run, recovery_commands
 

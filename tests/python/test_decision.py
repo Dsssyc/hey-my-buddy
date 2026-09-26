@@ -1186,7 +1186,7 @@ class DecisionDaemonTests(DecisionTestCase):
         with self.daemon(env=helper_env):
             code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "daemon-cat"}))
             self.assertEqual(code, 0, refreshed)
-            code, opened = self.cli("console", json.dumps({"action": "open"}))
+            code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))
             self.assertEqual(code, 0, opened)
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]

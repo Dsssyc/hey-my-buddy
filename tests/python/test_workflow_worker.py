@@ -225,8 +225,8 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
 class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
     def test_console_command_route_strips_the_capability_and_refuses_override(self):
         board = self.board()
-        board.console.start()
-        browser = Browser(board.console.url)
+        opened = board.console.start()
+        browser = Browser(opened['url'])
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
         created = board.call(

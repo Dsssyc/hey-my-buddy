@@ -737,7 +737,7 @@ class Console:
                 if not isinstance(operation, str) or not operation:
                     return self._error(400, "INVALID_ARGUMENT", "operation is required")
                 try:
-                    result = console.command(operation, value.get("params") or {}, session=self.browser_session)
+                    result = console.command(operation, value.get("params", {}), session=self.browser_session)
                 except BoardError as error:
                     return self._board_error(error)
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary

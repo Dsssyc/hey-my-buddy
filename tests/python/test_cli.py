@@ -97,6 +97,17 @@ class MethodSurfaceTests(unittest.TestCase):
     def test_control_methods_are_the_current_governed_mutations(self):
         self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "acknowledge", "scope-amend", "workspace-resolve", "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply"}))
 
+    def test_console_keeps_the_canonical_name_and_no_alternative_spellings(self):
+        self.assertEqual(transport.METHOD_MAP["console"], ("control", "console"))
+        self.assertIn("console", cli.METHODS)
+        for alias in ("console-open", "console-status", "console-close", "open-console"):
+            with self.subTest(alias=alias):
+                self.assertNotIn(alias, cli.METHODS)
+                self.assertNotIn(alias, transport.METHOD_MAP)
+        # The CLI-local browser/wait booleans never turn console into a local method:
+        # it still maps onto exactly one named C-Two lifecycle operation.
+        self.assertNotIn("console", cli.LOCAL_METHODS)
+
     def test_worker_evaluation_and_selection_operations_stay_distinct(self):
         # The governed goal lifecycle never absorbs the separate worker, evaluation
         # or selection surfaces; they keep their names and their own operations.

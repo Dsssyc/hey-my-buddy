@@ -635,7 +635,7 @@ class ConsoleAssetTests(ConsoleTestCase):
 class ConsoleDaemonTests(ConsoleTestCase):
     def test_cli_console_opens_and_closes_the_real_daemon_surface(self):
         with self.daemon():
-            code, opened = self.cli("console", json.dumps({"action": "open"}))
+            code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))
             self.assertEqual(code, 0, opened)
             self.assertFalse(opened["readOnly"])
             self.assertTrue(opened["url"].startswith("http://127.0.0.1:"))
@@ -676,7 +676,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "cli-cat"}))
             self.assertEqual(code, 0, refreshed)
             self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
-            code, opened = self.cli("console", json.dumps({"action": "open"}))
+            code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))
             self.assertEqual(code, 0, opened)
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
@@ -749,6 +749,10 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         status, _headers, data = browser.command("selection_list", {"limit": 0}, csrf=csrf)
         self.assertEqual(status, 400, data)
         self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
+        for invalid_params in (None, False, 0, [], ""):
+            status, _headers, data = browser.command("selection_list", invalid_params, csrf=csrf)
+            self.assertEqual(status, 400)
+            self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
         # The CLI spelling is a client alias, never an operation name on the boundary.
         status, _headers, data = browser.command("selection-list", {}, csrf=csrf)
         self.assertEqual(status, 404, data)
