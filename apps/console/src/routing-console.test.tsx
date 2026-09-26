@@ -18,7 +18,7 @@ const selector = { provider: "deepseek-official", model: "deepseek-flash", effor
 
 function snapshot(records: Task[] = []): Snapshot {
   return {
-    csrfToken: "csrf", tableRevision: 99,
+    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
     configuration: { revision: 9, decisionProfileId: worker.profileId },
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],

@@ -44,6 +44,7 @@ const proMax: Profile = {
 function catalogSnapshot(): Snapshot {
   return {
     csrfToken: "fixture-csrf",
+    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 2,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
     configuration: {

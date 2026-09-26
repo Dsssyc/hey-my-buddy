@@ -10,7 +10,7 @@ import type { Snapshot } from "./types";
 
 function snapshot(): Snapshot {
   return {
-    csrfToken: "csrf", tableRevision: 2,
+    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: null },
     profiles: [], cards: [], preferences: [], annotations: [], evidence: [], decisions: [],

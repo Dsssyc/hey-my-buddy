@@ -36,7 +36,7 @@ type LimitPatch = { adapter: string; provider: string; model: string; limit: num
 function fixture(options: { discoveryLimit?: number } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", tableRevision: 2,
+    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: flashOff },
     profiles,

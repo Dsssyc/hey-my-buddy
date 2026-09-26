@@ -65,7 +65,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   };
   const live = profiles.filter(p => p.available || p.profileId === decisionId);
   let state: Snapshot = {
-    csrfToken: "csrf", tableRevision: revision,
+    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: revision,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: decisionId },
     profiles: live,

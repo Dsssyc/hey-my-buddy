@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
+import { errorText, isReadOnlyRefusal } from "./api";
 import type { Snapshot, Task } from "./types";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { useRecordDraft } from "./record-drafts";
@@ -9,16 +9,26 @@ import { canRetry, excerpt, needsReview, resultText, taskStatus, taskTitle } fro
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
+import { READ_ONLY_ACTION_REFUSAL, createAuthorityLatch } from "./console-session";
+import type { AuthorityLatch } from "./console-session";
 
-export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onLockChange, onTaskUpdate, navigationLocked }: {
+export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onLockChange, onTaskUpdate, navigationLocked, authority, writesAvailable = true }: {
   task: Task; snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   selectTask: (runId: string | null) => void; active: boolean; onLockChange: (value: boolean) => void;
   onTaskUpdate: (value: Task) => void; navigationLocked: boolean;
+  authority?: AuthorityLatch; writesAvailable?: boolean;
 }) {
   const [detail, setDetail] = useState<unknown>(null), [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [routingRequest, setRoutingRequest] = useState(0);
   const [note, setNote] = useRecordDraft(task.runId, "executionNote", "");
+  const localLatch = useRef<AuthorityLatch | null>(null);
+  if (!localLatch.current) localLatch.current = createAuthorityLatch();
+  const latch = authority ?? localLatch.current;
+  // A superseded session, a failed authenticated poll or a latched refusal keeps
+  // reading this record but may not mutate it. Connection loss is not presented
+  // as a new-window takeover; the controls simply stay disabled.
+  const writable = writesAvailable && latch.writable(snapshot);
   useEffect(() => {
     if (!active || task.workflow) return;
     let current = true;
@@ -31,9 +41,19 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
     return () => { current = false; };
   }, [api, active, task.runId, task.revision, !!task.workflow, onTaskUpdate]);
   async function command(operation: string, params: Record<string, unknown>) {
+    if (!writable || !latch.writable(snapshot)) {
+      // No automatic or manual mutation retry from a read-only session.
+      setError(READ_ONLY_ACTION_REFUSAL);
+      return;
+    }
     setBusy(true); onLockChange(true); setError("");
     try { await api.command(operation, params, snapshot.csrfToken); await refresh(); }
-    catch (reason) { setError(errorText(reason)); }
+    catch (reason) {
+      // A definite read-only refusal latches the session, so the next click is
+      // refused locally instead of dispatching another write before the poll.
+      if (isReadOnlyRefusal(reason)) latch.lose(snapshot.consoleSession?.id);
+      setError(errorText(reason));
+    }
     finally { setBusy(false); onLockChange(false); }
   }
   const project = taskProject(task);
@@ -53,7 +73,8 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
           <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
-      selectTask={selectTask} active={active} onLockChange={onLockChange} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest} /> : <div className="detail-body">
+      selectTask={selectTask} active={active} onLockChange={onLockChange} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
+      authority={latch} writesAvailable={writesAvailable} /> : <div className="detail-body">
       {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
       <p className="small muted">来源字段只展示已记录的信息；执行结束与验收分别记录。</p>
@@ -62,9 +83,9 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       <TaskActivityView task={task} />
       <section className="detail-section"><h3>交付结果</h3><pre className="result-text">{detail ? resultText(detail) : "正在读取结果…"}</pre></section>
       <div className="actions">
-        {["queued", "running", "cancelling"].includes(task.status) && <button className="button danger" disabled={busy || task.status === "cancelling"}
+        {["queued", "running", "cancelling"].includes(task.status) && <button className="button danger" disabled={busy || !writable || task.status === "cancelling"}
           onClick={() => void command("task_cancel", { runId: task.runId })}>取消任务</button>}
-        {canRetry(task) && <button className="button" disabled={busy} onClick={() => void command("task_retry", { runId: task.runId })}>重新尝试</button>}
+        {canRetry(task) && <button className="button" disabled={busy || !writable} onClick={() => void command("task_retry", { runId: task.runId })}>重新尝试</button>}
       </div>
       {task.spec?.adapter === "decision" && <section className="detail-section">
         <p className="small muted">此计算记录无需业务验收。</p>
@@ -72,8 +93,8 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
           : <p className="small muted">未记录关联的决策 ID。</p>}
       </section>}
       {needsReview(task) && <section className="detail-section"><h3>记录验收</h3>
-        <label className="field"><span>检查依据</span><textarea rows={3} value={note} maxLength={2000} onChange={e => setNote(e.target.value)} /></label>
-        <div className="actions">{(["accepted", "rejected"] as const).map(verdict => <button key={verdict} className="button" disabled={busy || !note.trim() || task.shutdownConfirmed !== true}
+        <label className="field"><span>检查依据</span><textarea rows={3} value={note} maxLength={2000} readOnly={!writable} onChange={e => setNote(e.target.value)} /></label>
+        <div className="actions">{(["accepted", "rejected"] as const).map(verdict => <button key={verdict} className="button" disabled={busy || !writable || !note.trim() || task.shutdownConfirmed !== true}
           onClick={() => void command("task_acknowledge", { runId: task.runId, verdict, note: note.trim() })}>{verdict === "accepted" ? "接受交付" : "记录验收问题"}</button>)}</div>
       </section>}
     </div>}

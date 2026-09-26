@@ -16,12 +16,14 @@ import { executionCandidates } from "./policy";
 import { finalArtifact, finalIntegration, recordedIntegrations } from "./integration";
 import { formatDate } from "./ui";
 import { NativeSessionView } from "./native-session";
+import { CONNECTION_WRITE_PAUSED, READ_ONLY_ACTION_REFUSAL } from "./console-session";
+import type { AuthorityLatch } from "./console-session";
 
 const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boolean);
 const integrationLabel = (record: IntegrationRecord) =>
   record.state === "not-required" ? "整合：Host 记录无需整合" : "整合：已验证";
 
-export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo, routingRequest = 0 }: {
+export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo, routingRequest = 0, authority, writesAvailable = true }: {
   task: Task;
   snapshot: Snapshot;
   api: ConsoleApi;
@@ -32,9 +34,11 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   onTaskUpdate?: (task: Task) => void;
   recordInfo?: ReactNode;
   routingRequest?: number;
+  authority?: AuthorityLatch;
+  writesAvailable?: boolean;
 }) {
-  const state = useWorkflow(api, task, snapshot, refresh, active);
-  const { value, command } = state;
+  const state = useWorkflow(api, task, snapshot, refresh, active, writesAvailable, authority);
+  const { value, command, writable, sessionWritable } = state;
   const [reason, setReason] = useRecordDraft(task.runId, "reason", "");
   const [input, setInput] = useRecordDraft(task.runId, "input", "");
   const [note, setNote] = useRecordDraft(task.runId, "note", "");
@@ -63,7 +67,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   // Helper candidates come from the directory capability published by
   // `catalog.proposed_profiles` (`execution:<adapter>`), never a harness list.
   const profiles = executionCandidates(snapshot.profiles);
-  const locked = state.busy || state.uncertain || !value;
+  const locked = state.busy || state.uncertain || !value || !writable;
   const activeHelpers = value?.children.some(c => c.role === "helper" && c.state === "active");
   const canApprove = helpers.length > 0 && helpers.every(h =>
     (!h.profileId || profiles.some(p => p.profileId === h.profileId)) && h.task.trim() && h.cwd.startsWith("/") && (h.access === "read" || lines(h.writeScope).length));
@@ -105,7 +109,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
     {state.notice && <p className="success-message" role="status">{state.notice}</p>}
     {state.controlFile && <p className="small wrap">交给新 Host 的控制文件路径：<code>{state.controlFile}</code>。路径可用于 CLI 的 controlFile；不要复制文件中的凭据。</p>}
-    {state.uncertain && <button className="button primary" disabled={state.busy} onClick={() => void command("")}>重试同一操作</button>}
+    {!sessionWritable && <p className="small muted" role="status">{READ_ONLY_ACTION_REFUSAL}任务详情、路由依据与验收记录仍可查看。</p>}
+    {!writable && sessionWritable && <p className="small muted" role="status">{CONNECTION_WRITE_PAUSED}任务详情、路由依据与验收记录仍可查看。</p>}
+    {state.uncertain && <button className="button primary" disabled={state.busy || !writable} onClick={() => void command("")}>重试同一操作</button>}
     {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value.activeRequest?.summary || value.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>处理请求</button></div>}
     <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
       items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />

@@ -9,9 +9,11 @@ import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { RecordDrafts } from "./record-drafts";
 import { SplitView } from "./SplitView";
 import { mergeLiveTasks, useTaskHistory } from "./use-task-history";
+import type { AuthorityLatch } from "./console-session";
 
-export function Tasks({ snapshot, api, refresh, active = true }: {
+export function Tasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
+  authority?: AuthorityLatch; writesAvailable?: boolean;
 }) {
   const [filter, setFilter] = useState<TaskQuery["filter"]>("all"), [query, setQuery] = useState("");
   const [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState(""), [internal, setInternal] = useState(false);
@@ -124,7 +126,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
     </div>
   </section>;
   const detail = <aside className="panel detail-panel" aria-label="任务详情">
-    {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onLockChange={setLocked} onTaskUpdate={updateSelected} navigationLocked={locked} /> :
+    {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onLockChange={setLocked} onTaskUpdate={updateSelected} navigationLocked={locked} authority={authority} writesAvailable={writesAvailable} /> :
       <div className="detail-placeholder"><h2>{selected ? "正在读取委派…" : "选择一项委派"}</h2><p>{detailError || "按项目查看目标、委派方与执行结果。协助任务保留在所属目标的详情中。"}</p></div>}
   </aside>;
   return <RecordDrafts><SplitView selected={!!selected} list={list} detail={detail} /></RecordDrafts>;

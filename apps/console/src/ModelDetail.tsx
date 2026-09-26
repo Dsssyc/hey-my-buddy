@@ -17,6 +17,7 @@ import {
 } from "./console-data";
 import { DetailTabs } from "./DetailTabs";
 import { EvaluationHistory } from "./EvaluationHistory";
+import { READ_ONLY_DRAFT_NOTE } from "./console-session";
 
 const sections = [["overview", "概览"], ["assessment", "评价与意见"], ["preferences", "偏好与启用"], ["evidence", "证据"]] as const;
 const EMPTY_EVIDENCE = "暂无评价证据。你可以让已配置 hey-my-buddy skill 的 Harness 执行一次模型评价更新，或在该 Harness 中设置定时更新任务。";
@@ -26,8 +27,8 @@ const EMPTY_EVIDENCE = "暂无评价证据。你可以让已配置 hey-my-buddy 
  * earlier valid prefix. NaN represents an empty number field; policy validation
  * blocks it before acquiring any publication grant.
  */
-function ConcurrencyField({ editor, family, draftLimit, occupancy }: {
-  editor: Editor; family: ModelFamily; draftLimit: number; occupancy: number | null;
+function ConcurrencyField({ editor, family, draftLimit, occupancy, editable }: {
+  editor: Editor; family: ModelFamily; draftLimit: number; occupancy: number | null; editable: boolean;
 }) {
   const invalid = !Number.isInteger(draftLimit)
     || draftLimit < MODEL_CONCURRENCY_MIN || draftLimit > MODEL_CONCURRENCY_MAX;
@@ -35,7 +36,7 @@ function ConcurrencyField({ editor, family, draftLimit, occupancy }: {
     <label className="field concurrency-value">
       <span>并发任务上限</span>
       <input type="number" inputMode="numeric" min={MODEL_CONCURRENCY_MIN} max={MODEL_CONCURRENCY_MAX}
-        step={1} value={Number.isNaN(draftLimit) ? "" : draftLimit}
+        step={1} value={Number.isNaN(draftLimit) ? "" : draftLimit} readOnly={!editable}
         aria-invalid={invalid || undefined} aria-describedby="concurrency-note"
         onChange={(event) => {
           const raw = event.target.value;
@@ -62,6 +63,10 @@ export function ModelDetail({
   onCloseList: () => void; guard?: string; error?: string; note?: string;
 }) {
   const editing = editor.editing;
+  // A retained draft stays on screen (and copyable) even when the session lost
+  // write authority; only its editability is withdrawn.
+  const draftShown = editor.mode;
+  const draftFrozen = draftShown && !editor.sessionWritable;
   const profile = data.profiles.find(p => p.profileId === profileId);
   const published = profile ? recorded.profiles.find(p => p.profileId === profile.profileId) : undefined;
   const family = profile && modelFamilies(data.profiles).find(g => g.key === familyKey(profile));
@@ -135,7 +140,9 @@ export function ModelDetail({
         <p className="small muted">当前查看：{profile.model} / {effortText(profile.effort)} · {samples} 个验证样本
           {decisionProfileId === profile.profileId ? " · 已设为决策模型" : ""}
           {editor.configurationDirty && decisionProfileId === profile.profileId ? " · 未保存" : ""}</p>
-        {editor.mode && <p className="small muted">草稿只在本页保存；发布前不会影响正在运行的任务；发现模型由程序发布目录事实。</p>}
+        {editor.mode && <p className="small muted">{draftFrozen
+          ? READ_ONLY_DRAFT_NOTE
+          : "草稿只在本页保存；发布前不会影响正在运行的任务；发现模型由程序发布目录事实。"}</p>}
       </header>
       <DetailTabs id="model-detail" label="模型详情栏目" value={section} items={sections} onChange={onSection} />
       <div className="detail-body">
@@ -166,27 +173,29 @@ export function ModelDetail({
                 ? "自动评价与验证样本由获授权的维护 Harness 依据证据发布，控制台不能修改，也不会被人工意见覆盖。"
                 : "这张卡片没有记录发布者，不能判断为自动评价；内容只读，不会被人工意见覆盖。"}</p>
             </section>
-            {editing ? <>
+            {draftShown ? <>
               <label className="field"><span>我的意见{opinion !== publishedOpinion && <span className="unsaved-mark">未保存</span>}</span>
-                <textarea rows={4} value={opinion} maxLength={4000} aria-label="我的意见"
+                <textarea rows={4} value={opinion} maxLength={4000} aria-label="我的意见" readOnly={!editing}
                   onChange={e => editor.setDraft(d => d ? setAnnotation(d, profile.profileId, e.target.value) : d)}
                   placeholder="单独记录你的使用感受与适用条件；留空表示清除" /></label>
-              <p className="small muted">人工意见单独存储并保留来源，不覆盖已发布的评价、证据或样本计数。发布只提交发生变化的意见。</p>
+              <p className="small muted">{draftFrozen
+                ? READ_ONLY_DRAFT_NOTE
+                : "人工意见单独存储并保留来源，不覆盖已发布的评价、证据或样本计数。发布只提交发生变化的意见。"}</p>
             </> : <section className="annotation-readonly"><h3>我的意见</h3>
               <p className="read-text">{opinion || "尚未记录人工意见。"}</p>
               <p className="small muted">开启右上角“编辑模式”后可以写下或清除人工意见；已发布的评价内容始终只读。</p></section>}
           </>}
-          {panel === "preferences" && (editing ? <>
-            <label className="field"><span>用户偏好</span><select value={preference?.mode || ""}
+          {panel === "preferences" && (draftShown ? <>
+            <label className="field"><span>用户偏好</span><select value={preference?.mode || ""} disabled={!editing}
               onChange={e => editor.setDraft(d => d ? setPreference(d, profile.profileId, e.target.value as "prefer" | "pin" | "exclude" | "", preference?.reason || "") : d)}>
               <option value="">无额外偏好</option><option value="prefer">优先考虑</option>
               <option value="pin" disabled={!pinIsExisting && (!profile.available || !profile.enabled)}>固定选择</option><option value="exclude">排除</option></select></label>
-            <label className="field"><span>偏好依据</span><input disabled={!preference} value={preference?.reason || ""} maxLength={500}
+            <label className="field"><span>偏好依据</span><input disabled={!preference} readOnly={!editing} value={preference?.reason || ""} maxLength={500}
               onChange={e => editor.setDraft(d => d ? { ...d, preferences: d.preferences.map(p => p.profileId === profile.profileId ? { ...p, reason: e.target.value } : p) } : d)} /></label>
-            <label className="checkbox-field"><input type="checkbox" checked={profile.enabled} disabled={!canEnable}
+            <label className="checkbox-field"><input type="checkbox" checked={profile.enabled} disabled={!editing || !canEnable}
               onChange={e => editor.setDraft(d => d ? { ...d, profiles: d.profiles.map(p => p.profileId === profile.profileId ? { ...p, enabled: e.target.checked } : p) } : d)} />允许后续选择使用此配置</label>
             <ConcurrencyField key={familyKey(profile)} editor={editor} family={profile}
-              draftLimit={draftLimit} occupancy={occupancy} />
+              draftLimit={draftLimit} occupancy={occupancy} editable={editing} />
             <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；保存后立即对后续任务生效，调低上限不会中断正在运行的任务，只会等占用回落后再放行新任务。计数不包含 Harness 内部子代理、重试或其他应用的 API 请求。{concurrencyUnsaved && <span className="unsaved-mark">并发上限未保存</span>}</p>
             {!profile.available && (profile.enabled
               ? <p className="small muted">此配置当前不在目录中。你仍可以停用它、修改意见或偏好依据；重新启用需要它再次被发现。</p>

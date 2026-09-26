@@ -1,4 +1,5 @@
-import type { Snapshot, TaskPage, TaskQuery } from "./types";
+import type { ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
+import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
 
 export class ApiError extends Error {
   constructor(
@@ -18,7 +19,45 @@ const messages: Record<string, string> = {
   WRITER_NOT_ACTIVE: "编辑权限已失效。草稿仍然保留，需要重新取得权限。",
   STALE_GENERATION: "操作资格已失效，未提交任何变更。请刷新并核对当前负责人。",
   SHUTDOWN_UNCONFIRMED: "尚未确认前一次执行已停止，暂时不能重试。",
+  CONSOLE_READ_ONLY: READ_ONLY_ACTION_REFUSAL,
+  CONSOLE_SESSION_EXPIRED: "控制台会话已过期或 Cookie 无效。请从 Buddy 重新打开控制台；草稿仍然保留，不会自动重新取得写权限。",
+  CONSOLE_ENTRY_EXPIRED: "控制台入口票据已过期或已被使用，请重新打开入口取得新链接。",
 };
+
+/**
+ * Codes that prove the current browser session may no longer write. A callback
+ * receiving one of these must not retry, renew or release anything: only the
+ * bounded lease expires by itself, and a fresh CLI entry is the explicit way to
+ * acquire write authority again.
+ */
+export const READ_ONLY_REFUSAL_CODES = ["CONSOLE_READ_ONLY", "CONSOLE_SESSION_EXPIRED"] as const;
+
+export function isReadOnlyRefusal(error: unknown): boolean {
+  return error instanceof ApiError
+    && (READ_ONLY_REFUSAL_CODES as readonly string[]).includes(error.code);
+}
+
+/**
+ * Strict parse of the authenticated snapshot's session descriptor. Every
+ * malformation is refused instead of defaulting to write access: a missing
+ * descriptor, a non-boolean `canWrite`, an empty public id, an unknown reason
+ * or a contradictory pair (`canWrite:true` with a read-only reason, or a
+ * read-only session without its `superseded` reason) rejects the snapshot.
+ */
+export function parseConsoleSession(value: unknown): ConsoleSession {
+  const session = value as Partial<ConsoleSession> | null | undefined;
+  const valid = !!session && typeof session === "object" && !Array.isArray(session)
+    && typeof session.id === "string" && session.id.trim().length > 0
+    && typeof session.canWrite === "boolean"
+    && (session.canWrite ? session.reason === null : session.reason === "superseded");
+  if (!valid) {
+    throw new ApiError(
+      "INVALID_RESPONSE",
+      "控制台会话信息缺失或无法识别；为安全起见不会授予写权限，请检查服务版本或重新打开入口。",
+    );
+  }
+  return session as ConsoleSession;
+}
 
 export function errorText(error: unknown): string {
   if (error instanceof ApiError) return messages[error.code] || error.message;
@@ -84,7 +123,9 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
           "控制台数据不完整，请检查服务版本。",
         );
       }
-      return data;
+      // A valid session descriptor is required; a missing or malformed one is
+      // never read as write access.
+      return { ...data, consoleSession: parseConsoleSession(data.consoleSession) };
     },
     async command<T = unknown>(
       operation: string,

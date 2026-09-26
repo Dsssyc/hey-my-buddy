@@ -193,8 +193,21 @@ export type Configuration = {
   revision: number;
   decisionProfileId: string | null;
 };
+/**
+ * Browser-session identity of the authenticated HTTP snapshot. `canWrite` is
+ * true only for the current writer: a launch-created session that a newer
+ * launch superseded stays readable with `reason: "superseded"`. The descriptor
+ * never carries a credential; the session CSRF token stays separate.
+ */
+export type ConsoleSession = {
+  id: string;
+  canWrite: boolean;
+  reason: null | "superseded";
+};
 export type Snapshot = {
   csrfToken: string;
+  /** Authenticated browser session; missing or malformed fails closed. */
+  consoleSession: ConsoleSession;
   tableRevision: number;
   gate: Gate;
   configuration: Configuration;

@@ -46,6 +46,7 @@ const otherHarness: Profile = { ...worker, profileId: "zcode:bigmodel-api:glm:hi
 function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {}): Snapshot {
   return {
     csrfToken: "csrf",
+    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 3,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: worker.profileId },

@@ -5,6 +5,14 @@ import type { Snapshot } from "./types";
 import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
 import { useTheme } from "./theme";
+import {
+  READ_ONLY_ACTION_REFUSAL,
+  READ_ONLY_BANNER,
+  READ_ONLY_DRAFT_NOTE,
+  READ_ONLY_SAVE_REFUSAL,
+  UNRESOLVED_HANDOFF_NOTE,
+  createAuthorityLatch,
+} from "./console-session";
 import { Tasks } from "./Tasks";
 import { Models } from "./Models";
 import { Settings } from "./Settings";
@@ -41,13 +49,22 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const theme = useTheme();
   const editSwitch = useRef<HTMLButtonElement>(null);
   const exitWasOpen = useRef(false);
-  const mutationsAvailable = !connectionError && snapshot.capabilities.evaluationWriteGate !== false;
+  // One latch for the mounted page: the polling snapshot's own descriptor
+  // decides write authority, a definite board refusal latches the loss for this
+  // session (an older writable snapshot cannot restore it), and a failed
+  // authenticated poll pauses writes without claiming a new-window takeover.
+  const authority = useRef(createAuthorityLatch()).current;
+  const sessionWritable = authority.writable(snapshot);
+  const writesAvailable = !connectionError && sessionWritable;
+  const mutationsAvailable = writesAvailable && snapshot.capabilities.evaluationWriteGate !== false;
   const unavailableReason = connectionError
     ? "与本地黑板的连接已中断：保存已停用，草稿仍保留在本页。"
-    : snapshot.capabilities.evaluationWriteGate === false
-      ? "当前会话没有评价表写入资格：保存已停用。"
-      : "";
-  const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason);
+    : !sessionWritable
+      ? READ_ONLY_SAVE_REFUSAL
+      : snapshot.capabilities.evaluationWriteGate === false
+        ? "当前会话没有评价表写入资格：保存已停用。"
+        : "";
+  const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason, authority);
   function select(key: Tab) {
     setTab(key);
     setVisited(previous => previous.has(key) ? previous : new Set([...previous, key]));
@@ -92,12 +109,15 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       </nav>
       <div className="header-status">
         <span className="connection" title="关闭页面不影响后台任务">{connectionError ? "连接中断" : "已连接"}</span>
+        {!sessionWritable && <Badge tone="amber">只读会话</Badge>}
         {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
         <span className="small muted">V{snapshot.tableRevision}</span>
         <div className="edit-cluster">
           <button ref={editSwitch} type="button" role="switch" aria-checked={editor.mode} className="button small-button edit-switch"
-            aria-disabled={editor.busy || undefined} onClick={requestExit}
-            title={editor.busy ? "保存进行中；结果未确认前不会丢弃草稿" : editor.mode ? "退出编辑模式" : "开启本地草稿，不占用编辑资格"}>
+            aria-disabled={editor.busy || (!sessionWritable && !editor.mode) || undefined} onClick={requestExit}
+            title={editor.busy ? "保存进行中；结果未确认前不会丢弃草稿"
+              : !sessionWritable && !editor.mode ? READ_ONLY_ACTION_REFUSAL
+                : editor.mode ? "退出编辑模式" : "开启本地草稿，不占用编辑资格"}>
             <span className="switch-track" aria-hidden="true"><span className="switch-thumb" /></span>
             <span className="switch-label">编辑模式</span>
           </button>
@@ -118,6 +138,12 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     </header>
     <main id="main" className="main-content" tabIndex={-1} inert={editor.exitPrompt || undefined}>
       <h1 className="sr-only">{tabs[tab]}</h1>
+      {!sessionWritable && <div className="banner readonly-banner" role="status" data-console-session="read-only">
+        <strong>此页面已由新窗口接管写权限</strong>
+        <span>{READ_ONLY_BANNER}</span>
+        {editor.mode && editor.dirty && <span>{READ_ONLY_DRAFT_NOTE}</span>}
+        {editor.uncertain && <span>{UNRESOLVED_HANDOFF_NOTE}</span>}
+      </div>}
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
       {editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
         <span>共享评价表已发布 V{editor.conflict.latest}，你的草稿基于 V{editor.conflict.basedOn}。草稿仍保留：重新加载会采用最新发布版本，放弃修改会丢弃本页草稿。</span>
@@ -137,7 +163,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
           https://react.dev/learn/preserving-and-resetting-state */}
       {(Object.keys(tabs) as Tab[]).map(key => visited.has(key) && <section key={key} hidden={tab !== key}
         className={"view-panel" + (key !== "tasks" && editor.mode ? " edit-mode" : "")} aria-label={tabs[key]}>
-        {key === "tasks" ? <Tasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key} /> :
+        {key === "tasks" ? <Tasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
+          authority={authority} writesAvailable={writesAvailable} /> :
           key === "models" ? <Models snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings snapshot={snapshot} editor={editor} />}
       </section>)}

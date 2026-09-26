@@ -10,6 +10,7 @@ import { familyKey, modelFamilies, preferredVariant } from "./console-data";
 import { MAX_HISTORY_PROFILES, useProfileHistory } from "./use-profile-history";
 import { SplitView } from "./SplitView";
 import { ModelDetail } from "./ModelDetail";
+import { READ_ONLY_ACTION_REFUSAL, READ_ONLY_DRAFT_NOTE } from "./console-session";
 
 export function Models({ snapshot, editor, api, refresh, active = true, mutationsAvailable = true }: {
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
@@ -27,6 +28,9 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const editing = editor.editing;
+  // The editor's latch-aware flag, so a refusal before the next poll is not
+  // described as a still-writable session.
+  const sessionWritable = editor.sessionWritable;
   const families = modelFamilies(data.profiles);
   const visible = families.filter(g => (!harness || g.adapter === harness) && (!enabledOnly || g.profiles.some(p => p.enabled))
     && (showUnavailable || g.profiles.some(p => p.available))
@@ -58,7 +62,9 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
   }
   async function discover() {
     if (busy || !mutationsAvailable) {
-      setGuard(!mutationsAvailable ? "连接中断或缺少写入资格：暂时不能发现模型，草稿仍保留。" : "");
+      setGuard(!sessionWritable
+        ? READ_ONLY_ACTION_REFUSAL
+        : !mutationsAvailable ? "连接中断或缺少写入资格：暂时不能发现模型，草稿仍保留。" : "");
       return;
     }
     setBusy(true); editor.setAuxiliaryBusy(true); setError(""); setGuard(""); setNote("");
@@ -81,7 +87,7 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
     <div className="panel-toolbar"><h2>模型 <span className="muted">{visible.length}</span></h2>
       <div className="actions"><button className="button small-button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(true)}>更新记录</button>
         <button className="button small-button" aria-disabled={busy || !mutationsAvailable}
-          title={!mutationsAvailable ? "连接中断或缺少写入资格" : "由程序发布目录事实，不影响用户设置"}
+          title={!sessionWritable ? READ_ONLY_ACTION_REFUSAL : !mutationsAvailable ? "连接中断或缺少写入资格" : "由程序发布目录事实，不影响用户设置"}
           onClick={() => void discover()}>发现模型</button></div></div>
     <div className="list-filters">
       <label className="search"><span className="sr-only">搜索模型配置</span>

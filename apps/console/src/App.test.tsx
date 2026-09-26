@@ -7,6 +7,7 @@ import type { Snapshot, TaskQuery } from "./types";
 
 const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf",
+  consoleSession: { id: "fixture-session", canWrite: true, reason: null },
   tableRevision: 2,
   gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
   configuration: {
