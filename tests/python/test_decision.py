@@ -776,6 +776,14 @@ class DecisionFailureTests(DecisionTestCase):
             self.assertIn('diagnostics', json.dumps(receipt))
         self.assertEqual(board.call('console_snapshot', {})['gate']['readers'], 0)
 
+    def test_missing_native_finish_keeps_infrastructure_failure_semantics(self):
+        board = self.board()
+        self.seed(board)
+        decision = self.outcome(board, "protocol_error", request_id="missing-native-finish")
+        self.assertEqual(decision["status"], "failed")
+        self.assertIn("answer-missing-finish", decision["error"])
+        self.assertEqual(decision["output"]["diagnostics"]["calls"], 1)
+
     def test_model_rule_index_is_replaced_by_derived_integer_before_publication(self):
         """Echoed bool/float/string values never reach preference list indexing."""
         board = self.board()

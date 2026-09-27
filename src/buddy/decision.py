@@ -69,6 +69,10 @@ _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision
 MAX_DECISION_TASK_BYTES = 8192
 MAX_DECISION_REASON = 2000
 MAX_DECISION_EVIDENCE_IDS = 32
+ANSWER_VALIDATION_CODES = frozenset({
+    "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
+    "answer-unexpected-field", "answer-profile-not-candidate", "answer-evidence-not-supplied",
+})
 #: Harness bounds mirrored from the decision helper's request validation. They are
 #: the hard ceiling for one bounded selection request, never a silent truncation
 #: point: a complete current table above them becomes an explicit needs-host outcome.
@@ -1002,7 +1006,7 @@ class DecisionCoordinator:
             if isinstance(output, dict)
             and output.get("status") == "error"
             and isinstance(output.get("code"), str)
-            and output.get("code").startswith(("policy-", "answer-"))
+            and (output.get("code").startswith("policy-") or output.get("code") in ANSWER_VALIDATION_CODES)
             else None
         )
         if status == "cancelled" or task["state"] == "cancelling":

@@ -209,7 +209,7 @@ def main(argv):
             },
         )
         return 3
-    if MODE in ("policy_error", "answer_error"):
+    if MODE in ("policy_error", "answer_error", "protocol_error"):
         # A bounded machine code from the helper's own policy check. The decision
         # settles needs-host; the Worker receipt keeps its real outcome.
         write_output(
@@ -218,15 +218,15 @@ def main(argv):
                 "status": "error",
                 "operation": request.get("operation"),
                 "tableRevision": request.get("tableRevision"),
-                "code": "answer-invalid-json" if MODE == "answer_error" else "policy-outcome-false",
+                "code": "answer-missing-finish" if MODE == "protocol_error" else "answer-invalid-json" if MODE == "answer_error" else "policy-outcome-false",
                 "message": "the decision answer violated the routing policy",
                 "details": {"code": "policy-outcome-false", "description": "the program-derived task outcome disagrees"},
                 "elapsedSeconds": 0.2,
                 "shutdownConfirmed": True,
-                "diagnostics": {"calls": 2, "failures": [{"code": "answer-invalid-json", "answer": {
+                "diagnostics": {"calls": 1 if MODE == "protocol_error" else 2, "failures": [{"code": "answer-missing-finish" if MODE == "protocol_error" else "answer-invalid-json", "answer": {
                     "text": "<unparsed-answer>", "sha256": "a" * 64, "bytes": 18,
                     "truncated": False, "redacted": True,
-                }}] * 2},
+                }}] * (1 if MODE == "protocol_error" else 2)},
             },
         )
         return 1
