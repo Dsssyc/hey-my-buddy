@@ -531,6 +531,18 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     view.unmount();
   });
 
+  it.each([{ hidden: true }, { active: false }])("removes the portalled popover when its view is hidden or inactive: %j", async change => {
+    const timeline = objectiveTimelineFixture();
+    const view = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    await userEvent.setup().click(document.querySelector<HTMLButtonElement>(".mk.cluster")!);
+    expect(document.querySelector(".marker-popover")).toBeTruthy();
+    view.rerender(<ObjectiveTimeline {...baseProps(timeline, change)} />);
+    expect(document.querySelector(".marker-popover")).toBeNull();
+    view.rerender(<ObjectiveTimeline {...baseProps(timeline)} />);
+    expect(document.querySelector(".marker-popover")).toBeNull();
+    view.unmount();
+  });
+
   it("Enter on a row label opens the run detail with run-level selection semantics", () => {
     const timeline = objectiveTimelineFixture();
     const onSelectRun = vi.fn(), onOpenRun = vi.fn(), onOpenItem = vi.fn();

@@ -31,6 +31,7 @@ export type ObjectiveTimelineProps = {
   stale: boolean;
   newRunIds: ReadonlySet<string>;
   hidden: boolean;
+  active?: boolean;
   /** The delegation whose detail is currently open (accent marker on its row). */
   openedKey: string | null;
   openedRunId: string | null;
@@ -60,12 +61,13 @@ export type ObjectiveTimelineProps = {
  * details (0.15 C1–C3).
  */
 export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
-  const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection } = props;
+  const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection, active = true } = props;
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [asList, setAsList] = useState(false);
   const [openCluster, setOpenCluster] = useState<string | null>(null);
   const [clusterNotice, setClusterNotice] = useState<string | null>(null);
+  useEffect(() => { if (hidden || !active) setOpenCluster(null); }, [hidden, active]);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -553,7 +555,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       {cluster.items.length > 1 ? cluster.items.length : vocab?.glyph}
                     </button>;
                   })}
-                  {openClusterView && openClusterView.items.length > 1 && <MarkerPopover
+                  {!hidden && active && openClusterView && openClusterView.items.length > 1 && <MarkerPopover
                     anchor={rootRef.current?.querySelector<HTMLElement>(`[data-cluster-key="${openClusterView.key}"]`) ?? null}
                     cluster={openClusterView} rowsById={rowsById} selectedEventKey={selectedEventKeys}
                     onSelect={item => { setFocusKey(item.key); props.onSelectItem(item); }}

@@ -46,7 +46,7 @@ describe("settings routing status (R4)", () => {
     render(<Settings snapshot={snapshot({
       windowSize: 20, sampleCount: 18, failureCount: 4, consecutiveFailures: 2,
       abstentionCount: 3, cancelledCount: 1, staleCount: 2,
-      lastSuccessAt: "2026-09-27T08:02:00Z", lastSuccessDecisionId: "dec-41",
+      lastSuccessAt: "2026-09-25T08:02:00Z", lastSuccessDecisionId: "dec-41",
       recentFailures: [
         { decisionId: "dec-48", runId: "run-a", at: "2026-09-27T09:41:00Z", code: "call-failed" },
         { decisionId: "dec-47", runId: null, at: "2026-09-27T09:12:00Z", code: "needs-host" },
@@ -61,7 +61,7 @@ describe("settings routing status (R4)", () => {
     expect(status.textContent).toContain("过期 2 次");
     expect(status.textContent).toContain("不计为失败");
     expect(status.textContent).not.toContain("无成功记录");
-    expect(status.textContent).toMatch(/最后一次成功：\d{2}:\d{2}:\d{2} · dec-41/);
+    expect(status.textContent).toMatch(/最后一次成功：09-25 \d{2}:\d{2} · dec-41/);
     expect(status.querySelectorAll(".routing-failures li").length).toBe(3);
     expect(status.textContent).toContain("call-failed");
     expect(status.textContent).toContain("needs-host");

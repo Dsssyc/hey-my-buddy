@@ -1,7 +1,7 @@
 import type { RoutingHealth, Snapshot } from "./types";
 import type { Editor } from "./use-editor";
 import { Badge, Icon } from "./ui";
-import { clockSeconds } from "./objective-display";
+import { dayClock } from "./objective-display";
 import { effortText, profileTitle, profileTitleOr } from "./profile-display";
 import { decisionAttention, decisionCandidates, hasDecisionCapability } from "./policy";
 import { READ_ONLY_DRAFT_NOTE } from "./console-session";
@@ -32,11 +32,11 @@ function RoutingStatus({ health }: { health: RoutingHealth | undefined }) {
             {(health.abstentionCount > 0 || health.cancelledCount > 0 || health.staleCount > 0) ? "，不计为失败" : "无弃权、取消或过期结果"}
           </p>
           <p className="small">
-            最后一次成功：{health.lastSuccessAt ? `${clockSeconds(health.lastSuccessAt)}${health.lastSuccessDecisionId ? ` · ${health.lastSuccessDecisionId}` : ""}` : "无成功记录"}
+            最后一次成功：{health.lastSuccessAt ? `${dayClock(health.lastSuccessAt)}${health.lastSuccessDecisionId ? ` · ${health.lastSuccessDecisionId}` : ""}` : "无成功记录"}
           </p>
           {health.recentFailures.length > 0 && <ul className="routing-failures">
             {health.recentFailures.map(failure => <li key={failure.decisionId}>
-              <span>{clockSeconds(failure.at)}</span>
+              <span>{dayClock(failure.at)}</span>
               <code>{failure.code}</code>
               {failure.runId ? <span className="muted">{failure.runId}</span> : <span className="muted">委派未记录</span>}
             </li>)}

@@ -247,6 +247,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     onApplyReorder={list.applyReorder} />;
 
   const timelinePane = selected ? <ObjectiveTimeline
+    active={active}
     summary={selectedSummary}
     timeline={timeline.timeline}
     loading={timeline.loading}

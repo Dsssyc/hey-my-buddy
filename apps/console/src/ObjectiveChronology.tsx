@@ -46,7 +46,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
           aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
           <time>{clockTime(entry.atMs)}</time>
           <span className="glyph" aria-hidden="true">{vocab.glyph}</span>
-          <span className="e-title">Host {entry.event.label || vocab.label} · {helper}{title}</span>
+          <span className="e-title" title={title}>Host {entry.event.label || vocab.label} · {helper}{title}</span>
           <span className="e-meta"><span>{entry.item.parts.slice(1).join(" · ")}</span></span>
         </button>;
       }
@@ -72,7 +72,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
         aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
         <time>{clockTime(entry.atMs)}</time>
         {swatch}
-        <span className="e-title">{entry.item.head} · {helper}{entry.row.title}</span>
+        <span className="e-title" title={entry.row.title}>{entry.item.head} · {helper}{entry.row.title}</span>
         <span className="e-meta">
           {span.kind === "execution" && <span>{configurationLabel(span.configuration)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}

@@ -336,7 +336,7 @@ def build_runs() -> dict[str, dict]:
             integrations=[integration("int-a1", "art-a1", "att-a1-2", HOST_A)],
             routing=ROUTING_A1),
         run("preview-run-a1-h1", project="alpha", group=OBJ_A, parent="preview-run-a1",
-            title="补充 schema 升级离线副本的验证测试", title_source="summary",
+            title="补充 schema 升级离线副本的验证测试", title_source="title",
             task_text="为 board_prepare 的离线副本补充验证测试，覆盖行数不变与来源文件哈希不变。",
             created=instant(6, 20), updated=instant(6, 55), state="delivered", status="completed",
             category="review", configuration=CFG_GLM, result=True,

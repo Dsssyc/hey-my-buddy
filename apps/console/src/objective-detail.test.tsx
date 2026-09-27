@@ -100,7 +100,8 @@ const openObjective = async (f: ReturnType<typeof harness>) => {
 };
 // Layer mode opens details with Enter or a double click; a single click only pins.
 const openSpan = async (f: ReturnType<typeof harness>, key: string) => {
-  await f.user.dblClick(document.querySelector(`[data-key="span:${key}"]`) as HTMLButtonElement);
+  const surface = window.matchMedia?.("(max-width: 760px)").matches ? ".tl-list" : ".tl-scroll";
+  await f.user.dblClick(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
   await screen.findByRole("complementary", { name: "工作目标详情" });
   await waitFor(() => expect(document.querySelector(".locator")).toBeTruthy());
 };
@@ -132,7 +133,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     // Expand one folded break first; it must survive the detail round-trip.
     await f.user.click((await screen.findAllByRole("button", { name: /已折叠，展开/ }))[0]!);
     await openSpan(f, "s-r1-e");
-    const span = document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement;
+    const span = document.querySelector('.tl-list [data-key="span:s-r1-e"]') as HTMLButtonElement;
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "‹ 返回时间轴" }));
     await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
     expect(document.activeElement).toBe(span);
