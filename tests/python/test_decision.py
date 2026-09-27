@@ -707,17 +707,16 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(check["userPreference"], "none")
         self.assertNotIn("avoid", decision["reason"].lower())
 
-    def test_false_fallback_and_invented_constraints_settle_needs_host(self):
+    def test_policy_echo_cannot_replace_program_facts_in_published_output(self):
         board = self.board()
         self.seed(board)
         false_fallback = self.outcome(board, "policy_false_fallback", request_id="pick-false-fb")
-        self.assertEqual(false_fallback["status"], "needs-host")
-        self.assertIn("policy-outcome-false", false_fallback["reason"])
+        self.assertEqual(false_fallback["status"], "completed")
+        self.assertEqual(false_fallback["output"]["decision"]["policyCheck"]["taskPreference"], {"ruleIndex": None, "outcome": "none"})
         invented = self.outcome(board, "policy_invented_constraint", request_id="pick-invented")
-        self.assertEqual(invented["status"], "needs-host")
-        self.assertIn("policy-constraint-mismatch", invented["reason"])
-        # The last complete revision is unchanged and nothing was retried: each
-        # boundary is one finished decision the Host resolves on the same goal.
+        self.assertEqual(invented["status"], "completed")
+        self.assertEqual(invented["output"]["decision"]["policyCheck"]["hardConstraints"], {})
+        # Neither the user table nor task count is changed by a redundant echo.
         self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
         self.assertEqual(
             [run["runId"] for run in board.call("task_list", {"limit": 10})["runs"]],
@@ -764,11 +763,8 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertTrue(task["shutdownConfirmed"])
         self.assertIn("policy-outcome-false", task["selectedAttempt"]["error"])
 
-    def test_malformed_rule_index_through_publication_is_needs_host_without_exception(self):
-        """bool/float/string rule indexes from the helper must never compare equal
-        to the derived integer index nor reach list indexing: each settles
-        needs-host inside the result transaction, releases the reader and starts
-        no coding work."""
+    def test_model_rule_index_is_replaced_by_derived_integer_before_publication(self):
+        """Echoed bool/float/string values never reach preference list indexing."""
         board = self.board()
         self.seed(board)
         for variant in ("false", "float", "string"):
@@ -781,21 +777,59 @@ class DecisionFailureTests(DecisionTestCase):
                 })
                 self.run_worker(board, worker_id=f"w-index-{variant}")
                 decision = self.decision(board, request["decisionId"])
-                self.assertEqual(decision["status"], "needs-host", decision.get("reason"))
-                self.assertIn("policy-index-mismatch", decision["reason"])
-                self.assertIsNone(decision["profileId"])
+                self.assertEqual(decision["status"], "completed", decision.get("reason"))
+                self.assertEqual(decision["profileId"], PROFILE_ID)
                 self.assertEqual(
                     decision["output"]["decision"]["policyCheck"]["taskPreference"]["ruleIndex"],
-                    {"false": False, "float": 0.0, "string": "0"}[variant],
-                    "the malformed helper answer is retained in the audit unchanged",
+                    0,
+                    "publication records the independently computed index",
                 )
-                # The selection reader was released inside the same settlement.
                 self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
-                # No coding launch: every task on this board is a decision run.
                 self.assertEqual(
                     sorted(task["adapter"] for task in board.call("task_list", {"limit": 20})["runs"]),
                     ["decision"] * (["false", "float", "string"].index(variant) + 1),
                 )
+
+    def test_input_shaped_preference_echo_completes_and_records_program_outcome(self):
+        board = self.board()
+        self.seed(board)
+        self.use_helper(mode="policy_input_echo")
+        request = board.call("selection_request", {
+            "requestId": "input-shape-echo", "task": "Bounded implementation",
+            "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "Prefer DSH for this request"}],
+        })
+        self.run_worker(board)
+        decision = self.decision(board, request["decisionId"])
+        self.assertEqual(decision["status"], "completed", decision.get("reason"))
+        self.assertEqual(decision["output"]["decision"]["policyCheck"]["taskPreference"],
+                         {"ruleIndex": 0, "outcome": "matched"})
+        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
+
+    def test_routing_health_distinguishes_failure_abstention_and_success_without_writes(self):
+        board = self.board()
+        self.seed(board)
+        empty = board.call("health", {})["routingHealth"]
+        self.assertEqual(empty["sampleCount"], 0)
+        self.assertIsNone(empty["lastSuccessAt"])
+        success = self.outcome(board, "select_first", request_id="health-success")
+        self.outcome(board, "abstain", request_id="health-abstain")
+        failure = self.outcome(board, "policy_error", request_id="health-failure")
+        with board.store.db.read() as connection:
+            head = connection.execute('SELECT MAX(seq) FROM events').fetchone()[0]
+            success_time = connection.execute(
+                "SELECT created_at FROM events WHERE kind='decision.completed' AND json_extract(payload_json,'$.decisionId')=?",
+                (success["decisionId"],),
+            ).fetchone()[0]
+        report = board.call("health", {})["routingHealth"]
+        self.assertEqual(report["sampleCount"], 3)
+        self.assertEqual(report["failureCount"], 1)
+        self.assertEqual(report["consecutiveFailures"], 1)
+        self.assertEqual(report["abstentionCount"], 1)
+        self.assertEqual(report["lastSuccessAt"], success_time)
+        self.assertEqual(report["recentFailures"][0]["decisionId"], failure["decisionId"])
+        self.assertEqual(report, board.call("console_snapshot", {})["routingHealth"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT MAX(seq) FROM events').fetchone()[0], head)
 
     def test_malformed_abstention_through_publication_is_needs_host(self):
         board = self.board()

@@ -53,6 +53,8 @@ UPGRADE_STATEMENTS = (
     "CREATE INDEX workflow_runs_objective_idx ON workflow_runs(objective_id, activity_seq DESC, run_id DESC)",
     "CREATE INDEX workflow_runs_activity_idx ON workflow_runs(activity_seq)",
     "CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_id)",
+    """CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
+       WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale')""",
 )
 
 #: Attempt states that mean a board still owns live or unresolved work.

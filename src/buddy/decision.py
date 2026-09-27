@@ -29,6 +29,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 import json
+import re
 import sqlite3
 import uuid
 from typing import Any
@@ -994,12 +995,12 @@ class DecisionCoordinator:
             and isinstance(output, dict)
             and output.get("status") == "ok"
         )
-        policy_code = (
+        validation_code = (
             output.get("code")
             if isinstance(output, dict)
             and output.get("status") == "error"
             and isinstance(output.get("code"), str)
-            and output.get("code").startswith("policy-")
+            and output.get("code").startswith(("policy-", "answer-"))
             else None
         )
         if status == "cancelled" or task["state"] == "cancelling":
@@ -1007,17 +1008,16 @@ class DecisionCoordinator:
                 connection, row, status="cancelled", output=output, now=now,
                 reason="the decision run was cancelled; no recommendation is published",
             )
-        elif policy_code is not None:
-            # A routing-policy refusal is a Host boundary on the same goal, not a
-            # failure to retry: the helper answered, the answer is out of policy,
-            # and the Worker's own receipt keeps its real outcome.
+        elif validation_code is not None:
+            # The helper has already consumed its one bounded correction chance.
+            # Publication does not restart the model or create another attempt.
             self._finish(
                 connection, row, status="needs-host", output=output, now=now,
                 reason=(
                     f"the decision helper refused the recommendation under the routing policy "
-                    f"({policy_code}); the Host decides on the same goal"
+                    f"({validation_code}); the Host decides on the same goal"
                 ),
-                error=f"{policy_code}: routing policy boundary"[:2000],
+                error=f"{validation_code}: routing answer boundary"[:2000],
             )
         elif not helper_ok:
             detail = error or (output or {}).get("error") or (output or {}).get("message") or "the decision helper failed"
@@ -1067,11 +1067,9 @@ class DecisionCoordinator:
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> None:
         """Validate one select recommendation against the frozen candidate set.
 
-        The model's typed ``policyCheck`` and ``support`` are re-validated here
-        against this service's own immutable input — independently of the helper's
-        Node-side check — before adoption. Any policy violation settles
-        ``needs-host`` on the same goal with the precise machine code; nothing is
-        retried and the qualitative reason text is never parsed.
+        The policy outcome is independently derived from the service's frozen
+        input. Model/helper policy echoes cannot change it. Support and evidence
+        still fence adoption; publication itself never starts a retry.
         """
         document = json.loads(row["input_json"]) if row["input_json"] else {}
         supplied = {
@@ -1127,6 +1125,7 @@ class DecisionCoordinator:
                     reason=f"the abstention violated the routing policy ({failure[0]}: {failure[1]}); the Host decides",
                 )
                 return
+            output = {**output, "decision": {**decision, "policyCheck": None}}
             self._finish(connection, row, status="needs-host", output=output, now=now, reason=reason)
             return
         if not isinstance(profile_id, str) or profile_id not in supplied:
@@ -1194,6 +1193,7 @@ class DecisionCoordinator:
                 ),
             )
             return
+        output = {**output, "decision": {**decision, "policyCheck": policy_check}}
         if not self._reader_open(connection, row, now):
             self._finish(
                 connection, row, status="stale", output=output, now=now,
@@ -1321,6 +1321,64 @@ class DecisionCoordinator:
         )
 
     # -- views ---------------------------------------------------------------
+    def health_summary(self) -> dict:
+        """Bounded, model-free health over settled selection events, not task prose.
+
+        Terminal event time is immutable; a later stale receipt cannot move the
+        last-success clock. The partial event index avoids scanning task history.
+        """
+        limit = 20
+        kinds = "('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale')"
+        source = (
+            " FROM events e JOIN decision_requests r ON r.decision_id=json_extract(e.payload_json,'$.decisionId')"
+            " WHERE e.kind IN " + kinds + " AND r.kind='select'"
+        )
+        with self.db.read() as connection:
+            rows = connection.execute(
+                "SELECT e.kind,e.created_at,e.payload_json,r.decision_id,r.task_id,r.output_json,"
+                " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS goal_id"
+                + source + " ORDER BY e.seq DESC LIMIT ?", (limit,),
+            ).fetchall()
+            success = connection.execute(
+                "SELECT e.created_at,r.decision_id" + source
+                + " AND e.kind='decision.completed' ORDER BY e.seq DESC LIMIT 1",
+            ).fetchone()
+        failed = []
+        streak = 0
+        still_failing = True
+        abstentions = cancellations = stale = 0
+        for row in rows:
+            output = json.loads(row["output_json"]) if row["output_json"] else {}
+            output = output if isinstance(output, dict) else {}
+            decision = output.get("decision") or {}
+            abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
+                         and isinstance(decision, dict)
+                         and set(decision) == {"profileId", "reason", "evidenceIds", "policyCheck", "support"}
+                         and decision["profileId"] is None and decision.get("policyCheck") is None
+                         and decision.get("evidenceIds") == []
+                         and decision.get("support") == {"cardProfileIds": [], "annotationProfileIds": []})
+            is_failure = row["kind"] == "decision.failed" or (row["kind"] == "decision.needs_host" and not abstained)
+            if still_failing and is_failure:
+                streak += 1
+            else:
+                still_failing = False
+            abstentions += int(abstained)
+            cancellations += int(row["kind"] == "decision.cancelled")
+            stale += int(row["kind"] == "decision.stale")
+            if is_failure:
+                code = output.get("code")
+                # Only a bounded machine code is public here, never provider text.
+                if not isinstance(code, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,79}', code):
+                    code = 'needs-host' if row["kind"] == "decision.needs_host" else 'call-failed'
+                failed.append({"decisionId":row["decision_id"], "runId":row["goal_id"] or row["task_id"],
+                               "at":row["created_at"], "code":code})
+        return {"windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
+                "consecutiveFailures":streak, "abstentionCount":abstentions,
+                "cancelledCount":cancellations, "staleCount":stale,
+                "lastSuccessAt":success["created_at"] if success else None,
+                "lastSuccessDecisionId":success["decision_id"] if success else None,
+                "recentFailures":failed[:5]}
+
     def _request_response(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, duplicate: bool) -> dict:
         view = self._view(connection, row, include_audit=False)
         return {

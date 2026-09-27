@@ -59,6 +59,22 @@ def validate(decision, profile_facts, routing_preferences=(), cards=(), annotati
 
 
 class PolicyFactsTests(unittest.TestCase):
+    def test_input_shaped_echo_never_controls_the_program_derived_check(self):
+        for rules, prefer in (([], []), (POSITIVE_DSH_RULE, []), ([], [DSH_ID])):
+            with self.subTest(rules=rules, prefer=prefer):
+                facts = derived_facts(profiles=(DSH_PROFILE,), routing_preferences=rules, prefer=prefer)
+                echoed = {"hardConstraints": facts["hardConstraints"],
+                          "taskPreference": {**facts["taskPreference"], "outcome": "matched"},
+                          "userPreference": "none"}
+                expected = selection_policy.expected_policy_check(facts, rules, DSH_ID)
+                check, support, failure = validate(answer(DSH_ID, echoed), facts, rules)
+                self.assertIsNone(failure)
+                self.assertEqual(check, expected)
+                self.assertEqual(support, EMPTY_SUPPORT)
+                minimal = answer(DSH_ID, echoed)
+                del minimal["policyCheck"]
+                self.assertEqual(validate(minimal, facts, rules), (expected, EMPTY_SUPPORT, None))
+
     def test_positive_dsh_preference_matches_legal_dsh_and_cannot_be_inverted(self):
         derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
         self.assertEqual(derived["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]})
@@ -66,16 +82,13 @@ class PolicyFactsTests(unittest.TestCase):
         expected = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
         self.assertEqual(expected["taskPreference"], {"ruleIndex": 0, "outcome": "matched"})
         self.assertEqual(expected["userPreference"], "none")
-        # The historical inversion can neither be a valid enum nor pass as truth.
+        # An echo can no longer invert program-owned facts.
         for outcome in ("fallback", "none", "avoided", "excluded", "avoid"):
             with self.subTest(outcome=outcome):
                 inverted = {**expected, "taskPreference": {"ruleIndex": 0, "outcome": outcome}}
-                _, _, failure = validate(answer(DSH_ID, inverted), derived, POSITIVE_DSH_RULE)
-                self.assertIsNotNone(failure)
-                self.assertIn(
-                    failure[0],
-                    {selection_policy.POLICY_OUTCOME_FALSE, selection_policy.POLICY_OUTCOME_INVALID},
-                )
+                check, _, failure = validate(answer(DSH_ID, inverted), derived, POSITIVE_DSH_RULE)
+                self.assertIsNone(failure)
+                self.assertEqual(check, expected)
 
     def test_phantom_adapter_constraint_from_a_dsh_filename_is_refused(self):
         derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
@@ -83,12 +96,14 @@ class PolicyFactsTests(unittest.TestCase):
         self.assertEqual(derived["hardConstraints"], {})
         expected = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
         invented = {**expected, "hardConstraints": {"adapter": "dsh"}}
-        _, _, failure = validate(answer(DSH_ID, invented), derived, POSITIVE_DSH_RULE)
-        self.assertEqual(failure[0], selection_policy.POLICY_CONSTRAINT_MISMATCH)
+        checked, _, failure = validate(answer(DSH_ID, invented), derived, POSITIVE_DSH_RULE)
+        self.assertIsNone(failure)
+        self.assertEqual(checked["hardConstraints"], {})
         dropped = {**expected, "hardConstraints": {}}
         derived_with_hard = derived_facts(routing_preferences=POSITIVE_DSH_RULE, hard={"effort": "high"})
-        _, _, failure = validate(answer(DSH_ID, dropped), derived_with_hard, POSITIVE_DSH_RULE)
-        self.assertEqual(failure[0], selection_policy.POLICY_CONSTRAINT_MISMATCH)
+        checked, _, failure = validate(answer(DSH_ID, dropped), derived_with_hard, POSITIVE_DSH_RULE)
+        self.assertIsNone(failure)
+        self.assertEqual(checked["hardConstraints"], {"effort": "high"})
 
     def test_matched_preference_is_accepted_with_the_exact_expected_check(self):
         derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
@@ -145,8 +160,9 @@ class PolicyFactsTests(unittest.TestCase):
         self.assertIsNone(policy_check)
         self.assertEqual(support, EMPTY_SUPPORT)
         carrying = {**abstention, "policyCheck": {"hardConstraints": {}, "taskPreference": {"ruleIndex": None, "outcome": "none"}, "userPreference": "none"}}
-        _, _, failure = validate(carrying, derived_facts())
-        self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
+        checked, _, failure = validate(carrying, derived_facts())
+        self.assertIsNone(failure)
+        self.assertIsNone(checked)
         _, _, failure = validate({**abstention, "support": {"cardProfileIds": [DSH_ID], "annotationProfileIds": []}}, derived_facts(), cards=(DSH_ID,))
         self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
         # Python enforces the empty evidenceIds contract independently of Node.
@@ -218,35 +234,41 @@ class PolicyFactsTests(unittest.TestCase):
         validate(decision, first, rules)
         self.assertEqual(decision, frozen_decision)
 
-    def test_index_disagreement_and_malformed_checks_are_refused(self):
+    def test_model_index_and_shape_never_override_derived_index(self):
         derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
         check = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
         wrong_index = {**check, "taskPreference": {"ruleIndex": 1, "outcome": "matched"}}
-        _, _, failure = validate(answer(DSH_ID, wrong_index), derived, POSITIVE_DSH_RULE)
-        self.assertEqual(failure[0], selection_policy.POLICY_INDEX_MISMATCH)
+        checked, _, failure = validate(answer(DSH_ID, wrong_index), derived, POSITIVE_DSH_RULE)
+        self.assertIsNone(failure)
+        self.assertEqual(checked, check)
         null_index = {**check, "taskPreference": {"ruleIndex": None, "outcome": "none"}}
-        _, _, failure = validate(answer(DSH_ID, null_index), derived, POSITIVE_DSH_RULE)
-        self.assertEqual(failure[0], selection_policy.POLICY_INDEX_MISMATCH)
+        checked, _, failure = validate(answer(DSH_ID, null_index), derived, POSITIVE_DSH_RULE)
+        self.assertIsNone(failure)
+        self.assertEqual(checked, check)
         # Python bool is an int subclass and json parses 0.0 as float, so both
         # would compare equal to the derived index 0 and reach list indexing:
         # only an explicit null or non-bool integer in the derived range is legal.
         for bad_index in (False, True, 0.0, 1.0, "0", 2):
             with self.subTest(bad_index=bad_index):
                 typed = {**check, "taskPreference": {"ruleIndex": bad_index, "outcome": "matched"}}
-                _, _, failure = validate(answer(DSH_ID, typed), derived, POSITIVE_DSH_RULE)
-                self.assertEqual(failure[0], selection_policy.POLICY_INDEX_MISMATCH, repr(bad_index))
+                checked, _, failure = validate(answer(DSH_ID, typed), derived, POSITIVE_DSH_RULE)
+                self.assertIsNone(failure)
+                self.assertIs(type(checked["taskPreference"]["ruleIndex"]), int)
+                self.assertEqual(checked, check)
         for broken in (None, {}, {"hardConstraints": {}, "taskPreference": {"ruleIndex": 0, "outcome": "matched"}}):
             with self.subTest(broken=broken):
-                _, _, failure = validate(answer(DSH_ID, broken), derived, POSITIVE_DSH_RULE)
-                self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
+                checked, _, failure = validate(answer(DSH_ID, broken), derived, POSITIVE_DSH_RULE)
+                self.assertIsNone(failure)
+                self.assertEqual(checked, check)
         _, _, failure = validate(answer(DSH_ID, check, support={"cardProfileIds": []}), derived)
         self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
 
-    def test_unknown_user_outcome_enum_is_refused(self):
+    def test_unknown_user_outcome_enum_is_replaced_by_program_outcome(self):
         derived = derived_facts(prefer=[DSH_ID])
         check = selection_policy.expected_policy_check(derived, [], DSH_ID)
-        _, _, failure = validate({**answer(DSH_ID, check), "policyCheck": {**check, "userPreference": "deprioritized"}}, derived)
-        self.assertEqual(failure[0], selection_policy.POLICY_OUTCOME_INVALID)
+        checked, _, failure = validate({**answer(DSH_ID, check), "policyCheck": {**check, "userPreference": "deprioritized"}}, derived)
+        self.assertIsNone(failure)
+        self.assertEqual(checked, check)
 
 
 if __name__ == "__main__":

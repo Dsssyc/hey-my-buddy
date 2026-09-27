@@ -278,6 +278,7 @@ class BoardService(_BaseResource):
                 # claim.
                 "maxConcurrent": self.store.max_concurrent,
                 "capacity": self.store.capacity_report(),
+                "routingHealth": self.decisions.health_summary(),
                 "managedWorkerIds": list(pool.get("workerIds") or []),
                 "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
                 "stoppedWorkerIds": list(pool.get("stoppedWorkerIds") or []),
@@ -400,6 +401,7 @@ class BoardService(_BaseResource):
             from .console import assets_ready
 
             snapshot["capabilities"]["consoleAssets"] = assets_ready()
+            snapshot["routingHealth"] = self.decisions.health_summary()
             return snapshot
 
         return self._guard("console.snapshot", request_json, handler)

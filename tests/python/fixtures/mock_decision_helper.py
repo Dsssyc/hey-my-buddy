@@ -117,7 +117,10 @@ def select_envelope(request):
         cited = evidence[:2]
     if MODE == "out_of_candidate":
         chosen = "dsh:not-a-candidate:model:off"
-    if MODE == "policy_false_fallback":
+    if MODE == "policy_input_echo":
+        policy_check = stated_policy_check(request, chosen)
+        policy_check["taskPreference"] = {**request["policyFacts"]["taskPreference"], "outcome": "matched"}
+    elif MODE == "policy_false_fallback":
         # The historical inversion: a legal preference match reported as if no
         # rule matched. Python must settle this needs-host, never adopt it.
         policy_check = {"hardConstraints": {}, "taskPreference": {"ruleIndex": None, "outcome": "fallback"}, "userPreference": "none"}

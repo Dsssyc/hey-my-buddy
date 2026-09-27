@@ -202,6 +202,8 @@ CREATE TABLE IF NOT EXISTS events (
     created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
+CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
+    WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale');
 
 CREATE TABLE IF NOT EXISTS commands (
     command_id      TEXT PRIMARY KEY,
