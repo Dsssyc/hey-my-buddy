@@ -134,21 +134,21 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, selectedR
     ? metrics.sumMs : null;
 
   return <header className="detail-header tl-head">
-    <div className="row-between">
-      <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 工作目标列表</button>
+    <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 工作目标列表</button>
+    <div className="objective-title-row">
+      <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
       <span className="chip-row">
         {shown.kind === "standalone" && <Badge tone="neutral">未归档委派</Badge>}
         {headerActions}
       </span>
     </div>
-    <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
     {shown.description && <p className="objective-description">{shown.description}</p>}
     <p className="objective-vitals">
       <Badge tone={categoryTone(shown.state)}>{CATEGORY_LABEL[shown.state]}</Badge>
       <span>{shown.counts.accepted} / {shown.counts.roots} 个委派已验收</span>
       <span>最近活动 {clockTime(shown.lastActivityAt)}（{relativeTime(shown.lastActivityAt, Date.now())}）</span>
     </p>
-    <p className="hierarchy-line">
+    <div className="hierarchy-line">
       工作目标 › 委派 › 协助任务 › 回合
       <details className="hierarchy-help">
         <summary aria-label="层级说明">?</summary>
@@ -159,7 +159,7 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, selectedR
           回合：委派或协助任务的一次执行；接续会增加回合。
         </span>
       </details>
-    </p>
+    </div>
     <details className="time-stats">
       <summary>时间统计</summary>
       <div className="time-stats-body">

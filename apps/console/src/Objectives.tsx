@@ -24,7 +24,6 @@ const EMPTY_SET: ReadonlySet<string> = new Set();
    viewport picks the layout; above 760px an open detail collapses the list to
    a 48px rail and docks the detail beside the timeline. D = detail column,
    R = measured right-column width. */
-const RAIL_PX = 48;
 const DIVIDER_PX = 10;
 const DETAIL_MIN_PX = 360;
 const DETAIL_DEFAULT_MAX_PX = 600;
@@ -208,8 +207,8 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     return () => observer.disconnect();
   }, []);
   const detailOpen = !!detail;
-  // R = the timeline|detail stage width = pane minus the rail column.
-  const rightWidth = Math.max((paneWidth ?? 0) - RAIL_PX, 0);
+  // The observed detail pane already excludes the list rail.
+  const rightWidth = Math.max(paneWidth ?? 0, 0);
   const [detailWidth, setDetailWidth] = useState<number | null>(null);
   const maxDetail = detailMax(rightWidth > 0 ? rightWidth : 800);
   const dockDetailWidth = clamp(detailWidth ?? detailDefault(rightWidth > 0 ? rightWidth : 800), DETAIL_MIN_PX, maxDetail);
