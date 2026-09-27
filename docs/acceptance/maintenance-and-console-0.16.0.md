@@ -67,4 +67,4 @@ Host rechecked process start times, module/worker identity, daemon lifetime-lock
 
 ## Final pre-install snapshot
 
-At 2026-09-27T17:49:06.671Z, read-only storage inspection reported ZCode 3826799234 bytes (74 homes), managed checkouts 3551805352 bytes, runtimes 1381212651 bytes, and durable records 225297012 bytes. Two accepted ZCode homes totaling 138195356 bytes were eligible after the grace period; no storage apply was performed. The orphan process count was 3.
+At 2026-09-27T17:51:59.186Z, read-only inspection reported ZCode 3826799234 bytes (74 homes), managed checkouts 3551805352 bytes, runtimes 1381212651 bytes, and durable records 225297012 bytes. Eligible ZCode homes: 3, totaling 138195356 bytes. No storage apply was performed. Orphan processes: 0. Three additional old launcher-test supervisors (started at 01:06:20 +0800, before the final check) were found in the last snapshot and cooperatively stopped under the user’s all-orphans authorization, with exit and lock-release evidence in final-preexisting-three-stopped.json. Total confirmed stops: 100.
