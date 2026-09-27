@@ -206,7 +206,7 @@ class BuddyControl:
     def workflow_suggest(self, request_json: str) -> str:
         ...
 
-    # -- work objectives (read-only browsing) -------------------------------
+    # -- work objectives (reads and console-only cancellation) --------------
     def objective_list(self, request_json: str) -> str:
         ...
 

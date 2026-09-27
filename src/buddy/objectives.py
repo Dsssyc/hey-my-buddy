@@ -1,7 +1,7 @@
 """Human objective metadata and bounded read projections, never execution input.
 
 An objective groups governed delegations for browsing and archival. It owns a
-title and its original source attribution, nothing else: it schedules no work,
+title, optional description and original source attribution: it schedules no work,
 grants no control and is never part of an execution spec, Worker turn input or
 selector packet. The timeline is derived on every read from the recorded task,
 attempt, turn, request, routing and event rows; the only stored projection is the

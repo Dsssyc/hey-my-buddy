@@ -18,7 +18,7 @@ objective_stop resolves the complete selected group, cancels current unaccepted 
 
 Design b88aa718-abca-47b1-b98d-4d64dc46be52 used explicit Claude Opus 5.5/high under the user-established division. Host integrated its fixed document and corrected optional-description storage, accepted-root progress, uniform three-line cards and whole-group cancellation. Accepted integration int-c63054ef-d3fd-4de4-994c-886700ccca5a; managed checkout cleanup cln-4a30e796-ae63-4965-a69f-dfcdac283c46.
 
-Frontend d37a8c79-ce98-4e72-b003-a72704c99a5f omitted the configuration tuple and used a task-local GLM-5.3 preference. Decision dec-8edbcdcf-52cd-47e0-bf3b-6f26c4840ea0 succeeded and selected zcode/zai-api/GLM-5.3/max with matched task preference; no Host recovery. Implementation acceptance remains pending.
+Frontend d37a8c79-ce98-4e72-b003-a72704c99a5f omitted the configuration tuple and used a task-local GLM-5.3 preference. Decision dec-8edbcdcf-52cd-47e0-bf3b-6f26c4840ea0 succeeded and selected zcode/zai-api/GLM-5.3/max with matched task preference; no Host recovery. Its durable diagnostics record one selector call with an empty failure list (17,597 input and 224 output tokens); no correction occurred. Implementation acceptance remains pending.
 
 Baseline routingHealth: window 20, samples 20, failures 5, consecutive failures 4, last success 2026-09-25T11:17:44.243Z. Final comparison is pending. Explicit Claude configurations are not smart-route successes. policy-alternative-unsupported has not been observed in this agenda. Contrary to the supplied observation, installed 0.15.0 source lists that code among one-correction retryable answers; this round changes no routing retry code and records actual diagnostics when relevant.
 

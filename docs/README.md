@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the installed 0.15.0 contract and schema 12: [routing validation and diagnostics](reference/decision.md), objective-first Host guidance and [selection-first objective browsing](design/objective-browser-0.15.md). The [source acceptance](acceptance/routing-objective-browser-0.15.0.md) and [installation record](acceptance/installed-0.15.0.md) keep implementation and daily-runtime evidence distinct; [0.14.0](acceptance/installed-0.14.0.md) remains historical. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
+Daily installation remains 0.15.0/schema 12. The current references also specify the authorized 0.15.1 source candidate: [routing validation and diagnostics](reference/decision.md), objective-first Host guidance and [selection-first objective browsing](design/objective-browser-0.15.md). The [source acceptance](acceptance/routing-objective-browser-0.15.0.md) and [installation record](acceptance/installed-0.15.0.md) keep implementation and daily-runtime evidence distinct; [0.14.0](acceptance/installed-0.14.0.md) remains historical. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
 
 | Document | Role |
 | --- | --- |
@@ -101,3 +101,5 @@ Acceptance records are versioned evidence, not current contracts. They may refer
 | [AGENTS.md](../AGENTS.md) | Repository development invariants, verification commands and topic-based routing: which document to update for which kind of change |
 
 When behavior changes, update the owning reference first, then the READMEs and [skills/buddy/SKILL.md](../skills/buddy/SKILL.md) if the user-visible entry path changed, and record acceptance evidence under `docs/acceptance/`. Keep architecture statements verified against source; historical ADRs describe the decision at their own point in time.
+
+The [0.15.1 design](design/objective-browser-0.15.1.md) and [acceptance record](acceptance/readonly-objective-browser-0.15.1.md) cover read-only delegation records, objective descriptions, short titles, viewport-based detail browsing and the narrowed console write surface. The record distinguishes implementation, focused/full checks, synthetic browser evidence, normal routed work and installation status.
