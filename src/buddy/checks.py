@@ -35,6 +35,7 @@ import time
 #: runtime, a Worker identity or an agent credential instead of its own private roots.
 SANITIZED_VARIABLES = (
     "BUDDY_CHECKS_TMPDIR",
+    "BUDDY_SUPERVISOR_START_ID",
     "BUDDY_STATE_DIR",
     "BUDDY_RUNTIME_ROOT",
     "BUDDY_RUNTIME",

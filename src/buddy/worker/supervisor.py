@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..client import BoardClient
 from ..transport import get_state_dir
-from .worker import RETIRE_REQUEST_NAME, Worker, fsync_json
+from .worker import RETIRE_REQUEST_NAME, Worker, fsync_json, supervisor_start_stop_path
 
 RESTART_BACKOFF_SECONDS = 2.0
 MAX_BACKOFF_SECONDS = 30.0
@@ -35,6 +35,7 @@ class Supervisor:
         self.stop = threading.Event()
         self.directory = state_dir / "workers" / worker_id
         self.stop_request = self.directory / "stop.request"
+        self.start_stop_request = supervisor_start_stop_path(self.directory)
         #: Scale-down intent owned by the pool: this supervisor exits only after the
         #: Worker returns, which happens between attempts and after receipt replay.
         self.retire_request = self.directory / RETIRE_REQUEST_NAME
@@ -42,6 +43,10 @@ class Supervisor:
 
     def request_stop(self) -> None:
         self.stop.set()
+
+    def stop_file_requested(self) -> bool:
+        return (self.stop_request.exists()
+                or bool(self.start_stop_request and self.start_stop_request.exists()))
 
     def publish(self, state: str, **extra) -> None:
         fsync_json(
@@ -73,12 +78,14 @@ class Supervisor:
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
+            if self.start_stop_request:
+                self.start_stop_request.unlink(missing_ok=True)
 
     def _loop(self, *, max_restarts: int | None) -> int:
         self.publish("starting")
         backoff = RESTART_BACKOFF_SECONDS
         restarts = 0
-        while not self.stop.is_set() and not self.stop_request.exists():
+        while not self.stop.is_set() and not self.stop_file_requested():
             # A retire intent does not skip Worker creation: a restarted surplus
             # owner must still replay its receipts and reconcile its startup intents
             # before it may leave. The Worker itself observes the intent only between
@@ -99,7 +106,7 @@ class Supervisor:
                 backoff = min(MAX_BACKOFF_SECONDS, backoff * 2)
             else:
                 backoff = RESTART_BACKOFF_SECONDS
-            if self.stop.is_set() or self.stop_request.exists():
+            if self.stop.is_set() or self.stop_file_requested():
                 break
             if self.retire_request.exists():
                 pending = worker.recovery_pending()
@@ -115,7 +122,7 @@ class Supervisor:
             if max_restarts is not None and restarts >= max_restarts:
                 break
             self.stop.wait(backoff)
-        if self.retire_request.exists() and not self.stop_request.exists():
+        if self.retire_request.exists() and not self.stop_file_requested():
             self.publish("retired")
         else:
             self.publish("stopped")

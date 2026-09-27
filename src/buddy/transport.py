@@ -312,7 +312,8 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
                 from .launcher import read_private
                 failure = read_private(directory / "startup-error.json") or {}
                 if failure.get("pid") == child.pid and isinstance(failure.get("code"), str) and isinstance(failure.get("message"), str):
-                    raise ServiceError(failure["code"], failure["message"])
+                    details = failure.get("details")
+                    raise ServiceError(failure["code"], failure["message"], **(details if isinstance(details, dict) else {}))
                 raise ServiceError("SERVICE_START_FAILED", "The board daemon failed to start; inspect control.log")
             time.sleep(0.05)
         raise ServiceError("SERVICE_START_TIMEOUT", "The board daemon did not become ready; inspect control.log")

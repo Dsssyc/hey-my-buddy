@@ -8,8 +8,12 @@ same per-family counters.
 from __future__ import annotations
 
 import os
+import fcntl
+import subprocess
+import sys
 import threading
 import unittest
+import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -144,6 +148,132 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         with patch.object(daemon.pool, "reconcile", interrupted_reconcile):
             daemon._reconcile_pool()
         self.assertTrue(daemon.pool.handle("local-8").stop_request.exists())
+
+    def test_failed_late_start_drains_spawned_processes_but_preserves_reused_workers(self):
+        from buddy.daemon import SupervisorHandle
+        from buddy.errors import BoardError
+
+        daemon = self.private_daemon("failed-start")
+        reused = daemon.pool.handle("local")
+        reused.prepare()
+        owned = []
+        child_code = (
+            "import fcntl,sys,time; from pathlib import Path; p=Path(sys.argv[1]); "
+            "f=(p/'supervisor.lock').open('a'); fcntl.flock(f,fcntl.LOCK_EX); "
+            "print('ready',flush=True)\n"
+            "while not Path(sys.argv[2]).exists(): time.sleep(.01)\n"
+        )
+
+        def failing_start(handle, *_args, **_kwargs):
+            if handle.worker_id == "local":
+                return False
+            if handle.worker_id == "local-7":
+                raise OSError("injected seventh-slot spawn failure")
+            handle.prepare()
+            handle.start_stop_request = handle.directory / f"stop-{uuid.uuid4().hex}.request"
+            handle.process = subprocess.Popen([sys.executable, "-c", child_code, str(handle.directory), str(handle.start_stop_request)],
+                                              stdout=subprocess.PIPE, text=True)
+            owned.append(handle)
+            self.assertEqual(handle.process.stdout.readline().strip(), "ready")
+            return True
+
+        with reused.lock_path.open("a") as retained_lock:
+            fcntl.flock(retained_lock, fcntl.LOCK_EX)
+            try:
+                with patch.object(SupervisorHandle, "start", failing_start):
+                    with self.assertRaises(BoardError) as raised:
+                        daemon._start_pool()
+                self.assertEqual(raised.exception.code, "WORKER_POOL_START_FAILED")
+                self.assertEqual(len(raised.exception.details["workers"]), 5)
+                self.assertTrue(all(row["supervisorExited"] for row in raised.exception.details["workers"]))
+                self.assertFalse(reused.stop_request.exists(), "failed startup must preserve pre-existing work")
+                for handle in owned:
+                    self.assertIsNotNone(handle.process.poll())
+                    with handle.lock_path.open("a") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                for handle in owned:
+                    handle.start_stop_request.touch()
+                    handle.process.wait(timeout=5)
+                    handle.process.stdout.close()
+
+    def test_failed_start_never_stops_another_owner_after_its_child_lost_the_lock(self):
+        daemon = self.private_daemon("lost-start-race")
+        handle = daemon.pool.handle("local")
+        handle.prepare()
+        handle.start_stop_request = handle.directory / f"stop-{uuid.uuid4().hex}.request"
+        handle.process = subprocess.Popen([sys.executable, "-c", "pass"])
+        handle.process.wait(timeout=5)
+        with handle.lock_path.open("a") as other_owner:
+            fcntl.flock(other_owner, fcntl.LOCK_EX)
+            evidence = daemon.pool.stop_spawned()
+            self.assertTrue(evidence[0]["supervisorExited"])
+            self.assertFalse(handle.stop_request.exists())
+            self.assertFalse(handle.start_stop_request.exists())
+            self.assertTrue(handle.running(), "the other owner must retain its lock")
+
+    def test_failed_start_drains_a_real_supervisor_through_its_private_instance_request(self):
+        from buddy.daemon import SupervisorHandle
+        from buddy.errors import BoardError
+
+        daemon = self.private_daemon("real-failed-start")
+        original_start = SupervisorHandle.start
+
+        def fail_second(handle, *args, **kwargs):
+            if handle.worker_id == "local-2":
+                raise OSError("injected after real supervisor spawn")
+            return original_start(handle, *args, **kwargs)
+
+        target = {"python": sys.executable, "pythonPath": str(PYTHON_ROOT), "stable": False}
+        handle = daemon.pool.handle("local")
+        try:
+            with patch("buddy.daemon.runtime.launch_target", return_value=target), patch.object(SupervisorHandle, "start", fail_second):
+                with self.assertRaises(BoardError) as raised:
+                    daemon._start_pool()
+            self.assertEqual(len(raised.exception.details["workers"]), 1)
+            self.assertTrue(raised.exception.details["workers"][0]["supervisorExited"])
+            self.assertFalse(handle.stop_request.exists(), "failure cleanup must not write the shared stop")
+            self.assertFalse(handle.running())
+        finally:
+            if handle.process is not None:
+                if handle.process.poll() is None:
+                    handle.start_stop_request.touch()
+                handle.process.wait(timeout=10)
+
+    def test_private_start_abort_targets_only_the_matching_supervisor_instance(self):
+        from buddy.worker.supervisor import Supervisor
+        from buddy.worker.worker import Worker
+
+        with patch.dict(os.environ, {"BUDDY_SUPERVISOR_START_ID": "1" * 32}):
+            first = Supervisor("shared", self.directory)
+            first_worker = Worker("shared", self.directory)
+        with patch.dict(os.environ, {"BUDDY_SUPERVISOR_START_ID": "2" * 32}):
+            other = Supervisor("shared", self.directory)
+            other_worker = Worker("shared", self.directory)
+        first.directory.mkdir(parents=True, exist_ok=True)
+        first.start_stop_request.touch()
+        self.assertTrue(first.stop_file_requested())
+        self.assertTrue(first_worker.stop_requested())
+        self.assertFalse(other.stop_file_requested())
+        self.assertFalse(other_worker.stop_requested())
+
+    def test_signal_style_reentry_followed_by_spawn_error_keeps_every_stop_intent(self):
+        from buddy.daemon import SupervisorHandle
+        from buddy.errors import BoardError
+
+        daemon = self.private_daemon("failed-reentrant-start")
+
+        def interrupted_start(handle, *_args, **_kwargs):
+            handle.prepare()
+            if handle.worker_id == "local-7":
+                daemon.on_stop({"drainSeconds": 0})
+                handle.stop_request.unlink()
+                raise OSError("injected after signal-style stop")
+            return True
+
+        with patch.object(SupervisorHandle, "start", interrupted_start), self.assertRaises(BoardError):
+            daemon._start_pool()
+        self.assertTrue(all(daemon.pool.handle(worker).stop_request.exists() for worker in daemon.pool.worker_ids))
 
 
 class DaemonHealthTests(BoardTestCase):

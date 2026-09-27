@@ -263,6 +263,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | `NOT_REGISTERED` / `ALREADY_RUNNING` | The worker id is unknown / already supervised |
 | `ATTEMPT_FINISHED` | Progress or a mutation arrived after the attempt finished |
 | `ADAPTER_UNAVAILABLE` / `UNSUPPORTED_ADAPTER` | The adapter cannot run here / is not `dsh`, `zcode`, `codex`, `command` or `external` |
+| `WORKER_POOL_START_FAILED` | Initial supervisor startup failed; newly spawned supervisors receive cooperative stop requests, with per-worker exit observations in `details.workers`; reused supervisors remain untouched unless stop was explicitly requested |
 | `GOVERNED_REQUIRED` | Coding work or a governed record was addressed through the advanced execution path; use the governed command |
 | `CONFIGURATION_REQUIRED` | A routing boundary must be resolved with a complete configuration or a reroute |
 | `CONFIGURATION_CONFLICT` | A supplied configuration does not preserve the goal's original hard constraints |

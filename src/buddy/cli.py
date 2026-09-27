@@ -268,6 +268,7 @@ def _worker_command_unlocked(action: str, params: dict) -> dict:
         "BUDDY_WORKER_ID": worker_id,
         "BUDDY_RUNTIME_IDENTITY": target["identity"],
     }
+    environment.pop("BUDDY_SUPERVISOR_START_ID", None)
     if target["pythonPath"]:
         environment["PYTHONPATH"] = target["pythonPath"] + (
             os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""

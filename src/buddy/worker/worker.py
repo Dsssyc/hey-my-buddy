@@ -24,6 +24,14 @@ from ..errors import BoardError
 DEFAULT_RETRY_SECONDS = 120
 CLAIM_IDLE_SECONDS = 2.0
 
+
+def supervisor_start_stop_path(directory: Path) -> Path | None:
+    """A daemon-created supervisor's private startup-abort channel."""
+    identity = os.environ.get("BUDDY_SUPERVISOR_START_ID", "")
+    if len(identity) == 32 and all(char in "0123456789abcdef" for char in identity):
+        return directory / f"stop-{identity}.request"
+    return None
+
 #: Result vocabulary, in the service-side order documented by
 #: ``buddy.db.TERMINATION_REASONS``: completed, user-cancel, deadline,
 #: harness-error, transport-error. The worker never invents another label.
@@ -197,6 +205,7 @@ class Worker:
         self._log = log or (lambda message: None)
         self.heartbeat_path = self.spool.directory / "heartbeat.json"
         self.stop_request_path = self.spool.directory / "stop.request"
+        self.start_stop_request_path = supervisor_start_stop_path(self.spool.directory)
         #: Scale-down intent. Read only between attempts, after receipt replay.
         self.retire_request_path = self.spool.directory / RETIRE_REQUEST_NAME
 
@@ -205,7 +214,8 @@ class Worker:
 
     # -- lifecycle -----------------------------------------------------------
     def stop_requested(self) -> bool:
-        return self.stop.is_set() or self.stop_request_path.exists()
+        return (self.stop.is_set() or self.stop_request_path.exists()
+                or bool(self.start_stop_request_path and self.start_stop_request_path.exists()))
 
     def retire_requested(self) -> bool:
         """A scale-down intent, never a cancel signal for an owned child."""

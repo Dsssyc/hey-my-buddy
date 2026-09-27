@@ -63,6 +63,7 @@ class SupervisorHandle:
         #: never cancel an owned child or drop an undelivered receipt.
         self.retire_request = self.directory / RETIRE_REQUEST_NAME
         self.process: subprocess.Popen | None = None
+        self.start_stop_request: Path | None = None
         self.lock_fd: int | None = None
 
     def prepare(self) -> None:
@@ -126,6 +127,9 @@ class SupervisorHandle:
             "BUDDY_STATE_DIR": str(state_dir),
             "BUDDY_WORKER_ID": self.worker_id,
         }
+        start_id = uuid.uuid4().hex
+        self.start_stop_request = self.directory / f"stop-{start_id}.request"
+        environment["BUDDY_SUPERVISOR_START_ID"] = start_id
         if target["pythonPath"]:
             environment["PYTHONPATH"] = target["pythonPath"]
         else:
@@ -461,6 +465,37 @@ class WorkerPool:
             requested.append(worker_id)
         return requested
 
+    def stop_spawned(self, timeout: float = 5.0) -> list[dict]:
+        """Drain only supervisors this pool instance spawned after failed startup.
+
+        A reused supervisor has no local Popen handle and may still own work from
+        the previous daemon; failure of this startup never cancels that work.
+        """
+        owned = [handle for handle in self._handles.values() if handle.process is not None]
+        errors = {}
+        for handle in owned:
+            try:
+                if handle.process.poll() is None and handle.start_stop_request is not None:
+                    atomic_json(handle.start_stop_request, {"requestedBy": "failed-daemon-start"})
+                elif handle.process.poll() is None:
+                    errors[handle.worker_id] = "startup-instance-unproven"
+            except OSError as error:
+                errors[handle.worker_id] = type(error).__name__
+        deadline = time.monotonic() + timeout
+        evidence = []
+        for handle in owned:
+            try:
+                handle.process.wait(timeout=max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
+            exited = handle.process.poll() is not None
+            if exited and handle.start_stop_request is not None:
+                handle.start_stop_request.unlink(missing_ok=True)
+            evidence.append({"workerId": handle.worker_id,
+                             "supervisorExited": exited,
+                             "stopRequestError": errors.get(handle.worker_id)})
+        return evidence
+
 
 class Daemon:
     def __init__(self, directory: Path):
@@ -615,11 +650,17 @@ class Daemon:
         with self._pool_lifecycle_lock:
             if self.stopping.is_set() or self.control.get("stopping") or self.control.get("restart_requested"):
                 return
-            self.pool.start()
-            # Python signal handlers can reenter an RLock on this same thread.
-            # Restore the stop intent after any interrupted start completes.
-            if self.control.get("stopping"):
-                self.pool.request_stop()
+            try:
+                self.pool.start()
+            except Exception as error:
+                evidence = self.pool.stop_spawned()
+                raise BoardError("WORKER_POOL_START_FAILED", "The supervisor pool could not finish starting",
+                                 workers=evidence) from error
+            finally:
+                # Signal handlers can reenter the RLock on this same thread.
+                # Restore stop intents even when an interrupted start raises.
+                if self.control.get("stopping"):
+                    self.pool.request_stop()
 
     def _reconcile_pool(self) -> None:
         """Refresh pool reporting and drain surplus supervisors that are safe."""
@@ -793,7 +834,7 @@ def main() -> int:
     try:
         return daemon.run()
     except BoardError as error:
-        atomic_json(directory / "startup-error.json", {"pid":os.getpid(), "code":error.code, "message":str(error)})
+        atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()["error"]})
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.
         sys.stderr.write(f"buddy: {error.code}: {error}\n")
