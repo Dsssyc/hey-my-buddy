@@ -5,6 +5,7 @@ import type { TimelineItem } from "./objective-display";
 import { buildInspectorCard, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
 
 const LOCK_TITLE = "有结果未确认的操作：核对前不能打开其他委派的详情";
+const MISSING_TITLE = "该记录不在当前读取范围内（可能已截断或被筛选），不能从这张卡片打开";
 
 export type TimelineInspectorProps = {
   selection: InspectorSelection | null;
@@ -37,10 +38,13 @@ function LinkButton({ link, onSelectItem, onSelectRun }: {
   return <button type="button" className="inspector-link" onClick={() => onSelectRun(link.runId)}>{link.label}</button>;
 }
 
-function CardView({ card, truncatedEvents, openDisabled, onOpen, onSelectItem, onSelectRun, onUnpin, missing }: {
+function CardView({ card, truncatedEvents, openDisabled, openTitle, relatedDisabled, onOpen, onSelectItem, onSelectRun, onUnpin, missing }: {
   card: InspectorCard;
   truncatedEvents: boolean;
   openDisabled: boolean;
+  openTitle: string | undefined;
+  /** Per-run disable state for related-event navigation from this card. */
+  relatedDisabled: (runId: string) => { disabled: boolean; title: string | undefined };
   onOpen: (item: TimelineItem) => void;
   onSelectItem: (item: TimelineItem) => void;
   onSelectRun: (runId: string) => void;
@@ -52,7 +56,7 @@ function CardView({ card, truncatedEvents, openDisabled, onOpen, onSelectItem, o
       <strong>{card.head}</strong>
       <span className="inspector-actions">
         <button type="button" className="button small-button"
-          aria-disabled={openDisabled || undefined} title={openDisabled ? LOCK_TITLE : undefined}
+          aria-disabled={openDisabled || undefined} title={openTitle}
           onClick={() => { if (!openDisabled && card.openItem) onOpen(card.openItem); }}>打开详情</button>
         <button type="button" className="inspector-unpin" aria-label="取消固定" title="取消固定，回到预览"
           onClick={onUnpin}>×</button>
@@ -69,10 +73,15 @@ function CardView({ card, truncatedEvents, openDisabled, onOpen, onSelectItem, o
     {card.relatedEvents.length > 0 && <div className="inspector-group">
       <span className="inspector-group-label">相关 Host 事件</span>
       <span className="inspector-group-lines inspector-events">
-        {card.relatedEvents.map(({ item }) => <span key={item.key} className="inspector-event">
+        {card.relatedEvents.map(({ item }) => {
+          const state = relatedDisabled(item.runId);
+          return <span key={item.key} className="inspector-event">
           <button type="button" className="inspector-link" onClick={() => onSelectItem(item)}>{item.head} · {item.parts[1] ?? ""}</button>
-          <button type="button" className="button small-button" aria-label={`打开 ${item.head}`} onClick={() => onOpen(item)}>打开</button>
-        </span>)}
+          <button type="button" className="button small-button" aria-label={`打开 ${item.head}`}
+            aria-disabled={state.disabled || undefined} title={state.title}
+            onClick={() => { if (!state.disabled) onOpen(item); }}>打开</button>
+        </span>;
+        })}
         {truncatedEvents && <span className="trunc-chip">Host 事件已截断，此列表可能不完整</span>}
       </span>
     </div>}
@@ -112,15 +121,23 @@ export function TimelineInspector(props: TimelineInspectorProps) {
   }
 
   // A record that left the read can no longer be opened; a locked detail only
-  // blocks other delegations' details.
+  // blocks other delegations' details. Every navigation action from a stale
+  // card is disabled, each with its own accurate reason.
   const openDisabled = missing || (props.locked && !!card?.openItem && card.openItem.runId !== props.lockedRunId);
+  const openTitle = missing ? MISSING_TITLE : openDisabled ? LOCK_TITLE : undefined;
+  const relatedDisabled = (runId: string): { disabled: boolean; title: string | undefined } => {
+    if (missing) return { disabled: true, title: MISSING_TITLE };
+    if (props.locked && runId !== props.lockedRunId) return { disabled: true, title: LOCK_TITLE };
+    return { disabled: false, title: undefined };
+  };
 
   return <div className="inspector timeline-inspector">
     {previewRow && <div className="inspector-preview-row">{previewRow}
       <span className="hint">单击选中 · Enter 或双击打开详情</span>
     </div>}
     {card
-      ? <CardView card={card} truncatedEvents={props.truncatedEvents} openDisabled={openDisabled}
+      ? <CardView card={card} truncatedEvents={props.truncatedEvents} openDisabled={openDisabled} openTitle={openTitle}
+        relatedDisabled={relatedDisabled}
         onOpen={props.onOpen} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun} onUnpin={props.onUnpin}
         missing={missing} key={key} />
       : selection && !resolved

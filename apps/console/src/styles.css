@@ -263,7 +263,11 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 
 /* ---- Work objective timeline (right pane, layer one) ---- */
 .timeline-view, .run-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* A hard clip so an oversized header or inspector can never paint over a
+   docked sibling pane; each section is bounded itself. */
+.timeline-view { overflow: hidden; }
 .timeline-view[hidden], .run-view[hidden] { display: none !important; }
+.tl-head { flex-shrink: 0; max-height: min(340px, 36%); overflow-y: auto; overscroll-behavior: contain; grid-auto-rows: min-content; align-content: start; }
 .tl-head h2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tl-note { font-size: 11px; color: var(--faint); }
 .narrow-back { display: none; }
@@ -283,18 +287,20 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .refresh-state::before { content: "●"; color: var(--accent); margin-right: 4px; font-size: 9px; }
 .refresh-state.stale::before { color: var(--warning); }
 .trunc-banner { margin: 8px 20px 0; background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
-.timeline-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.timeline-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
 .tl-scroll { --label-w: 240px; flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; margin-top: 8px; border-top: 1px solid var(--line); }
 .tl-grid { position: relative; }
 .tl-row { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr); height: 40px; border-bottom: 1px solid var(--line); }
 .tl-row.axis { position: sticky; top: 0; z-index: 6; height: 40px; background: var(--surface); }
 .tl-row.markers { background: var(--accent-soft); }
-.tl-label { position: sticky; left: 0; z-index: 4; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 10px; border: 0; border-right: 1px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; font-size: 12px; }
+.tl-label { position: sticky; left: 0; z-index: 4; min-width: 0; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 10px; border: 0; border-right: 1px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; font-size: 12px; overflow: hidden; }
 button.tl-label:hover { background: var(--subtle); }
 .tl-row.markers .tl-label, .tl-row.axis .tl-label { background: var(--surface); color: var(--muted); font-size: 11px; font-weight: 600; }
 .tl-row.axis .tl-label { z-index: 7; }
 .tl-label .lbl-title { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 550; }
-.tl-label .lbl-title > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The bounded title text: glyphs and badges never take the clamp away from it. */
+.tl-label .lbl-title .lbl-name { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-label .lbl-title > .muted, .tl-label .lbl-title .st, .tl-label .new-mark, .tl-label .opened-mark { flex-shrink: 0; }
 .tl-label .lbl-sub { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-label.helper { padding-left: calc(10px + var(--depth) * 16px); }
 .tl-label.helper::before { content: ""; position: absolute; left: calc(var(--depth) * 16px - 2px); top: 0; height: 50%; width: 8px; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
@@ -388,8 +394,9 @@ button.tl-label:hover { background: var(--subtle); }
 }
 
 /* ---- 0.15: pinned inspector, marker popover, overview cards, dock ---- */
-.timeline-inspector { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; max-height: 16em; }
+.timeline-inspector { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; flex: 0 1 auto; gap: 4px; max-height: min(176px, 24%); }
 .timeline-body.as-list .timeline-inspector { display: flex; }
+.inspector-card-head strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .inspector-preview-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .inspector-preview { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; overflow-wrap: anywhere; }
 .inspector-card { border-top: 1px solid var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
@@ -408,14 +415,15 @@ button.tl-label:hover { background: var(--subtle); }
 .inspector-link:hover { text-decoration: underline; }
 .inspector-events { gap: 2px; }
 .inspector-event { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.marker-popover { position: absolute; top: 26px; z-index: 8; width: min(320px, 86vw); max-width: 340px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
+.marker-popover { position: fixed; z-index: 30; max-height: calc(100vh - 16px); overflow: auto; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
 .marker-popover-rows { max-height: calc(8 * 34px); overflow-y: auto; overscroll-behavior: contain; }
 .marker-popover-row { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); }
 .marker-popover-row:last-child { border-bottom: 0; }
 .marker-popover-row.selected { background: var(--accent-wash); }
 .marker-popover-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 7px 8px; border: 0; background: none; color: var(--ink); text-align: left; font-size: 12px; }
 .marker-popover-main time { color: var(--muted); font-size: 11px; }
-.marker-popover-title { min-width: 0; overflow-wrap: anywhere; }
+.marker-popover-title { min-width: 0; flex-basis: 100%; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.marker-popover-main > .muted { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .marker-popover-row .button { margin-right: 6px; flex-shrink: 0; }
 .marker-popover-hint { margin: 0; padding: 4px 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
 .mk.open { outline: 2px solid var(--focus); outline-offset: 1px; }
@@ -424,7 +432,6 @@ button.tl-label:hover { background: var(--subtle); }
 .sp.run-member, .flag.run-member { box-shadow: 0 0 0 1px var(--focus); }
 .tl-label.opened-run { box-shadow: inset 3px 0 var(--accent); }
 .opened-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); }
-.lbl-summary { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-entry.opened { box-shadow: inset 3px 0 var(--accent); background: var(--subtle); }
 /* Overview: metrics and delegation cards */
 .objective-summary-line { margin: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -442,14 +449,18 @@ button.tl-label:hover { background: var(--subtle); }
 .delegation-metrics { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
 .strip-bound { align-self: center; flex-shrink: 0; font-size: 10px; padding: 0 4px; }
 /* Dock modes: the detail shares the right pane with the timeline. One stable
-   wrapper keeps children mounted across layer/dock threshold changes. */
+   wrapper keeps children mounted across layer/dock threshold changes. Each
+   pane is explicitly sized so the timeline canvas keeps positive height. */
 .right-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.right-stage-pane { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.right-stage-pane { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 /* In layer mode the timeline is hidden, so its pane must not claim space. */
 .right-stage-pane:has(> [hidden]) { display: none; }
 .right-dock { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.right-dock.side { display: grid; grid-template-columns: minmax(0, 1fr) 10px var(--dock-detail-width, 520px); }
-.right-dock.stack .detail-stage { flex: 0 0 var(--dock-detail-height, 45%); min-height: 180px; }
+.right-dock.side { display: grid; grid-template-columns: minmax(0, 1fr) 10px min(var(--dock-detail-width, 520px), 56%); }
+.right-dock.side .dock-divider { width: 10px; }
+.right-dock.side .tl-scroll { --label-w: 180px; }
+.right-dock.stack .detail-stage { flex: 0 0 min(var(--dock-detail-height, 45%), 72%); min-height: 150px; }
+.right-dock.stack .dock-divider { flex: 0 0 10px; }
 .dock-divider { position: relative; touch-action: none; }
 .dock-divider.vertical { cursor: col-resize; }
 .dock-divider.horizontal { cursor: row-resize; }

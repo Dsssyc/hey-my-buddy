@@ -142,7 +142,7 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, selectedR
           <span>执行占用 {metrics?.unionMs != null ? durationText(metrics.unionMs) : "未记录"}</span>
           {cumulative !== null && <span>累计 {durationText(cumulative)}（{metrics!.segmentCount} 段，含并发）</span>}
           {metrics!.runningCount > 0 && <span className="muted">含进行中 {metrics!.runningCount} 段（计至读取时刻）</span>}
-          {metrics!.unconfirmedEndCount > 0 && <span className="muted">含 {metrics!.unconfirmedEndCount} 段结束未确认，尾段未计</span>}
+          {metrics!.unknownEndCount > 0 && <span className="muted">含 {metrics!.unknownEndCount} 段结束未确认，未计入执行时长</span>}
           {recordedPart && <span className="metric-warn" title={limitationTitle} tabIndex={0}>不完整（已记录部分）</span>}
           {stale && <span className="muted">按 {clockSeconds(timeline.observedAt)} 的数据</span>}
         </>}

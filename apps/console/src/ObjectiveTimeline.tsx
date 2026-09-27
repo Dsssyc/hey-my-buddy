@@ -13,7 +13,6 @@ import { ObjectiveOverview } from "./ObjectiveOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import type { InspectorSelection } from "./inspector-card";
-import { excerpt } from "./task-state";
 
 /** Markers closer than this many actual track pixels merge into one numbered marker. */
 const MARKER_MERGE_PX = 14;
@@ -315,7 +314,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         return;
       }
       const resolved = itemsByKey.get(key);
-      if (resolved) props.onOpenItem(resolved);
+      if (!resolved) return;
+      // A row label keeps its run-level semantics on Enter: the whole
+      // delegation stays selected when its detail opens.
+      if (key.startsWith("row:")) props.onOpenRun(resolved.runId);
+      else props.onOpenItem(resolved);
       return;
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -550,6 +553,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                     </button>;
                   })}
                   {openClusterView && openClusterView.items.length > 1 && <MarkerPopover
+                    anchor={rootRef.current?.querySelector<HTMLElement>(`[data-cluster-key="${openClusterView.key}"]`) ?? null}
                     cluster={openClusterView} rowsById={rowsById} selectedEventKey={selectedEventKeys}
                     onSelect={item => { setFocusKey(item.key); props.onSelectItem(item); }}
                     onOpen={item => { setFocusKey(item.key); props.onOpenItem(item); requestClusterClose(false); }}
@@ -584,11 +588,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       {row.kind === "helper" && <span aria-hidden="true" className="muted">↳</span>}
                       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
                       {props.newRunIds.has(row.runId) && <span className="new-mark">新</span>}
-                      <span>{row.title}</span>
+                      <span className="lbl-name">{row.title}</span>
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
                     <span className="lbl-sub">{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{configurationLabel(row.configuration)}</span>
-                    {row.summary && <span className="lbl-summary" title={row.summary}>结果：{excerpt(row.summary, 60)}</span>}
                     {unplaced > 0 && <span className="trunc-chip" title="这些片段的时间缺失或颠倒，未在时间轴上放置">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">

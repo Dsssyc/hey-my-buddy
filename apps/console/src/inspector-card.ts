@@ -13,7 +13,7 @@ import {
   clockTime, configurationLabel, durationText, outcomeLabel, rangeText, rowLabelItem,
   rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
 } from "./objective-display";
-import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, type RunRollup } from "./objective-metrics";
+import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./objective-metrics";
 
 export type InspectorSelection =
   | { type: "item"; key: string }
@@ -52,10 +52,16 @@ function spanTimingLine(span: TimelineSpan, observedAtMs: number | null): CardLi
   if (span.clockSkew === true || (startMs !== null && endMs !== null && endMs < startMs)) {
     return [{ text: "时间异常，未计算时长", tone: "warn" }, ...lines(span.startAt ?? null, span.endAt ?? null)];
   }
-  if (startMs === null) return [{ text: UNRECORDED }];
+  if (startMs === null) return [{ text: "时间未记录" }];
   if (endMs === null) {
-    const through = observedAtMs !== null ? `至今（截至 ${clockTime(observedAtMs)}）` : "至今";
-    return [{ text: `${clockTime(startMs)} ${through}` }];
+    // Only a legitimately open span extends to the observation instant; a
+    // terminal span with a missing end is unknown, never "至今".
+    const outcome = spanOutcome(span);
+    if (outcome === "running" || outcome === "open") {
+      const through = observedAtMs !== null ? `至今（截至 ${clockTime(observedAtMs)}）` : "至今";
+      return [{ text: `${clockTime(startMs)} ${through}` }];
+    }
+    return [{ text: `${clockTime(startMs)} · 结束时间缺失`, tone: "warn" }];
   }
   const duration = durationText(endMs - startMs);
   return [{ text: `${rangeText(startMs, endMs)}${duration ? ` · ${duration}` : ""}` }];
@@ -81,6 +87,7 @@ function recordIdentityLines(event: TimelineEvent): CardLine[] {
 
 function rollupGroups(rollup: RunRollup, rowsById: Map<string, TimelineRow>): CardGroup[] {
   const { row } = rollup;
+  const scopeLimited = hasScopeLimitations(rollup.limitations);
   const task: CardLine[] = [
     { text: row.title },
     ...(row.summary ? [{ text: `结果：${row.summary}`, tone: "muted" as const }] : [{ text: "摘要未记录", tone: "muted" as const }]),
@@ -95,18 +102,21 @@ function rollupGroups(rollup: RunRollup, rowsById: Map<string, TimelineRow>): Ca
     ? rollup.executions.map(span => {
       const startMs = toMs(span.startAt);
       const endMs = toMs(span.endAt);
-      const when = startMs === null ? UNRECORDED : endMs === null ? `${clockTime(startMs)}–至今` : `${clockTime(startMs)}–${clockTime(endMs)}`;
       const outcome = spanOutcome(span);
+      // A missing end is "至今" only for a live execution; otherwise unknown.
+      const when = startMs === null ? UNRECORDED : endMs === null
+        ? (outcome === "running" ? `${clockTime(startMs)}–至今` : `${clockTime(startMs)}–结束时间缺失`)
+        : `${clockTime(startMs)}–${clockTime(endMs)}`;
       const result = outcome === "unknown" ? "结束未确认" : span.resultStatus === "ok" ? "成功" : span.resultStatus === "failed" ? "失败" : span.resultStatus === "cancelled" ? "已取消" : "未记录";
       return { text: `第 ${span.turnIndex ?? "?"} 轮 · ${when} · ${configurationLabel(span.configuration)} · ${result}` };
     })
-    : [{ text: "没有已记录的执行片段", tone: "muted" }];
+    : [{ text: scopeLimited ? "已记录范围内没有执行片段" : "没有已记录的执行片段", tone: "muted" }];
 
   const latest = latestExecutionResult(rollup);
   const state = rowStateInfo(row);
   const resultGroup: CardLine[] = latest
     ? [{ text: `${latest.label} · 任务状态 ${state.label}` }]
-    : [{ text: `未执行 · 任务状态 ${state.label}`, tone: "muted" }];
+    : [{ text: `${scopeLimited ? "执行情况未知（读取不完整）" : "未执行"} · 任务状态 ${state.label}`, tone: "muted" }];
 
   const acceptance: CardLine[] = row.acceptanceVerdict
     ? [{ text: `${row.acceptanceVerdict === "rejected" ? "验收问题" : row.acceptanceVerdict === "accepted" ? "已验收" : row.acceptanceVerdict} · ${row.acceptedAt ? clockTime(row.acceptedAt) : UNRECORDED}` }]
@@ -121,15 +131,19 @@ function rollupGroups(rollup: RunRollup, rowsById: Map<string, TimelineRow>): Ca
       const summaryText = span.summary ? ` · ${span.summary}` : "";
       return { text: `${kind}${summaryText} · 开始于 ${startMs !== null ? clockTime(startMs) : UNRECORDED}`, tone: "warn" as const };
     })
-    : [{ text: "无", tone: "muted" }];
+    : [{ text: scopeLimited ? "已记录范围内无待决" : "无", tone: "muted" }];
 
-  return [
+  const groups: CardGroup[] = [
     { label: "任务", lines: task, link: taskLink },
     { label: "轮次", lines: rounds },
     { label: "结果", lines: resultGroup },
     { label: "验收", lines: acceptance },
     { label: "待决", lines: pending },
   ];
+  if (scopeLimited) {
+    groups.push({ label: "边界", lines: [{ text: "读取不完整（筛选或截断），以上为已记录部分", tone: "warn" }] });
+  }
+  return groups;
 }
 
 /**

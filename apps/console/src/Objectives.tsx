@@ -39,7 +39,9 @@ function DockDivider({ orientation, min, max, value, onChange, label }: {
     const rect = container()?.getBoundingClientRect();
     if (!rect) return;
     if (orientation === "vertical") resize(Math.min(max, rect.right - clientX));
-    else resize(Math.min(max, clientY - rect.top));
+    // The divider sits above the detail pane, so the pointer's distance from
+    // the container's bottom edge is the detail height it controls.
+    else resize(Math.min(max, rect.bottom - clientY));
   };
   const arrows = orientation === "vertical" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
   const grow = orientation === "vertical" ? "ArrowLeft" : "ArrowDown";

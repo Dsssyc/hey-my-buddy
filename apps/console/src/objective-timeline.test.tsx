@@ -76,7 +76,7 @@ describe("objective timeline rendering", () => {
     expect(metricLine.textContent).toMatch(/总跨度/);
     expect(metricLine.textContent).toMatch(/执行占用/);
     expect(metricLine.textContent).toMatch(/累计 .+（\d+ 段，含并发）/);
-    expect(metricLine.textContent).toContain("含 1 段结束未确认，尾段未计");
+    expect(metricLine.textContent).toContain("含 1 段结束未确认，未计入执行时长");
   });
 
   it("labels a standalone root honestly and keeps its note distinct", () => {
@@ -373,27 +373,36 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     view.unmount();
   });
 
-  it("keeps the last facts and disables opening when a refresh drops the selected record", async () => {
+  it("keeps the last facts and disables every navigation action when a refresh drops the selected record", async () => {
     const user = userEvent.setup();
     const timeline = objectiveTimelineFixture();
     const source = { get: () => null };
     const view = render(<Harness timeline={timeline} selectionSource={source} />);
-    await user.click(item("span:s-r3-e1")!);
+    // Pin the whole run so the card carries related Host events.
+    await user.click(item("row:r3")!);
     const card = document.querySelector(".inspector-card") as HTMLElement;
-    expect(card.textContent).toContain("执行失败");
-    // A filtered refresh that no longer returns the helper's spans.
+    expect(card.textContent).toContain("整项委派");
+    // A filtered refresh that no longer returns the helper's rows or spans.
     const dropped = objectiveTimelineFixture({
       rows: objectiveTimelineFixture().rows.filter(row => row.runId !== "r3"),
       spans: objectiveTimelineFixture().spans.filter(span => span.runId !== "r3"),
+      events: objectiveTimelineFixture().events.filter(event => event.runId !== "r3"),
       filtered: true, scopeComplete: false,
       totals: { rows: 5, spans: 13, events: 8, allRows: 6 },
     });
     view.rerender(<Harness timeline={dropped} selectionSource={source} />);
     const kept = document.querySelector(".inspector-card") as HTMLElement;
     expect(kept.textContent).toContain("该记录不在当前读取范围内（可能已截断或被筛选）");
-    expect(kept.textContent).toContain("执行失败");
     const open = within(kept).getByRole("button", { name: "打开详情" });
     expect(open.getAttribute("aria-disabled")).toBe("true");
+    expect(open.getAttribute("title")).toContain("不在当前读取范围内");
+    // Cached related-event opens are navigation from stale data: all disabled.
+    const relatedOpens = within(kept).getAllByRole("button", { name: /打开 Host 事件/ });
+    expect(relatedOpens.length).toBeGreaterThan(0);
+    for (const button of relatedOpens) {
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(button);
+    }
     view.unmount();
   });
 
@@ -495,6 +504,42 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(document.querySelector(".marker-popover")).toBeNull();
     expect(document.activeElement).toBe(cluster);
     view.unmount();
+  });
+
+  it("moves keyboard focus between popover row buttons; aria-controls names the popover id", async () => {
+    const user = userEvent.setup();
+    const timeline = objectiveTimelineFixture();
+    const source = { get: () => null };
+    const view = render(<Harness timeline={timeline} selectionSource={source} />);
+    const cluster = [...document.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!;
+    await user.click(cluster);
+    const popover = document.querySelector(".marker-popover") as HTMLElement;
+    const rows = [...popover.querySelectorAll<HTMLButtonElement>("[data-row-index]")];
+    expect(rows.length).toBe(2);
+    // Focus enters the popover on open without selecting or opening anything.
+    expect(document.activeElement).toBe(rows[0]);
+    expect(source.get()).toBeNull();
+    expect(cluster.getAttribute("aria-controls")).toBe(popover.getAttribute("id"));
+    fireEvent.keyDown(rows[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1]!, { key: "Home" });
+    expect(document.activeElement).toBe(rows[0]);
+    fireEvent.keyDown(rows[0]!, { key: "End" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[0]);
+    view.unmount();
+  });
+
+  it("Enter on a row label opens the run detail with run-level selection semantics", () => {
+    const timeline = objectiveTimelineFixture();
+    const onSelectRun = vi.fn(), onOpenRun = vi.fn(), onOpenItem = vi.fn();
+    render(<ObjectiveTimeline {...baseProps(timeline, { onSelectRun, onOpenRun, onOpenItem })} />);
+    const label = item("row:r2")!;
+    act(() => { label.focus(); });
+    fireEvent.keyDown(label, { key: "Enter" });
+    expect(onOpenRun).toHaveBeenCalledWith("r2");
+    expect(onOpenItem).not.toHaveBeenCalled();
   });
 
   it("opens an event detail from the popover row's open button and by Enter", async () => {
