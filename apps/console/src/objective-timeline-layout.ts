@@ -174,7 +174,19 @@ function readSpan(span: TimelineSpan, observedAtMs: number | null): SpanReading 
   const openEnded = hasNoEnd && startMs !== null && !stopped && isOpenOrUncertain(span);
 
   if (startMs !== null && endMs !== null) {
-    if (endMs >= startMs) return { instants, interval: { startMs, endMs }, unknown: false };
+    if (endMs >= startMs) {
+      // A finish timestamp alone does not prove the process stopped. Keep the
+      // recorded endpoint for rendering, but reserve its unknown tail so an
+      // idle break cannot hide potentially live work after that timestamp.
+      if (span.uncertain === true && !stopped) {
+        if (observedAtMs === null || observedAtMs < endMs) {
+          return { instants, interval: null, unknown: true };
+        }
+        instants.push(observedAtMs);
+        return { instants, interval: { startMs, endMs: observedAtMs }, unknown: false };
+      }
+      return { instants, interval: { startMs, endMs }, unknown: false };
+    }
     // Reversed timestamps are recorded facts but are never repaired into an invented duration.
     return { instants, interval: null, unknown: true };
   }

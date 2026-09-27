@@ -103,6 +103,31 @@ describe("objective timeline layout domain", () => {
 });
 
 describe("objective timeline layout occupancy", () => {
+  it("keeps an unconfirmed finished attempt occupied through observation", () => {
+    const layout = createTimelineLayout(timeline({
+      spans: [
+        span({ startAt: at(0), endAt: at(10 * MINUTE), state: "finished", shutdownConfirmed: false, uncertain: true }),
+        span({ spanId: "later", startAt: at(2 * HOUR), endAt: at(130 * MINUTE) }),
+      ],
+      observedAt: at(3 * HOUR),
+    }));
+    expect(layout.endMs).toBe(BASE + 3 * HOUR);
+    expect(layout.gaps).toEqual([]);
+    expect(layout.position(at(10 * MINUTE))!).toBeLessThan(layout.position(at(3 * HOUR))!);
+  });
+
+  it("refuses folding when an uncertain recorded end is newer than observation", () => {
+    const layout = createTimelineLayout(timeline({
+      spans: [
+        span({ endAt: at(10 * MINUTE), state: "finished", shutdownConfirmed: false, uncertain: true }),
+        span({ spanId: "later", startAt: at(2 * HOUR), endAt: at(130 * MINUTE) }),
+      ],
+      observedAt: at(5 * MINUTE),
+    }));
+    expect(layout.canFold).toBe(false);
+    expect(layout.gaps.every(gap => !gap.collapsed)).toBe(true);
+  });
+
   it("unions parallel and nested spans before detecting a gap", () => {
     const layout = createTimelineLayout(timeline({
       spans: [
