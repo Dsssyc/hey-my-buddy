@@ -2,7 +2,7 @@
 
 ## Scope and boundary
 
-The user authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) with the UI term 工作目标, latest-activity ordering and 30-minute idle folding. The Codex Host thread `01a0c252-f073-7e13-9a5f-033260938176` started the slice and ran out of Codex quota at 17:07 on 2026-09-26 with the backend partly written and uncommitted. At the user's request a Claude Code Host session continued the same branch and agenda. Release and named contract advance to 0.14.0 and the schema to 12. The [objectives reference](../reference/objectives.md) owns the contract. The daily board remains the installed 0.12.0 runtime; installation needs a separately authorized, coordinated cutover with an explicitly prepared schema-12 copy.
+The user authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) with the UI term 工作目标, latest-activity ordering and 30-minute idle folding. The Codex Host thread `01a0c252-f073-7e13-9a5f-033260938176` started the slice and ran out of Codex quota at 17:07 on 2026-09-26 with the backend partly written and uncommitted. At the user's request a Claude Code Host session continued the same branch and agenda. Release and named contract advance to 0.14.0 and the schema to 12. The [objectives reference](../reference/objectives.md) owns the contract. At the handoff the daily board remained on 0.12.0; the user subsequently authorized the separate [0.13.0 installation](installed-0.13.0.md). Installing this 0.14.0 candidate still needs a separately authorized, coordinated cutover with an explicitly prepared schema-12 copy.
 
 ## Backend
 

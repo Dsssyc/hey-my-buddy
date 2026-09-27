@@ -56,7 +56,7 @@ Idle gaps longer than 30 minutes fold by default and may be expanded. A gap can 
 Startup accepts schema 12 only and contains no automatic schema conversion or version facade. The explicit offline preparation tool copies an idle, verified schema-11 board into a separate new destination, adds the grouping/display columns and derives activity indexes while preserving all original rows, secrets and relationships:
 
 ```sh
-uv run --frozen python -m buddy.board_prepare --source <schema-11 state dir> --destination <new state dir>
+uv run --frozen python -m buddy.board_prepare --source "/path/to/schema-11-state" --destination "/path/to/new-schema-12-state"
 ```
 
 It refuses a source whose daemon owner locks are held, a source with open tasks or attempts without confirmed stop, a source that is not schema 11 or fails its integrity/foreign-key checks, an existing destination and a destination inside the source. It reads the source through a read-only connection and the SQLite backup API, applies the schema-12 additions to the copy only, replays the recorded event order through the same activity projection the runtime maintains, and then verifies integrity, foreign keys, the exact schema shape of a fresh schema-12 board, unchanged per-table row counts, the preserved capability secret and the unchanged source file hash. It creates no objectives: historical roots stay standalone delegations. The production switch remains separate; this candidate is tested with private boards and synthetic historical fixtures.

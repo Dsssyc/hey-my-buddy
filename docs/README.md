@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the 0.14.0 source candidate in this checkout (contract 0.14.0, schema 12), adding [work objectives and delegation timelines](reference/objectives.md) and [console entry and single-writer sessions](reference/console.md) on top of the installed [0.12.0 title fallback](acceptance/title-fallback-0.12.0.md) and Claude Worker P1 baseline. Its native adapter/controller probes, simulated-CLI service integration and separately installed daily runtime are recorded in the [Claude P1 record](acceptance/claude-worker-p1-0.11.0.md); use `buddy health` and `buddy runtime` to identify the running installation. The [0.10.0 delivery record](acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](acceptance/runtime-refinement-0.9.0.md) preserve their historical evidence. Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
+These pages describe the 0.14.0 source candidate in this checkout (contract 0.14.0, schema 12), adding [work objectives and delegation timelines](reference/objectives.md) and [console entry and single-writer sessions](reference/console.md) on top of the [installed 0.13.0 baseline](acceptance/installed-0.13.0.md), including title fallback and Claude Worker P1. Its native adapter/controller probes, simulated-CLI service integration and separately installed daily runtime are recorded in the [Claude P1 record](acceptance/claude-worker-p1-0.11.0.md); use `buddy health` and `buddy runtime` to identify the running installation. The [0.10.0 delivery record](acceptance/runtime-efficiency-0.10.0.md) and retained [0.9.0 installation](acceptance/runtime-refinement-0.9.0.md) preserve their historical evidence. Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
 
 | Document | Role |
 | --- | --- |
@@ -76,7 +76,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## History and evidence
 
-The [0.13.0 console-entry record](acceptance/console-entry-0.13.0.md) tracks the current candidate's source, worker integration, verification and separate installation boundary.
+The [0.13.0 installation record](acceptance/installed-0.13.0.md) identifies the daily runtime installed from `9452720` on 2026-09-27, its preserved data and installed checks. The [console-entry record](acceptance/console-entry-0.13.0.md) and [brief-output record](acceptance/cli-brief-output-0.13.0.md) retain the preceding source verification. The [0.14.0 objective/timeline candidate](acceptance/objective-timeline-0.14.0.md) remains separate and uninstalled.
 
 Current delivery evidence: [0.9.0 runtime refinement](acceptance/runtime-refinement-0.9.0.md) (candidate delivery record), [0.8.1 optional execution duration](acceptance/optional-deadline-0.8.1.md), [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.9.0 record owns the candidate's source and installation checks; earlier records keep their own verified scope, and the 0.8 installation record identifies the preserved data and unresolved old-artifact integration boundary.
 
