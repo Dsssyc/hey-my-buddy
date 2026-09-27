@@ -25,24 +25,34 @@ export function useObjectiveTimeline(api: ConsoleApi, objectiveId: string | null
     try {
       const next = await api.objectiveTimeline(objectiveId, { limit: 200 }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
+      if (next.objective.objectiveId !== objectiveId) {
+        setError("返回的工作目标标识与请求不符，未采用该数据。");
+        return;
+      }
       setError("");
+      // Merge from the last accepted data before setData: the state updater may
+      // be deferred by React, so new-row labels cannot depend on its output.
+      const previous = dataRef.current;
+      let rows = next.rows;
       let appended: string[] = [];
-      setData(previous => {
-        if (!previous || previous.objective.objectiveId !== next.objective.objectiveId) {
-          appended = next.rows.map(row => row.runId);
-          return next;
-        }
+      if (previous && previous.objective.objectiveId === next.objective.objectiveId) {
         // The service sends tree order; keep committed row order and append new
         // delegations at the end so a refresh never moves a row under the reader.
         const byId = new Map(next.rows.map(row => [row.runId, row]));
         const known = new Set(previous.rows.map(row => row.runId));
         appended = next.rows.filter(row => !known.has(row.runId)).map(row => row.runId);
-        const rows = [
+        rows = [
           ...previous.rows.map(row => byId.get(row.runId)).filter((row): row is NonNullable<typeof row> => row !== undefined),
           ...next.rows.filter(row => !known.has(row.runId)),
         ];
-        return { ...next, rows };
-      });
+      }
+      // A fresh selection marks nothing as new: the 新 label is only for rows
+      // appended to an already displayed timeline.
+      const merged = { ...next, rows };
+      // Keep the ref in step at write time so a same-tick follow-up read merges
+      // against this data rather than treating it as a selection change.
+      dataRef.current = merged;
+      setData(merged);
       setNewRunIds(new Set(appended));
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));

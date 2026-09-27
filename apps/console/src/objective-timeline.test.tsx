@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ObjectiveTimeline } from "./ObjectiveTimeline";
@@ -281,5 +281,195 @@ describe("objective timeline rendering", () => {
     expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "r1", section: "artifacts" }));
     await user.click(item("row:r3")!);
     expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "r3", section: "overview" }));
+  });
+
+  it("opens a merged cluster's first recorded event on click while keeping per-event links", async () => {
+    const user = userEvent.setup();
+    const timeline = objectiveTimelineFixture();
+    const onOpenItem = vi.fn();
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem })} />);
+    const cluster = [...container.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!;
+    await user.click(cluster);
+    expect(onOpenItem).toHaveBeenCalledTimes(1);
+    expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "r2", section: "assistance", key: "event:5" }));
+    // Per-event inspector links still open each individual event.
+    act(() => { cluster.focus(); });
+    const opens = [...container.querySelectorAll<HTMLButtonElement>(".cluster-line .button")];
+    await user.click(opens[1]!);
+    expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ key: "event:6", section: "execution" }));
+  });
+
+  it("seeds keyboard focus on a rendered marker key when only events exist", () => {
+    const events = objectiveTimelineFixture().events;
+    const timeline = objectiveTimelineFixture({ rows: [], spans: [], events, totals: { rows: 0, spans: 0, events: events.length, allRows: 0 } });
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    const tabbable = [...container.querySelectorAll<HTMLButtonElement>(".tl-item")].filter(node => node.tabIndex === 0);
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]!.dataset.key).toMatch(/^events:\d+$/);
+  });
+
+  it("measures the viewport after the async canvas mounts, resizes and keeps breaks at 64px", async () => {
+    const observers: Array<{ observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; callback: ResizeObserverCallback }> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+      constructor(public callback: ResizeObserverCallback) {
+        observers.push(this as unknown as { observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; callback: ResizeObserverCallback });
+      }
+    });
+    const widthOriginal = (() => {
+      let target: object | null = HTMLElement.prototype;
+      while (target) {
+        const descriptor = Object.getOwnPropertyDescriptor(target, "clientWidth");
+        if (descriptor) return { target, descriptor };
+        target = Object.getPrototypeOf(target);
+      }
+      return null;
+    })();
+    let stubbedWidth = 900;
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => stubbedWidth });
+    try {
+      const timeline = objectiveTimelineFixture();
+      // First render is a skeleton: no canvas, no observer yet.
+      const view = render(<ObjectiveTimeline {...baseProps(null, { loading: true })} />);
+      expect(observers.length).toBe(0);
+      expect(document.querySelector(".tl-grid")).toBeNull();
+      view.rerender(<ObjectiveTimeline {...baseProps(timeline)} />);
+      // The canvas mounts with the data; the observer attaches then.
+      const grid = document.querySelector(".tl-grid") as HTMLElement;
+      expect(observers.length).toBe(1);
+      expect(observers[0]!.observe).toHaveBeenCalled();
+      // 900px viewport minus the 240px fallback label column = 660px track.
+      expect(grid.style.width).toBe("calc(var(--label-w) + 660px)");
+      const band = document.querySelector(".fold-band") as HTMLElement;
+      const bandPercent = Number.parseFloat(band.style.width);
+      expect(bandPercent / 100 * 660).toBeCloseTo(64, 5);
+      // A viewport resize remaps the same recorded facts without feedback.
+      stubbedWidth = 1400;
+      act(() => { observers[0]!.callback([], observers[0]! as unknown as ResizeObserver); });
+      await waitFor(() => expect(grid.style.width).toBe("calc(var(--label-w) + 1160px)"));
+      const remapped = Number.parseFloat((document.querySelector(".fold-band") as HTMLElement).style.width);
+      expect(remapped / 100 * 1160).toBeCloseTo(64, 5);
+    } finally {
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      if (widthOriginal) Object.defineProperty(widthOriginal.target, "clientWidth", widthOriginal.descriptor);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("treats unknown shutdown as outranking a recorded failure, keeping the failure text", () => {
+    const timeline = objectiveTimelineFixture({
+      rows: [{
+        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title",
+        createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
+        shutdownConfirmed: false, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
+      }],
+      spans: [{
+        spanId: "s-r7", runId: "r7", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:20:00Z",
+        state: "uncertain", attemptId: "att-r7", turnId: null, turnIndex: 1, requestId: null, configuration: null,
+        shutdownConfirmed: false, uncertain: true, clockSkew: false, disposition: "failed", error: "执行失败的记录原因",
+      }],
+      events: [],
+      totals: { rows: 1, spans: 1, events: 0, allRows: 1 },
+    });
+    render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    const span = item("span:s-r7")!;
+    expect(span.className).toContain("unknown");
+    expect(span.className).not.toContain("failed");
+    expect(span.querySelector(".end-mark.warn")!.textContent).toBe("?");
+    expect(span.getAttribute("aria-label")).toContain("结束未确认");
+    expect(span.getAttribute("aria-label")).toContain("执行失败的记录原因");
+    expect(document.body.textContent).not.toContain("已停止");
+  });
+
+  it("says the end time is missing for a terminal span instead of borrowing now", () => {
+    const timeline = objectiveTimelineFixture({
+      rows: [{
+        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task",
+        createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
+        shutdownConfirmed: true, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
+      }],
+      spans: [{
+        spanId: "s-r8", runId: "r8", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: null,
+        state: "finished", attemptId: "att-r8", turnId: null, turnIndex: 1, requestId: null, configuration: null,
+        shutdownConfirmed: true, uncertain: false, clockSkew: false, disposition: "failed", error: "命令以失败结束",
+      }],
+      events: [],
+      totals: { rows: 1, spans: 1, events: 0, allRows: 1 },
+    });
+    render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    const label = document.querySelector('[data-key="row:r8"]') as HTMLButtonElement;
+    expect(label.querySelector(".trunc-chip")!.textContent).toContain("1 段时间缺失");
+    const span = item("span:s-r8")!;
+    expect(span.getAttribute("aria-label")).toContain("结束时间缺失");
+    expect(span.getAttribute("aria-label")).not.toContain("至 现在");
+  });
+
+  it("restores both scroll axes and refocuses the visible item, including the chronology", async () => {
+    const user = userEvent.setup();
+    const timeline = objectiveTimelineFixture();
+    const onOpenItem = vi.fn();
+    const view = render(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem })} />);
+    const scroll = document.querySelector(".tl-scroll") as HTMLElement;
+    scroll.scrollTop = 130;
+    scroll.scrollLeft = 240;
+    // List view: open from a chronology entry so its key owns the focus.
+    await user.click(screen.getByRole("button", { name: "以列表查看" })!);
+    const entry = document.querySelector(".tl-list [data-key='span:s-r6-e']") as HTMLButtonElement;
+    await user.click(entry);
+    expect(onOpenItem).toHaveBeenCalledWith(expect.objectContaining({ key: "span:s-r6-e" }));
+    // Hide (detail opens) and return: the chronology entry is the visible item.
+    view.rerender(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem, hidden: true })} />);
+    view.rerender(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem })} />);
+    expect(document.activeElement).toBe(entry);
+    expect(scroll.scrollTop).toBe(130);
+    expect(scroll.scrollLeft).toBe(240);
+    // Back in canvas mode, the same key refocuses its canvas span.
+    await user.click(screen.getByRole("button", { name: "以列表查看" })!);
+    const canvasSpan = item("span:s-r6-e")!;
+    await user.click(canvasSpan);
+    view.rerender(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem, hidden: true })} />);
+    view.rerender(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem })} />);
+    expect(document.activeElement).toBe(canvasSpan);
+    view.unmount();
+  });
+
+  it("keeps assigned configuration colours across refreshes and stripes overflow on the bars", () => {
+    const first = objectiveTimelineFixture();
+    const view = render(<ObjectiveTimeline {...baseProps(first)} />);
+    const legendColors = () => [...screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch")]
+      .map(node => (node as HTMLElement).style.getPropertyValue("--c"));
+    expect(legendColors()).toEqual(["var(--cfg-1)", "var(--cfg-2)", "var(--cfg-3)", "var(--cfg-4)"]);
+    // A refresh adds a new configuration in an earlier row: existing ones keep
+    // their slots and the newcomer takes the next one.
+    const second = objectiveTimelineFixture();
+    second.spans = [
+      {
+        ...second.spans[0], spanId: "s-r1-x", kind: "execution" as const, startAt: "2026-09-26T01:12:00Z", endAt: "2026-09-26T01:13:00Z",
+        configuration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-flash", effort: "high" },
+      },
+      ...second.spans,
+    ];
+    view.rerender(<ObjectiveTimeline {...baseProps(second)} />);
+    const colors = legendColors();
+    expect(colors[0]).toBe("var(--cfg-1)"); // claude-opus keeps its slot
+    expect(colors.some(entry => entry === "var(--cfg-5)")).toBe(true); // the newcomer takes the next slot
+    expect(colors).toHaveLength(5);
+    view.unmount();
+    // Beyond six configurations the execution bar itself gains the stripe; a
+    // fresh mount starts a new per-objective assignment cache.
+    const many = objectiveTimelineFixture();
+    const configs = ["a", "b", "c", "d", "e", "f", "g"].map(model => ({ adapter: "zcode", provider: "bigmodel-api", model, effort: "high" }));
+    many.rows = [many.rows[0]];
+    many.spans = configs.map((configuration, index) => ({
+      ...many.spans[0], spanId: `s-c${index}`, kind: "execution" as const, configuration,
+      startAt: `2026-09-26T01:${String(10 + index).padStart(2, "0")}:00Z`, endAt: `2026-09-26T01:${String(11 + index).padStart(2, "0")}:00Z`,
+    }));
+    many.events = [];
+    const overflow = render(<ObjectiveTimeline {...baseProps(many)} />);
+    expect([...document.querySelectorAll(".sp.exec.striped")].length).toBe(1);
+    expect(screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
+    overflow.unmount();
   });
 });

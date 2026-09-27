@@ -30,6 +30,29 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("work-objective list hook", () => {
+  it("keeps committed order and defers newcomers even when a poll returns the complete scope", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)])));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(page([summary("new", 10), summary("second", 9), summary("first", 3)])));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["first", "second"]);
+    expect(f.result.current.total).toBe(3);
+    expect(f.result.current.reorder).toEqual({ count: 2 });
+  });
+
+  it("removes proven nonmatching rows without reordering the surviving filtered rows", async () => {
+    const f = harness();
+    f.rerender({ query: { ...query, filter: "active" }, active: true });
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("gone", 5), summary("kept", 4), summary("busy", 3)])));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(page([summary("busy", 9), summary("kept", 4)])));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["kept", "busy"]);
+    expect(f.result.current.total).toBe(2);
+    expect(f.result.current.reorder).toEqual({ count: 1 });
+  });
+
   it("sends the filters and resets to a fresh first page when they change", async () => {
     const f = harness();
     await startRead();
@@ -59,16 +82,29 @@ describe("work-objective list hook", () => {
     expect(f.objectives).toHaveBeenCalledTimes(2);
   });
 
-  it("updates counts and times in place on the poll cadence without reordering", async () => {
+  it("updates counts, times and totals in place on the poll cadence without reordering", async () => {
     const f = harness();
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)])));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(f.requests[1]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[1]!.resolve(page([summary("second", 2, { state: "ended" })])));
+    // A complete page (no cursor) returning both rows proves the whole scope.
+    await act(async () => f.requests[1]!.resolve(page([summary("first", 3), summary("second", 2, { state: "ended" })])));
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["first", "second"]);
     expect(f.result.current.rows[1]!.state).toBe("ended");
+    expect(f.result.current.total).toBe(2);
     expect(f.result.current.reorder).toBeNull();
+  });
+
+  it("updates the reported total even when an incomplete poll defers its order", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)], "more-exists")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(({ ...page([summary("second", 2, { state: "ended" })], "more-exists"), total: 7 })));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["first", "second"]);
+    expect(f.result.current.rows[1]!.state).toBe("ended");
+    expect(f.result.current.total).toBe(7);
   });
 
   it("defers a real reorder behind the notice instead of moving a reader's rows", async () => {
@@ -76,7 +112,8 @@ describe("work-objective list hook", () => {
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)])));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7), summary("fresh", 9)])));
+    // The page is incomplete, so the unseen group defers behind the notice.
+    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7), summary("fresh", 9)], "more-exists")));
     // Order and membership stay exactly as committed until the notice is applied.
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["quiet", "busy"]);
     expect(f.result.current.reorder).toEqual({ count: 2 });
@@ -104,20 +141,39 @@ describe("work-objective list hook", () => {
     expect(f.result.current.rows[0]!.lastActivitySeq).toBe(2);
   });
 
-  it("adopts the first read after an empty poll without stranding new objectives", async () => {
+  it("adopts the first read after an empty poll, including its cursor", async () => {
     const f = harness();
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([])));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("fresh-a", 9), summary("fresh-b", 8)])));
-    // Nothing was displayed to reorder: the read is adopted directly.
+    // The empty display adopts the read directly, including its cursor.
+    await act(async () => f.requests[1]!.resolve(page([summary("fresh-a", 9), summary("fresh-b", 8)], "adopted-cursor")));
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["fresh-a", "fresh-b"]);
+    expect(f.result.current.nextCursor).toBe("adopted-cursor");
     expect(f.result.current.reorder).toBeNull();
-    // A later poll with an unseen group defers behind the notice instead.
+    // A later incomplete poll with an unseen group defers behind the notice.
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[2]!.resolve(page([summary("fresh-b", 8), summary("unseen", 10)])));
+    await act(async () => f.requests[2]!.resolve(page([summary("fresh-b", 8), summary("unseen", 10)], "more-exists")));
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["fresh-a", "fresh-b"]);
     expect(f.result.current.reorder).toEqual({ count: 1 });
+  });
+
+  it("removes rows a complete filtered page proves no longer match, keeping incomplete reads honest", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("gone", 6), summary("kept", 5)])));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    // Incomplete page: "gone" sorts above the returned floor, so its absence is
+    // ambiguous — it stays listed behind an explicit notice.
+    await act(async () => f.requests[1]!.resolve(page([summary("kept", 5)], "more-exists")));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["gone", "kept"]);
+    expect(f.result.current.reorder).toEqual({ count: null });
+    act(() => { f.result.current.applyReorder(); });
+    await startRead();
+    // A complete page that omits "gone" proves it no longer matches the filter.
+    await act(async () => f.requests[2]!.resolve(page([summary("kept", 5)])));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["kept"]);
+    expect(f.result.current.reorder).toBeNull();
   });
 
   it("keeps the notice when the service reports changed without a local delta", async () => {
@@ -125,7 +181,7 @@ describe("work-objective list hook", () => {
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("still", 3)])));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("still", 3)], null, true)));
+    await act(async () => f.requests[1]!.resolve(page([summary("still", 3)], "more-exists", true)));
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["still"]);
     expect(f.result.current.reorder).toEqual({ count: null });
     act(() => { f.result.current.applyReorder(); });
@@ -136,6 +192,19 @@ describe("work-objective list hook", () => {
     act(() => { void f.result.current.more(); });
     await act(async () => f.requests[3]!.resolve(page([summary("oldest", 0)], null, true)));
     expect(f.result.current.reorder).toEqual({ count: null });
+  });
+
+  it("does not discard a pending reorder notice by loading an unchanged older page", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "page-2")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "more-exists")));
+    expect(f.result.current.reorder).toEqual({ count: 1 });
+    act(() => { void f.result.current.more(); });
+    await act(async () => f.requests[2]!.resolve(page([summary("older", 1)], null, false)));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["quiet", "busy", "older"]);
+    expect(f.result.current.reorder).toEqual({ count: 1 });
   });
 
   it("breaks activity ties by objective identifier descending like the service", async () => {
@@ -150,7 +219,7 @@ describe("work-objective list hook", () => {
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("top", 4)], "cursor-2")));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("top", 9, { state: "ended" })])));
+    await act(async () => f.requests[1]!.resolve(page([summary("top", 9, { state: "ended" })], "cursor-2")));
     expect(f.result.current.rows[0]!.state).toBe("ended");
     act(() => { void f.result.current.more(); });
     await act(async () => f.requests[2]!.resolve(page([summary("older", 1)])));
@@ -164,7 +233,7 @@ describe("work-objective list hook", () => {
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "stale-cursor")));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)])));
+    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "more-exists")));
     expect(f.result.current.reorder).toEqual({ count: 1 });
     act(() => { f.result.current.applyReorder(); });
     // The stale keyset cursor is discarded by a fresh first-page read.

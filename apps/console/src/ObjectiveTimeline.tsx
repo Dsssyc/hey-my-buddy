@@ -1,46 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { ObjectiveSummary, ObjectiveTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
+import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
 import { createTimelineLayout, TIMELINE_FOLD_THRESHOLD_MS } from "./objective-timeline-layout";
-import type { TimelineGap, TimelineLayout } from "./objective-timeline-layout";
-import type { ConfigurationStyle, SpanOutcome, TimelineItem } from "./objective-display";
+import { scaleTimeline } from "./objective-timeline-scale";
+import type { SpanOutcome, TimelineItem } from "./objective-display";
 import {
   CATEGORY_LABEL, COUNT_ORDER, categoryTone, clockSeconds, clockTime, configurationLabel, durationShort,
   eventVocab, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
-  eventItem, toMs, totalDelegations, uncertainTailEnd, buildChronology, configurationPalette,
+  eventItem, toMs, totalDelegations, buildChronology, configurationPalette,
 } from "./objective-display";
 import { ObjectiveChronology } from "./ObjectiveChronology";
 import { Badge } from "./ui";
 import { excerpt } from "./task-state";
 
-/** Markers closer than this share of the track merge into one numbered marker. */
-const MARKER_MERGE_PERCENT = 1.6;
-/** Nominal track width for density decisions before measurement (and in tests). */
-const FALLBACK_TRACK_PX = 800;
-const LABEL_COLUMN_PX = 240;
+/** Markers closer than this many actual track pixels merge into one numbered marker. */
+const MARKER_MERGE_PX = 14;
+/** Nominal track width before measurement (and in tests without layout). */
+const FALLBACK_VIEWPORT_PX = 800;
+const FALLBACK_LABEL_PX = 240;
 
-function useElementWidth<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const update = () => setWidth(element.clientWidth);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
-}
-
-type SpanFacts = { item: TimelineItem; startMs: number | null; endMs: number | null; outcome: SpanOutcome };
-type MarkerCluster = { key: string; x: number; events: TimelineEvent[]; items: TimelineItem[]; lines: string[]; head: string };
+type SpanFacts = { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome };
+type MarkerCluster = { key: string; x: number; xPx: number; events: TimelineEvent[]; items: TimelineItem[]; lines: string[]; head: string };
 
 export type ObjectiveTimelineProps = {
   summary: ObjectiveSummary | null;
-  timeline: ObjectiveTimeline | null;
+  timeline: ObjectiveTimelineData | null;
   loading: boolean;
   error: string;
   stale: boolean;
@@ -58,27 +42,58 @@ export type ObjectiveTimelineProps = {
 };
 
 /**
- * Right pane, layer one: the read-only work-objective timeline. All placement
- * and folding come from the frozen pure layout module; this component only
- * renders recorded facts, keeps focus/expanded state across refreshes, and
- * stays mounted (hidden) while a delegation detail is open.
+ * Right pane, layer one: the read-only work-objective timeline. Occupancy,
+ * folding and instants come from the frozen layout module; scaleTimeline maps
+ * that normalized axis onto actual pixels (fixed 64px breaks, 1.6px/min
+ * minimum) from the measured scroll viewport. This component renders recorded
+ * facts only, keeps focus/expanded state across refreshes, and stays mounted
+ * (hidden) while a delegation detail is open.
  */
 export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const { timeline, loading, error, stale, hidden, openedKey, openedRunId } = props;
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [asList, setAsList] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const listToggleRef = useRef<HTMLButtonElement>(null);
-  const [overlayRef, overlayWidth] = useElementWidth<HTMLDivElement>();
-  const savedScroll = useRef<number | null>(null);
+  const [viewport, setViewport] = useState<number | null>(null);
+  const savedScroll = useRef<{ top: number; left: number } | null>(null);
   const wasHidden = useRef(false);
 
-  const observedAtMs = toMs(timeline?.observedAt) ?? null;
-  const layout: TimelineLayout | null = useMemo(
+  const observedAtMs = toMs(timeline?.observedAt);
+  const layout = useMemo(
     () => timeline ? createTimelineLayout(timeline, props.expandedGapIds) : null,
     [timeline, props.expandedGapIds],
+  );
+  const canvasKey = timeline?.objective.objectiveId ?? null;
+
+  // Measure the scroll viewport (not the expanding track) once the async
+  // canvas exists; zero hidden widths are ignored so saved geometry survives.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || canvasKey === null) return;
+    const labelWidth = () => {
+      const parsed = Number.parseFloat(getComputedStyle(element).getPropertyValue("--label-w"));
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : FALLBACK_LABEL_PX;
+    };
+    const update = () => {
+      const width = element.clientWidth;
+      if (width > 0) setViewport(Math.max(120, Math.round(width - labelWidth())));
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [canvasKey]);
+
+  // Pixels are a pure function of the measured viewport, so content sizing can
+  // never feed back into the measurement.
+  const scaled = useMemo(
+    () => layout ? scaleTimeline(layout, viewport ?? FALLBACK_VIEWPORT_PX) : null,
+    [layout, viewport],
   );
 
   const spansByRun = useMemo(() => {
@@ -91,7 +106,19 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     return map;
   }, [timeline]);
   const rowsById = useMemo(() => new Map((timeline?.rows ?? []).map(row => [row.runId, row])), [timeline]);
-  const palette = useMemo(() => configurationPalette(spansByRun), [spansByRun]);
+
+  // Colour slots persist per objective across refreshes: a configuration seen
+  // once keeps its slot even when later data shuffles first appearances.
+  const paletteCache = useRef(new Map<string, Map<string, number>>());
+  const palette = useMemo(() => {
+    if (!canvasKey || !spansByRun.size) return [];
+    let slots = paletteCache.current.get(canvasKey);
+    if (!slots) {
+      slots = new Map<string, number>();
+      paletteCache.current.set(canvasKey, slots);
+    }
+    return configurationPalette(spansByRun, slots);
+  }, [spansByRun, canvasKey]);
 
   const factsBySpan = useMemo(() => {
     const map = new Map<string, SpanFacts>();
@@ -108,7 +135,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     const map = new Map<string, TimelineItem>();
     for (const facts of factsBySpan.values()) map.set(facts.item.key, facts.item);
     if (timeline) {
-      for (const row of timeline.rows) map.set(rowLabelItem(row).key, rowLabelItem(row));
+      for (const row of timeline.rows) {
+        const label = rowLabelItem(row);
+        map.set(label.key, label);
+      }
       for (const row of timeline.rows) {
         const settle = settleItem(row);
         if (settle) map.set(settle.key, settle);
@@ -122,15 +152,18 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   }, [factsBySpan, timeline, rowsById]);
 
   const clusters = useMemo<MarkerCluster[]>(() => {
-    if (!timeline || !layout) return [];
+    if (!timeline || !scaled) return [];
     const placed = timeline.events
-      .map(event => ({ event, x: layout.position(event.at) }))
-      .filter((entry): entry is { event: TimelineEvent; x: number } => entry.x !== null)
-      .sort((left, right) => left.x - right.x);
-    const groups: { event: TimelineEvent; x: number }[][] = [];
+      .map(event => {
+        const percent = scaled.position(event.at);
+        return percent === null ? null : { event, x: percent, xPx: percent / 100 * scaled.widthPx };
+      })
+      .filter((entry): entry is { event: TimelineEvent; x: number; xPx: number } => entry !== null)
+      .sort((left, right) => left.xPx - right.xPx);
+    const groups: { event: TimelineEvent; x: number; xPx: number }[][] = [];
     for (const entry of placed) {
       const group = groups[groups.length - 1];
-      if (group && entry.x - group[group.length - 1]!.x < MARKER_MERGE_PERCENT) group.push(entry);
+      if (group && entry.xPx - group[group.length - 1]!.xPx < MARKER_MERGE_PX) group.push(entry);
       else groups.push([entry]);
     }
     return groups.map(group => {
@@ -138,18 +171,19 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       return {
         key: `events:${group[0]!.event.seq}`,
         x: group[0]!.x,
+        xPx: group[0]!.xPx,
         events: group.map(entry => entry.event),
         items,
         lines: items.map(item => `${item.head}，${item.parts.join("，")}`),
         head: group.length > 1 ? `Host 事件（${group.length} 条）` : items[0]!.head,
       };
     });
-  }, [timeline, layout, rowsById]);
+  }, [timeline, scaled, rowsById]);
 
   const canFold = layout?.canFold ?? false;
   const eligibleGaps = useMemo(() =>
-    (layout?.gaps ?? []).filter(gap => gap.endMs - gap.startMs > TIMELINE_FOLD_THRESHOLD_MS),
-    [layout]);
+    (scaled?.gaps ?? []).filter(gap => gap.endMs - gap.startMs > TIMELINE_FOLD_THRESHOLD_MS),
+    [scaled]);
 
   const chronology = useMemo(() => {
     if (!timeline || !layout) return [];
@@ -157,7 +191,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   }, [timeline, layout, factsBySpan, canFold]);
 
   // Roving tabindex: one stop inside the canvas, defaulting to the first
-  // delegation row's first execution span. Cluster keys are valid stops too.
+  // delegation row's first execution span, then a rendered marker cluster,
+  // then the first row label. Cluster buttons carry `events:` keys.
   const clusterKeys = useMemo(() => new Set(clusters.map(cluster => cluster.key)), [clusters]);
   useEffect(() => {
     if (!timeline) return;
@@ -170,29 +205,37 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       if (execution) { candidate = execution.item; break; }
     }
     candidate = candidate ?? [...factsBySpan.values()].find(facts => facts.item.atMs !== null)?.item ?? null;
-    candidate = candidate ?? (clusters[0] ? clusters[0].items[0] ?? null : null);
-    candidate = candidate ?? (rows[0] ? rowLabelItem(rows[0]) : null);
-    setFocusKey(candidate?.key ?? null);
+    const fallbackKey = clusters[0]?.key ?? (rows[0] ? rowLabelItem(rows[0]).key : null);
+    setFocusKey(candidate?.key ?? fallbackKey);
   }, [timeline, itemsByKey, factsBySpan, spansByRun, clusters, clusterKeys, focusKey]);
 
-  // Stay mounted while hidden; restore scroll and focus on return.
+  // Stay mounted while hidden; restore both scroll axes and focus on return.
   useEffect(() => {
     const element = scrollRef.current;
     if (hidden) {
       wasHidden.current = true;
-      if (element) savedScroll.current = element.scrollTop;
+      if (element) savedScroll.current = { top: element.scrollTop, left: element.scrollLeft };
       return;
     }
     if (wasHidden.current) {
       wasHidden.current = false;
-      if (element && savedScroll.current !== null) element.scrollTop = savedScroll.current;
+      if (element && savedScroll.current !== null) {
+        element.scrollTop = savedScroll.current.top;
+        element.scrollLeft = savedScroll.current.left;
+      }
       savedScroll.current = null;
       if (focusKey) {
-        const target = element?.querySelector<HTMLElement>(`[data-key="${focusKey}"]`);
-        target?.focus();
+        // Canvas items and chronology entries share keys; focus whichever the
+        // current view actually shows, then bring it into view.
+        const matches = [...(rootRef.current?.querySelectorAll<HTMLElement>(`[data-key="${focusKey}"]`) ?? [])];
+        const target = matches.find(node => node.classList.contains("tl-entry") === asList) ?? matches[0];
+        if (target) {
+          target.focus();
+          target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        }
       }
     }
-  }, [hidden, focusKey]);
+  }, [hidden, focusKey, asList]);
 
   function itemAria(item: TimelineItem): string {
     return `${item.head}，${item.parts.join("，")}`;
@@ -237,41 +280,40 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     }
   }
 
-  const trackWidthPx = Math.max(overlayWidth, FALLBACK_TRACK_PX);
-  const visibleMinutes = layout && layout.endMs !== null && layout.startMs !== null
-    ? ((layout.endMs - layout.startMs) - (layout?.gaps ?? []).reduce((total, gap) => total + (gap.collapsed ? gap.endMs - gap.startMs : 0), 0)) / 60000
+  const widthPx = scaled?.widthPx ?? FALLBACK_VIEWPORT_PX;
+  const collapsedGapMs = (scaled?.gaps ?? []).reduce((total, gap) => total + (gap.collapsed ? gap.endMs - gap.startMs : 0), 0);
+  const realMinutes = layout && layout.startMs !== null && layout.endMs !== null
+    ? Math.max((layout.endMs - layout.startMs - collapsedGapMs) / 60000, 0)
     : 0;
-  const trackMinPx = Math.ceil(visibleMinutes * 1.6);
 
   const ticks = useMemo(() => {
-    if (!layout || layout.startMs === null || layout.endMs === null || visibleMinutes <= 0) return [] as { at: number; label: string; left: number }[];
-    const pxPerMinute = trackWidthPx / Math.max(visibleMinutes, 1);
+    if (!scaled || !layout || layout.startMs === null || layout.endMs === null || realMinutes <= 0) return [] as { at: number; label: string; left: number }[];
+    const pxPerMinute = (widthPx - scaled.gaps.filter(gap => gap.collapsed).length * 64) / realMinutes;
     const steps = [15, 30, 60, 120, 240, 480, 1440];
     const stepMinutes = steps.find(step => step * pxPerMinute >= 64) ?? 1440;
     const stepMs = stepMinutes * 60000;
-    const collapsedSpans = (layout.gaps ?? []).filter(gap => gap.collapsed);
+    const collapsedSpans = scaled.gaps.filter(gap => gap.collapsed);
     const result: { at: number; label: string; left: number }[] = [];
     for (let at = Math.ceil(layout.startMs / stepMs) * stepMs; at <= layout.endMs; at += stepMs) {
-      const left = layout.position(at);
+      const left = scaled.position(at);
       if (left === null) continue;
       if (collapsedSpans.some(gap => at > gap.startMs && at < gap.endMs)) continue;
       const date = new Date(at);
-      const clock = clockTime(at);
       const label = date.getHours() === 0 && date.getMinutes() === 0
         ? `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} 00:00`
-        : clock;
+        : clockTime(at);
       result.push({ at, label, left });
     }
     return result;
-  }, [layout, trackWidthPx, visibleMinutes]);
+  }, [scaled, layout, realMinutes, widthPx]);
 
   const nowVisible = !!(layout && observedAtMs !== null && layout.endMs === observedAtMs);
-  const nowLeft = nowVisible && layout ? layout.position(observedAtMs) : null;
+  const nowLeft = nowVisible && scaled ? scaled.position(observedAtMs) : null;
   const activeKey = hoverKey ?? focusKey;
   const activeItem = activeKey ? itemsByKey.get(activeKey) ?? null : null;
   const activeCluster = activeKey ? clusters.find(cluster => cluster.key === activeKey) ?? null : null;
-  const guideLeft = activeCluster !== null || (activeItem?.guide === true)
-    ? (activeCluster ? activeCluster.x : layout && activeItem?.atMs !== null && activeItem ? layout.position(activeItem.atMs) : null)
+  const guideLeft = activeCluster !== null || activeItem?.guide === true
+    ? (activeCluster ? activeCluster.x : scaled && activeItem && activeItem.atMs !== null ? scaled.position(activeItem.atMs) : null)
     : null;
   const summary = timeline?.objective ?? props.summary;
 
@@ -297,17 +339,14 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   function renderSpan(row: TimelineRow, span: TimelineSpan) {
     const facts = factsBySpan.get(span.spanId);
-    if (!facts || facts.item.atMs === null) return null;
+    if (!facts || !scaled || facts.item.atMs === null) return null;
     const reversed = facts.endMs !== null && facts.endMs < facts.startMs!;
     if (reversed) return null;
-    const left = layout!.position(facts.startMs)!;
+    const left = scaled.position(facts.startMs)!;
     const style = paletteIndex(palette, span.configuration);
-    const uncertainTail = facts.outcome === "unknown" && span.endAt != null && observedAtMs !== null
-      ? uncertainTailEnd(toMs(span.endAt)!, observedAtMs, layout?.gaps ?? []) : null;
-    const visualEnd = uncertainTail ?? facts.endMs;
-    const right = visualEnd !== null ? layout!.position(visualEnd) : null;
-    const width = right !== null ? Math.max(right - left, 0.4) : 0.4;
-    const widthPx = (width / 100) * trackWidthPx;
+    const right = facts.endMs !== null ? scaled.position(facts.endMs) : null;
+    const width = right !== null ? Math.max(right - left, 0.3) : 0.3;
+    const widthPxSpan = width / 100 * widthPx;
     const selected = openedKey === facts.item.key;
     const classes = ["tl-item", "sp", span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : span.kind === "host" ? "wait" : "exec"];
     if (facts.outcome === "running") classes.push("running");
@@ -316,6 +355,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (facts.outcome === "unknown") classes.push("unknown");
     if (span.kind === "host" && span.endAt == null) classes.push("open");
     if (selected) classes.push("selected");
+    if (span.kind === "execution" && style?.striped) classes.push("striped");
     const colorVars = span.kind === "execution" && style
       ? { "--c": `var(--cfg-${style.color})` } as CSSProperties : undefined;
     const positionStyle: CSSProperties = { left: `${left}%`, width: `${width}%`, ...colorVars };
@@ -329,25 +369,27 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (span.kind === "routing") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        {widthPx >= 34 ? <span className="sp-text">路由</span> : null}
+        {widthPxSpan >= 34 ? <span className="sp-text">路由</span> : null}
       </button>;
     }
     if (span.kind === "host") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="sp-text">{widthPx >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : widthPx >= 64 ? "等待 Host" : widthPx >= 34 ? "等待" : ""}</span>
+        <span className="sp-text">{widthPxSpan >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : widthPxSpan >= 64 ? "等待 Host" : widthPxSpan >= 34 ? "等待" : ""}</span>
       </button>;
     }
     const shortModel = span.configuration?.model || span.configuration?.provider || "";
-    const label = widthPx >= 150
+    const label = widthPxSpan >= 150
       ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
-      : widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮` : widthPx >= 30 ? String(span.turnIndex ?? "·") : "";
-    if (facts.outcome === "unknown" && uncertainTail !== null) {
-      const solidWidth = Math.max(layout!.position(toMs(span.endAt)!)! - left, 0.4);
-      const solidShare = Math.min(100, (solidWidth / Math.max(width, 0.4)) * 100);
+      : widthPxSpan >= 72 ? `第${span.turnIndex ?? "?"}轮` : widthPxSpan >= 30 ? String(span.turnIndex ?? "·") : "";
+    if (facts.outcome === "unknown" && facts.recordedEndMs !== null) {
+      // Solid to the last recorded instant, dotted tail reserved through the
+      // observation instant by the Host layout.
+      const solidWidth = Math.max(scaled.position(facts.recordedEndMs)! - left, 0.3);
+      const solidShare = Math.min(100, solidWidth / Math.max(width, 0.3) * 100);
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="solid" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * trackWidthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <span className="solid" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
         <i className="end-mark warn" style={{ left: `calc(${solidShare}% - 8px)` }} aria-hidden="true">?</i>
         <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 ? "结束未确认" : ""}</span>
       </button>;
@@ -371,17 +413,17 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     : error && !timeline
       ? <div className="tl-body"><div className="tl-state" role="alert">读取时间轴失败：{error}
         <div style={{ marginTop: 12 }}><button className="button small-button" onClick={props.onRetry}>重试读取</button></div></div></div>
-      : timeline && layout
+      : timeline && scaled
         ? <div className={"timeline-body" + (asList ? " as-list" : "")}>
           <div ref={scrollRef} className="tl-scroll" onKeyDown={onCanvasKeyDown}>
             <div ref={gridRef} className="tl-grid" role="group" aria-label="工作目标时间轴"
-              style={{ "--track-min": `${trackMinPx}px` } as CSSProperties}>
+              style={{ width: `calc(var(--label-w) + ${Math.round(widthPx)}px)` }}>
               <div className="tl-row axis">
                 <div className="tl-label">委派 / 时间</div>
                 <div className="tl-track">
                   {ticks.map(tick => <span key={tick.at} className="tick" style={{ left: `${tick.left}%` }}>{tick.label}</span>)}
                   {canFold && eligibleGaps.map(gap => gap.collapsed
-                    ? <button key={gap.id} type="button" className="fold-button" style={{ left: `${(gap.fromPercent + gap.toPercent) / 2}%` }}
+                    ? <button key={gap.id} type="button" className="fold-button" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }}
                       aria-label={`空闲 ${durationShort(gap.endMs - gap.startMs)}，${clockTime(gap.startMs)} 至 ${clockTime(gap.endMs)}，已折叠，展开`}
                       title={`${clockTime(gap.startMs)}–${clockTime(gap.endMs)} 没有任何片段或事件`}
                       onClick={() => props.onToggleGap(gap.id)}>
@@ -407,7 +449,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       onFocus={() => setFocusKey(cluster.key)}
                       onMouseEnter={() => setHoverKey(cluster.key)}
                       onMouseLeave={() => setHoverKey(current => (current === cluster.key ? null : current))}
-                      onClick={() => { if (single) props.onOpenItem(single); }}>
+                      onClick={() => {
+                        // Enter/click opens the cluster's first recorded event;
+                        // per-event links stay available in the inspector.
+                        const first = cluster.items[0];
+                        if (first) props.onOpenItem(first);
+                      }}>
                       {cluster.items.length > 1 ? cluster.items.length : vocab?.glyph}
                     </button>;
                   })}
@@ -418,10 +465,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                 const label = rowLabelItem(row);
                 const unplaced = (spansByRun.get(row.runId) ?? []).filter(span => {
                   const facts = factsBySpan.get(span.spanId);
-                  return !facts || facts.item.atMs === null || (facts.endMs !== null && facts.endMs < facts.startMs!);
+                  return !facts || facts.item.atMs === null || facts.endMs === null
+                    || (facts.endMs !== null && facts.endMs < facts.startMs!);
                 }).length;
                 const settle = settleItem(row);
-                const settleLeft = settle && settle.atMs !== null ? layout.position(settle.atMs) : null;
+                const settleLeft = settle && settle.atMs !== null ? scaled.position(settle.atMs) : null;
                 return <div key={row.runId} className="tl-row" data-nav="">
                   <button type="button"
                     className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (openedRunId === row.runId ? " selected-run" : "")}
@@ -448,7 +496,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                   </div>
                 </div>;
               })}
-              <div ref={overlayRef} className="tl-overlay" aria-hidden="true">
+              <div className="tl-overlay" aria-hidden="true">
                 {canFold && eligibleGaps.map(gap => gap.collapsed
                   ? <div key={gap.id} className="fold-band" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }} />
                   : <div key={gap.id} className="expanded-band" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }} />)}
@@ -476,7 +524,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         </div>
         : null;
 
-  return <div className="timeline-view" hidden={hidden}>
+  return <div className="timeline-view" ref={rootRef} hidden={hidden}>
     {summary && <header className="detail-header tl-head">
       <div className="row-between">
         <button type="button" className="button small-button narrow-back" onClick={props.onBackToList}>返回工作目标</button>

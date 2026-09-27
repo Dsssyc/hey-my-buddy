@@ -16,7 +16,7 @@ import type {
   TimelineRow,
   TimelineSpan,
 } from "./objective-types";
-import { TIMELINE_FOLD_THRESHOLD_MS } from "./objective-timeline-layout";
+import { TIMELINE_FOLD_THRESHOLD_MS, parseTimelineInstant } from "./objective-timeline-layout";
 import type { TimelineGap } from "./objective-timeline-layout";
 
 export type SectionId = "overview" | "routing" | "assistance" | "artifacts" | "execution";
@@ -32,9 +32,11 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
   const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
   if (span.kind === "queue") return state === "queued" && span.endAt == null ? "open" : "claimed";
   if (span.kind === "host") return state === "open" && span.endAt == null ? "open" : "resolved";
+  // Unknown shutdown outranks a recorded failure disposition: an unconfirmed
+  // stop is never labelled plain failed/cancelled, though the failure text stays.
+  if (span.uncertain === true || state === "uncertain") return "unknown";
   if (span.disposition === "failed" || (typeof span.error === "string" && span.error.trim())) return "failed";
   if (span.disposition === "cancelled") return "cancelled";
-  if (span.uncertain === true || state === "uncertain") return "unknown";
   if (span.endAt == null) {
     return OPEN_EXECUTION_STATES.has(state) && span.shutdownConfirmed !== true ? "running" : "unplaced";
   }
@@ -160,24 +162,30 @@ export function configurationLabel(config: TimelineConfiguration | null | undefi
 export type ConfigurationStyle = { key: string; label: string; color: number; striped: boolean };
 
 /**
- * Execution-configuration colours in first-appearance order (rows in tree
- * order, then each row's spans in recorded order). The order is recomputed
- * from the same data on every refresh, so an existing configuration keeps its
- * colour while a newly appearing one takes the next slot; beyond six, colours
- * cycle and the legend gains a stripe.
+ * Stable execution-configuration colours. `assignments` maps a configuration
+ * key to the slot it received when first seen for this objective and persists
+ * across refreshes, so a newly appearing configuration — even in an earlier
+ * row — never recolours an existing one; the palette lists the configurations
+ * present in the current read by assignment order. Beyond six slots, colours
+ * cycle and gain a stripe on both the legend and the execution bars.
  */
-export function configurationPalette(spansByRun: Map<string, TimelineSpan[]>): ConfigurationStyle[] {
+export function configurationPalette(
+  spansByRun: Map<string, TimelineSpan[]>,
+  assignments?: Map<string, number>,
+): ConfigurationStyle[] {
+  const slots = assignments ?? new Map<string, number>();
   const byKey = new Map<string, ConfigurationStyle>();
   for (const spans of spansByRun.values()) {
     for (const span of spans) {
       if (span.kind !== "execution") continue;
       const key = configurationKey(span.configuration);
       if (key === null || byKey.has(key)) continue;
-      const index = byKey.size;
-      byKey.set(key, { key, label: configurationLabel(span.configuration), color: index % 6 + 1, striped: index >= 6 });
+      if (!slots.has(key)) slots.set(key, slots.size);
+      const slot = slots.get(key)!;
+      byKey.set(key, { key, label: configurationLabel(span.configuration), color: slot % 6 + 1, striped: slot >= 6 });
     }
   }
-  return [...byKey.values()];
+  return [...byKey.values()].sort((left, right) => (slots.get(left.key) ?? 0) - (slots.get(right.key) ?? 0));
 }
 
 export function paletteIndex(palette: ConfigurationStyle[], config: TimelineConfiguration | null | undefined): ConfigurationStyle | null {
@@ -238,19 +246,17 @@ export function durationShort(ms: number): string {
   return `${hours ? `${hours} 时 ` : ""}${rest} 分`;
 }
 
-/** Display-only instant reader; placement decisions stay in the layout module. */
+/** Placement uses the layout module's strict parser; display formatting may stay permissive. */
 export function toMs(value: string | number | null | undefined): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  const at = new Date(value).getTime();
-  return Number.isNaN(at) ? null : at;
+  return parseTimelineInstant(value);
 }
 
 export function rangeText(startMs: number | null, endMs: number | null): string {
   if (startMs === null) return "时间未记录";
-  const sameDay = endMs !== null && new Date(startMs).toDateString() === new Date(endMs).toDateString();
+  if (endMs === null) return `${clockTime(startMs)} 至 现在`;
+  const sameDay = new Date(startMs).toDateString() === new Date(endMs).toDateString();
   const start = sameDay ? clockTime(startMs) : dayClock(startMs);
-  if (endMs === null) return `${start} 至 现在`;
-  const end = new Date(startMs).toDateString() === new Date(endMs).toDateString() ? clockTime(endMs) : dayClock(endMs);
+  const end = sameDay ? clockTime(endMs) : dayClock(endMs);
   return `${start} 至 ${end}`;
 }
 
@@ -273,35 +279,31 @@ export type TimelineItem = {
   guide?: boolean;
 };
 
-function spanRange(span: TimelineSpan, observedAtMs: number | null): { startMs: number | null; endMs: number | null } {
+function spanPlacement(span: TimelineSpan, observedAtMs: number | null): {
+  startMs: number | null; recordedEndMs: number | null; endMs: number | null;
+} {
   const startMs = toMs(span.startAt);
-  const rawEnd = toMs(span.endAt);
+  const recordedEndMs = toMs(span.endAt);
   const outcome = spanOutcome(span);
-  const open = rawEnd === null && (outcome === "running" || outcome === "open" || outcome === "unknown");
-  return { startMs, endMs: rawEnd !== null ? rawEnd : open && observedAtMs !== null ? observedAtMs : null };
-}
-
-/**
- * The 结束未确认 tail ends at the observation instant, but never crosses a
- * collapsed break: if the frozen layout folded a gap over that stretch, the
- * tail stops at the break so the visual agrees with the occupancy evidence.
- */
-export function uncertainTailEnd(spanEndMs: number, observedAtMs: number, gaps: readonly TimelineGap[]): number {
-  let end = observedAtMs;
-  for (const gap of gaps) {
-    if (!gap.collapsed) continue;
-    if (gap.startMs > spanEndMs && gap.startMs < end) end = gap.startMs;
+  const openTail = outcome === "running" || outcome === "open" || outcome === "unknown";
+  let endMs: number | null = recordedEndMs;
+  if (outcome === "unknown" && recordedEndMs !== null) {
+    // The Host layout reserves the unknown tail through observedAt; only a
+    // nonsensical observation before the recorded end keeps that end.
+    endMs = observedAtMs !== null && observedAtMs >= recordedEndMs ? observedAtMs : recordedEndMs;
+  } else if (recordedEndMs === null && openTail && observedAtMs !== null) {
+    endMs = observedAtMs;
   }
-  return end;
+  return { startMs, recordedEndMs, endMs };
 }
 
 export function spanFacts(
   span: TimelineSpan,
   row: TimelineRow,
   observedAtMs: number | null,
-): { item: TimelineItem; startMs: number | null; endMs: number | null; outcome: SpanOutcome } {
+): { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome } {
   const outcome = spanOutcome(span);
-  const { startMs, endMs } = spanRange(span, observedAtMs);
+  const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
   const head = spanHead(span.kind);
   const parts: string[] = [row.title];
   if (span.kind === "execution" || span.kind === "routing") {
@@ -310,15 +312,18 @@ export function spanFacts(
   }
   if (span.kind === "execution" && span.configuration) parts.push(configurationLabel(span.configuration));
   if (span.kind === "host" && span.summary) parts.push(span.summary);
-  parts.push(rangeText(startMs, endMs));
+  // A terminal span without a recorded end never borrows "now": it says the
+  // end time is missing, exactly like a missing start.
+  parts.push(startMs === null ? "时间未记录" : endMs === null ? `${clockTime(startMs)} 至 结束时间缺失` : rangeText(startMs, endMs));
   const duration = durationText(endMs !== null && startMs !== null ? endMs - startMs : null);
   if (duration) parts.push(duration);
   parts.push(outcomeLabel(span, outcome));
   if (typeof span.error === "string" && span.error.trim()) parts.push(span.error.trim());
   const targetRun = span.kind === "routing" && span.decisionTaskId ? span.decisionTaskId : row.runId;
-  const locatorBase = startMs === null ? head : `${head} ${clockTime(startMs)}–${endMs === null ? "?" : clockTime(endMs)}`;
+  const endText = endMs === null ? "结束时间缺失" : clockTime(endMs);
+  const locatorBase = startMs === null ? head : `${head} ${clockTime(startMs)}–${endText}`;
   const locator = span.kind === "execution" && span.turnIndex != null
-    ? `第 ${span.turnIndex} 轮 · 执行片段 ${clockTime(startMs)}–${endMs === null ? "现在" : clockTime(endMs)} · ${configurationLabel(span.configuration)}`
+    ? `第 ${span.turnIndex} 轮 · 执行片段 ${startMs === null ? "?" : clockTime(startMs)}–${endText} · ${configurationLabel(span.configuration)}`
     : locatorBase;
   return {
     item: {
@@ -332,6 +337,7 @@ export function spanFacts(
     },
     startMs,
     endMs,
+    recordedEndMs,
     outcome,
   };
 }

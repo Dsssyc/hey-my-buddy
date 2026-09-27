@@ -67,21 +67,35 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
       for (const summary of next.objectives) fresh.set(summary.objectiveId, summary);
       if (mode === "poll") {
         const previous = pageRef.current;
-        // An empty display adopts the read directly; nothing was on screen to
-        // reorder. Otherwise the freshest summaries render in place while only
-        // a real order change — new activity moving a group, or an unseen
-        // group appearing — defers behind the reorder notice.
+        // An empty display adopts the read directly (including its cursor);
+        // nothing was on screen to reorder. Otherwise the freshest summaries
+        // render in place while only a real order change — new activity moving
+        // a group, or an unseen group appearing — defers behind the notice.
         if (!previous.rows.length) {
           setLatest(fresh);
-          setPage({ rows: [...next.objectives].sort(byActivity), total: next.total, nextCursor: previous.nextCursor });
+          setPage({ rows: [...next.objectives].sort(byActivity), total: next.total, nextCursor: next.nextCursor });
           return;
         }
         const known = new Set(previous.rows.map(row => row.objectiveId));
         const hasNew = next.objectives.some(row => !known.has(row.objectiveId));
-        const merged = [
-          ...previous.rows.map(row => fresh.get(row.objectiveId) ?? row),
-          ...next.objectives.filter(row => !known.has(row.objectiveId)),
-        ];
+        // A complete filtered first page proves the whole matching scope: rows
+        // it no longer returns have stopped matching and leave the list (an
+        // open detail stays mounted on the workspace's summary fallbacks). An
+        // incomplete page cannot prove absence, so it keeps the refresh notice
+        // instead of guessing.
+        const complete = next.nextCursor === null;
+        const returned = new Set(next.objectives.map(row => row.objectiveId));
+        const droppedAmbiguous = complete ? [] : previous.rows.filter(row => {
+          if (returned.has(row.objectiveId)) return false;
+          const floor = next.objectives.length ? next.objectives[next.objectives.length - 1]!.lastActivitySeq : -Infinity;
+          return row.lastActivitySeq >= floor;
+        });
+        // Completeness proves membership, not permission to reorder. Preserve
+        // the surviving committed order; newcomers wait behind the notice.
+        const retained = previous.rows
+          .filter(row => !complete || returned.has(row.objectiveId))
+          .map(row => fresh.get(row.objectiveId) ?? row);
+        const merged = [...retained, ...next.objectives.filter(row => !known.has(row.objectiveId))];
         const sorted = [...merged].sort(byActivity);
         const orderChanged = hasNew || sorted.some((row, index) => merged[index]!.objectiveId !== row.objectiveId);
         const changedCount = merged.filter(row => {
@@ -89,8 +103,11 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
           return committed === undefined || row.lastActivitySeq > committed.lastActivitySeq;
         }).length;
         setLatest(fresh);
-        if (orderChanged) setReorder({ count: changedCount > 0 ? changedCount : null });
-        else if (next.changed) setReorder(existing => existing ?? { count: null });
+        // The committed order stays behind the notice, but the reported total
+        // always reflects the newest read.
+        setPage(previous => ({ rows: retained, total: next.total, nextCursor: complete ? null : previous.nextCursor }));
+        if (orderChanged) setReorder(existing => changedCount > 0 ? { count: changedCount } : existing ?? { count: null });
+        else if (next.changed || droppedAmbiguous.length > 0) setReorder(existing => existing ?? { count: null });
       } else {
         const known = new Set(mode === "more" ? pageRef.current.rows.map(row => row.objectiveId) : []);
         const rows = mode === "more"
@@ -99,9 +116,11 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
           : [...next.objectives].sort(byActivity);
         setPage({ rows, total: next.total, nextCursor: next.nextCursor });
         setLatest(mode === "first" ? new Map(next.objectives.map(row => [row.objectiveId, row])) : fresh);
-        // A paged read that reports `changed` still offers the refresh notice:
+        // Loading an unchanged older page never discards a pending reorder
+        // notice; a paged read that reports `changed` still offers one because
         // activity above the first page is not visible in this reply.
-        setReorder(mode === "more" && next.changed ? { count: null } : null);
+        if (mode === "more") setReorder(existing => existing ?? (next.changed ? { count: null } : null));
+        else setReorder(null);
       }
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));

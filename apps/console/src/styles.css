@@ -285,9 +285,9 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .trunc-banner { margin: 8px 20px 0; background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
 .timeline-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tl-scroll { --label-w: 240px; flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; margin-top: 8px; border-top: 1px solid var(--line); }
-.tl-grid { --track-min: 0px; position: relative; width: max(100%, calc(var(--label-w) + var(--track-min))); }
+.tl-grid { position: relative; }
 .tl-row { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr); height: 40px; border-bottom: 1px solid var(--line); }
-.tl-row.axis { position: sticky; top: 0; z-index: 6; height: 36px; background: var(--surface); }
+.tl-row.axis { position: sticky; top: 0; z-index: 6; height: 40px; background: var(--surface); }
 .tl-row.markers { background: var(--accent-soft); }
 .tl-label { position: sticky; left: 0; z-index: 4; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 10px; border: 0; border-right: 1px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; font-size: 12px; }
 button.tl-label:hover { background: var(--subtle); }
@@ -312,12 +312,14 @@ button.tl-label:hover { background: var(--subtle); }
 .now-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); }
 .guide-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--focus); }
 .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); padding: 3px 0 0 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
-.fold-button { position: absolute; top: 3px; bottom: 3px; min-width: 48px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 4px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 10px; line-height: 1.2; z-index: 3; }
+.fold-button { position: absolute; top: 2px; bottom: 2px; min-width: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 2px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 9px; line-height: 1.25; overflow: hidden; z-index: 3; }
 .fold-button:hover { color: var(--accent); border-color: var(--accent); }
 .collapse-button { position: absolute; top: 5px; height: 22px; display: flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 10px; white-space: nowrap; z-index: 3; }
 .collapse-button:hover { color: var(--accent); border-color: var(--accent); }
 .now-chip { position: absolute; bottom: 3px; transform: translateX(-50%); padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 3; }
-.tl-item { position: absolute; top: 50%; transform: translateY(-50%); }
+/* Track items (spans, markers, flags) sit on the track; row labels keep their
+   sticky grid placement and are never pulled out of the row by this rule. */
+.tl-track > .sp, .tl-track > .mk, .tl-track > .flag { position: absolute; top: 50%; transform: translateY(-50%); }
 .tl-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .sp { height: 22px; min-width: 4px; padding: 0 6px; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; text-align: left; white-space: nowrap; overflow: visible; }
 .sp-text { display: block; overflow: hidden; text-overflow: ellipsis; position: relative; }
@@ -328,6 +330,7 @@ button.tl-label:hover { background: var(--subtle); }
 .sp.wait.open { border-right: 0; border-radius: 3px 0 0 3px; }
 .sp.failed { box-shadow: 0 0 0 1.5px var(--danger); }
 .sp.cancelled { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 42%, transparent) 0 2px, transparent 2px 6px); }
+.sp.striped { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 38%, transparent) 0 1.5px, transparent 1.5px 5px); }
 .sp.running { background: linear-gradient(90deg, var(--c) 72%, color-mix(in srgb, var(--c) 40%, transparent)); }
 .sp.unknown { background: transparent; border: 1.5px dotted var(--c); color: var(--ink); padding: 0; }
 .sp.unknown .solid { position: absolute; inset: -1.5px auto -1.5px -1.5px; background: var(--c); border-radius: 2px; color: var(--on-cfg); padding: 0 6px; line-height: 22px; overflow: hidden; }
@@ -349,7 +352,7 @@ button.tl-label:hover { background: var(--subtle); }
 .tl-state[role="alert"] { color: var(--danger); }
 .tl-body { flex: 1; min-height: 0; overflow-y: auto; }
 .skeleton { height: 22px; margin: 12px 20px; border-radius: 3px; background: linear-gradient(90deg, var(--subtle), var(--line), var(--subtle)); }
-.inspector { flex-shrink: 0; min-height: 46px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--subtle); font-size: 12px; }
+.inspector { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--subtle); font-size: 12px; max-height: 7.5em; overflow-y: auto; overscroll-behavior: contain; }
 .inspector strong { font-weight: 600; }
 .inspector > span:not(.hint) { min-width: 0; overflow-wrap: anywhere; }
 .inspector .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
