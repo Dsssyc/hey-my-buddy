@@ -257,8 +257,7 @@ class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
         )
         self.assertEqual(status, 400, body)
         self.assertEqual(json.loads(body)["error"]["code"], "INVALID_ARGUMENT")
-        # The console persists a newly issued capability to a private file and never
-        # returns the raw token.
+        # The console cannot submit work or issue a Host capability.
         status, _headers, body = browser.command(
             "workflow_submit",
             {
@@ -271,13 +270,9 @@ class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
             },
             csrf=csrf,
         )
-        self.assertEqual(status, 200, body)
-        result = json.loads(body)["result"]
-        self.assertNotIn("controlToken", json.dumps(result))
-        self.assertNotIn("controlToken", json.dumps(result["control"]))
-        control_path = Path(result["controlFile"])
-        self.assertEqual(stat.S_IMODE(control_path.stat().st_mode), 0o600)
-        self.assertEqual(control_path.parent, board.store.directory / "controls")
+        self.assertEqual(status, 404, body)
+        self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")
+        self.assertNotIn("controlFile", json.dumps(json.loads(body)))
         board.console.close()
 
 
@@ -375,23 +370,6 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
             self.assertEqual(path.read_text(), "not-json", "a malformed record is never overwritten")
             path.write_text(original)
 
-    def test_console_submission_token_creation_is_immutable_and_shared(self):
-        from buddy.errors import BoardError
-
-        board = self.board()
-        board.console.start()
-        try:
-            tokens = self._race(lambda: board.console._submission_token("console-race"))
-            self.assertEqual(len(set(tokens)), 1, tokens)
-            directory = board.store.directory / "submissions"
-            path = next(directory.glob("*.json"))
-            path.write_text("{")
-            with self.assertRaises(BoardError) as raised:
-                board.console._submission_token("console-race")
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertEqual(path.read_text(), "{")
-        finally:
-            board.console.close()
 
 
 class DshNativeStorageArgumentsTests(unittest.TestCase):

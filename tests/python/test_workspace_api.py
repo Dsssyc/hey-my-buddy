@@ -71,7 +71,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
                 self.assertIn(name, cli.METHODS)
                 self.assertIn(name, cli.CONTROL_METHODS)
                 self.assertIn(operation, CONTROL_OPERATIONS)
-                self.assertIn(operation, CONSOLE_OPERATIONS)
+                self.assertNotIn(operation, CONSOLE_OPERATIONS)
                 self.assertTrue(callable(getattr(BuddyControl, operation)))
 
         board = self.board()
@@ -100,7 +100,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
                         })))
                         self.assertEqual(response["error"]["code"], "INVALID_ARGUMENT")
 
-    def test_authenticated_http_scope_and_conflict_resolution(self):
+    def test_console_refuses_scope_and_resolution_while_host_cli_remains_authorized(self):
         board, submitted, _claimed, _manifest, checkout = self.scoped_failure()
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
@@ -115,11 +115,14 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         status, _headers, body = browser.command("workflow_workspace_resolve", {
             **resolution, "consoleAuthority": {"sessionId": "forged"},
         }, csrf=csrf)
-        self.assertEqual(status, 400, body)
+        self.assertEqual(status, 404, body)
         self.assertTrue((checkout / "outside.txt").exists())
         status, _headers, body = browser.command("workflow_workspace_resolve", resolution, csrf=csrf)
-        self.assertEqual(status, 200, body)
-        resolved = json.loads(body)["result"]
+        self.assertEqual(status, 404, body)
+        self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")
+        self.assertTrue((checkout / "outside.txt").exists())
+        code, resolved = self.cli_call(board, "workspace-resolve", {**resolution, **self.control(view)})
+        self.assertEqual(code, 0, resolved)
         self.assertTrue(resolved["resolved"])
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
@@ -129,8 +132,10 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
                  "expectedRevision": resolved["revision"], "expectedScopeVersion": 1,
                  "writeScope": ["src", "docs"], "reason": "Host authorized documentation changes for the next stage"}
         status, _headers, body = browser.command("workflow_scope_amend", scope, csrf=csrf)
-        self.assertEqual(status, 200, body)
-        amended = json.loads(body)["result"]
+        self.assertEqual(status, 404, body)
+        self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")
+        code, amended = self.cli_call(board, "scope-amend", {**scope, **self.control(view)})
+        self.assertEqual(code, 0, amended)
         self.assertEqual(amended["scopeVersion"], 2)
         self.assertNotIn("controlToken", json.dumps(amended))
 

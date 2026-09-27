@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hey-my-buddy",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Host-directed DSH and ZCode work with durable model routing, explicit Git workspaces, verified artifacts, shared evaluations and a private React/Vite console.",
   "author": {
     "name": "Dsssyc"
