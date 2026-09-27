@@ -70,6 +70,8 @@ The [verified 0.14.0 installation](docs/acceptance/installed-0.14.0.md) uses con
 
 ## Documentation and development
 
+The 0.15.0 source repairs routing validation, adds one bounded format correction with redacted diagnostics, and improves objective browsing. Hosts route by default and group each user agenda explicitly. Source work is separate from the installed 0.14.0 runtime; another installation requires authorization. See the [decision contract](docs/reference/decision.md) and [objective presentation](docs/reference/objectives.md).
+
 In the candidate console, 委派记录 opens grouped work objectives with a delegation timeline; 全部执行记录 preserves the previous history. Selecting a timeline item opens its existing delegation details, and narrow screens use a chronological list. The [acceptance record](docs/acceptance/objective-timeline-0.14.0.md) separates source, packaged-runtime and installation evidence.
 
 Start with the [documentation index](docs/README.md) for commands, architecture, harness adapters and design history. [AGENTS.md](AGENTS.md) covers repository invariants; end users do not need npm or a frontend build. Report problems through [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).

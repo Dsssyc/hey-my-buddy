@@ -778,6 +778,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
     return {
         "runId": entry["runId"], "parentRunId": entry["parentRunId"], "rootRunId": entry["rootRunId"],
         "title": entry["title"] or UNTITLED, "titleSource": entry["titleSource"],
+        "summary": "合成记录：已提交输出，等待按记录核对。" if entry["status"] == "completed" else None,
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
         "kind": entry["kind"],
@@ -806,6 +807,7 @@ def objective_summary(group: str, matching: set[str]) -> dict:
     seq, at = FIXTURES["group_activity"][group]
     return {
         "objectiveId": group, "kind": kind, "title": title or UNTITLED, "titleSource": title_source,
+        "summary": "合成记录：保留独立委派的结果摘要。" if kind == "standalone" else None,
         "project": PROJECTS[project], "sourceHostId": source_host,
         "currentHostIds": sorted({entry["currentHostId"] for entry in entries}),
         "createdAt": created, "lastActivityAt": at, "lastActivitySeq": seq, "state": state,
@@ -1009,6 +1011,11 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "modelConcurrency": concurrency_rows(),
         "unavailableProfileCount": 0,
         "preferences": [], "annotations": [], "cards": [], "evidence": [], "decisions": [],
+        "routingHealth": {"windowSize": 20, "sampleCount": 5, "failureCount": 3,
+                          "consecutiveFailures": 3, "abstentionCount": 1, "cancelledCount": 0, "staleCount": 0,
+                          "lastSuccessAt": instant(11, 15), "lastSuccessDecisionId": "synthetic-success",
+                          "recentFailures": [{"decisionId": "synthetic-routing-refusal", "runId": "preview-run-a1",
+                                              "at": instant(14, 5), "code": "policy-check-shape"}]},
         "pendingEvidence": 0, "sampleCounts": {profile["profileId"]: 0 for profile in profiles},
         "tasks": {"runs": tasks, "total": len(tasks), "nextCursor": None},
         "capabilities": {"selection": True, "maintenance": False, "maintenanceMode": "harness-owned",

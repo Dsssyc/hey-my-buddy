@@ -70,6 +70,8 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 ## 文档与开发
 
+0.15.0 源码修复路由校验，增加一次有界格式纠错与脱敏诊断，并改善工作目标浏览。Host 默认使用智能路由，并为每项用户议程建立工作目标。源码工作与已安装的 0.14.0 分开记录，再次安装需另行授权。详见[决策契约](docs/reference/decision.md)和[工作目标呈现](docs/reference/objectives.md)。
+
 候选控制台的“委派记录”默认展示按项目归组的工作目标和委派时间轴；“全部执行记录”保留原有历史。选择时间轴条目可以打开对应委派详情，窄屏使用按时间排序的列表。[验收记录](docs/acceptance/objective-timeline-0.14.0.md)分别记录源码、打包运行时和安装证据。
 
 [文档索引](docs/README.md)提供命令、架构、harness 适配器和设计历史的入口。[AGENTS.md](AGENTS.md)说明仓库开发约束；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
