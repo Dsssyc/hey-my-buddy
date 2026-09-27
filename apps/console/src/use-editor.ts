@@ -822,6 +822,16 @@ export function useEditor(
         setError(errorText(failure));
         return;
       }
+      if (saveAmbiguous.current && failure instanceof ApiError
+        && ["FORBIDDEN", "UNAUTHORIZED"].includes(failure.code)) {
+        // A restarted daemon may reject stale CSRF before reading its receipt.
+        // Keep the earlier publication identity and refresh authentication data.
+        setUncertain(true);
+        setConfirming(true);
+        setError(UNRESOLVED_SAVE_NOTE);
+        await refresh();
+        return;
+      }
       if (uncertainResponse(failure)) {
         // The payload and its commandId stay staged: a retry resolves the same
         // command instead of publishing a second revision. Idle renewals stop so

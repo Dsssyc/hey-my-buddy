@@ -80,6 +80,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
       published.push(params);
       const scripted = take("publish");
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
+      if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "stale CSRF after restart");
       if (scripted === "conflict") {
         state = { ...state, tableRevision: state.tableRevision + 1,
           annotations: [...state.annotations.filter(a => a.profileId !== flashOff),
@@ -273,6 +274,27 @@ describe("edit mode and the write lease", () => {
     expect(f.published).toHaveLength(2);
     expect(f.published[1]).toEqual(f.published[0]);
     expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(1);
+  });
+
+  it("retains an unknown publication across a later CSRF refusal", async () => {
+    const f = fixture({ publish: ["network", "forbidden"] });
+    const user = userEvent.setup();
+    await openModels(f.api, user);
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "保留原请求");
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText(/保存结果未确认/);
+    await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
+    await waitFor(() => expect(f.published).toHaveLength(2));
+    await screen.findByText(/保存结果未确认/);
+    expect(f.aborted).toHaveLength(0);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "重试同一保存" })[0]!.hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published).toHaveLength(3);
+    expect(f.published[1]).toEqual(f.published[0]);
+    expect(f.published[2]).toEqual(f.published[0]);
   });
 
   it("keeps a conflicting draft and offers a deliberate reload or discard", async () => {
