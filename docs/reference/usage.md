@@ -186,3 +186,9 @@ If the App heartbeat tool is unavailable or registration fails, keep waiting in 
 ## More than one task at a time
 
 Capacity and cwd/exclusive-resource conflicts queue with a `queueReason` instead of failing. The daemon starts a worker pool for one machine-wide concurrent-attempt ceiling — `BUDDY_MAX_CONCURRENT`, default 8, clamped 1–32 — shared by routing and execution; the reserved decision lane and its separate limit are removed. On top of the ceiling, each exact adapter/provider/model family has a user-set concurrency limit (default 2 per family; effort variants and the routing decisions using that model share the counter), edited on its model card in the console. `health.capacity` reports the total limit, total active and per-model occupancy. One worker runs one attempt at a time; parallel editors require separate worktrees. Await independent tasks by their own `runId`. Unconfirmed shutdown still occupies its slot.
+
+## 0.16.0 operating rules
+
+State the user's language explicitly in every Worker task packet and require the result summary in that language; this repository uses Chinese. Every delegation in an agenda retains its objectiveId and a short intent title. The browser never translates results or invokes a model for wording. Existing Codex await behavior is unchanged.
+
+The 0.16.0 target uses service-owned `buddy backup` and new-package `buddy upgrade` with one verified rolling `backups/current/`, automatic failure rollback and idle-only cutover. Never make ad-hoc whole-state/source archives. Installation requires separate user authorization. Storage plan is read-only; apply requires confirmation of its exact guarded plan. The console uses a stable bookmarkable loopback URL and renewable persistent login; all authenticated windows can edit settings subject to revision conflict checks. Source verification and actual installation remain separate facts.

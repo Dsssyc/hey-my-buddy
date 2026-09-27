@@ -52,3 +52,9 @@ Routing and execution share a machine-wide attempt ceiling (default 8) and each 
 ## Maintain shared model cards
 
 Only when the user requests an update, a Host prepares facts with `evaluation-prepare` (no model call, no lease), synthesizes changed cards and publishes them with a short `evaluation-write-begin(kind: maintenance)` grant and `assessment-publish`. A Worker must not strip or borrow credentials to impersonate that role, though a credential-free synthesis proposal may be delegated. Never turn CI failures, provider limits or cancelled work into invented model-performance samples, and preserve user policy, annotations and unrelated cards. Page views and acknowledgements never trigger a model call; recurring maintenance needs an explicitly requested Harness schedule. The [maintenance reference](../../docs/reference/evaluation-maintenance.md) owns fields, bounds, conflict recovery and verification.
+
+## 0.16.0 operating rules
+
+State the user's language explicitly in every Worker task packet and require the result summary in that language; this repository uses Chinese. Every delegation in an agenda retains its objectiveId and a short intent title. The browser never translates results or invokes a model for wording. Existing Codex await behavior is unchanged.
+
+The 0.16.0 target uses service-owned `buddy backup` and new-package `buddy upgrade` with one verified rolling `backups/current/`, automatic failure rollback and idle-only cutover. Never make ad-hoc whole-state/source archives. Installation requires separate user authorization. Storage plan is read-only; apply requires confirmation of its exact guarded plan. The console uses a stable bookmarkable loopback URL and renewable persistent login; all authenticated windows can edit settings subject to revision conflict checks. Source verification and actual installation remain separate facts.
