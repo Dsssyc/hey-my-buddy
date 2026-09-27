@@ -76,7 +76,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## History and evidence
 
-The [0.13.0 installation record](acceptance/installed-0.13.0.md) identifies the daily runtime installed from `9452720` on 2026-09-27, its preserved data and installed checks. The [console-entry record](acceptance/console-entry-0.13.0.md) and [brief-output record](acceptance/cli-brief-output-0.13.0.md) retain the preceding source verification. The [0.14.0 objective/timeline candidate](acceptance/objective-timeline-0.14.0.md) remains separate and uninstalled.
+The [0.14.0 installation record](acceptance/installed-0.14.0.md) identifies the daily runtime installed from `d7731b9` on 2026-09-27, its verified schema-12 preparation, preserved data and new logo. The [0.14.0 source acceptance](acceptance/objective-timeline-0.14.0.md), [previous 0.13.0 installation](acceptance/installed-0.13.0.md), [console-entry record](acceptance/console-entry-0.13.0.md) and [brief-output record](acceptance/cli-brief-output-0.13.0.md) retain their separate verification history.
 
 Current delivery evidence: [0.9.0 runtime refinement](acceptance/runtime-refinement-0.9.0.md) (candidate delivery record), [0.8.1 optional execution duration](acceptance/optional-deadline-0.8.1.md), [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.9.0 record owns the candidate's source and installation checks; earlier records keep their own verified scope, and the 0.8 installation record identifies the preserved data and unresolved old-artifact integration boundary.
 

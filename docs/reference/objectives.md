@@ -1,6 +1,6 @@
 # Work objectives and delegation timelines
 
-Implementation contract for the user-authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md). The next candidate is release/contract 0.14.0, schema 12. It builds on verified source 0.13.0, while the daily board remains 0.12.0/schema 11 until a separately authorized retained-data cutover. This feature supplies archival grouping and read-only browsing; it adds no scheduler, dependency graph, execution permission, result ledger or model-routing input.
+Implementation contract for the user-authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md), release/contract 0.14.0 and schema 12. The separately authorized [daily installation](../acceptance/installed-0.14.0.md) on 2026-09-27 retained the previous schema-11 data through a verified offline copy. This feature supplies archival grouping and read-only browsing; it adds no scheduler, dependency graph, execution permission, result ledger or model-routing input.
 
 ## Submission metadata
 

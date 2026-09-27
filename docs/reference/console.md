@@ -1,6 +1,6 @@
 # Console entry and browser sessions
 
-The console-entry contract introduced in 0.13.0 implements section V of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) and the user's choice that a newly opened session takes write access while older sessions remain readable. The 0.14.0 source adds the work-objective view with schema 12. The separately recorded [daily installation](../acceptance/installed-0.13.0.md) remains at 0.13.0; source verification does not install a candidate.
+The console-entry contract introduced in 0.13.0 implements section V of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) and the user's choice that a newly opened session takes write access while older sessions remain readable. Version 0.14.0 adds the work-objective view with schema 12. Its separately authorized [daily installation](../acceptance/installed-0.14.0.md) was verified on 2026-09-27; source verification and installation remain separate records.
 
 ## Entry and ownership
 
