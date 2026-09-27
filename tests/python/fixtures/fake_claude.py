@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -44,8 +45,14 @@ def read_state():
 def write_state(update):
     state = read_state()
     state.update(update)
-    state_path().parent.mkdir(parents=True, exist_ok=True)
-    state_path().write_text(json.dumps(state))
+    path = state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Tests poll while the mock is running. Publish a complete old/new snapshot
+    # instead of exposing the empty interval created by write_text truncation.
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name+".", delete=False) as stream:
+        json.dump(state, stream)
+        temporary = stream.name
+    os.replace(temporary, path)
 
 
 def argv_value(flag):
