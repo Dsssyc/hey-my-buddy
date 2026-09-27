@@ -834,7 +834,7 @@ def main() -> int:
     try:
         return daemon.run()
     except BoardError as error:
-        atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()["error"]})
+        atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()})
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.
         sys.stderr.write(f"buddy: {error.code}: {error}\n")
