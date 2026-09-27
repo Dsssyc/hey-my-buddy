@@ -66,13 +66,13 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。[参考文档](docs/reference/claude.md) 记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
-[已验证的 0.14.0 安装](docs/acceptance/installed-0.14.0.md)使用 contract 0.14.0、schema 12，新增[工作目标与委派时间轴](docs/reference/objectives.md)，并包含[控制台入口与单写会话](docs/reference/console.md)与已安装的[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)。已有的 schema 11 看板需先按该文档执行显式离线准备，再进行切换。源码改动与日常运行时的实际安装分别记录。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。用 `health` 和 `runtime` 核对实际运行的安装；新契约需要协调空闲切换。
+[已验证的 0.15.0 安装](docs/acceptance/installed-0.15.0.md)使用 contract 0.15.0、schema 12，提供[工作目标与委派时间轴](docs/reference/objectives.md)，并包含[控制台入口与单写会话](docs/reference/console.md)及已安装的[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)。空闲切换保留了 schema 12 黑板、用户评价及模型上限；[0.14.0 离线准备](docs/acceptance/installed-0.14.0.md)保留在安装历史中。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。用 `health` 和 `runtime` 核对实际运行的安装。
 
 ## 文档与开发
 
-0.15.0 源码修复路由校验，增加一次有界格式纠错与脱敏诊断，并改善工作目标浏览。Host 默认使用智能路由，并为每项用户议程建立工作目标。源码工作与已安装的 0.14.0 分开记录，再次安装需另行授权。详见[决策契约](docs/reference/decision.md)和[工作目标呈现](docs/reference/objectives.md)。
+0.15.0 修复路由校验，增加一次有界格式纠错与脱敏诊断，并改善工作目标浏览。Host 默认使用智能路由，并为每项用户议程建立工作目标。源码与安装的验证证据分别记录。详见[决策契约](docs/reference/decision.md)和[工作目标呈现](docs/reference/objectives.md)。
 
-0.15.0 候选控制台的“委派记录”默认展示按项目归组的工作目标、概览卡和委派时间轴；独立委派折叠在“未归档委派”中，“全部执行记录”保留原有历史。单击将事实固定在检查器中；Enter、双击或显式打开按钮才打开详情，桌面端使用停靠栏，窄屏使用详情层。[验收记录](docs/acceptance/routing-objective-browser-0.15.0.md)分别记录源码、打包运行时和安装证据。
+0.15.0 控制台的“委派记录”默认展示按项目归组的工作目标、概览卡和委派时间轴；独立委派折叠在“未归档委派”中，“全部执行记录”保留原有历史。单击将事实固定在检查器中；Enter、双击或显式打开按钮才打开详情，桌面端使用停靠栏，窄屏使用详情层。[源码验收](docs/acceptance/routing-objective-browser-0.15.0.md)与[安装记录](docs/acceptance/installed-0.15.0.md)分别说明验证边界。
 
 [文档索引](docs/README.md)提供命令、架构、harness 适配器和设计历史的入口。[AGENTS.md](AGENTS.md)说明仓库开发约束；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 

@@ -51,6 +51,8 @@ Requirements are macOS or Linux, uv with Python 3.12–3.14, Node.js 20+ for the
 
 ## Runtime lifecycle
 
+The [installed 0.15.0 runtime](../acceptance/installed-0.15.0.md) uses contract 0.15.0 and schema 12. It was switched from the idle 0.14.0 service with a verified state/plugin archive and an unchanged database; the recorded runtime identity and preserved configuration are installation facts, distinct from the earlier [source acceptance](../acceptance/routing-objective-browser-0.15.0.md). New Codex tasks load the updated skill; existing Hosts must resolve the new bundled launcher before dispatching work against the upgraded service.
+
 Contract 0.10.0 introduces the lightweight `ping` operation for routine client attachment; explicit `health` still performs current storage diagnostics. The database remains schema 11. A 0.9.0-to-0.10.0 installation therefore requires a matching client/daemon/idle-worker cutover and a recoverable backup, but no schema conversion. The [0.10.0 acceptance record](../acceptance/runtime-efficiency-0.10.0.md) owns the actual source and installation status.
 
 Buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.5.1` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the plugin cache, so replacing the plugin does not disturb a running service.
