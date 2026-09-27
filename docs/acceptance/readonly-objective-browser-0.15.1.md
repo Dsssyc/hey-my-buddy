@@ -2,7 +2,7 @@
 
 ## Scope and installation
 
-The user authorized U1–U4 and normal routed delegations under objective `obj-11f3e1a9-6b3a-4374-944d-61fde180672f`. Source/release contract is 0.15.1; schema remains 12. Daily installation remains verified 0.15.0, stable runtime `091d997d8164557d9877366d48095971`, service `a1a93886-9e11-42ed-9418-3cc956e5264e`. Installation is not authorized for this candidate. No native acceptance probe was run. The protected uncommitted production-repairs-0.8.0.md is excluded. A2/A3 remain unimplemented proposals.
+The user authorized U1–U4 and normal routed delegations under objective `obj-11f3e1a9-6b3a-4374-944d-61fde180672f`. Source/release contract is 0.15.1; schema remains 12. Daily installation remains verified 0.15.0, stable runtime `091d997d8164557d9877366d48095971`, service `a1a93886-9e11-42ed-9418-3cc956e5264e`. Installation was not part of this source-acceptance authorization; the subsequent user-authorized cutover is recorded in [installed-0.15.1.md](installed-0.15.1.md). No native acceptance probe was run. The protected uncommitted production-repairs-0.8.0.md is excluded. A2/A3 remain unimplemented proposals.
 
 ## Implemented contracts and backend
 
@@ -51,3 +51,7 @@ As of 2026-09-27T11:46:09.369Z, deduplicated cumulative token_count events in th
 Compared with the user-supplied previous baseline (224 main requests, 469,000 median input, 98.3M total input, at least four full checks and 226 extra polling-agent requests), this task has 66.9% less input and 70.8% lower median input, but main request count did not fall. Long waits still caused too many main-thread updates. No polling agent was created; full checks ran twice because the first exposed concrete omissions. No prior used_percent sample was supplied, so no quota-point or monetary savings claim is made.
 
 Remaining boundaries: this agenda contains one smart-routed selection (success, no recovery), not a broad routing reliability sample; policy-alternative-unsupported frequency is 0/1 and existing retry semantics are unchanged; A2/A3 remain deferred; stop cancels the resolved current scope without closing the objective to future authorized Host submissions; no daily installation or native model probe was performed.
+
+## Subsequent installation
+
+The user subsequently authorized installation. [Installed 0.15.1](installed-0.15.1.md) records the completed idle cutover, verified archive, unchanged schema-12 database, retained history/control files/settings and actual served assets. Earlier uninstalled statements above describe the source-acceptance boundary at that time.
