@@ -415,6 +415,7 @@ button.tl-label:hover { background: var(--subtle); }
 .inspector-group-lines .tone-warn { color: var(--warning); }
 .inspector-link { padding: 0; border: 0; background: none; color: var(--accent); text-align: left; font-size: 12px; overflow-wrap: anywhere; }
 .inspector-link:hover { text-decoration: underline; }
+.inspector-field-value .inspector-link { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 100%; }
 .inspector-events { gap: 2px; }
 .inspector-event { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .marker-popover { position: fixed; z-index: 30; max-height: calc(100vh - 16px); overflow: auto; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
