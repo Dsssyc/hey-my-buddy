@@ -536,8 +536,11 @@ export function rowLabelItem(row: TimelineRow): TimelineItem {
 /**
  * The measured acceptance wait (0.16 P1.8): from the row's last execution
  * span's recorded end to its acceptance marker. Null whenever any condition
- * fails — no flag, no recorded end, an unconfirmed stop, or an end after the
- * acceptance — because the wait must never be invented.
+ * fails — no flag, any execution without a recorded end, a last stop that is
+ * not explicitly confirmed
+ * (`shutdownConfirmed === true`; a finished/endAt span with null/false
+ * shutdown is not confirmation), or an end after the acceptance — because the
+ * wait must never be invented.
  */
 export function acceptanceWaitMs(row: TimelineRow, spans: readonly TimelineSpan[]): number | null {
   if (!row.acceptedAt) return null;
@@ -545,11 +548,14 @@ export function acceptanceWaitMs(row: TimelineRow, spans: readonly TimelineSpan[
   if (atMs === null) return null;
   const executions = spans
     .filter(span => span.kind === "execution")
-    .map(span => ({ span, endMs: toMs(span.endAt) }))
-    .filter((entry): entry is { span: TimelineSpan; endMs: number } => entry.endMs !== null)
-    .sort((left, right) => left.endMs - right.endMs);
-  const last = executions[executions.length - 1];
+    .map(span => ({ span, endMs: toMs(span.endAt) }));
+  // An execution without a recorded end (still running, or its end missing)
+  // means the last stop is not known, so no earlier end may stand in for it.
+  if (executions.some(entry => entry.endMs === null)) return null;
+  const last = (executions as { span: TimelineSpan; endMs: number }[])
+    .sort((left, right) => left.endMs - right.endMs)[executions.length - 1];
   if (!last) return null;
+  if (last.span.shutdownConfirmed !== true) return null;
   if (spanOutcome(last.span) === "unknown") return null;
   return last.endMs <= atMs ? atMs - last.endMs : null;
 }

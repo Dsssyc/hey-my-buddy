@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ObjectiveFilter, ObjectiveSummary } from "./objective-types";
 import { Empty } from "./ui";
 import { Popover } from "./Popover";
@@ -19,6 +19,8 @@ export type ObjectiveListProps = {
   hostId: string;
   choices: { projects: { id: string; label: string; path: string | null }[]; hosts: string[] };
   selected: string | null;
+  /** False while the 委派记录 tab is switched away; transient popovers close. */
+  active?: boolean;
   /** Collapsed 48px rail while a detail is open above 760px (0.15.1 U1). */
   rail: boolean;
   /** The selected objective whose state icon the rail carries. */
@@ -120,8 +122,21 @@ export function ObjectiveList(props: ObjectiveListProps) {
   const [show, setShow] = useState<ShowKind>("objectives");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filterButton = useRef<HTMLButtonElement>(null);
+  const projectSelect = useRef<HTMLSelectElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const scrollIntent = useRef(false);
+  // The filter popup is transient: it closes when the rail hides the list or
+  // the tab is inactive, and reopening must not restore it (review §10).
+  const filtersHidden = props.rail || props.active === false;
+  const filtersShown = filtersOpen && !filtersHidden;
+  useEffect(() => {
+    if (filtersHidden) setFiltersOpen(false);
+  }, [filtersHidden]);
+  // Opening the filter popup lands focus on the 项目 select — the first
+  // dropdown (design P1.4) — never on informational content (review §11).
+  useEffect(() => {
+    if (filtersShown) projectSelect.current?.focus({ preventScroll: true });
+  }, [filtersShown]);
   const objectives = useMemo(() => rows.filter(row => row.kind === "objective"), [rows]);
   const standalone = useMemo(() => rows.filter(row => row.kind === "standalone"), [rows]);
   const filtersIdle = props.filter === "all" && !props.query.trim() && !props.projectId && !props.hostId && show === "objectives";
@@ -160,15 +175,15 @@ export function ObjectiveList(props: ObjectiveListProps) {
         <label className="search"><span className="sr-only">搜索工作目标</span><input value={props.query} maxLength={200}
           onChange={event => props.onQueryChange(event.target.value)} placeholder="搜索目标、项目或 ID" /></label>
         <button ref={filterButton} type="button" className="button small-button filters-button"
-          id="objective-filters-button" aria-expanded={filtersOpen} aria-controls="objective-filters-popover"
+          id="objective-filters-button" aria-expanded={filtersShown} aria-controls="objective-filters-popover"
           onClick={() => setFiltersOpen(current => !current)}>筛选{nonDefaultCount > 0 ? ` · ${nonDefaultCount}` : ""}</button>
-        {filtersOpen && <Popover anchor={filterButton.current} label="筛选" width="min(22em, calc(100vw - 16px))"
+        {filtersShown && <Popover id="objective-filters-popover" anchor={filterButton.current} label="筛选" width="min(22em, calc(100vw - 16px))"
           className="filters-popover" onClose={() => setFiltersOpen(false)}>
           <div className="filters-popover-body">
             <div className="segmented" aria-label="按委派状态筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
               <button key={key} aria-pressed={props.filter === key} onClick={() => props.onFilterChange(key)}>{label}</button>)}</div>
             <label><span className="field-label">项目</span>
-              <select value={props.projectId} onChange={event => props.onProjectChange(event.target.value)}>
+              <select ref={projectSelect} value={props.projectId} onChange={event => props.onProjectChange(event.target.value)}>
                 <option value="">全部项目</option>
                 {props.choices.projects.map(project => <option key={project.id} value={project.id}>{project.label}{project.path ? ` — ${project.path}` : ""}</option>)}
               </select></label>

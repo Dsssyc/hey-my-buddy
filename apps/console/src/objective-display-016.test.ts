@@ -144,6 +144,22 @@ describe("0.16 acceptance wait (P1.8)", () => {
     expect(acceptanceWaitMs({ ...row, acceptedAt: null }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")])).toBeNull();
   });
 
+  it("requires the last execution's shutdownConfirmed === true; a finished span with an end is not confirmation", () => {
+    const ended = (shutdownConfirmed: boolean | null | undefined) =>
+      execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z", { shutdownConfirmed } as Partial<TimelineSpan>);
+    expect(acceptanceWaitMs(row, [ended(true)])).toBe(2 * 3600_000);
+    expect(acceptanceWaitMs(row, [ended(null)])).toBeNull();
+    expect(acceptanceWaitMs(row, [ended(false)])).toBeNull();
+    expect(acceptanceWaitMs(row, [ended(undefined)])).toBeNull();
+    expect(acceptanceWaitText(row, [ended(null)])).toBeNull();
+    // Only the last stop counts: an earlier confirmed end cannot stand in for
+    // a later unconfirmed one, nor for a later execution without an end.
+    const earlier = execution("2026-09-26T03:00:00Z", "2026-09-26T03:10:00Z", { spanId: "e0" });
+    expect(acceptanceWaitMs(row, [earlier, ended(null)])).toBeNull();
+    expect(acceptanceWaitMs(row, [earlier, execution("2026-09-26T05:20:00Z", null, { spanId: "e2", state: "running" })])).toBeNull();
+    expect(acceptanceWaitMs(row, [ended(null), { ...earlier, spanId: "e3", startAt: "2026-09-26T06:00:00Z", endAt: "2026-09-26T06:25:00Z" }])).toBe(3600_000);
+  });
+
   it("words a rejected verdict as a pending conclusion", () => {
     expect(acceptanceWaitText({ ...row, acceptanceVerdict: "rejected" }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")]))
       .toContain("等待验收结论");

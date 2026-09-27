@@ -7,7 +7,7 @@ import type { SpanOutcome, TimelineItem, FriendlyProfile } from "./objective-dis
 import {
   buildChronology, clockSeconds, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
   eventClusterLabel, eventSentence, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
-  eventItem, toMs, configurationPalette, acceptanceWaitText, titleLineTooltip,
+  eventItem, toMs, configurationPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
 } from "./objective-display";
 import { ObjectiveChronology } from "./ObjectiveChronology";
 import { DelegationStrip, ObjectiveOverview } from "./ObjectiveOverview";
@@ -20,11 +20,39 @@ const MARKER_MERGE_PX = 14;
 /** Nominal track width before measurement (and in tests without layout). */
 const FALLBACK_VIEWPORT_PX = 800;
 const FALLBACK_LABEL_PX = 240;
+/**
+ * Right-edge room after the last instant: flags, end marks, the running pulse
+ * and minimum-width bars centred on the final time stay inside the canvas, so
+ * 适应窗口 has no internal horizontal overflow.
+ */
+const TRACK_END_PX = 12;
 /** The inspector drawer's default and keyboard-adjusted geometry (P2.1). */
 const DRAWER_DEFAULT_PX = 168;
 const DRAWER_MIN_PX = 44;
 const DRAWER_STEP_PX = 16;
+/** Below this the drawer body would be a sliver, so it folds to its title row. */
+const DRAWER_USEFUL_PX = 96;
+/** The timeline keeps this height before the drawer may take more (P2.1). */
+const TIMELINE_MIN_PX = 200;
+/** Mirrors `.tl-head`'s max-height: min(340px, 45%). */
+const HEAD_MAX_PX = 340;
+const HEAD_MAX_SHARE = 0.45;
 const ZOOM_STEP = 1.5;
+
+/**
+ * The natural (unshrunk) outer height of a fixed section of the column. Using
+ * scrollHeight means a header the CSS fallback already compressed is still
+ * counted at full size, so the drawer yields first and never locks the
+ * header in its compressed form.
+ */
+function naturalHeight(element: HTMLElement, columnHeight: number): number {
+  const style = getComputedStyle(element);
+  const px = (value: string) => Number.parseFloat(value) || 0;
+  const borders = px(style.borderTopWidth) + px(style.borderBottomWidth);
+  let height = Math.max(element.offsetHeight, element.scrollHeight + borders);
+  if (element.classList.contains("tl-head")) height = Math.min(height, HEAD_MAX_PX, columnHeight * HEAD_MAX_SHARE);
+  return height + px(style.marginTop) + px(style.marginBottom);
+}
 
 type SpanFacts = { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome };
 type MarkerCluster = MarkerClusterView & { head: string };
@@ -149,24 +177,77 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   // remembered per objective for this page session (P1.7).
   const [hostEventsOpenByObjective, setHostEventsOpenByObjective] = useState<Map<string, boolean>>(() => new Map());
 
-  // The inspector drawer height (P2.1): page-session persistent.
+  // The inspector drawer (P2.1/P2.2): the user's height and open/closed choice
+  // persist for the page session, and the shown height is re-clamped from
+  // reactive measurements. The drawer never takes the timeline below 200px:
+  // it shrinks first and folds to its title row when only a sliver would be
+  // left; the narrow layout caps at 40vh and starts at its title row.
   const [drawerHeight, setDrawerHeight] = useState<number | null>(null);
-  const [drawerCollapsed, setDrawerCollapsed] = useState(false);
-  const columnHeight = useRef<number | null>(null);
+  const [drawerCollapsed, setDrawerCollapsed] = useState<boolean | null>(null);
+  const [columnBox, setColumnBox] = useState<{ column: number; reserved: number } | null>(null);
+  const boxObserver = useRef<ResizeObserver | null>(null);
+  const observedSections = useRef<Element[]>([]);
   useEffect(() => {
     const element = rootRef.current;
     if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => { columnHeight.current = element.clientHeight; });
+    const measure = () => {
+      const column = element.clientHeight;
+      if (column <= 0) return; // hidden: keep the last geometry
+      let reserved = 0;
+      for (const child of element.children) {
+        if (!(child instanceof HTMLElement)) continue;
+        if (child.matches(".timeline-body, .tl-body, .inspector-dock")) continue;
+        reserved += naturalHeight(child, column);
+      }
+      reserved = Math.round(reserved);
+      setColumnBox(previous => previous && previous.column === column && previous.reserved === reserved
+        ? previous : { column, reserved });
+    };
+    const observer = new ResizeObserver(measure);
+    boxObserver.current = observer;
     observer.observe(element);
-    columnHeight.current = element.clientHeight;
-    return () => observer.disconnect();
+    measure();
+    return () => {
+      observer.disconnect();
+      boxObserver.current = null;
+      observedSections.current = [];
+    };
   }, []);
-  const drawerMax = Math.max(DRAWER_MIN_PX, Math.round((columnHeight.current ?? 400) * 0.45));
-  const drawerValue = drawerCollapsed ? DRAWER_MIN_PX : Math.max(DRAWER_MIN_PX, Math.min(drawerHeight ?? DRAWER_DEFAULT_PX, drawerMax));
-
-  // Zoom (P2.3): null means 适应窗口; a number is an absolute px/minute.
-  const [zoom, setZoom] = useState<number | null>(null);
-  const zoomAnchor = useRef<{ timeMs: number; screenX: number } | null>(null);
+  // Header, band, toolbar and banner come and go with the data; observe the
+  // current set so their own size changes re-clamp the drawer too.
+  useEffect(() => {
+    const element = rootRef.current;
+    const observer = boxObserver.current;
+    if (!element || !observer) return;
+    const sections = [...element.children];
+    const previous = observedSections.current;
+    if (sections.length === previous.length && sections.every((section, index) => section === previous[index])) return;
+    for (const section of previous) observer.unobserve(section);
+    for (const section of sections) observer.observe(section);
+    observedSections.current = sections;
+  });
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === "undefined" || !Number.isFinite(window.innerHeight) ? 800 : window.innerHeight);
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const drawerShareMax = narrowViewport ? viewportHeight * 0.4 : (columnBox?.column ?? 400) * 0.45;
+  const drawerRoom = columnBox ? columnBox.column - columnBox.reserved - TIMELINE_MIN_PX : Number.POSITIVE_INFINITY;
+  const drawerFitMax = Math.min(drawerShareMax, drawerRoom);
+  // An explicit 展开 in a short window still opens a usable drawer (within its
+  // share); the CSS fallback then compresses header and timeline, and the
+  // column scrolls as the last resort, so the drawer bottom stays reachable.
+  const drawerMax = Math.max(DRAWER_MIN_PX, Math.round(drawerCollapsed === false
+    ? Math.max(drawerFitMax, Math.min(drawerShareMax, DRAWER_USEFUL_PX))
+    : drawerFitMax));
+  // Without an explicit choice the narrow drawer shows its title row until a
+  // single click pins something (the pinned card is that click's only
+  // effect); a short column folds it regardless.
+  const drawerActuallyCollapsed = drawerCollapsed
+    ?? (drawerFitMax < DRAWER_USEFUL_PX || (narrowViewport && selection === null));
+  const drawerValue = drawerActuallyCollapsed ? DRAWER_MIN_PX : Math.max(DRAWER_MIN_PX, Math.min(drawerHeight ?? DRAWER_DEFAULT_PX, drawerMax));
 
   const observedAtMs = toMs(timeline?.observedAt);
   const layout = useMemo(
@@ -174,6 +255,19 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     [timeline, props.expandedGapIds],
   );
   const canvasKey = timeline?.objective.objectiveId ?? null;
+
+  // Zoom (P2.3): null means 适应窗口; a number is an absolute px/minute. A
+  // manual level and its pending anchor belong to one objective (review §5):
+  // an actual objective switch starts from 适应窗口, while same-objective
+  // polling and returning from a detail keep the level.
+  const [zoomState, setZoomState] = useState<{ objectiveId: string; ppm: number } | null>(null);
+  const zoom = zoomState !== null && zoomState.objectiveId === canvasKey ? zoomState.ppm : null;
+  const zoomAnchor = useRef<{ objectiveId: string; timeMs: number; screenX: number } | null>(null);
+  useEffect(() => {
+    if (canvasKey === null) return;
+    setZoomState(current => current !== null && current.objectiveId !== canvasKey ? null : current);
+    if (zoomAnchor.current && zoomAnchor.current.objectiveId !== canvasKey) zoomAnchor.current = null;
+  }, [canvasKey]);
 
   // Measure the scroll viewport (not the expanding track) once the async
   // canvas exists; zero hidden widths are ignored so saved geometry survives.
@@ -188,9 +282,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (!element || canvasKey === null) return;
     const update = () => {
       const width = element.clientWidth;
-      // Track viewport floor 380 (design §1): with the label column the
-      // timeline content stays ≥560 and scrolls horizontally below that.
-      if (width > 0) setViewport(Math.max(380, Math.round(width - labelWidthPx())));
+      // The fit track is the actual remaining width (review §2): a 500px
+      // column with 240px labels has a 260px track, never a floor that would
+      // force horizontal overflow. Rounding down keeps a fractional label
+      // column from adding a pixel of overflow.
+      const track = width > 0 ? Math.floor(width - labelWidthPx()) : 0;
+      if (track > 0) setViewport(track);
     };
     update();
     if (typeof ResizeObserver === "undefined") return;
@@ -199,7 +296,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     return () => observer.disconnect();
   }, [canvasKey, asList]);
 
-  const effectiveViewport = viewport ?? FALLBACK_VIEWPORT_PX;
+  // The time scale ends TRACK_END_PX before the canvas edge (see above).
+  const effectiveViewport = Math.max(1, (viewport ?? FALLBACK_VIEWPORT_PX) - TRACK_END_PX);
   const fitPpm = useMemo(
     () => layout ? fitPixelsPerMinute(layout, effectiveViewport) : Number.POSITIVE_INFINITY,
     [layout, effectiveViewport],
@@ -219,13 +317,13 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     const element = scrollRef.current;
     const anchor = zoomAnchor.current;
     zoomAnchor.current = null;
-    if (!element || !anchor || !scaled || !layout || layout.startMs === null) return;
+    if (!element || !anchor || anchor.objectiveId !== canvasKey || !scaled || !layout || layout.startMs === null) return;
     const percent = scaled.position(anchor.timeMs);
     if (percent === null) return;
     const labelW = labelWidthPx();
     const trackX = percent / 100 * scaled.widthPx;
     element.scrollLeft = Math.max(0, Math.round(labelW + trackX - anchor.screenX));
-  }, [scaled, layout]);
+  }, [scaled, layout, canvasKey]);
 
   const spansByRun = useMemo(() => {
     const map = new Map<string, TimelineSpan[]>();
@@ -402,10 +500,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     return labelWidthPx() + percent / 100 * scaled.widthPx - element.scrollLeft;
   }
 
-  /** A zoom step keeps the anchor time (selection in view, else viewport centre) at its screen position. */
+  /** A zoom step keeps the anchor time (selection in view, else the visible track centre) at its screen position. */
   function changeZoom(next: number | null) {
     const element = scrollRef.current;
+    if (canvasKey === null) return;
     if (element && scaled && layout && layout.startMs !== null && layout.endMs !== null && !asList) {
+      const labelW = labelWidthPx();
       let anchorTime: number | null = null;
       let anchorScreenX: number | null = null;
       const selectedTime = selection?.type === "item"
@@ -413,16 +513,20 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         : null;
       if (selectedTime !== null) {
         const x = screenXAt(selectedTime);
-        if (x !== null && x >= 0 && x <= element.clientWidth) {
+        // The sticky label column covers the left labelWidth of the viewport,
+        // so only a selection right of it is actually visible (review §4).
+        if (x !== null && x >= labelW && x <= element.clientWidth) {
           anchorTime = selectedTime;
           anchorScreenX = x;
         }
       }
       if (anchorTime === null || anchorScreenX === null) {
-        // The time at the viewport centre, found by bisection over the
-        // monotonic position mapping (fold bands included).
-        const centreX = element.scrollLeft + element.clientWidth / 2 - labelWidthPx();
-        const percent = Math.max(0, Math.min(100, centreX / scaled.widthPx * 100));
+        // The time at the centre of the visible track (right of the sticky
+        // labels), found by bisection over the monotonic position mapping
+        // (fold bands included).
+        const screenX = labelW + Math.max(0, element.clientWidth - labelW) / 2;
+        const trackX = element.scrollLeft + screenX - labelW;
+        const percent = Math.max(0, Math.min(100, trackX / scaled.widthPx * 100));
         let lo = layout.startMs, hi = layout.endMs;
         for (let i = 0; i < 44; i += 1) {
           const mid = (lo + hi) / 2;
@@ -430,11 +534,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
           if (at < percent) lo = mid; else hi = mid;
         }
         anchorTime = (lo + hi) / 2;
-        anchorScreenX = element.clientWidth / 2;
+        anchorScreenX = screenX;
       }
-      zoomAnchor.current = { timeMs: anchorTime, screenX: anchorScreenX };
+      zoomAnchor.current = { objectiveId: canvasKey, timeMs: anchorTime, screenX: anchorScreenX };
     }
-    setZoom(next === null ? null : Math.max(0, next));
+    setZoomState(next === null ? null : { objectiveId: canvasKey, ppm: Math.max(0, next) });
   }
 
   function zoomIn() {
@@ -453,9 +557,13 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   function onCanvasKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
     if (target.closest("input, textarea, select")) return;
-    // Keyboard zoom (P2.3): + / - / 0 while focus is inside the timeline grid;
-    // no modifier so the browser's own zoom is untouched.
-    if (!asList && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "0")) {
+    // Keyboard zoom (P2.3): + / - / 0 while focus is inside the timeline grid
+    // (not in the portalled Host event popup). Ctrl/Meta/Alt stay with the
+    // browser's own shortcuts (review §3); Shift is allowed because Shift+= is
+    // how "+" is typed.
+    if (!asList && !event.ctrlKey && !event.metaKey && !event.altKey
+      && gridRef.current?.contains(target) === true
+      && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "0")) {
       event.preventDefault();
       if (event.key === "+" || event.key === "=") zoomIn();
       else if (event.key === "-") zoomOut();
@@ -525,7 +633,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   const ticks = useMemo(() => {
     if (!scaled || !layout || layout.startMs === null || layout.endMs === null || realMinutes <= 0) return [] as { at: number; label: string; left: number }[];
-    const pxPerMinute = (widthPx - scaled.gaps.filter(gap => gap.collapsed).length * 64) / realMinutes;
+    // Breaks shrink to fit the viewport, so measure their actual pixel total
+    // instead of assuming 64px each.
+    const collapsedGapPx = scaled.gaps.filter(gap => gap.collapsed)
+      .reduce((total, gap) => total + (gap.toPercent - gap.fromPercent) / 100 * widthPx, 0);
+    const pxPerMinute = (widthPx - collapsedGapPx) / realMinutes;
     const steps = [15, 30, 60, 120, 240, 480, 1440];
     const stepMinutes = steps.find(step => step * pxPerMinute >= 64) ?? 1440;
     const stepMs = stepMinutes * 60000;
@@ -688,7 +800,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
             onScroll={() => { if (openCluster !== null) requestClusterClose(false); }}
             onKeyDown={onCanvasKeyDown}>
             <div ref={gridRef} className="tl-grid" role="group" aria-label="工作目标时间轴"
-              style={{ width: `calc(var(--label-w) + ${Math.round(widthPx)}px)` }}>
+              style={{ width: `calc(var(--label-w) + ${Math.round(widthPx) + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
               <div className="tl-row axis">
                 <div className="tl-label">委派 / 时间</div>
                 <div className="tl-track">
@@ -700,7 +812,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       onClick={() => props.onToggleGap(gap.id)}>
                       <span>空闲 {durationShort(gap.endMs - gap.startMs)}</span><span>展开</span>
                     </button>
-                    : <button key={gap.id} type="button" className="collapse-button" style={{ left: `${gap.fromPercent + 0.4}%` }}
+                    // In the right half the control hangs leftwards from the
+                    // band's end, so its label never runs past the canvas.
+                    : <button key={gap.id} type="button" className="collapse-button"
+                      style={gap.fromPercent <= 50 ? { left: `${gap.fromPercent + 0.4}%` } : { right: `${100 - gap.toPercent + 0.4}%` }}
                       aria-label={`收起空闲 ${durationShort(gap.endMs - gap.startMs)}`}
                       onClick={() => props.onToggleGap(gap.id)}>收起空闲 {durationShort(gap.endMs - gap.startMs)}</button>)}
                   {nowVisible && nowLeft !== null && <span className="now-chip">现在 {clockTime(observedAtMs!)}</span>}
@@ -776,22 +891,18 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                 const runSelected = selectedRunId === row.runId;
                 const runOpened = openedRunId === row.runId;
                 const settleSelected = selection?.type === "item" && selection.key === settle?.key;
-                // The acceptance-wait dashed line (P1.8): only from a recorded,
-                // confirmed execution end to the flag, never an invented time.
+                // The acceptance-wait dashed line (P1.8): only from the last
+                // execution's recorded end with an explicitly confirmed stop to
+                // the flag — the same measurement the inspector shows — never
+                // an invented time.
                 const ownSpans = spansByRun.get(row.runId) ?? [];
+                const waitMs = settle ? acceptanceWaitMs(row, ownSpans) : null;
                 const waitText = settle ? acceptanceWaitText(row, ownSpans) : null;
+                const acceptedMs = toMs(row.acceptedAt);
                 let waitLine: { from: number; to: number } | null = null;
-                if (settle && settleLeft !== null && waitText !== null) {
-                  const executions = ownSpans
-                    .filter(span => span.kind === "execution")
-                    .map(span => ({ span, endMs: toMs(span.endAt) }))
-                    .filter((entry): entry is { span: TimelineSpan; endMs: number } => entry.endMs !== null)
-                    .sort((left, right) => left.endMs - right.endMs);
-                  const last = executions[executions.length - 1];
-                  if (last && settle.atMs !== null && last.endMs <= settle.atMs) {
-                    const from = scaled.position(last.endMs);
-                    if (from !== null && settleLeft >= from) waitLine = { from, to: settleLeft };
-                  }
+                if (settleLeft !== null && waitMs !== null && waitText !== null && acceptedMs !== null) {
+                  const from = scaled.position(acceptedMs - waitMs);
+                  if (from !== null && settleLeft >= from) waitLine = { from, to: settleLeft };
                 }
                 return <div key={row.runId} className={"tl-row" + (runSelected ? " run-selected" : "")} data-nav="">
                   <button type="button"
@@ -900,14 +1011,14 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
       onChange={value => { setDrawerCollapsed(false); setDrawerHeight(value); }}
       onReset={() => { setDrawerCollapsed(false); setDrawerHeight(null); }} />
-    <div className={"inspector-dock" + (drawerCollapsed ? " collapsed" : "")} style={{ height: `${drawerValue}px` }}>
+    <div className={"inspector-dock" + (drawerActuallyCollapsed ? " collapsed" : "")} style={{ height: `${drawerValue}px` }}>
       <div className="inspector-dock-head">
         <span className="inspector-dock-title">检查器</span>
         <button type="button" className="button small-button"
-          aria-expanded={!drawerCollapsed}
-          onClick={() => setDrawerCollapsed(current => !current)}>{drawerCollapsed ? "展开" : "收起"}</button>
+          aria-expanded={!drawerActuallyCollapsed}
+          onClick={() => setDrawerCollapsed(!drawerActuallyCollapsed)}>{drawerActuallyCollapsed ? "展开" : "收起"}</button>
       </div>
-      {!drawerCollapsed && <div className="inspector-dock-body">
+      {!drawerActuallyCollapsed && <div className="inspector-dock-body">
         <TimelineInspector selection={selection}
           previewItem={activeItem}
           previewClusterHead={activeCluster ? activeCluster.head : null}

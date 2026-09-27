@@ -366,6 +366,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     nextCursor={list.nextCursor} reorder={list.reorder}
     filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
     selected={selected}
+    active={active}
     rail={railActive} railState={selectedSummary} railButtonRef={railButtonRef}
     onToggleRail={() => {
       setDrawerOpen(current => {
@@ -443,6 +444,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
           nextCursor={list.nextCursor} reorder={list.reorder}
           filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
           selected={selected}
+          active={active}
           rail={false} railState={null}
           onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
           onSelect={selectObjective} onRefresh={list.reset} onRetry={list.retry} onMore={list.more}

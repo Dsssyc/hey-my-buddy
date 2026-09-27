@@ -381,17 +381,19 @@ describe("objective timeline rendering", () => {
       const grid = document.querySelector(".tl-grid") as HTMLElement;
       expect(observers.length).toBeGreaterThan(before);
       const viewportObserver = observers[observers.length - 1]!;
-      // 900px viewport minus the 240px fallback label column = 660px track.
+      // 900px viewport minus the 240px fallback label column = 660px canvas:
+      // exactly the viewport (适应窗口 never overflows), of which the time
+      // track is 648px and 12px stay after the last instant.
       expect(grid.style.width).toBe("calc(var(--label-w) + 660px)");
       const band = document.querySelector(".fold-band") as HTMLElement;
       const bandPercent = Number.parseFloat(band.style.width);
-      expect(bandPercent / 100 * 660).toBeCloseTo(64, 5);
+      expect(bandPercent / 100 * 648).toBeCloseTo(64, 5);
       // A viewport resize remaps the same recorded facts without feedback.
       stubbedWidth = 1400;
       act(() => { viewportObserver.callback([], viewportObserver as unknown as ResizeObserver); });
       await waitFor(() => expect(grid.style.width).toBe("calc(var(--label-w) + 1160px)"));
       const remapped = Number.parseFloat((document.querySelector(".fold-band") as HTMLElement).style.width);
-      expect(remapped / 100 * 1160).toBeCloseTo(64, 5);
+      expect(remapped / 100 * 1148).toBeCloseTo(64, 5);
     } finally {
       delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
       if (widthOriginal) Object.defineProperty(widthOriginal.target, "clientWidth", widthOriginal.descriptor);

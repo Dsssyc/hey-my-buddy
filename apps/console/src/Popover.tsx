@@ -30,6 +30,8 @@ export type PopoverProps = {
   width?: string;
   /** Extra class for the panel. */
   className?: string;
+  /** Element id, so a trigger's `aria-controls` can name the dialog. */
+  id?: string;
 };
 
 /**
@@ -38,12 +40,21 @@ export type PopoverProps = {
  * below has no room. Outside click, Escape and focus leaving the
  * trigger+popover pair close it; Escape returns focus to the trigger while an
  * outside click never steals focus. The popover is `role="dialog"` without
- * aria-modal, and only one shared popover exists at a time.
+ * aria-modal, and only one shared popover exists at a time — including the
+ * Host event popup, which reuses this lifecycle. Viewport resizes and scrolls
+ * re-run the same placement so an unchanged-size popover stays anchored to
+ * its trigger and inside the viewport.
  */
-export function Popover({ anchor, label, onClose, children, width, className }: PopoverProps) {
+export function Popover({ anchor, label, onClose, children, width, className, id }: PopoverProps) {
   const root = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const owner = useRef({}).current;
+  const placeRef = useRef<() => void>(() => {});
+  // Owners may pass a fresh callback each render; the lifecycle listeners and
+  // the single-popover claim stay registered once per anchor.
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => { onCloseRef.current = onClose; });
+  const close = useRef(() => onCloseRef.current()).current;
 
   useLayoutEffect(() => {
     if (!anchor) return;
@@ -61,15 +72,19 @@ export function Popover({ anchor, label, onClose, children, width, className }: 
       setPosition(previous => previous && previous.left === left && previous.top === top
         ? previous : { left, top });
     };
+    placeRef.current = place;
     place();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(place);
     observer.observe(root.current!);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      placeRef.current = () => {};
+    };
   }, [anchor, children]);
 
   // Opening claims the single shared slot; closing (any way) releases it.
-  useEffect(() => claimPopover(owner, onClose), [owner, onClose]);
+  useEffect(() => claimPopover(owner, close), [owner, close]);
 
   // Outside pointer press closes; the anchor itself toggles through its own
   // button handler, so presses there are left alone.
@@ -78,11 +93,11 @@ export function Popover({ anchor, label, onClose, children, width, className }: 
       const target = event.target as HTMLElement | null;
       if (root.current?.contains(target)) return;
       if (anchor?.contains(target)) return;
-      onClose();
+      close();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [anchor, onClose]);
+  }, [anchor, close]);
 
   // Escape closes and returns focus to the trigger button.
   useEffect(() => {
@@ -90,12 +105,12 @@ export function Popover({ anchor, label, onClose, children, width, className }: 
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      close();
       anchor?.focus();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [anchor, onClose]);
+  }, [anchor, close]);
 
   // Focus leaving the trigger+popover pair closes without moving focus.
   useEffect(() => {
@@ -103,26 +118,40 @@ export function Popover({ anchor, label, onClose, children, width, className }: 
       const related = event.relatedTarget as HTMLElement | null;
       if (related && root.current?.contains(related)) return;
       if (related && anchor?.contains(related)) return;
-      // Let the browser finish moving focus before deciding.
-      window.requestAnimationFrame(() => {
+      // Let the browser finish moving focus before deciding. A popover that
+      // already closed (for example because focus moved into the next one)
+      // cancels the pending check so it can never close its successor.
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
         const active = document.activeElement;
         if (active && root.current?.contains(active)) return;
         if (active && anchor?.contains(active)) return;
-        onClose();
+        close();
       });
     };
+    let frame = 0;
     document.addEventListener("focusout", onFocusOut);
-    return () => document.removeEventListener("focusout", onFocusOut);
-  }, [anchor, onClose]);
+    return () => {
+      document.removeEventListener("focusout", onFocusOut);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [anchor, close]);
 
-  // A viewport resize re-clamps through the layout effect's measurement loop.
+  // A viewport resize or any scroll replays the same placement; an
+  // unchanged-size popover re-clamps instead of losing its position.
   useEffect(() => {
-    const onResize = () => setPosition(null);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const reposition = () => placeRef.current();
+    window.addEventListener("resize", reposition);
+    document.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("scroll", reposition, true);
+    };
   }, []);
 
-  return createPortal(<div ref={root} role="dialog" aria-label={label}
+  // tabIndex -1: a click on the popover's plain text focuses the dialog itself
+  // instead of the body, so it does not count as focus leaving.
+  return createPortal(<div ref={root} id={id} role="dialog" aria-label={label} tabIndex={-1}
     className={"shared-popover" + (className ? ` ${className}` : "")}
     style={{ left: position ? `${position.left}px` : undefined, top: position ? `${position.top}px` : undefined, width }}>
     {children}
