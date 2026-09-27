@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 1 44 62" width="88" height="124" role="img" aria-label="hey-my-buddy">
+  <title>hey-my-buddy</title>
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="10" y="1" width="44" height="62">
+      <rect x="10" y="1" width="44" height="62" fill="#fff"/>
+      <path d="M22 37 29 33.5M35 30.5 42 27M30 28V38M34 26V36" stroke="#000" stroke-width="1"/>
+    </mask>
+  </defs>
+  <g mask="url(#cut)">
+    <polygon fill="#24654D" points="12,13 22,13 22,61 12,54"/>
+    <polygon fill="#24654D" points="22,32 30,28 30,38 22,42"/>
+    <polygon fill="#1F2A24" points="42,3 52,10 52,51 42,51"/>
+    <polygon fill="#1F2A24" points="34,26 42,22 42,32 34,36"/>
+    <polygon fill="#D85A30" points="30,28 34,26 34,36 30,38"/>
+  </g>
+</svg>
