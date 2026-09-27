@@ -35,6 +35,17 @@ afterEach(() => cleanup());
 const item = (key: string) => document.querySelector(`[data-key="${key}"]`) as HTMLButtonElement | null;
 
 describe("objective timeline rendering", () => {
+  it("shows receipt cancellation even with an error reason and no cancelled turn disposition", () => {
+    const timeline = objectiveTimelineFixture();
+    const cancelled = timeline.spans.find(span => span.spanId === "s-r5-e")!;
+    cancelled.disposition = undefined;
+    cancelled.resultStatus = "cancelled";
+    cancelled.error = "Host cancelled the attempt";
+    render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    expect(item("span:s-r5-e")!.getAttribute("aria-label")).toContain("已取消");
+    expect(item("span:s-r5-e")!.className).not.toContain("failed");
+  });
+
   it("shows the recorded header facts and the archival note", () => {
     const timeline = objectiveTimelineFixture();
     render(<ObjectiveTimeline {...baseProps(timeline)} />);

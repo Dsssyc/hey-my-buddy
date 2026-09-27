@@ -529,7 +529,8 @@ def _run_spans(connection, row) -> list[dict]:
     run_id = row["task_id"]
     spans: list[dict] = []
     attempts = connection.execute(
-        "SELECT a.*, t.turn_id, t.turn_index, t.input_json, t.disposition"
+        "SELECT a.*, json_extract(a.result_json,'$.status') AS result_status,"
+        " t.turn_id, t.turn_index, t.input_json, t.disposition"
         " FROM attempts a LEFT JOIN workflow_turns t ON t.attempt_id = a.attempt_id"
         " WHERE a.task_id=? ORDER BY a.generation, a.created_at",
         (run_id,),
@@ -559,6 +560,7 @@ def _run_spans(connection, row) -> list[dict]:
             state, attempt_id=attempt["attempt_id"], turn_id=attempt["turn_id"], turn_index=attempt["turn_index"],
             configuration=configuration, shutdown_confirmed=confirmed, uncertain=uncertain,
             generation=attempt["generation"], disposition=attempt["disposition"],
+            resultStatus=attempt["result_status"],
             error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
         ))
         queued_from = attempt["finished_at"] or attempt["created_at"]
@@ -582,7 +584,8 @@ def _run_spans(connection, row) -> list[dict]:
 def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list[dict]:
     spans = []
     for attempt in connection.execute(
-        "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at"
+        "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at,"
+        " json_extract(result_json,'$.status') AS result_status, error"
         " FROM attempts WHERE task_id=? ORDER BY generation", (decision_task_id,)
     ).fetchall():
         state, confirmed, uncertain = _attempt_state(attempt)
@@ -590,7 +593,8 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
             "routing", f"routing:{attempt['attempt_id']}", owner_run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" else None,
             state, attempt_id=attempt["attempt_id"], shutdown_confirmed=confirmed, uncertain=uncertain,
-            decisionTaskId=decision_task_id,
+            decisionTaskId=decision_task_id, resultStatus=attempt["result_status"],
+            error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
         ))
     return spans
 

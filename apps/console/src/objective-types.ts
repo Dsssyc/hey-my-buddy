@@ -68,6 +68,8 @@ export type TimelineSpan = {
   requestId: string | null; configuration: TimelineConfiguration | null;
   shutdownConfirmed: boolean | null; uncertain: boolean; clockSkew: boolean;
   generation?: number; disposition?: string; error?: string;
+  /** Own durable attempt receipt; a model turn disposition is not the execution result. */
+  resultStatus?: "ok" | "failed" | "cancelled";
   requestKind?: string; summary?: string; decisionTaskId?: string;
 };
 export type TimelineEventKind =

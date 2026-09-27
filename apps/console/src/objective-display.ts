@@ -35,8 +35,9 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
   // Unknown shutdown outranks a recorded failure disposition: an unconfirmed
   // stop is never labelled plain failed/cancelled, though the failure text stays.
   if (span.uncertain === true || state === "uncertain") return "unknown";
-  if (span.disposition === "failed" || (typeof span.error === "string" && span.error.trim())) return "failed";
-  if (span.disposition === "cancelled") return "cancelled";
+  if (span.resultStatus === "cancelled") return "cancelled";
+  if (span.resultStatus === "failed") return "failed";
+  if (span.resultStatus !== "ok" && typeof span.error === "string" && span.error.trim()) return "failed";
   if (span.endAt == null) {
     return OPEN_EXECUTION_STATES.has(state) && span.shutdownConfirmed !== true ? "running" : "unplaced";
   }

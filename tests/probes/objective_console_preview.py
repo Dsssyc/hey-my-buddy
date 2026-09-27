@@ -193,7 +193,7 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
          confirmed: bool | None = None, uncertain: bool = False, generation: int | None = None,
          disposition: str | None = None, error: str | None = None, request_kind: str | None = None,
          summary: str | None = None, decision_task: str | None = None,
-         turn_index: int | None = None) -> dict:
+         turn_index: int | None = None, result_status: str | None = None) -> dict:
     view = {"spanId": span_id, "kind": kind, "startAt": start, "endAt": end, "state": state,
             "attemptId": attempt_id, "turnId": f"turn-{attempt_id}" if attempt_id else None,
             "turnIndex": turn_index, "requestId": request_id, "configuration": configuration,
@@ -202,6 +202,8 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
     extras = {"generation": generation, "disposition": disposition, "error": error,
               "requestKind": request_kind, "summary": summary, "decisionTaskId": decision_task}
     view.update({key: value for key, value in extras.items() if value is not None})
+    if kind in ("execution", "routing") and state == "finished":
+        view["resultStatus"] = result_status or ("failed" if error else "ok")
     return view
 
 
@@ -480,7 +482,7 @@ def build_runs() -> dict[str, dict]:
                 span("execution:att-b1h-1", "execution", instant(3, 11), instant(3, 25), "finished",
                      attempt_id="att-b1h-1", configuration=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1,
-                     error="synthetic preview cancellation: Host cancelled the helper"),
+                     error="synthetic preview cancellation: Host cancelled the helper", result_status="cancelled"),
             ],
             attempts=[attempt("att-b1h-1", 1, "finished", True, instant(3, 11), instant(3, 25), CFG_GLM,
                               error="synthetic preview cancellation: Host cancelled the helper",

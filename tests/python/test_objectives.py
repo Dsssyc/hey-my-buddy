@@ -91,6 +91,24 @@ class ObjectiveReadTests(WorkflowTestCase):
     def list_(self, board, **params):
         return board.call('objective_list', params)
 
+    def test_execution_spans_use_their_own_receipt_status_not_turn_disposition(self):
+        board = self.board()
+        self.register(board)
+        for status in ('ok', 'failed', 'cancelled'):
+            with self.subTest(status=status):
+                submitted = self.submit(board, request_id=f'receipt-{status}', kind='worktree')
+                claimed = self.claim(board, claim_request_id=f'claim-{status}', run_id=submitted['runId'])
+                if status == 'cancelled':
+                    board.call('workflow_cancel', {
+                        'runId': submitted['runId'], 'commandId': 'cancel-receipt',
+                        **self.controls[submitted['runId']],
+                    })
+                self.finish_turn(board, claimed, runner_status=status)
+                timeline = board.call('objective_timeline', {'objectiveId': f"run:{submitted['runId']}"})
+                execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')
+                self.assertEqual(execution.get('resultStatus'), status)
+                self.assertTrue(execution['shutdownConfirmed'])
+
     def test_list_groups_objectives_and_standalone_roots_by_latest_activity(self):
         board, first, second, loose = self.grouped_board()
         listed = self.list_(board)
