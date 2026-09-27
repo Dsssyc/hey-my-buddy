@@ -400,7 +400,7 @@ button.tl-label:hover { background: var(--subtle); }
 .timeline-body.as-list .timeline-inspector { display: flex; }
 .inspector-card-head strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .inspector-preview-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
-.inspector-preview { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; overflow-wrap: anywhere; }
+.inspector-preview { min-width: 0; max-width: 100%; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-card { border-top: 1px solid var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .inspector-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .inspector-card-head strong { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
@@ -664,4 +664,3 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .storage-outcome p { margin: 2px 0; }
 .storage-skipped { list-style: disc; padding-left: 18px; font-size: 11px; color: var(--muted); margin: 4px 0; }
 .storage-actions { margin-top: 12px; }
-

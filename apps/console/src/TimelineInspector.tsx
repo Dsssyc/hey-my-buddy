@@ -109,10 +109,15 @@ export function TimelineInspector(props: TimelineInspectorProps) {
   const missing = !!selection && !resolved && card !== null;
 
   const previewTarget = props.previewItem;
-  // P1.6: the hover/focus preview is one line — type, delegation short title
-  // and time — never a comma dump.
+  const previewCard = timeline && previewTarget
+    ? buildInspectorCard({ type: "item", key: previewTarget.key }, timeline, itemsByKey, props.profiles)
+    : null;
+  // Derive facts by field identity; free-text titles can themselves contain
+  // “时间” or “至” and must never be mistaken for another timing field.
   const previewLine = props.previewClusterHead
-    ?? (previewTarget ? `${previewTarget.head} · ${previewTarget.parts[0] ?? ""} · ${previewTarget.parts.find(part => /至|起|时间/.test(part)) ?? ""}` : null);
+    ?? (previewCard ? [previewCard.head, ...["委派", "时间"].map(label =>
+      previewCard.fields.find(field => field.label === label)?.value)].filter(Boolean).join(" · ")
+      : previewTarget?.head ?? null);
   const previewIsSelection = !props.previewClusterHead && (
     (selection?.type === "item" && previewTarget?.key === selection.key));
 
@@ -120,11 +125,11 @@ export function TimelineInspector(props: TimelineInspectorProps) {
   if (!selection) {
     // One preview line plus the single selection hint (P1.6).
     previewRow = <>
-      {previewLine && <span className="inspector-preview"><strong>{previewLine}</strong></span>}
+      {previewLine && <span className="inspector-preview" title={previewLine}><strong>{previewLine}</strong></span>}
       <span className="hint">单击选中 · Enter 或双击打开详情</span>
     </>;
   } else if (previewLine && !previewIsSelection) {
-    previewRow = <span className="inspector-preview muted">预览：{previewLine}</span>;
+    previewRow = <span className="inspector-preview muted" title={previewLine}>预览：{previewLine}</span>;
   }
 
   // A record that left the read can no longer be opened; record browsing

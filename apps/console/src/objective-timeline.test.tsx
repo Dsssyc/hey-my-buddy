@@ -463,10 +463,15 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
 
   it("shows the preview facts when nothing is pinned and a hint on empty canvases", () => {
     const timeline = objectiveTimelineFixture();
+    const title = "修正时间轴上的重复预览标题";
+    timeline.rows = timeline.rows.map(row => ({ ...row, title, titleSource: "title" }));
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const inspector = container.querySelector(".timeline-inspector")!;
     // Nothing is pinned yet: the row shows one preview line and the hint.
     expect(inspector.textContent).toContain("执行片段");
+    const preview = inspector.querySelector(".inspector-preview")!;
+    expect(preview.textContent!.split(title)).toHaveLength(2);
+    expect(preview.getAttribute("title")).toBe(preview.textContent);
     expect(inspector.textContent).toContain("单击选中 · Enter 或双击打开详情");
     const empty = objectiveTimelineFixture({ rows: [], spans: [], events: [], totals: { rows: 0, spans: 0, events: 0, allRows: 0 } });
     const second = render(<ObjectiveTimeline {...baseProps(empty)} />);

@@ -350,7 +350,14 @@ class TestInquiry(BoardTestCase):
         })
 
     def test_bridge_request_reports_unreachable_sockets(self):
-        result = bridge_request({"socketPath": str(self.workdir() / "missing.sock"), "token": "x"}, "observe", {})
+        import tempfile
+        import uuid
+
+        # Keep the AF_UNIX address short even inside buddy.checks' private TMPDIR.
+        # A nested workdir can exceed macOS's socket limit before ENOENT is tested.
+        missing = Path(tempfile.gettempdir()) / f"hbi-{uuid.uuid4().hex[:8]}"
+        self.assertFalse(missing.exists())
+        result = bridge_request({"socketPath": str(missing), "token": "x"}, "observe", {})
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "bridge-unreachable")
 

@@ -70,9 +70,8 @@ class MethodSurfaceTests(unittest.TestCase):
         for method, target in expected.items():
             with self.subTest(method=method):
                 self.assertEqual(transport.METHOD_MAP[method], target)
-        # ``await`` is the one CLI-level blocking helper; every other public method
-        # is exactly one named C-Two operation.
-        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await"})
+        # Await and the new-package upgrade coordinator are CLI-level helpers.
+        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await", "upgrade"})
         self.assertEqual(cli.LOCAL_METHODS, ("worker-start", "worker-stop"))
 
     def test_execution_results_unwrap_the_task_view_and_goal_results_do_not(self):
