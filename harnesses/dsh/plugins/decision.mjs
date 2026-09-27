@@ -91,7 +91,7 @@ export const MAX_DIAGNOSTIC_FAILURES = 2;
 /** Bounded string/list limits mirrored from the selection prompt contract. */
 export const BOUNDS = Object.freeze({
   reasonChars: 2_000,
-  evidenceIds: 50,
+  evidenceIds: 32,
 });
 
 /** Non-empty, bounded, single-line-safe identifier. */
@@ -140,7 +140,7 @@ function checkIdentifierList(value, { limit, allowed, allowEmpty = true, label }
  */
 export function normalizeCandidates(profiles) {
   if (!Array.isArray(profiles) || profiles.length === 0) return { candidates: null, problem: 'request-profile-invalid' };
-  if (profiles.length > 128) return { candidates: null, problem: 'request-profile-invalid' };
+  if (profiles.length > 200) return { candidates: null, problem: 'request-profile-invalid' };
   const candidates = new Map();
   for (const entry of profiles) {
     const profileId = field(entry, 'profileId');

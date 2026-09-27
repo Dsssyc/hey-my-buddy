@@ -532,6 +532,16 @@ describe('native llm call composition', () => {
 });
 
 describe('bounded corrective retry (R2)', () => {
+  test('candidate and answer evidence bounds agree with the Python owner', () => {
+    const profiles = Array.from({ length: 200 }, (_, index) => ({ profileId: `p${index}`, enabled: true, available: true }));
+    assert.equal(normalizeCandidates(profiles).candidates.size, 200);
+    assert.equal(normalizeCandidates([...profiles, { profileId: 'extra', enabled: true, available: true }]).problem, 'request-profile-invalid');
+    const evidence = Array.from({ length: 33 }, (_, index) => `e${index}`);
+    const legal = new Map([['p1', new Set(evidence)]]);
+    const base = { profileId: 'p1', reason: 'r', support: { cardProfileIds: [], annotationProfileIds: [] } };
+    assert.equal(validateSelectAnswer({ ...base, evidenceIds: evidence.slice(0, 32) }, legal).problem, undefined);
+    assert.equal(validateSelectAnswer({ ...base, evidenceIds: evidence }, legal).problem, 'answer-shape');
+  });
   test('corrected usage includes both model calls and never invents missing counters', async () => {
     const good = JSON.stringify({ profileId: 'p1', reason: 'r', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
     const used = text => [
