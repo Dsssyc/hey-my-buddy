@@ -655,6 +655,24 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     view.unmount();
   });
 
+  it("restores focus to the CSS-selected narrow chronology without a list-toggle click", async () => {
+    const previous = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: true }) });
+    try {
+      const timeline = objectiveTimelineFixture();
+      const view = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+      const entry = document.querySelector(".tl-list [data-key='span:s-r6-e']") as HTMLButtonElement;
+      await userEvent.setup().click(entry);
+      view.rerender(<ObjectiveTimeline {...baseProps(timeline, { hidden: true })} />);
+      view.rerender(<ObjectiveTimeline {...baseProps(timeline)} />);
+      expect(document.activeElement).toBe(entry);
+      view.unmount();
+    } finally {
+      if (previous) Object.defineProperty(window, "matchMedia", previous);
+      else Reflect.deleteProperty(window, "matchMedia");
+    }
+  });
+
   it("keeps assigned configuration colours across refreshes and stripes overflow on the bars", () => {
     const first = objectiveTimelineFixture();
     const view = render(<ObjectiveTimeline {...baseProps(first)} />);

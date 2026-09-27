@@ -252,9 +252,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         // Canvas items and chronology entries share keys; focus whichever the
         // current view actually shows, then bring it into view.
         const matches = [...(rootRef.current?.querySelectorAll<HTMLElement>(`[data-key="${focusKey}"]`) ?? [])];
-        const target = matches.find(node => node.classList.contains("tl-entry") === asList) ?? matches[0];
+        const chronological = asList || window.matchMedia?.("(max-width: 760px)").matches === true;
+        const target = matches.find(node => node.classList.contains("tl-entry") === chronological) ?? matches[0];
         if (target) {
-          target.focus();
+          target.focus({ preventScroll: true });
           target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
         }
       }
