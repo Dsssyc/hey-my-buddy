@@ -18,6 +18,7 @@ import type { ObjectiveTimeline, TimelineSpan } from "./objective-types";
 
 /** Empty intervals strictly longer than this fold when the view is eligible. */
 export const TIMELINE_FOLD_THRESHOLD_MS = 30 * 60 * 1000;
+const HOST_MARKER_PADDING_MS = 60 * 1000;
 
 /** Width budget of one collapsed break, and of all collapsed breaks together, in percent. */
 const COLLAPSED_GAP_PERCENT = 3;
@@ -332,7 +333,9 @@ function createPosition(startMs: number, endMs: number, units: readonly Unit[]) 
  * There is never idle space before the first or after the last recorded item.
  *
  * Gaps: empty intervals between the unioned occupancy, split at every recorded
- * instant. Folding applies only to intervals strictly longer than 30 minutes,
+ * instant. Host markers reserve a one-minute neighborhood clipped to the domain;
+ * this is conservative visual spacing, not a claim of Host execution duration.
+ * Folding applies only to intervals strictly longer than 30 minutes,
  * only when `scopeComplete` is true (and, when present, no truncation flag is
  * set) and every needed timestamp is usable and non-reversed, and never to an
  * id passed in `expandedGapIds`. Folding also needs at least one interval that
@@ -347,6 +350,7 @@ export function createTimelineLayout(
 ): TimelineLayout {
   const observedAtMs = parseInstant(timeline.observedAt);
   const instants: number[] = [];
+  const markerInstants: number[] = [];
   const intervals: Interval[] = [];
   let timingTrustworthy = true;
 
@@ -364,6 +368,7 @@ export function createTimelineLayout(
       continue;
     }
     instants.push(atMs);
+    markerInstants.push(atMs);
   }
 
   if (instants.length === 0) {
@@ -375,6 +380,15 @@ export function createTimelineLayout(
   for (const instant of instants) {
     if (instant < startMs) startMs = instant;
     if (instant > endMs) endMs = instant;
+  }
+
+  // Markers reserve a one-minute visual neighborhood on either side. Clip it
+  // to the recorded domain: padding must never invent leading/trailing time.
+  for (const atMs of markerInstants) {
+    const from = Math.max(startMs, atMs - HOST_MARKER_PADDING_MS);
+    const to = Math.min(endMs, atMs + HOST_MARKER_PADDING_MS);
+    instants.push(from, to);
+    intervals.push({ startMs: from, endMs: to });
   }
 
   const canFold = timeline.scopeComplete === true && timingTrustworthy && !hasTruncatedCollections(timeline);

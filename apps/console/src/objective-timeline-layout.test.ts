@@ -64,7 +64,7 @@ describe("objective timeline layout domain", () => {
     }));
     expect(layout.startMs).toBe(BASE + 100 * MINUTE);
     expect(layout.endMs).toBe(BASE + 300 * MINUTE);
-    expect(layout.gaps.map(bounds)).toEqual([[110 * MINUTE, 300 * MINUTE]]);
+    expect(layout.gaps.map(bounds)).toEqual([[110 * MINUTE, 299 * MINUTE]]);
     expect(layout.position(at(47 * HOUR))).toBe(100);
   });
 
@@ -103,6 +103,17 @@ describe("objective timeline layout domain", () => {
 });
 
 describe("objective timeline layout occupancy", () => {
+  it("reserves one minute around Host markers without expanding the recorded domain", () => {
+    const layout = createTimelineLayout(timeline({
+      events: [event(0)],
+      spans: [span({ startAt: at(31 * MINUTE), endAt: at(40 * MINUTE) })],
+    }));
+    expect(layout.startMs).toBe(BASE);
+    expect(layout.endMs).toBe(BASE + 40 * MINUTE);
+    expect(layout.gaps.map(bounds)).toEqual([[MINUTE, 31 * MINUTE]]);
+    expect(layout.gaps[0]!.collapsed).toBe(false);
+  });
+
   it("keeps an unconfirmed finished attempt occupied through observation", () => {
     const layout = createTimelineLayout(timeline({
       spans: [
@@ -152,9 +163,10 @@ describe("objective timeline layout occupancy", () => {
       ],
       events: [event(60 * MINUTE)],
     }));
-    expect(layout.gaps.map(bounds)).toEqual([[10 * MINUTE, 60 * MINUTE], [60 * MINUTE, 2 * HOUR]]);
+    expect(layout.gaps.map(bounds)).toEqual([[10 * MINUTE, 59 * MINUTE], [61 * MINUTE, 2 * HOUR]]);
     expect(layout.gaps.map(gap => gap.collapsed)).toEqual([true, true]);
-    expect(layout.gaps[0]!.toPercent).toBeCloseTo(layout.gaps[1]!.fromPercent, 9);
+    expect(layout.gaps[0]!.toPercent).toBeLessThan(layout.position(at(HOUR))!);
+    expect(layout.position(at(HOUR))!).toBeLessThan(layout.gaps[1]!.fromPercent);
   });
 
   it("does not create a gap for a Host marker inside an occupied span", () => {
@@ -178,8 +190,7 @@ describe("objective timeline layout occupancy", () => {
     expect(adjacent.position(at(10 * MINUTE))).toBeCloseTo(50, 6);
 
     const pointSpan = createTimelineLayout(timeline({
-      spans: [span({ spanId: "point", startAt: at(HOUR), endAt: at(HOUR) })],
-      events: [event(0), event(2 * HOUR)],
+      spans: [0, HOUR, 2 * HOUR].map((instant, i) => span({ spanId: `point-${i}`, startAt: at(instant), endAt: at(instant) })),
     }));
     expect(pointSpan.gaps.map(bounds)).toEqual([[0, HOUR], [HOUR, 2 * HOUR]]);
     expect(pointSpan.canFold).toBe(true);
@@ -337,7 +348,8 @@ describe("objective timeline idle folding", () => {
   });
 
   it("keeps the real scale when nothing unfolded remains to fold against", () => {
-    const layout = createTimelineLayout(timeline({ events: [event(0), event(2 * HOUR)] }));
+    const point = (instant: number) => span({ spanId: `point-${instant}`, startAt: at(instant), endAt: at(instant) });
+    const layout = createTimelineLayout(timeline({ spans: [point(0), point(2 * HOUR)] }));
     expect(layout.canFold).toBe(true);
     expect(layout.gaps).toHaveLength(1);
     expect(layout.gaps[0]!.collapsed).toBe(false);
@@ -346,14 +358,14 @@ describe("objective timeline idle folding", () => {
     expect(layout.position(at(HOUR))).toBeCloseTo(50, 6);
 
     const markers = createTimelineLayout(timeline({
-      events: [event(0), event(HOUR), event(2 * HOUR)],
+      spans: [point(0), point(HOUR), point(2 * HOUR)],
       observedAt: at(2 * HOUR),
     }));
     expect(markers.gaps.map(gap => gap.collapsed)).toEqual([false, false]);
     expect(markers.gaps.map(width)).toEqual([50, 50]);
 
     const hourly = createTimelineLayout(timeline({
-      events: Array.from({ length: 21 }, (_, index) => event(index * HOUR, { seq: index })),
+      spans: Array.from({ length: 21 }, (_, index) => point(index * HOUR)),
       observedAt: at(20 * HOUR),
     }));
     expect(hourly.gaps).toHaveLength(20);
@@ -517,7 +529,7 @@ describe("objective timeline layout coordinates", () => {
       expect(gap.id).toContain(String(gap.startMs));
       expect(gap.id).toContain(String(gap.endMs));
     }
-    expect(first.gaps.map(bounds)).toEqual([[10 * MINUTE, HOUR], [HOUR, 2 * HOUR]]);
+    expect(first.gaps.map(bounds)).toEqual([[10 * MINUTE, HOUR - MINUTE], [HOUR + MINUTE, 2 * HOUR]]);
 
     const moved = createTimelineLayout(timeline({
       spans: [
