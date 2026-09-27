@@ -44,8 +44,9 @@ function FieldView({ field, onSelectItem, onSelectRun }: {
 }) {
   return <div className={"inspector-field" + (field.tone ? ` tone-${field.tone}` : "")}>
     <dt className="inspector-field-label">{field.label}</dt>
-    <dd className="inspector-field-value" title={field.title ?? field.value}>{field.value}</dd>
-    {field.link && <LinkButton link={field.link} onSelectItem={onSelectItem} onSelectRun={onSelectRun} />}
+    <dd className="inspector-field-value" title={field.title ?? field.value}>
+      {field.link ? <LinkButton link={field.link} onSelectItem={onSelectItem} onSelectRun={onSelectRun} /> : field.value}
+    </dd>
   </div>;
 }
 
