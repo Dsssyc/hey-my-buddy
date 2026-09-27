@@ -532,6 +532,21 @@ describe('native llm call composition', () => {
 });
 
 describe('bounded corrective retry (R2)', () => {
+  test('corrected usage includes both model calls and never invents missing counters', async () => {
+    const good = JSON.stringify({ profileId: 'p1', reason: 'r', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
+    const used = text => [
+      { type: 'text-delta', text },
+      { type: 'usage', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ];
+    const { llm } = fakeLlm({ chunkSets: [used('bad'), used(good)] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true);
+    assert.equal(result.usage.inputTokens, 20);
+    assert.equal(result.usage.outputTokens, 4);
+    assert.equal(result.usage.totalTokens, 24);
+    assert.equal(result.usage.cacheReadTokens, null);
+  });
   const VALID_ANSWER = JSON.stringify({ profileId: 'p1', reason: 'valid', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
 
   test('one format refusal is corrected by one second call under the same deadline', async () => {
@@ -655,6 +670,11 @@ describe('bounded corrective retry (R2)', () => {
 });
 
 describe('bounded visible-answer diagnostics (R3)', () => {
+  test('free-form and unknown fields redact numeric and nested contents too', () => {
+    const raw = JSON.stringify({ profileId: 123456789, reason: { profileId: 'p1' }, secret: 987654321 });
+    const diagnostic = boundedAnswerDiagnostic(raw, new Set(['p1']));
+    assert.doesNotMatch(diagnostic.text, /123456789|987654321|p1|secret/);
+  });
   const SECRET = 'sk-live-SUPERSECRET';
   const URL = 'https://internal.example.invalid/private?token=abcd';
   const VALID_ANSWER = JSON.stringify({ profileId: 'p1', reason: 'valid', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });

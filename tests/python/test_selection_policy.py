@@ -271,5 +271,34 @@ class PolicyFactsTests(unittest.TestCase):
         self.assertEqual(checked, check)
 
 
+class DiagnosticTests(unittest.TestCase):
+    def diagnostic(self, text='{"profileId":"p1","reason":"<redacted>"}'):
+        return {"calls": 2, "failures": [{"code": "answer-shape", "answer": {
+            "text": text, "sha256": "a"*64, "bytes": 500, "redacted": True, "truncated": False,
+        }}]}
+
+    def test_bounded_structure_and_supplied_ids_survive_without_changing_decision(self):
+        diagnostics = self.diagnostic()
+        output = {"status": "ok", "decision": {"profileId": "p1"}, "diagnostics": diagnostics}
+        self.assertEqual(selection_policy.sanitize_diagnostics(output, {"profiles": [{"profileId": "p1"}]}), output)
+        self.assertEqual(output["diagnostics"], diagnostics)
+
+    def test_redacted_flag_cannot_authorize_secret_text_or_unbounded_shape(self):
+        base = self.diagnostic()
+        variants = [self.diagnostic('{"reason":"SECRET-123"}'), self.diagnostic('{"profileId":"ghost"}'),
+                    self.diagnostic('{"reason":123456789}'), self.diagnostic('界'*1000),
+                    {**base, "calls": True}, {**base, "calls": 3}, {**base, "failures": base["failures"]*3}]
+        for diagnostics in variants:
+            with self.subTest(diagnostics=diagnostics):
+                output = selection_policy.sanitize_diagnostics({"status": "ok", "diagnostics": diagnostics}, {})
+                self.assertNotIn("diagnostics", output)
+                self.assertTrue(output["diagnosticsOmitted"])
+                self.assertEqual(output["status"], "ok")
+
+    def test_unparseable_text_never_leaves_the_sanitizer(self):
+        output = selection_policy.sanitize_diagnostics({"diagnostics": self.diagnostic('Bearer secret-token')}, {})
+        self.assertEqual(output["diagnostics"]["failures"][0]["answer"]["text"], "<unparsed-answer>")
+
+
 if __name__ == "__main__":
     unittest.main()

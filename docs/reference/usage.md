@@ -37,6 +37,10 @@ Independent of grouping, governed coding work names its Git isolation contract i
 
 ### 3. Write a bounded packet
 
+Use one work objective per user agenda: the first `submit` carries `objective: {title}` and an intent-focused delegation `title`; later new delegations use the returned `objectiveId`. Keep that identifier with the run/control identifiers in the session handoff. If context is lost, the brief `get` of a known run recovers it. Continuations and helpers preserve their existing association without an extra argument. Cross-Host enrollment remains refused; do not invent a matching Host label or silently start another group to hide that boundary.
+
+Omit the execution `adapter`, `provider`, `model` and `effort` by default and let the fixed decision Buddy route. A complete tuple is appropriate only for a user-specified configuration, a user-established repository work division, or recovery at this goal's routing boundary. Use `routingPreferences` for soft preferences and partial fields only for actual hard requirements. Report a routing failure and its decision code to the user; recovering one goal explicitly never turns into a policy of preselecting subsequent goals.
+
 A good packet lets the worker finish without guessing:
 
 Delegate a coherent work unit with a verifiable output. A deterministic file listing, status query or already-known calculation usually belongs in a script; open-ended diagnosis and implementation may benefit from a coding Buddy. A read-only cross-platform artifact audit can still be complex. Give the worker the owning reference and relevant evidence, rather than automatically loading every design document or the complete project history. Choose native subagents and Buddy independently: context isolation and comparative cost/capability solve different problems.

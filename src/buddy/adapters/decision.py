@@ -182,6 +182,9 @@ class DecisionAdapter(Adapter):
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
         payload = _read_envelope(self.output_path(context))
+        if payload is not None:
+            from ..selection_policy import sanitize_diagnostics
+            payload = sanitize_diagnostics(payload, context.decision_input or {})
         exit_code = handle.process.returncode
         # The helper's own statement *and* the observed exit of the process this
         # adapter started. Its detached child group cannot be proven stopped by this

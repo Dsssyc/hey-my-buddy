@@ -33,19 +33,11 @@ export const USER_OUTCOMES = Object.freeze(['none', 'matched', 'alternative']);
 /**
  * Stable machine codes for policy violations; Python settles each needs-host.
  *
- * `POLICY_CONSTRAINT_MISMATCH`, `POLICY_INDEX_MISMATCH`,
- * `POLICY_OUTCOME_INVALID` and `POLICY_OUTCOME_FALSE` remain published codes for
- * a document written by an older helper, but the current flow never derives them
- * from a model answer: a model-provided `policyCheck` is ignored and the program
- * computes the adopted one, so a false or malformed model claim cannot fail a
- * decision that is otherwise legal.
+ * Outcomes are program-computed; a malformed redundant policy echo cannot fail
+ * an otherwise legal recommendation.
  */
 export const POLICY_FACTS_MISMATCH = 'policy-facts-mismatch';
 export const POLICY_CHECK_SHAPE = 'policy-check-shape';
-export const POLICY_CONSTRAINT_MISMATCH = 'policy-constraint-mismatch';
-export const POLICY_INDEX_MISMATCH = 'policy-index-mismatch';
-export const POLICY_OUTCOME_INVALID = 'policy-outcome-invalid';
-export const POLICY_OUTCOME_FALSE = 'policy-outcome-false';
 export const POLICY_SUPPORT_UNKNOWN = 'policy-support-unknown';
 export const POLICY_ALTERNATIVE_UNSUPPORTED = 'policy-alternative-unsupported';
 

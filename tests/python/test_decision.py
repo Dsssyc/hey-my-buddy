@@ -763,6 +763,19 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertTrue(task["shutdownConfirmed"])
         self.assertIn("policy-outcome-false", task["selectedAttempt"]["error"])
 
+    def test_exhausted_answer_correction_retains_diagnostics_and_one_attempt(self):
+        board = self.board()
+        self.seed(board)
+        decision = self.outcome(board, "answer_error", request_id="two-invalid-answers")
+        self.assertEqual(decision["status"], "needs-host")
+        self.assertIn("answer-invalid-json", decision["reason"])
+        self.assertEqual(decision["output"]["diagnostics"]["calls"], 2)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
+            receipt = json.loads(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
+            self.assertIn('diagnostics', json.dumps(receipt))
+        self.assertEqual(board.call('console_snapshot', {})['gate']['readers'], 0)
+
     def test_model_rule_index_is_replaced_by_derived_integer_before_publication(self):
         """Echoed bool/float/string values never reach preference list indexing."""
         board = self.board()

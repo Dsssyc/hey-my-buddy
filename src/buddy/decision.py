@@ -977,6 +977,8 @@ class DecisionCoordinator:
     def _complete(self, connection: sqlite3.Connection, *, row: sqlite3.Row, task: sqlite3.Row, attempt: sqlite3.Row, status: str, result: Any, shutdown_confirmed: bool, error: str | None, now: str) -> dict[str, Any]:
         summary: dict[str, Any] = {"decisionId": row["decision_id"], "kind": row["kind"], "status": row["status"]}
         output = result if isinstance(result, dict) else None
+        if output is not None:
+            output = selection_policy.sanitize_diagnostics(output, json.loads(row["input_json"]) if row["input_json"] else {})
         if row["status"] in TERMINAL_DECISION_STATUSES:
             # A late or superseded result is retained for audit and never published.
             if output is not None:

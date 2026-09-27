@@ -9,6 +9,8 @@ This module is pure and does not interpret qualitative reason prose as proof.
 from __future__ import annotations
 
 from typing import Any
+import json
+import re
 
 #: The closed outcome vocabularies. There is deliberately no avoid/exclude/reject
 #: value: task preferences are POSITIVE, and the historical inverted enums are
@@ -29,6 +31,81 @@ POLICY_FACTS_MISMATCH = "policy-facts-mismatch"
 POLICY_CHECK_SHAPE = "policy-check-shape"
 POLICY_SUPPORT_UNKNOWN = "policy-support-unknown"
 POLICY_ALTERNATIVE_UNSUPPORTED = "policy-alternative-unsupported"
+
+
+def sanitize_diagnostics(output: dict, request: dict) -> dict:
+    """Recheck advisory diagnostics before they reach receipts or publication.
+
+    Model/provider prose is not authorized by a self-reported redacted flag.
+    Keep only the fixed structure, supplied ids and redaction placeholders.
+    Invalid diagnostics are omitted without changing a valid recommendation.
+    """
+    if "diagnostics" not in output:
+        return output
+    clean = {key: value for key, value in output.items() if key != "diagnostics"}
+    value = output["diagnostics"]
+    def integer(number, maximum):
+        return type(number) is int and 0 <= number <= maximum
+    if not isinstance(value, dict) or set(value) != {"calls", "failures"} or not integer(value["calls"], 2):
+        return {**clean, "diagnosticsOmitted": True}
+    failures = value["failures"]
+    if not isinstance(failures, list) or len(failures) > value["calls"]:
+        return {**clean, "diagnosticsOmitted": True}
+    safe = {"none", "matched", "alternative", "fallback", "<redacted>", "<ignored>"}
+    def add(item):
+        if isinstance(item, str):
+            safe.add(item)
+    add(request.get("requestId"))
+    for item in (request.get("profile") or {}).values():
+        add(item)
+    for name in ("profiles", "cards", "preferences", "annotations", "evidence"):
+        for item in request.get(name) or []:
+            if isinstance(item, dict):
+                add(item.get("profileId"))
+                add(item.get("evidenceId"))
+                for identifier in item.get("evidenceIds") or []:
+                    add(identifier)
+    keys = {"profileId", "reason", "evidenceIds", "policyCheck", "support", "cardProfileIds", "annotationProfileIds"}
+    def safe_shape(item, depth=0):
+        if item is None or type(item) is bool:
+            return True
+        if isinstance(item, str):
+            return item in safe
+        if depth >= 4:
+            return False
+        if isinstance(item, list):
+            return len(item) <= 16 and all(safe_shape(child, depth+1) for child in item)
+        if isinstance(item, dict):
+            return len(item) <= 16 and all(
+                (key in keys or re.fullmatch(r'<unknown-field>(?:-[0-9]{1,2})?', key))
+                and safe_shape(child, depth+1) for key, child in item.items())
+        return False
+    checked = []
+    for failure in failures:
+        if not isinstance(failure, dict) or set(failure) != {"code", "answer"}:
+            return {**clean, "diagnosticsOmitted": True}
+        code, answer = failure["code"], failure["answer"]
+        if not isinstance(code, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,119}', code):
+            return {**clean, "diagnosticsOmitted": True}
+        if not isinstance(answer, dict) or set(answer) != {"text", "sha256", "bytes", "truncated", "redacted"}:
+            return {**clean, "diagnosticsOmitted": True}
+        text = answer["text"]
+        if (not isinstance(text, str) or len(text.encode('utf-8', errors='replace')) > 2048
+            or not isinstance(answer["sha256"], str) or not re.fullmatch(r'[0-9a-f]{64}', answer["sha256"])
+            or not integer(answer["bytes"], 2**53-1) or type(answer["truncated"]) is not bool or answer["redacted"] is not True):
+            return {**clean, "diagnosticsOmitted": True}
+        if text not in {"<empty-answer>", "<unparsed-answer>", "<truncated-redacted-answer>"}:
+            try:
+                parsed = json.loads(text)
+            except (ValueError, RecursionError):
+                # The child may cut an already redacted JSON projection at its
+                # byte bound. Do not forward an unverifiable partial string.
+                text = "<truncated-redacted-answer>" if answer["truncated"] else "<unparsed-answer>"
+            else:
+                if not safe_shape(parsed):
+                    return {**clean, "diagnosticsOmitted": True}
+        checked.append({"code": code, "answer": {**answer, "text": text}})
+    return {**clean, "diagnostics": {"calls": value["calls"], "failures": checked}}
 
 
 def _bounded_identifier(value: Any) -> bool:

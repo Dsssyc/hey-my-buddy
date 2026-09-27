@@ -100,6 +100,20 @@ class CliViewTests(RealWorkspaceTestCase):
         for key in ("runId", "requestId", "revision", "ownerGeneration", "state", "workspace"):
             self.assertIn(key, submitted)
 
+    def test_objective_id_survives_brief_submit_and_context_recovery_get(self):
+        code, submitted, _ = self.cli("submit", {
+            **CONFIGURATION, "requestId": "views-objective", "hostId": "host-1",
+            "task": PACKET, "title": "Implement bounded state transition", "cwd": str(self.repo),
+            "objective": {"title": "Ship state transition"},
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        self.assertEqual(code, 0, submitted)
+        self.assertTrue(submitted["objectiveId"].startswith("obj-"))
+        code, fetched, _ = self.cli("get", {"runId": submitted["runId"]})
+        self.assertEqual(code, 0, fetched)
+        self.assertEqual(fetched["objectiveId"], submitted["objectiveId"])
+        self.assertEqual(fetched["title"], submitted["title"])
+
     def test_get_brief_keeps_next_command_identifiers_and_full_is_unchanged(self):
         submitted, service_view = self.delivered()
         run_id = submitted["runId"]

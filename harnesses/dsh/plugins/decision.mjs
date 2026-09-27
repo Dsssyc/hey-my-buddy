@@ -326,7 +326,8 @@ function projectAnswerValue(value, supplied, depth, state) {
   if (typeof value === 'string') {
     return supplied.has(value) || SAFE_ANSWER_ENUMS.has(value) ? value : REDACTED;
   }
-  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return REDACTED;
   if (depth >= MAX_ANSWER_DEPTH) {
     state.truncated = true;
     return REDACTED;
@@ -348,7 +349,7 @@ function projectAnswerValue(value, supplied, depth, state) {
       unknown += 1;
       name = unknown === 1 ? UNKNOWN_FIELD : `${UNKNOWN_FIELD}-${String(unknown)}`;
     }
-    projected[name] = name === 'policyCheck'
+    projected[name] = key === 'reason' || !SAFE_ANSWER_KEYS.has(key) ? REDACTED : name === 'policyCheck'
       ? '<ignored>'
       : projectAnswerValue(value[key], supplied, depth + 1, state);
   }
@@ -534,7 +535,7 @@ async function streamDecisionAnswer(request, prepared, controller, correction) {
       ...(field(finish, 'failure') === undefined ? {} : { detail: errorDetail(field(finish, 'failure')) }),
     };
   }
-  if (!sawText) return { ok: false, code: 'answer-empty', text, reasoningBytes };
+  if (!sawText) return { ok: false, code: 'answer-empty', text, reasoningBytes, usage };
   return { ok: true, text, usage, reasoningBytes };
 }
 
@@ -560,6 +561,7 @@ export async function callDecisionModel(ctx, request, { timeoutMs }) {
   const timer = setTimeout(() => controller.abort(new Error('decision call timed out')), timeoutMs);
   const diagnostics = { calls: 0, failures: [] };
   const supplied = collectSuppliedIds(request);
+  const usages = [];
   let reasoningBytes = 0;
   try {
     // Independent re-derivation of the request's policy facts from its own table
@@ -596,8 +598,10 @@ export async function callDecisionModel(ctx, request, { timeoutMs }) {
       if (controller.signal.aborted) return { ok: false, code: 'call-timeout', diagnostics };
       const resolvedCall = await prepareDecisionCall(ctx, profile, controller.signal);
       if (!resolvedCall.ok) return { ...resolvedCall, diagnostics };
+      if (controller.signal.aborted) return { ok: false, code: 'call-timeout', diagnostics };
       diagnostics.calls += 1;
       const streamed = await streamDecisionAnswer(request, resolvedCall.prepared, controller, correction);
+      usages.push(streamed.usage ?? null);
       reasoningBytes = Math.min(MAX_REASONING_BYTES * (attempt + 1), reasoningBytes + (streamed.reasoningBytes ?? 0));
       if (!streamed.ok) {
         recordAttemptFailure(diagnostics, streamed.code, streamed.text, supplied);
@@ -637,14 +641,10 @@ export async function callDecisionModel(ctx, request, { timeoutMs }) {
           model: resolvedCall.prepared.config.model,
           reasoningEffort: resolvedCall.prepared.config.reasoningEffort ?? null,
         },
-        usage: streamed.usage === null ? null : {
-          inputTokens: streamed.usage.inputTokens,
-          outputTokens: streamed.usage.outputTokens,
-          totalTokens: streamed.usage.totalTokens ?? null,
-          cacheReadTokens: streamed.usage.cacheReadTokens ?? null,
-          cacheWriteTokens: streamed.usage.cacheWriteTokens ?? null,
-          reasoningTokens: streamed.usage.reasoningTokens ?? null,
-        },
+        usage: usages.some(usage => usage === null) ? null : Object.fromEntries(
+          ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens']
+            .map(key => [key, usages.every(usage => Number.isFinite(usage[key]))
+              ? usages.reduce((sum, usage) => sum + usage[key], 0) : null])),
         reasoningBytes,
         elapsedSeconds: Math.round(performance.now() - started) / 1000,
         diagnostics,
