@@ -37,7 +37,7 @@ Independent of grouping, governed coding work names its Git isolation contract i
 
 ### 3. Write a bounded packet
 
-Use one work objective per user agenda: the first `submit` carries `objective: {title}` and an intent-focused delegation `title`; later new delegations use the returned `objectiveId`. Keep that identifier with the run/control identifiers in the session handoff. If context is lost, the brief `get` of a known run recovers it. Continuations and helpers preserve their existing association without an extra argument. Cross-Host enrollment remains refused; do not invent a matching Host label or silently start another group to hide that boundary.
+Use one work objective per user agenda: the first `submit` carries `objective: {title}` and a required intent-focused delegation `title` of at most 30 characters; later new delegations use the returned `objectiveId`. Keep that identifier with the run/control identifiers in the session handoff. If context is lost, the brief `get` of a known run recovers it. Continuations and helpers preserve their existing association without an extra argument. Cross-Host enrollment remains refused; do not invent a matching Host label or silently start another group to hide that boundary.
 
 Omit the execution `adapter`, `provider`, `model` and `effort` by default and let the fixed decision Buddy route. A complete tuple is appropriate only for a user-specified configuration, a user-established repository work division, or recovery at this goal's routing boundary. Use `routingPreferences` for soft preferences and partial fields only for actual hard requirements. Report a routing failure and its decision code to the user; recovering one goal explicitly never turns into a policy of preselecting subsequent goals.
 
@@ -55,6 +55,8 @@ Long work may explicitly set `"timeoutSeconds": 0` to run without an overall exe
 - as much relevant context as the task needs. Task text is bounded at 1 MiB; the DSH runner delivers content over 32,000 bytes as a file reference, and that file must stay in place until the run finishes.
 
 For a governed task, state the workspace intent in the packet too: which checkout or worktree, whether access is read or write, and who integrates helper output.
+
+New objectives may carry an optional `description` of at most 300 characters: one or two sentences in the user’s words, written at creation and excluded from Worker and selector inputs. This field requires installed 0.15.1; omit it when using installed 0.15.0.
 
 ### 4. Submit the governed goal once
 
@@ -85,7 +87,7 @@ Read `activeRequest`, the routing object, the current turn summary and fixed art
 
 The [assistance examples](workflow.md#host-boundaries-and-requests) provide complete helper packets and explain one-use automatic continuation. The [continuation and takeover examples](workflow.md#manual-continuation-and-takeover) cover new Host input, active-helper policy, `targetRunId` for an owned descendant, and transfer of control. Re-read after each decision: another pending request can become active. Nested requests retain their origin and are authorized by the Host.
 
-Each continuation gets a fresh attempt and recorded resume mode: DSH reconstructs a fresh session, while ZCode resumes its exact proven native session or explicitly reconstructs a new one after an unproven prior turn. The named integrator applies exact helper commits/patches and checks the combined result. The private console exposes the same decisions and ownership checks.
+Each continuation gets a fresh attempt and recorded resume mode: DSH reconstructs a fresh session, while ZCode resumes its exact proven native session or explicitly reconstructs a new one after an unproven prior turn. The named integrator applies exact helper commits/patches and checks the combined result. The private console displays the recorded decisions read-only; the Host performs these operations through the CLI.
 
 ### 7. Inspect the final artifact, record integration and acknowledge
 
