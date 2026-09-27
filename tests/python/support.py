@@ -257,6 +257,7 @@ class InProcessBoard:
         self.console = Console(
             self.store,
             self.service,
+            port=0,
             assets_dir=options.get("console_assets", self.directory / "console-assets"),
         )
 

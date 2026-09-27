@@ -13,7 +13,7 @@ from unittest import mock
 import urllib.request
 from urllib.parse import urlsplit
 
-from buddy.console_sessions import MAX_ENTRIES, MAX_SESSIONS
+from buddy.console_sessions import MAX_ENTRIES, MAX_SESSIONS, SESSION_SECONDS
 from buddy.errors import BoardError
 from test_console import Browser, ConsoleTestCase, http_call
 from support import _child_environment
@@ -60,81 +60,81 @@ class ConsoleSessionTests(ConsoleTestCase):
             self.assertEqual(sorted(pool.map(lambda _: redeem(), range(2))), [303, 410])
         self.assertEqual(board.console.status()['sessionCount'], 1)
 
-    def test_shared_cookie_jar_preserves_old_read_only_session_after_new_open(self):
+    def test_shared_cookie_jar_keeps_stable_bookmark_and_writable_login(self):
         board = self.board()
-        entry, _ = self.open_console(board, assets=True)
-        # Two CLI entries in one browser cookie jar reproduce shared-tab cookies.
+        self.open_console(board, assets=True)
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         first = opener.open(board.call('console', {'action': 'open'})['url'], timeout=5).geturl()
-        old_snapshot = json.load(opener.open(first + 'api/console', timeout=5))
         second = opener.open(board.call('console', {'action': 'open'})['url'], timeout=5).geturl()
-        new_snapshot = json.load(opener.open(second + 'api/console', timeout=5))
+        self.assertEqual(first, second)
+        self.assertEqual(len(list(jar)), 1)
         reread = json.load(opener.open(first + 'api/console', timeout=5))
-        self.assertNotEqual(first, second)
-        self.assertEqual(len(list(jar)), 2)
-        self.assertFalse(reread['consoleSession']['canWrite'])
-        self.assertEqual(reread['consoleSession']['reason'], 'superseded')
-        self.assertEqual(old_snapshot['csrfToken'], reread['csrfToken'])
-        self.assertNotEqual(reread['csrfToken'], new_snapshot['csrfToken'])
-        self.assertTrue(new_snapshot['consoleSession']['canWrite'])
+        self.assertTrue(reread['consoleSession']['canWrite'])
+        self.assertIsNone(reread['consoleSession']['reason'])
 
     def queued_task(self, board):
         return board.call('task_submit', {'requestId': 'console-session-task', 'task': 'still pending',
             'cwd': str(self.workdir()), 'adapter': 'command', 'argv': ['/bin/echo', 'ok']})['task']['runId']
 
-    def test_old_session_can_browse_but_cannot_mutate_or_reuse_old_grant(self):
+    def test_independent_sessions_keep_authority_and_stale_revision_is_refused(self):
         board = self.board()
-        run_id = self.queued_task(board)
         _, first = self.open_console(board)
-        csrf = first.bootstrap()['csrfToken']
-        status, _, raw = first.command('evaluation_write_begin',
-            {'requestId': 'old-grant', 'expectedRevision': 0, 'kind': 'human'}, csrf=csrf)
-        self.assertEqual(status, 200)
-        grant = json.loads(raw)['result']
         _, second = self.open_console(board)
-        for operation, params in (
-            ('objective_stop', {'objectiveId': 'run:' + run_id, 'commandId': 'stale-stop'}),
-            ('model_catalog_refresh', {'requestId': 'old-refresh'}),
-            ('evaluation_write_renew', {k: grant[k] for k in ('writerId','generation','writerToken')}),
-        ):
-            status, _, raw = first.command(operation, params, csrf=csrf)
-            self.assertEqual(status, 403)
-            self.assertEqual(json.loads(raw)['error']['code'], 'CONSOLE_READ_ONLY')
-        self.assertEqual(first.get('/api/tasks')[0], 200)
-        self.assertEqual(first.command('evaluation_history', {}, csrf=csrf)[0], 200)
-        self.assertEqual(first.command('selection_list', {}, csrf=csrf)[0], 200)
-        self.assertEqual(first.command('model_profiles', {}, csrf=csrf)[0], 200)
-        self.assertEqual(board.call('task_get', {'runId': run_id})['task']['status'], 'queued')
-        self.assertEqual(second.command('task_cancel', {'runId': run_id}, csrf=second.bootstrap()['csrfToken'])[0], 404)
+        for i, browser in enumerate((first, second)):
+            snapshot = browser.bootstrap()
+            self.assertTrue(snapshot['consoleSession']['canWrite'])
+            status, _, raw = browser.command('evaluation_write_begin',
+                {'requestId': f'grant-{i}', 'expectedRevision': snapshot['tableRevision'], 'kind': 'human'}, csrf=snapshot['csrfToken'])
+            self.assertEqual(status, 200, raw)
+            grant = json.loads(raw)['result']
+            status, _, raw = browser.command('evaluation_write_abort',
+                {**{k: grant[k] for k in ('writerId','generation','writerToken')}, 'commandId': f'abort-{i}'}, csrf=snapshot['csrfToken'])
+            self.assertEqual(status, 200, raw)
+        snapshot = first.bootstrap()
+        status, _, raw = first.command('evaluation_write_begin',
+            {'requestId':'stale', 'expectedRevision': snapshot['tableRevision'] + 1, 'kind':'human'}, csrf=snapshot['csrfToken'])
+        self.assertEqual(status, 200, raw)
+        grant = json.loads(raw)['result']
+        status, _, raw = first.command('user_policy_publish', {
+            **{k: grant[k] for k in ('writerId','generation','writerToken')},
+            'commandId':'stale-publish', 'expectedRevision':snapshot['tableRevision'] + 1,
+            'profileSettings':[]}, csrf=snapshot['csrfToken'])
+        self.assertEqual(json.loads(raw)['error']['code'], 'REVISION_CONFLICT')
 
-    def test_late_request_body_cannot_cross_a_writer_handoff(self):
+    def test_sessions_persist_hashed_and_restart_reauthenticates_cookie(self):
+        import os
+        from buddy.console import Console
         board = self.board()
-        run_id = self.queued_task(board)
-        _, first = self.open_console(board)
-        csrf = first.bootstrap()['csrfToken']
-        handler = board.console._server.RequestHandlerClass
-        read_body = handler._read_body
-        authenticated, release = threading.Event(), threading.Event()
-        def delayed_read(request):
-            authenticated.set()
-            if not release.wait(5):
-                raise TimeoutError('test barrier not released')
-            return read_body(request)
-        with mock.patch.object(handler, '_read_body', delayed_read), ThreadPoolExecutor(max_workers=1) as pool:
-            pending = pool.submit(first.command, 'objective_stop', {'objectiveId': 'run:' + run_id, 'commandId': 'late-stop'}, csrf=csrf)
-            try:
-                self.assertTrue(authenticated.wait(5))
-                _, second = self.open_console(board)
-                self.assertTrue(second.bootstrap()['consoleSession']['canWrite'])
-            finally:
-                release.set()
-            status, _, raw = pending.result(timeout=5)
-        self.assertEqual(status, 403)
-        self.assertEqual(json.loads(raw)['error']['code'], 'CONSOLE_READ_ONLY')
-        self.assertEqual(board.call('task_get', {'runId': run_id})['task']['status'], 'queued')
+        _, browser = self.open_console(board)
+        snapshot = browser.bootstrap()
+        session_file = board.directory / 'console-sessions.json'
+        data = session_file.read_text()
+        self.assertNotIn(browser.cookie.split('=', 1)[1], data)
+        self.assertNotIn(snapshot['csrfToken'], data)
+        self.assertEqual(os.stat(session_file).st_mode & 0o777, 0o600)
+        board.console.close()
+        board.console = Console(board.store, board.service, port=browser.port)
+        board.console.start(issue_ticket=False)
+        restored = browser.bootstrap()
+        self.assertEqual(snapshot['consoleSession']['id'], restored['consoleSession']['id'])
+        self.assertTrue(restored['consoleSession']['canWrite'])
+        self.assertNotEqual(snapshot['csrfToken'], restored['csrfToken'])
+        self.assertEqual(browser.command('evaluation_history', {}, csrf=restored['csrfToken'])[0], 200)
 
-    def test_idle_console_closes_without_touching_tasks_or_starting_again(self):
+    def test_fixed_port_collision_is_explicit_and_nonloopback_is_refused(self):
+        from buddy.console import Console
+        board = self.board()
+        _, browser = self.open_console(board)
+        other = self.board()
+        occupied = Console(other.store, other.service, port=browser.port)
+        with self.assertRaises(BoardError) as caught:
+            occupied.start()
+        self.assertEqual(caught.exception.code, 'CONSOLE_PORT_IN_USE')
+        with self.assertRaises(BoardError):
+            Console(other.store, other.service, host='0.0.0.0')
+
+    def test_idle_console_stays_open_and_does_not_touch_tasks(self):
         board, now = self.timed_board()
         run_id = self.queued_task(board)
         entry, browser = self.open_console(board)
@@ -145,9 +145,9 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(anonymous.get('/api/console')[0], 401)
         now[0] += 100
         board.console.expire(entry['consoleId'])
-        self.assertFalse(board.console.status()['running'])
+        self.assertTrue(board.console.status()['running'])
         self.assertEqual(board.call('task_get', {'runId': run_id})['task']['status'], 'queued')
-        self.assertFalse(board.service._console_sessions)
+        self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
 
     def test_authenticated_reads_keep_the_console_alive_but_old_waiter_cannot_close_replacement(self):
         board, now = self.timed_board()
@@ -189,7 +189,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(first.call('GET', urlsplit(pending['url']).path)[0], 429)
         self.assertEqual(first.get('/api/console')[0], 200)
         self.assertEqual(board.console.status()['sessionCount'], MAX_SESSIONS)
-        now[0] += 300
+        now[0] += SESSION_SECONDS
         fresh = board.call('console', {'action': 'open'})
         self.assertTrue(Browser(fresh['url']).bootstrap()['consoleSession']['canWrite'])
         self.assertEqual(board.console.status()['sessionCount'], 1)

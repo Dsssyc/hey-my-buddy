@@ -32,7 +32,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .errors import BoardError
-from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, IDLE_SECONDS, READ_OPERATIONS
+from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, SESSION_SECONDS, READ_OPERATIONS
 from .service import call_operation
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -133,6 +133,8 @@ CONSOLE_OPERATIONS = (
     "model_profiles",
     "workflow_get",
     "objective_stop",
+    "storage_plan",
+    "storage_apply",
 )
 
 #: Fields the console server owns. A browser that supplies one is refused: console
@@ -246,11 +248,19 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
 class Console:
     """One loopback console instance owned by the service."""
 
-    def __init__(self, store, service, *, assets_dir: Path | str | None = None, host: str = "127.0.0.1", clock=time.monotonic):
+    def __init__(self, store, service, *, assets_dir: Path | str | None = None, host: str = "127.0.0.1", port: int | None = None, clock=time.time):
         self.store = store
         self.service = service
         self.assets_dir = Path(assets_dir) if assets_dir is not None else default_assets_dir()
+        if host != "127.0.0.1":
+            raise BoardError("INVALID_ARGUMENT", "Console must bind numeric loopback 127.0.0.1")
         self.host = host
+        try:
+            self.port = int(os.environ.get("BUDDY_CONSOLE_PORT", "49637")) if port is None else port
+            if not 0 <= self.port <= 65535:
+                raise ValueError()
+        except (ValueError, TypeError) as error:
+            raise BoardError("INVALID_ARGUMENT", "BUDDY_CONSOLE_PORT must be an integer port") from error
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -260,12 +270,16 @@ class Console:
         self.origin: str | None = None
 
     # -- lifecycle -----------------------------------------------------------
-    def start(self) -> dict:
+    def start(self, *, issue_ticket: bool = True) -> dict:
         with self._lock:
             already_running = self._server is not None
             if not already_running:
-                self._sessions = ConsoleSessions(clock=self._clock)
-                server = _ConsoleHTTPServer((self.host, 0), self._handler())
+                self._sessions = ConsoleSessions(clock=self._clock, path=self.store.directory / "console-sessions.json")
+                try:
+                    server = _ConsoleHTTPServer((self.host, self.port), self._handler())
+                except OSError as error:
+                    self._sessions = None
+                    raise BoardError("CONSOLE_PORT_IN_USE", f"Cannot bind 127.0.0.1:{self.port}; free the port or configure BUDDY_CONSOLE_PORT") from error
                 self._server = server
                 self.origin = f"http://{self.host}:{server.server_address[1]}"
                 self._thread = threading.Thread(target=server.serve_forever, name="buddy-console", daemon=True)
@@ -275,6 +289,8 @@ class Console:
                 threading.Thread(target=self._expire_loop, args=(self._sessions.console_id, stop),
                                  name="buddy-console-expiry", daemon=True).start()
             self._expire_sessions()
+            if not issue_ticket:
+                return self.status()
             ticket = self._sessions.issue()
             return {
                 "url": f"{self.origin}/launch/{ticket}",
@@ -291,8 +307,6 @@ class Console:
             console_id = self._sessions.console_id if self._sessions else None
             if expected_console_id is not None and console_id is not None and expected_console_id != console_id:
                 return {"closed": False, "reason": "replaced", "consoleId": console_id}
-            if _idle_only and self._sessions is not None and not self._sessions.idle():
-                return {"closed": False, "reason": "active", "consoleId": console_id}
             server, self._server = self._server, None
             if self._expiry_stop is not None:
                 self._expiry_stop.set()
@@ -319,9 +333,6 @@ class Console:
             if self._sessions is None or self._sessions.console_id != console_id:
                 return
             self._expire_sessions()
-            idle = self._sessions.idle()
-        if idle:
-            self.close(expected_console_id=console_id, _idle_only=True)
 
     def _expire_loop(self, console_id: str, stop: threading.Event) -> None:
         while not stop.wait(5):
@@ -333,7 +344,9 @@ class Console:
                 "consoleId": self._sessions.console_id if self._sessions else None,
                 "running": self._server is not None,
                 "sessionCount": len(self._sessions.sessions) if self._sessions else 0,
-                "idleTimeoutSeconds": IDLE_SECONDS,
+                "idleTimeoutSeconds": None,
+                "sessionLifetimeSeconds": SESSION_SECONDS,
+                "baseUrl": self.origin + "/" if self.origin else None,
                 "assetsBuilt": assets_ready(self.assets_dir),
                 "assetsDir": str(self.assets_dir),
             }
@@ -349,7 +362,7 @@ class Console:
                 self._sessions.authenticate(session.id, session.cookie)
             if operation in CONSOLE_OPERATIONS and operation not in READ_OPERATIONS:
                 if session is None or not session.can_write:
-                    raise BoardError("CONSOLE_READ_ONLY", "A newer console session owns write access; this page remains readable")
+                    raise BoardError("CONSOLE_SESSION_EXPIRED", "An authenticated console session is required")
             return self._command(operation, params, session=session)
 
     def _command(self, operation: str, params: dict, *, session: BrowserSession | None) -> dict:
@@ -411,6 +424,8 @@ class Console:
                 self.send_header("Cache-Control", cache)
                 if self.close_connection:
                     self.send_header("Connection", "close")
+                if getattr(self, "browser_session", None) is not None:
+                    self.send_header("Set-Cookie", f"{SESSION_COOKIE}={self.browser_session.cookie}; Path=/; Max-Age={SESSION_SECONDS}; HttpOnly; SameSite=Strict")
                 self._security_headers()
                 self.end_headers()
                 if self.command != "HEAD":
@@ -441,6 +456,7 @@ class Console:
 
             # -- trust checks ----------------------------------------------
             def _trusted_request(self) -> bool:
+                self.browser_session = None
                 expected_host = f"{console.host}:{console._server.server_address[1]}" if console._server else ""
                 if self.headers.get("Host") != expected_host:
                     self._error(403, "FORBIDDEN", "Host is not the loopback console origin")
@@ -479,22 +495,15 @@ class Console:
                     if sessions is None:
                         self._error(401, "CONSOLE_SESSION_EXPIRED", "The console is closed; run buddy console again")
                         return None
-                    prefix = f"/console/{sessions.console_id}/"
-                    if not path.startswith(prefix):
-                        self._error(404, "NOT_FOUND", "Not found")
-                        return None
-                    session_id, separator, relative = path[len(prefix):].partition("/")
-                    if not separator or re.fullmatch(r"[0-9a-f]{24}", session_id) is None:
-                        self._error(404, "NOT_FOUND", "Not found")
-                        return None
                     try:
                         console._expire_sessions()
-                        self.browser_session = sessions.authenticate(session_id, self._cookie())
+                        self.browser_session = sessions.authenticate(None, self._cookie())
+                        console.service.register_console_authority(self.browser_session.cookie)
                     except BoardError as error:
                         self._board_error(error)
                         return None
                     self.session_path = sessions.path(self.browser_session)
-                    return "/" + relative
+                    return path
 
             def _launch(self, path: str) -> None:
                 ticket = path.removeprefix("/launch/")
@@ -519,7 +528,7 @@ class Console:
                     return self._send(STATUS_BY_CODE.get(error.code, 400), body, "text/html; charset=utf-8")
                 self.send_response(303)
                 self.send_header("Location", target)
-                self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session.cookie}; Path={target}; HttpOnly; SameSite=Strict")
+                self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session.cookie}; Path=/; Max-Age={SESSION_SECONDS}; HttpOnly; SameSite=Strict")
                 self.send_header("Content-Length", "0")
                 self.send_header("Cache-Control", "no-store")
                 self._security_headers()

@@ -539,6 +539,7 @@ class Daemon:
             self.store.initialize()
             service = self.service()
             self.console = Console(self.store, service)
+            self.console.start(issue_ticket=False)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
             # Buddy's private C-Two profile goes in before the first register: the
             # pool, reassembly and execution capacity are set through C-Two's public

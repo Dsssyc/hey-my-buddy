@@ -146,7 +146,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertTrue(snapshot["csrfToken"])
         self.assertIn("httponly", browser.entry_headers["set-cookie"].lower())
         self.assertIn("samesite=strict", browser.entry_headers["set-cookie"].lower())
-        self.assertNotIn("set-cookie", headers)
+        self.assertIn("Max-Age=2592000", headers["set-cookie"])
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertIn("content-security-policy", headers)
         self.assertNotIn("access-control-allow-origin", headers)
@@ -154,7 +154,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # A second read reuses the same session without rotating it.
         status, headers, _body = browser.get("/api/console")
         self.assertEqual(status, 200)
-        self.assertNotIn("set-cookie", headers)
+        self.assertIn("Max-Age=2592000", headers["set-cookie"])
         # The console is a GET-only read surface for the snapshot and never a writer.
         self.assertEqual(board.store.count_tasks(), 0)
 
@@ -437,7 +437,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertIn("application/json", headers["content-type"])
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertNotIn("access-control-allow-origin", headers)
-        self.assertNotIn("set-cookie", headers)
+        self.assertIn("Max-Age=2592000", headers["set-cookie"])
         payload = json.loads(body)
         self.assertEqual(sorted(payload), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
         self.assertEqual(payload["runs"], payload["tasks"])
@@ -617,14 +617,14 @@ class ConsoleAssetTests(ConsoleTestCase):
         self.assertIn("text/html", headers["content-type"])
         self.assertIn("Buddy console fixture", body.decode())
 
-    def test_console_close_and_reopen_rotates_the_private_session(self):
+    def test_console_close_and_reopen_requires_cookie_at_stable_path(self):
         board = self.board()
         stated, browser = self.open_console(board)
         old_prefix = browser.prefix
         board.call("console", {"action": "close"})
         status = board.call("console", {"action": "status"})
         self.assertFalse(status["running"])
-        # A fresh open is a new secret; the previous URL path is gone.
+        # A fresh ticket does not make the stable URL public.
         reopened = board.call("console", {"action": "open"})
         self.assertNotEqual(reopened["url"], stated["url"])
         new_parts = urlsplit(reopened["url"])
@@ -635,7 +635,7 @@ class ConsoleAssetTests(ConsoleTestCase):
             old_prefix + "/api/console",
             headers={"Host": f"{new_parts.hostname}:{new_parts.port}"},
         )
-        self.assertEqual(status, 404)
+        self.assertEqual(status, 401)
 
 
 class ConsoleDaemonTests(ConsoleTestCase):
