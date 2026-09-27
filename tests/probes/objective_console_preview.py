@@ -365,8 +365,8 @@ def build_runs() -> dict[str, dict]:
         run("preview-run-a1-h1-h1", project="alpha", group=OBJ_A, parent="preview-run-a1-h1",
             title="核对离线副本的跨平台路径边界", title_source="task",
             task_text="核对 Windows 与 macOS 下离线副本路径大小写与分隔符的边界记录。",
-            created=instant(6, 56), updated=instant(7, 2), state="delivered", status="completed",
-            category="ended", configuration=CFG_CLAUDE, result=True, shutdown_confirmed=False,
+            created=instant(6, 56), updated=instant(7, 2), state="executing", status="reconciliation-needed",
+            category="active", configuration=CFG_CLAUDE, result=True, shutdown_confirmed=False,
             result_summary="核对离线副本的跨平台路径边界",
             spans=[
                 span("queue:att-h2-1", "queue", instant(6, 56), instant(6, 57), "claimed",
@@ -432,11 +432,11 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE)],
             markers=[marker(instant(9, 35), "dispatch", actor=HOST_A)]),
-        run("preview-run-b1", project="beta", group=OBJ_B, hosts=(HOST_B, HOST_B),
+        run("preview-run-b1", project="beta", group=OBJ_B, hosts=(HOST_B, HOST_B2),
             title=long_title("DSH 插件在 Windows 路径下的沙箱回归排查与修复记录，包含长标题截断检查："),
             title_source="title",
             task_text="排查 DSH 插件在 Windows 路径下的沙箱回归，修复后等待最终验收。",
-            created=instant(3, 0), updated=instant(4, 35), state="delivered", status="completed",
+            created=instant(3, 0), updated=instant(5, 35), state="delivered", status="completed",
             category="review", configuration=CFG_GLM, result=True, continuation_count=1,
             result_summary="合成预览：沙箱回归修复完成，等待验收",
             spans=[
@@ -445,27 +445,28 @@ def build_runs() -> dict[str, dict]:
                 span("execution:att-b1-1", "execution", instant(3, 4), instant(3, 30), "finished",
                      attempt_id="att-b1-1", configuration=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
-                span("queue:att-b1-2", "queue", instant(4, 1), instant(4, 2), "claimed",
+                span("queue:att-b1-2", "queue", instant(5, 1), instant(5, 2), "claimed",
                      attempt_id="att-b1-2"),
-                span("execution:att-b1-2", "execution", instant(4, 2), instant(4, 30), "finished",
+                span("execution:att-b1-2", "execution", instant(5, 2), instant(5, 30), "finished",
                      attempt_id="att-b1-2", configuration=CFG_GLM, confirmed=True, generation=2,
                      disposition="completed", turn_index=2),
             ],
             attempts=[
                 attempt("att-b1-1", 1, "finished", True, instant(3, 4), instant(3, 30), CFG_GLM,
                         result="合成预览：第一轮探测完成。"),
-                attempt("att-b1-2", 2, "finished", True, instant(4, 2), instant(4, 30), CFG_GLM,
+                attempt("att-b1-2", 2, "finished", True, instant(5, 2), instant(5, 30), CFG_GLM,
                         result="合成预览：修复完成，等待验收。"),
             ],
             markers=[
                 marker(instant(3, 0), "dispatch", actor=HOST_B),
-                marker(instant(4, 1), "continue", actor=HOST_B, continuation_id="cont-b1-1"),
-                marker(instant(4, 35), "integrate", actor=HOST_B, artifact_id="art-b1",
+                marker(instant(4, 1), "takeover", actor=HOST_B2),
+                marker(instant(5, 1), "continue", actor=HOST_B2, continuation_id="cont-b1-1"),
+                marker(instant(5, 35), "integrate", actor=HOST_B2, artifact_id="art-b1",
                        integration_id="int-b1", summary="merge"),
             ],
             artifacts=[artifact("art-b1", "att-b1-2", digest("b1-output")[:40], "/synthetic-preview/diffs/b1.diff",
                                 ["harnesses/dsh/plugins/sandbox.js"])],
-            integrations=[integration("int-b1", "art-b1", "att-b1-2", HOST_B)]),
+            integrations=[integration("int-b1", "art-b1", "att-b1-2", HOST_B2)]),
         run("preview-run-b1-h1", project="beta", group=OBJ_B, parent="preview-run-b1",
             hosts=(HOST_B, HOST_B),
             title="整理 macOS 与 Windows 沙箱规则差异清单", title_source="title",
@@ -1399,6 +1400,8 @@ def occupied_intervals(group: str) -> list[tuple[datetime, datetime]]:
             start, end = parse(item["startAt"]), parse(item["endAt"])
             if start is None:
                 continue
+            if item["uncertain"] and item["shutdownConfirmed"] is not True:
+                end = observed
             if end is None:
                 if item["shutdownConfirmed"] is True or not (item["uncertain"] or
                                                              item["state"].lower() in open_states):
@@ -1445,9 +1448,11 @@ def validate_fixtures() -> list[str]:
     if json.dumps(objective_timeline({"objectiveId": OBJ_B}, "normal"), sort_keys=True) != json.dumps(
             objective_timeline({"objectiveId": OBJ_B}, "normal"), sort_keys=True):
         problems.append("objective timeline is not stable across reads")
-    biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_A)), default=timedelta())
+    if any(end - start > timedelta(minutes=30) for start, end in idle_gaps(OBJ_A)):
+        problems.append("objective A's unconfirmed tail must prevent false idle folding")
+    biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_B)), default=timedelta())
     if biggest <= timedelta(minutes=30):
-        problems.append("objective A has no strictly-greater-than-30-minute idle gap")
+        problems.append("objective B has no strictly-greater-than-30-minute idle gap")
     if not any(gap[1] - gap[0] == timedelta(minutes=30) for gap in idle_gaps(OBJ_B)):
         problems.append("objective B does not carry the exact 30-minute non-folding boundary")
     if not objective_timeline({"objectiveId": OBJ_A}, "normal")["scopeComplete"]:
@@ -1559,7 +1564,7 @@ def smoke(assets: Path, scenario: str) -> int:
             check("truncated scenario reports truncation",
                   (scenario == "truncated") == bool(timeline["truncated"]["rows"]),
                   str(timeline["truncated"]))
-        biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_A)), default=timedelta())
+        biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_B)), default=timedelta())
         check("truly idle gap > 30 min", biggest > timedelta(minutes=30), f"biggest={biggest}")
         status, task, _headers = call("GET", "/api/tasks/preview-run-a1")
         check("GET /api/tasks/<id>", status == 200 and task.get("runId") == "preview-run-a1",
@@ -1626,7 +1631,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"CHECK FAIL  {problem}")
         if problems:
             return 1
-        biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_A)), default=timedelta())
+        biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_B)), default=timedelta())
         print(f"CHECK OK  shapes stable · idle gap {biggest} · fixtures deterministic · "
               f"{len(FIXTURES['runs'])} runs / {len(FIXTURES['groups'])} groups")
         return 0
