@@ -42,7 +42,7 @@ The CLI uses short names that map one-to-one onto those operations: `submit` →
 
 The local `worker-start` and `worker-stop` CLI commands start a supervisor or write its cooperative stop request directly. They do not use this RPC path.
 
-Buddy transports bounded JSON strings through C-Two 0.6.0's named Python operations. This is a same-user Python API only; no cross-language portability is claimed and no FastDB DTO is used. A non-Python client must define an explicit transport contract. Node-side bridges do not connect to C-Two directly: the Python service is their client over private files and sockets. This dependency update validates Buddy behavior without reviewing C-Two internals.
+hey-my-buddy transports bounded JSON strings through C-Two 0.6.0's named Python operations. This is a same-user Python API only; no cross-language portability is claimed and no FastDB DTO is used. A non-Python client must define an explicit transport contract. Node-side bridges do not connect to C-Two directly: the Python service is their client over private files and sockets. This dependency update validates hey-my-buddy behavior without reviewing C-Two internals.
 
 ## Data model
 
