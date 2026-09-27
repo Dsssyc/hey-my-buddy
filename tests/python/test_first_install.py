@@ -176,7 +176,10 @@ class CodexCliMarketplaceTests(unittest.TestCase):
         completed = subprocess.run(
             [self.binary, *arguments], env=environment, capture_output=True, text=True, timeout=180
         )
-        return completed.returncode, completed.stdout + completed.stderr
+        # Successful --json data belongs to stdout. Codex can also report a
+        # harmless private-TMPDIR PATH-alias warning on stderr; it is not JSON.
+        output = completed.stdout if completed.returncode == 0 else completed.stdout + completed.stderr
+        return completed.returncode, output
 
     def test_private_codex_home_resolves_the_repository_catalog(self):
         code, output = self.codex("plugin", "marketplace", "add", str(ROOT), "--json")
