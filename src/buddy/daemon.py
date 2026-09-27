@@ -466,6 +466,7 @@ class Daemon:
     def __init__(self, directory: Path):
         self.directory = Path(directory)
         self.stopping = threading.Event()
+        self._pool_lifecycle_lock = threading.RLock()
         self.started_at = utc_now()
         self.service_id = str(uuid.uuid4())
         self.token = secrets.token_urlsafe(32)
@@ -580,6 +581,15 @@ class Daemon:
                 name=WAIT_NAME,
                 concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL),
             )
+            self.resume_path.unlink(missing_ok=True)
+            self.stop_path.unlink(missing_ok=True)
+            # Do not expose health/stop until all initial Popen handles exist.
+            # Otherwise a stop can be overwritten by a later slot's start.
+            self._start_pool()
+            self._reconcile_pool()
+            if self.control.get("stopping") or self.control.get("restart_requested"):
+                self.stopping.wait()
+                return self.finish()
             atomic_json(
                 self.endpoint_path,
                 {
@@ -594,12 +604,6 @@ class Daemon:
                     "runtimeIdentity": self.control["runtime"],
                 },
             )
-            self.resume_path.unlink(missing_ok=True)
-            self.stop_path.unlink(missing_ok=True)
-            # A fresh daemon reserves the configured slots; a restarted daemon finds
-            # the same supervisor IDs already running and never duplicates them.
-            self.pool.start()
-            self._reconcile_pool()
             sweeper = threading.Thread(target=self._sweep, name="buddy-lease-sweeper", daemon=True)
             sweeper.start()
             self.stopping.wait()
@@ -607,16 +611,28 @@ class Daemon:
         finally:
             self.cleanup()
 
+    def _start_pool(self) -> None:
+        with self._pool_lifecycle_lock:
+            if self.stopping.is_set() or self.control.get("stopping") or self.control.get("restart_requested"):
+                return
+            self.pool.start()
+            # Python signal handlers can reenter an RLock on this same thread.
+            # Restore the stop intent after any interrupted start completes.
+            if self.control.get("stopping"):
+                self.pool.request_stop()
+
     def _reconcile_pool(self) -> None:
         """Refresh pool reporting and drain surplus supervisors that are safe."""
-        if self.stopping.is_set() or self.control.get("stopping") or self.control.get("restart_requested"):
-            # A stop/restart was requested: never resurrect a managed slot while the
-            # service is leaving, or a detached supervisor would outlive the owner.
-            return
-        try:
-            self.control["worker_pool"] = self.pool.reconcile(self.store)
-        except Exception:  # pragma: no cover - reporting must never stop the daemon
-            pass
+        with self._pool_lifecycle_lock:
+            if self.stopping.is_set() or self.control.get("stopping") or self.control.get("restart_requested"):
+                return
+            try:
+                self.control["worker_pool"] = self.pool.reconcile(self.store)
+            except Exception:  # pragma: no cover - reporting must never stop the daemon
+                pass
+            finally:
+                if self.control.get("stopping"):
+                    self.pool.request_stop()
 
     def _sweep(self) -> None:
         while not self.stopping.wait(LEASE_SWEEP_SECONDS):
@@ -631,7 +647,8 @@ class Daemon:
     def on_stop(self, params: dict) -> dict:
         drain = int(params.get("drainSeconds", DRAIN_SECONDS_DEFAULT))
         reason = params.get("reason", "service stop requested")
-        self.control["stopping"] = True
+        with self._pool_lifecycle_lock:
+            self.control["stopping"] = True
         atomic_json(self.stop_path, {"requestedAt": utc_now(), "reason": reason, "drainSeconds": drain})
         governed, governed_task_ids = self.store.workflow.cancel_for_service_stop(f"service stop: {reason}")
         queued = governed["queued"] + self.cancel_queued(reason, exclude=governed_task_ids)
@@ -639,7 +656,8 @@ class Daemon:
         unresolved = self.drain(drain)
         # Every managed pool worker — including a surplus supervisor retained from a
         # higher limit — receives a cooperative stop request; none is signalled.
-        workers_asked = self.pool.request_stop()
+        with self._pool_lifecycle_lock:
+            workers_asked = self.pool.request_stop()
         self.stopping.set()
         return {
             "action": "stop",
@@ -660,7 +678,8 @@ class Daemon:
         """Detach and let a fresh daemon take over, preserving every worker."""
         drain = int(params.get("drainSeconds", DRAIN_SECONDS_DEFAULT))
         reason = params.get("reason", "service restart requested")
-        self.control["restart_requested"] = True
+        with self._pool_lifecycle_lock:
+            self.control["restart_requested"] = True
         # Deliberately no cancel and no worker stop: workers survive the daemon.
         atomic_json(
             self.resume_path,

@@ -74,9 +74,9 @@ class CwdIndependentCliTests(unittest.TestCase):
     """The single launcher reaches the same CLI from any working directory."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-launch-", dir="/tmp")
-        self.addCleanup(self.temp.cleanup)
-        base = Path(self.temp.name).resolve()
+        base = Path(tempfile.mkdtemp(prefix="buddy-launch-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))).resolve()
+        self.base = base
+        self.addCleanup(self.cleanup_private)
         self.state = base / "state"
         self.runtime_root = base / "runtime"
         self.first_cwd = base / "first"
@@ -84,20 +84,14 @@ class CwdIndependentCliTests(unittest.TestCase):
         self.first_cwd.mkdir()
         self.second_cwd.mkdir()
 
-    def tearDown(self):
-        from support import stop_private_workers
+    def cleanup_private(self):
+        from buddy.checks import teardown_private_root
 
-        if self.state.exists():
-            subprocess.run(
-                ["/bin/sh", str(LAUNCHER), "stop"],
-                env=self.environment(),
-                cwd=str(self.first_cwd),
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            stop_private_workers(self.state)
-        self.temp.cleanup()
+        # The last pool slots may still be starting when health returns. Keep
+        # state until process observation AND lifetime locks prove every slot
+        # stopped; a one-time glob of existing lock files misses late starters.
+        evidence = teardown_private_root(self.base)
+        self.assertIsNone(evidence, f"Private launcher processes remain; preserved {self.base}")
 
     def environment(self) -> dict:
         # The launcher selects Python 3.12 for its uv project; give it a private
@@ -107,7 +101,7 @@ class CwdIndependentCliTests(unittest.TestCase):
             BUDDY_STATE_DIR=str(self.state),
             BUDDY_RUNTIME_ROOT=str(self.runtime_root),
             BUDDY_DEV_SOURCE="1",
-            UV_PROJECT_ENVIRONMENT=str(Path(self.temp.name) / "cli-venv"),
+            UV_PROJECT_ENVIRONMENT=str(self.base / "cli-venv"),
         )
 
     def launch(self, command: str, cwd: Path, timeout: int = 240) -> dict:
@@ -171,7 +165,7 @@ class StagedPluginInventoryTests(unittest.TestCase):
     """Staging ships the supported layout only, and never writes into the source."""
 
     def stage(self):
-        directory = tempfile.TemporaryDirectory(prefix="buddy-plugin-", dir="/tmp")
+        directory = tempfile.TemporaryDirectory(prefix="buddy-plugin-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(directory.cleanup)
         destination = Path(directory.name) / "hey-my-buddy"
         return load_stage_plugin().stage(ROOT, destination)

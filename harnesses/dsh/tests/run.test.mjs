@@ -647,7 +647,7 @@ describe('private per-run inquiry bridge mount', () => {
     const s = scenario('inquiry-mount');
     // A Unix socket path is length-bounded, so this test uses a short one; the
     // owned service picks the real location in production.
-    const socketDir = mkdtempSync('/tmp/dd-inquiry-mount-');
+    const socketDir = mkdtempSync(join(tmpdir(), 'dd-inquiry-mount-'));
     const socketPath = join(socketDir, 'inquiry.sock');
     const resultsPath = join(socketDir, 'inquiry.results.jsonl');
     const result = runCli([
@@ -706,7 +706,7 @@ describe('private per-run inquiry bridge mount', () => {
 
   test('the =value form keeps a dash-leading inquiry value out of argument parsing', () => {
     const s = scenario('inquiry-equals');
-    const socketDir = mkdtempSync('/tmp/dd-inquiry-equals-');
+    const socketDir = mkdtempSync(join(tmpdir(), 'dd-inquiry-equals-'));
     const socketPath = join(socketDir, 'inquiry.sock');
     const resultsPath = join(socketDir, 'results.jsonl');
     // Separate-value form: `parseArgs` treats a `-`-leading value as an option

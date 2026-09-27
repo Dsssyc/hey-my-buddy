@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
@@ -8,7 +9,7 @@ import { CLI_PATH, testEnv, writeMockDsh } from './support/helpers.mjs';
 import { resolveWorkspaceTarget, connectWorkspaceHost } from '../scripts/lib/workspace-host.mjs';
 
 async function fixture(t) {
-  const dir = realpathSync(mkdtempSync('/tmp/dgw-'));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'dgw-')));
   const socketPath = join(dir, 'workspace.sock');
   const task = join(dir, 'task.md');
   const settings = join(dir, 'settings.json');

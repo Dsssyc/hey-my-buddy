@@ -8,6 +8,7 @@ same per-family counters.
 from __future__ import annotations
 
 import os
+import threading
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -63,6 +64,86 @@ class DaemonCeilingTests(BoardTestCase):
         self.assertFalse(hasattr(daemon.store, "decision_concurrent"))
         self.assertEqual(daemon.pool.total_limit, 4)
         self.assertEqual(len(daemon.pool.worker_ids), 4)
+
+
+class DaemonPoolLifecycleTests(BoardTestCase):
+    def private_daemon(self, name):
+        from buddy.daemon import Daemon
+
+        with clean_buddy_env():
+            daemon = Daemon(self.directory / name)
+        daemon.store.initialize()
+        return daemon
+
+    def test_stop_waits_for_initial_late_slots_and_keeps_every_stop_intent(self):
+        from buddy.daemon import SupervisorHandle
+
+        daemon = self.private_daemon("late-start")
+        blocked, release, stopping, stopped = (threading.Event() for _ in range(4))
+        failures = []
+
+        def delayed_start(handle, *_args, **_kwargs):
+            if handle.worker_id == "local-7":
+                blocked.set()
+                if not release.wait(5):
+                    raise AssertionError("late start was not released")
+            handle.prepare()
+            handle.stop_request.unlink(missing_ok=True)
+            return True
+
+        def stop():
+            stopping.set()
+            try:
+                daemon.on_stop({"drainSeconds": 0})
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                stopped.set()
+
+        with patch.object(SupervisorHandle, "start", delayed_start):
+            starter = threading.Thread(target=daemon._start_pool)
+            starter.start()
+            self.assertTrue(blocked.wait(5))
+            stopper = threading.Thread(target=stop)
+            stopper.start()
+            try:
+                self.assertTrue(stopping.wait(5))
+                self.assertFalse(stopped.wait(.1), "stop bypassed an in-flight pool start")
+            finally:
+                release.set()
+                starter.join(5)
+                stopper.join(5)
+        self.assertFalse(starter.is_alive() or stopper.is_alive())
+        self.assertEqual(failures, [])
+        self.assertTrue(all(daemon.pool.handle(worker).stop_request.exists() for worker in daemon.pool.worker_ids))
+
+    def test_signal_style_reentry_cannot_erase_late_slot_stop_intents(self):
+        from buddy.daemon import SupervisorHandle
+
+        daemon = self.private_daemon("reentrant-start")
+
+        def interrupted_start(handle, *_args, **_kwargs):
+            handle.prepare()
+            if handle.worker_id == "local-7":
+                daemon.on_stop({"drainSeconds": 0})
+            handle.stop_request.unlink(missing_ok=True)
+            return True
+
+        with patch.object(SupervisorHandle, "start", interrupted_start):
+            daemon._start_pool()
+        self.assertTrue(all(daemon.pool.handle(worker).stop_request.exists() for worker in daemon.pool.worker_ids))
+
+    def test_signal_style_reentry_during_reconcile_preserves_stop_intents(self):
+        daemon = self.private_daemon("reentrant-reconcile")
+
+        def interrupted_reconcile(_store):
+            daemon.on_stop({"drainSeconds": 0})
+            daemon.pool.handle("local-8").stop_request.unlink()
+            return daemon.pool.report()
+
+        with patch.object(daemon.pool, "reconcile", interrupted_reconcile):
+            daemon._reconcile_pool()
+        self.assertTrue(daemon.pool.handle("local-8").stop_request.exists())
 
 
 class DaemonHealthTests(BoardTestCase):

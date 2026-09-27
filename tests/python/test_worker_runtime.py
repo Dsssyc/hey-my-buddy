@@ -71,7 +71,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
 
 class StagedWorkerRuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-staged-worker-", dir="/tmp")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-staged-worker-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
         self.runtime_root = self.root / "runtime"

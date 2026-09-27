@@ -34,6 +34,7 @@ import time
 #: Inherited variables that would otherwise point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of its own private roots.
 SANITIZED_VARIABLES = (
+    "BUDDY_CHECKS_TMPDIR",
     "BUDDY_STATE_DIR",
     "BUDDY_RUNTIME_ROOT",
     "BUDDY_RUNTIME",
@@ -87,6 +88,7 @@ def child_environment(root: Path, private_root: Path) -> dict:
     """The suite environment, with every child temp file inside the private root."""
     values = test_environment(root)
     values["TMPDIR"] = str(private_root / "tmp")
+    values["BUDDY_CHECKS_TMPDIR"] = str(private_root / "tmp")
     return values
 
 

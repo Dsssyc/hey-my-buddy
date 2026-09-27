@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os';
 /**
  * Unit tests for the private per-run inquiry bridge plugin.
  *
@@ -27,7 +28,7 @@ const TOKEN = 'test-token-0123456789';
 
 /** A short owner-private socket directory (macOS /tmp is short and private enough). */
 function makeSocketDir() {
-  return mkdtempSync('/tmp/iq-bridge-');
+  return mkdtempSync(join(tmpdir(), 'iq-bridge-'));
 }
 
 function sha256(text) {
@@ -573,13 +574,14 @@ test('the bridge never writes to stdout or stderr', async () => {
   const script = `
     import { createHash, randomUUID } from 'node:crypto';
     import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
     import { join } from 'node:path';
     import { connect } from 'node:net';
     import { startInquiryBridge, PROTOCOL_VERSION } from ${JSON.stringify(new URL('../plugins/inquiry-bridge.mjs', import.meta.url).href)};
     let written = 0;
     const stdoutWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = (chunk, ...rest) => { written += Buffer.byteLength(chunk); return stdoutWrite(chunk, ...rest); };
-    const dir = mkdtempSync('/tmp/iq-quiet-');
+    const dir = mkdtempSync(join(tmpdir(), 'iq-quiet-'));
     const socketPath = join(dir, 'inquiry.sock');
     const listeners = new Map();
     const ctx = {
@@ -610,7 +612,7 @@ test('the bridge never writes to stdout or stderr', async () => {
     rmSync(dir, { recursive: true, force: true });
     writeFileSync(process.env.QUIET_REPORT, String(written));
   `;
-  const reportPath = join(mkdtempSync('/tmp/iq-report-'), 'written.txt');
+  const reportPath = join(mkdtempSync(join(tmpdir(), 'iq-report-')), 'written.txt');
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20000, env: { ...process.env, QUIET_REPORT: reportPath } });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(child.stdout, '', 'the bridge must not write to the run stdout');
