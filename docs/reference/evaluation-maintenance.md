@@ -12,7 +12,7 @@ Evaluation maintenance is performed by a Harness that has the buddy skill, not b
 | `EvaluationStore.assessment_publish` | `assessment_publish` | Commits the card-only patch at the packet's revision. |
 | `DecisionCoordinator.get` / `list_decisions` | `selection_get` / `selection_list` | Read-only history, including historical `kind: "maintain"` records. |
 
-`evaluation-prepare '{"requestId":"maint-1","limit":32}'` collects facts; `evaluation-history '{"limit":20}'` reads the publication log. An ordinary Buddy Worker keeps its limited attempt-scoped credentials and can never prepare or publish maintenance: it must not strip or borrow credentials to impersonate a maintenance Host.
+`evaluation-prepare '{"requestId":"maint-1","limit":32}'` collects facts; `evaluation-history '{"limit":20}'` reads the publication log. An ordinary Worker buddy keeps its limited attempt-scoped credentials and can never prepare or publish maintenance: it must not strip or borrow credentials to impersonate a maintenance Host.
 
 The maintenance Host may delegate bounded synthesis from an already prepared, credential-free packet. That Worker returns a proposal and receives no writer grant or publication authority. The Host verifies every proposed claim, condition and reference before publishing the card-only patch. This permits economical assistance without adding a maintenance scheduler or an autonomous maintenance model to the blackboard. Review notes should identify material corrections and verification boundaries; infrastructure incidents and a project's failing tests do not automatically establish poor model capability. Existing usage fields are observations with harness-specific coverage, not a complete billing ledger or proof of savings.
 

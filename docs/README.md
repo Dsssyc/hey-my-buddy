@@ -50,6 +50,8 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Accepted design direction
 
+[ADR-013: buddy roles and blackboard terminology](decisions/013-buddy-roles-and-blackboard-terminology.md) names the participants: Host buddies and Worker buddies are peers in standing that interact only through the blackboard and differ in role and authority, while hey-my-buddy names the product. It changes wording only; [CONTEXT.md](../CONTEXT.md) holds the definitions.
+
 [ADR-012: Bounded control overhead](decisions/012-bounded-control-overhead.md) records light liveness, transient empty polls versus durable allocations, and the user-approved order of subsequent reliability and routing repairs. The [0.10.0 acceptance record](acceptance/runtime-efficiency-0.10.0.md) owns progress and installation evidence.
 
 [ADR-011: Shared model concurrency and verified native interaction](decisions/011-runtime-refinement.md) defines the 0.9.0 source candidate: one machine-wide attempt ceiling with user-owned per-model-family concurrency limits replacing the separate business and decision lanes, and whole-goal artifact verification over immutable Git objects. Its delivery status is owned by the [0.9.0 acceptance record](acceptance/runtime-refinement-0.9.0.md).
@@ -99,6 +101,7 @@ Acceptance records are versioned evidence, not current contracts. They may refer
 | Document | Role |
 | --- | --- |
 | [AGENTS.md](../AGENTS.md) | Repository development invariants, verification commands and topic-based routing: which document to update for which kind of change |
+| [CONTEXT.md](../CONTEXT.md) | Domain language: the blackboard, Host and Worker buddies, Worker runtimes and delegated-work terms, with the words to avoid |
 
 When behavior changes, update the owning reference first, then the READMEs and [skills/buddy/SKILL.md](../skills/buddy/SKILL.md) if the user-visible entry path changed, and record acceptance evidence under `docs/acceptance/`. Keep architecture statements verified against source; historical ADRs describe the decision at their own point in time.
 

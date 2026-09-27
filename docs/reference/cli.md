@@ -1,4 +1,4 @@
-# Buddy CLI reference
+# `buddy` CLI reference
 
 `buddy` is the supported entrypoint: one command per operation, one JSON object argument, one JSON object on stdout. This page is the complete command surface and its defaults, bounds, envelopes and error codes. Usage flows are in [usage.md](usage.md); the governed goal lifecycle is in [workflow.md](workflow.md); runtime lifecycle is in [operations.md](operations.md).
 

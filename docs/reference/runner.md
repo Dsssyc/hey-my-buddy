@@ -45,7 +45,7 @@ cat "$DELEGATE_DEMO_DIR/result.json"
 | `--attach-session <id>` | | group an existing completed session; no task file, no model run |
 | `--workspace-socket <path>` | see precedence | private socket served by the owning host plugin |
 | `--workspace-timeout <seconds>` | `15` | per-request bound, integer 1–120 |
-| `--inquiry-socket <path>`, `--inquiry-token <token>`, `--inquiry-results <path>` | | private per-run inquiry channel, supplied together by the owning Buddy service; never by hand |
+| `--inquiry-socket <path>`, `--inquiry-token <token>`, `--inquiry-results <path>` | | private per-run inquiry channel, supplied together by the owning Worker runtime; never by hand |
 | `--turn-input-file <path>`, `--turn-output-file <path>` | omitted for standalone runs | paired private absolute paths for a governed turn; input must exist and output must be absent |
 | `-h`, `--help` | | print help and exit (needs no dsh) |
 
@@ -157,7 +157,7 @@ stdout carries exactly one JSON object:
 - `requested` is the route and effort actually written into the settings copy.
 - `finalText` is at most 6000 characters of the head of the dsh stdout log, with `finalTextTruncated` (byte-based) telling you whether more existed. stderr and reasoning are never copied into the JSON.
 - `workspace` reports `enabled`, `bound`, `id`, `path`, `sessionId` and any binding `error`. Task `status`/`exitCode` and log paths survive a grouping failure; check the process exit and `workspace.bound`, not task status alone.
-- `inquiry` says whether the owning Buddy service mounted this run's private bridge (`enabled`, its paths and any startup `error`). A bridge that fails to start never fails the run.
+- `inquiry` says whether this run's private bridge, requested by the owning Worker runtime, was mounted (`enabled`, its paths and any startup `error`). A bridge that fails to start never fails the run.
 - `processState.shutdownConfirmed` is true only when the owned process group was observed stopped; it is required before the adapter reports success and before `acknowledge`.
 - Logs go to a unique owner-private directory (directory mode `0700`, file mode `0600`): under `--log-dir` when given, otherwise under the OS temp directory. Pre-existing files are never truncated or reused. When the adapter runs a task, `--log-dir` is the attempt directory, so the runner logs sit beside the adapter's own `runner.stdout.log`/`runner.stderr.log`.
 

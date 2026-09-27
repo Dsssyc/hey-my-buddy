@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-Buddy 让 Host agent 把边界明确的工作交给本地编码 harness，同时保留对整体目标的责任。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude.md)）作为 P1 适配器加入，默认采用用户确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
+hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对整体目标的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude.md)）作为 P1 适配器加入，默认采用用户确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
 
 目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好、模型并发设置和评价卡片。
 
@@ -18,7 +18,7 @@ Buddy 让 Host agent 把边界明确的工作交给本地编码 harness，同时
 
 ## 安装并试用
 
-需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、DSH 所需的 Node.js 20+ 及所安装 ZCode CLI 要求的运行环境，以及已配置服务商凭据的本地 `dsh` 和/或 ZCode。Codex 使用已安装的 App Server 和既有原生账户登录，不需要 API key。Buddy 使用 harness 已配置的凭据，不修改全局模型设置。
+需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、DSH 所需的 Node.js 20+ 及所安装 ZCode CLI 要求的运行环境，以及已配置服务商凭据的本地 `dsh` 和/或 ZCode。Codex 使用已安装的 App Server 和既有原生账户登录，不需要 API key。hey-my-buddy 使用 harness 已配置的凭据，不修改全局模型设置。
 
 从本仓库自带的插件市场安装 `hey-my-buddy`，不需要个人市场，也不依赖任何公共目录上架。从本地 checkout 安装：
 
@@ -52,7 +52,7 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 打开命令返回的 loopback 地址，顶部提供“委派记录 / 模型卡片 / 路由配置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据。模型按家族聚合，各思考档位保留独立评价；已启用档位有勾选标记，与当前查看的档位分开显示。右上角“编辑模式”创建本地草稿，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑模式只修改你自己的意见、偏好、启用状态、模型并发设置和路由配置：自动评价、证据和目录事实始终只读。每个模型家族在模型卡片上还有一个用户拥有的并发上限，走同样的本地草稿与短时发布流程；它在下一次认领时生效，调低上限不会停止正在运行的任务。同一入口可以显示不可用配置并分页查看保留历史；失效的 pin 或决策配置只给出提示，不阻止保存其他修改。证据区始终只读，并提示通过具备 skill 的 Harness 更新；“更新记录”显示已发布版本。深浅主题开关只记住显示偏好。查看、刷新和编辑草稿都不调用模型。
 
-可以直接让具备 skill 的 Harness“更新 Buddy 黑板的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工意见。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
+可以直接让具备 skill 的 Harness“更新黑板中的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工意见。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
 
 ## 执行与恢复
 

@@ -4,11 +4,11 @@
 
 [中文文档](README.zh-CN.md)
 
-Buddy lets a Host agent delegate bounded work to local coding harnesses while keeping responsibility for the goal. A Host can implement one part itself and hand other parts to a Worker whose harness, model or cost fits the work. The supported coding harnesses are [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`), ZCode (`zcode`) and the experimental Codex App Server (`codex`); a Claude Code adapter (`claude`, [reference](docs/reference/claude.md)) joins them as a P1 adapter with verified native outcome, cancellation and bounded sandbox paths, plus a separately approved read-only lifecycle test through the installed service.
+hey-my-buddy lets a Host buddy, the agent that owns a goal, delegate bounded work to Worker buddies running in local coding harnesses while keeping responsibility for the goal. Both are buddies of equal standing that coordinate only through a shared blackboard; they differ in role. A Host can implement one part itself and hand other parts to a Worker whose harness, model or cost fits the work. The supported coding harnesses are [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`), ZCode (`zcode`) and the experimental Codex App Server (`codex`); a Claude Code adapter (`claude`, [reference](docs/reference/claude.md)) joins them as a P1 adapter with verified native outcome, cancellation and bounded sandbox paths, plus a separately approved read-only lifecycle test through the installed service.
 
 Goals, decisions and results live in a local SQLite blackboard. Coding work gets explicit Git workspaces and fixed input/output snapshots; a private React/Vite console shows tasks, routing, shared model profiles, preferences, per-model concurrency and evaluation cards.
 
-## Working with Buddy
+## How buddies collaborate
 
 Use it for scoped implementation, testing, reproducible investigations, documentation or file transformations with a checkable result. Keep the task with the Host when the edit is trivial, the answer is already known or the requirements still need clarification.
 
@@ -18,7 +18,7 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 ## Install and try
 
-You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for DSH and the runtime required by your installed ZCode CLI, and a working local `dsh` and/or ZCode installation with its own provider credentials. Codex uses the installed App Server with your existing native account-plan login instead of an API key. Buddy uses the credentials already configured for the harness and leaves global model settings alone.
+You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for DSH and the runtime required by your installed ZCode CLI, and a working local `dsh` and/or ZCode installation with its own provider credentials. Codex uses the installed App Server with your existing native account-plan login instead of an API key. hey-my-buddy uses the credentials already configured for the harness and leaves global model settings alone.
 
 Install the `hey-my-buddy` plugin from this repository's own marketplace; no personal marketplace and no public registry listing is required. From a local checkout:
 
@@ -52,7 +52,7 @@ The 0.13.0 source candidate opens the default browser with a single-use entry li
 
 The returned loopback URL opens delegation records, model cards and routing configuration. Records are grouped by source project and show original/current Host attribution, execution turns and frozen routing rationale. Model families group effort variants while keeping evaluations independent; enabled variants have a visible check, separate from the inspected variant. The top-right edit-mode switch creates a local draft; Save acquires a short publication grant, and conflicts or uncertain replies preserve recovery state. Edit mode touches only your own annotations, preferences, enablement, model concurrency and the selector: automatic assessments, evidence and catalog facts stay read-only. Each model family also carries a user-owned concurrent-attempt limit edited on its model card; it is published through the same local draft and short grant, takes effect at the next claim, and lowering it never stops already-running attempts. The same surface can show unavailable configurations and page their retained history; a stale pin or selector is a warning that never blocks unrelated saves. `Update history` shows published revisions, and a light/dark switch remembers only your display preference. Viewing, refreshing and editing drafts call no model.
 
-Ask a skill-equipped Harness to “update the Buddy model evaluations,” or schedule that request with the Harness's own scheduler when you explicitly want recurring updates. The [maintenance workflow](docs/reference/evaluation-maintenance.md) incrementally collects reviewed facts across Hosts/projects, preserves qualified failed and retried attempts, and publishes a bounded card-only update without changing preferences or annotations. Task acknowledgement does not trigger a model call. When no new material is available, skip synthesis without claiming a fresh assessment.
+Ask a skill-equipped Harness to “update the blackboard's model evaluations,” or schedule that request with the Harness's own scheduler when you explicitly want recurring updates. The [maintenance workflow](docs/reference/evaluation-maintenance.md) incrementally collects reviewed facts across Hosts/projects, preserves qualified failed and retried attempts, and publishes a bounded card-only update without changing preferences or annotations. Task acknowledgement does not trigger a model call. When no new material is available, skip synthesis without claiming a fresh assessment.
 
 ## Execution and recovery
 

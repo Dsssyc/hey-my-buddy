@@ -8,8 +8,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Hey My Buddy",
-    "shortDescription": "Delegate bounded work through local Buddy harnesses.",
-    "longDescription": "Delegate scoped work through one uv-managed Buddy CLI. Choose a complete model configuration or route under hard constraints using the bounded shared evaluation table. Explicit Git snapshots and Host capabilities govern assistance, continuation and final acceptance. Independent workers own DSH and ZCode processes; Python and C-Two retain durable state. A private React/Vite console shows tasks, evaluations and actionable Host decisions. Background follow-up uses an explicit App heartbeat.",
+    "shortDescription": "Delegate bounded work to Worker buddies in local harnesses.",
+    "longDescription": "Delegate scoped work through one uv-managed CLI. Choose a complete model configuration or route under hard constraints using the bounded shared evaluation table. Explicit Git snapshots and Host capabilities govern assistance, continuation and final acceptance. Independent workers own DSH and ZCode processes; Python and C-Two retain durable state. A private React/Vite console shows tasks, evaluations and actionable Host decisions. Background follow-up uses an explicit App heartbeat.",
     "developerName": "Dsssyc",
     "category": "Productivity",
     "capabilities": [
@@ -17,7 +17,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Delegate a bounded task with Buddy and verify its artifacts."
+      "Delegate a bounded task to a Worker buddy and verify its artifacts."
     ]
   },
   "license": "MIT",
