@@ -110,11 +110,11 @@ function StopDialog({ summary, onConfirm, onCancel }: {
     <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-objective-title" aria-describedby="stop-objective-body">
       <h2 id="stop-objective-title">停止工作目标</h2>
       <p id="stop-objective-body">
-        目标：{summary.title}。{scope}服务器按记录解析完整范围，不受当前筛选或截断影响；取消以真实停止证据为准，确认前显示“正在停止”。
+        目标：{summary.title}。{scope}服务器按记录解析完整范围，不受当前筛选或截断影响；取消以真实停止证据为准，未确认停止时显示“正在停止”或“停止未确认”。
       </p>
       <div className="actions">
-        <button type="button" className="button danger" onClick={onConfirm}>确认停止目标</button>
         <button ref={cancelRef} type="button" className="button" onClick={onCancel}>取消</button>
+        <button type="button" className="button danger" onClick={onConfirm}>确认停止目标</button>
       </div>
     </div>
   </div>;

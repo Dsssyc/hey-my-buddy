@@ -10,10 +10,11 @@ import {
 import { objectiveMetrics, rootRollups, type RunRollup } from "./objective-metrics";
 
 /** One labeled single-line row of an overview card (0.15.1 U2). */
-function CardRow({ label, text, title }: { label: string; text: string; title?: string }) {
+function CardRow({ label, text, title, note }: { label: string; text: string; title?: string; note?: string }) {
   return <span className="card-row">
     <span className="card-row-label">{label}</span>
     <span className="card-row-text" title={title}>{text}</span>
+    {note && <span className="title-source-note">{note}</span>}
   </span>;
 }
 
@@ -31,7 +32,7 @@ export function DelegationThreeRows({ title, titleSource, taskSummary, resultSum
 }) {
   const titleLine = displayTitle(titleSource ?? "none", title || "未命名委派");
   return <div className="card-rows three-rows">
-    <CardRow label="做什么" text={titleLine.text + (titleLine.fromTask ? `（${TASK_SOURCE_NOTE}）` : "")} />
+    <CardRow label="做什么" text={titleLine.text} note={titleLine.fromTask ? TASK_SOURCE_NOTE : undefined} />
     <CardRow label="目标摘要" text={taskSummary ?? "未记录任务原文"} />
     <CardRow label="结果摘要" text={(resultSummary ?? "尚无 Worker 结论") + (resultSummary ? "（Worker 自述，非验收）" : "")} />
   </div>;

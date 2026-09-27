@@ -542,3 +542,11 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 .objective-title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .objective-title-row h2 { flex: 1; min-width: 0; }
 .objective-title-row > .chip-row { flex: 0 0 auto; }
+
+/* Keep all five detail tabs visible in the 360px dock. */
+.detail-stage .detail-tabs { padding-inline: 6px; gap: 0; }
+.detail-stage .detail-tabs button { padding-inline: 6px; flex: 0 0 auto; }
+/* Fallback provenance stays visible independently of the clipped title. */
+.task-title.single-line { display: flex; align-items: center; }
+.task-title.single-line .objective-list-title-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.title-source-note { flex: 0 0 auto; white-space: nowrap; }

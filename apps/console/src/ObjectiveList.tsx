@@ -58,7 +58,7 @@ function EntryRow({ row, selected, onSelect }: {
       </span>
       <strong className={"task-title" + (title.fromTask ? " single-line" : "")}
         title={title.fromTask ? `${title.text}（完整任务见详情）` : row.title}>
-        {excerpt(title.text, 100)}
+        <span className="objective-list-title-text">{excerpt(title.text, 100)}</span>
         {title.fromTask && <span className="title-source-note">{TASK_SOURCE_NOTE}</span>}
       </strong>
       {row.summary !== null && <span className="task-summary muted" title={row.summary}>结果：{excerpt(row.summary, 80)}</span>}
