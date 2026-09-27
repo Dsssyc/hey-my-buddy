@@ -17,6 +17,22 @@ const profile = (profileId: string, adapter: string, provider: string, effort: s
 });
 
 describe("console grouping and recorded attribution", () => {
+  it("orders extended thinking levels by intensity in family labels and variant tabs", () => {
+    for (const adapter of ["claude", "codex"]) {
+      const levels = ["ultra", "max", "high", "medium", "xhigh", "low"];
+      const profiles = levels.map(effort => profile(`${adapter}-${effort}`, adapter, "provider", effort));
+      expect(modelFamilies(profiles)[0].profiles.map(item => item.effort))
+        .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+      expect(profiles.map(item => item.effort)).toEqual(levels);
+    }
+  });
+
+  it("keeps default and non-thinking modes ahead of ranked efforts and retains unknown native levels", () => {
+    const levels = ["future", "ultra", "minimal", "off", "default", "none"];
+    expect(modelFamilies(levels.map(effort => profile(effort, "codex", "provider", effort)))[0]
+      .profiles.map(item => item.effort)).toEqual(["default", "none", "off", "minimal", "ultra", "future"]);
+  });
+
   it("groups efforts while keeping the same model name from different harnesses and providers separate", () => {
     const families = modelFamilies([profile("dsh-low", "dsh", "provider-a", "low"),
       profile("dsh-high", "dsh", "provider-a", "high"), profile("other-provider", "dsh", "provider-b", "high"),

@@ -35,7 +35,8 @@ export function modelFamilies(profiles: Profile[]): ModelFamilyGroup[] {
     if (!groups.has(key)) groups.set(key, { key, name: profileName(profile), adapter: profile.adapter, provider: profile.provider, profiles: [] });
     groups.get(key)!.profiles.push(profile);
   }
-  const levels = ["off", "low", "medium", "high", "max"];
+  // Display order only; default/non-thinking modes do not imply a capability score.
+  const levels = ["default", "none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
   for (const group of groups.values()) group.profiles.sort((a, b) => {
     const rank = (value: string) => levels.includes(value) ? levels.indexOf(value) : levels.length;
     return rank(a.effort) - rank(b.effort) || a.effort.localeCompare(b.effort);
