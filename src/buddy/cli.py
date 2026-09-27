@@ -32,6 +32,9 @@ METHODS = [
     "capabilities",
     "adapters",
     "runtime",
+    "backup",
+    "storage-plan",
+    "storage-apply",
     # -- single governed goal lifecycle ------------------------------------
     "submit",
     "get",
@@ -546,6 +549,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("method", choices=METHODS)
     parser.add_argument("params", nargs="?", default="{}", help="JSON object")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) >= 2 and argv[0] == "storage" and argv[1] in ("plan", "apply"):
+        argv[:2] = ["storage-" + argv[1]]
     args = parser.parse_args(argv)
     try:
         params = json.loads(args.params)

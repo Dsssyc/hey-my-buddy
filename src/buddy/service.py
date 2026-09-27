@@ -38,6 +38,9 @@ CONTROL_OPERATIONS = (
     "console",
     "console_snapshot",
     "runtime_info",
+    "backup",
+    "storage_plan",
+    "storage_apply",
     "task_submit",
     "task_get",
     "task_list",
@@ -347,6 +350,21 @@ class BoardService(_BaseResource):
             }
 
         return self._guard("capabilities", request_json, handler)
+
+    def storage_plan(self, request_json: str) -> str:
+        from . import storage
+        return self._guard("storage.plan", request_json, lambda params: storage.plan(self.store, params))
+
+    def storage_apply(self, request_json: str) -> str:
+        from . import storage
+        return self._guard("storage.apply", request_json, lambda params: storage.apply(self.store, params))
+
+    def backup(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            from . import backup
+            schemas.reject_unknown(params, set(), "backup")
+            return backup.create(self.store, runtime_identity=runtime.resolve_runtime(), plugin_commit=backup.source_commit())
+        return self._guard("backup", request_json, handler)
 
     def runtime_info(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
