@@ -405,6 +405,13 @@ describe("objective timeline idle folding", () => {
 });
 
 describe("objective timeline folding eligibility", () => {
+  it("honors an explicit filter flag even if a producer wrongly claims complete scope", () => {
+    const slice = { ...twoAttempts(2 * HOUR), filtered: true };
+    const layout = createTimelineLayout(slice);
+    expect(layout.canFold).toBe(false);
+    expect(layout.gaps.every(gap => !gap.collapsed)).toBe(true);
+  });
+
   it("never folds an incomplete or filtered scope and keeps durations linear", () => {
     const layout = createTimelineLayout(timeline({
       scopeComplete: false,

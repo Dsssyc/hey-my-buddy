@@ -128,7 +128,7 @@ function daysInMonth(year: number, month: number): number {
  * without an explicit offset, because none of those can be placed on a shared
  * axis without inventing a reading.
  */
-function parseInstant(value: string | number | null | undefined): number | null {
+export function parseTimelineInstant(value: string | number | null | undefined): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
   const text = value.trim();
@@ -163,8 +163,8 @@ function isOpenOrUncertain(span: TimelineSpan): boolean {
  * unknown instead of becoming an active span.
  */
 function readSpan(span: TimelineSpan, observedAtMs: number | null): SpanReading {
-  const startMs = parseInstant(span.startAt);
-  const endMs = parseInstant(span.endAt);
+  const startMs = parseTimelineInstant(span.startAt);
+  const endMs = parseTimelineInstant(span.endAt);
   const instants: number[] = [];
   if (startMs !== null) instants.push(startMs);
   if (endMs !== null) instants.push(endMs);
@@ -223,7 +223,8 @@ function gapId(startMs: number, endMs: number): string {
  * `ObjectiveTimeline`) gives a second, stricter signal: any truncated
  * collection could hold omitted occupancy, and folding must then be refused.
  */
-function hasTruncatedCollections(timeline: object): boolean {
+function hasOmittedScope(timeline: object): boolean {
+  if ("filtered" in timeline && timeline.filtered === true) return true;
   const truncated: unknown = (timeline as { truncated?: unknown }).truncated;
   if (truncated === null || typeof truncated !== "object") return false;
   const flags = truncated as Record<string, unknown>;
@@ -306,7 +307,7 @@ function buildUnits(
 
 function createPosition(startMs: number, endMs: number, units: readonly Unit[]) {
   return (timestamp: string | number | null): number | null => {
-    const atMs = parseInstant(timestamp);
+    const atMs = parseTimelineInstant(timestamp);
     if (atMs === null) return null;
     // A zero-length domain has no direction: its single instant sits at the midpoint.
     if (startMs === endMs) return atMs === startMs ? POINT_POSITION_PERCENT : atMs < startMs ? 0 : 100;
@@ -348,7 +349,7 @@ export function createTimelineLayout(
   timeline: Pick<ObjectiveTimeline, "spans" | "events" | "observedAt" | "scopeComplete">,
   expandedGapIds?: ReadonlySet<string>,
 ): TimelineLayout {
-  const observedAtMs = parseInstant(timeline.observedAt);
+  const observedAtMs = parseTimelineInstant(timeline.observedAt);
   const instants: number[] = [];
   const markerInstants: number[] = [];
   const intervals: Interval[] = [];
@@ -362,7 +363,7 @@ export function createTimelineLayout(
   }
 
   for (const event of timeline.events) {
-    const atMs = parseInstant(event.at);
+    const atMs = parseTimelineInstant(event.at);
     if (atMs === null) {
       timingTrustworthy = false;
       continue;
@@ -391,7 +392,7 @@ export function createTimelineLayout(
     intervals.push({ startMs: from, endMs: to });
   }
 
-  const canFold = timeline.scopeComplete === true && timingTrustworthy && !hasTruncatedCollections(timeline);
+  const canFold = timeline.scopeComplete === true && timingTrustworthy && !hasOmittedScope(timeline);
   const units = buildUnits(startMs, endMs, instants, mergeIntervals(intervals), canFold, expandedGapIds);
   const gaps: TimelineGap[] = [];
   for (const unit of units) {
