@@ -81,3 +81,7 @@ Start with the [documentation index](docs/README.md) for commands, architecture,
 [MIT](LICENSE).
 
 The 0.15.1 source candidate makes delegation records read-only, with one confirmed “停止目标” action for the whole selected objective. Details open beside a readable, adjustable timeline; short intent titles, objective descriptions and task/result summaries clarify the hierarchy. Host decisions and acceptance stay in the CLI; user settings retain single-writer editing. Schema remains 12. Installation is separate and has not been authorized for this candidate.
+
+## 0.16.0 maintenance
+
+The 0.16.0 source adds service-owned single rolling `buddy backup`, idle-only new-package `buddy upgrade` with verified rollback, and guarded `buddy storage plan` / `buddy storage apply`. The console uses a bookmarkable loopback URL and renewable login; every authenticated window can edit settings subject to revision checks. See [operations](docs/reference/operations.md) and [console](docs/reference/console.md). Source validation and the separately authorized daily installation are distinct.

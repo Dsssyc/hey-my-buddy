@@ -81,3 +81,7 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 [MIT](LICENSE)。
 
 0.15.1 源码候选将委派记录改为只读，仅保留带二次确认的整组“停止目标”。详情与可调宽度的时间轴并排；短意图标题、工作目标描述、任务与结果摘要说明工作层级。Host 决定和验收保留在 CLI，用户设置仍采用单写会话。schema 保持 12；本候选尚未获准安装。
+
+## 0.16.0 维护
+
+0.16.0 源码新增服务执行的单份滚动 `buddy backup`、新包启动器执行的空闲升级 `buddy upgrade`（含校验与失败回滚），以及受保护规则约束的 `buddy storage plan` / `buddy storage apply`。控制台使用可收藏的回环地址和自动续期登录；所有已登录窗口均可编辑设置，冲突由版本检查拒绝。详见 [运维](docs/reference/operations.md) 和 [控制台](docs/reference/console.md)。源码验证与需要单独授权的日常安装分别记录。

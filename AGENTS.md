@@ -1,5 +1,9 @@
 # Repository maintenance
 
+## 0.16.0 authorized work
+
+The current agenda covers single rolling backup and idle upgrade/rollback, guarded storage reclamation, renewable persistent multi-window console access, human-friendly UI repairs and C-Two 0.6.0. Schema stays 12. Operations, console and objectives contracts own the boundaries. Daily installation remains 0.15.1 pending separate authorization; never stop unrelated/orphan processes or delete the old archive without explicit confirmation. Iteration uses private roots and focused checks; full buddy.checks runs only on the final candidate. Preserve the user-owned production-repairs-0.8.0.md. Implementations route by default with task-local GLM/DSH preference; design uses Opus/high, screenshot review Sonnet 5/medium, with at most one Claude task. Backend, schema and final acceptance stay Host-owned.
+
 ## Current design
 
 The user authorized the 0.15.1 read-only record and browsing repair (U1–U4). Daily [0.15.1 is installed and verified](docs/acceptance/installed-0.15.1.md); normal routed delegations are authorized and distinct from individually approved native probes. Contract-first references are console.md and objectives.md; schema stays 12, with optional objective description in its creation event. Implementation delegations default to routing, short titles are required by skill, and one objective groups this agenda. Backend/schema/final review remain Host-owned. Iterate with focused tests; run the complete buddy.checks only on the final candidate. The user separately authorized the completed 0.15.1 installation; future installations need separate authorization. Preserve the uncommitted production-repairs-0.8.0.md.

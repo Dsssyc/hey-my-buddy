@@ -304,3 +304,9 @@ A governed Host boundary additionally reports `goalComplete: false`, the current
 ### 0.15.1 objective presentation
 
 `submit.objective` accepts optional `description`, a nonempty string of at most 300 Unicode characters when present. It is immutable display metadata, excluded from execution/selection and included in submission replay identity. The skill requires a ≤30-character intent title on new delegations, while the optional 200-character API limit remains unchanged. Objective read shapes add `description`, `counts.accepted` (accepted roots), and timeline row `taskSummary`; see [objectives](objectives.md). The console-only `objective_stop` is not a Host CLI command; ordinary Host `cancel` and its control capability remain unchanged.
+
+## 0.16.0 maintenance commands
+
+`backup '{}'` invokes service-owned online backup and returns `{path, verified, schema, bytes, fileCount, durationSeconds}`. It has no caller-supplied destination. `upgrade '{}'` is local to the new package launcher; it accepts no Worker credential or implicit cancellation. Success returns `{upgraded, backup, verification, previousRuntime, rollback, runtimePruning}`; failure returns a nonzero CLI status and either verified rollback evidence or a retained recovery journal. Running `upgrade` again resumes an interrupted journal. Ordinary commands cannot mutate while the upgrade fence is active (`UPGRADE_IN_PROGRESS`). Busy work is `UPGRADE_NOT_IDLE`.
+
+`storage plan '{}'` and `storage apply '{"planId":"stg-…","commandId":"…","confirm":true}'` map to named `storage_plan` and `storage_apply` operations. [Operations](operations.md#storage-wire-shapes-0160) owns the exact plan/result shapes, protection rules and 15-minute expiry. Reuse the same commandId after an unknown reply or interrupted deletion; changing its plan conflicts. Neither command stops a process. Browser access adds only these two operations to the existing whitelist.
