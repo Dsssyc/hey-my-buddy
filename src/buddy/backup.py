@@ -76,6 +76,26 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
+def database_snapshot(connection, *, event_head: int | None = None) -> dict:
+    tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    if event_head is None:
+        event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+    fingerprints = {}
+    for name in tables:
+        if name == 'workers':
+            continue
+        quoted = '"' + name.replace('"','""') + '"'
+        sql, args = 'SELECT * FROM ' + quoted, ()
+        if name == 'events':
+            sql += ' WHERE seq<=?';args = (event_head,)
+        elif name == 'sqlite_sequence':
+            sql += " WHERE name NOT IN ('events','workers')"
+        rows = sorted(json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex()) for row in connection.execute(sql,args))
+        fingerprints[name] = hashlib.sha256('\n'.join(rows).encode()).hexdigest()
+    return {'tables':{name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0] for name in tables},
+            'fingerprints':fingerprints, 'eventHead':event_head}
+
+
 def verify(directory: Path) -> dict:
     manifest = json.loads((directory / 'manifest.json').read_text())
     if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
@@ -99,6 +119,8 @@ def verify(directory: Path) -> dict:
                 raise BoardError('BACKUP_INVALID', 'SQLite integrity check failed')
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
+            if manifest.get('databaseSnapshot') is not None and database_snapshot(connection) != manifest['databaseSnapshot']:
+                raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
         # Exercise the real current-schema opener in a separate private directory.
         Database(trial).initialize()
     return manifest
@@ -133,6 +155,8 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         with store.db.connect() as source, closing(sqlite3.connect(snapshot)) as target:
             source.backup(target)
         os.chmod(snapshot, 0o600)
+        with closing(sqlite3.connect(snapshot)) as connection:
+            snapshot_metadata = database_snapshot(connection)
         with snapshot.open('rb') as source, gzip.open(incoming / 'board.sqlite3.gz', 'wb', compresslevel=6) as target:
             shutil.copyfileobj(source, target)
         os.chmod(incoming / 'board.sqlite3.gz', 0o600)
@@ -154,7 +178,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
                 _private_copy(source, incoming / 'state' / source.name)
         files = {str(path.relative_to(incoming)): {'bytes': path.stat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
         manifest = {'format': 1, 'createdAt': utc_now(), 'schema': SCHEMA_VERSION, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
-                    'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata', 'files': files}
+                    'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata', 'files': files}
         manifest_path = incoming / 'manifest.json'
         with manifest_path.open('x') as stream:
             os.chmod(manifest_path, 0o600)

@@ -61,3 +61,19 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],'999')
+
+    def test_retained_event_prefix_detects_rewrites_but_allows_new_events(self):
+        board=self.board()
+        board.call('task_submit',{'requestId':'event-fixture','task':'private','cwd':str(self.workdir()),'adapter':'command','argv':['/bin/true']})
+        with board.store.db.connect() as connection:
+            before=backup.database_snapshot(connection)
+        with board.store.db.write() as connection:
+            board.store._append_event(connection, 'private-lifecycle-observation', payload={})
+        with board.store.db.connect() as connection:
+            appended=backup.database_snapshot(connection,event_head=before['eventHead'])
+        self.assertEqual(before['fingerprints']['events'],appended['fingerprints']['events'])
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE events SET payload_json=? WHERE seq=(SELECT MIN(seq) FROM events)", ('{"tampered":true}',))
+        with board.store.db.connect() as connection:
+            after=backup.database_snapshot(connection,event_head=before['eventHead'])
+        self.assertNotEqual(before['fingerprints']['events'],after['fingerprints']['events'])

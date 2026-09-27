@@ -49,8 +49,9 @@ def file_lock(path: Path, *, timeout: float = 0):
         os.close(fd)
 
 
-def idle_snapshot(state: Path) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
             raise BoardError('UNSUPPORTED_SCHEMA', 'Upgrade accepts schema 12 only; no conversion was performed')
@@ -61,15 +62,7 @@ def idle_snapshot(state: Path) -> dict:
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        tables = [r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-        fingerprints = {}
-        for name in tables:
-            if name in {'workers', 'events'}:
-                continue
-            quoted = '"' + name.replace('"', '""') + '"'
-            rows = sorted(json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value: value.hex()) for row in connection.execute('SELECT * FROM ' + quoted))
-            fingerprints[name] = hashlib.sha256('\n'.join(rows).encode()).hexdigest()
-        return {'tables': {name: connection.execute('SELECT COUNT(*) FROM "' + name.replace('"','""') + '"').fetchone()[0] for name in tables}, 'fingerprints': fingerprints}
+        return backup.database_snapshot(connection, event_head=event_head)
 
 
 def _environment(state: Path, target: Path) -> dict:
@@ -205,7 +198,9 @@ def verify_started(state: Path, target: Path, health: dict, before: dict) -> dic
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
-    actual = idle_snapshot(state)
+    actual = idle_snapshot(state, event_head=before.get('eventHead'))
+    if set(actual['tables']) != set(before['tables']):
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed')
     changed = [name for name, value in before['fingerprints'].items() if actual['fingerprints'].get(name) != value]
     if changed:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
@@ -279,6 +274,10 @@ def upgrade(params: dict) -> dict:
                 journal['before'] = before
                 if backed_up is None:
                     backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'])
+                stored = backup.verify(Path(backed_up['path']))
+                if stored.get('databaseSnapshot') is not None:
+                    before = {**stored['databaseSnapshot'], 'runtimeSettings':runtime_settings}
+                    journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
             active = target
