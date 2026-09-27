@@ -125,7 +125,12 @@ def retire_workers(state: Path, *, timeout: float = 35) -> None:
 
 
 def detach(state: Path, target: Path) -> None:
-    command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated idle upgrade'})
+    try:
+        command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated idle upgrade'})
+    except (BoardError, subprocess.SubprocessError):
+        # A lost restart reply is not a stop receipt. The ownership locks below
+        # must still be acquired before inspecting or restoring any state.
+        pass
     with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
         # Reject work admitted in the small window before an old-version daemon
         # detached. The caller then restores that runtime without touching work.
@@ -152,13 +157,10 @@ def start(state: Path, target: Path) -> dict:
         except (OSError, ValueError, BoardError):
             pass
         time.sleep(.2)
-    # Never kill by guessed PID. The Popen handle is our exact spawned child.
-    child.terminate()
-    try:
-        child.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        raise BoardError('UPGRADE_SHUTDOWN_UNCONFIRMED', 'Replacement daemon did not stop; automatic restore refused')
-    raise BoardError('UPGRADE_START_FAILED', 'Replacement daemon did not become ready')
+    # SIGTERM runs the daemon's task-cancelling stop handler. Even a rollback
+    # startup may be preserving work admitted before a legacy detach, so an
+    # upgrade must never use that signal as a timeout cleanup shortcut.
+    raise BoardError('UPGRADE_SHUTDOWN_UNCONFIRMED', 'Replacement startup is unconfirmed; journal retained, no process was signalled')
 
 
 def restore(state: Path, current: Path) -> None:

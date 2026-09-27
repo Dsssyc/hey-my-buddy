@@ -134,7 +134,10 @@ def inspect(store) -> dict:
     orphaned, commands, known = process_inventory(state)
     now = time.time()
     def add(category, path, reasons, **metadata):
-        size, fingerprint, safe = tree_info(path)
+        if any(parent.is_symlink() for parent in (path, *path.parents)):
+            size, fingerprint, safe = 0, '', False
+        else:
+            size, fingerprint, safe = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
         if not path.exists():

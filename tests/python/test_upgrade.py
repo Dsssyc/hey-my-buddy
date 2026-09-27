@@ -40,3 +40,14 @@ class UpgradeTests(BoardTestCase):
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT value FROM meta WHERE key='post-backup'").fetchone())
         upgrade.idle_snapshot(board.directory)
+
+    def test_startup_timeout_never_signals_a_daemon_or_cancels_work(self):
+        board=self.board()
+        child=mock.Mock()
+        child.poll.return_value=None
+        with mock.patch('buddy.upgrade.subprocess.Popen',return_value=child), mock.patch('buddy.upgrade.time.monotonic',side_effect=[0,46]):
+            with self.assertRaises(BoardError) as caught:
+                upgrade.start(board.directory, self.directory/'runtime-target')
+        self.assertEqual(caught.exception.code,'UPGRADE_SHUTDOWN_UNCONFIRMED')
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
