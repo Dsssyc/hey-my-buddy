@@ -68,6 +68,8 @@ This source candidate uses contract 0.14.0 and schema 12 for [work objectives an
 
 ## Documentation and development
 
+In the candidate console, 委派记录 opens grouped work objectives with a delegation timeline; 全部执行记录 preserves the previous history. Selecting a timeline item opens its existing delegation details, and narrow screens use a chronological list. The [acceptance record](docs/acceptance/objective-timeline-0.14.0.md) separates source, packaged-runtime and installation evidence.
+
 Start with the [documentation index](docs/README.md) for commands, architecture, harness adapters and design history. [AGENTS.md](AGENTS.md) covers repository invariants; end users do not need npm or a frontend build. Report problems through [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
 
 ## License

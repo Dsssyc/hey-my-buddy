@@ -1,6 +1,6 @@
 # Console entry and browser sessions
 
-This is the implementation contract for the 0.13.0 console-entry candidate, with schema 11 unchanged. It implements section V of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) and the user's choice that a newly opened session takes write access while older sessions remain readable. The installed daily service stays at 0.12.0 until a separately authorized cutover. Source verification and installation are recorded separately.
+The console-entry contract introduced in 0.13.0 implements section V of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md) and the user's choice that a newly opened session takes write access while older sessions remain readable. The 0.14.0 source adds the work-objective view with schema 12. The separately recorded [daily installation](../acceptance/installed-0.13.0.md) remains at 0.13.0; source verification does not install a candidate.
 
 ## Entry and ownership
 
@@ -23,6 +23,8 @@ Authenticated HTTP snapshots add `consoleSession: {id, canWrite, reason}`. `id` 
 Contract 0.14.0 adds two authenticated GET reads, `/api/objectives` and `/api/objectives/<objectiveId>/timeline`, forwarded to the named `objective_list` and `objective_timeline` operations. Each accepts only its documented query parameters (unknown or repeated names are `INVALID_ARGUMENT`), is available to superseded read-only sessions, and takes no lease, write authority or model call; [objectives](objectives.md) owns the shapes and presentation.
 
 The UI keeps the existing three pages, selections, local drafts and read-only history/detail/routing reads. A superseded window displays a clear read-only message, stops save/renew/retry mutations and disables edit, discovery and task-control actions; it never discards drafts or reloads to gain authority. Theme and navigation remain usable. Opening a fresh entry is the explicit way to acquire a new writer session.
+
+Within 委派记录, 工作目标 groups governed delegations by project and exposes the bounded timeline; 全部执行记录 retains the previous history, including command/external records. Timeline links reuse existing detail and authority checks. Model-card effort variants use display order `default`, `none`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; unfamiliar levels follow without being dropped. This ordering changes presentation only and does not rewrite routing or model settings.
 
 A lost mutation reply remains an unknown outcome after handoff. A later read-only refusal proves only that the later request was denied; it cannot establish whether an earlier request with that command ID committed. Keep its staged identity, draft and uncertainty visible without replaying it from the old session. The user can inspect the published state in the new window; a permission change never implies a rollback or a failed publication.
 

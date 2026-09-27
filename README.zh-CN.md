@@ -68,6 +68,8 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 ## 文档与开发
 
+候选控制台的“委派记录”默认展示按项目归组的工作目标和委派时间轴；“全部执行记录”保留原有历史。选择时间轴条目可以打开对应委派详情，窄屏使用按时间排序的列表。[验收记录](docs/acceptance/objective-timeline-0.14.0.md)分别记录源码、打包运行时和安装证据。
+
 [文档索引](docs/README.md)提供命令、架构、harness 适配器和设计历史的入口。[AGENTS.md](AGENTS.md)说明仓库开发约束；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 
 ## 许可证

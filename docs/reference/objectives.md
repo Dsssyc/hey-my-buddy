@@ -41,6 +41,8 @@ Timeline rows arrive in tree order (roots by creation, each followed depth-first
 | `routing` | a routing decision task's attempts, shown on the routed run's row | as for execution |
 | `host` | a recorded request from creation to decision; an open request has no end | `open`, `approved`, `declined`, `superseded` or `cancelled` |
 
+Execution and routing spans additionally carry `resultStatus` when their own durable receipt records `ok`, `failed` or `cancelled`. This is independent of execution state and the structured turn's disposition: a completed turn can contain a failed receipt, and a cancellation reason is not a failure. Missing receipts remain unknown; current task status cannot substitute for a historical attempt's outcome. Unconfirmed shutdown takes precedence over terminal outcome styling.
+
 Host markers come from `task.submitted` (dispatch, 派发), `workflow.request_approved`/`request_declined` (decide, 决定), `workflow.continued` (continue, 续接), `workflow.integration_recorded` (integrate, 整合), `workflow.acknowledged` (accept 验收, or reject 验收问题 for a rejected verdict), `workflow.cancelled` (cancel, 取消) and `workflow.takeover` (takeover, 接管). Each carries `seq`, `runId`, `kind`, `at`, `label`, a bounded `summary`, `actor` and the record identities it names; raw payloads, notes and credentials are not copied. Automatic continuations are Worker-side and not Host markers.
 
 `totals.rows` counts the filtered scope and `totals.allRows` every delegation of the group; `truncated` has one boolean per collection and `filtered` reports a query or filter. `scopeComplete` is true only without filters or truncation.
@@ -51,7 +53,12 @@ The UI says 工作目标 and groups the left list by source project. The detail 
 
 Idle gaps longer than 30 minutes fold by default and may be expanded. A gap can fold only when no returned span or Host marker occupies it and the timeline scope is complete. A running attempt, unresolved shutdown or waiting-Host interval occupies time; it is not an idle gap. Filtering, truncation or unusable timing disables automatic folding because omitted facts could occupy the apparent gap. Narrow layouts use a chronological list; failure/cancellation/unknown labels do not rely only on color. Reads refresh at the existing three-second cadence, preserving selections and paging position.
 
+The 委派记录 page opens this view by default; 全部执行记录 keeps command/external history accessible. List refresh preserves the current order and selection while offering an explicit refresh when activity changes ordering or membership. Selecting a span or Host marker locates the existing delegation detail, and returning restores the objective selection. Dirty drafts require an explicit choice; unresolved command outcomes lock navigation until reconciled. Both views keep their local state when switching.
+
+The desktop label column stays visible while the timeline scrolls horizontally. Folded gaps are 64 CSS pixels wide; their aggregate width stays within 40% of the canvas and unfolding retains the recorded timestamps. Unknown-ended executions occupy through `observedAt` even if a finish timestamp exists, and Host markers reserve a small surrounding interval. No fold is inferred from filtered, truncated or invalid-timestamp data. The preview helper `tests/probes/objective_console_preview.py` serves synthetic read-only fixtures and denies mutations, without connecting to the daily service or calling a model.
+
 ## Schema and verification
+
 
 Startup accepts schema 12 only and contains no automatic schema conversion or version facade. The explicit offline preparation tool copies an idle, verified schema-11 board into a separate new destination, adds the grouping/display columns and derives activity indexes while preserving all original rows, secrets and relationships:
 
