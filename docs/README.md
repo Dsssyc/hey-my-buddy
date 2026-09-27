@@ -52,6 +52,8 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 [ADR-013: buddy roles and blackboard terminology](decisions/013-buddy-roles-and-blackboard-terminology.md) names the participants: Host buddies and Worker buddies are peers in standing that interact only through the blackboard and differ in role and authority, while hey-my-buddy names the product. It changes wording only; [CONTEXT.md](../CONTEXT.md) holds the definitions.
 
+[ADR-014: Router buddy and read-only routing](decisions/014-router-buddy-and-read-only-routing.md) accepts the direction of a separate Router role that examines a goal read-only within a budget and whose choice is checked against the routing bounds only, not re-judged. Implementation, native probes and the console changes are not yet authorized; current routing remains the DSH decision helper described in [decision.md](reference/decision.md).
+
 [ADR-012: Bounded control overhead](decisions/012-bounded-control-overhead.md) records light liveness, transient empty polls versus durable allocations, and the user-approved order of subsequent reliability and routing repairs. The [0.10.0 acceptance record](acceptance/runtime-efficiency-0.10.0.md) owns progress and installation evidence.
 
 [ADR-011: Shared model concurrency and verified native interaction](decisions/011-runtime-refinement.md) defines the 0.9.0 source candidate: one machine-wide attempt ceiling with user-owned per-model-family concurrency limits replacing the separate business and decision lanes, and whole-goal artifact verification over immutable Git objects. Its delivery status is owned by the [0.9.0 acceptance record](acceptance/runtime-refinement-0.9.0.md).
