@@ -33,6 +33,7 @@ METHODS = [
     "adapters",
     "runtime",
     "backup",
+    "upgrade",
     "storage-plan",
     "storage-apply",
     # -- single governed goal lifecycle ------------------------------------
@@ -228,6 +229,18 @@ def _abandoned(abandoned, commands: list[str]) -> dict:
 
 
 def _worker_command(action: str, params: dict) -> dict:
+    if action == "worker-start":
+        from .upgrade import file_lock
+        state = get_state_dir(params.get("stateDir"))
+        state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with file_lock(state / "control-start.lock"):
+            if (state / "upgrade.json").exists():
+                raise BoardError("UPGRADE_IN_PROGRESS", "Worker start is fenced during upgrade")
+            return _worker_command_unlocked(action, params)
+    return _worker_command_unlocked(action, params)
+
+
+def _worker_command_unlocked(action: str, params: dict) -> dict:
     """Start or cooperatively stop one independent worker supervisor."""
     worker_id = params.get("workerId") or "local"
     if not isinstance(worker_id, str) or not worker_id.strip():
@@ -558,7 +571,10 @@ def main(argv: list[str] | None = None) -> int:
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)
-        if args.method in LOCAL_METHODS:
+        if args.method == "upgrade":
+            from .upgrade import upgrade
+            result = upgrade(params)
+        elif args.method in LOCAL_METHODS:
             result = _worker_command(args.method, params)
         elif args.method == "console":
             # Console keeps its one canonical JSON argument, but `browser` and `wait`
@@ -591,7 +607,7 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(result, dict):
                 _scrub_and_save(result)
         print(_dumps(cli_views.render(args.method, result, mode)))
-        return 0
+        return 1 if isinstance(result, dict) and result.get("error") else 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope
         print(_dumps({"error": {"code": getattr(error, "code", "SERVICE_ERROR"), "message": str(error)}}))
         return 1

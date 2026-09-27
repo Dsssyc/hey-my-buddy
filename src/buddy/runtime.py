@@ -378,6 +378,7 @@ def materialize(
             "python": str(interpreter),
             "runtimeRoot": str(target.parent),
             "installedAt": _now(),
+            "sourceCommit": _source_commit(root),
             "manifest": ASSET_MANIFEST.as_posix(),
             "manifestSha256": record["manifestSha256"],
             "resources": {name: str(path) for name, path in resource_paths(target).items()},
@@ -651,3 +652,13 @@ def _now() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _source_commit(root: Path) -> str | None:
+    metadata = root / "src/buddy/build-info.json"
+    if metadata.exists():
+        return json.loads(metadata.read_text()).get("sourceCommit")
+    try:
+        return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None

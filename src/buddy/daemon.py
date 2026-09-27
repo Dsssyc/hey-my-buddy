@@ -473,6 +473,8 @@ class Daemon:
         if wait_capacity > rpc_config.MAX_WAIT_CAPACITY:
             raise BoardError("INVALID_ARGUMENT", "BUDDY_WAIT_CAPACITY cannot exceed 48; control operations reserve the remaining RPC callbacks")
         self.wait_admission = WaitAdmission(wait_capacity)
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_pending: set[str] = set()
         self.store = BoardStore(
             self.directory,
             max_concurrent=_env_int("BUDDY_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT),
@@ -521,6 +523,26 @@ class Daemon:
                 )
             self.lock_fds.append(fd)
 
+    def queue_workspace_cleanup(self, run_id: str) -> None:
+        # The queue is only an optimization. Existing accepted workspaces remain
+        # discoverable by storage plan after a crash or daemon restart.
+        with self._cleanup_lock:
+            self._cleanup_pending.add(run_id)
+
+    def _cleanup_accepted_workspaces(self) -> None:
+        if (self.directory / "upgrade.json").exists():
+            return
+        from .storage import cleanup_accepted_workspace
+        with self._cleanup_lock:
+            pending = tuple(self._cleanup_pending)
+            self._cleanup_pending.clear()
+        for run_id in pending:
+            try:
+                cleanup_accepted_workspace(self.store, run_id)
+            except (BoardError, OSError):
+                # Guard refusals preserve the workspace and its durable plan.
+                pass
+
     def service(self) -> BoardService:
         return BoardService(
             self.store,
@@ -529,6 +551,7 @@ class Daemon:
             on_stop=self.on_stop,
             on_restart=self.on_restart,
             console_factory=self.on_console,
+            on_accepted=self.queue_workspace_cleanup,
         )
 
     def run(self) -> int:
@@ -602,6 +625,7 @@ class Daemon:
             except Exception:  # pragma: no cover - a sweep must never kill the daemon
                 pass
             self._reconcile_pool()
+            self._cleanup_accepted_workspaces()
 
     # -- control actions -----------------------------------------------------
     def on_stop(self, params: dict) -> dict:

@@ -403,6 +403,41 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(accepted["state"], "accepted")
         return board, submitted, manifest, checkout, artifact, self.view(board, submitted["runId"])
 
+    def test_storage_apply_reuses_workspace_protection_and_current_revision(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
+            planned = board.call('storage_plan', {})
+            candidate = next(r for r in planned['candidates'] if r['path'] == str(checkout))
+            self.assertTrue(candidate['eligible'], candidate)
+            request = {'planId':planned['planId'], 'commandId':'storage-cleanup', 'confirm':True}
+            result = board.call('storage_apply', request)
+            self.assertFalse(checkout.exists(), result)
+            self.assertTrue(result['removed'], result)
+            self.assertEqual(board.call('storage_apply', request), result)
+            self.assertTrue(self.repo.exists())
+
+    def test_storage_native_removal_resumes_after_interrupted_delete(self):
+        import hashlib
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
+        run_id = submitted['runId']
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        native = board.directory / 'harnesses/zcode' / hashlib.sha256(run_id.encode()).hexdigest()
+        native.mkdir(parents=True)
+        (native / 'sessions.sqlite').write_bytes(b'private session fixture')
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
+            planned = board.call('storage_plan', {})
+            request = {'planId':planned['planId'], 'commandId':'native-interrupted', 'confirm':True}
+            with mock.patch('buddy.storage.shutil.rmtree', side_effect=OSError('injected')):
+                with self.assertRaises(BoardError) as caught:
+                    board.call('storage_apply', request)
+            self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')
+            self.assertFalse(native.exists())
+            result = board.call('storage_apply', request)
+            self.assertTrue(result['complete'])
+            self.assertTrue(any(r['path'] == str(native.resolve()) for r in result['removed']))
+            self.assertFalse(list(native.parent.glob('.reclaim-*')))
+
     # -- continuation cleanup -------------------------------------------------
     def two_turn_worktree(self, *, request_id="continuation-cleanup"):
         """One managed worktree whose second stage is prepared from the first seal.

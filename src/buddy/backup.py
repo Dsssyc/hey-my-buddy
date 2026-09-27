@@ -80,7 +80,7 @@ def verify(directory: Path) -> dict:
     manifest = json.loads((directory / 'manifest.json').read_text())
     if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
-    actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p.name != 'manifest.json'}
+    actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p != directory / 'manifest.json'}
     if actual != set(manifest['files']):
         raise BoardError('BACKUP_INVALID', 'Backup inventory mismatch')
     for relative, row in manifest['files'].items():
@@ -104,7 +104,7 @@ def verify(directory: Path) -> dict:
     return manifest
 
 
-def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None) -> dict:
+def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
     started = time.monotonic()
     state = store.directory.resolve()
     root = state / 'backups'
@@ -119,6 +119,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         os.close(lock)
         raise BoardError('BACKUP_BUSY', 'Another backup is in progress')
     incoming, current = root / '.incoming', root / 'current'
+    published = False
     try:
         for path in (incoming, current):
             if path.is_symlink():
@@ -139,18 +140,21 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         for name in ('attempts', 'controls', 'submissions'):
             for path in _regular_files(state / name):
                 _private_copy(path, incoming / 'state' / path.relative_to(state))
-        for path in sorted((state / 'workers').glob('*/receipts/*.json')):
+        if (state / 'workers').is_symlink():
+            raise BoardError('BACKUP_UNSAFE_PATH', 'Worker root cannot be linked')
+        for path in sorted([*(state / 'workers').glob('*/receipts/*.json'), *(state / 'workers').glob('*/startup.json'), *(state / 'workers').glob('*/orphaned.json')]):
             if path.is_symlink() or any(p.is_symlink() for p in (path.parent, path.parent.parent)):
                 raise BoardError('BACKUP_UNSAFE_PATH', 'Receipt spool cannot be linked')
             _private_copy(path, incoming / 'state' / path.relative_to(state))
-        sessions = state / 'console-sessions.json'
-        if sessions.exists():
-            if sessions.is_symlink():
-                raise BoardError('BACKUP_UNSAFE_PATH', 'Session store cannot be linked')
-            _private_copy(sessions, incoming / 'state' / sessions.name)
+        for name in ('console-sessions.json', 'worker-pool.json', 'runtime-retention.json'):
+            source = state / name
+            if source.exists():
+                if source.is_symlink():
+                    raise BoardError('BACKUP_UNSAFE_PATH', 'State record cannot be linked')
+                _private_copy(source, incoming / 'state' / source.name)
         files = {str(path.relative_to(incoming)): {'bytes': path.stat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
-        manifest = {'format': 1, 'createdAt': utc_now(), 'schema': SCHEMA_VERSION, 'contract': CONTRACT_VERSION,
-                    'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'files': files}
+        manifest = {'format': 1, 'createdAt': utc_now(), 'schema': SCHEMA_VERSION, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
+                    'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata', 'files': files}
         manifest_path = incoming / 'manifest.json'
         with manifest_path.open('x') as stream:
             os.chmod(manifest_path, 0o600)
@@ -167,6 +171,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             exchange(incoming, current)
         else:
             os.replace(incoming, current)
+        published = True
         sync_dir(root)
         if incoming.exists():
             shutil.rmtree(incoming)
@@ -174,6 +179,10 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         return {'path': str(current), 'verified': True, 'schema': SCHEMA_VERSION,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
                 'fileCount': len(files), 'durationSeconds': round(time.monotonic() - started, 3)}
+    except Exception:
+        if not published and incoming.exists() and not incoming.is_symlink():
+            shutil.rmtree(incoming)
+        raise
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         os.close(lock)
@@ -185,6 +194,13 @@ def manifest_path_size(current: Path) -> int:
 
 def source_commit() -> str | None:
     from .runtime import project_root
+    for metadata in (project_root() / 'READY.json', project_root() / 'src/buddy/build-info.json'):
+        try:
+            value = json.loads(metadata.read_text()).get('sourceCommit')
+            if isinstance(value, str) and len(value) == 40:
+                return value
+        except (OSError, ValueError):
+            pass
     try:
         return subprocess.check_output(['git', '-C', str(project_root()), 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL, text=True).strip()
     except (OSError, subprocess.CalledProcessError):

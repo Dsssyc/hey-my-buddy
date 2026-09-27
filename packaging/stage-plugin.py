@@ -13,6 +13,7 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -94,6 +95,12 @@ def stage(source: Path, destination: Path) -> Path:
             _copy_path(source, staged, relative)
         for relative in assets:
             _copy_asset(source, staged, relative)
+        try:
+            commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError):
+            metadata = source / "src/buddy/build-info.json"
+            commit = json.loads(metadata.read_text()).get("sourceCommit") if metadata.exists() else None
+        (staged / "src/buddy/build-info.json").write_text(json.dumps({"sourceCommit": commit}) + "\n")
         assert_supported_inventory(staged)
         refresh_portable_metadata(staged)
         expected = {relative.split("/")[0] for relative in (*PLUGIN_PATHS, *assets)}

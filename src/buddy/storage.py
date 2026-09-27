@@ -16,7 +16,7 @@ import uuid
 from . import schemas
 from .db import utc_now
 from .errors import BoardError
-from .runtime import DEFAULT_RUNTIME_ROOT
+from .runtime import DEFAULT_RUNTIME_ROOT, is_ready
 
 GRACE_SECONDS = 3 * 86400
 LABELS = {'zcode':'ZCode 私有主目录', 'workspaces':'受管检出', 'runtimes':'运行时', 'backup':'备份', 'durable':'看板与记录'}
@@ -67,7 +67,18 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
                 observed_state = str(state)
         except (OSError, ValueError):
             pass
-        runtime_match = re.search(r'(/\S+/runtime/[^/ ]+)/', command)
+        if observed_state is None:
+            try:
+                opened = subprocess.run(['lsof','-nP','-p',pid,'-Fn'], capture_output=True, text=True, timeout=5)
+                roots = {str(Path(line[1:].removesuffix(' (deleted)')).parent) for line in opened.stdout.splitlines()
+                         if line.startswith('n/') and line.removesuffix(' (deleted)').endswith(('/board-owner.lock','/control-daemon.lock'))}
+                if len(roots) == 1:
+                    observed_state = roots.pop()
+            except (OSError, subprocess.SubprocessError):
+                pass
+        runtime_match = re.search(r'(/\S+/(?:runtime|runtime-root)/[^/ ]+)/', command)
+        if observed_state is not None:
+            observed_state = str(Path(observed_state).resolve())
         if observed_state != str(state):
             orphans.append({'pid': int(pid), 'kind': kind, 'stateDir': observed_state,
                             'runtimeDir': runtime_match.group(1) if runtime_match else None})
@@ -131,55 +142,76 @@ def inspect(store) -> dict:
         rows.append({'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
                      'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
                      'fingerprint': fingerprint, **metadata})
+    # Snapshot board facts first. Filesystem walks and Git inspection must never
+    # hold an authoritative database transaction open.
+    native_owners = {}
+    workspace_inputs = []
     with store.db.read() as connection:
         runs = connection.execute('SELECT * FROM workflow_runs').fetchall()
-        by_home = {hashlib.sha256(r['run_id'].encode()).hexdigest(): r for r in runs}
-        home_root = state / 'harnesses/zcode'
-        if home_root.exists():
-            for path in sorted(home_root.iterdir()):
-                run = by_home.get(path.name)
-                task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone() if run else None
-                add('zcode', path, _zcode_reasons(store, connection, run, task, now), runId=run['run_id'] if run else None)
-        seen = set()
         for run in runs:
+            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
+            native_owners[hashlib.sha256(run['run_id'].encode()).hexdigest()] = (
+                run['run_id'], _zcode_reasons(store, connection, run, task, now))
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
             retained = store.workflow._allocation_provenance(connection, run)
-            try:
-                allocation = workspace.resolve_allocation(state, manifest, retained)
-                if allocation is None:
-                    continue  # Host-owned/unrelated checkout: never measure or delete.
-                path = Path(allocation['path'])
-                if path in seen or not path.exists():
-                    continue
-                seen.add(path)
-                task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
-                reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest, allocation=allocation)
-                if not reasons:
-                    sealed = store.workflow._latest_handoff(connection, run, manifest)
-                    inspected = workspace.cleanup_inspect(state, manifest, sealed=sealed, retained=retained)
-                    reasons.extend(inspected['reasons'])
-                add('workspaces', path, reasons, runId=run['run_id'], revision=run['revision'])
-            except BoardError:
-                # Invalid ownership never licenses a filesystem guess.
+            reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
+            sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
+            workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
+    home_root = state / 'harnesses/zcode'
+    if any(p.is_symlink() for p in (state / 'harnesses', home_root)):
+        add('zcode', state / 'harnesses' if (state / 'harnesses').is_symlink() else home_root, ['linked-path'])
+    elif home_root.exists():
+        for path in sorted(home_root.iterdir()):
+            run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
+            add('zcode', path, reasons, runId=run_id)
+    seen = set()
+    for run_id, revision, manifest, retained, reasons, sealed in workspace_inputs:
+        try:
+            allocation = workspace.resolve_allocation(state, manifest, retained)
+            if allocation is None:
+                continue  # Host-owned/unrelated checkout: never measure or delete.
+            path = Path(allocation['path'])
+            if path in seen or not path.exists():
                 continue
-    runtime_root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).resolve()
+            seen.add(path)
+            if not reasons:
+                inspected = workspace.cleanup_inspect(state, manifest, sealed=sealed, retained=retained)
+                reasons.extend(inspected['reasons'])
+            add('workspaces', path, reasons, runId=run_id, revision=revision)
+        except BoardError:
+            # Invalid ownership never licenses a filesystem guess.
+            continue
+    runtime_root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
     try:
         keep = json.loads((state / 'runtime-retention.json').read_text())
         retained_ids = {keep['current'], keep['previous']}
     except (OSError, KeyError, ValueError):
         retained_ids = None
-    if runtime_root.exists():
+    if any(p.is_symlink() for p in (runtime_root, *runtime_root.parents)):
+        add('runtimes', runtime_root, ['linked-path'])
+    elif runtime_root.exists():
         for path in sorted(runtime_root.iterdir()):
             if not path.is_dir() or not (path / 'READY.json').exists():
                 continue
             reasons = (['retention-history-unproven'] if retained_ids is None else
                        ['retained-runtime'] if path.name in retained_ids else runtime_usage(path, commands, known))
+            if any(p.is_symlink() for p in (runtime_root, *runtime_root.parents)):
+                reasons.append('linked-path')
+            if not is_ready(path):
+                reasons.append('runtime-identity-unproven')
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
-    for name in ('board.sqlite3', 'board.sqlite3-wal', 'attempts', 'controls', 'submissions', 'workers', 'decisions'):
-        add('durable', state / name, ['durable-record'])
+    for path in sorted(state.iterdir()):
+        if path.name in {'workspaces','harnesses','backups'} or path == runtime_root:
+            continue
+        add('durable', path, ['durable-record'])
+    harnesses = state / 'harnesses'
+    if harnesses.exists() and not harnesses.is_symlink():
+        for path in sorted(harnesses.iterdir()):
+            if path.name != 'zcode':
+                add('durable', path, ['durable-record'])
     categories = []
     for key, label in LABELS.items():
         members = [r for r in rows if r['category'] == key]
@@ -239,11 +271,13 @@ def apply(store, params: dict) -> dict:
             planned = json.loads(path.read_text())
         except (OSError, ValueError):
             raise BoardError('NOT_FOUND', 'Storage plan is unavailable')
-        if datetime.fromisoformat(planned['expiresAt']).timestamp() < time.time():
+        if not receipt.exists() and datetime.fromisoformat(planned['expiresAt']).timestamp() < time.time():
             raise BoardError('PLAN_EXPIRED', 'Storage plan expired; inspect again')
         result = {'planId': plan_id, 'removedBytes': 0, 'removed': [], 'skipped': [], 'complete': False}
         if receipt.exists():
             result = saved
+        if result.get('pending'):
+            _finish_pending(result, receipt)
         current = {row['id']: row for row in inspect(store)['candidates']}
         done = {row['id'] for row in result['removed'] + result['skipped']}
         for candidate in planned['candidates']:
@@ -259,7 +293,7 @@ def apply(store, params: dict) -> dict:
                     request = {'runId': fresh['runId'], 'commandId': command + ':' + fresh['id'], 'expectedRevision': fresh['revision']}
                     planned_workspace = store.workflow.cleanup_plan(request, console_authority=authority)
                     wp = planned_workspace['plan']
-                    store.workflow.cleanup_apply({**request, 'commandId': request['commandId'] + ':apply', 'planId': wp['planId'], 'confirmPath': fresh['path']}, console_authority=authority)
+                    store.workflow.cleanup_apply({**request, 'commandId': request['commandId'] + ':apply', 'expectedRevision': planned_workspace['targetRevision'], 'planId': wp['planId'], 'confirmPath': fresh['path']}, console_authority=authority)
                 elif candidate['category'] in ('zcode', 'runtimes'):
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
@@ -270,15 +304,78 @@ def apply(store, params: dict) -> dict:
                         if runtime_usage(original, commands, known):
                             raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                     tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
-                    os.rename(original, tomb)
-                    shutil.rmtree(tomb)
+                    result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb), 'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint']}
+                    _save_receipt(receipt, result)
+                    _finish_pending(result, receipt)
+                    continue
                 else:
                     raise BoardError('STORAGE_PROTECTED', 'Durable storage cannot be reclaimed')
                 result['removed'].append({'id': fresh['id'], 'path': fresh['path'], 'bytes': fresh['bytes']})
                 result['removedBytes'] += fresh['bytes']
             except (BoardError, OSError) as error:
+                if result.get('pending'):
+                    raise BoardError('STORAGE_INCOMPLETE', 'Removal is incomplete; retry the same commandId and planId', planId=plan_id) from error
                 result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': [error.code if isinstance(error, BoardError) else 'filesystem-error']})
-            atomic_json(receipt, result)
+            _save_receipt(receipt, result)
         result['complete'] = True
-        atomic_json(receipt, result)
+        _save_receipt(receipt, result)
         return result
+
+
+def _finish_pending(result: dict, receipt: Path) -> None:
+    """Resume only a previously journaled exact tomb; never count it as skipped."""
+    from .daemon import atomic_json
+    pending = result['pending']
+    original, tomb = Path(pending['path']), Path(pending['tomb'])
+    if any(p.is_symlink() for p in (original, tomb, *original.parents)):
+        raise BoardError('STORAGE_UNSAFE', 'Removal path identity changed')
+    if original.exists():
+        if tomb.exists() or tree_info(original)[1] != pending['fingerprint']:
+            raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
+        os.rename(original, tomb)
+        from .backup import sync_dir
+        sync_dir(original.parent)
+    if tomb.exists():
+        shutil.rmtree(tomb)
+        from .backup import sync_dir
+        sync_dir(tomb.parent)
+    result['removed'].append({k:pending[k] for k in ('id','path','bytes')})
+    result['removedBytes'] += pending['bytes']
+    del result['pending']
+    _save_receipt(receipt, result)
+
+
+def cleanup_accepted_workspace(store, run_id: str) -> dict:
+    """Daemon-triggered cleanup after acceptance, using the normal guarded plan."""
+    with store.db.read() as connection:
+        run = store.workflow._run_row(connection, run_id)
+        if run['state'] != 'accepted':
+            return {'removed':False, 'reason':'not-accepted'}
+        revision = run['revision']
+    authority = {'sessionId':'accepted-workspace-maintenance'}
+    command = 'accepted-cleanup-' + uuid.uuid4().hex
+    params = {'runId':run_id, 'expectedRevision':revision, 'commandId':command}
+    planned = store.workflow.cleanup_plan(params, console_authority=authority)
+    if not planned['plan']['eligible']:
+        return {'removed':False, 'plan':planned['plan']}
+    return store.workflow.cleanup_apply({**params, 'commandId':command + '-apply',
+        'expectedRevision':planned['targetRevision'], 'planId':planned['plan']['planId'],
+        'confirmPath':planned['plan']['path']}, console_authority=authority)
+
+
+def prune_old_runtimes(store) -> dict:
+    """Upgrade-authorized retention; other storage categories remain untouched."""
+    from .daemon import atomic_json
+    planned = plan(store, {})
+    for candidate in planned['candidates']:
+        if candidate['category'] != 'runtimes':
+            candidate['eligible'] = False
+    atomic_json(store.directory / 'storage' / (planned['planId'] + '.json'), planned)
+    return apply(store, {'planId':planned['planId'], 'commandId':'upgrade-' + planned['planId'], 'confirm':True})
+
+
+def _save_receipt(path: Path, result: dict) -> None:
+    from .daemon import atomic_json
+    from .backup import sync_dir
+    atomic_json(path, result)
+    sync_dir(path.parent)

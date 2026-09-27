@@ -457,6 +457,9 @@ class Console:
             # -- trust checks ----------------------------------------------
             def _trusted_request(self) -> bool:
                 self.browser_session = None
+                if (console.store.directory / "upgrade.json").exists():
+                    self._error(503, "UPGRADE_IN_PROGRESS", "Upgrade verification is in progress; retry shortly")
+                    return False
                 expected_host = f"{console.host}:{console._server.server_address[1]}" if console._server else ""
                 if self.headers.get("Host") != expected_host:
                     self._error(403, "FORBIDDEN", "Host is not the loopback console origin")

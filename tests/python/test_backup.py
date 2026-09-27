@@ -11,7 +11,7 @@ from support import BoardTestCase
 class BackupTests(BoardTestCase):
     def test_roundtrip_one_generation_and_excluded_regenerable_data(self):
         board = self.board()
-        for name in ('controls/x.json', 'submissions/y.json', 'attempts/run/attempt/result.json', 'workers/local/receipts/a.json', 'workspaces/large', 'harnesses/zcode/native'):
+        for name in ('controls/x.json', 'submissions/y.json', 'attempts/run/attempt/result.json', 'workers/local/receipts/a.json', 'workers/local/startup.json', 'worker-pool.json', 'workspaces/large', 'harnesses/zcode/native'):
             p = board.directory / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text('{}')
@@ -21,6 +21,8 @@ class BackupTests(BoardTestCase):
         self.assertTrue(first['verified'])
         self.assertIn('state/controls/x.json', manifest['files'])
         self.assertIn('state/workers/local/receipts/a.json', manifest['files'])
+        self.assertIn('state/workers/local/startup.json', manifest['files'])
+        self.assertIn('state/worker-pool.json', manifest['files'])
         self.assertFalse(any('workspaces' in p or 'harnesses' in p for p in manifest['files']))
         (board.directory / 'controls/x.json').write_text('{"new":true}')
         second = board.call('backup', {})

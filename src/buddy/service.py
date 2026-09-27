@@ -155,6 +155,12 @@ class _BaseResource:
                 )
             workflow_module.set_request_scope(scope)
             try:
+                if (self.store.directory / "upgrade.json").exists():
+                    permitted = operation in {"ping", "health", "runtime.info", "capabilities", "backup"}
+                    permitted = permitted or (operation == "console" and params.get("action") == "status")
+                    permitted = permitted or (operation == "service.control" and params.get("action") in {"restart", "status"})
+                    if not permitted:
+                        raise BoardError("UPGRADE_IN_PROGRESS", "The service is fenced for an idle upgrade; retry after verification")
                 result = handler(params)
             finally:
                 workflow_module.clear_request_scope()
@@ -219,6 +225,7 @@ class BoardService(_BaseResource):
         on_restart: Callable[[dict], dict],
         console_factory: Callable[[dict], dict] | None = None,
         runtime_directory: Path | None = None,
+        on_accepted: Callable[[str], None] | None = None,
         evaluation: EvaluationStore | None = None,
     ):
         super().__init__(store)
@@ -228,6 +235,7 @@ class BoardService(_BaseResource):
         self.on_restart = on_restart
         self.console_factory = console_factory
         self.runtime_directory = runtime_directory
+        self.on_accepted = on_accepted
         # All evaluation and decision state is durable; a lazily composed store keeps
         # every existing in-process harness working without a second authority.
         self.evaluation = evaluation or store.evaluation
@@ -362,7 +370,17 @@ class BoardService(_BaseResource):
     def backup(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             from . import backup
-            schemas.reject_unknown(params, set(), "backup")
+            schemas.reject_unknown(params, {"upgradeToken"}, "backup")
+            marker = self.store.directory / "upgrade.json"
+            if marker.exists():
+                import hashlib
+                import hmac
+                journal = json.loads(marker.read_text())
+                supplied = params.get("upgradeToken")
+                if not isinstance(supplied, str) or not hmac.compare_digest(hashlib.sha256(supplied.encode()).hexdigest(), journal.get("backupTokenHash", "")):
+                    raise BoardError("UPGRADE_IN_PROGRESS", "The rolling backup is reserved for this upgrade")
+            elif "upgradeToken" in params:
+                raise BoardError("INVALID_ARGUMENT", "An upgrade token is only valid during its fenced upgrade")
             return backup.create(self.store, runtime_identity=runtime.resolve_runtime(), plugin_commit=backup.source_commit())
         return self._guard("backup", request_json, handler)
 
@@ -528,9 +546,12 @@ class BoardService(_BaseResource):
 
     def workflow_acknowledge(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            return self.store.workflow.acknowledge(
+            result = self.store.workflow.acknowledge(
                 params, console_authority=workflow_module.console_authority_from_scope()
             )
+            if result.get("state") == "accepted" and self.on_accepted is not None:
+                self.on_accepted(result["runId"])
+            return result
 
         return self._guard("workflow.acknowledge", request_json, handler)
 

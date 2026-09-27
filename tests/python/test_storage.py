@@ -10,7 +10,7 @@ from support import BoardTestCase
 class StorageTests(BoardTestCase):
     def setUp(self):
         super().setUp()
-        self.env = mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')})
+        self.env = mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str((self.directory / 'runtime').resolve())})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -60,3 +60,17 @@ class StorageTests(BoardTestCase):
         self.assertEqual(len(rows),3)
         self.assertTrue(all(not r['eligible'] for r in rows))
         self.assertIn('runtime-in-use', next(r for r in rows if r['path'].endswith('/older'))['reasons'])
+
+    def test_linked_native_root_does_not_read_or_reclaim_external_home(self):
+        board=self.board()
+        outside=self.directory/'outside-native';outside.mkdir();sentinel=outside/'sessions.sqlite';sentinel.write_bytes(b'outside')
+        (board.directory/'harnesses').mkdir()
+        (board.directory/'harnesses/zcode').symlink_to(outside, target_is_directory=True)
+        with mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
+            planned=board.call('storage_plan',{})
+            rows=[r for r in planned['candidates'] if r['category']=='zcode']
+            self.assertEqual(len(rows),1)
+            self.assertFalse(rows[0]['eligible'])
+            self.assertEqual(rows[0]['bytes'],0)
+            board.call('storage_apply',{'planId':planned['planId'],'commandId':'linked-no-delete','confirm':True})
+        self.assertEqual(sentinel.read_bytes(),b'outside')
