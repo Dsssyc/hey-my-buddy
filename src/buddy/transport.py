@@ -274,7 +274,8 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
         # explicit BUDDY_DEV_SOURCE=1 development/test run executes from the checkout,
         # and that reports stable=false.
         target = runtime.launch_target(log_path=directory / "runtime-install.log")
-        env = dict(os.environ)
+        from .launcher import launch_defaults, write_active_runtime
+        env = {**launch_defaults(directory), **os.environ}
         env.update(BUDDY_STATE_DIR=str(directory), C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="")
         env["BUDDY_RUNTIME_IDENTITY"] = target["identity"]
         if target["pythonPath"]:
@@ -304,8 +305,14 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
         while time.monotonic() < deadline:
             endpoint = _healthy(directory)
             if endpoint:
+                if target["stable"]:
+                    write_active_runtime(directory, Path(target["runtime"]["runtimeDir"]))
                 return endpoint
             if child.poll() not in (None, 0):
+                from .launcher import read_private
+                failure = read_private(directory / "startup-error.json") or {}
+                if failure.get("pid") == child.pid and isinstance(failure.get("code"), str) and isinstance(failure.get("message"), str):
+                    raise ServiceError(failure["code"], failure["message"])
                 raise ServiceError("SERVICE_START_FAILED", "The board daemon failed to start; inspect control.log")
             time.sleep(0.05)
         raise ServiceError("SERVICE_START_TIMEOUT", "The board daemon did not become ready; inspect control.log")

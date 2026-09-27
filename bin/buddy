@@ -16,4 +16,4 @@ if [ -n "${PLUGIN_DATA:-}" ] && [ -z "${UV_PROJECT_ENVIRONMENT:-}" ]; then
   UV_PROJECT_ENVIRONMENT="$PLUGIN_DATA/venv-$BUDDY_ENV_KEY"
   export UV_PROJECT_ENVIRONMENT
 fi
-exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" buddy "$@"
+exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"

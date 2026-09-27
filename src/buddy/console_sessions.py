@@ -29,7 +29,6 @@ class BrowserSession:
     csrf: str = field(repr=False)
     last_seen: float
     token_hash: str = field(default="", repr=False)
-    can_write: bool = True
 
     def view(self) -> dict:
         return {"id": self.id, "canWrite": True, "reason": None}
@@ -82,11 +81,19 @@ class ConsoleSessions:
         self.entries[ticket] = self.clock() + ENTRY_SECONDS
         return ticket
 
-    def redeem(self, ticket: str) -> tuple[BrowserSession, None]:
+    def redeem(self, ticket: str, cookie: str = "") -> BrowserSession:
         self.expire()
         deadline = self.entries.get(ticket)
         if deadline is None or self.clock() >= deadline:
             raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is used or expired; run buddy console again")
+        if cookie:
+            try:
+                current = self.authenticate(None, cookie)
+            except BoardError:
+                pass
+            else:
+                del self.entries[ticket]
+                return current
         if len(self.sessions) >= MAX_SESSIONS:
             raise BoardError("CONSOLE_LIMIT", "Too many active console sessions; wait for expiry")
         del self.entries[ticket]
@@ -98,7 +105,7 @@ class ConsoleSessions:
         except Exception:
             self.sessions.pop(current.id, None)
             raise
-        return current, None
+        return current
 
     def authenticate(self, session_id: str | None, cookie: str) -> BrowserSession:
         digest = hashlib.sha256(cookie.encode()).hexdigest()

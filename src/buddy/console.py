@@ -1,9 +1,9 @@
 """Private writable local console: a loopback browser surface over board operations.
 
-The console binds ``127.0.0.1`` on an ephemeral port. A short-lived, single-use
+The console binds ``127.0.0.1`` on a fixed configurable port. A short-lived, single-use
 entry creates an HttpOnly browser session and redirects to a credential-free URL.
-Every read authenticates its cookie; writes additionally require the current
-writer session and a same-origin anti-CSRF header. There is no
+Every read authenticates its renewable cookie; every authenticated session may
+write with a same-origin anti-CSRF header. There is no
 wildcard CORS and no generic SQL surface: every command is dispatched to the same
 named, validated Python operation that C-Two and the CLI use.
 
@@ -174,7 +174,6 @@ STATUS_BY_CODE = {
     "INTERNAL_ERROR": 500,
     "CONSOLE_ENTRY_EXPIRED": 410,
     "CONSOLE_SESSION_EXPIRED": 401,
-    "CONSOLE_READ_ONLY": 403,
     "CONSOLE_LIMIT": 429,
 }
 
@@ -255,11 +254,20 @@ class Console:
         if host != "127.0.0.1":
             raise BoardError("INVALID_ARGUMENT", "Console must bind numeric loopback 127.0.0.1")
         self.host = host
+        self._persist_port = port is None
         try:
-            self.port = int(os.environ.get("BUDDY_CONSOLE_PORT", "49637")) if port is None else port
-            if not 0 <= self.port <= 65535:
+            if port is None:
+                from .launcher import read_private
+                saved = read_private(self.store.directory / "console-settings.json")
+                value = os.environ.get("BUDDY_CONSOLE_PORT", saved["port"] if saved is not None else 49637)
+                self.port = int(value)
+                if isinstance(value, bool):
+                    raise ValueError()
+            else:
+                self.port = port
+            if isinstance(self.port, bool) or not isinstance(self.port, int) or not 0 <= self.port <= 65535:
                 raise ValueError()
-        except (ValueError, TypeError) as error:
+        except (ValueError, TypeError, KeyError) as error:
             raise BoardError("INVALID_ARGUMENT", "BUDDY_CONSOLE_PORT must be an integer port") from error
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -280,6 +288,14 @@ class Console:
                 except OSError as error:
                     self._sessions = None
                     raise BoardError("CONSOLE_PORT_IN_USE", f"Cannot bind 127.0.0.1:{self.port}; free the port or configure BUDDY_CONSOLE_PORT") from error
+                if self._persist_port:
+                    try:
+                        from .launcher import write_private
+                        write_private(self.store.directory / "console-settings.json", {"port":self.port})
+                    except Exception:
+                        server.server_close()
+                        self._sessions = None
+                        raise
                 self._server = server
                 self.origin = f"http://{self.host}:{server.server_address[1]}"
                 self._thread = threading.Thread(target=server.serve_forever, name="buddy-console", daemon=True)
@@ -302,7 +318,7 @@ class Console:
                 "assetsBuilt": assets_ready(self.assets_dir),
             }
 
-    def close(self, expected_console_id: str | None = None, *, _idle_only: bool = False) -> dict:
+    def close(self, expected_console_id: str | None = None) -> dict:
         with self._lock:
             console_id = self._sessions.console_id if self._sessions else None
             if expected_console_id is not None and console_id is not None and expected_console_id != console_id:
@@ -353,15 +369,15 @@ class Console:
 
     # -- dispatch ------------------------------------------------------------
     def command(self, operation: str, params: dict, *, session: BrowserSession | None = None) -> dict:
-        # Keep the authorization check and complete mutation under the same lock as
-        # ticket redemption. A slow request cannot cross a writer handoff boundary.
+        # Serialize authentication and mutation with console close/session expiry.
+        # Settings concurrency is governed by their existing revision checks.
         with self._lock:
             if session is not None:
                 if self._sessions is None:
                     raise BoardError("CONSOLE_SESSION_EXPIRED", "The console session is closed")
                 self._sessions.authenticate(session.id, session.cookie)
             if operation in CONSOLE_OPERATIONS and operation not in READ_OPERATIONS:
-                if session is None or not session.can_write:
+                if session is None:
                     raise BoardError("CONSOLE_SESSION_EXPIRED", "An authenticated console session is required")
             return self._command(operation, params, session=session)
 
@@ -380,7 +396,7 @@ class Console:
                 "INVALID_ARGUMENT",
                 f"{refused[0]} is not accepted from the browser; console authority is attached by the console server",
             )
-        if session is not None and session.can_write:
+        if session is not None:
             params["consoleAuthority"] = {"sessionId": session.cookie}
         return call_operation(self.service, operation, params)
 
@@ -501,7 +517,7 @@ class Console:
                     try:
                         console._expire_sessions()
                         self.browser_session = sessions.authenticate(None, self._cookie())
-                        console.service.register_console_authority(self.browser_session.cookie)
+                        console.service.register_console_authority(self.browser_session.cookie, self.browser_session.id)
                     except BoardError as error:
                         self._board_error(error)
                         return None
@@ -516,10 +532,8 @@ class Console:
                         if sessions is None or re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket) is None:
                             raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is unavailable; run buddy console again")
                         console._expire_sessions()
-                        session, previous = sessions.redeem(ticket)
-                        if previous is not None:
-                            console.service.revoke_console_authority(previous.cookie)
-                        console.service.register_console_authority(session.cookie)
+                        session = sessions.redeem(ticket, self._cookie())
+                        console.service.register_console_authority(session.cookie, session.id)
                         target = sessions.path(session)
                 except BoardError as error:
                     # A human following a stale entry needs an actionable page, not

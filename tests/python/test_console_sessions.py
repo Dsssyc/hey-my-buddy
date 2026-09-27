@@ -163,6 +163,35 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(refusal, {'closed': False, 'reason': 'replaced', 'consoleId': new['consoleId']})
         self.assertTrue(board.console.status()['running'])
 
+    def test_configured_port_survives_restart_without_environment_override(self):
+        import os
+        import socket
+        from buddy.console import Console
+        board=self.board()
+        with socket.socket() as reserved:
+            reserved.bind(('127.0.0.1',0))
+            port=reserved.getsockname()[1]
+        with mock.patch.dict(os.environ, {'BUDDY_CONSOLE_PORT':str(port)}):
+            board.console=Console(board.store,board.service)
+            board.console.start(issue_ticket=False)
+            self.assertEqual(board.console.port,port)
+            board.console.close()
+        clean={k:v for k,v in os.environ.items() if k!='BUDDY_CONSOLE_PORT'}
+        with mock.patch.dict(os.environ,clean,clear=True):
+            board.console=Console(board.store,board.service)
+            board.console.start(issue_ticket=False)
+            self.assertEqual(board.console.origin,f'http://127.0.0.1:{port}')
+            self.assertEqual((board.directory/'console-settings.json').stat().st_mode & 0o777,0o600)
+
+    def test_real_daemon_port_collision_reaches_the_cli_as_actionable_error(self):
+        import socket
+        with socket.socket() as reserved:
+            reserved.bind(('127.0.0.1',0));reserved.listen(1)
+            code,result=self.cli('health',env={'BUDDY_CONSOLE_PORT':str(reserved.getsockname()[1])})
+        self.assertNotEqual(code,0)
+        self.assertEqual(result['error']['code'],'CONSOLE_PORT_IN_USE')
+        self.assertIn('BUDDY_CONSOLE_PORT',result['error']['message'])
+
     def test_launch_capacity_is_bounded_and_recovers_after_expiry(self):
         board, now = self.timed_board()
         for _ in range(MAX_ENTRIES):
@@ -186,7 +215,12 @@ class ConsoleSessionTests(ConsoleTestCase):
             _, browser = self.open_console(board)
             first = first or browser
         pending = board.call('console', {'action': 'open'})
-        self.assertEqual(first.call('GET', urlsplit(pending['url']).path)[0], 429)
+        existing_id = first.bootstrap()['consoleSession']['id']
+        self.assertEqual(first.call('GET', urlsplit(pending['url']).path)[0], 303)
+        self.assertEqual(first.bootstrap()['consoleSession']['id'], existing_id)
+        fresh_ticket = board.call('console', {'action':'open'})
+        anonymous = Browser(first.origin + '/')
+        self.assertEqual(anonymous.call('GET', urlsplit(fresh_ticket['url']).path)[0], 429)
         self.assertEqual(first.get('/api/console')[0], 200)
         self.assertEqual(board.console.status()['sessionCount'], MAX_SESSIONS)
         now[0] += SESSION_SECONDS

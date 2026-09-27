@@ -198,13 +198,14 @@ class _BaseResource:
             session_id = authority if isinstance(authority, str) else (
                 authority.get("sessionId") if isinstance(authority, dict) else None
             )
-            if not isinstance(session_id, str) or not self.console_session_valid(session_id):
+            public_id = self.console_public_identity(session_id) if isinstance(session_id, str) else None
+            if public_id is None:
                 raise BoardError(
                     "UNAUTHORIZED",
                     "The console authority is not a registered authenticated console session; a caller-controlled "
                     "field can never substitute for Host control",
                 )
-            scope = {"kind": workflow_module.CONSOLE_KIND, "sessionId": session_id}
+            scope = {"kind": workflow_module.CONSOLE_KIND, "sessionId": public_id}
         if credential is not None:
             if scope["kind"] == workflow_module.CONSOLE_KIND:
                 raise BoardError("UNAUTHORIZED", "An attempt-scoped credential cannot claim console authority")
@@ -625,11 +626,16 @@ class BoardService(_BaseResource):
         )
 
     # -- console-user authority --------------------------------------------
-    def register_console_authority(self, session_id: str) -> None:
+    def register_console_authority(self, session_id: str, public_id: str | None = None) -> None:
+        import hashlib
         if not isinstance(session_id, str) or not session_id:
-            raise BoardError("INVALID_ARGUMENT", "A console session id is required")
+            raise BoardError("INVALID_ARGUMENT", "A console capability is required")
+        if public_id is not None and (not isinstance(public_id, str) or re.fullmatch(r"[0-9a-f]{24}", public_id) is None):
+            raise BoardError("INVALID_ARGUMENT", "A public console identity must be 24 hex characters")
+        # The bearer stays only in this in-memory authorization map. Durable
+        # events record the public identity, never the session credential.
         with self._console_lock:
-            self._console_sessions[session_id] = utc_now()
+            self._console_sessions[session_id] = public_id or hashlib.sha256(session_id.encode()).hexdigest()[:24]
 
     def revoke_console_authority(self, session_id: str | None = None) -> None:
         with self._console_lock:
@@ -638,12 +644,15 @@ class BoardService(_BaseResource):
             else:
                 self._console_sessions.pop(session_id, None)
 
-    def console_session_valid(self, session_id: str) -> bool:
+    def console_public_identity(self, capability: str) -> str | None:
         import hmac as _hmac
-
         with self._console_lock:
-            sessions = tuple(self._console_sessions)
-        return any(_hmac.compare_digest(session_id, candidate) for candidate in sessions)
+            sessions = tuple(self._console_sessions.items())
+        return next((public for secret, public in sessions
+                     if _hmac.compare_digest(capability.encode(), secret.encode())), None)
+
+    def console_session_valid(self, session_id: str) -> bool:
+        return self.console_public_identity(session_id) is not None
 
     # -- tasks --------------------------------------------------------------
     def task_submit(self, request_json: str) -> str:

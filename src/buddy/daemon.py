@@ -773,7 +773,8 @@ def main() -> int:
         signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT, "reason": "signal"}))
     try:
         return daemon.run()
-    except ServiceError as error:
+    except BoardError as error:
+        atomic_json(directory / "startup-error.json", {"pid":os.getpid(), "code":error.code, "message":str(error)})
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.
         sys.stderr.write(f"buddy: {error.code}: {error}\n")

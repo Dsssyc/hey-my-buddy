@@ -50,8 +50,25 @@ class ObjectiveStopTests(WorkflowTestCase, ConsoleTestCase):
         for run in (first, second):
             self.assertEqual(board.call('workflow_get', {'runId': run['runId']})['state'], 'executing')
         _, new_browser = self.open_console(board)
-        self.assertEqual(browser.command('objective_stop', params, csrf=browser.bootstrap()['csrfToken'])[0], 403)
+        self.assertEqual(browser.command('objective_stop', params, csrf=browser.bootstrap()['csrfToken'])[0], 200)
         self.assertEqual(new_browser.command('objective_stop', params, csrf=new_browser.bootstrap()['csrfToken'])[0], 200)
+
+    def test_console_audit_keeps_public_identity_but_never_the_bearer(self):
+        board=self.board()
+        run=self.submit(board,kind='worktree')
+        _,browser=self.open_console(board)
+        snapshot=browser.bootstrap()
+        params={'objectiveId':'run:'+run['runId'],'commandId':'private-audit-stop'}
+        with self.assertRaises(BoardError) as denied:
+            board.call('objective_stop',{**params,'consoleAuthority':{'sessionId':snapshot['consoleSession']['id']}})
+        self.assertEqual(denied.exception.code,'UNAUTHORIZED')
+        self.assertEqual(browser.command('objective_stop',params,csrf=snapshot['csrfToken'])[0],200)
+        bearer=browser.cookie.split('=',1)[1]
+        with board.store.db.connect() as connection:
+            dump='\n'.join(connection.iterdump())
+        self.assertNotIn(bearer,dump)
+        self.assertIn('console:'+snapshot['consoleSession']['id'],dump)
+        self.assertNotIn(bearer,(board.directory/'console-sessions.json').read_text())
 
     def test_standalone_stop_preserves_unknown_shutdown(self):
         board = self.board()

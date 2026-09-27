@@ -146,7 +146,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             if path.is_symlink() or any(p.is_symlink() for p in (path.parent, path.parent.parent)):
                 raise BoardError('BACKUP_UNSAFE_PATH', 'Receipt spool cannot be linked')
             _private_copy(path, incoming / 'state' / path.relative_to(state))
-        for name in ('console-sessions.json', 'worker-pool.json', 'runtime-retention.json'):
+        for name in ('console-sessions.json', 'console-settings.json', 'worker-pool.json', 'runtime-retention.json', 'active-runtime.json', 'launch-settings.json'):
             source = state / name
             if source.exists():
                 if source.is_symlink():

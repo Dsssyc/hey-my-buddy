@@ -76,6 +76,12 @@ def _environment(state: Path, target: Path) -> dict:
     env = {key: value for key, value in os.environ.items() if key not in {
         'PYTHONPATH', 'VIRTUAL_ENV', 'UV_PROJECT_ENVIRONMENT', 'BUDDY_DEV_SOURCE', 'BUDDY_RUNTIME',
         'BUDDY_RUNTIME_IDENTITY', 'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID', 'BUDDY_AGENT_CREDENTIAL', 'BUDDY_AGENT_CREDENTIAL_FILE'}}
+    marker = state / 'upgrade.json'
+    if marker.exists():
+        preserved = json.loads(marker.read_text()).get('environment', {})
+        for key in ('BUDDY_MAX_CONCURRENT', 'BUDDY_WAIT_CAPACITY'):
+            if key in preserved:
+                env[key] = str(preserved[key])
     env.update(BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name,
                BUDDY_PYTHON=str(target / 'venv/bin/python'))
     return env
@@ -152,6 +158,10 @@ def start(state: Path, target: Path) -> dict:
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         if child.poll() is not None:
+            from .launcher import read_private
+            failure = read_private(state / 'startup-error.json') or {}
+            if failure.get('pid') == child.pid and isinstance(failure.get('code'), str):
+                raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'))
             raise BoardError('UPGRADE_START_FAILED', 'Replacement daemon exited; see private upgrade-start.log')
         try:
             endpoint = json.loads((state / 'control.json').read_text())
@@ -192,6 +202,9 @@ def restore(state: Path, current: Path) -> None:
 def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
     if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != SCHEMA_VERSION:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match')
+    settings = before.get('runtimeSettings', {})
+    if any(health.get(key) != value for key, value in settings.items()):
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     actual = idle_snapshot(state)
     changed = [name for name, value in before['fingerprints'].items() if actual['fingerprints'].get(name) != value]
     if changed:
@@ -225,7 +238,10 @@ def upgrade(params: dict) -> dict:
     health_before = probe(state, previous)
     if health_before is None or health_before.get('serviceId') != endpoint.get('serviceId') or health_before.get('pid') != endpoint.get('pid'):
         raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The live installed service does not match its recorded runtime identity')
+    preserved = {'BUDDY_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'BUDDY_WAIT_CAPACITY':str(health_before['waitCapacity'])}
+    runtime_settings = {'maxConcurrent':health_before['maxConcurrent'], 'waitCapacity':health_before['waitCapacity']}
     before = idle_snapshot(state)
+    before['runtimeSettings'] = runtime_settings
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize()
@@ -240,8 +256,9 @@ def upgrade(params: dict) -> dict:
         if attached is None or attached.get('serviceId') != endpoint.get('serviceId'):
             raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
         before = idle_snapshot(state)
+        before['runtimeSettings'] = runtime_settings
         backup_token = secrets.token_urlsafe(32)
-        journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight', 'before':before, 'backupTokenHash':hashlib.sha256(backup_token.encode()).hexdigest()}
+        journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight', 'before':before, 'environment':preserved, 'backupTokenHash':hashlib.sha256(backup_token.encode()).hexdigest()}
         write_journal(marker, journal)
         backed_up = None
         active = previous
@@ -258,6 +275,8 @@ def upgrade(params: dict) -> dict:
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
                 before = idle_snapshot(state)
+                before['runtimeSettings'] = runtime_settings
+                journal['before'] = before
                 if backed_up is None:
                     backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'])
                 journal.update(phase='backed-up', backup=backed_up)
@@ -271,7 +290,10 @@ def upgrade(params: dict) -> dict:
                 pruning = prune_old_runtimes(BoardStore(state))
             except Exception as cleanup_error:
                 pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
+            from .launcher import write_active_runtime
+            write_active_runtime(state, target, preserved)
             journal.update(phase='verified', verification=evidence, runtimePruning=pruning)
+            write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             clear_journal(marker)
             return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
@@ -281,6 +303,8 @@ def upgrade(params: dict) -> dict:
                 if active == previous and not detached:
                     surviving = probe(state, previous)
                     if surviving is not None:
+                        from .launcher import write_active_runtime
+                        write_active_runtime(state, previous, preserved)
                         clear_journal(marker)
                         return {'upgraded':False, 'error':{'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}, 'failure':getattr(failure,'code',type(failure).__name__)}
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
@@ -293,6 +317,8 @@ def upgrade(params: dict) -> dict:
                 # and restart the previous runtime without restoring an older DB.
                 recovered = start(state, previous)
                 evidence = verify_started(state, previous, recovered, before) if backed_up else {'runtimeContentId':previous.name, 'workPreserved':True}
+                from .launcher import write_active_runtime
+                write_active_runtime(state, previous, preserved)
                 journal.update(phase='rolled-back', rollback=evidence, failure=getattr(failure, 'code', type(failure).__name__))
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
@@ -308,6 +334,7 @@ def recover(state: Path, root: Path) -> dict:
     """Resume an interrupted journal under both launcher fences; never cancel work."""
     marker = state / 'upgrade.json'
     journal = json.loads(marker.read_text())
+    from .launcher import write_active_runtime
     previous, target = Path(journal['previous']), Path(journal['target'])
     for path in (previous, target):
         if path.parent.resolve() != root or path.is_symlink() or not runtime.is_ready(path):
@@ -316,6 +343,7 @@ def recover(state: Path, root: Path) -> dict:
     previous_health = probe(state, previous)
     if journal.get('phase') == 'verified' and target_health is not None:
         evidence = verify_started(state, target, target_health, journal['before'])
+        write_active_runtime(state, target, journal.get('environment'))
         write_journal(state / 'upgrade-last.json', journal)
         clear_journal(marker)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence}
@@ -328,8 +356,11 @@ def recover(state: Path, root: Path) -> dict:
             # No backup/cutover happened: preserve live workers and any work that
             # raced the old-version preflight rather than attempting to retire it.
             previous_health = start(state, previous)
+        write_active_runtime(state, previous, journal.get('environment'))
         clear_journal(marker)
         return {'upgraded':False, 'recoveredJournal':True, 'rollback':{'runtimeContentId':previous.name,'workPreserved':True}}
+    if target_health is not None or previous_health is not None:
+        idle_snapshot(state)
     if target_health is not None:
         detach(state, target)
     elif previous_health is not None:
@@ -345,6 +376,7 @@ def recover(state: Path, root: Path) -> dict:
         before = idle_snapshot(state)
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before)
+    write_active_runtime(state, previous, journal.get('environment'))
     journal.update(phase='rolled-back', rollback=evidence)
     write_journal(state / 'upgrade-last.json', journal)
     clear_journal(marker)

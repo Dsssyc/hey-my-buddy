@@ -50,7 +50,7 @@ class SingleEntrypointTests(unittest.TestCase):
         self.assertEqual(launchers, ["buddy"])
         pyproject = (ROOT / "pyproject.toml").read_text()
         self.assertEqual(pyproject.count("[project.scripts]"), 1)
-        self.assertIn('buddy = "buddy.cli:main"', pyproject)
+        self.assertIn('buddy = "buddy.launcher:main"', pyproject)
 
     def test_the_only_agent_entrypoint_is_the_plugin_skill(self):
         self.assertTrue((ROOT / "skills" / "buddy" / "SKILL.md").is_file())
