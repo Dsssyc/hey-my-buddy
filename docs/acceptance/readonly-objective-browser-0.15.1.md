@@ -24,6 +24,6 @@ Baseline routingHealth: window 20, samples 20, failures 5, consecutive failures 
 
 ## Verification status
 
-Focused backend validation: objective metadata/read and stop tests 18 passed; console/CLI/session tests 67 passed; description-to-selector isolation 1 passed; current-core tests 6 passed. Tests use private state/runtime roots. A new test initially omitted an acceptance note and was corrected; a focused command initially named the wrong test class and was rerun correctly. No full buddy.checks has run in this task yet.
+Focused backend validation: objective metadata/read and stop tests 18 passed; console/CLI/session tests 67 passed; description-to-selector isolation 1 passed; current-core tests 6 passed; routing and offline schema-preparation tests 26 passed. Tests use private state/runtime roots. A new test initially omitted an acceptance note and was corrected; a focused command initially named the wrong test class and was rerun correctly. No full buddy.checks has run in this task yet.
 
 Frontend, browser width evidence, final full checks, package validation and task usage accounting remain pending. Raw receipts/logs are in ignored .dsh-skill-build/readonly-0151/. Screenshots will use output/playwright/ and synthetic fixtures, not the daily board.
