@@ -302,6 +302,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       const label = date.getHours() === 0 && date.getMinutes() === 0
         ? `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} 00:00`
         : clockTime(at);
+      // Keep the complete label out of a folded band's fixed-width control.
+      const x = left / 100 * widthPx;
+      const labelWidth = label.length * 6 + 8;
+      if (x + labelWidth > widthPx || collapsedSpans.some(gap =>
+        x < gap.toPercent / 100 * widthPx && x + labelWidth > gap.fromPercent / 100 * widthPx)) continue;
       result.push({ at, label, left });
     }
     return result;
@@ -427,12 +432,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       aria-label={`空闲 ${durationShort(gap.endMs - gap.startMs)}，${clockTime(gap.startMs)} 至 ${clockTime(gap.endMs)}，已折叠，展开`}
                       title={`${clockTime(gap.startMs)}–${clockTime(gap.endMs)} 没有任何片段或事件`}
                       onClick={() => props.onToggleGap(gap.id)}>
-                      <span>空闲</span><span>{durationShort(gap.endMs - gap.startMs)}</span><span>展开</span>
+                      <span>空闲 {durationShort(gap.endMs - gap.startMs)}</span><span>展开</span>
                     </button>
                     : <button key={gap.id} type="button" className="collapse-button" style={{ left: `${gap.fromPercent + 0.4}%` }}
                       aria-label={`收起空闲 ${durationShort(gap.endMs - gap.startMs)}`}
                       onClick={() => props.onToggleGap(gap.id)}>收起空闲 {durationShort(gap.endMs - gap.startMs)}</button>)}
-                  {nowVisible && nowLeft !== null && <span className="now-chip" style={{ left: `${nowLeft}%` }}>现在 {clockTime(observedAtMs!)}</span>}
+                  {nowVisible && nowLeft !== null && <span className="now-chip">现在 {clockTime(observedAtMs!)}</span>}
                 </div>
               </div>
               <div className="tl-row markers" data-nav="">
@@ -443,7 +448,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                     const single = cluster.items.length === 1 ? cluster.items[0]! : null;
                     const vocab = single ? eventVocab(single ? cluster.events[0]!.kind : "") : null;
                     const classes = ["tl-item", "mk", cluster.items.length > 1 ? "cluster" : cluster.events[0]!.kind];
-                    return <button key={cluster.key} type="button" className={classes.join(" ")} style={{ left: `${cluster.x}%` }}
+                    return <button key={cluster.key} type="button" className={classes.join(" ")} style={{ left: `clamp(9px, ${cluster.x}%, calc(100% - 9px))` }}
                       data-key={cluster.key} data-x={cluster.x} tabIndex={focusKey === cluster.key ? 0 : -1}
                       aria-label={cluster.lines.join("；")} title={cluster.lines.join("；")}
                       onFocus={() => setFocusKey(cluster.key)}

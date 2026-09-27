@@ -230,7 +230,7 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 }
 @media (max-width: 760px) {
   .app-header { display: grid; grid-template-columns: 1fr auto; gap: 0; padding: 10px 12px 0; }
-  .brand strong { display: block; font-size: 14px; }
+  .brand strong { display: none; }
   .primary-tabs { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 6px; }
   .primary-tabs a { justify-content: center; padding: 9px 4px; font-size: 12px; gap: 5px; }
   .primary-tabs svg { width: 15px; height: 15px; }
@@ -316,7 +316,7 @@ button.tl-label:hover { background: var(--subtle); }
 .fold-button:hover { color: var(--accent); border-color: var(--accent); }
 .collapse-button { position: absolute; top: 5px; height: 22px; display: flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 10px; white-space: nowrap; z-index: 3; }
 .collapse-button:hover { color: var(--accent); border-color: var(--accent); }
-.now-chip { position: absolute; bottom: 3px; transform: translateX(-50%); padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 3; }
+.now-chip { position: absolute; right: 3px; bottom: 3px; padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 3; }
 /* Track items (spans, markers, flags) sit on the track; row labels keep their
    sticky grid placement and are never pulled out of the row by this rule. */
 .tl-track > .sp, .tl-track > .mk, .tl-track > .flag { position: absolute; top: 50%; transform: translateY(-50%); }
@@ -380,7 +380,7 @@ button.tl-label:hover { background: var(--subtle); }
 }
 @media (max-width: 760px) {
   .history-switch-bar > span { display: none; }
-  .narrow-back { display: inline-flex; }
+  .narrow-back { display: inline-flex; flex-shrink: 0; white-space: nowrap; }
   .tl-toolbar, .locator { padding-inline: 14px; }
   .trunc-banner { margin-inline: 14px; }
   .tl-tools .list-toggle { display: none; }
