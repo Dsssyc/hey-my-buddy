@@ -103,3 +103,5 @@ Acceptance records are versioned evidence, not current contracts. They may refer
 When behavior changes, update the owning reference first, then the READMEs and [skills/buddy/SKILL.md](../skills/buddy/SKILL.md) if the user-visible entry path changed, and record acceptance evidence under `docs/acceptance/`. Keep architecture statements verified against source; historical ADRs describe the decision at their own point in time.
 
 The [0.15.1 design](design/objective-browser-0.15.1.md) and [acceptance record](acceptance/readonly-objective-browser-0.15.1.md) cover read-only delegation records, objective descriptions, short titles, viewport-based detail browsing and the narrowed console write surface. The record distinguishes implementation, focused/full checks, synthetic browser evidence, normal routed work and installation status.
+
+The [0.16.0 acceptance record](acceptance/maintenance-and-console-0.16.0.md) covers rolling backup, idle upgrade and rollback, guarded storage reclamation, persistent multi-window access, console usability and C-Two 0.6.0. It separates source and test evidence from the separately authorized daily installation.
