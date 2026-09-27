@@ -20,7 +20,7 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .app-header { display: flex; align-items: center; gap: 32px; flex: 0 0 auto; min-height: 60px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
 .brand strong { font-size: 15px; letter-spacing: -.03em; }
-.brand-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font: 700 25px/1 Georgia, serif; flex-shrink: 0; }
+.brand-icon { display: block; width: 30px; height: 30px; object-fit: contain; flex-shrink: 0; }
 .primary-tabs { display: flex; align-self: stretch; gap: 8px; }
 .primary-tabs a { display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 3px solid transparent; color: var(--muted); white-space: nowrap; font-size: 13px; }
 .primary-tabs a:hover { background: var(--subtle); }

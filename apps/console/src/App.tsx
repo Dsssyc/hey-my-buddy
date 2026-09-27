@@ -18,6 +18,7 @@ import { Models } from "./Models";
 import { Settings } from "./Settings";
 import { Badge, Icon } from "./ui";
 import "./styles.css";
+import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 
 const tabs = { tasks: "委派记录", models: "模型卡片", settings: "路由配置" } as const;
 type Tab = keyof typeof tabs;
@@ -30,7 +31,7 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
   return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
-    <main className="startup"><div className="brand-icon">b</div>
+    <main className="startup"><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" />
       <h1>{state.error ? "暂时无法连接黑板" : "正在连接本地黑板"}</h1>
       <p role={state.error ? "alert" : "status"}>{state.error || "读取持久记录，不调用模型。"}</p>
       {state.error && <button className="button primary" onClick={() => void state.refresh()}>重新连接</button>}
@@ -99,7 +100,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       event.preventDefault(); document.getElementById("main")?.focus();
     }}>跳至主要内容</a>
     <header className="app-header" inert={editor.exitPrompt || undefined}>
-      <a className="brand" href="#tasks" onClick={() => select("tasks")}><span className="brand-icon">b</span><strong>hey my buddy</strong></a>
+      <a className="brand" href="#tasks" aria-label="hey my buddy" onClick={() => select("tasks")}><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" /><strong>hey my buddy</strong></a>
       <nav className="primary-tabs" aria-label="主要导航">
         {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + key} onClick={() => select(key)}
           aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""}>
