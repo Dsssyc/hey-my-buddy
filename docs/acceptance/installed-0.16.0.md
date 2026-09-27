@@ -16,7 +16,7 @@ The upgrade removed 19 proven unused old runtimes totaling 1,007,964,885 bytes. 
 
 All 100 identified orphan test processes were subsequently confirmed exited under the user's stop authorization. Final inventory found zero orphan Buddy processes. This includes three older launcher-test supervisors found in the final snapshot; their start time preceded the final complete test. Historical test directories/records were preserved. The staging helper's temporary previous-plugin source was removed after verification; it had matched the installed 0.15.1 cache before Codex updated that cache, and the verified previous stable runtime remains.
 
-The old `/Users/soku/.local/share/hey-my-buddy/archive-before-readonly-0.15.1-20260927-195555` archive and the user's Trash remain untouched. Deleting the old archive still requires the user's separate confirmation now that the new backup and upgrade are verified.
+After the user separately replied “删除,” Host reverified the current backup with the shared manifest, hash, SQLite integrity, foreign-key and private-open checks, and confirmed the daily service still ran contract 0.16.0/schema 12 on runtime `88cfd4423dd42ac7a6f94e70f77007f5`. Host then removed only `/Users/soku/.local/share/hey-my-buddy/archive-before-readonly-0.15.1-20260927-195555` (7,482,405,564 logical payload bytes) and confirmed it was absent while `backups/current` remained present. The user's Trash was untouched. Exact evidence is `.dsh-skill-build/016/archive-deletion-report.json`.
 
 ## Console
 
