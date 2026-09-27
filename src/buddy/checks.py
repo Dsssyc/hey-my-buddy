@@ -167,18 +167,17 @@ def _ps_argv_table() -> list[tuple[int, str]] | None:
 
 
 def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool]:
-    """Pids with a file open under the root: ``lsof +D``, ``/proc`` as the fallback.
+    """Pids with a file open under the root: ``lsof``, ``/proc`` as the fallback.
 
     Returns ``(pids, error, available)``. An unavailable channel is a recorded note,
-    not a failure; a present channel that fails to run is an error. Neither channel
-    can observe an already-unlinked open file on macOS; that holder is caught by the
-    argv channel instead (Buddy supervisors name their state directory in argv).
+    not a failure; a present channel that fails to run is an error. The name channel includes deleted-but-open files; scanning only existing
+    directory entries would miss a daemon after its lock path was unlinked.
     """
     binary = shutil.which("lsof")
     if binary is not None:
         try:
             completed = subprocess.run(
-                [binary, "-w", "-F", "p", "+D", str(root)],
+                [binary, "-nP", "-u", str(os.getuid()), "-Fpn"],
                 capture_output=True,
                 timeout=120,
                 check=False,
@@ -188,9 +187,15 @@ def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool]:
         if completed.returncode == 0:
             stdout = completed.stdout.decode(errors="replace")
             pids = set()
+            current_pid = None
+            prefixes = _root_prefixes(root)
             for line in stdout.splitlines():
                 if line.startswith("p") and line[1:].isdigit():
-                    pids.add(int(line[1:]))
+                    current_pid = int(line[1:])
+                elif line.startswith("n") and current_pid is not None:
+                    filename = line[1:].removesuffix(" (deleted)")
+                    if any(filename == prefix or filename.startswith(prefix + "/") for prefix in prefixes):
+                        pids.add(current_pid)
             return pids, None, True
         if completed.returncode == 1 and not completed.stderr.strip():
             # lsof reports "no matching files" as exit 1.
@@ -235,10 +240,10 @@ def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[
     argv_by_pid = dict(table)
     for pid, argv in table:
         if pid != own and _argv_tied(argv, prefixes):
-            findings[pid] = {"pid": pid, "source": "argv", "argv": argv[:400]}
+            findings[pid] = {"pid": pid, "source": "argv", "executable": Path(argv.split()[0]).name if argv.split() else "unknown"}
     open_pids, open_error, open_available = _open_file_pids(root)
     if not open_available:
-        notes.append("open-file observation unavailable (no lsof and no /proc)")
+        problems.append("open-file observation unavailable (no lsof and no /proc)")
     elif open_error:
         problems.append(open_error)
     for pid in open_pids:
@@ -249,7 +254,7 @@ def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[
             entry["source"] = "argv+openFiles"
         else:
             findings[pid] = {"pid": pid, "source": "openFiles",
-                             "argv": argv_by_pid.get(pid, "")[:400]}
+                             "executable": Path(argv_by_pid.get(pid, "unknown").split()[0]).name}
     return findings, problems, notes
 
 

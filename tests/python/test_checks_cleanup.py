@@ -299,3 +299,15 @@ class PrivateRootTeardownTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeletedOpenFileObservationTests(unittest.TestCase):
+    def test_lsof_name_channel_keeps_deleted_private_handles_only(self):
+        root = Path('/private/checks-fixture')
+        output = b'p123\nn/private/checks-fixture/state/control-daemon.lock (deleted)\np456\nn/private/other/state/board-owner.lock\n'
+        completed = subprocess.CompletedProcess([], 0, stdout=output, stderr=b'')
+        with patch('buddy.checks.shutil.which', return_value='/usr/sbin/lsof'), patch('buddy.checks.subprocess.run', return_value=completed):
+            pids, error, available = checks._open_file_pids(root)
+        self.assertEqual(pids, {123})
+        self.assertIsNone(error)
+        self.assertTrue(available)
