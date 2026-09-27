@@ -76,9 +76,9 @@ def test_environment(root: Path) -> dict:
     return values
 
 
-def create_private_root() -> Path:
+def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
-    root = Path(tempfile.mkdtemp(prefix="buddy-checks-"))
+    root = Path(tempfile.mkdtemp(prefix="buddy-checks-", dir=directory)).resolve()
     (root / "tmp").mkdir(mode=0o700)
     return root
 
@@ -442,7 +442,10 @@ def _safe_teardown(private_root: Path) -> dict | None:
 
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
-    private_root = create_private_root()
+    # macOS's per-user temporary path leaves too little room for nested native
+    # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
+    # root short; all child TMPDIRs still stay inside it and share its teardown.
+    private_root = create_private_root(directory=Path("/tmp") if sys.platform == "darwin" else None)
     print(f"buddy.checks: private test root {private_root}", file=sys.stderr)
     failure: str | None = None
     evidence: dict | None = None
