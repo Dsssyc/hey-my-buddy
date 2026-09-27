@@ -91,6 +91,20 @@ class ObjectiveReadTests(WorkflowTestCase):
     def list_(self, board, **params):
         return board.call('objective_list', params)
 
+    def test_intent_title_is_not_replaced_by_worker_result_summary(self):
+        board = self.board()
+        submitted = self.submit(board, kind='worktree', task='Implement bounded routing\nDetailed request')
+        self.register(board)
+        claimed = self.claim(board, run_id=submitted['runId'])
+        self.finish_turn(board, claimed)
+        group = self.list_(board)['objectives'][0]
+        self.assertEqual(group['title'], 'Implement bounded routing')
+        self.assertEqual(group['titleSource'], 'task')
+        self.assertTrue(group['summary'])
+        timeline = board.call('objective_timeline', {'objectiveId':group['objectiveId']})
+        self.assertEqual(timeline['rows'][0]['title'], group['title'])
+        self.assertEqual(timeline['rows'][0]['summary'], group['summary'])
+
     def test_execution_spans_use_their_own_receipt_status_not_turn_disposition(self):
         board = self.board()
         self.register(board)

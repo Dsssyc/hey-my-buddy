@@ -8,7 +8,9 @@ export type ObjectiveSummary = {
   kind: "objective" | "standalone";
   /** Objective title, or the root's display title; `titleSource: "none"` means the 未命名委派 fallback. */
   title: string;
-  titleSource: "objective" | "title" | "summary" | "task" | "none";
+  titleSource: "objective" | "title" | "task" | "none";
+  /** Latest recorded own result, separate from intent; groups do not synthesize one. */
+  summary: string | null;
   project: { id: string; path: string | null; label: string };
   sourceHostId: string | null;
   currentHostIds: string[];
@@ -39,7 +41,8 @@ export type TimelineConfiguration = {
 export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;
   title: string;
-  titleSource: "title" | "summary" | "task" | "none";
+  titleSource: "title" | "task" | "none";
+  summary: string | null;
   createdAt: string;
   /** Governed workflow state (for example executing, awaiting-host, delivered, accepted). */
   state: string;

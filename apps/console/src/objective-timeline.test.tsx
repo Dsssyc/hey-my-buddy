@@ -372,7 +372,7 @@ describe("objective timeline rendering", () => {
   it("treats unknown shutdown as outranking a recorded failure, keeping the failure text", () => {
     const timeline = objectiveTimelineFixture({
       rows: [{
-        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title",
+        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: false, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
       }],
@@ -397,7 +397,7 @@ describe("objective timeline rendering", () => {
   it("says the end time is missing for a terminal span instead of borrowing now", () => {
     const timeline = objectiveTimelineFixture({
       rows: [{
-        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task",
+        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: true, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
       }],

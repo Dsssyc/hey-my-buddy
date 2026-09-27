@@ -204,6 +204,12 @@ export type ConsoleSession = {
   canWrite: boolean;
   reason: null | "superseded";
 };
+export type RoutingHealth = {
+  windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
+  abstentionCount: number; cancelledCount: number; staleCount: number;
+  lastSuccessAt: string | null; lastSuccessDecisionId: string | null;
+  recentFailures: { decisionId: string; runId: string | null; at: string; code: string }[];
+};
 export type Snapshot = {
   csrfToken: string;
   /** Authenticated browser session; missing or malformed fails closed. */
@@ -225,6 +231,8 @@ export type Snapshot = {
   unavailableProfileCount?: number;
   evidence: Evidence[];
   decisions: Decision[];
+  /** Read-only bounded selection health; absent data is unknown, not success. */
+  routingHealth?: RoutingHealth;
   /** Recorded verification samples per profile; independent of published card prose. */
   sampleCounts: Record<string, number>;
   /**

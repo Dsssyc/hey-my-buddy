@@ -27,7 +27,7 @@ TIMELINE_MAX_LIMIT = 200
 MAX_SPANS = 800
 MAX_MARKERS = 800
 SUMMARY_LIMIT = 300
-#: Display fallback when a delegation recorded no title, summary or task line.
+#: Display fallback when a delegation recorded no intent title or task line.
 UNTITLED = "未命名委派"
 TITLE_LIMIT = 200
 CURSOR_VERSION = 1
@@ -185,8 +185,8 @@ def _first_line(text: Any) -> str | None:
     return " ".join(text.strip().splitlines()[0].split())[:TITLE_LIMIT]
 
 
-def _run_title(connection, run_id: str) -> tuple[str | None, str]:
-    """Display title order: explicit run title, latest concluded summary, first task line."""
+def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | None]:
+    """Intent first; a recorded result summary is a separate secondary field."""
     row = connection.execute(
         "SELECT r.title,"
         " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
@@ -198,16 +198,14 @@ def _run_title(connection, run_id: str) -> tuple[str | None, str]:
         (run_id,),
     ).fetchone()
     if row is None:
-        return None, "none"
-    if isinstance(row["title"], str) and row["title"].strip():
-        return row["title"].strip()[:TITLE_LIMIT], "title"
+        return None, "none", None
     summary = _first_line(row["summary"])
-    if summary:
-        return summary, "summary"
+    if isinstance(row["title"], str) and row["title"].strip():
+        return row["title"].strip()[:TITLE_LIMIT], "title", summary
     task = _first_line(row["task"])
     if task:
-        return task, "task"
-    return None, "none"
+        return task, "task", summary
+    return None, "none", summary
 
 
 def _state(row) -> str:
@@ -290,6 +288,7 @@ def _members(connection, group_id: str) -> list:
 
 
 def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -> dict:
+    result_summary = None
     members = [row for row in _members(connection, group_id) if row["governed_run_id"] is not None]
     matching = connection.execute(
         f"SELECT COUNT(*) AS count FROM ({MEMBERS_SQL}) WHERE group_id = ? AND "
@@ -313,7 +312,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
     else:
         root_id = group_id[len("run:"):]
         root = next((row for row in members if row["task_id"] == root_id), None)
-        title, title_source = _run_title(connection, root_id)
+        title, title_source, result_summary = _run_presentation(connection, root_id)
         metadata = delegation.metadata_from_row(root) if root is not None else {"project": None, "sourceHostId": None}
         project, source_host = metadata["project"], metadata["sourceHostId"]
         created_at = root["created_at"] if root is not None else None
@@ -327,6 +326,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         "kind": kind,
         "title": title or UNTITLED,
         "titleSource": title_source,
+        "summary": result_summary,
         "project": project,
         "sourceHostId": source_host,
         "currentHostIds": current_hosts,
@@ -439,7 +439,7 @@ def _tree_order(runs: list) -> list:
 
 def _timeline_row(connection, row, depth: int) -> dict:
     metadata = delegation.metadata_from_row(row)
-    title, title_source = _run_title(connection, row["task_id"])
+    title, title_source, result_summary = _run_presentation(connection, row["task_id"])
     shutdown = connection.execute(
         "SELECT COUNT(*) AS attempts,"
         " SUM(CASE WHEN execution_state='finished' AND shutdown_confirmed=1 THEN 1 ELSE 0 END) AS confirmed"
@@ -456,6 +456,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "rootRunId": row["root_run_id"],
         "title": title or UNTITLED,
         "titleSource": title_source,
+        "summary": result_summary,
         "createdAt": row["created_at"],
         "state": row["run_state"],
         "status": row["state"],
