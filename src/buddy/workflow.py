@@ -1275,6 +1275,12 @@ class WorkflowCoordinator:
         )
         connection.execute("UPDATE workflow_runs SET objective_id=?,title=? WHERE run_id=?",
                            (objective_id, presentation.get("title"), run_id))
+        if "objective" in presentation:
+            self.board._append_event(
+                connection, "workflow.objective_created", task_id=run_id,
+                payload={"objectiveId": objective_id,
+                         "description": presentation["objective"].get("description")},
+            )
         if manifest:
             # The column tracks the effective execution checkout (a prepared worktree
             # path), while spec_json/input_fingerprint keep the immutable original
@@ -2827,6 +2833,52 @@ class WorkflowCoordinator:
                 self.board._store_receipt(
                     connection, command_id, "workflow.cancel", request_key, response, task_id=run_id
                 )
+            head = self.board._head_of(connection)
+        self.board._notify(head)
+        return response
+
+    def stop_objective(self, params: dict, *, console_authority: dict | None = None) -> dict:
+        """One browser-only cancellation scope, resolved and fenced atomically."""
+        schemas.reject_unknown(params, {"objectiveId", "commandId", "reason"}, "objective.stop")
+        if console_authority is None:
+            raise BoardError("UNAUTHORIZED", "Stopping an objective requires an authenticated console writer")
+        identifier = schemas.required_string(params, "objectiveId", max_length=134)
+        command_id = schemas.required_string(params, "commandId", max_length=128)
+        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or "User stopped objective"
+        request = {"objectiveId": identifier, "reason": reason}
+        now = self.now()
+        with self.db.write() as connection:
+            receipt = self.board._receipt(connection, command_id, "objective.stop", request)
+            if receipt is not None:
+                return {**receipt, "duplicate": True}
+            if identifier.startswith("obj-"):
+                roots = connection.execute(
+                    "SELECT r.* FROM workflow_runs r WHERE r.objective_id=?"
+                    " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)"
+                    " ORDER BY r.created_at,r.run_id", (identifier,),
+                ).fetchall()
+            elif identifier.startswith("run:"):
+                roots = connection.execute(
+                    "SELECT r.* FROM workflow_runs r WHERE r.run_id=? AND r.objective_id IS NULL"
+                    " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)",
+                    (identifier[4:],),
+                ).fetchall()
+            else:
+                raise BoardError("INVALID_ARGUMENT", "objectiveId must identify an objective or standalone root")
+            if not roots:
+                raise BoardError("NOT_FOUND", "Unknown work objective")
+            results, accepted = [], []
+            for root in roots:
+                if root["state"] == "accepted":
+                    accepted.append(root["run_id"])
+                    continue
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
+                results.append(self._cancel_in_transaction(
+                    connection, root, task, reason, f"console:{console_authority['sessionId']}", now,
+                ))
+            response = {"objectiveId": identifier, "runIds": [r["runId"] for r in results],
+                        "acceptedRunIds": accepted, "results": results, "duplicate": False}
+            self.board._store_receipt(connection, command_id, "objective.stop", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
         return response

@@ -31,6 +31,34 @@ class ObjectiveAdmissionTests(WorkflowTestCase):
         for hidden in ('Human group sentinel', 'Human run sentinel', identifier):
             self.assertNotIn(hidden, text)
 
+    def test_description_is_atomic_immutable_display_metadata(self):
+        board = self.board()
+        metadata = {'title': 'Readable goal', 'description': 'User wording sentinel.'}
+        run = self.submit(board, kind='worktree', objective=metadata, title='Short title', task='Task opening.\nMore detail.')
+        identifier = run['objectiveId']
+        summary = board.call('objective_timeline', {'objectiveId': identifier})
+        self.assertEqual(summary['objective']['description'], metadata['description'])
+        self.assertEqual(summary['objective']['counts']['accepted'], 0)
+        self.assertEqual(summary['rows'][0]['taskSummary'], 'Task opening.')
+        with board.store.db.read() as db:
+            shape = [tuple(r) for r in db.execute('PRAGMA table_info(objectives)')]
+            head = db.execute('SELECT MAX(seq) FROM events').fetchone()[0]
+        self.assertTrue(self.submit(board, kind='worktree', objective=metadata, title='Short title', task='Task opening.\nMore detail.')['duplicate'])
+        with self.assertRaises(BoardError) as conflict:
+            self.submit(board, kind='worktree', objective={**metadata, 'description': 'Changed'}, title='Short title', task='Task opening.\nMore detail.')
+        self.assertEqual(conflict.exception.code, 'CONFLICT')
+        with board.store.db.read() as db:
+            self.assertEqual(head, db.execute('SELECT MAX(seq) FROM events').fetchone()[0])
+            self.assertEqual(shape, [tuple(r) for r in db.execute('PRAGMA table_info(objectives)')])
+            for row in db.execute('SELECT goal_json FROM workflow_runs'):
+                self.assertNotIn(metadata['description'], row[0])
+        self.register(board)
+        self.assertNotIn(metadata['description'], json.dumps(self.claim(board)))
+        for value in ('', ' ', 'x' * 301, None, False):
+            with self.assertRaises(BoardError):
+                schemas.normalize_presentation({'objective': {'title': 'ok', 'description': value}})
+        self.assertEqual(len(schemas.normalize_presentation({'objective': {'title': 'ok', 'description': '字' * 300}})['objective']['description']), 300)
+
     def test_changed_presentation_conflicts_without_creating_another_group(self):
         board = self.board()
         self.submit(board, objective={'title':'one'}, title='first')

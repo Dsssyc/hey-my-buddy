@@ -94,7 +94,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         grant = json.loads(raw)['result']
         _, second = self.open_console(board)
         for operation, params in (
-            ('task_cancel', {'runId': run_id}),
+            ('objective_stop', {'objectiveId': 'run:' + run_id, 'commandId': 'stale-stop'}),
             ('model_catalog_refresh', {'requestId': 'old-refresh'}),
             ('evaluation_write_renew', {k: grant[k] for k in ('writerId','generation','writerToken')}),
         ):
@@ -106,7 +106,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(first.command('selection_list', {}, csrf=csrf)[0], 200)
         self.assertEqual(first.command('model_profiles', {}, csrf=csrf)[0], 200)
         self.assertEqual(board.call('task_get', {'runId': run_id})['task']['status'], 'queued')
-        self.assertEqual(second.command('task_cancel', {'runId': run_id}, csrf=second.bootstrap()['csrfToken'])[0], 200)
+        self.assertEqual(second.command('task_cancel', {'runId': run_id}, csrf=second.bootstrap()['csrfToken'])[0], 404)
 
     def test_late_request_body_cannot_cross_a_writer_handoff(self):
         board = self.board()
@@ -122,7 +122,7 @@ class ConsoleSessionTests(ConsoleTestCase):
                 raise TimeoutError('test barrier not released')
             return read_body(request)
         with mock.patch.object(handler, '_read_body', delayed_read), ThreadPoolExecutor(max_workers=1) as pool:
-            pending = pool.submit(first.command, 'task_cancel', {'runId': run_id}, csrf=csrf)
+            pending = pool.submit(first.command, 'objective_stop', {'objectiveId': 'run:' + run_id, 'commandId': 'late-stop'}, csrf=csrf)
             try:
                 self.assertTrue(authenticated.wait(5))
                 _, second = self.open_console(board)

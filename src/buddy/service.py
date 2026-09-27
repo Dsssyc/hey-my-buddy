@@ -91,6 +91,7 @@ CONTROL_OPERATIONS = (
     "workflow_suggest",
     "objective_list",
     "objective_timeline",
+    "objective_stop",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
 
@@ -574,6 +575,14 @@ class BoardService(_BaseResource):
 
         return self._guard(
             "objective.timeline", request_json, lambda params: objectives.objective_timeline(self.store, params)
+        )
+
+    def objective_stop(self, request_json: str) -> str:
+        return self._guard(
+            "objective.stop", request_json,
+            lambda params: self.store.workflow.stop_objective(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            ),
         )
 
     # -- console-user authority --------------------------------------------

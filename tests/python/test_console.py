@@ -233,7 +233,11 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        for operation in ("dispatch", "store.task_cancel", "_receipt", "console_snapshot", "unknown_operation"):
+        for operation in ("dispatch", "store.task_cancel", "_receipt", "console_snapshot", "unknown_operation", "task_cancel", "task_retry", "task_acknowledge",
+                          "workflow_submit", "workflow_decide", "workflow_continue", "workflow_takeover",
+                          "workflow_cancel", "workflow_acknowledge", "workflow_scope_amend",
+                          "workflow_workspace_resolve", "workflow_integration_record", "workspace_cleanup_plan",
+                          "workspace_cleanup_apply", "workflow_suggest"):
             status, _h, data = browser.command(operation, {}, csrf=csrf)
             self.assertEqual(status, 404, operation)
             self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
@@ -283,7 +287,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         run_id = submitted["task"]["runId"]
         stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        # A writer holds the table; task control through the console still works.
+        # A writer holds the table; settings remain writable but task control is refused.
         refreshed = board.call("model_catalog_refresh", {"requestId": "cat"})
         profile = next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)
         family = {key: profile[key] for key in ("adapter", "provider", "model")}
@@ -291,8 +295,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(status, 200, data)
         begin = json.loads(data)["result"]
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
-        self.assertEqual(status, 200, data)
-        self.assertEqual(json.loads(data)["result"]["task"]["status"], "cancelled")
+        self.assertEqual(status, 404, data)
+        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
         # A publish through the browser is the same operation the CLI uses: it is
         # validated, gated and persisted exactly once.
         status, _h, data = browser.command(
@@ -318,7 +322,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                         if all(row[key] == value for key, value in family.items()))
         self.assertEqual(capacity, {**family, "limit": 4, "active": 0})
         # Invalid input is a safe 4xx envelope, never a traceback.
-        status, _h, data = browser.command("task_cancel", {"runId": run_id, "nonsense": True}, csrf=csrf)
+        status, _h, data = browser.command("objective_stop", {"objectiveId": "run:" + run_id, "commandId": "invalid-stop", "nonsense": True}, csrf=csrf)
         self.assertEqual(status, 400, data)
         payload = json.loads(data)
         self.assertFalse(payload["ok"])

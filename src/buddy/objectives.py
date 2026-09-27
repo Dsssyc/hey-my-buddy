@@ -289,15 +289,17 @@ def _members(connection, group_id: str) -> list:
 
 def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -> dict:
     result_summary = None
+    description = None
     members = [row for row in _members(connection, group_id) if row["governed_run_id"] is not None]
     matching = connection.execute(
         f"SELECT COUNT(*) AS count FROM ({MEMBERS_SQL}) WHERE group_id = ? AND "
         + " AND ".join(["governed_run_id IS NOT NULL", *clauses]),
         [group_id, *values],
     ).fetchone()["count"]
-    counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0}
+    counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0}
     for row in members:
         counts[_state(row)] += 1
+        counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
         counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group_id.startswith("obj-"):
@@ -308,6 +310,16 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         source_host, created_at = objective["source_host_id"], objective["created_at"]
         activity_seq, activity_at = objective["activity_seq"], objective["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]
+        first = connection.execute("SELECT run_id FROM workflow_runs WHERE objective_id=? ORDER BY created_at, rowid LIMIT 1", (group_id,)).fetchone()
+        if first:
+            event = connection.execute(
+                "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.objective_created' ORDER BY seq LIMIT 1",
+                (first["run_id"],),
+            ).fetchone()
+            if event:
+                metadata = json.loads(event["payload_json"])
+                if metadata.get("objectiveId") == group_id:
+                    description = metadata.get("description")
         kind = "objective"
     else:
         root_id = group_id[len("run:"):]
@@ -327,6 +339,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         "title": title or UNTITLED,
         "titleSource": title_source,
         "summary": result_summary,
+        "description": description,
         "project": project,
         "sourceHostId": source_host,
         "currentHostIds": current_hosts,
@@ -440,6 +453,7 @@ def _tree_order(runs: list) -> list:
 def _timeline_row(connection, row, depth: int) -> dict:
     metadata = delegation.metadata_from_row(row)
     title, title_source, result_summary = _run_presentation(connection, row["task_id"])
+    task_text = connection.execute("SELECT json_extract(goal_json,'$.task') FROM workflow_runs WHERE run_id=?", (row["task_id"],)).fetchone()
     shutdown = connection.execute(
         "SELECT COUNT(*) AS attempts,"
         " SUM(CASE WHEN execution_state='finished' AND shutdown_confirmed=1 THEN 1 ELSE 0 END) AS confirmed"
@@ -457,6 +471,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "title": title or UNTITLED,
         "titleSource": title_source,
         "summary": result_summary,
+        "taskSummary": _first_line(task_text[0]) if task_text else None,
         "createdAt": row["created_at"],
         "state": row["run_state"],
         "status": row["state"],

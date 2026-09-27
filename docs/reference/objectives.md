@@ -1,6 +1,6 @@
 # Work objectives and delegation timelines
 
-Implementation contract for the user-authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md), introduced in 0.14.0 and revised by the authorized 0.15.0 presentation repair; schema remains 12. The separately authorized [0.14.0 daily installation](../acceptance/installed-0.14.0.md) on 2026-09-27 retained the previous schema-11 data through a verified offline copy; the 0.15.0 candidate has not been installed. This feature supplies archival grouping and read-only browsing; it adds no scheduler, dependency graph, execution permission, result ledger or model-routing input.
+Implementation contract for the user-authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md), introduced in 0.14.0 and revised by the authorized 0.15.0 presentation repair; schema remains 12. The separately authorized [0.14.0 daily installation](../acceptance/installed-0.14.0.md) on 2026-09-27 retained the previous schema-11 data through a verified offline copy; the 0.15.0 daily installation is recorded in [installed-0.15.0](../acceptance/installed-0.15.0.md), while the 0.15.1 candidate remains uninstalled. This feature supplies archival grouping and read-only browsing; it adds no scheduler, dependency graph, execution permission, result ledger or model-routing input.
 
 ## Submission metadata
 

@@ -79,3 +79,5 @@ Start with the [documentation index](docs/README.md) for commands, architecture,
 ## License
 
 [MIT](LICENSE).
+
+The 0.15.1 source candidate makes delegation records read-only, with one confirmed “停止目标” action for the whole selected objective. Details open beside a readable, adjustable timeline; short intent titles, objective descriptions and task/result summaries clarify the hierarchy. Host decisions and acceptance stay in the CLI; user settings retain single-writer editing. Schema remains 12. Installation is separate and has not been authorized for this candidate.

@@ -463,8 +463,10 @@ def normalize_presentation(params: dict) -> dict:
                                                 pattern=re.compile(r"^obj-[A-Za-z0-9-]+$"))
     if "objective" in params:
         objective = require_object(params["objective"], "objective")
-        reject_unknown(objective, {"title"}, "objective")
+        reject_unknown(objective, {"title", "description"}, "objective")
         result["objective"] = {"title": " ".join(required_string(objective, "title", max_length=200).split())}
+        if "description" in objective:
+            result["objective"]["description"] = " ".join(required_string(objective, "description", max_length=300).split())
     return result
 
 
