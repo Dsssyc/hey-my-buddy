@@ -51,3 +51,13 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code,'UPGRADE_SHUTDOWN_UNCONFIRMED')
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
+
+    def test_upgrade_refuses_another_schema_without_conversion(self):
+        board=self.board()
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE meta SET value='999' WHERE key='schema_version'")
+        with self.assertRaises(BoardError) as caught:
+            upgrade.idle_snapshot(board.directory)
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],'999')

@@ -2,11 +2,10 @@
 
 Every operation is a named method with a validated request schema — there is no
 public ``dispatch(method, JSON)`` facade and no Python-to-Node engine relay. Complex
-payloads travel as bounded JSON strings. In the released C-Two version (0.5.1) an
-ordinary Python ``str`` argument is still transported with the Python pickle
-protocol, so this DTO is a **same-user Python API only**: it is not claimed to be
-cross-language portable, no FastDB DTO is used here, and a non-Python client must
-define its own C-Two contract instead of relying on these pickle payloads.
+payloads travel as bounded JSON strings over C-Two 0.6.0. This DTO is a
+**same-user Python API only**: it is not claimed to be cross-language portable,
+no FastDB DTO is used here, and a non-Python client must define its own contract.
+
 
 ``BuddyControl`` owns mutations and reads. ``BuddyWait`` is a *separate* resource
 name with its own bounded capacity, so many waiting clients can never consume the

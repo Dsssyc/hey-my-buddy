@@ -51,6 +51,9 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def idle_snapshot(state: Path) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
+            raise BoardError('UNSUPPORTED_SCHEMA', 'Upgrade accepts schema 12 only; no conversion was performed')
         active = connection.execute("SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')").fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
         if active or unresolved:

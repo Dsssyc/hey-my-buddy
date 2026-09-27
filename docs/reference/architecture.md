@@ -42,7 +42,7 @@ The CLI uses short names that map one-to-one onto those operations: `submit` →
 
 The local `worker-start` and `worker-stop` CLI commands start a supervisor or write its cooperative stop request directly. They do not use this RPC path.
 
-The transport DTO in the released C-Two 0.5.1 uses the Python pickle protocol for string arguments, so this is a **same-user Python API only**. It is not claimed to be cross-language portable, no FastDB DTO is used, and a non-Python client must define its own contract instead of relying on these payloads. Node-side bridges never connect to C-Two directly: the Python service is the client of the DSH bridges over private files and sockets.
+Buddy transports bounded JSON strings through C-Two 0.6.0's named Python operations. This is a same-user Python API only; no cross-language portability is claimed and no FastDB DTO is used. A non-Python client must define an explicit transport contract. Node-side bridges do not connect to C-Two directly: the Python service is their client over private files and sockets. This dependency update validates Buddy behavior without reviewing C-Two internals.
 
 ## Data model
 
