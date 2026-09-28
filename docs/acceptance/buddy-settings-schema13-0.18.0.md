@@ -9,7 +9,7 @@
 - schema 13 后端：`ed5650b`、`d1b8522`、`109ce5a`、`7d7bb2d`。偏好改为家族默认加档位覆盖（含 `none`），备注改为家族级，所有读取方通过 `effective_preferences` 视图取得生效偏好；`upgrade` 在校验过的备份之后、独占锁下单事务把 schema 12 迁移到 13，并校验迁移范围之外每张表的指纹；备份校验会在试验副本上验证迁移；`board_prepare` 接着执行同一迁移。启动时仍不做任何迁移。
 - 控制台：`6230316`、`0673229`、`58e9666`、`a00b806`，导航改为 委派记录 / Buddy 配置 / 设置。
 - 时间轴修复：`0ad0e72`。等待 Host 的运行（任务状态仍为 queued）不再同时画出未结束的排队段，排队段的斜纹曾盖住"等待 Host"标签；被取消请求的等待段以记录的取消时间结束；取消纹理只用于执行段。
-- 文档同步：`b8029c6`、`a00b806`；[ADR-017](../decisions/017-local-installation-and-harness-discovery.md) 为提议，未实现（`e61fa0b`）。
+- 文档同步：`b8029c6`、`a00b806`；[ADR-017](../decisions/017-local-installation-and-harness-discovery.md) 已被接受，尚未实现（`e61fa0b`）。
 
 ## 委派记录
 

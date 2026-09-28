@@ -25,7 +25,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-Daily [installation is 0.17.0/schema 12](acceptance/installed-0.17.0.md). The current 0.18.0 source candidate replaces the DSH tool-free decision helper with the harness-neutral [Router protocol](reference/decision.md), freezes the legal candidate ids into the answer schema, validates only the routing bounds, adds provisional `quick`/`standard`/`deep` budgets and verifies a private read-only input mirror. It also stores user preferences and notes per model family (schema 13, resolved by the `effective_preferences` view) and replaces the console's two settings pages with [Buddy 配置 and 设置](reference/evaluation.md#console-http-surface); the console pages and the schema change are implemented in source and not installed. Every native read-only structured capability is unverified and the candidate is not installed; the [0.17.0 source record](acceptance/router-read-only-routing-0.17.0.md) owns that evidence. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
+Daily [installation is 0.18.0/schema 13](acceptance/installed-0.18.0.md): the shared `buddy` skill in `~/.agents/skills` (linked from `~/.claude/skills`) replaced the retired Codex plugin. It carries the harness-neutral [Router protocol](reference/decision.md) introduced in 0.17.0 (legal candidate ids frozen into the answer schema, routing-bounds-only validation, provisional `quick`/`standard`/`deep` budgets, a private read-only input mirror), stores user preferences and notes per model family (schema 13, resolved by the `effective_preferences` view) and replaces the console's two settings pages with [Buddy 配置 and 设置](reference/evaluation.md#console-http-surface). Every native read-only structured capability is still unverified, so no Router model is available and default-routed delegations stop at the Host boundary; the [0.17.0 source record](acceptance/router-read-only-routing-0.17.0.md) owns that evidence and the pending probes. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
 
 | Document | Role |
 | --- | --- |
@@ -47,9 +47,9 @@ Daily [installation is 0.17.0/schema 12](acceptance/installed-0.17.0.md). The cu
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
-## Proposed design direction
+## Accepted design direction, not yet implemented
 
-[ADR-017: local installation, on-demand service and harness discovery](decisions/017-local-installation-and-harness-discovery.md) (proposed, not implemented) keeps every Worker on the local machine, starts the single service on demand from any Host but never from inside a Host sandbox, installs and updates through one versioned command that refuses while work is running, and makes the service find and handshake harness executables itself without running shell configuration files or storing environment values.
+[ADR-017: local installation, on-demand service and harness discovery](decisions/017-local-installation-and-harness-discovery.md) (accepted, not implemented) keeps every Worker on the local machine, starts the single service on demand from any Host but never from inside a Host sandbox, installs and updates through one versioned command that refuses while work is running, and makes the service find and handshake harness executables itself without running shell configuration files or storing environment values.
 
 ## Accepted design direction
 

@@ -2,7 +2,7 @@
 
 ## 状态
 
-提议：用户于 2026-09-28 在讨论中确认了下列方向，待审阅本文后接受。尚未实现，也未安装；实现、发布与日常安装都需另行授权。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
+已接受：用户于 2026-09-28 在讨论中确认了下列方向，并在审阅本文后接受。尚未实现，也未安装；实现、发布与日常安装都需另行授权。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
 
 ## 背景
 
