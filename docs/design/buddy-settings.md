@@ -79,6 +79,38 @@
 - 方案 A（建议先做）：不改 schema。家族层面的修改由界面展开为对该家族每个档位的同值写入；读取时若各档位值相同则显示为家族值，否则显示"各档位不同"。一次保存仍是一次发布，沿用现有的草稿、版本和冲突处理。
 - 方案 B：新增家族级偏好与备注的存储，档位级作为覆盖。语义更清楚，但需要 schema 变更和数据迁移，按现有规则需先停下来说明并取得用户同意。
 
+## 数据契约（schema 13，实现依据）
+
+存储：
+
+- `family_preferences(adapter, provider, model, mode, reason, updated_revision)`：家族默认偏好，`mode` 为 `prefer`、`pin` 或 `exclude`。
+- `evaluation_preferences(profile_id, mode, reason, updated_revision)`：改为档位覆盖，`mode` 增加 `none`（该档位明确不带偏好，即使家族有默认值）。
+- `family_annotations(adapter, provider, model, text, revision, updated_at)`：家族备注。`evaluation_annotations` 删除。
+- 视图 `effective_preferences(profile_id, mode, reason, source)`：档位有覆盖时取覆盖（`none` 视为无偏好，不出现在视图里），否则取家族默认；`source` 为 `override` 或 `family`。候选筛选、Router 输入、维护输入和控制台都读这个视图。
+- 家族以 `(adapter, provider, model)` 标识，与并发上限一致。
+
+控制台快照（`console_snapshot`）：
+
+- `familyPreferences: [{adapter, provider, model, mode, reason}]`
+- `preferenceOverrides: [{profileId, mode, reason}]`，`mode` 可为 `none`
+- `preferences: [{profileId, mode, reason, source}]`：生效偏好（来自视图），只读
+- `familyAnnotations: [{adapter, provider, model, text, revision, updatedAt}]`
+- 删除原来的 `annotations`；`profiles`、`cards`、`modelConcurrency`、`configuration`（含 `decisionProfileId` 与 `routingBudget`）不变。
+
+发布（`user_policy_publish`，字段补丁，未给出的字段不变）：
+
+- `familyPreferenceChanges: [{adapter, provider, model, mode, reason}]`：`mode` 为 `prefer`、`pin`、`exclude`，或 `null` 表示清除家族默认。
+- `preferenceChanges: [{profileId, mode, reason}]`：档位覆盖；`mode` 为 `prefer`、`pin`、`exclude`、`none`，或 `null` 表示删除覆盖、回到家族默认。
+- `familyAnnotationChanges: [{adapter, provider, model, text}]`：空文本表示清除。
+- 删除 `annotationChanges`；`profileSettings`（启用）、`configuration`、`modelConcurrency` 不变。
+- 固定（`pin`）的规则不变：只要有任何生效的固定，候选就只限于生效为固定的档位。
+
+迁移（12 → 13，在 `upgrade` 内、备份校验之后、独占锁下单事务完成）：
+
+- 偏好：一个家族的全部档位都有相同的 `mode` 和 `reason` 时，合并为家族默认并删除这些档位行；否则原样保留为档位覆盖。
+- 备注：同一家族只有一条或多条相同时直接作为家族备注；不同时按档位拼接为一条，每段标注来源档位，例如"（来自 high 档位）"，不截断。
+- 迁移后，除上述三张表和 `meta` 的版本号外，其余表的指纹必须与迁移前一致；任何一步失败都用迁移前的备份和旧运行时恢复。
+
 ## 已确认的决定（2026-09-28）
 
 1. 页面名称：Buddy 配置。
@@ -90,6 +122,3 @@
 
 7. 偏好的档位覆盖直接标在档位标签上：优先、固定、排除各用一种颜色，外加一个小图标或描边样式，不只靠颜色区分（与时间轴的无障碍规则一致）。家族层面的偏好作为默认，没有覆盖的档位不额外标记；不再显示"N 个档位不同"之类的文字。
 
-## 仍待讨论
-
-- 方案 B 的迁移：现有按档位保存的偏好和备注如何合并到家族层面（例如各档位相同时直接合并，不同时保留为档位覆盖，备注按档位拼接并注明来源）。
