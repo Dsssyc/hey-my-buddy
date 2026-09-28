@@ -13,6 +13,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from . import turn_io
 from ..runtime import resource_path
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 
-UNIX_SOCKET_PATH_BUDGET = 105 if os.uname().sysname == "Linux" else 101
+UNIX_SOCKET_PATH_BUDGET = 105 if sys.platform.startswith('linux') else 101
 TERMINATE_GRACE_SECONDS = 3.0
 
 
@@ -56,6 +57,11 @@ class DshAdapter(Adapter):
         record = selected("dsh")
         if record is not None:
             return record.get('status') == 'ready', record.get('reasonCode')
+        if not (os.environ.get('BUDDY_DEV_SOURCE') == '1' and os.environ.get('BUDDY_RUNNER_PATH')):
+            from ..harness_discovery import discover
+            detected = discover('dsh')
+            if not detected['available']:
+                return False, detected.get('remedy') or detected.get('reasonCode')
         if not node_binary():
             return False, "Node.js is required for the dsh runner; set BUDDY_NODE"
         try:
@@ -179,6 +185,10 @@ class DshAdapter(Adapter):
         for key in ('BUDDY_AGENT_CREDENTIAL_FILE', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_STATE_DIR', 'BUDDY_PYTHON', 'DSH_HOME'):
             if key in context.environment:
                 environment[key] = context.environment[key]
+        if os.environ.get('BUDDY_DEV_SOURCE') == '1' and os.environ.get('BUDDY_RUNNER_PATH'):
+            for key in ('DSH_BIN', 'MOCK_ARTIFACT_DIR', 'MOCK_STUB_SLEEP_SECONDS'):
+                if key in context.environment:
+                    environment[key] = context.environment[key]
         try:
             process = subprocess.Popen(
                 self.arguments(context, inquiry),

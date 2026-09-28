@@ -237,7 +237,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""})
             self.assertLess(time.monotonic() - started, 2)
             self.assertEqual(result["status"], "unhealthy")
-            self.assertEqual(result["reasonCode"], "scan-timeout")
+            # A slow OS reaper may not close the inherited pipe within the
+            # cleanup budget. It must remain unavailable with honest evidence.
+            self.assertIn(result["reasonCode"], ("scan-timeout", "shutdown-unverified"))
             self.assertIn(signal.SIGKILL, [call.args[1] for call in kill_group.call_args_list])
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")

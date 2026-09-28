@@ -583,14 +583,22 @@ class BoardService(_BaseResource):
     def _touch_harnesses(self, params, *, explicit=False):
         if not self.automatic_discovery:
             return
-        name = params.get('adapter')
-        if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and not self.harnesses.get(name)['available']:
-            self.harnesses.refresh(name, force=True)
+        specs = [params]
+        specs.extend(params[key] for key in ('configuration', 'spec') if isinstance(params.get(key), dict))
+        if isinstance(params.get('helpers'), list):
+            specs.extend(helper.get('spec', helper) for helper in params['helpers'] if isinstance(helper, dict))
+        names = {spec.get('adapter') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('adapter'), str)}
+        for name in sorted(names):
+            if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and not self.harnesses.get(name)['available']:
+                self.harnesses.refresh(name, force=True)
         self.harnesses.kick()
 
     # -- decisions ----------------------------------------------------------
     def selection_request(self, request_json: str) -> str:
-        return self._guard("selection.request", request_json, self.decisions.request_select)
+        def handler(params):
+            self._touch_harnesses(params, explicit=True)
+            return self.decisions.request_select(params)
+        return self._guard("selection.request", request_json, handler)
 
     def selection_get(self, request_json: str) -> str:
         return self._guard("selection.get", request_json, self.decisions.get)
@@ -642,6 +650,7 @@ class BoardService(_BaseResource):
 
     def workflow_decide(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
+            self._touch_harnesses(params, explicit=True)
             return self.store.workflow.decide(
                 params, console_authority=workflow_module.console_authority_from_scope()
             )
@@ -650,6 +659,7 @@ class BoardService(_BaseResource):
 
     def workflow_continue(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
+            self._touch_harnesses(params, explicit=True)
             return self.store.workflow.continue_run(
                 params, console_authority=workflow_module.console_authority_from_scope()
             )

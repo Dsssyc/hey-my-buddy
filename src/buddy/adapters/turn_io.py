@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import secrets
 import uuid
 from pathlib import Path
@@ -103,7 +104,7 @@ def workspace_cwd(context: ExecutionContext) -> str:
 #: ``sun_path`` budget for a private Unix socket. The attempt directory can be
 #: deep, so callers fall back to a short temp directory and keep the credentials
 #: (not the socket) in the attempt directory the service reads.
-UNIX_SOCKET_PATH_BUDGET = 105 if os.uname().sysname == "Linux" else 101
+UNIX_SOCKET_PATH_BUDGET = 105 if sys.platform.startswith("linux") else 101
 
 
 def inquiry_paths(context: ExecutionContext) -> dict:

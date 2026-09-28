@@ -63,3 +63,11 @@ class HarnessServiceTests(BoardTestCase):
         self.assertEqual(saved['harness']['manualPath'], '/custom/codex')
         refused = self.call('harness_set', adapter='codex', path='/other/codex', expectedRevision=0)
         self.assertEqual(refused['error']['code'], 'REVISION_CONFLICT')
+
+    def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
+        with patch.object(self.board.workflow, 'continue_run', return_value={}), \
+             patch.object(self.board.workflow, 'decide', return_value={}), \
+             patch.object(self.service.harnesses, 'refresh') as refresh:
+            self.call('workflow_continue', configuration={'adapter': 'codex'})
+            self.call('workflow_decide', helpers=[{'spec': {'adapter': 'dsh'}}])
+        self.assertEqual([call.args[0] for call in refresh.call_args_list], ['codex', 'dsh'])

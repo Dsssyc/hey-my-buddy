@@ -17,6 +17,7 @@ Example::
 from __future__ import annotations
 
 import os
+import socket
 import secrets
 import uuid
 from pathlib import Path
@@ -119,7 +120,7 @@ class BoardClient:
                 "adapter": adapter,
                 "capabilities": capabilities if capabilities is not None else [adapter],
                 "pid": pid if pid is not None else os.getpid(),
-                "host": os.uname().nodename,
+                "host": socket.gethostname(),
                 "commandId": command_id,
             },
         )

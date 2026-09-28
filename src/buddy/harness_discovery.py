@@ -480,6 +480,10 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
 
 
 def _launch_command(path: Path, environment: dict) -> list[str] | None:
+    if os.name == 'nt' and path.suffix.lower() == '.cmd':
+        import ntpath
+        command = ntpath.join(environment.get('SYSTEMROOT') or r'C:\Windows', 'System32', 'cmd.exe')
+        return [command, '/d', '/s', '/c', str(path)]
     if path.suffix.lower() == ".ps1":
         shell = shutil.which("pwsh", path=environment.get("PATH")) or shutil.which(
             "powershell.exe", path=environment.get("PATH"))
