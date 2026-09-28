@@ -20,7 +20,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture()
-        self.enterContext(patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)))
+        DecisionTestCase.use_helper(self)
 
     def routed(self, board, *, request_id="route-1", **constraints):
         response = board.call("workflow_submit", {
@@ -31,6 +31,10 @@ class TestWorkflowRouting(WorkflowTestCase):
         if response.get("control"):
             self.controls[response["runId"]] = response["control"]
         return response
+
+    def prepare_reroute(self, board, view):
+        board.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
+        return board.call("workflow_get", {"runId": view["runId"]})
 
     def router_claim(self, board, view, *, claim_id="router-1"):
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
@@ -43,6 +47,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
             "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+                       "inputVerification": {"unchanged": True, "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
@@ -140,6 +145,12 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board)
         self.seed(board)
         continued = self.continue_run(board, submitted, reroute=True)
+        self.assertIsNone(continued["routing"]["decisionId"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
+            event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='workflow.continued' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+            self.assertTrue(event["reroute"])
+        continued = self.prepare_reroute(board, continued)
         self.assertEqual(continued["routing"]["status"], "queued")
         self.assertNotEqual(continued["routing"]["decisionId"], submitted["routing"]["decisionId"])
         self.assertTrue(self.continue_run(board, submitted, reroute=True)["duplicate"])
@@ -279,7 +290,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION, reason="Host attempted to configure an unrelated goal")
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
 
-    def test_pending_writer_gate_then_routing_uses_new_configuration_revision(self):
+    def test_pending_writer_gate_fences_changed_router_instead_of_refreshing_frozen_input(self):
         board = self.board()
         self.seed(board)
         revision = board.call("console_snapshot", {})["tableRevision"]
@@ -293,8 +304,17 @@ class TestWorkflowRouting(WorkflowTestCase):
             "configuration": {"decisionProfileId": SECOND_PROFILE_ID},
         })
         claimed = self.router_claim(board, submitted, claim_id="after-writer")
-        self.assertEqual(claimed["claim"]["decisionInput"]["profile"]["model"], SECOND_PROFILE["model"])
-        self.select(board, claimed, profile_id=SECOND_PROFILE_ID)
+        self.assertIsNone(claimed["claim"])
+        old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
+        self.assertEqual(old["status"], "stale")
+        self.assertEqual(old["input"]["profile"]["model"], PROFILE["model"])
+        self.assertEqual(old["input"]["tableRevision"], revision)
+        current = board.call("workflow_get", {"runId": submitted["runId"]})
+        pending = self.continue_run(board, current, command_id="reroute-new-router", reroute=True)
+        continued = self.prepare_reroute(board, pending)
+        fresh = self.router_claim(board, continued, claim_id="new-router")
+        self.assertEqual(fresh["claim"]["decisionInput"]["profile"]["model"], SECOND_PROFILE["model"])
+        self.select(board, fresh, profile_id=SECOND_PROFILE_ID)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["tableRevision"], revision + 1)
         self.assertEqual(view["routing"]["configurationRevision"], 2)
@@ -415,8 +435,10 @@ class TestWorkflowRouting(WorkflowTestCase):
         audit = board.call("selection_get", {"decisionId": decision_id, "includeAudit": True})["decision"]
         self.assertEqual([profile["profileId"] for profile in audit["input"]["profiles"]], [SECOND_PROFILE_ID])
         self.assertEqual(audit["requestedProfile"]["model"], PROFILE["model"])
-        input_path = self.directory / "attempts" / decision_task["taskId"] / selected["routing"]["attemptId"] / "decision-input.json"
-        self.assertEqual(json.loads(input_path.read_text()), audit["input"])
+        control_path = self.directory / "attempts" / decision_task["taskId"] / selected["routing"]["attemptId"] / "mock-readonly.json"
+        self.assertEqual(json.loads(control_path.read_text())["document"], audit["input"])
+        self.assertTrue(audit["inputVerification"]["unchanged"])
+        self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
         self.assertEqual(worker.spool.pending(), [])
         self.assertTrue(self.routed(board, effort="high")["duplicate"])
         with board.store.db.read() as connection:
@@ -447,7 +469,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(decision["requested"]["taskReference"], reference)
         self.assertIsNone(decision["input"])
         self.assertIsNone(decision["attemptId"])
-        self.assertLess(len(json.dumps(decision["requested"])), 1024)
+        self.assertLess(len(json.dumps(decision["requested"])), 4096)
+        self.assertNotIn(task, json.dumps(decision["requested"]))
         worker = Worker("oversized-router", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
         with patch("buddy.adapters.decision.DecisionAdapter.start") as start:

@@ -44,7 +44,6 @@ from buddy.store import BoardStore
 from buddy.worker import supervisor as supervisor_module
 from buddy.worker.worker import ReceiptSpool, Worker
 
-MOCK_HELPER = Path(__file__).resolve().parent / "fixtures" / "mock_decision_helper.py"
 
 PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
 PROFILE = {
@@ -120,25 +119,8 @@ class CapacityTestCase(BoardTestCase):
         self.use_decision_helper()
 
     def use_decision_helper(self, **mode: str) -> None:
-        keys = (
-            "BUDDY_DECISION_HELPER",
-            "MOCK_DECISION_MODE",
-            "MOCK_DECISION_PROFILE_ID",
-            "MOCK_DECISION_SLEEP",
-        )
-        previous = {key: os.environ.get(key) for key in keys}
-        os.environ["BUDDY_DECISION_HELPER"] = str(MOCK_HELPER)
-        for key, value in mode.items():
-            os.environ[f"MOCK_DECISION_{key.upper()}"] = value
-
-        def restore() -> None:
-            for key, value in previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-
-        self.addCleanup(restore)
+        from fixtures import mock_readonly
+        mock_readonly.install(self, **mode)
 
     def seed_evaluation(self, board, *, model_limit: int | None = None) -> dict:
         """Enable one discovered profile through a registered console session."""
@@ -927,13 +909,30 @@ class DaemonPoolTests(CapacityTestCase):
             self.release_gate("overlap-3")
             self.assertTrue(wait_for(lambda: client.get(runId=third)["status"] == "completed", timeout=90))
 
+    def readonly_bootstrap_path(self):
+        # Test-only Python startup instrumentation reaches the independent daemon
+        # and supervisors without adding a production capability override.
+        root = self.directory / 'mock-native-startup'
+        root.mkdir()
+        (root / 'sitecustomize.py').write_text(
+            'from contextlib import ExitStack\nfrom types import SimpleNamespace\n'
+            'from fixtures.mock_readonly import install\n'
+            '_patches = ExitStack()\n_fixture = SimpleNamespace(enterContext=_patches.enter_context)\n'
+            'install(_fixture)\n'
+            'import os\nfrom buddy import runtime\n_original = runtime.launch_target\n'
+            'def _launch(*args, **kwargs):\n'
+            '    target = _original(*args, **kwargs)\n'
+            '    return {**target, "pythonPath": os.environ["PYTHONPATH"]}\n'
+            'runtime.launch_target = _launch\n')
+        return os.pathsep.join([str(root), str(Path(__file__).resolve().parent), str(Path(__file__).resolve().parents[2] / 'src')])
+
     def test_decision_completes_on_the_pool_with_a_free_total_slot(self):
         catalog = self.catalog_fixture()
         env = {
             "BUDDY_WORKER_ID": "local",
             "BUDDY_MAX_CONCURRENT": "3",
             "BUDDY_MODEL_CATALOG_FILE": str(catalog),
-            "BUDDY_DECISION_HELPER": str(MOCK_HELPER),
+            "PYTHONPATH": self.readonly_bootstrap_path(),
         }
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()

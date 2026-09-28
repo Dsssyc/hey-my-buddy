@@ -338,7 +338,7 @@ class BoardService(_BaseResource):
                         "authority and code-owned counters are never changed by a model"
                     ),
                     "decisionModelIdentity": (
-                        "the bounded decision helper reports the requested and resolved configuration; the served "
+                        "the Router records its requested and resolved configuration; the served "
                         "identity is unknown and is never invented"
                     ),
                     "osIsolation": (

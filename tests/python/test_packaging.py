@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "bin" / "buddy"
-REQUIRED_RESOURCES = {"dsh.runner", "dsh.catalog", "dsh.decision", "yaml.bridge", "console.assets"}
+REQUIRED_RESOURCES = {"dsh.runner", "dsh.catalog", "yaml.bridge", "console.assets"}
 
 
 def load_stage_plugin():

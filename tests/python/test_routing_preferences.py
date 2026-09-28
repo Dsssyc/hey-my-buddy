@@ -5,13 +5,17 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from buddy import schemas
-from buddy.adapters.base import Adapter, ExecutionContext
+from buddy.adapters.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
 from buddy.adapters.decision import DecisionAdapter
 from buddy.adapters.dsh import DshAdapter
 from buddy.adapters.codex import CodexAdapter
+from buddy.adapters.claude import ClaudeAdapter
+from buddy.adapters.zcode import ZcodeAdapter
+from buddy import router
 from buddy.errors import BoardError
 from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
 from test_workflow import CONFIGURATION, WorkflowTestCase
@@ -53,27 +57,67 @@ class RoutingPreferenceSchemaTests(unittest.TestCase):
 
 
 class DecisionCapabilityTests(unittest.TestCase):
-    def test_only_verified_native_adapters_declare_decision_execution(self):
-        self.assertTrue(DshAdapter.decision_execution)
-        self.assertFalse(CodexAdapter.decision_execution)
-        self.assertFalse(Adapter.decision_execution)
+    def test_native_verification_defaults_false_including_dsh(self):
+        for native in (Adapter, DshAdapter, CodexAdapter, ClaudeAdapter, ZcodeAdapter):
+            with self.subTest(native=native.name):
+                self.assertFalse(native.read_only_structured_verified)
+        self.assertFalse(DshAdapter.read_only_structured)
+        self.assertTrue(CodexAdapter.read_only_structured)
+        self.assertTrue(ClaudeAdapter.read_only_structured)
+        self.assertFalse(DecisionAdapter().available()[0])
 
-    def test_decision_attempt_dispatches_through_registered_capability(self):
+    def test_decision_dispatches_generic_request_with_frozen_input_and_no_agent_authority(self):
         class Native(Adapter):
             name = "native-fixture"
-            decision_execution = True
+            read_only_structured = True
+            read_only_structured_verified = True
 
-            def decision_available(self):
-                return True, None
+            def start_read_only_structured(self, context, request):
+                calls.append((context, request))
+                return SimpleNamespace()
 
-            def start_decision(self, context):
-                return "native-handle"
+        calls = []
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "attempt"
+            frozen = Path(root) / "frozen"
+            frozen.mkdir()
+            manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
+            budget = router.budget("quick")
+            document = {"profile": {"adapter": "native-fixture", "provider": "fixture", "model": "model", "effort": "off"},
+                        "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([PROFILE_ID]),
+                        "profiles": [{"profileId": PROFILE_ID}], "task": "bounded read"}
+            context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
+                                       spec={"cwd": root, "timeoutSeconds": 60}, directory=directory,
+                                       runtime={}, environment={}, decision_input=document,
+                                       turn={"input": {}}, agent_credential="must-not-pass")
+            with mock.patch("buddy.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
+                "buddy.adapters.adapter", return_value=Native()
+            ):
+                handle = DecisionAdapter().start(context)
+            prepare.assert_called_once_with(manifest, directory)
+            child, request = calls[0]
+            self.assertIsInstance(request, ReadOnlyStructuredRequest)
+            self.assertEqual(request.cwd, str(frozen))
+            self.assertEqual(request.prompt, router.render_prompt(document))
+            self.assertEqual(request.output_schema, document["outputSchema"])
+            self.assertEqual(request.budget, budget)
+            self.assertIsNone(child.turn)
+            self.assertIsNone(child.agent_credential)
+            self.assertEqual(child.spec["model"], "model")
+            self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
 
+    def test_unverified_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
-                                   spec={"cwd": "/tmp", "timeoutSeconds": 10}, directory=Path("/tmp/unused"),
-                                   runtime={}, environment={}, decision_input={"profile": {"adapter": "native-fixture"}})
-        with mock.patch.object(DecisionAdapter, "prepare"), mock.patch("buddy.adapters.adapter", return_value=Native()):
-            self.assertEqual(DecisionAdapter().start(context), "native-handle")
+                                   spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
+                                   decision_input={"profile": {"adapter": "codex"}})
+        with mock.patch("buddy.adapters.adapter", return_value=CodexAdapter()), mock.patch(
+            "buddy.router_input.prepare"
+        ) as prepare, mock.patch.object(CodexAdapter, "start_read_only_structured") as start:
+            with self.assertRaises(BoardError) as raised:
+                DecisionAdapter().start(context)
+        self.assertEqual(raised.exception.code, "UNSUPPORTED_ADAPTER")
+        prepare.assert_not_called()
+        start.assert_not_called()
 
 
 class RoutingPreferenceWorkflowTests(WorkflowTestCase):
@@ -85,7 +129,6 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
         super().setUp()
         self.catalog_fixture()
         self.use_helper()
-        self.enterContext(mock.patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)))
 
     @staticmethod
     def annotations(board):
@@ -121,6 +164,7 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
             "generation": claim["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
             "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+                       "inputVerification": {"unchanged": True, "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
                        "decision": self.valid_decision(document, profile_id)},
         })
         return document
@@ -140,7 +184,7 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
         self.assertEqual(routed["routing"]["routingPreferences"], prefs)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM evaluation_preferences").fetchone()[0], 0)
-            self.assertEqual(connection.execute("SELECT reason FROM workflow_routes WHERE run_id=?", (view["runId"],)).fetchone()[0].find("task preference: fallback") > 0, True)
+            self.assertEqual(connection.execute("SELECT reason FROM workflow_routes WHERE run_id=?", (view["runId"],)).fetchone()[0], "fixture selection")
 
     def test_direct_selection_request_freezes_preferences_in_decision_input(self):
         board = self.board()

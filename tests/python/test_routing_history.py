@@ -28,9 +28,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
-        self.enterContext(
-            patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None))
-        )
+        DecisionTestCase.use_helper(self)
 
     # -- driven helpers -----------------------------------------------------
     def routed(self, board, *, request_id="route-1", **constraints):
@@ -43,6 +41,10 @@ class RoutingHistoryTestCase(WorkflowTestCase):
             self.controls[response["runId"]] = response["control"]
         return response
 
+    def prepare_reroute(self, board, view):
+        board.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
+        return board.call("workflow_get", {"runId": view["runId"]})
+
     def router_claim(self, board, view, *, claim_id="router-1"):
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         return self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id=claim_id)
@@ -54,6 +56,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
             "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+                       "inputVerification": {"unchanged": True, "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
@@ -123,6 +126,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         view = submitted
         for index in range(1, 22):
             view = self.continue_run(board, view, command_id=f"reroute-{index}", reroute=True)
+            view = self.prepare_reroute(board, view)
             decision_ids.append(view["routing"]["decisionId"])
         self.assertEqual(len(set(decision_ids)), 22)
 
@@ -270,7 +274,8 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(frozen_config["executionConfigurationRevision"], 1)
 
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
+        pending = self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
+        self.prepare_reroute(board, pending)
         history = self.history(board, submitted["runId"], limit=2)
         self.assertEqual(history["total"], 2)
         newest, frozen = history["entries"]

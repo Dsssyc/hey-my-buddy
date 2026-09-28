@@ -1,28 +1,10 @@
-"""Durable decision orchestration over the real Worker/attempt/capacity system.
+"""Durable Router attempts with Python-owned frozen inputs and boundary checks.
 
-A *selection* recommendation is not a second execution engine. The service records a
-decision, admits the selection reader lease it needs, and then creates one ordinary
-task whose adapter is the narrow :mod:`buddy.adapters.decision` helper. The existing
-independent worker claims it, consumes real ``BUDDY_MAX_CONCURRENT`` capacity, owns
-the helper process handle, enforces the deadline and reports a durable receipt.
-Python remains the only writer of authoritative state: the decision row and the
-reader release are committed inside the *same* transaction as the worker's result,
-never as a side effect of a GET.
-
-Evaluation maintenance is **not** executed here. An external Harness prepares
-bounded facts through ``EvaluationStore.prepare``, synthesizes card text under the
-buddy skill, and commits a card-only patch through the ordinary evaluation writer
-gate. Historical ``kind='maintain'`` decisions remain read-only history through
-``selection_get``/``selection_list``; no maintenance request spawns an internal
-decision task, holds a writer lease or calls a model.
-
-The split of responsibilities is deliberate:
-
-* selection readers are admitted only when a queued selection can actually execute,
-  on a complete current revision, and are fenced with the attempt lifecycle;
-* every helper output is untrusted input: candidates and evidence references are
-  re-validated in Python before one atomic recommendation, and anything outside the
-  bounded policy becomes ``needs-host``.
+The blackboard owns publication, reader leases and atomic terminal events. The
+Worker runtime owns native handles, budgets, input verification and stop receipts.
+Router answers choose a legal configuration or abstain; preference judgments are
+recorded, never used as an additional veto. Historical maintenance records remain
+readable but cannot start model work.
 """
 from __future__ import annotations
 
@@ -71,7 +53,7 @@ MAX_DECISION_REASON = 2000
 MAX_DECISION_EVIDENCE_IDS = 32
 ANSWER_VALIDATION_CODES = frozenset({
     "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
-    "answer-unexpected-field", "answer-profile-not-candidate", "answer-evidence-not-supplied",
+    "answer-unexpected-field",
 })
 #: Harness bounds mirrored from the decision helper's request validation. They are
 #: the hard ceiling for one bounded selection request, never a silent truncation
@@ -253,13 +235,7 @@ class DecisionCoordinator:
             "strengths": json.loads(row["strengths_json"]),
             "limitations": json.loads(row["limitations_json"]),
             "risks": json.loads(row["risks_json"]),
-            "evidence": json.loads(row["evidence_ids_json"]),
-            "policyCheck": (output or {}).get("policyCheck"),
-            "budget": request.get("budget"),
-            "usage": (output or {}).get("usage"),
-            "nativeIdentity": (output or {}).get("nativeIdentity"),
-            "stopEvidence": (output or {}).get("stopEvidence"),
-            "inputVerification": (output or {}).get("inputVerification"),
+            "evidenceIds": json.loads(row["evidence_ids_json"]),
             "sampleCount": int(row["sample_count"]),
             "updatedAt": row["updated_at"],
         }
@@ -499,17 +475,15 @@ class DecisionCoordinator:
         task_text, _size = schemas.bounded_text(params, "task", max_bytes=MAX_DECISION_TASK_BYTES)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
         routing_preferences = schemas.normalize_routing_preferences(params.get("routingPreferences", []))
-        with self.db.read() as connection:
-            default_timeout = router.configured_budget(connection)["timeoutSeconds"]
         timeout = schemas.optional_int(
-            params, "timeoutSeconds", default_timeout, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
+            params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
         )
         request = {
             "kind": "select",
             "task": task_text,
             "requiredCapabilities": capabilities,
             "routingPreferences": routing_preferences,
-            "timeoutSeconds": timeout,
+            "timeoutSeconds": timeout if "timeoutSeconds" in params else None,
         }
         return self._create(request_id, request)
 
@@ -532,7 +506,8 @@ class DecisionCoordinator:
             now = self._now()
             state = self._state(connection)
             request = {**request, "budget": router.configured_budget(connection)}
-            request["budget"]["timeoutSeconds"] = request.get("timeoutSeconds", request["budget"]["timeoutSeconds"])
+            request["timeoutSeconds"] = request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
+            request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
             available, unavailable_reason = self._adapter_available() if needs_host_reason is None else (True, None)
             profile_row, profile_reason = self._decision_profile(connection) if needs_host_reason is None else (None, None)
             # A writer intent means the table is about to move. The request is created
@@ -557,8 +532,8 @@ class DecisionCoordinator:
                 reason = needs_host_reason
             elif not available:
                 status = "needs-host"
-                error = f"ADAPTER_UNAVAILABLE: {unavailable_reason or 'the bounded decision helper is unavailable'}"
-                reason = "the bounded decision helper is not available in this build, so no model call was made"
+                error = f"ADAPTER_UNAVAILABLE: {unavailable_reason or 'the Router executor is unavailable'}"
+                reason = "the Router executor is not available in this build, so no model call was made"
             elif profile_row is None:
                 status = "needs-host"
                 reason = profile_reason or NEEDS_HOST_NO_PROFILE
@@ -816,7 +791,7 @@ class DecisionCoordinator:
             " input_json=?, input_sha256=?, considered_evidence=?, pending_after=?, updated_at=?"
             " WHERE decision_id=?",
             (
-                int(self._state(connection)["configuration_revision"]),
+                int(row["configuration_revision"]),
                 attempt_id,
                 generation,
                 reader_id,
@@ -995,8 +970,6 @@ class DecisionCoordinator:
     def _complete(self, connection: sqlite3.Connection, *, row: sqlite3.Row, task: sqlite3.Row, attempt: sqlite3.Row, status: str, result: Any, shutdown_confirmed: bool, error: str | None, now: str) -> dict[str, Any]:
         summary: dict[str, Any] = {"decisionId": row["decision_id"], "kind": row["kind"], "status": row["status"]}
         output = result if isinstance(result, dict) else None
-        if output is not None:
-            output = selection_policy.sanitize_diagnostics(output, json.loads(row["input_json"]) if row["input_json"] else {})
         if row["status"] in TERMINAL_DECISION_STATUSES:
             # A late or superseded result is retained for audit and never published.
             if output is not None:
@@ -1112,7 +1085,7 @@ class DecisionCoordinator:
         evidence_ids = decision["evidence"]
         if profile_id is None:
             self._finish(connection, row, status="needs-host", output={**output, "policyCheck": None},
-                         now=now, reason=reason)
+                         now=now, reason=reason, evidence_ids=evidence_ids)
             return
         request = json.loads(row["requested_json"])
         current_ids = {item["profile_id"] for item in self._select_candidates(
@@ -1150,7 +1123,7 @@ class DecisionCoordinator:
         if outcome == "matched":
             preference_reason = routing_preferences[rule_index]["reason"]
         elif outcome == "alternative":
-            preference_reason = "The selector chose another legal candidate despite a matching task preference"
+            preference_reason = reason
         elif outcome == "fallback":
             preference_reason = "No task preference matched a legal candidate"
         else:
@@ -1159,7 +1132,6 @@ class DecisionCoordinator:
             selected["routingPreference"] = {
                 "status": outcome, "ruleIndex": rule_index, "reason": preference_reason,
             }
-            reason = f"{reason[:MAX_DECISION_REASON - 160]} [task preference: {outcome}; rule {rule_index}]"
         self._finish(
             connection, row, status="completed", output=output, now=now,
             reason=reason, profile_id=profile_id, evidence_ids=evidence_ids, selected=selected,
@@ -1293,7 +1265,7 @@ class DecisionCoordinator:
             abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
                          and isinstance(decision, dict) and decision.get("profileId", False) is None
                          and set(decision) == {"profileId", "reason", "evidence"})
-            special = output.get("code") in special_counts
+            special = row["kind"] in ("decision.failed", "decision.needs_host") and output.get("code") in special_counts
             if special:
                 special_counts[output["code"]] += 1
             is_failure = not special and (row["kind"] == "decision.failed" or
@@ -1409,6 +1381,9 @@ class DecisionCoordinator:
         output = json.loads(row["output_json"]) if row["output_json"] else None
         request = json.loads(row["requested_json"]) if row["requested_json"] else {}
         selected = json.loads(row["selected_json"]) if row["selected_json"] else None
+        references = json.loads(row["evidence_ids_json"])
+        evidence = references if isinstance(references, list) and all(
+            isinstance(item, dict) and set(item) == {"kind", "ref"} for item in references) else None
         view: dict[str, Any] = {
             "decisionId": row["decision_id"],
             "requestId": row["request_id"],
@@ -1433,7 +1408,7 @@ class DecisionCoordinator:
             ),
             "noOp": bool(row["status"] == "completed" and row["published_revision"] is None and row["kind"] == "maintain"),
             "reason": row["reason"],
-            "evidence": json.loads(row["evidence_ids_json"]),
+            "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
             "budget": request.get("budget"),
             "usage": (output or {}).get("usage"),

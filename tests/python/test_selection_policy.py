@@ -1,12 +1,4 @@
-"""Bounded routing policy facts and the typed model check: unit coverage.
-
-The selector's historical bugs are regression tests here at the pure-policy
-level: a positive DSH task preference can never be stated as a fallback or an
-exclusion while a legal DSH candidate exists, and a constraint invented from a
-DSH filename or task text has no path into the facts. Acceptance and refusal
-are decided by program-derived facts only; the qualitative reason text is never
-parsed.
-"""
+"""Program-owned routing facts and generic Router answer boundaries."""
 from __future__ import annotations
 
 import copy
@@ -30,274 +22,148 @@ DISABLED_DSH_PROFILE = {**DSH_HIGH_PROFILE, "profileId": "dsh:deepseek-official:
 UNAVAILABLE_ZCODE_PROFILE = {**ZCODE_PROFILE, "profileId": "zcode:zai-api:GLM-5.3-Flash:low", "effort": "low", "available": False}
 POSITIVE_DSH_RULE = [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness for this task"}]
 ABSENT_PROVIDER_RULE = [{"match": {"provider": "not-installed"}, "reason": "Try this provider when available"}]
-EMPTY_SUPPORT = {"cardProfileIds": [], "annotationProfileIds": []}
-
-
 def derived_facts(profiles=(DSH_PROFILE, ZCODE_PROFILE), routing_preferences=(), prefer=(), hard=None):
     return selection_policy.policy_facts(
-        profiles=list(profiles),
-        routing_preferences=list(routing_preferences),
-        prefer_profile_ids=list(prefer),
-        hard_constraints=hard or {},
-    )
-
-
-def answer(profile_id, check, *, evidence=(), support=None):
-    return {
-        "profileId": profile_id,
-        "reason": "grounded in the supplied table",
-        "evidenceIds": list(evidence),
-        "policyCheck": check,
-        "support": support or EMPTY_SUPPORT,
-    }
-
-
-def validate(decision, profile_facts, routing_preferences=(), cards=(), annotations=()):
-    return selection_policy.validate_decision(
-        decision, profile_facts, routing_preferences, set(cards), set(annotations),
+        profiles=list(profiles), routing_preferences=list(routing_preferences),
+        prefer_profile_ids=list(prefer), hard_constraints=hard or {},
     )
 
 
 class PolicyFactsTests(unittest.TestCase):
-    def test_input_shaped_echo_never_controls_the_program_derived_check(self):
-        for rules, prefer in (([], []), (POSITIVE_DSH_RULE, []), ([], [DSH_ID])):
-            with self.subTest(rules=rules, prefer=prefer):
-                facts = derived_facts(profiles=(DSH_PROFILE,), routing_preferences=rules, prefer=prefer)
-                echoed = {"hardConstraints": facts["hardConstraints"],
-                          "taskPreference": {**facts["taskPreference"], "outcome": "matched"},
-                          "userPreference": "none"}
-                expected = selection_policy.expected_policy_check(facts, rules, DSH_ID)
-                check, support, failure = validate(answer(DSH_ID, echoed), facts, rules)
-                self.assertIsNone(failure)
-                self.assertEqual(check, expected)
-                self.assertEqual(support, EMPTY_SUPPORT)
-                minimal = answer(DSH_ID, echoed)
-                del minimal["policyCheck"]
-                self.assertEqual(validate(minimal, facts, rules), (expected, EMPTY_SUPPORT, None))
+    def test_positive_dsh_preference_matches_legal_dsh(self):
+        facts = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
+        self.assertEqual(facts["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]})
+        self.assertEqual(facts["hardConstraints"], {})
+        check = selection_policy.expected_policy_check(facts, POSITIVE_DSH_RULE, DSH_ID)
+        self.assertEqual(check["taskPreference"], {"ruleIndex": 0, "outcome": "matched"})
+        self.assertEqual(check["userPreference"], "none")
 
-    def test_positive_dsh_preference_matches_legal_dsh_and_cannot_be_inverted(self):
-        derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
-        self.assertEqual(derived["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]})
-        self.assertEqual(derived["hardConstraints"], {})
-        expected = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
-        self.assertEqual(expected["taskPreference"], {"ruleIndex": 0, "outcome": "matched"})
-        self.assertEqual(expected["userPreference"], "none")
-        # An echo can no longer invert program-owned facts.
-        for outcome in ("fallback", "none", "avoided", "excluded", "avoid"):
-            with self.subTest(outcome=outcome):
-                inverted = {**expected, "taskPreference": {"ruleIndex": 0, "outcome": outcome}}
-                check, _, failure = validate(answer(DSH_ID, inverted), derived, POSITIVE_DSH_RULE)
-                self.assertIsNone(failure)
-                self.assertEqual(check, expected)
+    def test_absent_preferred_candidate_is_fallback_and_no_rules_is_none(self):
+        facts = derived_facts(routing_preferences=ABSENT_PROVIDER_RULE)
+        self.assertEqual(facts["taskPreference"], {"ruleIndex": None, "matchingProfileIds": []})
+        self.assertEqual(selection_policy.expected_policy_check(facts, ABSENT_PROVIDER_RULE, ZCODE_ID)["taskPreference"],
+                         {"ruleIndex": None, "outcome": "fallback"})
+        self.assertEqual(selection_policy.expected_policy_check(derived_facts(), [], ZCODE_ID)["taskPreference"],
+                         {"ruleIndex": None, "outcome": "none"})
 
-    def test_phantom_adapter_constraint_from_a_dsh_filename_is_refused(self):
-        derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
-        # Working on DSH source files adds no adapter constraint of its own.
-        self.assertEqual(derived["hardConstraints"], {})
-        expected = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
-        invented = {**expected, "hardConstraints": {"adapter": "dsh"}}
-        checked, _, failure = validate(answer(DSH_ID, invented), derived, POSITIVE_DSH_RULE)
-        self.assertIsNone(failure)
-        self.assertEqual(checked["hardConstraints"], {})
-        dropped = {**expected, "hardConstraints": {}}
-        derived_with_hard = derived_facts(routing_preferences=POSITIVE_DSH_RULE, hard={"effort": "high"})
-        checked, _, failure = validate(answer(DSH_ID, dropped), derived_with_hard, POSITIVE_DSH_RULE)
-        self.assertIsNone(failure)
-        self.assertEqual(checked["hardConstraints"], {"effort": "high"})
-
-    def test_matched_preference_is_accepted_with_the_exact_expected_check(self):
-        derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
-        check = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
-        policy_check, support, failure = validate(answer(DSH_ID, check), derived, POSITIVE_DSH_RULE)
-        self.assertIsNone(failure)
-        self.assertEqual(policy_check, check)
-        self.assertEqual(support, EMPTY_SUPPORT)
-
-    def test_absent_preferred_candidate_is_an_honest_fallback(self):
-        derived = derived_facts(routing_preferences=ABSENT_PROVIDER_RULE)
-        self.assertEqual(derived["taskPreference"], {"ruleIndex": None, "matchingProfileIds": []})
-        check = selection_policy.expected_policy_check(derived, ABSENT_PROVIDER_RULE, ZCODE_ID)
-        self.assertEqual(check["taskPreference"], {"ruleIndex": None, "outcome": "fallback"})
-        _, _, failure = validate(answer(ZCODE_ID, check), derived, ABSENT_PROVIDER_RULE)
-        self.assertIsNone(failure)
-        # The same shape without any supplied rules is "none", never "fallback".
-        plain = derived_facts()
-        check = selection_policy.expected_policy_check(plain, [], ZCODE_ID)
-        self.assertEqual(check["taskPreference"], {"ruleIndex": None, "outcome": "none"})
-        _, _, failure = validate(answer(ZCODE_ID, check), plain, [])
-        self.assertIsNone(failure)
-
-    def test_supported_alternative_is_accepted_and_unsupported_alternative_is_refused(self):
-        derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
-        check = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, ZCODE_ID)
+    def test_task_and_user_preferences_record_legal_alternatives_without_support(self):
+        facts = derived_facts(routing_preferences=POSITIVE_DSH_RULE, prefer=[DSH_ID])
+        check = selection_policy.expected_policy_check(facts, POSITIVE_DSH_RULE, ZCODE_ID)
         self.assertEqual(check["taskPreference"], {"ruleIndex": 0, "outcome": "alternative"})
-        _, _, failure = validate(answer(ZCODE_ID, check), derived, POSITIVE_DSH_RULE)
-        self.assertEqual(failure[0], selection_policy.POLICY_ALTERNATIVE_UNSUPPORTED)
-        _, _, failure = validate(
-            answer(ZCODE_ID, check, evidence=["ev-1"]),
-            derived, POSITIVE_DSH_RULE, cards=(), annotations=(),
-        )
-        self.assertIsNone(failure)
-        _, _, failure = validate(
-            answer(ZCODE_ID, check, support={"cardProfileIds": [], "annotationProfileIds": [DSH_ID]}),
-            derived, POSITIVE_DSH_RULE, annotations=(DSH_ID,),
-        )
-        self.assertIsNone(failure)
-        # An unsupported alternative on the user-preference axis is refused too.
-        user_derived = derived_facts(prefer=[DSH_ID])
-        user_check = selection_policy.expected_policy_check(user_derived, [], ZCODE_ID)
-        self.assertEqual(user_check["userPreference"], "alternative")
-        _, _, failure = validate(answer(ZCODE_ID, user_check), user_derived, [])
-        self.assertEqual(failure[0], selection_policy.POLICY_ALTERNATIVE_UNSUPPORTED)
-
-    def test_null_abstention_is_accepted_only_fully_empty(self):
-        abstention = {
-            "profileId": None, "reason": "no candidate is clearly better supported",
-            "evidenceIds": [], "policyCheck": None, "support": EMPTY_SUPPORT,
-        }
-        policy_check, support, failure = validate(abstention, derived_facts())
-        self.assertIsNone(failure)
-        self.assertIsNone(policy_check)
-        self.assertEqual(support, EMPTY_SUPPORT)
-        carrying = {**abstention, "policyCheck": {"hardConstraints": {}, "taskPreference": {"ruleIndex": None, "outcome": "none"}, "userPreference": "none"}}
-        checked, _, failure = validate(carrying, derived_facts())
-        self.assertIsNone(failure)
-        self.assertIsNone(checked)
-        _, _, failure = validate({**abstention, "support": {"cardProfileIds": [DSH_ID], "annotationProfileIds": []}}, derived_facts(), cards=(DSH_ID,))
-        self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
-        # Python enforces the empty evidenceIds contract independently of Node.
-        _, _, failure = validate({**abstention, "evidenceIds": ["ev-1"]}, derived_facts())
-        self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
-        _, _, failure = validate({**abstention, "evidenceIds": "ev-1"}, derived_facts())
-        self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
-
-    def test_unknown_or_unrelated_support_references_are_refused(self):
-        derived = derived_facts()
-        check = selection_policy.expected_policy_check(derived, [], DSH_ID)
-        _, _, failure = validate(
-            answer(DSH_ID, check, support={"cardProfileIds": ["ghost"], "annotationProfileIds": []}),
-            derived, [], cards=(DSH_ID,),
-        )
-        self.assertEqual(failure[0], selection_policy.POLICY_SUPPORT_UNKNOWN)
-        # A real supplied annotation for an unrelated candidate is still out of scope.
-        _, _, failure = validate(
-            answer(DSH_ID, check, support={"cardProfileIds": [], "annotationProfileIds": [ZCODE_ID]}),
-            derived, [], annotations=(ZCODE_ID,),
-        )
-        self.assertEqual(failure[0], selection_policy.POLICY_SUPPORT_UNKNOWN)
-        _, _, failure = validate(
-            answer(DSH_ID, check, support={"cardProfileIds": [DSH_ID, DSH_ID], "annotationProfileIds": []}),
-            derived, [], cards=(DSH_ID,),
-        )
-        self.assertEqual(failure[0], selection_policy.POLICY_SUPPORT_UNKNOWN)
-        oversized = {"cardProfileIds": [f"p-{index}" for index in range(selection_policy.MAX_SUPPORT_IDS + 1)], "annotationProfileIds": []}
-        _, _, failure = validate(answer(DSH_ID, check, support=oversized), derived, [], cards=tuple(oversized["cardProfileIds"]))
-        self.assertEqual(failure[0], selection_policy.POLICY_SUPPORT_UNKNOWN)
-
-    def test_pins_excludes_and_hard_filters_still_bind_preference_matching(self):
-        derived = derived_facts(
-            profiles=(DSH_PROFILE, DISABLED_DSH_PROFILE, UNAVAILABLE_ZCODE_PROFILE),
-            routing_preferences=POSITIVE_DSH_RULE,
-        )
-        self.assertEqual(
-            derived["taskPreference"],
-            {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]},
-            "a disabled or unavailable DSH profile can never carry the preference match",
-        )
-        derived = derived_facts(hard={"effort": "high"})
-        self.assertEqual(derived["hardConstraints"], {"effort": "high"})
-
-    def test_all_effort_variants_remain_user_controlled(self):
-        profiles = (DSH_PROFILE, DSH_HIGH_PROFILE)
-        derived = derived_facts(profiles=profiles, prefer=[DSH_ID])
-        check = selection_policy.expected_policy_check(derived, [], DSH_HIGH_ID)
         self.assertEqual(check["userPreference"], "alternative")
-        self.assertEqual(check["hardConstraints"], {}, "no effort or model constraint is invented")
-        _, _, failure = validate(
-            answer(DSH_HIGH_ID, check, support={"cardProfileIds": [], "annotationProfileIds": [DSH_ID]}),
-            derived, [], annotations=(DSH_ID,),
-        )
-        self.assertIsNone(failure, "a higher-effort variant stays a legal supported alternative, not a pin violation")
+        from buddy import router
+        answer = {"profileId": ZCODE_ID, "reason": "file evidence supports another route", "evidence": []}
+        self.assertEqual(router.validate_answer(answer, [DSH_ID, ZCODE_ID]), answer)
 
-    def test_user_preferences_and_annotations_are_untouched_and_facts_are_deterministic(self):
+    def test_hard_bounds_and_unavailable_profiles_do_not_create_preference_matches(self):
+        facts = derived_facts(profiles=(DSH_PROFILE, DISABLED_DSH_PROFILE, UNAVAILABLE_ZCODE_PROFILE),
+                              routing_preferences=POSITIVE_DSH_RULE, hard={"effort": "high"})
+        self.assertEqual(facts["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]})
+        self.assertEqual(facts["hardConstraints"], {"effort": "high"})
+
+    def test_first_matching_rule_has_a_program_integer_index(self):
+        rules = [*ABSENT_PROVIDER_RULE, *POSITIVE_DSH_RULE]
+        facts = derived_facts(routing_preferences=rules)
+        check = selection_policy.expected_policy_check(facts, rules, DSH_ID)
+        self.assertEqual(check["taskPreference"], {"ruleIndex": 1, "outcome": "matched"})
+        self.assertIs(type(check["taskPreference"]["ruleIndex"]), int)
+
+    def test_effort_variants_remain_user_controlled_alternatives(self):
+        facts = derived_facts(profiles=(DSH_PROFILE, DSH_HIGH_PROFILE), prefer=[DSH_ID])
+        check = selection_policy.expected_policy_check(facts, [], DSH_HIGH_ID)
+        self.assertEqual(check["userPreference"], "alternative")
+        self.assertEqual(check["hardConstraints"], {})
+
+    def test_facts_are_deterministic_and_never_mutate_user_inputs(self):
         profiles = [dict(DSH_PROFILE), dict(ZCODE_PROFILE)]
-        preferences = [{"profileId": DSH_ID, "mode": "prefer", "reason": "user preferred"}]
         rules = [{"match": {"adapter": "dsh"}, "reason": "positive"}]
-        frozen = (copy.deepcopy(profiles), copy.deepcopy(preferences), copy.deepcopy(rules))
-        first = derived_facts(profiles=profiles, routing_preferences=rules, prefer=[DSH_ID], hard={"effort": "off"})
-        second = derived_facts(profiles=profiles, routing_preferences=rules, prefer=[DSH_ID], hard={"effort": "off"})
-        self.assertEqual(first, second)
-        self.assertEqual((profiles, preferences, rules), frozen, "derivation never mutates its inputs")
-        check = selection_policy.expected_policy_check(first, rules, DSH_ID)
-        decision = answer(DSH_ID, check)
-        frozen_decision = copy.deepcopy(decision)
-        validate(decision, first, rules)
-        self.assertEqual(decision, frozen_decision)
-
-    def test_model_index_and_shape_never_override_derived_index(self):
-        derived = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
-        check = selection_policy.expected_policy_check(derived, POSITIVE_DSH_RULE, DSH_ID)
-        wrong_index = {**check, "taskPreference": {"ruleIndex": 1, "outcome": "matched"}}
-        checked, _, failure = validate(answer(DSH_ID, wrong_index), derived, POSITIVE_DSH_RULE)
-        self.assertIsNone(failure)
-        self.assertEqual(checked, check)
-        null_index = {**check, "taskPreference": {"ruleIndex": None, "outcome": "none"}}
-        checked, _, failure = validate(answer(DSH_ID, null_index), derived, POSITIVE_DSH_RULE)
-        self.assertIsNone(failure)
-        self.assertEqual(checked, check)
-        # Python bool is an int subclass and json parses 0.0 as float, so both
-        # would compare equal to the derived index 0 and reach list indexing:
-        # only an explicit null or non-bool integer in the derived range is legal.
-        for bad_index in (False, True, 0.0, 1.0, "0", 2):
-            with self.subTest(bad_index=bad_index):
-                typed = {**check, "taskPreference": {"ruleIndex": bad_index, "outcome": "matched"}}
-                checked, _, failure = validate(answer(DSH_ID, typed), derived, POSITIVE_DSH_RULE)
-                self.assertIsNone(failure)
-                self.assertIs(type(checked["taskPreference"]["ruleIndex"]), int)
-                self.assertEqual(checked, check)
-        for broken in (None, {}, {"hardConstraints": {}, "taskPreference": {"ruleIndex": 0, "outcome": "matched"}}):
-            with self.subTest(broken=broken):
-                checked, _, failure = validate(answer(DSH_ID, broken), derived, POSITIVE_DSH_RULE)
-                self.assertIsNone(failure)
-                self.assertEqual(checked, check)
-        _, _, failure = validate(answer(DSH_ID, check, support={"cardProfileIds": []}), derived)
-        self.assertEqual(failure[0], selection_policy.POLICY_CHECK_SHAPE)
-
-    def test_unknown_user_outcome_enum_is_replaced_by_program_outcome(self):
-        derived = derived_facts(prefer=[DSH_ID])
-        check = selection_policy.expected_policy_check(derived, [], DSH_ID)
-        checked, _, failure = validate({**answer(DSH_ID, check), "policyCheck": {**check, "userPreference": "deprioritized"}}, derived)
-        self.assertIsNone(failure)
-        self.assertEqual(checked, check)
+        prefer = [DSH_ID]
+        frozen = copy.deepcopy((profiles, rules, prefer))
+        first = derived_facts(profiles=profiles, routing_preferences=rules, prefer=prefer, hard={"effort": "off"})
+        self.assertEqual(first, derived_facts(profiles=profiles, routing_preferences=rules, prefer=prefer, hard={"effort": "off"}))
+        selection_policy.expected_policy_check(first, rules, DSH_ID)
+        self.assertEqual((profiles, rules, prefer), frozen)
 
 
-class DiagnosticTests(unittest.TestCase):
-    def diagnostic(self, text='{"profileId":"p1","reason":"<redacted>"}'):
-        return {"calls": 2, "failures": [{"code": "answer-shape", "answer": {
-            "text": text, "sha256": "a"*64, "bytes": 500, "redacted": True, "truncated": False,
-        }}]}
+class RouterAnswerTests(unittest.TestCase):
+    def answer(self, **changes):
+        return {"profileId": DSH_ID, "reason": "Read the frozen checkout", "evidence": [], **changes}
 
-    def test_bounded_structure_and_supplied_ids_survive_without_changing_decision(self):
-        diagnostics = self.diagnostic()
-        output = {"status": "ok", "decision": {"profileId": "p1"}, "diagnostics": diagnostics}
-        self.assertEqual(selection_policy.sanitize_diagnostics(output, {"profiles": [{"profileId": "p1"}]}), output)
-        self.assertEqual(output["diagnostics"], diagnostics)
+    def validate(self, value):
+        from buddy import router
+        return router.validate_answer(value, [DSH_ID, ZCODE_ID])
 
-    def test_redacted_flag_cannot_authorize_secret_text_or_unbounded_shape(self):
-        base = self.diagnostic()
-        variants = [self.diagnostic('{"reason":"SECRET-123"}'), self.diagnostic('{"profileId":"ghost"}'),
-                    self.diagnostic('{"reason":123456789}'), self.diagnostic('界'*1000),
-                    {**base, "calls": True}, {**base, "calls": 3}, {**base, "failures": base["failures"]*3}]
-        for diagnostics in variants:
-            with self.subTest(diagnostics=diagnostics):
-                output = selection_policy.sanitize_diagnostics({"status": "ok", "diagnostics": diagnostics}, {})
-                self.assertNotIn("diagnostics", output)
-                self.assertTrue(output["diagnosticsOmitted"])
-                self.assertEqual(output["status"], "ok")
+    def assert_code(self, code, answer):
+        from buddy.errors import BoardError
+        with self.assertRaises(BoardError) as caught:
+            self.validate(answer)
+        self.assertEqual(caught.exception.code, code)
 
-    def test_unparseable_text_never_leaves_the_sanitizer(self):
-        output = selection_policy.sanitize_diagnostics({"diagnostics": self.diagnostic('Bearer secret-token')}, {})
-        self.assertEqual(output["diagnostics"]["failures"][0]["answer"]["text"], "<unparsed-answer>")
+    def test_dict_and_json_string_answers_match_and_never_mutate_input(self):
+        import json
+        answer = self.answer(evidence=[{"kind": "file", "ref": "src/example.py"}])
+        frozen = copy.deepcopy(answer)
+        self.assertEqual(self.validate(answer), frozen)
+        self.assertEqual(self.validate(json.dumps(answer)), frozen)
+        self.assertEqual(answer, frozen)
+
+    def test_unknown_card_annotation_and_preference_references_are_allowed(self):
+        evidence = [{"kind": kind, "ref": "not-supplied"} for kind in ("card", "annotation", "preference")]
+        self.assertEqual(self.validate(self.answer(evidence=evidence))["evidence"], evidence)
+
+    def test_abstention_uses_same_shape_and_can_cite_files(self):
+        answer = self.answer(profileId=None, evidence=[{"kind": "file", "ref": "README.md"}])
+        self.assertEqual(self.validate(answer), answer)
+
+    def test_outside_frozen_candidates_is_rejected(self):
+        for value in ("ghost", "", 3, True, [], {}):
+            with self.subTest(value=value):
+                self.assert_code("router-out-of-bounds", self.answer(profileId=value))
+
+    def test_extra_legacy_fields_and_missing_required_fields_are_rejected(self):
+        for key in ("policyCheck", "support", "evidenceIds", "diagnostics"):
+            with self.subTest(key=key):
+                self.assert_code("answer-shape", self.answer(**{key: None}))
+        for key in ("profileId", "reason", "evidence"):
+            answer = self.answer()
+            del answer[key]
+            self.assert_code("answer-shape", answer)
+        for value in (None, [], "{not json", "[]"):
+            self.assert_code("answer-invalid-json" if value == "{not json" else "answer-shape", value)
+
+    def test_reason_and_reference_shape_are_bounded(self):
+        from buddy import router
+        for value in (None, "", "  ", 1, "x" * (router.MAX_REASON + 1)):
+            with self.subTest(reason=value):
+                self.assert_code("answer-shape", self.answer(reason=value))
+        invalid = [None, {}, "id", [{"kind": "card"}], [{"kind": "card", "ref": "a", "extra": 1}],
+                   [{"kind": "unknown", "ref": "a"}], [{"kind": "card", "ref": ""}],
+                   [{"kind": "card", "ref": "a\nsecret"}], [{"kind": "card", "ref": "a\x7f"}],
+                   [{"kind": "card", "ref": "x" * 1025}],
+                   [{"kind": "card", "ref": "a"}] * (router.MAX_REFERENCES + 1)]
+        for value in invalid:
+            with self.subTest(evidence=value):
+                self.assert_code("answer-shape", self.answer(evidence=value))
+        self.validate(self.answer(reason="x" * router.MAX_REASON,
+                                  evidence=[{"kind": "card", "ref": "x" * 1024}] * router.MAX_REFERENCES))
+
+    def test_file_paths_cannot_escape_checkout(self):
+        for ref in ("/etc/passwd", "../file", "src/../../file", "src/../file", "C:/file", "src\\file", "."):
+            with self.subTest(ref=ref):
+                self.assert_code("answer-shape", self.answer(evidence=[{"kind": "file", "ref": ref}]))
+        self.validate(self.answer(evidence=[{"kind": "file", "ref": "src/module.py"}]))
+
+    def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
+        from buddy import router
+        from jsonschema import Draft202012Validator
+        schema = router.answer_schema([DSH_ID, ZCODE_ID])
+        self.assertEqual(schema["properties"]["profileId"]["enum"], [DSH_ID, ZCODE_ID, None])
+        self.assertEqual(set(schema["properties"]), {"profileId", "reason", "evidence"})
+        validator = Draft202012Validator(schema)
+        self.assertTrue(validator.is_valid(self.answer()))
+        self.assertTrue(validator.is_valid(self.answer(profileId=None)))
+        self.assertFalse(validator.is_valid(self.answer(profileId="ghost")))
+        self.assertFalse(validator.is_valid(self.answer(policyCheck={})))
 
 
 if __name__ == "__main__":

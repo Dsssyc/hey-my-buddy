@@ -61,6 +61,11 @@ def capability_report() -> dict:
             "reason": reason,
             "capabilities": list(instance.capabilities),
             "executedBy": "built-in-worker",
+            "readOnlyStructured": {
+                "implemented": instance.read_only_structured,
+                "verified": instance.read_only_structured_verified,
+                "sameAttemptContinuation": instance.read_only_structured_resume,
+            },
         }
     report["external"] = {
         "adapter": "external",

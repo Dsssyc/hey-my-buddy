@@ -2584,6 +2584,11 @@ class EvaluationStore:
     # -- views ---------------------------------------------------------------
     @staticmethod
     def _profile_view(row: sqlite3.Row) -> dict:
+        from .adapters import adapters
+        native = adapters().get(row["adapter"])
+        capabilities = json.loads(row["capabilities_json"])
+        if not (native and native.read_only_structured and native.read_only_structured_verified):
+            capabilities = [item for item in capabilities if item != "decision"]
         view = {
             "profileId": row["profile_id"],
             "label": row["label"],
@@ -2593,7 +2598,7 @@ class EvaluationStore:
             "effort": row["effort"],
             "available": bool(row["available"]),
             "enabled": bool(row["enabled"]),
-            "capabilities": json.loads(row["capabilities_json"]),
+            "capabilities": capabilities,
             "contextWindow": row["context_window"],
             "description": row["description"],
             "source": row["source"],

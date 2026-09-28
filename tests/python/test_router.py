@@ -55,7 +55,7 @@ class RouterPublicationTests(WorkflowTestCase):
         self.enterContext(patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', True))
         self.enterContext(patch('buddy.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
-    def settle(self, profile, *, code=None, preferences=None):
+    def settle(self, profile, *, code=None, preferences=None, result_status=None):
         board = self.board()
         self.seed(board, preferences=preferences)
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
@@ -69,7 +69,7 @@ class RouterPublicationTests(WorkflowTestCase):
             result['code'] = code
         board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
                                     'generation': claim['attempt']['generation'], 'nonce': NONCE,
-                                    'status': 'failed' if code else 'ok', 'shutdownConfirmed': True, 'result': result})
+                                    'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
         return board, board.call('selection_get', {'decisionId': request['decisionId']})['decision']
 
     def test_publication_accepts_alternative_without_card_veto(self):
@@ -125,6 +125,37 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertEqual(configured['routingBudget'], 'deep')
         self.assertEqual(configured['decisionProfileId'], PROFILE_ID)
         self.assertEqual(SCHEMA_VERSION, 12)
+
+    def test_budget_update_does_not_change_selection_request_replay(self):
+        board = self.board()
+        self.seed(board)
+        params = {'requestId': 'stable-budget-request', 'task': 'choose'}
+        original = board.call('selection_request', params)
+        with board.store.db.write() as connection:
+            connection.execute("INSERT INTO meta(key,value) VALUES('router_budget_preset','deep')")
+        replay = board.call('selection_request', params)
+        self.assertTrue(replay['duplicate'])
+        self.assertEqual(replay['decisionId'], original['decisionId'])
+        view = board.call('selection_get', {'decisionId': original['decisionId']})['decision']
+        self.assertEqual(view['budget']['preset'], 'standard')
+
+    def test_cancellation_keeps_budget_code_out_of_budget_count(self):
+        board, decision = self.settle(None, code='router-budget-exhausted', result_status='cancelled')
+        health = board.store.decisions.health_summary()
+        self.assertEqual(decision['status'], 'cancelled')
+        self.assertEqual(health['cancelledCount'], 1)
+        self.assertEqual(health['budgetExhaustedCount'], 0)
+
+    def test_retained_legacy_capability_cannot_be_advertised_as_verified(self):
+        board = self.board()
+        self.seed(board)
+        with patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', False):
+            snapshot = board.call('console_snapshot', {})
+        profile = next(p for p in snapshot['profiles'] if p['profileId'] == PROFILE_ID)
+        self.assertNotIn('decision', profile['capabilities'])
+        with board.store.db.read() as connection:
+            recorded = json.loads(connection.execute('SELECT capabilities_json FROM evaluation_profiles WHERE profile_id=?', (PROFILE_ID,)).fetchone()[0])
+        self.assertIn('decision', recorded)
 
     def test_outside_choice_is_rejected_and_not_abstention(self):
         board, decision = self.settle('foreign')

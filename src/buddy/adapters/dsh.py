@@ -33,15 +33,8 @@ class DshAdapter(Adapter):
     name = "dsh"
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline")
     model_discovery = True
-    decision_execution = True
-
-    def decision_available(self) -> tuple[bool, str | None]:
-        from .decision import DecisionAdapter
-        return DecisionAdapter().helper_available()
-
-    def start_decision(self, context: ExecutionContext) -> ProcessHandle:
-        from .decision import DecisionAdapter
-        return DecisionAdapter()._start_helper(context)
+    # The native DSH permission policy does not confine reads or networking.
+    # Do not advertise a read-only structured Router capability.
 
     def discover_models(self) -> dict:
         from .dsh_catalog import discover_models

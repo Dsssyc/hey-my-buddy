@@ -129,7 +129,6 @@ class Adapter:
     capabilities: tuple[str, ...] = ()
     native_resume = False
     model_discovery = False
-    decision_execution = False
     read_only_structured = False
     # Mock coverage is not native verification. Enable only after an approved probe.
     read_only_structured_verified = False
@@ -145,12 +144,6 @@ class Adapter:
     def discovery_available(self) -> tuple[bool, str | None]:
         """Whether fresh metadata can be queried; execution readiness may be stricter."""
         return self.available()
-
-    def decision_available(self) -> tuple[bool, str | None]:
-        return False, f"{self.name} has no verified tool-free decision execution"
-
-    def start_decision(self, context: ExecutionContext) -> "ProcessHandle":
-        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} cannot execute a tool-free decision", adapter=self.name)
 
     @staticmethod
     def validate_turn_provenance(record: dict) -> str | None:

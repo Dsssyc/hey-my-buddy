@@ -19,23 +19,14 @@ from buddy.errors import BoardError
 FAMILY_A = ("dsh", "deepseek-official", "deepseek-flash")
 FAMILY_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
 DECISION_PROFILE = "dsh:deepseek-official:deepseek-flash:off"
-MOCK_HELPER = Path(__file__).resolve().parent / "fixtures" / "mock_decision_helper.py"
 
 
 class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
     """Governed fixtures plus the authenticated console policy writer."""
 
     def use_decision_helper(self) -> None:
-        previous = os.environ.get("BUDDY_DECISION_HELPER")
-        os.environ["BUDDY_DECISION_HELPER"] = str(MOCK_HELPER)
-
-        def restore() -> None:
-            if previous is None:
-                os.environ.pop("BUDDY_DECISION_HELPER", None)
-            else:
-                os.environ["BUDDY_DECISION_HELPER"] = previous
-
-        self.addCleanup(restore)
+        from fixtures import mock_readonly
+        mock_readonly.install(self)
 
     def seed_decision_profile(self, board) -> None:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})

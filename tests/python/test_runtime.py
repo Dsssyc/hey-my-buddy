@@ -34,7 +34,6 @@ DEFAULT_ASSETS = [
 DEFAULT_RESOURCES = {
     "dsh.runner": "harnesses/dsh/scripts/run.mjs",
     "dsh.catalog": "harnesses/dsh/scripts/model-catalog.mjs",
-    "dsh.decision": "harnesses/dsh/scripts/decision.mjs",
     "yaml.bridge": "src/buddy/yaml_bridge.py",
     "console.assets": "src/buddy/console_assets",
 }
