@@ -135,7 +135,7 @@ def migrate_12_to_13(connection: sqlite3.Connection) -> dict:
         raise
     finally:
         connection.execute("PRAGMA foreign_keys=ON")
-    if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+    if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         raise ValueError("integrity check failed after migration")
     return {"fromSchema": PREVIOUS_SCHEMA_VERSION, "toSchema": SCHEMA_VERSION,
             "familyPreferences": merged_families, "preferenceOverrides": overrides,
