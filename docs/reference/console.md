@@ -2,7 +2,7 @@
 
 ## 0.16.0 target and verification boundary
 
-This is the user-authorized 0.16.0 implementation contract. Daily installation remains 0.15.1 until separately authorized. Source, private HTTP/browser verification and installation are recorded independently in the acceptance record. Schema remains 12.
+This section records the user-authorized 0.16.0 implementation contract. Source, private HTTP/browser verification and installation are recorded independently in the acceptance records. Later console presentation changes do not change the service contract.
 
 ## Entry and lifetime
 
@@ -23,6 +23,12 @@ Authenticated GET `/api/objectives` and `/api/objectives/<objectiveId>/timeline`
 `objective_stop` accepts only objectiveId, commandId and optional bounded reason with server-attached console authority. It atomically cancels the complete current unaccepted root/helper/routing scope while retaining accepted roots and its replay receipt. Cancellation acknowledgement never proves termination; show 正在停止 or 停止未确认 until recorded shutdown is confirmed. It does not close the group to future Host submissions.
 
 ## UI and verification
+
+The current console polish is implemented in source and is not installed through this change. Its header reads `Hey my buddy`; the browser title reads `Hey my buddy · 本地工作台`. The single header refresh reads the snapshot and every visible list, open timeline, delegation detail, collaboration record and configuration update record, then reports completion time or failure in its tooltip. Automatic read-only polling continues. Connection status appears in the header only while disconnected, with a recovery hint. The dark theme uses neutral grey surfaces and distinct non-green focus; the light theme keeps its existing controls and gains a raised detail surface.
+
+Timeline hover highlights an item and shows a short native tooltip without moving the inspector or reference line. Click or keyboard selection pins the inspector. The view switch is a `时间轴 | 列表` segmented control. The objective heading and delegation cards wrap compactly, the legend opens from the toolbar, and the inspector starts as a one-line summary that expands into a resizable drawer. The timeline owns its horizontal and vertical scrolling. An idle fold uses a compact icon with its duration in the tooltip. In the desktop three-column view, the docked delegation detail has its own raised surface in both themes, a stronger separator and a fixed title area. The collapsed objective rail contains only `工作目标 ›`. Non-modal popovers close when their owning page or anchor becomes hidden and never appear at the viewport origin without a visible anchor.
+
+The system settings page groups display and storage controls in aligned cards with matching title sizes. Theme choices use a segmented control; storage shows total and reclaimable occupancy while retaining the existing check, plan and confirmation flow. No empty language group is shown.
 
 Records remain read-only with the short hint “只读 · 操作由 Host 在 CLI 完成”; no edit/read-only badge belongs on them. Navigation is the three top tabs `委派记录` / `Buddy 配置` / `设置`: the retired `模型卡片` and `路由配置` pages are gone, routing settings live on `Buddy 配置`, and only system-level content (display and storage, later language) stays on `设置`. Retired bookmarks keep resolving — `#models` (模型卡片) and `#settings` (路由配置) both open `Buddy 配置` — so the 设置 page is addressed as `#system`. `Buddy 配置` edits directly — there is no global edit switch — and a bottom save bar with `放弃` and `保存` appears only while that page holds a draft; no other page shows it. A draft survives tab changes, and leaving a settings page raises no exit confirmation. All authenticated windows retain settings drafts, revision conflict handling and confirmed stop. The settings storage panel shows category bytes and reclaimable bytes, obtains a fresh plan and requires explicit confirmation before applying that exact plan. Orphan processes are listed only; stopping them requires separate user authorization.
 

@@ -162,7 +162,6 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>回合会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
       <NativeSessionView task={task} turnSessionId={value.currentTurn?.sessionId} />
       <details className="detail-section"><summary>原始目标</summary><p className="read-text">{task.task}</p></details>
-      <button className="button small-button" onClick={state.reload}>刷新协作记录</button>
       </div>
     </>}
     </div>

@@ -5,7 +5,7 @@ import { createTimelineLayout, TIMELINE_FOLD_THRESHOLD_MS } from "./objective-ti
 import { fitPixelsPerMinute, MAX_PIXELS_PER_MINUTE, scaleTimeline } from "./objective-timeline-scale";
 import type { SpanOutcome, TimelineItem, FriendlyProfile } from "./objective-display";
 import {
-  buildChronology, clockSeconds, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
+  buildChronology, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
   eventClusterLabel, eventSentence, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
   eventItem, toMs, configurationPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
 } from "./objective-display";
@@ -13,7 +13,8 @@ import { ObjectiveChronology } from "./ObjectiveChronology";
 import { DelegationStrip, ObjectiveOverview } from "./ObjectiveOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
-import type { InspectorSelection } from "./inspector-card";
+import { Popover } from "./Popover";
+import { buildInspectorCard, type InspectorCard, type InspectorSelection } from "./inspector-card";
 
 /** Markers closer than this many actual track pixels merge into one numbered marker. */
 const MARKER_MERGE_PX = 14;
@@ -34,9 +35,6 @@ const DRAWER_STEP_PX = 16;
 const DRAWER_USEFUL_PX = 96;
 /** The timeline keeps this height before the drawer may take more (P2.1). */
 const TIMELINE_MIN_PX = 200;
-/** Mirrors `.tl-head`'s max-height: min(340px, 45%). */
-const HEAD_MAX_PX = 340;
-const HEAD_MAX_SHARE = 0.45;
 const ZOOM_STEP = 1.5;
 
 /**
@@ -45,12 +43,11 @@ const ZOOM_STEP = 1.5;
  * counted at full size, so the drawer yields first and never locks the
  * header in its compressed form.
  */
-function naturalHeight(element: HTMLElement, columnHeight: number): number {
+function naturalHeight(element: HTMLElement): number {
   const style = getComputedStyle(element);
   const px = (value: string) => Number.parseFloat(value) || 0;
   const borders = px(style.borderTopWidth) + px(style.borderBottomWidth);
-  let height = Math.max(element.offsetHeight, element.scrollHeight + borders);
-  if (element.classList.contains("tl-head")) height = Math.min(height, HEAD_MAX_PX, columnHeight * HEAD_MAX_SHARE);
+  const height = Math.max(element.offsetHeight, element.scrollHeight + borders);
   return height + px(style.marginTop) + px(style.marginBottom);
 }
 
@@ -125,9 +122,9 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
 
 /**
  * Right pane, layer one: the read-only work-objective timeline. The vertical
- * structure follows 0.16 P2.1 — a bounded header, a collapsible delegation
+ * structure follows 0.16 P2.1 — a compact header, a collapsible delegation
  * band, the toolbar, the timeline as the only row-scroll area (min 200px), a
- * keyboard/pointer separator and the inspector as an always-visible bottom
+ * keyboard/pointer separator and the inspector as a summary-first bottom
  * drawer. Occupancy and folding stay in the frozen layout module; the default
  * scale fits observed activity (适应窗口) and +/−/0 zoom by ×1.5 steps anchored
  * on the selection or viewport centre. Single clicks only select the pinned
@@ -136,11 +133,13 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
 export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection, active = true } = props;
   const [focusKey, setFocusKey] = useState<string | null>(null);
-  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [asList, setAsList] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const legendButtonRef = useRef<HTMLButtonElement>(null);
   const [openCluster, setOpenCluster] = useState<string | null>(null);
   const [clusterNotice, setClusterNotice] = useState<string | null>(null);
-  useEffect(() => { if (hidden || !active) setOpenCluster(null); }, [hidden, active]);
+  useEffect(() => { if (hidden || !active) { setOpenCluster(null); setLegendOpen(false); } }, [hidden, active]);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -179,11 +178,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   // The inspector drawer (P2.1/P2.2): the user's height and open/closed choice
   // persist for the page session, and the shown height is re-clamped from
-  // reactive measurements. The drawer never takes the timeline below 200px:
-  // it shrinks first and folds to its title row when only a sliver would be
-  // left; the narrow layout caps at 40vh and starts at its title row.
+  // reactive measurements. The drawer begins folded to its summary row; the
+  // narrow layout caps an opened drawer at 40vh.
   const [drawerHeight, setDrawerHeight] = useState<number | null>(null);
-  const [drawerCollapsed, setDrawerCollapsed] = useState<boolean | null>(null);
+  const [drawerCollapsed, setDrawerCollapsed] = useState<boolean>(true);
   const [columnBox, setColumnBox] = useState<{ column: number; reserved: number } | null>(null);
   const boxObserver = useRef<ResizeObserver | null>(null);
   const observedSections = useRef<Element[]>([]);
@@ -197,7 +195,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       for (const child of element.children) {
         if (!(child instanceof HTMLElement)) continue;
         if (child.matches(".timeline-body, .tl-body, .inspector-dock")) continue;
-        reserved += naturalHeight(child, column);
+        reserved += naturalHeight(child);
       }
       reserved = Math.round(reserved);
       setColumnBox(previous => previous && previous.column === column && previous.reserved === reserved
@@ -242,11 +240,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const drawerMax = Math.max(DRAWER_MIN_PX, Math.round(drawerCollapsed === false
     ? Math.max(drawerFitMax, Math.min(drawerShareMax, DRAWER_USEFUL_PX))
     : drawerFitMax));
-  // Without an explicit choice the narrow drawer shows its title row until a
-  // single click pins something (the pinned card is that click's only
-  // effect); a short column folds it regardless.
-  const drawerActuallyCollapsed = drawerCollapsed
-    ?? (drawerFitMax < DRAWER_USEFUL_PX || (narrowViewport && selection === null));
+  // The summary row is the default on every viewport; an explicit expansion
+  // keeps the drawer open until the user folds it again.
+  const drawerActuallyCollapsed = drawerCollapsed;
   const drawerValue = drawerActuallyCollapsed ? DRAWER_MIN_PX : Math.max(DRAWER_MIN_PX, Math.min(drawerHeight ?? DRAWER_DEFAULT_PX, drawerMax));
 
   const observedAtMs = toMs(timeline?.observedAt);
@@ -380,6 +376,14 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     }
     return map;
   }, [factsBySpan, timeline, rowsById]);
+  // Preserve the selected facts even when the drawer is folded and a later
+  // filtered read omits that record. Opening the drawer can still show the
+  // last recorded card with its missing-record warning.
+  const cardCache = useRef<{ key: string; card: InspectorCard } | null>(null);
+  const cardKey = selection ? selection.type === "run" ? `run:${selection.runId}` : selection.key : "";
+  const currentCard = timeline && selection ? buildInspectorCard(selection, timeline, itemsByKey, props.profiles) : null;
+  if (currentCard) cardCache.current = { key: cardKey, card: currentCard };
+  const selectedCard = currentCard ?? (cardCache.current?.key === cardKey ? cardCache.current.card : null);
 
   const clusters = useMemo<MarkerCluster[]>(() => {
     if (!timeline || !scaled) return [];
@@ -663,9 +667,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   const nowVisible = !!(layout && observedAtMs !== null && layout.endMs === observedAtMs);
   const nowLeft = nowVisible && scaled ? scaled.position(observedAtMs) : null;
-  const activeKey = hoverKey ?? focusKey;
+  const activeKey = focusedKey ?? (selection?.type === "item" ? selection.key : null);
   const activeItem = activeKey ? itemsByKey.get(activeKey) ?? null : null;
-  const activeCluster = activeKey ? clusters.find(cluster => cluster.key === activeKey) ?? null : null;
+  const activeCluster = focusedKey ? clusters.find(cluster => cluster.key === focusedKey) ?? null : null;
   const guideLeft = activeCluster !== null || activeItem?.guide === true
     ? (activeCluster ? activeCluster.x : scaled && activeItem && activeItem.atMs !== null ? scaled.position(activeItem.atMs) : null)
     : null;
@@ -693,9 +697,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   function itemHandlers(key: string) {
     return {
       "data-key": key,
-      onFocus: () => setFocusKey(key),
-      onMouseEnter: () => setHoverKey(key),
-      onMouseLeave: () => setHoverKey(current => (current === key ? null : current)),
+      onFocus: () => { setFocusKey(key); setFocusedKey(key); },
       // A single click only pins the inspector; opening needs Enter, a double
       // click or an explicit 打开 control.
       onClick: () => {
@@ -782,8 +784,6 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const hostEventsTrackId = canvasKey ? `host-events-track-${canvasKey}` : "host-events-track";
   const hostEventsOpen = canvasKey !== null && (hostEventsOpenByObjective.get(canvasKey) ?? false) === true;
 
-  const refreshAt = timeline?.observedAt ?? props.summary?.lastActivityAt;
-
   const body = loading && !timeline
     ? <div className="tl-body">
       <p className="tl-state" role="status">正在读取时间轴…</p>
@@ -808,9 +808,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                   {canFold && eligibleGaps.map(gap => gap.collapsed
                     ? <button key={gap.id} type="button" className="fold-button" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }}
                       aria-label={`空闲 ${durationShort(gap.endMs - gap.startMs)}，${clockTime(gap.startMs)} 至 ${clockTime(gap.endMs)}，已折叠，展开`}
-                      title={`${clockTime(gap.startMs)}–${clockTime(gap.endMs)} 没有任何片段或事件`}
+                      title={`空闲 ${durationShort(gap.endMs - gap.startMs)} · ${clockTime(gap.startMs)}–${clockTime(gap.endMs)} 没有任何片段或事件`}
                       onClick={() => props.onToggleGap(gap.id)}>
-                      <span>空闲 {durationShort(gap.endMs - gap.startMs)}</span><span>展开</span>
+                      <span aria-hidden="true">›</span>
                     </button>
                     // In the right half the control hangs leftwards from the
                     // band's end, so its label never runs past the canvas.
@@ -848,9 +848,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       aria-controls={cluster.items.length > 1 && isOpen ? `popover-${cluster.key}` : undefined}
                       aria-label={single ? sentence ?? cluster.head : cluster.head}
                       title={single ? sentence ?? cluster.head : cluster.head}
-                      onFocus={() => setFocusKey(cluster.key)}
-                      onMouseEnter={() => setHoverKey(cluster.key)}
-                      onMouseLeave={() => setHoverKey(current => (current === cluster.key ? null : current))}
+                      onFocus={() => { setFocusKey(cluster.key); setFocusedKey(cluster.key); }}
                       onClick={() => {
                         // Opening the popover selects nothing (0.15 C3).
                         if (single) {
@@ -910,9 +908,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                     style={{ "--depth": row.depth } as CSSProperties}
                     data-key={label.key} data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
                     title={titleLineTooltip(title)} aria-label={itemAria(label)}
-                    onFocus={() => setFocusKey(label.key)}
-                    onMouseEnter={() => setHoverKey(label.key)}
-                    onMouseLeave={() => setHoverKey(current => (current === label.key ? null : current))}
+                    onFocus={() => { setFocusKey(label.key); setFocusedKey(label.key); }}
                     onClick={() => props.onSelectRun(row.runId)}
                     onDoubleClick={() => props.onOpenRun(row.runId)}>
                     <span className="lbl-title">
@@ -962,6 +958,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       onToggleCollapsed={() => setCardsCollapsed(!cardsActuallyCollapsed)}
       onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun} />}
     <div className="tl-toolbar">
+      <button ref={legendButtonRef} type="button" className="button small-button" aria-expanded={legendOpen}
+        aria-controls="timeline-legend-popover" title="图例" onClick={() => setLegendOpen(current => !current)}>图例</button>
+      {legendOpen && !hidden && active && <Popover anchor={legendButtonRef.current} id="timeline-legend-popover"
+        label="时间轴图例" className="timeline-legend-popover" onClose={() => setLegendOpen(false)}>
       <div className="legend" aria-label="执行配置图例">
         <span className="legend-title">执行配置</span>
         {palette.length ? palette.map(entry => <span key={entry.key} className="legend-item" title={entry.rawTitle ?? entry.label}>
@@ -977,14 +977,19 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         <span className="legend-item"><span className="glyph" aria-hidden="true">⊘</span>已取消</span>
         <span className="legend-item"><span className="glyph warn" aria-hidden="true">?</span>结束未确认</span>
       </div>
+      </Popover>}
       <div className="tl-tools">
         {canFold && eligibleGaps.length > 0 && <button type="button" className="button small-button"
           aria-pressed={eligibleGaps.every(gap => props.expandedGapIds.has(gap.id))}
           onClick={() => props.onSetExpanded(new Set(eligibleGaps.map(gap => gap.id)))}>展开全部空闲</button>}
         {canFold && eligibleGaps.length > 0 && props.expandedGapIds.size > 0 && <button type="button" className="button small-button"
           onClick={() => props.onSetExpanded(new Set())}>折叠空闲</button>}
-        <button ref={listToggleRef} type="button" className="button small-button list-toggle" aria-pressed={asList}
-          onClick={() => setAsList(current => !current)}>以列表查看</button>
+        <div className="timeline-view-switch" role="group" aria-label="时间轴视图">
+          <button ref={listToggleRef} type="button" className="button small-button list-toggle" aria-pressed={!asList}
+            onClick={() => { setAsList(false); setLegendOpen(false); }}>时间轴</button>
+          <button type="button" className="button small-button list-toggle" aria-pressed={asList}
+            onClick={() => { setAsList(true); setLegendOpen(false); }}>列表</button>
+        </div>
         {!asList && <div className="tl-zoom" role="group" aria-label="时间轴缩放">
           <button type="button" className="button small-button" aria-label="缩小" disabled={zoomAtFit}
             title={zoomAtFit ? "已是适应窗口的最小刻度" : "缩小时间轴（键盘 -）"} onClick={zoomOut}>−</button>
@@ -993,14 +998,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
           <button type="button" className="button small-button" aria-pressed={zoomAtFit}
             title="缩放到有活动的时间段（键盘 0）" onClick={() => changeZoom(null)}>适应窗口</button>
         </div>}
-        <span className={"refresh-state" + (stale ? " stale" : "")}
-          title={stale && timeline
-            ? `最近一次读取失败；显示的是 ${clockSeconds(timeline.observedAt)} 的数据`
-            : `每 3 秒读取一次，不调用模型 · 数据截至 ${clockSeconds(refreshAt)}`}>
-          {stale && timeline
-            ? `读取失败 · 显示 ${clockTime(timeline.observedAt)} 的数据`
-            : `自动刷新 · ${clockTime(refreshAt)}`}
-        </span>
+        {stale && timeline && <span className="refresh-state stale" role="alert"
+          title={`最近一次读取失败；显示的是 ${timeline.observedAt} 的数据`}>
+          读取失败 · 显示 {clockTime(timeline.observedAt)} 的数据
+        </span>}
         {stale && <button type="button" className="button small-button" onClick={props.onRetry}>重试读取</button>}
       </div>
     </div>
@@ -1008,20 +1009,23 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       时间轴读取有边界：{truncation.join("；")}。可调整筛选或打开单个委派查看其完整记录。
     </div>}
     {body}
-    <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
+    {!drawerActuallyCollapsed && <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
       onChange={value => { setDrawerCollapsed(false); setDrawerHeight(value); }}
-      onReset={() => { setDrawerCollapsed(false); setDrawerHeight(null); }} />
+      onReset={() => { setDrawerCollapsed(false); setDrawerHeight(null); }} />}
     <div className={"inspector-dock" + (drawerActuallyCollapsed ? " collapsed" : "")} style={{ height: `${drawerValue}px` }}>
       <div className="inspector-dock-head">
-        <span className="inspector-dock-title">检查器</span>
-        <button type="button" className="button small-button"
+        <span className="inspector-dock-title">{selectedCard
+          ? [selectedCard.head, selectedCard.fields.find(field => field.label === "委派")?.value,
+            selectedCard.fields.find(field => field.label === "时间")?.value].filter(Boolean).join(" · ")
+          : selection ? "选中记录 · 当前读取范围外" : "检查器 · 单击时间轴元素查看详情"}</span>
+        <button type="button" className="icon-button inspector-dock-toggle"
+          aria-label={drawerActuallyCollapsed ? "展开检查器" : "收起检查器"}
+          title={drawerActuallyCollapsed ? "展开检查器" : "收起检查器"}
           aria-expanded={!drawerActuallyCollapsed}
-          onClick={() => setDrawerCollapsed(!drawerActuallyCollapsed)}>{drawerActuallyCollapsed ? "展开" : "收起"}</button>
+          onClick={() => setDrawerCollapsed(!drawerActuallyCollapsed)}>{drawerActuallyCollapsed ? "▴" : "▾"}</button>
       </div>
       {!drawerActuallyCollapsed && <div className="inspector-dock-body">
-        <TimelineInspector selection={selection}
-          previewItem={activeItem}
-          previewClusterHead={activeCluster ? activeCluster.head : null}
+        <TimelineInspector selection={selection} cachedCard={selectedCard}
           timeline={timeline} itemsByKey={itemsByKey} profiles={props.profiles}
           truncatedEvents={!!timeline?.truncated.events}
           onOpen={props.onOpenItem} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun}

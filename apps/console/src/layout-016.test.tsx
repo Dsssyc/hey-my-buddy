@@ -164,6 +164,19 @@ describe("§6 strict stop evidence for the acceptance-wait line", () => {
 });
 
 describe("§7/§8 the shared popover lifecycle", () => {
+  it("does not place a popover at the viewport origin when its anchor is hidden", () => {
+    const wrapper = document.createElement("div");
+    wrapper.hidden = true;
+    const anchor = document.createElement("button");
+    wrapper.append(anchor);
+    document.body.append(wrapper);
+    const onClose = vi.fn();
+    render(<Popover anchor={anchor} label="隐藏浮层" onClose={onClose}>内容</Popover>);
+    expect(screen.queryByRole("dialog", { name: "隐藏浮层" })).toBeNull();
+    expect(onClose).toHaveBeenCalled();
+    wrapper.remove();
+  });
+
   function stubRects(anchorRect: () => { left: number; top: number; bottom: number }) {
     const own = Object.getOwnPropertyDescriptor(Element.prototype, "getBoundingClientRect");
     Element.prototype.getBoundingClientRect = function (this: Element) {
@@ -248,7 +261,7 @@ describe("§7/§8 the shared popover lifecycle", () => {
     expect(document.activeElement).toBe(rows[1]);
     for (const row of rows) expect(row.getAttribute("aria-label")).toMatch(/[一-鿿]/);
     // Tab-like focus move out of the popup and its marker closes it.
-    act(() => { screen.getByRole("button", { name: "以列表查看" }).focus(); });
+    act(() => { screen.getByRole("button", { name: "列表" }).focus(); });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Host 事件/ })).toBeNull());
   });
 });
@@ -278,19 +291,19 @@ describe("§9 the inspector drawer stays reachable", () => {
     const user = userEvent.setup();
     render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
     expect(dock().className).toContain("collapsed");
-    expect(valueNow()).toBe(44);
+    expect(dock().style.height).toBe("44px");
     expect(document.querySelector(".timeline-inspector")).toBeNull();
-    await user.click(within(dock()).getByRole("button", { name: "展开" }));
+    await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     // 168px default, capped at 40% of a 400px viewport.
     expect(valueNow()).toBe(160);
     expect(separator().getAttribute("aria-valuemax")).toBe("160");
     expect(dock().style.height).toBe("160px");
     // The explicit choice holds: collapsing stays collapsed.
-    await user.click(within(dock()).getByRole("button", { name: "收起" }));
-    expect(valueNow()).toBe(44);
+    await user.click(within(dock()).getByRole("button", { name: "收起检查器" }));
+    expect(dock().style.height).toBe("44px");
   });
 
-  it("opens the narrow drawer when a click pins something, unless the user collapsed it", async () => {
+  it("updates the narrow summary after selection while the drawer stays folded", async () => {
     stubMedia(true);
     stubWindow("innerHeight", 400);
     const user = userEvent.setup();
@@ -299,9 +312,11 @@ describe("§9 the inspector drawer stays reachable", () => {
     const view = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     expect(dock().className).toContain("collapsed");
     view.rerender(<ObjectiveTimeline {...baseProps(timeline, { selection: pinned })} />);
-    expect(dock().className).not.toContain("collapsed");
+    expect(dock().className).toContain("collapsed");
+    expect(dock().querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
+    await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     expect(document.querySelector(".timeline-inspector")).toBeTruthy();
-    await user.click(within(dock()).getByRole("button", { name: "收起" }));
+    await user.click(within(dock()).getByRole("button", { name: "收起检查器" }));
     view.rerender(<ObjectiveTimeline {...baseProps(timeline, { selection: { type: "run", runId: "r2" } })} />);
     expect(dock().className).toContain("collapsed");
   });
@@ -329,6 +344,7 @@ describe("§9 the inspector drawer stays reachable", () => {
     stubGetter(Element.prototype, "scrollHeight", function (this: HTMLElement) { return sectionHeight(this); });
     const user = userEvent.setup();
     render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     const root = document.querySelector(".timeline-view")!;
     const drawerObserver = observers.find(observer => observer.targets.includes(root))!;
     const resize = (height: number) => {
@@ -342,12 +358,9 @@ describe("§9 the inspector drawer stays reachable", () => {
     resize(520);
     expect(valueNow()).toBe(122);
     expect(dock().className).not.toContain("collapsed");
-    // 450 leaves 52px — a sliver, so the drawer folds to its title row.
+    // An explicitly opened drawer retains a usable body in a short column.
     resize(450);
-    expect(dock().className).toContain("collapsed");
-    expect(valueNow()).toBe(44);
-    // An explicit 展开 still opens a usable drawer (the column scrolls as the last resort).
-    await user.click(within(dock()).getByRole("button", { name: "展开" }));
+    expect(dock().className).not.toContain("collapsed");
     expect(valueNow()).toBe(96);
     // Growing back restores the user's height instead of the clamp.
     fireEvent.keyDown(separator(), { key: "ArrowDown" });

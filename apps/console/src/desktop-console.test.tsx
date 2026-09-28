@@ -76,6 +76,32 @@ function fixture(records: Task[] = []) {
 afterEach(() => { cleanup(); window.location.hash = ""; });
 
 describe("desktop console", () => {
+  it("uses one header refresh for the visible objective list and reports completion", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    render(<App suppliedApi={f.api} />);
+    expect(await screen.findByRole("link", { name: "Hey my buddy" })).toHaveProperty("textContent", "Hey my buddy");
+    expect(screen.queryByText("已连接")).toBeNull();
+    await waitFor(() => expect(f.api.objectives).toHaveBeenCalled());
+    const before = (f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+    const button = screen.getByRole("button", { name: "刷新工作台" });
+    await user.click(button);
+    await waitFor(() => expect((f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(button.getAttribute("title")).toContain("已刷新 ·"));
+  });
+
+  it("reports a visible objective read failure in the header refresh tooltip", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "还没有工作目标" });
+    (f.api.objectives as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("合成读取失败"));
+    const button = screen.getByRole("button", { name: "刷新工作台" });
+    await user.click(button);
+    await waitFor(() => expect(button.getAttribute("title")).toContain("刷新失败：合成读取失败"));
+  });
+
   it("uses the exact top navigation and presents the 22 native configurations as six read-only model families", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -198,7 +224,7 @@ describe("desktop console", () => {
     expect(screen.queryByText("已加载 2 个委派目标")).toBeNull();
   });
 
-  it("announces new records without inserting them or changing scroll until the user refreshes history", async () => {
+  it("reloads the visible filtered history when the global refresh is pressed", async () => {
     const f = fixture([goal("old")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
@@ -210,20 +236,17 @@ describe("desktop console", () => {
     scroll.scrollTop = 240;
     f.snapshot.tasks.runs.unshift({ ...goal("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "刷新工作台" }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByRole("button", { name: /条新记录/ })).toBeNull();
     f.snapshot.tasks.runs.unshift({ ...goal("new"), createdAt: "2026-09-24T11:00:00Z" });
     f.snapshot.tasks.total = 2;
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    const notice = await screen.findByRole("button", { name: "有 1 条新记录 · 回到最新" });
-    expect(screen.queryByRole("button", { name: /目标 new/ })).toBeNull();
-    expect(scroll.scrollTop).toBe(240);
-    await user.click(notice);
     expect(await screen.findByRole("button", { name: /目标 new/ })).toBeTruthy();
-    expect(scroll.scrollTop).toBe(0);
+    expect(scroll.scrollTop).toBe(240);
     expect(screen.queryByRole("button", { name: /目标 outside/ })).toBeNull();
   });
 
-  it("announces the first matching record after an empty history read", async () => {
+  it("loads the first matching record from the global refresh after an empty history read", async () => {
     const f = fixture();
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
@@ -233,9 +256,6 @@ describe("desktop console", () => {
     f.snapshot.tasks.runs.push(goal("first"));
     f.snapshot.tasks.total = 1;
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    const notice = await screen.findByRole("button", { name: "有 1 条新记录 · 回到最新" });
-    expect(screen.queryByRole("button", { name: /目标 first/ })).toBeNull();
-    await user.click(notice);
     expect(await screen.findByRole("button", { name: /目标 first/ })).toBeTruthy();
   });
 

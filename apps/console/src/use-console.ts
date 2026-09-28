@@ -10,7 +10,7 @@ export function useConsole(api: ConsoleApi) {
   const mounted = useRef(false),
     sequence = useRef(0);
   const refresh = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal, strict = false) => {
       const request = ++sequence.current;
       try {
         const next = await api.snapshot(signal);
@@ -27,6 +27,7 @@ export function useConsole(api: ConsoleApi) {
           !isAbortError(failure)
         )
           setError(errorText(failure));
+        if (strict && !isAbortError(failure)) throw failure;
         return null;
       }
     },

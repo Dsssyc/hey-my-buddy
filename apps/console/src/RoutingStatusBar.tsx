@@ -90,9 +90,12 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
   const attention = decisionAttention(data);
   const health = healthSummary(snapshot.routingHealth);
   const candidates = decisionCandidates(data.profiles).length;
-  const warning = !routerId
-    ? "尚未指定 Router：请在具备 decision 能力的档位菜单中选择“设为 Router”。"
-    : attention?.message || health.warning;
+  const noVerifiedRouter = candidates === 0;
+  const warning = noVerifiedRouter
+    ? "暂无已验证的 Router，默认路由会停在 Host 边界；委派时请指定配置。"
+    : !routerId
+      ? "尚未指定 Router：请在具备 decision 能力的档位菜单中选择“设为 Router”。"
+      : attention?.message || health.warning;
   function setBudget(value: RoutingBudget) {
     editor.update(d => ({ ...d, configuration: { ...d.configuration, routingBudget: value } }));
   }
@@ -117,6 +120,7 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
           <Badge tone={isDecisionCandidate(router) ? "green" : "amber"}>{isDecisionCandidate(router) ? "可担任" : "需要处理"}</Badge>
           {router && <button type="button" className="button small-button" onClick={() => onShowRouter(router.profileId)}>查看所在家族</button>}
         </p> : <p className="muted">尚未指定</p>}
+        {noVerifiedRouter && <p className="small muted">目录中没有同时满足已启用、当前可用且具备已验证 decision 能力的档位。默认路由因此会停在 Host 边界；委派时请指定配置。</p>}
       </div>
       <div className="routing-detail-block">
         <h3>路由预算 <Help label="路由预算说明">{BUDGET_HELP}</Help></h3>

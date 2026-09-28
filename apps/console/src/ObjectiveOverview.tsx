@@ -108,7 +108,8 @@ function SingleDelegationCard({ rollup, onOpen }: {
 
 /**
  * The collapsible delegation-card band (0.16 P2.1): “▾ 委派（n）” toggles the
- * whole strip; collapsed it is one 28px row. Cards scroll horizontally only.
+ * whole strip; collapsed it is one 28px row. Cards wrap into at most two rows
+ * until the user reveals the full set.
  */
 export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCollapsed, onSelectRun, onOpenRun }: {
   timeline: ObjectiveTimelineData;
@@ -121,8 +122,25 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
   const roots = useMemo(() => rootRollups(timeline), [timeline]);
   const [cardFocus, setCardFocus] = useState(0);
   const stripRoot = useRef<HTMLDivElement>(null);
+  const [stripWidth, setStripWidth] = useState(800);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => {
+    const strip = stripRoot.current;
+    if (!strip || typeof ResizeObserver === "undefined") return;
+    const measure = () => { if (strip.clientWidth > 0) setStripWidth(strip.clientWidth); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [collapsed, timeline.objective.objectiveId]);
+  useEffect(() => setShowAll(false), [timeline.objective.objectiveId]);
   if (!roots.length) return null;
   const stripId = "delegation-strip-region";
+  // The strip has 20px inline padding on each side and 8px between cards.
+  const cardsPerRow = Math.max(1, Math.floor((stripWidth - 40 + 8) / 270));
+  const firstTwoRows = cardsPerRow * 2;
+  const selectedIndex = roots.findIndex(rollup => rollup.row.runId === selectedRunId);
+  const visibleCount = showAll || selectedIndex >= firstTwoRows ? roots.length : Math.min(roots.length, firstTwoRows);
   function onStripKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (!roots.length) return;
     let next = cardFocus;
@@ -133,8 +151,10 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
     else return;
     event.preventDefault();
     setCardFocus(next);
-    const cards = stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card");
-    cards?.[next]?.focus();
+    if (next >= visibleCount) {
+      setShowAll(true);
+      requestAnimationFrame(() => stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card")[next]?.focus());
+    } else stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card")[next]?.focus();
   }
   return <div className={"delegation-band" + (collapsed ? " collapsed" : "")}>
     <button type="button" className="delegation-band-toggle" aria-expanded={!collapsed} aria-controls={stripId}
@@ -145,9 +165,11 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
       ? <div className="delegation-strip single-root"><SingleDelegationCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
       : <div className="delegation-strip" id={stripId} ref={stripRoot} role="group"
         aria-label="委派卡（按创建顺序）" onKeyDown={onStripKeyDown}>
-        {roots.map((rollup, index) => <DelegationCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
-          selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, roots.length - 1)}
+        {roots.slice(0, visibleCount).map((rollup, index) => <DelegationCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
+          selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, visibleCount - 1)}
           onSelect={onSelectRun} onOpen={onOpenRun} />)}
+        {visibleCount < roots.length && <button type="button" className="button small-button delegation-show-all"
+          onClick={() => setShowAll(true)}>展开全部 {roots.length} 个</button>}
         {(timeline.truncated.rows || timeline.filtered) && <span className="muted strip-bound">
           显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
         </span>}
@@ -192,13 +214,13 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
     <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 工作目标列表</button>
     <div className="objective-title-row">
       <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
+      {shown.description && <span className="objective-description" title={shown.description}>{shown.description}</span>}
       <span className="chip-row">
         {shown.kind === "standalone" && <Badge tone="neutral">历史独立委派</Badge>}
         {headerActions}
       </span>
     </div>
-    {shown.description && <p className="objective-description" title={compact ? shown.description : undefined}>{shown.description}</p>}
-    <p className="objective-vitals">
+    <div className="objective-vitals">
       <Badge tone={categoryTone(shown.state)}>{objectiveProgressText(shown)}</Badge>
       <span title={shown.lastActivityAt}>最近活动 {clockTime(shown.lastActivityAt)}（{relativeTime(shown.lastActivityAt, Date.now())}）</span>
       <span className="hierarchy-help-entry">
@@ -210,7 +232,6 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
           <p className="hierarchy-help-text">{HIERARCHY_HELP_TEXT}</p>
         </Popover>}
       </span>
-    </p>
     <details className="time-stats">
       <summary>时间统计</summary>
       <div className="time-stats-body">
@@ -229,5 +250,6 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
         <p className="small muted record-source">记录来源：项目 {shown.project.label}{shown.project.path ? `（${shown.project.path}）` : ""} · 来源 Host {shown.sourceHostId || "未记录"} · 当前 Host {shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</p>
       </div>
     </details>
+    </div>
   </header>;
 }

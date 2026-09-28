@@ -19,6 +19,16 @@ function claimPopover(id: object, close: () => void): () => void {
 
 const VIEWPORT_MARGIN_PX = 8;
 
+function anchorVisible(anchor: HTMLElement | null): anchor is HTMLElement {
+  if (!anchor?.isConnected || document.hidden) return false;
+  for (let node: HTMLElement | null = anchor; node; node = node.parentElement) {
+    if (node.hidden || node.getAttribute("aria-hidden") === "true") return false;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
 export type PopoverProps = {
   /** Anchor trigger button; Esc returns focus to it after closing. */
   anchor: HTMLElement | null;
@@ -55,10 +65,18 @@ export function Popover({ anchor, label, onClose, children, width, className, id
   const onCloseRef = useRef(onClose);
   useLayoutEffect(() => { onCloseRef.current = onClose; });
   const close = useRef(() => onCloseRef.current()).current;
+  const visible = anchorVisible(anchor);
+
+  // A portal is outside the hidden tab's DOM subtree. Close it when its
+  // trigger disappears, so switching tabs cannot leave a floating menu behind.
+  useLayoutEffect(() => {
+    if (!visible) close();
+  }, [visible, close]);
 
   useLayoutEffect(() => {
-    if (!anchor) return;
+    if (!anchor || !visible) return;
     const place = () => {
+      if (!anchorVisible(anchor)) { close(); return; }
       const panel = root.current;
       if (!panel) return;
       const rect = anchor.getBoundingClientRect();
@@ -81,10 +99,24 @@ export function Popover({ anchor, label, onClose, children, width, className, id
       observer.disconnect();
       placeRef.current = () => {};
     };
-  }, [anchor, children]);
+  }, [anchor, children, close, visible]);
 
   // Opening claims the single shared slot; closing (any way) releases it.
-  useEffect(() => claimPopover(owner, close), [owner, close]);
+  useEffect(() => visible ? claimPopover(owner, close) : undefined, [owner, close, visible]);
+
+  useEffect(() => {
+    if (!anchor || !visible) return;
+    const observer = new MutationObserver(() => {
+      if (!anchorVisible(anchor)) close();
+      else placeRef.current();
+    });
+    for (let node: HTMLElement | null = anchor; node; node = node.parentElement) {
+      observer.observe(node, { attributes: true, attributeFilter: ["hidden", "style", "class", "aria-hidden"] });
+    }
+    const onVisibility = () => { if (!anchorVisible(anchor)) close(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [anchor, close, visible]);
 
   // Outside pointer press closes; the anchor itself toggles through its own
   // button handler, so presses there are left alone.
@@ -151,9 +183,11 @@ export function Popover({ anchor, label, onClose, children, width, className, id
 
   // tabIndex -1: a click on the popover's plain text focuses the dialog itself
   // instead of the body, so it does not count as focus leaving.
+  if (!visible) return null;
   return createPortal(<div ref={root} id={id} role="dialog" aria-label={label} tabIndex={-1}
     className={"shared-popover" + (className ? ` ${className}` : "")}
-    style={{ left: position ? `${position.left}px` : undefined, top: position ? `${position.top}px` : undefined, width }}>
+    style={{ left: position ? `${position.left}px` : undefined, top: position ? `${position.top}px` : undefined,
+      visibility: position ? "visible" : "hidden", width }}>
     {children}
   </div>, document.body);
 }

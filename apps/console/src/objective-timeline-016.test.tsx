@@ -126,6 +126,8 @@ describe("0.16 P2.1: the inspector dock", () => {
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const dock = container.querySelector(".inspector-dock") as HTMLElement;
     expect(dock).toBeTruthy();
+    expect(dock.className).toContain("collapsed");
+    await user.click(within(dock).getByRole("button", { name: "展开检查器" }));
     expect(container.querySelector(".timeline-inspector")).toBeTruthy();
     const separator = container.querySelector(".inspector-separator") as HTMLElement;
     expect(separator.getAttribute("role")).toBe("separator");
@@ -141,10 +143,10 @@ describe("0.16 P2.1: the inspector dock", () => {
     fireEvent.keyDown(separator, { key: "Enter" });
     await waitFor(() => expect(valueNow()).toBe(before));
     // The collapse control shrinks the dock to its title row and back.
-    await user.click(within(dock).getByRole("button", { name: "收起" }));
+    await user.click(within(dock).getByRole("button", { name: "收起检查器" }));
     expect(dock.className).toContain("collapsed");
     expect(container.querySelector(".timeline-inspector")).toBeNull();
-    await user.click(within(dock).getByRole("button", { name: "展开" }));
+    await user.click(within(dock).getByRole("button", { name: "展开检查器" }));
     expect(container.querySelector(".timeline-inspector")).toBeTruthy();
   });
 });
@@ -157,7 +159,7 @@ describe("0.16 P2.1: the delegation band", () => {
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline, { onSelectRun })} />);
     const toggle = screen.getByRole("button", { name: /委派（5）/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelectorAll(".delegation-card").length).toBe(5);
+    expect(container.querySelectorAll(".delegation-card").length).toBe(4);
     await user.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelectorAll(".delegation-card").length).toBe(0);
@@ -193,7 +195,7 @@ describe("0.16 T2: the hierarchy popover dismissal", () => {
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
     await user.click(screen.getByRole("button", { name: "层级说明" }));
     expect(screen.getByRole("dialog", { name: "层级说明" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "以列表查看" }));
+    await user.click(screen.getByRole("button", { name: "列表" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "层级说明" })).toBeNull());
   });
 

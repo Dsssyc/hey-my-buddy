@@ -372,7 +372,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
     selected={selected}
     active={active}
-    rail={railActive} railState={selectedSummary} railButtonRef={railButtonRef}
+    rail={railActive} railButtonRef={railButtonRef}
     onToggleRail={() => {
       setDrawerOpen(current => {
         if (current) railButtonRef.current?.focus();
@@ -380,7 +380,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
       });
     }}
     onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
-    onSelect={selectObjective} onRefresh={list.reset} onRetry={list.retry} onMore={list.more}
+    onSelect={selectObjective} onRetry={list.retry} onMore={list.more}
     onApplyReorder={list.applyReorder} />;
 
   const timelinePane = selected ? <ObjectiveTimeline
@@ -425,7 +425,8 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   const stageStyle = detailOpen && !narrowViewport
     ? ({ "--dock-detail-width": `${dockDetailWidth}px` } as CSSProperties)
     : undefined;
-  const detailPane = <aside className="panel detail-panel" ref={paneRef} aria-label="工作目标详情">
+  const detailPane = <aside className={"panel detail-panel" + (detailOpen && !narrowViewport ? " docked" : "")}
+    ref={paneRef} aria-label="工作目标详情">
     {selected
       ? <div className={detailOpen && !narrowViewport ? "right-dock side" : "right-stage"} style={stageStyle}>
         <div key="timeline" className="right-stage-pane">{timelinePane}</div>
@@ -450,9 +451,9 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
           filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
           selected={selected}
           active={active}
-          rail={false} railState={null}
+          rail={false}
           onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
-          onSelect={selectObjective} onRefresh={list.reset} onRetry={list.retry} onMore={list.more}
+          onSelect={selectObjective} onRetry={list.retry} onMore={list.more}
           onApplyReorder={list.applyReorder} />
       </div>}
     </div>

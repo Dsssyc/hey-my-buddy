@@ -1,5 +1,4 @@
 import { useRef } from "react";
-import type { ReactNode } from "react";
 import type { ObjectiveTimeline } from "./objective-types";
 import type { TimelineItem } from "./objective-display";
 import { buildInspectorCard, type CardField, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
@@ -9,9 +8,8 @@ const MISSING_TITLE = "该记录不在当前读取范围内（可能已截断或
 
 export type TimelineInspectorProps = {
   selection: InspectorSelection | null;
-  /** Hover/focus item when it differs from the selection; never replaces the card. */
-  previewItem: TimelineItem | null;
-  previewClusterHead: string | null;
+  /** Last selected facts retained by the parent while this drawer was folded. */
+  cachedCard?: InspectorCard | null;
   timeline: ObjectiveTimeline | null;
   itemsByKey: ReadonlyMap<string, TimelineItem>;
   truncatedEvents: boolean;
@@ -68,7 +66,7 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
         <button type="button" className="button small-button"
           aria-disabled={openDisabled || undefined} title={openTitle}
           onClick={() => { if (!openDisabled && card.openItem) onOpen(card.openItem); }}>打开详情</button>
-        <button type="button" className="inspector-unpin" aria-label="取消固定" title="取消固定，回到预览"
+        <button type="button" className="inspector-unpin" aria-label="取消固定" title="取消固定"
           onClick={onUnpin}>×</button>
       </span>
     </div>
@@ -92,9 +90,9 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
 }
 
 /**
- * The pinned inspector as the timeline's always-visible bottom drawer (0.15
+ * The pinned inspector inside the timeline's expandable bottom drawer (0.15
  * C1/C2, 0.16 P1.6/P2.1): one structured six-field card that changes only
- * with the selection, plus a single preview line. Refreshes, arrows and hover
+ * with the selection. Refreshes and hover
  * never replace the card; when the selected record leaves the read, the last
  * facts stay with a warning and 打开详情 is disabled until it returns.
  */
@@ -106,32 +104,8 @@ export function TimelineInspector(props: TimelineInspectorProps) {
   // silently clear pinned facts.
   const cache = useRef<{ key: string; card: InspectorCard }>({ key: "", card: null as unknown as InspectorCard });
   if (resolved) cache.current = { key, card: resolved };
-  const card = cache.current.key === key ? cache.current.card : null;
+  const card = cache.current.key === key ? cache.current.card : props.cachedCard ?? null;
   const missing = !!selection && !resolved && card !== null;
-
-  const previewTarget = props.previewItem;
-  const previewCard = timeline && previewTarget
-    ? buildInspectorCard({ type: "item", key: previewTarget.key }, timeline, itemsByKey, props.profiles)
-    : null;
-  // Derive facts by field identity; free-text titles can themselves contain
-  // “时间” or “至” and must never be mistaken for another timing field.
-  const previewLine = props.previewClusterHead
-    ?? (previewCard ? [previewCard.head, ...["委派", "时间"].map(label =>
-      previewCard.fields.find(field => field.label === label)?.value)].filter(Boolean).join(" · ")
-      : previewTarget?.head ?? null);
-  const previewIsSelection = !props.previewClusterHead && (
-    (selection?.type === "item" && previewTarget?.key === selection.key));
-
-  let previewRow: ReactNode = null;
-  if (!selection) {
-    // One preview line plus the single selection hint (P1.6).
-    previewRow = <>
-      {previewLine && <span className="inspector-preview" title={previewLine}><strong>{previewLine}</strong></span>}
-      <span className="hint">单击选中 · Enter 或双击打开详情</span>
-    </>;
-  } else if (previewLine && !previewIsSelection) {
-    previewRow = <span className="inspector-preview muted" title={previewLine}>预览：{previewLine}</span>;
-  }
 
   // A record that left the read can no longer be opened; record browsing
   // itself is never locked (0.15.1 U4), so every navigation action from a
@@ -140,7 +114,6 @@ export function TimelineInspector(props: TimelineInspectorProps) {
   const openTitle = missing ? MISSING_TITLE : undefined;
 
   return <div className="inspector timeline-inspector">
-    {previewRow && <div className="inspector-preview-row">{previewRow}</div>}
     {card
       ? <CardView card={card} truncatedEvents={props.truncatedEvents} openDisabled={openDisabled} openTitle={openTitle}
         onOpen={props.onOpen} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun} onUnpin={props.onUnpin}
@@ -148,6 +121,6 @@ export function TimelineInspector(props: TimelineInspectorProps) {
       : selection && !resolved
         ? <div className="inspector-card" aria-live="polite"><div className="inspector-card-head"><strong>选中的记录</strong></div>
           <p className="inspector-missing">该记录不在当前读取范围内（可能已截断或被筛选）。</p></div>
-        : null}
+        : <span className="hint">单击选中 · Enter 或双击打开详情</span>}
   </div>;
 }
