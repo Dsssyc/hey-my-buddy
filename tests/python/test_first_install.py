@@ -71,9 +71,11 @@ class SkillInstallTests(unittest.TestCase):
     def test_foreign_directories_are_never_replaced(self):
         from buddy.errors import BoardError
         (self.claude / "buddy").mkdir(parents=True)
-        result = self.install()
-        self.assertEqual(result["claude"]["status"], "conflict")
+        with self.assertRaises(BoardError) as caught:
+            self.install()
+        self.assertEqual(caught.exception.code, "SKILL_TARGET_CONFLICT")
         self.assertFalse((self.claude / "buddy").is_symlink())
+        (self.claude / "buddy").rmdir()
         shutil.rmtree(self.agents / "buddy")
         (self.agents / "buddy").mkdir()
         (self.agents / "buddy/SKILL.md").write_text("---\nname: someone-else\ndescription: x\n---\n")
@@ -99,22 +101,19 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
         self.assertIn("codex plugin remove", result["next"])
 
-    def test_claude_falls_back_to_a_refreshed_copy_when_links_are_unavailable(self):
-        with patch("pathlib.Path.symlink_to", side_effect=OSError("symlinks need Developer Mode")):
-            first = self.install()
-            self.assertEqual(first["claude"]["status"], "copied")
-            copy = self.claude / "buddy"
-            self.assertFalse(copy.is_symlink())
-            self.assertEqual((copy / "skill.json").read_text(), (self.agents / "buddy/skill.json").read_text())
-            self.assertEqual(self.install()["claude"]["status"], "already-copied")
-            current = json.loads((copy / "skill.json").read_text())
-            (copy / "skill.json").write_text(json.dumps({**current, "version": "0.0.1"}))
-            self.assertEqual(self.install()["claude"]["status"], "copied")
-            self.assertEqual(json.loads((copy / "skill.json").read_text())["version"], current["version"])
-        # Once links work, the managed copy becomes a link.
-        self.assertEqual(self.install()["claude"]["status"], "linked")
-        self.assertTrue((self.claude / "buddy").is_symlink())
-        self.assertEqual(sorted(path.name for path in self.claude.iterdir()), ["buddy"])
+    def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
+        from buddy.errors import BoardError
+        with patch("pathlib.Path.symlink_to", side_effect=OSError(1, "Operation not permitted")), \
+                patch("buddy.skill_install._service") as service:
+            with self.assertRaises(BoardError) as caught:
+                self.install()
+            service.assert_not_called()
+        self.assertEqual(caught.exception.code, "CLAUDE_LINK_FAILED")
+        self.assertTrue((self.agents / "buddy/SKILL.md").is_file())
+        self.assertFalse((self.claude / "buddy").exists())
+        result = self.install()
+        self.assertEqual(result["skill"]["placement"], "already-current")
+        self.assertEqual(result["claude"]["status"], "linked")
 
     def test_windows_data_root_is_local_app_data(self):
         from pathlib import PurePosixPath

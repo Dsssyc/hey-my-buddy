@@ -72,11 +72,11 @@ def _place(source: Path, target: Path, marker: dict) -> str:
 
 
 def _link_claude(target: Path) -> dict:
-    """Point ~/.claude/skills/buddy at the canonical skill.
+    """Point ~/.claude/skills/buddy at the canonical skill with a symbolic link.
 
-    A symbolic link is preferred. Where one cannot be created (Windows without
-    Developer Mode), a copy carrying the same skill.json marker is used instead and
-    refreshed by every later install. Anything else at that path is left unchanged.
+    There is no copy fallback: a second copy could silently drift from the canonical
+    skill. Anything that prevents the link fails the install before the service is
+    upgraded; rerunning after the fix skips the already-placed skill.
     """
     home = claude_skills_home()
     link = home / SKILL
@@ -85,33 +85,18 @@ def _link_claude(target: Path) -> dict:
         if resolved == Path(os.path.realpath(target)):
             return {"path": str(link), "status": "already-linked"}
         if resolved.exists() and not _is_buddy_skill(resolved):
-            return {"path": str(link), "status": "conflict", "reason": "links to a different skill; left unchanged"}
+            raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to a different skill; move it away and rerun install")
         link.unlink()
     elif link.exists():
-        if _marker(link) is None:
-            return {"path": str(link), "status": "conflict", "reason": "is a separate directory; left unchanged"}
-        # Our own earlier copy: replace it with a link when possible, else refresh it.
-        copy = _marker(link)
-        wanted = _marker(target)
-        stale = link.with_name(f".{SKILL}-copy-{os.getpid()}")
-        link.rename(stale)
-        try:
-            link.symlink_to(target, target_is_directory=True)
-        except OSError:
-            if copy and wanted and all(copy.get(key) == wanted.get(key) for key in ("version", "sourceCommit")):
-                stale.rename(link)
-                return {"path": str(link), "status": "already-copied"}
-            shutil.copytree(target, link, symlinks=True)
-            shutil.rmtree(stale, ignore_errors=True)
-            return {"path": str(link), "status": "copied"}
-        shutil.rmtree(stale, ignore_errors=True)
-        return {"path": str(link), "status": "linked"}
+        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away and rerun install")
     home.mkdir(parents=True, exist_ok=True)
     try:
         link.symlink_to(target, target_is_directory=True)
-    except OSError:
-        shutil.copytree(target, link, symlinks=True)
-        return {"path": str(link), "status": "copied"}
+    except OSError as error:
+        raise BoardError("CLAUDE_LINK_FAILED",
+                         f"Could not link {link} to {target} ({error.strerror or error}). On Windows, enable Developer "
+                         "Mode or run with permission to create symbolic links, then rerun install; the skill is "
+                         "already placed and the service was not upgraded.") from None
     return {"path": str(link), "status": "linked"}
 
 
@@ -177,13 +162,7 @@ def _claude_status(target: Path) -> str:
     link = claude_skills_home() / SKILL
     if link.is_symlink():
         return "linked" if Path(os.path.realpath(link)) == Path(os.path.realpath(target)) else "conflict"
-    if not link.exists():
-        return "missing"
-    copy, wanted = _marker(link), _marker(target)
-    if copy is None:
-        return "conflict"
-    same = wanted is not None and all(copy.get(key) == wanted.get(key) for key in ("version", "sourceCommit"))
-    return "copied" if same else "stale-copy"
+    return "conflict" if link.exists() else "missing"
 
 
 def paths(params: dict) -> dict:

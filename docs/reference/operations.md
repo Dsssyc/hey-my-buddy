@@ -24,7 +24,7 @@ uv run --frozen python packaging/build-skill.py --destination /path/to/dist/budd
 `buddy install` holds a lock in the skills directory, then:
 
 - places the skill in `~/.agents/skills/buddy` unless a copy with the same version and source commit is already there, replacing an older copy by rename; a foreign directory or a symbolic link at that path is refused with `SKILL_TARGET_CONFLICT`;
-- creates or repairs `~/.claude/skills/buddy`; where a symbolic link cannot be created (Windows without Developer Mode) it writes a managed copy carrying the same `skill.json`, refreshes it on later installs and turns it into a link once links work; a separate directory or a link to another skill is reported as a conflict and left unchanged;
+- creates or repairs the symbolic link `~/.claude/skills/buddy`; there is no copy fallback, because a second copy could silently drift. A separate directory or a link to another skill fails with `SKILL_TARGET_CONFLICT`, and a link that cannot be created (for example Windows without Developer Mode) fails with `CLAUDE_LINK_FAILED`. Both fail before the service is upgraded; rerunning `install` after the fix skips the already-placed skill;
 - when a service is running, runs the installed skill's `scripts/buddy upgrade`, so the daily service switches to this package with the upgrade guarantees below; without a running service nothing starts, and the next command cold-starts the pinned or packaged runtime;
 - reports any remaining Codex plugin cache under `legacyPlugins`. Retire it with `codex plugin remove hey-my-buddy@<marketplace>`; two `buddy` skills must not stay installed side by side.
 

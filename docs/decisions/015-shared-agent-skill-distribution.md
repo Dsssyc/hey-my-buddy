@@ -14,7 +14,7 @@
 
 1. **唯一正本在 `~/.agents/skills/buddy/`。** 目录包含 `SKILL.md`、`scripts/buddy`（全局 CLI）和 `references/`（从仓库参考文档生成的精简副本）。skill 自包含，不再引用仓库路径或插件根目录。
 2. **CLI 放在 skill 目录内。** `scripts/buddy` 是指向稳定运行时的薄启动器，本身不含运行时；`SKILL.md` 用绝对路径 `~/.agents/skills/buddy/scripts/buddy` 调用，不依赖 PATH。需要在终端手动使用时，可另外建一个指向它的 `~/.local/bin/buddy` 链接，但不是必需的。
-3. **Claude Code 通过符号链接接入。** `~/.claude/skills/buddy` 指向 `~/.agents/skills/buddy`，不产生第二份副本。Windows 无法创建符号链接时改为复制，并由版本号保证两份一致。
+3. **Claude Code 通过符号链接接入。** `~/.claude/skills/buddy` 指向 `~/.agents/skills/buddy`，不产生第二份副本。不做复制回退：链接建不成、或该位置已被其他目录或其他 skill 占用时，`install` 直接报错并停在升级服务之前，避免第二份副本与正本悄悄不一致（2026-09-28 用户决定）。Windows 上需开启开发者模式；是否改用目录联接留待真机验证。
 4. **只安装一次。** 首次安装由 `buddy install` 完成：安装稳定运行时、写入公共 skill、建立 Claude Code 链接。安装器先检查 `~/.agents/skills/buddy` 与其中的版本标记，版本相同则只补齐缺失的链接，不重复安装；多个 Host 并发执行时用锁文件串行化。
 5. **新版本也用 `install` 安装。** 新包的 `scripts/buddy install` 把新版 skill 写入临时目录后按重命名替换，刷新链接，再在服务运行时调用已安装 skill 的 `upgrade`，由它完成现有的空闲检查、滚动备份、服务切换和校验；正在读取旧 skill 的 agent 不会读到写了一半的文件。`install` 的输出报告 skill 版本、contract 和放置结果。`upgrade` 本身仍只切换服务，中断后可单独重跑恢复。
 6. **运行时与数据位置不变。** 运行时、状态、备份继续放在 `~/.local/share/hey-my-buddy`，它们是数据而非用户直接使用的入口。
@@ -32,5 +32,5 @@
 
 - `SKILL.md`、`references/` 与 CLI 改为从 skill 目录相对定位；AGENTS.md、两份 README、operations.md 的安装与升级说明按新方案改写，ADR-007 相关条款以本文为准。
 - 需要新增 `buddy install`，并扩展 `buddy upgrade` 以更新 skill；安装与升级都要在私有根目录下测试，包括并发安装、已安装跳过、链接缺失补齐和升级中断恢复。
-- Windows 适配时，`scripts/` 需要提供 `buddy.cmd` 或 `buddy.ps1`，链接改为复制。
+- Windows 适配时，`scripts/` 需要提供 `buddy.cmd` 或 `buddy.ps1`；Claude Code 入口仍只用链接，不复制。
 - 真实安装、卸载插件和日常升级仍需用户单独授权。
