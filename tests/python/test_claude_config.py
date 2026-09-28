@@ -235,11 +235,12 @@ class ClaudeConfigTests(unittest.TestCase):
                "BUDDY_AGENT_CREDENTIAL": "worker-secret", "BUDDY_AGENT_CREDENTIAL_FILE": "/private/cred.json",
                "BUDDY_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
                "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}
-        result = native_environment(env)
+        with mock.patch('buddy.adapters.claude_config.cli_command', return_value=[]):
+            result = native_environment(env)
         self.assertEqual(result["PATH"], "/bin")
         self.assertEqual(result["HOME"], "/users/fixture")
         self.assertEqual(result["TMPDIR"], "/tmp/fixture")
-        self.assertEqual(result["ANTHROPIC_API_KEY"], "first-party-key")
+        self.assertNotIn('ANTHROPIC_API_KEY', result)
         self.assertEqual(result["CLAUDE_CONFIG_DIR"], "/users/fixture/.claude")
         self.assertEqual(result["BUDDY_CLAUDE_FIXTURE_CASE"], "ok")
         # No host, worker, agent-credential or other-harness value may leak.

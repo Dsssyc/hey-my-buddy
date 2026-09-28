@@ -427,6 +427,8 @@ class SelectionRequestTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         self.use_helper(path=self.directory / "missing-readonly")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE harness_health SET status='missing' WHERE adapter='dsh'")
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
         self.assertFalse(capabilities["maintenance"])
@@ -434,7 +436,7 @@ class SelectionRequestTests(DecisionTestCase):
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
-        self.assertIn("ADAPTER_UNAVAILABLE", self.decision(board, request["decisionId"])["error"])
+        self.assertIn("available", self.decision(board, request["decisionId"])["reason"])
         # Maintenance is not a blackboard model call at all any more, so an absent
         # helper cannot report it as an adapter-unavailable maintenance failure.
         self.assertFalse(capabilities["maintenance"])

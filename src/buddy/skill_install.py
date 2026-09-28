@@ -134,8 +134,7 @@ def _link_claude(target: Path) -> dict:
     except OSError as error:
         raise BoardError("CLAUDE_LINK_FAILED",
                          f"Could not link {link} to {target} ({error.strerror or error}). On Windows, enable Developer "
-                         "Mode or run with permission to create symbolic links, then rerun install; the skill is "
-                         "already placed and the service was not upgraded.") from None
+                         "Mode or run with permission to create symbolic links, then rerun the fixed-version package install command.") from None
     return {"path": str(link), "status": "linked"}
 
 
@@ -161,7 +160,8 @@ def install(params: dict) -> dict:
     state = get_state_dir()
     from .runtime import runtime_root
     planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
-    print(json.dumps({'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
+    from .contracts import CONTRACT_VERSION
+    print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
     if (state / 'board.sqlite3').exists() and not (state / 'upgrade.json').exists():
         from .upgrade import idle_snapshot
         idle_snapshot(state)
@@ -237,7 +237,7 @@ def install(params: dict) -> dict:
             if (state / "board.sqlite3").exists():
                 raise BoardError("UPGRADE_NO_ROLLBACK_RUNTIME",
                                  "Existing board has no provable service runtime; recover its previous package before installing")
-            installed = runtime.materialize()
+            installed = runtime.materialize(root=source / 'package')
             ready = runtime.read_ready(Path(installed["runtimeDir"]))
             if ready.get("sourceCommit") != marker.get("sourceCommit"):
                 raise BoardError("INSTALL_GENERATION_MISMATCH", "Skill and materialized runtime came from different source generations")

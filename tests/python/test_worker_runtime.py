@@ -85,6 +85,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("BUDDY") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PLUGIN_DATA"}}
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_STATE_DIR=str(self.state), BUDDY_RUNTIME_ROOT=str(self.runtime_root),
+                                BUDDY_AGENT_SKILLS_DIR=str(self.root / 'agents'), BUDDY_CLAUDE_SKILLS_DIR=str(self.root / 'claude'),
                                 BUDDY_MAX_CONCURRENT="2", UV_PROJECT_ENVIRONMENT=str(self.root / "cli-venv"),
                                 BUDDY_CLAUDE_CLI=str(self.root / "claude-not-installed"))
         # Building reads the current checkout and never rewrites it, so the real root
@@ -100,6 +101,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         # be claimed by the explicit worker this test starts. No safety is weakened:
         # the owner is still asserted exactly, it is just no longer raced.
         self.spare_locks = []
+        self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         for worker_id in ("local-2", "local-3"):
             directory = self.state / "workers" / worker_id
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -142,6 +144,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         return self.client.get(runId=run_id)
 
     def test_staged_launcher_adds_runtime_worker_that_survives_stage_replacement(self):
+        self.staged_cli('install')
         health = self.staged_cli("health")
         self.assertTrue(health["runtimeStable"], health)
         info = self.staged_cli("runtime")["identity"]

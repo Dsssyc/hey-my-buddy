@@ -24,13 +24,19 @@ OPERATIONS = ROOT / "docs" / "reference" / "operations.md"
 class SkillInstallTests(unittest.TestCase):
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix="buddy-install-")).resolve()
-        self.addCleanup(shutil.rmtree, self.base, True)
+        self.addCleanup(self.cleanup_private)
         self.agents = self.base / "agents/skills"
         self.claude = self.base / "claude/skills"
         self.environment = {"BUDDY_AGENT_SKILLS_DIR": str(self.agents),
                             "BUDDY_CLAUDE_SKILLS_DIR": str(self.claude),
                             "BUDDY_STATE_DIR": str(self.base / "state"),
+                            "BUDDY_RUNTIME_ROOT": str(self.base / 'runtime'),
+                            'BUDDY_MAX_CONCURRENT': '1', 'BUDDY_CONSOLE_PORT': '0',
                             "CODEX_HOME": str(self.base / "codex")}
+
+    def cleanup_private(self):
+        from buddy.checks import teardown_private_root
+        self.assertIsNone(teardown_private_root(self.base), 'Private install did not stop; evidence retained')
 
     def install(self, **extra):
         from buddy.skill_install import install
@@ -76,7 +82,7 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SKILL_TARGET_CONFLICT")
         self.assertFalse((self.claude / "buddy").is_symlink())
         (self.claude / "buddy").rmdir()
-        shutil.rmtree(self.agents / "buddy")
+        self.assertFalse((self.agents / "buddy").exists())
         (self.agents / "buddy").mkdir()
         (self.agents / "buddy/SKILL.md").write_text("---\nname: someone-else\ndescription: x\n---\n")
         with self.assertRaises(BoardError) as caught:
@@ -104,15 +110,15 @@ class SkillInstallTests(unittest.TestCase):
     def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
         from buddy.errors import BoardError
         with patch("pathlib.Path.symlink_to", side_effect=OSError(1, "Operation not permitted")), \
-                patch("buddy.skill_install._service") as service:
+                patch("buddy.upgrade.upgrade") as service:
             with self.assertRaises(BoardError) as caught:
                 self.install()
             service.assert_not_called()
         self.assertEqual(caught.exception.code, "CLAUDE_LINK_FAILED")
-        self.assertTrue((self.agents / "buddy/SKILL.md").is_file())
+        self.assertFalse((self.agents / "buddy").exists())
         self.assertFalse((self.claude / "buddy").exists())
         result = self.install()
-        self.assertEqual(result["skill"]["placement"], "already-current")
+        self.assertEqual(result["skill"]["placement"], "installed")
         self.assertEqual(result["claude"]["status"], "linked")
 
     def test_windows_data_root_is_local_app_data(self):
@@ -140,8 +146,9 @@ class SkillInstallTests(unittest.TestCase):
         state = os.path.realpath(self.base / "state")
         self.assertEqual(after["data"]["stateDir"], state)
         self.assertEqual(after["data"]["board"], os.path.join(state, "board.sqlite3"))
-        self.assertIsNone(after["runtime"]["active"])
-        self.assertFalse((self.base / "state").exists())
+        self.assertTrue(Path(after["runtime"]["active"]).is_relative_to(self.base / 'runtime'))
+        self.assertTrue((self.base / "state/active-runtime.json").is_file())
+        self.assertFalse((self.base / 'state/board.sqlite3').exists())
 
     def test_the_repository_launcher_installs_from_any_cwd(self):
         cwd = self.base / "elsewhere"
@@ -172,7 +179,7 @@ class DocumentationTests(unittest.TestCase):
     def test_readmes_keep_first_install_parity(self):
         for name in ("README.md", "README.zh-CN.md"):
             text = (ROOT / name).read_text()
-            self.assertIn("skills/buddy/scripts/buddy install", text, name)
+            self.assertIn("uvx hey-my-buddy@0.19.0 install", text, name)
             self.assertIn("~/.agents/skills/buddy", text, name)
             self.assertIn("docs/reference/operations.md#installation", text, name)
             self.assertNotIn("codex plugin add", text, name)

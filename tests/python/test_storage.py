@@ -8,6 +8,23 @@ from buddy import storage
 from support import BoardTestCase
 
 class StorageTests(BoardTestCase):
+    def test_private_state_cannot_prune_the_default_states_runtime_inventory(self):
+        board = self.board()
+        shared = self.directory / 'shared-default-runtime'
+        previous = shared / 'retained-by-another-state'
+        previous.mkdir(parents=True)
+        (previous / 'READY.json').write_text('{}')
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'test-current', 'previous': 'test-previous'}))
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(shared)}), \
+             mock.patch('buddy.storage.DEFAULT_RUNTIME_ROOT', shared), \
+             mock.patch('buddy.home.default_state_dir', return_value=self.directory / 'daily-state'), \
+             mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), \
+             mock.patch('buddy.storage.runtime_usage', return_value=[]), \
+             mock.patch('buddy.storage.is_ready', return_value=True):
+            result = storage.prune_old_runtimes(board.store)
+        self.assertTrue(previous.is_dir())
+        self.assertEqual(result['removedBytes'], 0)
+
     def setUp(self):
         super().setUp()
         self.env = mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str((self.directory / 'runtime').resolve())})

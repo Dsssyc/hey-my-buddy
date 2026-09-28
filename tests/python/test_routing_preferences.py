@@ -61,7 +61,7 @@ class DecisionCapabilityTests(unittest.TestCase):
     def test_native_verification_defaults_false_including_dsh(self):
         for native in (Adapter, DshAdapter, CodexAdapter, ClaudeAdapter, ZcodeAdapter):
             with self.subTest(native=native.name):
-                self.assertFalse(native.read_only_structured_verified)
+                self.assertFalse(native().read_only_structured_verified)
         self.assertFalse(DshAdapter.read_only_structured)
         self.assertTrue(CodexAdapter.read_only_structured)
         self.assertTrue(ClaudeAdapter.read_only_structured)

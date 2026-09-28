@@ -159,7 +159,8 @@ class TrustBoundaryTests(AttachFixture):
     def test_group_or_world_accessible_directory_is_not_trusted(self):
         self.directory.chmod(0o755)
         self.assert_rejected_by_validation()
-        self.assert_falls_back_to_cold_start()
+        self.assertEqual(ensure_service(self.directory), ENDPOINT)
+        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
 
     def test_private_but_unreadable_directory_is_not_trusted(self):
         self.directory.chmod(0o000)
@@ -331,8 +332,9 @@ class ColdStartTests(unittest.TestCase):
         # A path that already exists as a file cannot become the state directory.
         blocked = Path(self.temp.name) / "state"
         blocked.write_text("not a directory")
-        with self.assertRaises(OSError):
+        with self.assertRaises(ServiceError) as refused:
             ensure_service(blocked)
+        self.assertEqual(refused.exception.code, 'LAUNCH_ACCESS_DENIED')
         self.spawn.assert_not_called()
         self.assertEqual(blocked.read_text(), "not a directory")
 

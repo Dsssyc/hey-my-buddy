@@ -346,7 +346,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     before['runtimeSettings'] = runtime_settings
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
-    materialized = runtime.materialize()
+    materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
     target = Path(materialized['runtimeDir'])
     if previous == target and skill_source is None:
         return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name}

@@ -187,6 +187,9 @@ def inspect(store) -> dict:
             # Invalid ownership never licenses a filesystem guess.
             continue
     runtime_root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
+    from .home import default_state_dir
+    foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
+                            and state != default_state_dir().resolve())
     try:
         keep = json.loads((state / 'runtime-retention.json').read_text())
         retained_ids = {keep['current'], keep['previous']}
@@ -200,6 +203,8 @@ def inspect(store) -> dict:
                 continue
             reasons = (['retention-history-unproven'] if retained_ids is None else
                        ['retained-runtime'] if path.name in retained_ids else runtime_usage(path, commands, known))
+            if foreign_default_root:
+                reasons.append('runtime-owned-by-default-state')
             if any(p.is_symlink() for p in (runtime_root, *runtime_root.parents)):
                 reasons.append('linked-path')
             if not is_ready(path):

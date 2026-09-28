@@ -261,6 +261,9 @@ class InProcessBoard:
             evaluation=self.evaluation,
             console_factory=self.console_action,
         )
+        # Native startup validation shares this synthetic health boundary. The
+        # real service/discovery suites construct BoardService independently.
+        self.service.harnesses.refresh = lambda name, **kwargs: self.service.harnesses.get(name)
         self.wait_service = WaitService(self.store, self.admission, token="test-token")
         self.console = Console(
             self.store,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+from buddy.contracts import CONTRACT_VERSION
 import json
 import os
 import tempfile
@@ -401,7 +402,7 @@ class OpenTests(ConsoleCliTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(
             json.loads(stdout.getvalue()),
-            {**OPEN_REPLY, "browserOpened": False},
+            {**OPEN_REPLY, "browserOpened": False, 'contractVersion': CONTRACT_VERSION},
         )
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
         self.assertEqual(stderr.getvalue(), "")

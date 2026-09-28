@@ -268,6 +268,7 @@ def _cold_start_preflight(directory: Path) -> None:
     address = None
     try:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
         if not _trusted_directory(directory):
             raise OSError('State directory is not owner-private')
         fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

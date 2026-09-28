@@ -16,6 +16,7 @@ if ($WheelUrl -and $WheelUrl -notmatch "/hey_my_buddy-$([regex]::Escape($Version
 $dataHome = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData\Local' }
 $privateDir = Join-Path $dataHome "hey-my-buddy\uv\$uvVersion"
 $uv = Join-Path $privateDir 'uv.exe'
+Write-Output "Private uv destination (if needed): $privateDir"
 $systemUv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
 if ($systemUv) { $uv = $systemUv.Source }
 elseif (-not (Test-Path $uv)) {

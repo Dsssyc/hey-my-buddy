@@ -24,6 +24,7 @@ fi
 
 UV_PRIVATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/hey-my-buddy/uv/$UV_VERSION"
 UV_BIN="$UV_PRIVATE_DIR/uv"
+printf 'Private uv destination (if needed): %s\n' "$UV_PRIVATE_DIR"
 if command -v uv >/dev/null 2>&1; then
   UV_BIN=$(command -v uv)
 elif [ ! -x "$UV_BIN" ]; then

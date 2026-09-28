@@ -52,7 +52,8 @@ class SingleEntrypointTests(unittest.TestCase):
         self.assertFalse((ROOT / "bin").exists())
         pyproject = (ROOT / "pyproject.toml").read_text()
         self.assertEqual(pyproject.count("[project.scripts]"), 1)
-        self.assertIn('buddy = "buddy.launcher:main"', pyproject)
+        self.assertIn('hey-my-buddy = "buddy.package_install:main"', pyproject)
+        self.assertNotIn('\nbuddy =', pyproject)
 
     def test_the_only_agent_entrypoint_is_the_shared_skill_and_no_plugin_is_published(self):
         self.assertTrue((ROOT / "skills" / "buddy" / "SKILL.md").is_file())

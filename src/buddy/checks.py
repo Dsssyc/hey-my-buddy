@@ -72,6 +72,7 @@ def test_environment(root: Path) -> dict:
     # Claude availability reads native account metadata. Unrelated tests must not
     # launch the user's CLI; Claude fixtures override this sentinel explicitly.
     values["BUDDY_CLAUDE_CLI"] = str(root / "tests/python/fixtures/claude-not-installed")
+    values["BUDDY_CODEX_CLI"] = str(root / "tests/python/fixtures/codex-not-installed")
     # The console backend's fixed default port belongs to the daily service; a private
     # test environment lets the operating system assign its own console ports.
     values["BUDDY_CONSOLE_PORT"] = "0"
@@ -90,6 +91,8 @@ def child_environment(root: Path, private_root: Path) -> dict:
     values = test_environment(root)
     values["TMPDIR"] = str(private_root / "tmp")
     values["BUDDY_CHECKS_TMPDIR"] = str(private_root / "tmp")
+    values['BUDDY_STATE_DIR'] = str(private_root / 'state')
+    values['BUDDY_RUNTIME_ROOT'] = str(private_root / 'runtime')
     return values
 
 
