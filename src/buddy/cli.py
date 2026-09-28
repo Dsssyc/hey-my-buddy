@@ -35,6 +35,7 @@ METHODS = [
     "backup",
     "upgrade",
     "install",
+    "paths",
     "storage-plan",
     "storage-apply",
     # -- single governed goal lifecycle ------------------------------------
@@ -579,6 +580,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.method == "install":
             from .skill_install import install
             result = install(params)
+        elif args.method == "paths":
+            from .skill_install import paths
+            result = paths(params)
         elif args.method in LOCAL_METHODS:
             result = _worker_command(args.method, params)
         elif args.method == "console":

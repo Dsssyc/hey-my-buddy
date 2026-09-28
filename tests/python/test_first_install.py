@@ -99,6 +99,23 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
         self.assertIn("codex plugin remove", result["next"])
 
+    def test_paths_reports_skill_data_and_runtime_locations_without_starting_anything(self):
+        from buddy.skill_install import paths
+        with patch.dict(os.environ, self.environment):
+            before = paths({})
+            self.install()
+            after = paths({})
+        self.assertFalse(before["skill"]["installed"])
+        self.assertEqual(before["claude"]["status"], "missing")
+        self.assertTrue(after["skill"]["installed"])
+        self.assertEqual(after["claude"]["status"], "linked")
+        self.assertEqual(after["skill"]["launcher"], str(self.agents / "buddy/scripts/buddy"))
+        state = os.path.realpath(self.base / "state")
+        self.assertEqual(after["data"]["stateDir"], state)
+        self.assertEqual(after["data"]["board"], os.path.join(state, "board.sqlite3"))
+        self.assertIsNone(after["runtime"]["active"])
+        self.assertFalse((self.base / "state").exists())
+
     def test_the_repository_launcher_installs_from_any_cwd(self):
         cwd = self.base / "elsewhere"
         cwd.mkdir()

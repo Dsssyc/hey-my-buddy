@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
         state = Path(os.environ.get('BUDDY_STATE_DIR') or Path.home() / '.local/share/hey-my-buddy/state').expanduser().resolve()
-        if args and args[0] not in {'upgrade','install','--help','-h'}:
+        if args and args[0] not in {'upgrade','install','paths','--help','-h'}:
             if (state / 'upgrade.json').exists():
                 from buddy.errors import BoardError
                 raise BoardError('UPGRADE_IN_PROGRESS', 'The launcher is fenced until upgrade verification or recovery finishes')

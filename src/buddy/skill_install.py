@@ -8,7 +8,6 @@ daily service switches to this package with the usual idle checks and backup.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -114,6 +113,8 @@ def install(params: dict) -> dict:
     schemas.reject_unknown(params, set(), "install")
     if os.environ.get("BUDDY_AGENT_CREDENTIAL") or os.environ.get("BUDDY_AGENT_CREDENTIAL_FILE"):
         raise BoardError("UNAUTHORIZED", "A Worker cannot install the shared skill")
+    import fcntl  # POSIX-only lock; imported here so read-only commands stay portable.
+
     home = agent_skills_home()
     home.mkdir(parents=True, exist_ok=True)
     target = home / SKILL
@@ -145,3 +146,37 @@ def install(params: dict) -> dict:
         result["legacyPlugins"] = legacy
         result["next"] = "Retire the Codex plugin: codex plugin remove hey-my-buddy@<marketplace>"
     return result
+
+
+def _claude_status(target: Path) -> str:
+    link = claude_skills_home() / SKILL
+    if link.is_symlink():
+        return "linked" if Path(os.path.realpath(link)) == Path(os.path.realpath(target)) else "conflict"
+    return "conflict" if link.exists() else "missing"
+
+
+def paths(params: dict) -> dict:
+    """Where the skill, launcher, data and runtime live; reads files only, starts nothing."""
+    schemas.reject_unknown(params, set(), "paths")
+    from .runtime import runtime_root
+    home = agent_skills_home()
+    target = home / SKILL
+    marker = _marker(target) if target.is_dir() else None
+    running = packaged_skill()
+    state = get_state_dir()
+    pointer = None
+    try:
+        pointer = json.loads((state / "active-runtime.json").read_text()).get("runtimeDir")
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {
+        "skill": {"dir": str(target), "installed": marker is not None,
+                  "version": marker.get("version") if marker else None,
+                  "launcher": str(target / "scripts" / SKILL)},
+        "claude": {"path": str(claude_skills_home() / SKILL), "status": _claude_status(target)},
+        "invokedFrom": str(running) if running else str(project_root()),
+        "data": {"stateDir": str(state), "board": str(state / "board.sqlite3"),
+                 "attempts": str(state / "attempts"), "workspaces": str(state / "workspaces"),
+                 "backup": str(state / "backups" / "current"), "serviceLog": str(state / "control.log")},
+        "runtime": {"root": str(runtime_root().resolve()), "active": pointer},
+    }
