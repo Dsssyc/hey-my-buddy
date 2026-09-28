@@ -70,7 +70,7 @@ DOM 实测四个桌面片段均高 22 px、没有片段文字、保留点阵。�
 
 执行 uv run --frozen python packaging/stage-plugin.py --destination .dsh-skill-build/stage-final/hey-my-buddy，再通过 stage_smoke.py 在独立临时根目录冷启动包内 CLI。移走分发源目录后仍可读取 health/runtime，stable=true、leaks=[]、resourcesMissing=[]。未验证 Router 的 selection-request 返回 needs-host、runId=null，没有启动模型。私有服务通过自身 CLI stop 收尾。
 
-运行时内容 ID：15366b8e3dfaa43add6f6073aeef9fd7。详细路径、身份和停止回执见 .dsh-skill-build/stage-smoke.json。文档收尾后重新生成分发目录，并核验运行资产与已验证运行时的字节一致；文档不是运行时依赖。
+运行时内容 ID 以 stage-smoke.json 为准。详细路径、身份和停止回执见 .dsh-skill-build/stage-smoke.json。最终分发目录与已验证运行时核验字节一致。分发过程生成 build-info.json 记录源提交；除此项生成的溯源信息外，运行资产与源码逐项一致。
 
 ## 待批准的原生探针
 
