@@ -1071,9 +1071,12 @@ class WorkflowCoordinator:
                       override_payload.get("configurationRevision") == run["execution_configuration_revision"]
                       else "original-explicit" if len(schemas.configuration_constraints(goal)) == len(schemas.CONFIGURATION_FIELDS)
                       else None)
-            return {"status": "needs-host" if needs_host else "explicit", "decisionId": None, "taskId": None,
+            preparing = (run["state"] == "executing" and self._configuration(run) is None
+                         and connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state='queued'"
+                                                " AND workspace_manifest_json IS NULL LIMIT 1", (run["run_id"],)).fetchone() is not None)
+            return {"status": "needs-host" if needs_host else "queued" if preparing else "explicit", "decisionId": None, "taskId": None,
                     "constraints": schemas.configuration_constraints(goal), "routingPreferences": preferences,
-                    "source": source}
+                    "source": None if preparing else source}
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (run["current_routing_id"],)).fetchone()
         decision = self.board.decisions._row(connection, run["current_routing_id"])
         status = decision["status"] if link["state"] == "pending" else {

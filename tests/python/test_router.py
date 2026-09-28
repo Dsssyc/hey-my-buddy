@@ -112,6 +112,8 @@ class RouterPublicationTests(WorkflowTestCase):
             'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'}})
         self.controls[submitted['runId']] = submitted['control']
         continued = self.continue_run(board, submitted, reroute=True, input='Changed continuation task')
+        self.assertEqual(continued['routing']['status'], 'queued')
+        self.assertIsNone(continued['routing']['source'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 1)
             self.assertIsNone(connection.execute('SELECT workspace_manifest_json FROM workflow_continuations').fetchone()[0])
