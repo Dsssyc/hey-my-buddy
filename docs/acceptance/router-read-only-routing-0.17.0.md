@@ -101,6 +101,18 @@ Host 又误把广告 effort 当作用户可用配置：文档 7e363262-0130-4b90
 
 产物由 Host 独立检查、测试和整合；验收备注保留这些错误。收尾使用原 runId/controlFile 和官方 CLI：get → integration-record → acknowledge → workspace-cleanup-plan/apply，保留固定补丁、manifest 和 refs。逐项回执在 .dsh-skill-build/ledger/，测试迁移的早期回执在 test-integration.json、test-ack.json、test-cleanup-plan.json。被后续工作取代的初始前端 attention run 按取消收束，不伪造完成回合；私有服务在任务停止后关闭。
 
+## 复核修正
+
+2026-09-28 的独立复核在同一候选上发现并修正了以下问题，修正提交位于分支 socu/router-buddy-0.17-review。该分支同时把起点的三个文档提交换成不含 AI 署名的版本，文件树与原分支一致。
+
+- 冻结输入副本：原实现为每个文件启动一次 git 子进程，本仓库 389 个文件、7.3 MB 实测 7.4 秒，时间随文件数线性增长且不计入预算；副本也从不删除，而存储回收不覆盖 attempt 目录。现改为单个 `git cat-file --batch` 读取原始 blob，物化设 120 秒上限；Router 停止并核验未变后删除副本，只保留摘要；核验失败的副本保留以供检查；准备失败不留下半成品。
+- 读取字节上限：Claude 与 Codex 都无法观测读取量，上限从未执行，但设置页把 128 KiB/512 KiB/2 MiB 显示成已生效的限制。现在设置页与决策详情只显示时限与工具调用上限，参考文档说明读取字节上限只在可观测时生效，当前不生效。
+- 依赖：删除为答案校验新增的 `jsonschema`（连带 attrs、referencing、rpds-py 等），改用只覆盖 Router 答案所用关键字的内置校验，未知关键字直接拒绝；越界选择仍不做格式纠正。
+- 工具调用预算：原实现在调用数达到上限时即中断，上限 N 实际只允许 N−1 次；现在允许 N 次，第 N+1 次中断。
+- 控制台：状态未知的路由片段改为点线，与取消的虚线区分，不再只靠颜色；`api.ts` 中误改为 0.17.0 的 0.16.0 存储接口注释已恢复。
+
+复核验证：test_router、test_selection_policy 共 34 项通过；test_decision、test_codex、test_claude、test_workflow_routing、test_routing_history、test_routing_preferences、test_objectives、test_router_probe、test_evaluation 共 215 项通过（按 buddy.checks 的做法清除了 Claude 会话导出的 ANTHROPIC_* 变量）；控制台 npm test 39 个文件 486 项通过，npm run build 通过并重建 console_assets。完整 buddy.checks 结果见下一段。
+
 ## 开放边界
 
 原生 Router 能力仍全未验证；Codex 的允许操作边界、Claude 的策略/拒绝证据和读取量观测需逐次批准的探针。DSH 暂不可用，ZCode 仅 mock。预算参数待实测。日常 0.17.0 安装没有授权，也没有执行。源码检查、mock/浏览器/打包验证与日常安装是独立结论。
