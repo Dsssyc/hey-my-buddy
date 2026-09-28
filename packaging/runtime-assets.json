@@ -2,6 +2,7 @@
   "format": 1,
   "assets": [
     {"path": "packaging/runtime-assets.json", "kind": "file"},
+    {"path": "packaging/hatch_build.py", "kind": "file"},
     {"path": "pyproject.toml", "kind": "file"},
     {"path": "uv.lock", "kind": "file"},
     {"path": "src/buddy", "kind": "directory"},
