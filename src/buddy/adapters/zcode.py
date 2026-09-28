@@ -35,6 +35,10 @@ class ZcodeAdapter(Adapter):
     model_discovery = True
 
     def available(self) -> tuple[bool, str | None]:
+        from ..harness_runtime import selected
+        record = selected("zcode")
+        if record is not None:
+            return record.get('status') == 'ready', record.get('reasonCode')
         try:
             cli_command()
             paths = provider_paths()
@@ -183,6 +187,7 @@ class ZcodeAdapter(Adapter):
         return "the ZCode native resume identity is invalid"
 
     def discover_models(self) -> dict:
+        from ..harness_runtime import controller_environment
         """Ask the installed app-server for its real available models; never send a turn."""
         directory = Path(tempfile.mkdtemp(prefix="buddy-zcode-catalog-"))
         stopped = False
@@ -197,7 +202,7 @@ class ZcodeAdapter(Adapter):
             stdout, stderr = open_logs(logs)
             try:
                 process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.zcode_runner", "--control", str(control)],
-                                           stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
+                                           stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, env=controller_environment(directory))
             finally:
                 os.close(stdout)
                 os.close(stderr)

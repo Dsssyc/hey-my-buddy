@@ -31,6 +31,10 @@ class CodexAdapter(Adapter):
         return start(self.name, context, request)
 
     def available(self) -> tuple[bool, str | None]:
+        from ..harness_runtime import selected
+        record = selected("codex")
+        if record is not None:
+            return record.get('status') == 'ready', record.get('reasonCode')
         try:
             cli_command()
             return True, None
@@ -173,6 +177,7 @@ class CodexAdapter(Adapter):
         return "the Codex native resume identity is invalid"
 
     def discover_models(self) -> dict:
+        from ..harness_runtime import controller_environment
         directory = Path(tempfile.mkdtemp(prefix="buddy-codex-catalog-"))
         stopped = False
         try:
@@ -183,7 +188,7 @@ class CodexAdapter(Adapter):
             stdout, stderr = open_logs(logs)
             try:
                 process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.codex_runner", "--control", str(control)],
-                                           stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
+                                           stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, env=controller_environment(directory))
             finally:
                 os.close(stdout)
                 os.close(stderr)

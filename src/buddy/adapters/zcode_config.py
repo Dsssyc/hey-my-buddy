@@ -14,6 +14,13 @@ DEFAULT_CLI = Path("/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs")
 
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
+    if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_ZCODE_CLI")):
+        from ..harness_runtime import command_for
+        from ..errors import BoardError
+        try:
+            return command_for("zcode", env)
+        except BoardError as error:
+            raise NativeError("adapter-unavailable", error.message) from None
     value = env.get("BUDDY_ZCODE_CLI") or shutil.which("zcode", path=env.get("PATH")) or str(DEFAULT_CLI)
     path = Path(value).expanduser().resolve()
     if not path.is_file():

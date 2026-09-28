@@ -75,7 +75,7 @@ NATIVE_ENVIRONMENT_ALLOWLIST = (
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-    "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CONFIG_DIR",
 )
 
 #: The only outbound network the sandbox allows: package-manager registries, so
@@ -133,6 +133,13 @@ AUTH_STATUS_MAX_BYTES = 1 << 16
 
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
+    if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_CLAUDE_CLI")):
+        from ..harness_runtime import command_for
+        from ..errors import BoardError
+        try:
+            return command_for("claude", env)
+        except BoardError as error:
+            raise ClaudeUnavailable(error.message) from None
     value = env.get("BUDDY_CLAUDE_CLI") or shutil.which("claude", path=env.get("PATH"))
     if not value:
         raise ClaudeUnavailable("Claude Code CLI is missing; configure BUDDY_CLAUDE_CLI")
@@ -308,7 +315,10 @@ def native_environment(environment: dict) -> dict:
     model-driven process cannot read Buddy credentials or silently reselect a
     configuration.
     """
-    result = {key: environment[key] for key in NATIVE_ENVIRONMENT_ALLOWLIST if key in environment}
-    result.update({key: value for key, value in environment.items()
-                   if key.startswith("BUDDY_CLAUDE_FIXTURE_")})
+    from ..harness_discovery import native_environment as clean
+    result = clean(environment, command=cli_command(environment))
+    if os.environ.get("BUDDY_DEV_SOURCE") == "1":
+        for key in ("BUDDY_CLAUDE_FIXTURE_AUTH_STATUS", "BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"):
+            if key in environment:
+                result[key] = environment[key]
     return result

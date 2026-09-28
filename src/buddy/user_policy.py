@@ -139,6 +139,7 @@ def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
 def publish(evaluation, connection, *, revision: int, writer, now: str, params: dict) -> dict:
     """Apply only requested human fields in the caller's publication transaction."""
     require_writer_kind('human')
+    from .harness_health import read_health
     provided = set(params) & PATCH_FIELDS
     if not provided:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
@@ -155,6 +156,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
             if row is None:
                 raise BoardError('NOT_FOUND', 'Unknown profileId', profileId=profile_id)
             profiles[profile_id] = dict(row)
+            profiles[profile_id]['available'] = bool(row['available']) and read_health(connection, row['adapter'])['available']
     for entry in settings:
         if type(entry.get('enabled')) is not bool:
             raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean')
@@ -167,7 +169,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     for entry in family_preferences + annotations:
         family = _family(entry)
         if family not in families:
-            members = connection.execute('SELECT available, enabled FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=?', family).fetchall()
+            members = connection.execute("SELECT (p.available AND h.status='ready') AS available,p.enabled FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.adapter=? AND p.provider=? AND p.model=?", family).fetchall()
             if not members:
                 raise BoardError('NOT_FOUND', 'Unknown model family')
             families[family] = members
@@ -232,7 +234,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         profile_id = configuration.get('decisionProfileId', evaluation._state(connection)['decision_profile_id'])
         if 'decisionProfileId' in configuration and profile_id is not None:
             profile = connection.execute('SELECT * FROM evaluation_profiles WHERE profile_id=?', (profile_id,)).fetchone()
-            if profile is None or not profile['available'] or not profile['enabled']:
+            if profile is None or not profile['available'] or not profile['enabled'] or not read_health(connection, profile['adapter'])['available']:
                 raise BoardError('CONFIGURATION_UNAVAILABLE', 'A new selector must be available and enabled')
             from .adapters import adapter
             native = adapter(profile['adapter'])

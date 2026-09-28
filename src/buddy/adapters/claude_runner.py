@@ -172,6 +172,7 @@ def _read_only_call(connection, control, result, catalog, early_messages, user_s
             for model in catalog["providers"][0]["models"]):
         raise ClaudeProtocolError("invalid-configuration", "Unknown native read-only configuration")
     connection.pump_available()
+    result["modelStarted"] = True
     connection.send({"type": "user", "message": {"role": "user",
                     "content": [{"type": "text", "text": request["prompt"]}]}})
     user_sent["value"] = True
@@ -214,7 +215,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     started = time.monotonic()
     deadline = execution_deadline(control["timeoutSeconds"])
     result = {"status": "error", "mode": "claude", "harnessVersion": "unknown",
-              "requested": control.get("spec"), "resolved": None, "observed": None}
+              "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
     record = None
     connection = None
     process = None
@@ -350,6 +351,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             connection.pump_available()
             prompt = "\n\n".join([HARNESS_PREAMBLE, *ASSISTANCE_HINTS,
                                   Path(control["taskFile"]).read_text(), canonical_json(turn_input)])
+            result["modelStarted"] = True
             connection.send({"type": "user", "message": {"role": "user",
                                                          "content": [{"type": "text", "text": prompt}]}})
             user_sent["value"] = True

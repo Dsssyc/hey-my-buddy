@@ -97,6 +97,15 @@ def local_capabilities() -> list[str]:
     return sorted(values)
 
 
+def supported_capabilities() -> list[str]:
+    """Executor code capabilities; native readiness is owned by the blackboard.
+
+    Supervisor registration never probes a user's harnesses or account. Claims
+    and the pre-start service check decide whether an installed route can run.
+    """
+    return sorted({'blackboard', 'worker', *(value for item in adapters().values() for value in item.capabilities)})
+
+
 __all__ = [
     "Adapter",
     "AdapterOutcome",
@@ -113,4 +122,5 @@ __all__ = [
     "adapters",
     "capability_report",
     "local_capabilities",
+    "supported_capabilities",
 ]

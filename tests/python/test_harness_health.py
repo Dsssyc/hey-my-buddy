@@ -34,6 +34,15 @@ class HarnessHealthTests(BoardTestCase):
         self.native.assert_called_once()
         self.assertEqual(len(self.refreshed), 1)
 
+    def test_caller_path_is_a_transient_hint_and_never_stored(self):
+        self.health.add_path_hint('/private/new-cli:/other/bin:relative')
+        self.health.refresh('codex', force=True)
+        environment = self.native.call_args.args[2]
+        self.assertTrue(environment['PATH'].startswith('/private/new-cli:/other/bin:'))
+        with self.board.db.read() as db:
+            stored = db.execute("SELECT record_json FROM harness_health WHERE adapter='codex'").fetchone()[0]
+        self.assertNotIn('/private/new-cli', stored)
+
     def test_preflight_checks_fingerprints_without_reprobing_unchanged_binary(self):
         self.health.refresh('codex')
         self.health.refresh('codex', preflight=True)

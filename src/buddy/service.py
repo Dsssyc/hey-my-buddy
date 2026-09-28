@@ -8,6 +8,7 @@ a generic ``dispatch(method, JSON)`` entry point.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import os
 import threading
 import time
@@ -34,6 +35,8 @@ CONTROL_OPERATIONS = (
     "ping",
     "health",
     "capabilities",
+    "harness_set",
+    "harness_prepare",
     "service_control",
     "console",
     "console_snapshot",
@@ -147,6 +150,9 @@ class _BaseResource:
         try:
             params = schemas.decode_request(request_json, f"{operation} request")
             scope = self._authenticate(params)
+            path_hint = params.pop('_harnessPathHint', None)
+            if scope.get('kind') == workflow_module.SERVICE_KIND and getattr(self, 'harnesses', None) is not None:
+                self.harnesses.add_path_hint(path_hint)
             if scope.get("kind") == workflow_module.AGENT_KIND:
                 # A request that presents an attempt-scoped credential is confined to
                 # the permitted operations and to its own run, before any handler runs.
@@ -157,11 +163,16 @@ class _BaseResource:
             try:
                 if (self.store.directory / "upgrade.json").exists():
                     permitted = operation in {"ping", "health", "runtime.info", "capabilities", "backup"}
+                    if operation == 'capabilities' and params.get('refresh'):
+                        permitted = False
                     permitted = permitted or (operation == "console" and params.get("action") == "status")
                     permitted = permitted or (operation == "service.control" and params.get("action") in {"restart", "status"})
                     if not permitted:
                         raise BoardError("UPGRADE_IN_PROGRESS", "The service is fenced for an idle upgrade; retry after verification")
-                result = handler(params)
+                from .harness_runtime import bound
+                health = getattr(self, 'harnesses', None)
+                with bound(health.all()) if health and getattr(self, 'automatic_discovery', False) else nullcontext():
+                    result = handler(params)
             finally:
                 workflow_module.clear_request_scope()
             return schemas.encode(result)
@@ -228,6 +239,7 @@ class BoardService(_BaseResource):
         runtime_directory: Path | None = None,
         on_accepted: Callable[[str], None] | None = None,
         evaluation: EvaluationStore | None = None,
+        automatic_discovery: bool = False,
     ):
         super().__init__(store)
         self.token = token
@@ -241,6 +253,11 @@ class BoardService(_BaseResource):
         # every existing in-process harness working without a second authority.
         self.evaluation = evaluation or store.evaluation
         self.decisions = store.decisions
+        from .harness_health import HarnessHealth
+        self.automatic_discovery = automatic_discovery
+        self.harnesses = HarnessHealth(store, catalog_refresh=self._refresh_harness_catalog)
+        # Startup/upgrade verification must not mutate health or retained model
+        # facts. A missing record projects as unknown until a Host-triggered scan.
         # Console-user authority: only a session the console itself registered can
         # present it, so a caller-controlled JSON field can never bypass Host control.
         self._console_sessions: dict[str, str] = {}
@@ -309,12 +326,26 @@ class BoardService(_BaseResource):
 
     def capabilities(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"includeUnavailable"}, "capabilities")
+            schemas.reject_unknown(params, {"includeUnavailable", "refresh", "adapter"}, "capabilities")
             from .adapters import local_capabilities
+            from .harness_health import HARNESSES
+            from .harness_runtime import bound
+            if schemas.optional_bool(params, 'refresh', False):
+                for name in [params['adapter']] if params.get('adapter') else HARNESSES:
+                    self.harnesses.refresh(name, force=True)
+            elif self.automatic_discovery and not (self.store.directory / 'upgrade.json').exists():
+                self.harnesses.kick()
+            records = self.harnesses.all()
+            with bound(records) if self.automatic_discovery or params.get('refresh') else nullcontext():
+                report, capabilities = capability_report(), local_capabilities()
+            for record in records:
+                if self.automatic_discovery or record['revision']:
+                    report[record['adapter']].update(available=record['available'], reason=record.get('reasonCode'), harness=record)
 
             return {
-                "adapters": capability_report(),
-                "localCapabilities": local_capabilities(),
+                "adapters": report,
+                "localCapabilities": capabilities,
+                "harnesses": records,
                 "operations": {"control": list(CONTROL_OPERATIONS), "wait": list(WAIT_OPERATIONS)},
                 "waitAdmission": self.control.get("wait_admission").stats()
                 if self.control.get("wait_admission")
@@ -432,7 +463,9 @@ class BoardService(_BaseResource):
 
     def console_snapshot(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
+            self._touch_harnesses(params)
             snapshot = self.evaluation.snapshot(params)
+            snapshot['harnesses'] = self.harnesses.all()
             # The JSON route is a read: it never admits a selection reader and never
             # calls a model. The browser layer injects its own CSRF token into this
             # object; a C-Two/CLI caller gets an empty token because it has no session.
@@ -476,6 +509,85 @@ class BoardService(_BaseResource):
     def evaluation_history(self, request_json: str) -> str:
         return self._guard("evaluation.history", request_json, self.evaluation.history)
 
+    def _refresh_harness_catalog(self, name, record):
+        from . import catalog_store
+        from .adapters import adapter
+        from .harness_runtime import bound
+        observation = catalog_store.begin(self.evaluation)
+        try:
+            with bound([record]):
+                payload = adapter(name).discover_models()
+            payload['discoveries'] = [{'adapter': name, 'status': 'complete'}]
+            catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
+        except BoardError as error:
+            if error.code != 'UPGRADE_IN_PROGRESS':
+                self.harnesses.invalidate(name, record['revision'], error.code)
+
+    def harness_set(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'path', 'expectedRevision'}, 'harness.set')
+            name = schemas.required_string(params, 'adapter', max_length=32)
+            if 'path' not in params:
+                raise BoardError('INVALID_ARGUMENT', 'path is required; use null to restore automatic detection')
+            revision = params.get('expectedRevision')
+            if revision is not None and (type(revision) is not int or revision < 0):
+                raise BoardError('INVALID_ARGUMENT', 'expectedRevision must be a nonnegative integer')
+            return {'harness': self.harnesses.set_path(name, params['path'], expected_revision=revision)}
+        return self._guard('harness.set', request_json, handler)
+
+    def harness_prepare(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'workerId', 'attemptId', 'generation', 'nonce', 'commandId', 'retry', 'failedOnly', 'healthRevision'}, 'harness.prepare')
+            command_id = schemas.required_string(params, 'commandId', max_length=128)
+            retry = schemas.optional_bool(params, 'retry', False)
+            failed_only = schemas.optional_bool(params, 'failedOnly', False)
+            if retry and failed_only:
+                raise BoardError('INVALID_ARGUMENT', 'A failure report cannot also request a retry')
+            if (retry or failed_only) and type(params.get('healthRevision')) is not int:
+                raise BoardError('INVALID_ARGUMENT', 'A pre-start failure must identify the selected health revision')
+            with self.store.db.read() as db:
+                attempt, _worker = self.store._verify_attempt_actor(db, params)
+                if attempt['execution_state'] == 'finished' or attempt['cancel_requested_at']:
+                    raise BoardError('ATTEMPT_FINISHED', 'This attempt cannot start a harness')
+                name = attempt['model_adapter'] or attempt['adapter']
+                if name not in ('dsh', 'zcode', 'codex', 'claude'):
+                    return {'harness': None}
+                request = {key: params.get(key) for key in ('attemptId', 'generation', 'retry', 'failedOnly', 'healthRevision')}
+                subject = self.store._subject(params['workerId'], params['nonce'], attempt['attempt_id'])
+                receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
+                if receipt is not None:
+                    return receipt
+                if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
+                    raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
+            if retry or failed_only:
+                self.harnesses.invalidate(name, params.get('healthRevision'))
+            record = self.harnesses.get(name) if failed_only else self.harnesses.refresh(name, force=retry, preflight=True)
+            with self.store.db.write() as db:
+                attempt, _worker = self.store._verify_attempt_actor(db, params)
+                receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
+                if receipt is not None:
+                    return receipt
+                if attempt['execution_state'] == 'finished' or attempt['cancel_requested_at']:
+                    raise BoardError('ATTEMPT_FINISHED', 'This attempt cannot start a harness')
+                if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
+                    raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
+                response = {'harness': record, 'retry': retry}
+                self.store._append_event(db, 'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected', task_id=attempt['task_id'],
+                                         payload={'attemptId': attempt['attempt_id'], 'harness': record})
+                self.store._store_receipt(db, command_id, 'harness.prepare', request, response, subject=subject, task_id=attempt['task_id'])
+                head = self.store._head_of(db)
+            self.store._notify(head)
+            return response
+        return self._guard('harness.prepare', request_json, handler)
+
+    def _touch_harnesses(self, params, *, explicit=False):
+        if not self.automatic_discovery:
+            return
+        name = params.get('adapter')
+        if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and not self.harnesses.get(name)['available']:
+            self.harnesses.refresh(name, force=True)
+        self.harnesses.kick()
+
     # -- decisions ----------------------------------------------------------
     def selection_request(self, request_json: str) -> str:
         return self._guard("selection.request", request_json, self.decisions.request_select)
@@ -495,7 +607,16 @@ class BoardService(_BaseResource):
             observation = catalog_store.begin(self.evaluation, request_id)
             if observation["response"] is not None:
                 return {**observation["response"], "duplicate": True}
-            discovered = catalog.discover()
+            if self.automatic_discovery:
+                from .harness_health import HARNESSES
+                for name in HARNESSES:
+                    self.harnesses.refresh(name, force=True)
+                with self.store.db.read() as db:
+                    cached = catalog_store.current(db)
+                discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
+                    {'adapter': row['adapter'], 'status': 'unknown', 'reason': row.get('reasonCode')} for row in self.harnesses.all()]}
+            else:
+                discovered = catalog.discover()
             recorded = self.evaluation.record_catalog(discovered, observation["observationId"])
             return {**recorded, "requestId": request_id}
 
@@ -504,11 +625,17 @@ class BoardService(_BaseResource):
     def model_profiles(self, request_json: str) -> str:
         from . import catalog_store
 
-        return self._guard("model.profiles", request_json, lambda params: catalog_store.profiles(self.evaluation, params))
+        def handler(params):
+            self._touch_harnesses(params)
+            return catalog_store.profiles(self.evaluation, params)
+        return self._guard("model.profiles", request_json, handler)
 
     # -- governed workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:
-        return self._guard("workflow.submit", request_json, self.store.workflow.submit)
+        def handler(params):
+            self._touch_harnesses(params, explicit=True)
+            return self.store.workflow.submit(params)
+        return self._guard("workflow.submit", request_json, handler)
 
     def workflow_get(self, request_json: str) -> str:
         return self._guard("workflow.get", request_json, self.store.workflow.get)
@@ -716,6 +843,17 @@ class BoardService(_BaseResource):
 
     def worker_claim(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
+            if self.automatic_discovery:
+                # No scan for an empty queue. Changed binaries/default records are
+                # rechecked before the transaction freezes a continuation's mode.
+                with self.store.db.read() as db:
+                    names = {row[0] for row in db.execute("SELECT DISTINCT adapter FROM tasks WHERE state='queued' AND queue_reason IN ('awaiting-worker','capacity','awaiting-configuration-validation')")}
+                    if 'decision' in names:
+                        row = db.execute('SELECT p.adapter FROM evaluation_state e JOIN evaluation_profiles p ON p.profile_id=e.decision_profile_id WHERE e.id=1').fetchone()
+                        if row:
+                            names.add(row[0])
+                for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):
+                    self.harnesses.refresh(name, preflight=True)
             # A continuation's effective workspace is prepared here, outside the claim
             # transaction, so the canonical turn input already carries the resolved
             # manifest and its hash is exactly what the adapter writes to disk.

@@ -241,6 +241,11 @@ class InProcessBoard:
         )
         self.store.decisions = DecisionCoordinator(self.store, self.store.evaluation)
         self.store.initialize()
+        # These store/transport unit fixtures model healthy native harnesses.
+        # Dedicated discovery/service tests start with empty real health records.
+        with self.store.db.write() as db:
+            for name in ('dsh', 'zcode', 'codex', 'claude'):
+                db.execute("INSERT OR IGNORE INTO harness_health(adapter,status,record_json) VALUES(?,'ready','{}')", (name,))
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
         self.control: dict = {"wait_admission": self.admission}
         self.stopped: list[dict] = []
@@ -350,8 +355,11 @@ class BoardTestCase(unittest.TestCase):
 
         environment = _child_environment(self.directory, env)
         log = open(self.directory / "test-daemon.log", "ab")
+        command = [sys.executable, '-m', 'buddy.daemon']
+        if environment.get('BUDDY_MODEL_CATALOG_FILE'):
+            command = [sys.executable, str(Path(__file__).parent / 'fixtures/daemon_with_catalog.py')]
         process = subprocess.Popen(
-            [sys.executable, "-m", "buddy.daemon"],
+            command,
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=log,

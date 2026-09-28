@@ -37,6 +37,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "health": ("control", "health"),
     "capabilities": ("control", "capabilities"),
     "adapters": ("control", "capabilities"),
+    "harness-set": ("control", "harness_set"),
     "runtime": ("control", "runtime_info"),
     "backup": ("control", "backup"),
     "storage-plan": ("control", "storage_plan"),
@@ -202,7 +203,10 @@ def _read_endpoint(directory: Path) -> dict | None:
 def _request(endpoint: dict, operation: str, params: dict, resource: str = "control") -> dict:
     # The token travels with the operation's own parameters and is verified by the
     # resource before any schema validation happens.
-    request = encode_message({"token": endpoint["token"], **params})
+    payload = {"token": endpoint["token"], **params}
+    if operation in {'capabilities', 'model_profiles', 'model_catalog_refresh', 'workflow_submit', 'selection_request', 'console_snapshot'}:
+        payload['_harnessPathHint'] = os.environ.get('PATH', '')
+    request = encode_message(payload)
     contract = BuddyControl if resource == "control" else BuddyWait
     name = CONTROL_NAME if resource == "control" else WAIT_NAME
     # One process may not connect before the private profile is in place; this is the

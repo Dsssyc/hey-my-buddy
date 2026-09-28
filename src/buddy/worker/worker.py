@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import activity as activity_module
-from ..adapters import ExecutionContext, adapter as get_adapter, local_capabilities
+from ..adapters import ExecutionContext, adapter as get_adapter, supported_capabilities
 from ..client import BoardClient, new_nonce
 from ..db import TERMINATION_REASONS
 from ..errors import BoardError
@@ -398,7 +398,7 @@ class Worker:
     # -- claim / run ---------------------------------------------------------
     def register(self) -> dict:
         adapter_names = self.adapters or ("dsh", "command")
-        capabilities = sorted({*local_capabilities(), *self.extra_capabilities})
+        capabilities = sorted({*supported_capabilities(), *self.extra_capabilities})
         return self.client.register_worker(
             self.worker_id,
             adapter=adapter_names[0],
@@ -565,6 +565,58 @@ class Worker:
     def _execute_guarded(
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
     ) -> dict:
+        from ..harness_health import HARNESSES
+        from ..harness_runtime import bound, RECORD_FILE
+
+        name = spec['adapter']
+        if name == 'decision':
+            name = (claim.get('decisionInput') or {}).get('profile', {}).get('adapter')
+        if name not in HARNESSES:
+            return self._execute_selected(claim, task, spec, attempt, directory, holder)
+        history = []
+        record = None
+        for retry in (False, True):
+            response = self.client.call('harness_prepare', {
+                'workerId': self.worker_id, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
+                'nonce': self._nonce(), 'commandId': f"harness-{attempt['attemptId']}-{int(retry)}", 'retry': retry,
+                'healthRevision': record.get('revision') if record else None,
+            })
+            record = response['harness']
+            history.append({'retry': retry, 'harness': record})
+            if record is None or not record.get('available'):
+                if not retry:
+                    continue
+                return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
+                    'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run buddy adapters with refresh:true'),
+                    'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
+                    'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
+            selection = directory / 'harness-selection.json'
+            fsync_json(selection, {name: record})
+            holder['harnessEnvironment'] = {RECORD_FILE: str(selection)}
+            holder['harnessHistory'] = history
+            holder['harnessRetry'] = retry
+            try:
+                with bound([record]):
+                    return self._execute_selected(claim, task, spec, attempt, directory, holder)
+            except (OSError, BoardError) as error:
+                # Popen/prepare failures are retryable only before a child exists.
+                # Any spawned child keeps its ordinary receipt and stop ownership.
+                startup_failure = (isinstance(error, BoardError) and error.code in {'ADAPTER_UNAVAILABLE', 'HARNESS_UNAVAILABLE', 'HARNESS_PREMODEL_FAILED'})
+                startup_failure = startup_failure or (isinstance(error, OSError) and error.filename in record.get('command', []))
+                if retry and not holder.get('started') and startup_failure:
+                    self._harness_failed(attempt, record)
+                if retry or holder.get('started') or not startup_failure:
+                    raise
+        raise AssertionError('unreachable harness retry')
+
+    def _harness_failed(self, attempt, record):
+        self.client.call('harness_prepare', {'workerId': self.worker_id, 'attemptId': attempt['attemptId'],
+            'generation': attempt['generation'], 'nonce': self._nonce(), 'failedOnly': True,
+            'healthRevision': record['revision'], 'commandId': f"harness-failed-{attempt['attemptId']}"})
+
+    def _execute_selected(
+        self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
+    ) -> dict:
         from .. import runtime
 
         context = ExecutionContext(
@@ -574,7 +626,7 @@ class Worker:
             spec=spec,
             directory=directory,
             runtime=runtime.resolve_runtime(),
-            environment={**os.environ, "BUDDY_STATE_DIR": str(self.state_dir)},
+            environment={**os.environ, "BUDDY_STATE_DIR": str(self.state_dir), **holder.get('harnessEnvironment', {})},
             lease_seconds=self.lease_seconds,
             decision_input=claim.get("decisionInput"),
             # The service-owned turn identity and bounded context; the adapter stages
@@ -603,6 +655,8 @@ class Worker:
         try:
             implementation.prepare(context)
         except BoardError as error:
+            if holder.get('harnessHistory') and error.code == 'ADAPTER_UNAVAILABLE':
+                raise
             return self.receipt(
                 claim,
                 {
@@ -673,10 +727,20 @@ class Worker:
             renewal.stop()
             renewal.join(timeout=2)
         outcome = implementation.collect(handle, context)
+        if (holder.get('harnessHistory') and not timed_out
+                and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
+                and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
+                and outcome.result.get('code') in {'adapter-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
+            fsync_json(directory / 'harness-prestart-failure.json', {'code': outcome.result['code'], 'shutdownConfirmed': True})
+            holder['started'] = False
+            holder.pop('handle', None)
+            raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
         if timed_out and outcome.status == "ok":
             outcome.status = "failed"
             outcome.error = f"the worker deadline of {spec['timeoutSeconds']}s was reached before the adapter finished"
         report = outcome.to_report()
+        if holder.get('harnessHistory'):
+            report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.

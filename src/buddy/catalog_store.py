@@ -23,19 +23,30 @@ def current(db):
     for row in db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id ORDER BY c.adapter'):
         results.append({'adapter': row['adapter'], 'status': row['status'], 'reason': row['reason']})
         if row['payload_json']:
-            providers.extend(p for p in json.loads(row['payload_json'])['providers'] if p['adapter'] == row['adapter'])
+            from .harness_health import read_health
+            healthy = read_health(db, row['adapter'])['available']
+            providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
+                              'unavailableReason': m.get('unavailableReason') if healthy else 'HARNESS_UNHEALTHY'} for m in p['models']]}
+                             for p in json.loads(row['payload_json'])['providers'] if p['adapter'] == row['adapter'])
     if not results:
         return None
     return CatalogView.from_payload({'source': 'current-native-observations', 'providers': providers, 'discoveries': results})
 
 
-def record(evaluation, discovered, observation_id=None):
+def record(evaluation, discovered, observation_id=None, *, health_generation=None):
     payload = canonical_payload(discovered)
     if observation_id is None:
         observation_id = begin(evaluation)['observationId']
     identity = {k: v for k, v in payload.items() if k != 'discoveredAt'}
     discovery_id = 'cat-' + sha256_text(canonical_json(identity))[:24]
     with evaluation.db.write() as db:
+        if (evaluation.board.directory / 'upgrade.json').exists():
+            raise BoardError('UPGRADE_IN_PROGRESS', 'Catalog publication is fenced until upgrade verification finishes')
+        if health_generation is not None:
+            name, generation = health_generation
+            health = db.execute('SELECT revision,status FROM harness_health WHERE adapter=?', (name,)).fetchone()
+            if health is None or health['revision'] != generation or health['status'] != 'ready':
+                return {'staleAdapters': [name], 'appliedAdapters': []}
         observation = db.execute('SELECT * FROM catalog_observations WHERE observation_id=?', (observation_id,)).fetchone()
         if observation is None:
             raise BoardError('NOT_FOUND', 'Unknown catalog observation')
@@ -70,6 +81,9 @@ def record(evaluation, discovered, observation_id=None):
                 if old['profile_id'] not in seen:
                     db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?,updated_revision=? WHERE profile_id=?', ('not present in the latest complete native discovery', revision, old['profile_id']))
             for p in entries:
+                health = db.execute('SELECT status FROM harness_health WHERE adapter=?', (name,)).fetchone()
+                if health is not None and health['status'] != 'ready':
+                    p = {**p, 'available': False, 'unavailableReason': 'HARNESS_UNHEALTHY'}
                 existing = db.execute('SELECT adapter,provider,model,effort FROM evaluation_profiles WHERE profile_id=?', (p['profileId'],)).fetchone()
                 if existing and tuple(existing) != tuple(p[key] for key in ('adapter', 'provider', 'model', 'effort')):
                     raise BoardError('CATALOG_INVALID', 'A native profile ID collided with a different execution identity', profileId=p['profileId'])
@@ -102,7 +116,7 @@ def profiles(evaluation, params):
     include = schemas.optional_bool(params, 'includeUnavailable', False)
     query = schemas.optional_string(params, 'query', max_length=200) or ''
     adapter = schemas.optional_string(params, 'adapter', max_length=32)
-    clauses = ['p.profile_id>?', '(? OR p.available=1)']
+    clauses = ['p.profile_id>?', "(? OR (p.available=1 AND h.status='ready'))"]
     values = [after, int(include)]
     if adapter:
         clauses.append('p.adapter=?')
@@ -114,7 +128,7 @@ def profiles(evaluation, params):
     if len(query.split()) > 8:
         raise BoardError('INVALID_ARGUMENT', 'query accepts at most 8 search terms')
     with evaluation.db.read() as db:
-        rows = db.execute('SELECT p.*, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
+        rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
         values = [evaluation._profile_view(row) for row in rows[:limit]]
         ids = [value['profileId'] for value in values]
         marks = ','.join('?' for _ in ids) or 'NULL'

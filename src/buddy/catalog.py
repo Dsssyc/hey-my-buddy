@@ -193,10 +193,17 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
         raise BoardError("UNSUPPORTED_ADAPTER", "This adapter does not declare a model execution catalog")
     payload = _override()
     if payload is None:
-        available, reason = instance.available()
-        if not available:
-            raise BoardError("ADAPTER_UNAVAILABLE", reason or "The selected harness is unavailable")
-        payload = canonical_payload(instance.discover_models())
+        from .db import Database
+        from .harness_health import read_health
+        from . import catalog_store
+        with Database(directory).read() as db:
+            health = read_health(db, selected['adapter'])
+            if not health['available']:
+                raise BoardError('ADAPTER_UNAVAILABLE', health.get('remedy') or 'Run buddy adapters with refresh:true', harness=health)
+            recorded = catalog_store.current(db)
+        if recorded is None:
+            raise BoardError('CATALOG_UNAVAILABLE', 'No native model catalog is recorded; run buddy adapters with refresh:true')
+        payload = recorded.payload
     view = CatalogView.from_payload(payload)
     model = view.lookup(selected["adapter"], selected["provider"], selected["model"])
     if model is None or not model["available"]:

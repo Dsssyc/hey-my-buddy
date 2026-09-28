@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from collections import ChainMap
 import json
+import os
 from pathlib import Path
 import threading
 
@@ -18,14 +20,14 @@ def _later(seconds):
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
 
-def _snapshot(name, manual):
+def _snapshot(name, manual, environment=None):
     from .harness_discovery import candidate_snapshot
-    return candidate_snapshot(name, manual_path=manual)
+    return candidate_snapshot(name, manual_path=manual, environment=environment)
 
 
-def _discover(name, manual):
+def _discover(name, manual, environment=None):
     from .harness_discovery import discover
-    return discover(name, manual_path=manual)
+    return discover(name, manual_path=manual, environment=environment)
 
 
 def _name(name):
@@ -52,6 +54,20 @@ class HarnessHealth:
         self._pending = threading.Lock()
         self._closed = False
         self._thread = None
+        self._path_hints = ()
+
+    def add_path_hint(self, path):
+        """PATH is an ephemeral low-priority hint, never a stored environment."""
+        if not isinstance(path, str) or len(path) > 32768:
+            return
+        parts = [part for part in path.split(os.pathsep) if part and Path(part).is_absolute()]
+        self._path_hints = tuple(dict.fromkeys([*parts, *self._path_hints]))[:64]
+
+    def environment(self):
+        if not self._path_hints:
+            return os.environ
+        path = os.pathsep.join([*self._path_hints, os.environ.get('PATH', '')])
+        return ChainMap({'PATH': path}, os.environ)
 
     def initialize(self):
         """An upgraded board starts unverified without rewriting user settings."""
@@ -64,6 +80,18 @@ class HarnessHealth:
     def get(self, name):
         with self.board.db.read() as db:
             return read_health(db, _name(name))
+
+    def invalidate(self, name, revision, reason='HARNESS_START_FAILED'):
+        with self.board.db.write() as db:
+            row = read_health(db, _name(name))
+            if row['revision'] != revision:
+                return row
+            db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json({**row, "reasonCode": reason, "available": False}), name))
+            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE adapter=?', (reason, name))
+            self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason})
+            head = self.board._head_of(db)
+        self.board._notify(head)
+        return self.get(name)
 
     def all(self):
         with self.board.db.read() as db:
@@ -88,10 +116,13 @@ class HarnessHealth:
         name = _name(name)
         with self._locks[name]:
             old = self.get(name)
+            if (self.board.directory / 'upgrade.json').exists():
+                return old
             now = utc_now()
             if not force and not preflight and (old.get('scanAfter') or '') > now:
                 return old
-            snapshot = _snapshot(name, old['manualPath'])
+            environment = self.environment()
+            snapshot = _snapshot(name, old['manualPath'], environment)
             signature = sha256_text(canonical_json(snapshot))
             unchanged = old.get('locationFingerprint') == signature
             if not force and unchanged and (old.get('expiresAt') or '') > now:
@@ -99,13 +130,15 @@ class HarnessHealth:
                     db.execute('UPDATE harness_health SET scan_after=? WHERE adapter=? AND revision=?', (_later(SCAN_SECONDS), name, old['revision']))
                 return self.get(name)
             with self.board.db.write() as db:
+                if self._closed or (self.board.directory / 'upgrade.json').exists():
+                    return read_health(db, name)
                 current = read_health(db, name)
                 if current['revision'] != old['revision']:
                     return current
                 generation = old['revision'] + 1
                 db.execute('INSERT INTO harness_health(adapter,revision) VALUES(?,?) ON CONFLICT(adapter) DO UPDATE SET revision=excluded.revision', (name, generation))
             try:
-                record = _discover(name, old['manualPath'])
+                record = _discover(name, old['manualPath'], environment)
             except Exception:
                 record = {'adapter': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run buddy adapters with refresh:true'}
@@ -116,6 +149,8 @@ class HarnessHealth:
             if len(canonical_json(record).encode()) > 65536:
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery diagnostics exceeded their bound')
             with self.board.db.write() as db:
+                if (self.board.directory / 'upgrade.json').exists():
+                    return read_health(db, name)
                 if read_health(db, name)['revision'] != generation:
                     return read_health(db, name)
                 db.execute('UPDATE harness_health SET status=?,record_json=?,checked_at=?,expires_at=?,scan_after=? WHERE adapter=? AND revision=?',
@@ -126,7 +161,7 @@ class HarnessHealth:
                                           'version': record.get('version'), 'reasonCode': record.get('reasonCode')})
                 head = self.board._head_of(db)
             self.board._notify(head)
-            if status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged):
+            if not self._closed and status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged):
                 self.catalog_refresh(name, self.get(name))
             return self.get(name)
 
@@ -151,4 +186,4 @@ class HarnessHealth:
     def close(self):
         self._closed = True
         if self._thread:
-            self._thread.join(timeout=15)
+            self._thread.join(timeout=55)

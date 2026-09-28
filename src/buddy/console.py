@@ -122,6 +122,8 @@ def parse_objective_query(query: str, allowed: frozenset[str]) -> dict:
 #: selection model call, and no direct evidence entry. The ordinary writer gate
 #: permits authenticated user policy patches; assessment cards stay Harness-owned.
 CONSOLE_OPERATIONS = (
+    "capabilities",
+    "harness_set",
     "evaluation_write_begin",
     "evaluation_write_renew",
     "user_policy_publish",

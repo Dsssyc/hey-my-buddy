@@ -4708,14 +4708,24 @@ class WorkflowCoordinator:
         turn_index = turn_count + 1
         resume_mode = "initial" if turn_index == 1 else "reconstructed-new-session"
         configuration = self._configuration(run_row)
+        harness_changed = False
         if previous is not None and previous["state"] == "concluded" and previous["session_id"] and configuration:
             previous_input = json.loads(previous["input_json"])
             if previous_input.get("context", {}).get("executionConfiguration") == configuration:
                 executor = self._execution_adapter(configuration["adapter"])
-                if executor.native_resume:
+                from .harness_health import read_health
+                health = read_health(connection, configuration['adapter'])
+                prior = connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (previous['attempt_id'],)).fetchone()
+                result = json.loads(prior['result_json'] or '{}') if prior else {}
+                history = result.get('harnessAttempts') or result.get('result', {}).get('harnessAttempts') or []
+                old_version = history[-1].get('harness', {}).get('version') if history else None
+                harness_changed = bool(old_version and health.get('version') and old_version != health['version'])
+                if executor.native_resume and not harness_changed:
                     resume_mode = "native-session"
         turn_id = str(uuid.uuid4())
         context = self._turn_context(connection, run_row, task, spec, continuation, previous, turn_index)
+        if harness_changed:
+            context['resumeReason'] = 'harness-version-changed'
         manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
         execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_index)
         # Exactly the version-1 turn-input document: the runner validates these ten

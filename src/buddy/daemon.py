@@ -588,6 +588,7 @@ class Daemon:
             on_restart=self.on_restart,
             console_factory=self.on_console,
             on_accepted=self.queue_workspace_cleanup,
+            automatic_discovery=True,
         )
 
     def run(self) -> int:
@@ -597,6 +598,7 @@ class Daemon:
         try:
             self.store.initialize()
             service = self.service()
+            self.harnesses = service.harnesses
             self.console = Console(self.store, service)
             self.console.start(issue_ticket=False)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
@@ -798,6 +800,8 @@ class Daemon:
         return 0
 
     def cleanup(self) -> None:
+        if getattr(self, 'harnesses', None) is not None:
+            self.harnesses.close()
         try:
             cc.shutdown()
         except Exception:  # pragma: no cover - teardown best effort

@@ -44,6 +44,10 @@ class ClaudeAdapter(Adapter):
         return start(self.name, context, request)
 
     def available(self) -> tuple[bool, str | None]:
+        from ..harness_runtime import selected
+        record = selected("claude")
+        if record is not None:
+            return record.get('status') == 'ready', record.get('reasonCode')
         usable, reason = self.discovery_available()
         if not usable:
             return False, reason
@@ -254,6 +258,7 @@ def _cache_key() -> tuple:
 
 def _probe_native_metadata() -> dict:
     """One initialize-only native discovery run in a private temporary root."""
+    from ..harness_runtime import controller_environment
     directory = Path(tempfile.mkdtemp(prefix="buddy-claude-catalog-"))
     stopped = False
     try:
@@ -264,7 +269,7 @@ def _probe_native_metadata() -> dict:
         stdout, stderr = open_logs(logs)
         try:
             process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.claude_runner", "--control", str(control)],
-                                       stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
+                                       stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, env=controller_environment(directory))
         finally:
             os.close(stdout)
             os.close(stderr)

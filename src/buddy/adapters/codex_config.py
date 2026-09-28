@@ -12,6 +12,13 @@ class CodexUnavailable(Exception):
 
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
+    if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_CODEX_CLI")):
+        from ..harness_runtime import command_for
+        from ..errors import BoardError
+        try:
+            return command_for("codex", env)
+        except BoardError as error:
+            raise CodexUnavailable(error.message) from None
     value = env.get("BUDDY_CODEX_CLI") or shutil.which("codex", path=env.get("PATH"))
     if not value:
         fallback = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
@@ -26,7 +33,11 @@ def cli_command(environment: dict | None = None) -> list[str]:
 
 def native_environment(environment: dict) -> dict:
     """Use the installed native ChatGPT account, never a caller's API key fallback."""
-    result = dict(environment)
-    for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"):
-        result.pop(key, None)
+    from ..harness_discovery import native_environment as clean
+    command = cli_command(environment)
+    result = clean(environment, command=command)
+    if os.environ.get("BUDDY_DEV_SOURCE") == "1":
+        for key in ("BUDDY_CODEX_FIXTURE_CASE", "BUDDY_CODEX_FIXTURE_STATE"):
+            if key in environment:
+                result[key] = environment[key]
     return result

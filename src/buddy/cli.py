@@ -31,6 +31,7 @@ METHODS = [
     "health",
     "capabilities",
     "adapters",
+    "harness-set",
     "runtime",
     "backup",
     "upgrade",
@@ -568,6 +569,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "storage" and argv[1] in ("plan", "apply"):
         argv[:2] = ["storage-" + argv[1]]
+    if len(argv) == 4 and argv[:2] == ['harness', 'set']:
+        argv = ['harness-set', json.dumps({'adapter': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
     args = parser.parse_args(argv)
     try:
         params = json.loads(args.params)

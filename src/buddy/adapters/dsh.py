@@ -25,8 +25,18 @@ UNIX_SOCKET_PATH_BUDGET = 105 if os.uname().sysname == "Linux" else 101
 TERMINATE_GRACE_SECONDS = 3.0
 
 
-def node_binary() -> str | None:
-    return os.environ.get("BUDDY_NODE") or shutil.which("node")
+def node_binary(environment=None) -> str | None:
+    from ..harness_runtime import selected
+    env = os.environ if environment is None else environment
+    if os.environ.get('BUDDY_DEV_SOURCE') == '1' and env.get('BUDDY_NODE'):
+        return env['BUDDY_NODE']
+    record = selected('dsh', env)
+    command = record.get('command', []) if record else []
+    if len(command) > 1 and Path(command[0]).stem == 'node':
+        return command[0]
+    from ..harness_discovery import discover
+    result = discover('node', environment=env)
+    return result.get('executable') if result.get('available') else None
 
 
 class DshAdapter(Adapter):
@@ -42,6 +52,10 @@ class DshAdapter(Adapter):
         return discover_models()
 
     def available(self) -> tuple[bool, str | None]:
+        from ..harness_runtime import selected
+        record = selected("dsh")
+        if record is not None:
+            return record.get('status') == 'ready', record.get('reasonCode')
         if not node_binary():
             return False, "Node.js is required for the dsh runner; set BUDDY_NODE"
         try:
@@ -101,7 +115,7 @@ class DshAdapter(Adapter):
     def arguments(self, context: ExecutionContext, inquiry: dict) -> list[str]:
         spec = context.spec
         args = [
-            node_binary() or "node",
+            node_binary(context.environment) or "node",
             self.runner_path() or "",
             "--cwd",
             self.workspace_cwd(context),
@@ -127,6 +141,10 @@ class DshAdapter(Adapter):
             # owning harness.
             args.append("--no-workspace")
             args.append(f"--session-root={context.directory / 'sessions'}")
+        from ..harness_runtime import selected
+        selected_harness = selected('dsh', context.environment)
+        if selected_harness and selected_harness.get('executable'):
+            args.append('--dsh-bin=' + selected_harness['executable'])
         for key in ("model", "provider", "effort"):
             if spec.get(key):
                 args.append(f"--{key}={spec[key]}")
@@ -152,11 +170,20 @@ class DshAdapter(Adapter):
         context.inquiry = inquiry  # type: ignore[attr-defined]
         log_paths = context.log_paths()
         stdout, stderr = open_logs(log_paths)
+        from ..harness_discovery import native_environment
+        from ..harness_runtime import selected
+        record = selected('dsh', context.environment) or {}
+        environment = native_environment(context.environment, command=record.get('command', []))
+        # The DSH bridge has intentionally scoped blackboard authority. None of
+        # the Host/Worker service identity or provider API-key variables survive.
+        for key in ('BUDDY_AGENT_CREDENTIAL_FILE', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_STATE_DIR', 'BUDDY_PYTHON', 'DSH_HOME'):
+            if key in context.environment:
+                environment[key] = context.environment[key]
         try:
             process = subprocess.Popen(
                 self.arguments(context, inquiry),
                 cwd=self.workspace_cwd(context),
-                env=context.environment,
+                env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
@@ -193,9 +220,11 @@ class DshAdapter(Adapter):
         exit_code = handle.process.returncode
         inquiry = getattr(handle, "inquiry", {})
         if payload is None:
+            preflight = _preflight_failed(exit_code, stdout_path) and handle.shutdown_confirmed()
             return AdapterOutcome(
                 status="cancelled" if handle.cancel_requested else "failed",
-                result={"status": "invalid-result", "error": "the dsh runner produced no parseable result"},
+                result={"status": "invalid-result", "error": "the dsh runner produced no parseable result",
+                        **({'modelStarted': False, 'code': 'adapter-unavailable'} if preflight else {})},
                 error="the dsh runner produced no parseable result",
                 exit_code=exit_code,
                 signal=_signal_name(handle.process),

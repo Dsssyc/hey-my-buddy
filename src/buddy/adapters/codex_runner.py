@@ -150,6 +150,7 @@ def _read_only_call(connection, control, result, catalog):
         connection.on_notification = lambda message: pending.append(message)
         control["_readonlyToolBase"] = previous_tools
         control["_readonlyTurnBase"] = call_index
+        result["modelStarted"] = True
         response = connection.call("turn/start", {
             "threadId": thread_id, "cwd": control["cwd"], "model": spec["model"], "effort": spec["effort"],
             "input": [{"type": "text", "text": prompt}], "approvalPolicy": "never",
@@ -202,7 +203,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     native_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     deadline = execution_deadline(control["timeoutSeconds"])
     started = time.monotonic()
-    environment = native_environment(dict(os.environ))
+    incoming = dict(os.environ)
+    command = cli_command(incoming)
+    environment = native_environment(incoming)
     if control.get("readOnlyRequest"):
         # Keep user/project tool integrations out of this independent native server.
         old_home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
@@ -213,7 +216,6 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             (private_home / "auth.json").symlink_to(auth)
         (private_home / "config.toml").write_text('web_search = "disabled"\n[features]\napps = false\nmulti_agent = false\n')
         environment["CODEX_HOME"] = str(private_home)
-    command = cli_command(environment)
     # Version is diagnostic only. Discovery never makes a paid model call.
     try:
         version_result = subprocess.run([*command, "--version"], cwd=control["cwd"], env=environment,
@@ -227,11 +229,14 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         process = subprocess.Popen([*command, "app-server", "--listen", "stdio://"], cwd=control["cwd"],
                                    env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
                                    start_new_session=True, close_fds=True)
+    except OSError:
+        return {'status': 'error', 'code': 'adapter-unavailable', 'modelStarted': False,
+                'error': 'The selected Codex executable could not start', 'processState': {'shutdownConfirmed': True}}, 1
     finally:
         os.close(fd)
     handle = ProcessHandle(process, own_group=True, log_paths={})
     result = {"status": "error", "mode": "codex", "harnessVersion": version,
-              "requested": control.get("spec"), "resolved": None, "observed": None}
+              "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
     record = None
     connection = None
     thread_id = turn_id = None
@@ -309,6 +314,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 *ASSISTANCE_HINTS,
                 Path(control["taskFile"]).read_text(), canonical_json(turn_input),
             ])
+            result["modelStarted"] = True
             response = connection.call("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
                                                        "cwd": control["cwd"], "model": requested["model"],
                                                        "effort": requested["effort"], "approvalPolicy": "never",

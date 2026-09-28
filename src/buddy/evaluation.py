@@ -656,9 +656,10 @@ class EvaluationStore:
             profiles = [
                 self._profile_view(row)
                 for row in connection.execute(
-                    "SELECT p.*, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
+                    "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
+                    "LEFT JOIN harness_health h ON h.adapter=p.adapter "
                     "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
-                    "WHERE p.available=1 OR p.profile_id=? ORDER BY p.rowid LIMIT 201", (state["decision_profile_id"],)
+                    "WHERE (p.available=1 AND h.status='ready') OR p.profile_id=? ORDER BY p.rowid LIMIT 201", (state["decision_profile_id"],)
                 )
             ]
             profile_ids = [profile["profileId"] for profile in profiles]
@@ -689,7 +690,7 @@ class EvaluationStore:
                 profile_id: self._sample_count(connection, profile_id) for profile_id in profile_ids
             }
             unavailable_count = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_profiles WHERE available=0"
+                "SELECT COUNT(*) AS count FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
             ).fetchone()["count"]
             gate = self._gate_view(connection, now)
             # One row per model family represented in this response, with the
@@ -2585,7 +2586,7 @@ class EvaluationStore:
             "provider": row["provider"],
             "model": row["model"],
             "effort": row["effort"],
-            "available": bool(row["available"]),
+            "available": bool(row["available"]) and ("harness_status" not in row.keys() or row["harness_status"] == "ready"),
             "enabled": bool(row["enabled"]),
             "capabilities": capabilities,
             "contextWindow": row["context_window"],
@@ -2594,6 +2595,8 @@ class EvaluationStore:
         }
         if row["unavailable_reason"]:
             view["unavailableReason"] = row["unavailable_reason"]
+        if not row['enabled'] and row['created_revision'] == row['updated_revision']:
+            view['newlyDiscovered'] = True
         if "catalog_state" in row.keys():
             view["catalogState"] = row["catalog_state"] or "unknown"
             view["catalogReason"] = row["catalog_reason"]

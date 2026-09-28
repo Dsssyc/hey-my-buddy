@@ -132,8 +132,12 @@ class DecisionCoordinator:
 
     def _adapter_available(self) -> tuple[bool, str | None]:
         from .adapters.decision import DecisionAdapter
-
-        return DecisionAdapter().available()
+        from .harness_health import HARNESSES, read_health
+        from .harness_runtime import bound
+        with self.board.db.read() as db:
+            records = [read_health(db, name) for name in HARNESSES]
+        with bound(records):
+            return DecisionAdapter().available()
 
     def selector_family(self, connection: sqlite3.Connection) -> tuple[str, str, str] | None:
         """The model family the fixed decision profile will actually consume.
@@ -158,7 +162,8 @@ class DecisionCoordinator:
         ).fetchone()
         if row is None:
             return None, f"the configured decision profile {profile_id} is not published: {NEEDS_HOST_NO_PROFILE}"
-        if not row["enabled"] or not row["available"]:
+        from .harness_health import read_health
+        if not row["enabled"] or not row["available"] or not read_health(connection, row['adapter'])['available']:
             return None, (
                 f"the configured decision profile {profile_id} is not an available, enabled profile; fix the "
                 "configuration before asking for a decision"
@@ -170,9 +175,6 @@ class DecisionCoordinator:
             return None, f"the configured decision profile {profile_id} has no installed native adapter"
         if not (implementation.read_only_structured and implementation.read_only_structured_verified):
             return None, f"the configured decision profile {profile_id} has no verified read-only structured capability"
-        usable, reason = implementation.available()
-        if not usable:
-            return None, reason or f"the configured decision profile {profile_id} is unavailable for decision execution"
         if not row["provider"] or not row["model"] or not row["effort"]:
             return None, f"the configured decision profile {profile_id} has no complete provider/model/effort identity"
         return row, None
@@ -186,6 +188,7 @@ class DecisionCoordinator:
         """
         clauses = [
             "p.enabled=1", "p.available=1", "COALESCE(f.mode,'')!='exclude'",
+            "EXISTS(SELECT 1 FROM harness_health h WHERE h.adapter=p.adapter AND h.status='ready')",
             "(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')",
         ]
         values = []
