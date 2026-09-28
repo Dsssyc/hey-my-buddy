@@ -28,7 +28,7 @@ from .errors import BoardError
 from .runtime import iter_assets
 
 SKILL_NAME = "buddy"
-UNSUPPORTED_PARTS = ("tests", "node_modules", ".venv", "__pycache__", ".git", "tmp", ".dsh-skill-build", "apps")
+UNSUPPORTED_PARTS = ("tests", "node_modules", ".venv", "__pycache__", ".git", "tmp", "apps")
 IGNORED_COPY = ("__pycache__", "*.pyc", "*.pyo")
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 

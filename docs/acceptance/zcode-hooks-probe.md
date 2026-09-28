@@ -48,7 +48,7 @@ Installing hooks for a single attempt by writing `hooks.events.*` into `<storage
 
 ## Reproduce
 
-- Free (no model call, no state writes outside the work dir): `uv run --frozen python tests/probes/zcode_hooks.py` — assembles a private workspace under ignored `.dsh-skill-build/`, self-tests the hook, runs `--version` and `plugins list` privately, hashes `~/.zcode` before/after, prints a redacted JSON summary.
+- Free (no model call, no state writes outside the work dir): `uv run --frozen python tests/probes/zcode_hooks.py` — assembles a private workspace under ignored `tmp/`, self-tests the hook, runs `--version` and `plugins list` privately, hashes `~/.zcode` before/after, prints a redacted JSON summary.
 - Paid (small model run; this task's budget of two was fully spent): `uv run --frozen python tests/probes/zcode_hooks.py --paid [--hook-via config|plugin]` — adds one headless `--prompt` run and records the hook log, session/turn bindings and nonce observation in `summary.json`.
 - Focused tests: `uv run --frozen python -m unittest discover -s tests/python -p 'test_zcode_hooks_probe.py' -v` — 13 tests, all passing; they cover credential scrubbing, snapshot/diff, hook self-test, plugin/config assembly, and the free probe pipeline including private plugin discovery.
 

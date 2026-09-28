@@ -47,7 +47,7 @@ Tool-free `deepseek-official / deepseek-flash / off` smoke calls returned the re
 
 A 70-record synthetic compaction case exposed two useful failures: the model could paraphrase protected text and, when old evidence was listed first, omit new records. The prompt was clarified to preserve protected strings verbatim and prioritize new sources, and the fixture was aligned with the service's deterministic pending-first ordering. That call kept 50 current references, retained the unresolved incident and all six new references, and kept the old risk/limitation strings unchanged. It reported 3.6 seconds and 896 cache-read tokens. No cache-hit percentage or universal routing-quality claim follows from this small sample; the native usage fields are recorded as reported, not converted into money or a billing budget.
 
-Raw local inputs/results and setup scripts are in the ignored `.dsh-skill-build/` directory. Model calls used synthetic observations and installed public model metadata; no repository source or credential value was included in the decision payloads. None of these fixtures is evidence of real model coding quality.
+Raw local inputs/results and setup scripts are in the ignored `tmp/` directory. Model calls used synthetic observations and installed public model metadata; no repository source or credential value was included in the decision payloads. None of these fixtures is evidence of real model coding quality.
 
 ## Remaining scope
 

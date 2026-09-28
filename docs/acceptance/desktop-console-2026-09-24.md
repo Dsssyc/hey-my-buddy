@@ -21,7 +21,7 @@ DSH Flash/max supplied the bounded read/history slice in run `1386aa4d-f4fc-4821
 - Private real-service acceptance under `/private/tmp/buddy-desktop-acceptance.NyukHr` created 105 external-only records through C-Two, read them through the HTTP history endpoint, inserted a newer row between pages, and verified no duplicate/missing old rows. It also checked infrastructure exclusion, rejected invalid query/Origin requests and fetched the built JavaScript asset. No model was launched. The private service cancelled only its 106 unclaimed fixture records during cleanup and reported no unresolved attempts; its supervisor recorded stopped.
 - `npm audit --omit=dev --audit-level=high` reported zero production dependency vulnerabilities. No dependencies were added. Source/staged documentation links and examples, skill/plugin validators and diff checks were run.
 
-Raw checks remain local in `.dsh-skill-build/desktop-console-final.log`, `desktop-console-build.log`, `desktop-history-final.log`, `desktop-console-python.log` and `desktop-http-acceptance.log`.
+Raw checks remain local in `tmp/desktop-console-final.log`, `desktop-console-build.log`, `desktop-history-final.log`, `desktop-console-python.log` and `desktop-http-acceptance.log`.
 
 ## Runtime and verification boundary
 

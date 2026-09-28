@@ -41,4 +41,4 @@ Use a small native bridge only where the harness requires it. A session-private 
 5. Implement and verify the ZCode adapter with native evidence, protocol fixtures, timeout/cancellation cases and a real artifact task; update ADR-006 and current references.
 6. Publish only the plugin, remove the independent skill discovery entry recoverably, retain the old board archive, initialize the approved current profiles, and verify the installed runtime and real routed work.
 
-All test subprocesses use explicit private state/runtime roots. Clear inherited `BUDDY_*` runtime/worker/credential variables when starting a test harness; setting `BUDDY_DEV_SOURCE=1` alone does not override a pinned runtime. Do not repeat broad model or regression runs for documentation-only changes. Keep raw local evidence in ignored `.dsh-skill-build/`.
+All test subprocesses use explicit private state/runtime roots. Clear inherited `BUDDY_*` runtime/worker/credential variables when starting a test harness; setting `BUDDY_DEV_SOURCE=1` alone does not override a pinned runtime. Do not repeat broad model or regression runs for documentation-only changes. Keep raw local evidence in ignored `tmp/`.

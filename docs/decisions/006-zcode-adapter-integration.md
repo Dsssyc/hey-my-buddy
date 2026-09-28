@@ -294,4 +294,4 @@ run.mjs 通过"复制 settings → 只写 `agent-default-model` 三字段 → �
 | E3 | 同 E2 命令、正常环境 | 成功；退出 0；stdout 恰好一个 JSON 对象（整体 `json.load` 通过）；`response=="pong"`；`usage.inputTokens≈35k`（cacheRead≈31.8k）；`projection.status=="idle"`；`contextWindow==200000` |
 | E4 | E3 重复一次并全量落盘 | 同构信封（sessionId/traceId/turnId/response/usage/eventCount/projection），证实输出形态稳定 |
 
-E2–E4 的原始命令与完整输出保存在本地 `.dsh-skill-build/` 之外的分析会话中（样本 JSON 曾存 `/tmp/zcode-headless-sample.json`）；按仓库惯例，若本分析进入实现阶段，原始证据应归档到 `docs/acceptance/` 并把原始文件留在被忽略的 `.dsh-skill-build/` 目录。本文引用的源码事实（适配器契约、Worker 循环、schema 白名单、run.mjs 行为）均直接读自上述分支源码，关键行号：adapters/base.py 全文、adapters/dsh.py 全文、adapters/__init__.py:12、schemas.py:19-46/153-159/185-213、worker/worker.py:47-108/400/511-522/596-660、run.mjs:38/634。
+E2–E4 的原始命令与完整输出保存在本地 `tmp/` 之外的分析会话中（样本 JSON 曾存 `/tmp/zcode-headless-sample.json`）；按仓库惯例，若本分析进入实现阶段，原始证据应归档到 `docs/acceptance/` 并把原始文件留在被忽略的 `tmp/` 目录。本文引用的源码事实（适配器契约、Worker 循环、schema 白名单、run.mjs 行为）均直接读自上述分支源码，关键行号：adapters/base.py 全文、adapters/dsh.py 全文、adapters/__init__.py:12、schemas.py:19-46/153-159/185-213、worker/worker.py:47-108/400/511-522/596-660、run.mjs:38/634。

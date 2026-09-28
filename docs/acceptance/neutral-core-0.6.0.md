@@ -12,7 +12,7 @@ DSH supplied the runtime/package, CLI and documentation slices in isolated workt
 
 ## Automated and browser checks
 
-- `BUDDY_NODE=<Node 24.15.0> uv run --frozen python -m buddy.checks`: 483 Python tests passed in 451.510 seconds, followed by 201 Node tests with zero failures. Raw output is retained locally in `.dsh-skill-build/checks-0.6-delivery.log`.
+- `BUDDY_NODE=<Node 24.15.0> uv run --frozen python -m buddy.checks`: 483 Python tests passed in 451.510 seconds, followed by 201 Node tests with zero failures. Raw output is retained locally in `tmp/checks-0.6-delivery.log`.
 - After the last removal of the silently ignored `get.taskId` argument, the six current-core tests passed. Fresh schema creation, old-schema refusal without changing archive bytes or permissions, removed public surfaces and opaque current receipts are covered.
 - React/Vite: 25 frontend tests, type checking and the production build passed with Node 24.15.0. Built assets are shipped under `src/buddy/console_assets/`; the distributable excludes frontend source, tests and dependency environments.
 - Packaging, runtime and protocol tests cover concurrent cold installation, required resources, external symlink refusal, actual stable import paths, source replacement, owner fencing, helper/workspace conflicts, late routing results, cancellation, replay and malformed turn evidence. ZCode fixtures use the installed CLI against local protocol fixtures without external model traffic.

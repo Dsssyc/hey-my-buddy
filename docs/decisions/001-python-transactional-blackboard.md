@@ -117,7 +117,7 @@ Port the private read-only dashboard to Python or a static client of the Python 
 9. Legacy migration: dry-run, idempotent import, malformed/conflicting/active input rollback; original files unchanged; imported results and acceptance readable.
 10. Self-hosted acceptance: the new skill/CLI starts a real dsh task producing a verifiable artifact; observe inquiry, restart the new daemon during its run, await the same run, independently verify artifact bytes/hash and acknowledge. A second run through the command/external adapter validates generic participation.
 
-Run the relevant full checks once after implementation, then targeted checks for subsequent repairs. Keep machine-local logs under `.dsh-skill-build/`; commit a portable acceptance summary with commands, outcomes and explicit limitations.
+Run the relevant full checks once after implementation, then targeted checks for subsequent repairs. Keep machine-local logs under `tmp/`; commit a portable acceptance summary with commands, outcomes and explicit limitations.
 
 ## Sources and design basis
 

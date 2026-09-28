@@ -42,7 +42,7 @@ Final 564f25d package validation repeated after asset changes: stable runtime 54
 
 Shared model profiles, cards, annotations, preferences, table revision and configured concurrency limits match the pre-work snapshot; only live occupancy changed while the screenshot reviewer ran.
 
-The final release package additionally verifies both portable and Codex manifests at 0.15.1. Private cold-start/runtime/HTTP/asset/lifecycle checks pass with runtime 543fa60da3a0c9d067039a24e0e5195e, schema 12 and zero model calls. Daily health recheck still reports contract 0.15.0, original service/runtime identities, schema 12 and routing consecutiveFailures=0. Installation remains unperformed pending separate user authorization. Raw receipts/logs are in ignored .dsh-skill-build/readonly-0151/.
+The final release package additionally verifies both portable and Codex manifests at 0.15.1. Private cold-start/runtime/HTTP/asset/lifecycle checks pass with runtime 543fa60da3a0c9d067039a24e0e5195e, schema 12 and zero model calls. Daily health recheck still reports contract 0.15.0, original service/runtime identities, schema 12 and routing consecutiveFailures=0. Installation remains unperformed pending separate user authorization. Raw receipts/logs are in ignored tmp/readonly-0151/.
 
 ## Request and quota accounting
 

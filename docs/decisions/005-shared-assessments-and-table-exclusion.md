@@ -12,7 +12,7 @@
 
 当前可核对的行为仍以 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md)、[operations.md](../reference/operations.md) 和对应源码为准。本文中的闸门、读者、写者与状态名称表达领域概念，不是当前命令、参数或数据库 schema。
 
-本次裁决依据 ADR-004 第三部分、Host 复核记录（本地 `.dsh-skill-build/evaluation-gate-review-20260922/review.md`，属于支撑材料，其权威不超过本文接受的结论）以及用户 2026-09-22 的明确接受。
+本次裁决依据 ADR-004 第三部分、Host 复核记录（本地 `tmp/evaluation-gate-review-20260922/review.md`，属于支撑材料，其权威不超过本文接受的结论）以及用户 2026-09-22 的明确接受。
 
 ## 背景：两个待裁决的选择
 

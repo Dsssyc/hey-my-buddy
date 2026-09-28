@@ -330,7 +330,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace.seal(self.state, existing, "existing", "attempt")["changedPaths"], [])
 
     def test_ignored_dependencies_and_unreadable_environments_are_not_read(self):
-        (self.repo / ".gitignore").write_text("node_modules/\n.venv/\n.dsh-skill-build/\n")
+        (self.repo / ".gitignore").write_text("node_modules/\n.venv/\ntmp/\n")
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "exclude environments")
         dependency = self.repo / "node_modules/package"
@@ -342,14 +342,14 @@ class WorkspaceTests(unittest.TestCase):
         (environment / "unreadable").write_text("private environment input")
         environment.chmod(0)
         self.addCleanup(environment.chmod, 0o700)
-        (self.repo / ".dsh-skill-build").mkdir()
-        (self.repo / ".dsh-skill-build/output.log").write_text("ignored runtime log")
+        (self.repo / "tmp").mkdir()
+        (self.repo / "tmp/output.log").write_text("ignored runtime log")
         (self.repo / ".git/info/exclude").write_text("local-environment/\n")
         (self.repo / "local-environment").mkdir()
         (self.repo / "local-environment/secret").write_text("ignored by repository exclude")
         read = workspace._file
         def managed_read(root, path):
-            self.assertFalse(path.startswith(("node_modules/", ".venv/", ".dsh-skill-build/", "local-environment/")), path)
+            self.assertFalse(path.startswith(("node_modules/", ".venv/", "tmp/", "local-environment/")), path)
             return read(root, path)
         with patch.object(workspace, "_file", side_effect=managed_read):
             manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})

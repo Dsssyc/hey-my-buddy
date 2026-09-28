@@ -1,7 +1,5 @@
 # Local scratch: logs, probe output, experiment scripts, machine paths
 /tmp/
-# Legacy scratch location; historical acceptance records still cite evidence there
-/.dsh-skill-build/
 
 # macOS
 .DS_Store

@@ -14,7 +14,7 @@ The Host independently passed 90 focused Python tests covering the CLI, request 
 
 The Host reproduced a frontend stale-handler regression before correcting it: a sibling hook could use its cached writable flag after another component revoked the shared session latch. Dispatch now consults the live latch in the editor, ordinary task and workflow paths. The new regression failed before the correction. The focused frontend run passed 78 tests; the full Vitest suite then passed 244 tests across 22 files, and Node 24 tsc/Vite production build succeeded. npm audit --omit=dev reported zero production dependency vulnerabilities. The bundle hashes are JavaScript index-htL3kjq9.js: 6417ce39b2778c8de97f0245c399e32a067b3f8307502438ee16e38407380154 and CSS index-DPIw79D8.css: 58c86b1bab970f371545e7d3b33f23436c4d99fa1cc3250b4c8283c45cbd8f29.
 
-The required uv run --frozen python -m buddy.checks completed with exit 0: all 1,104 Python tests passed in 990.781 seconds, followed by all 207 Node tests in 25 suites with no failures, cancellations or skips. Raw logs and deterministic probe scripts are in .dsh-skill-build/console-entry-20260926-S1lA0U/. No Computer Use was performed; HTTP/component verification does not claim Chrome, Firefox or Safari visual acceptance.
+The required uv run --frozen python -m buddy.checks completed with exit 0: all 1,104 Python tests passed in 990.781 seconds, followed by all 207 Node tests in 25 suites with no failures, cancellations or skips. Raw logs and deterministic probe scripts are in tmp/console-entry-20260926-S1lA0U/. No Computer Use was performed; HTTP/component verification does not claim Chrome, Firefox or Safari visual acceptance.
 
 ## Packaged runtime
 

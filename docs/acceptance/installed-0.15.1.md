@@ -10,4 +10,4 @@ Installed CLI and authenticated HTTP objective reads succeeded (107 browse group
 
 routingHealth is identical before and after installation: 20 samples, 5 historical failures, 0 consecutive failures, latest success `2026-09-27T09:51:46.005Z` from `dec-8edbcdcf-52cd-47e0-bf3b-6f26c4840ea0`. This installation used zero model calls and no native model probes. No shared model-card/policy/enablement/capacity edits were made. A2/A3 remain deferred. The protected uncommitted `production-repairs-0.8.0.md` was not changed.
 
-Raw receipts are retained under ignored `.dsh-skill-build/readonly-0151/`: `installation-0151.json`, `verification-0151.json`, `install-0151.log`, `verify-installed-0151.log`, `install-health-before.json` and `install-materialized.json`.
+Raw receipts are retained under ignored `tmp/readonly-0151/`: `installation-0151.json`, `verification-0151.json`, `install-0151.log`, `verify-installed-0151.log`, `install-health-before.json` and `install-materialized.json`.

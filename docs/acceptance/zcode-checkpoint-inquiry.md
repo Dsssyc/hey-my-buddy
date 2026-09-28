@@ -22,7 +22,7 @@ Two assertions in the Host-owned `tests/python/test_inquiry.py` encode the previ
 
 ## Real native acceptance proof
 
-One bounded private paid probe (of at most two authorized) was run against the real installed ZCode app-server with the real `zai-api` provider (API-key access), model **GLM-5.3-Flash**, effort `low`, in a private scratch state/runtime with no board and no global config or credential writes; test subprocess pins were cleared. The probe script and secret-redacted raw evidence are retained under the ignored `.dsh-skill-build/zcode-inquiry-probe/` directory (the report was scanned for API keys before retention).
+One bounded private paid probe (of at most two authorized) was run against the real installed ZCode app-server with the real `zai-api` provider (API-key access), model **GLM-5.3-Flash**, effort `low`, in a private scratch state/runtime with no board and no global config or credential writes; test subprocess pins were cleared. The probe script and secret-redacted raw evidence are retained under the ignored `tmp/zcode-inquiry-probe/` directory (the report was scanned for API keys before retention).
 
 While the task was live, the probe queued the Host question "what is the exact acknowledgement word you were told to reply with?" through the private bridge socket. The real root model then, inside the single admitted turn: created `probe-output.txt` with exactly `inquiry-channel-verified`, called `buddy_checkpoint`, answered the question through `buddy_answer_inquiry` with exactly `checkpoint-ok`, and concluded `completed` through the signed finish tool. Verified facts from the controller receipt, turn record and journal:
 

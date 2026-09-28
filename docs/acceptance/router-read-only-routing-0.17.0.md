@@ -27,7 +27,7 @@ Router 是 decision attempt，不写 workflow_turns，不持有 agent 凭据。�
 
 | 命令或范围 | 结果 |
 | --- | --- |
-| uv run --frozen python .dsh-skill-build/focused.py test_packaging test_runtime test_daemon test_zcode test_codex test_claude test_zcode_request_input_probe | M0：153 通过；日常服务仍监听 49637 |
+| uv run --frozen python tmp/focused.py test_packaging test_runtime test_daemon test_zcode test_codex test_claude test_zcode_request_input_probe | M0：153 通过；日常服务仍监听 49637 |
 | focused.py test_router test_user_policy test_catalog test_catalog_observations | M1：32 通过 |
 | focused.py test_router test_codex test_claude test_workflow_preparation test_workflow | M2：149 通过，最后增量 16 通过 |
 | 路由、历史、偏好、容量与并发 | 150 项首轮两处旧夹具断言失败；修复后对应两项通过，后续全量覆盖 |
@@ -40,7 +40,7 @@ Router 是 decision attempt，不写 workflow_turns，不持有 agent 凭据。�
 | Git replace 原始对象隔离补正 | 4 项真实 Git 输入测试通过；不读取替换对象 |
 | uv lock --check、git diff --check | 通过 |
 
-日志保存在 .dsh-skill-build/：m0-tests.log、m1-focused.log、m2-final-focused.log、m3-routing-final.log、m4-vitest.log、m4-final-build.log、final-checks.log、final-checks-rerun.log、last-routing-view.log。失败轮次未被改写成通过。
+日志保存在 tmp/：m0-tests.log、m1-focused.log、m2-final-focused.log、m3-routing-final.log、m4-vitest.log、m4-final-build.log、final-checks.log、final-checks-rerun.log、last-routing-view.log。失败轮次未被改写成通过。
 
 首轮全量失败来自旧夹具配置未验证 Router、未包含预算字段的快照断言，以及 staged-worker 环境漏设随机端口。修复后先跑受影响套件，再完整复跑。原文包括：
 
@@ -58,9 +58,9 @@ FAILED (failures=2, errors=17)
 
 使用 tests/probes/objective_console_preview.py 的合成数据，没有连接日常控制台。1440×900 浅色、1440×900 深色、390×844 窄屏各覆盖完成、失败、取消、放弃，共 12 张截图：
 
-- .dsh-skill-build/screenshots/light-{completed,failed,cancelled,abstention}.png
-- .dsh-skill-build/screenshots/dark-{completed,failed,cancelled,abstention}.png
-- .dsh-skill-build/screenshots/narrow-{completed,failed,cancelled,abstention}.png
+- tmp/screenshots/light-{completed,failed,cancelled,abstention}.png
+- tmp/screenshots/dark-{completed,failed,cancelled,abstention}.png
+- tmp/screenshots/narrow-{completed,failed,cancelled,abstention}.png
 
 DOM 实测四个桌面片段均高 22 px、没有片段文字、保留点阵。失败宽 14 px 且有细线 ×；取消是虚线且没有 ×；放弃没有 ×。已查看浅色、深色及窄屏截图。窄屏没有文档横向溢出；控制台错误和警告均为 0。
 
@@ -68,9 +68,9 @@ DOM 实测四个桌面片段均高 22 px、没有片段文字、保留点阵。�
 
 ## 分发包
 
-执行 uv run --frozen python packaging/stage-plugin.py --destination .dsh-skill-build/stage-final/hey-my-buddy，再通过 stage_smoke.py 在独立临时根目录冷启动包内 CLI。移走分发源目录后仍可读取 health/runtime，stable=true、leaks=[]、resourcesMissing=[]。未验证 Router 的 selection-request 返回 needs-host、runId=null，没有启动模型。私有服务通过自身 CLI stop 收尾。
+执行 uv run --frozen python packaging/stage-plugin.py --destination tmp/stage-final/hey-my-buddy，再通过 stage_smoke.py 在独立临时根目录冷启动包内 CLI。移走分发源目录后仍可读取 health/runtime，stable=true、leaks=[]、resourcesMissing=[]。未验证 Router 的 selection-request 返回 needs-host、runId=null，没有启动模型。私有服务通过自身 CLI stop 收尾。
 
-运行时内容 ID 以 stage-smoke.json 为准。详细路径、身份和停止回执见 .dsh-skill-build/stage-smoke.json。最终分发目录与已验证运行时核验字节一致。分发过程生成 build-info.json 记录源提交；除此项生成的溯源信息外，运行资产与源码逐项一致。
+运行时内容 ID 以 stage-smoke.json 为准。详细路径、身份和停止回执见 tmp/stage-smoke.json。最终分发目录与已验证运行时核验字节一致。分发过程生成 build-info.json 记录源提交；除此项生成的溯源信息外，运行资产与源码逐项一致。
 
 ## 待批准的原生探针
 
@@ -99,7 +99,7 @@ Host 又误把广告 effort 当作用户可用配置：文档 7e363262-0130-4b90
 
 已核对日常启用配置：Flash max/off、Codex Sol high/max、Claude Sonnet 5 medium、Opus 5.5 high。实际 capability 另报告 Codex CLI 缺失。后续必须同时核对配置和实际能力。没有修改用户启用状态、偏好、容量或发布模型评价。
 
-产物由 Host 独立检查、测试和整合；验收备注保留这些错误。收尾使用原 runId/controlFile 和官方 CLI：get → integration-record → acknowledge → workspace-cleanup-plan/apply，保留固定补丁、manifest 和 refs。逐项回执在 .dsh-skill-build/ledger/，测试迁移的早期回执在 test-integration.json、test-ack.json、test-cleanup-plan.json。被后续工作取代的初始前端 attention run 按取消收束，不伪造完成回合；私有服务在任务停止后关闭。
+产物由 Host 独立检查、测试和整合；验收备注保留这些错误。收尾使用原 runId/controlFile 和官方 CLI：get → integration-record → acknowledge → workspace-cleanup-plan/apply，保留固定补丁、manifest 和 refs。逐项回执在 tmp/ledger/，测试迁移的早期回执在 test-integration.json、test-ack.json、test-cleanup-plan.json。被后续工作取代的初始前端 attention run 按取消收束，不伪造完成回合；私有服务在任务停止后关闭。
 
 ## 复核修正
 
