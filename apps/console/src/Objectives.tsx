@@ -18,6 +18,7 @@ import { stopStatus, stoppableSummary, useObjectiveStop } from "./objective-stop
 import type { AuthorityLatch } from "./console-session";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { displayTitle } from "./objective-display";
+import { useBackgroundInert } from "./modal";
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
@@ -92,6 +93,8 @@ function StopDialog({ summary, onConfirm, onCancel }: {
   onCancel: () => void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useBackgroundInert(backdrop);
   useEffect(() => { cancelRef.current?.focus(); }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -109,7 +112,7 @@ function StopDialog({ summary, onConfirm, onCancel }: {
   const scope = summary.kind === "standalone"
     ? `将停止这条历史独立委派及其协助任务。`
     : `将停止「${title}」中尚未验收的 ${unaccepted} 个委派及其协助任务；已验收的 ${summary.counts.accepted} 个保留。停止需要等到确认，期间显示“正在停止”。`;
-  return <div className="dialog-backdrop">
+  return <div className="dialog-backdrop" ref={backdrop}>
     <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-objective-title" aria-describedby="stop-objective-body">
       <h2 id="stop-objective-title">停止工作目标</h2>
       <p id="stop-objective-body">

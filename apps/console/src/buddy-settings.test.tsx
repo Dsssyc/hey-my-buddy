@@ -239,6 +239,35 @@ describe("the model family list", () => {
     expect(screen.getByRole("button", { name: "GPT-6 Sol，已启用 0/2" })).toBeTruthy();
     expect(screen.getByText("Router")).toBeTruthy();
   });
+
+  it("matches adapter id, harness display name, provider and model name, case-insensitively", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    const search = screen.getByLabelText("搜索模型");
+    // Harness display name ("Claude Code"), not only the `claude` adapter id.
+    await user.type(search, "claude code");
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(familyRow("Claude Sonnet 5")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
+    // Provider, uppercase: case does not matter.
+    await user.clear(search);
+    await user.type(search, "ZHIPU");
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Claude Sonnet 5/ })).toBeNull();
+    // Model display name, lowercase.
+    await user.clear(search);
+    await user.type(search, "gpt-6 sol");
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(familyRow("GPT-6 Sol")).toBeTruthy();
+    // The recorded adapter id matches as before.
+    await user.clear(search);
+    await user.type(search, "codex");
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(familyRow("GPT-6 Sol")).toBeTruthy();
+    expect(f.command).not.toHaveBeenCalled();
+  });
 });
 
 describe("effort tags and preference overrides", () => {

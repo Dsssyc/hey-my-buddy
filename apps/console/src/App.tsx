@@ -18,11 +18,18 @@ import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 const tabs = { tasks: "委派记录", buddy: "Buddy 配置", settings: "设置" } as const;
 type Tab = keyof typeof tabs;
 const tabIcons = { tasks: "tasks", buddy: "models", settings: "settings" } as const;
-/** Old bookmarks of the retired "模型卡片" page land on its successor. */
-const legacyTabs: Record<string, Tab> = { models: "buddy" };
+/**
+ * URL hash per tab. The 设置 page cannot keep `settings`: that hash was the
+ * retired 路由配置 page, and the user's decision is that the old bookmark opens
+ * Buddy 配置, where the routing settings now live.
+ */
+const tabHashes: Record<Tab, string> = { tasks: "tasks", buddy: "buddy", settings: "system" };
+/** Old bookmarks of the retired "模型卡片" (`models`) and "路由配置" (`settings`) pages land on their successor. */
+const legacyTabs: Record<string, Tab> = { models: "buddy", settings: "buddy" };
 function currentTab(): Tab {
   const key = window.location.hash.slice(1);
-  return key in tabs ? key as Tab : legacyTabs[key] ?? "tasks";
+  const known = (Object.keys(tabs) as Tab[]).find(tab => tabHashes[tab] === key);
+  return known ?? legacyTabs[key] ?? "tasks";
 }
 
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
@@ -113,7 +120,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     <header className="app-header">
       <a className="brand" href="#tasks" aria-label="hey my buddy" onClick={() => select("tasks")}><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" /><strong>hey my buddy</strong></a>
       <nav className="primary-tabs" aria-label="主要导航">
-        {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + key} onClick={() => select(key)}
+        {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + tabHashes[key]} onClick={() => select(key)}
           aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""}>
           <Icon name={tabIcons[key]} /><span>{tabs[key]}</span>
           {key === "tasks" && pending > 0 && <span className="nav-count" title="最新记录中等待 Host 决定的目标">{pending}</span>}

@@ -1,11 +1,13 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { useBackgroundInert } from "./modal";
 
 /**
  * Modal confirmation with a real focus trap: focus starts on the safe cancel
  * action so Enter cannot confirm by accident, Tab wraps inside the dialog and
- * Escape cancels. The caller restores focus to the control that opened it.
+ * Escape cancels. The background content is inert while the dialog is open,
+ * and the caller restores focus to the control that opened it.
  */
 export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCancel }: {
   title: string; children: ReactNode; confirmLabel: string;
@@ -14,6 +16,7 @@ export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCanc
   const id = useId();
   const backdrop = useRef<HTMLDivElement>(null);
   const initialFocus = useRef<HTMLButtonElement>(null);
+  useBackgroundInert(backdrop);
   useEffect(() => { initialFocus.current?.focus(); }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

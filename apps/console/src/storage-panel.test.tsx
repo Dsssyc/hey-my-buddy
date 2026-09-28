@@ -137,18 +137,23 @@ describe("storage panel (0.16 wire-shape contract)", () => {
   it("requires the modal confirmation; cancel is the initial focus and Esc cancels", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    const view = render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     const clean = screen.getByRole("button", { name: /清理可回收数据（5\.8 GB）/ }) as HTMLButtonElement;
     expect(clean.className).toContain("danger");
     await user.click(clean);
     const dialog = screen.getByRole("dialog", { name: "清理可回收数据" });
     expect(dialog.getAttribute("aria-modal")).toBe("true");
+    // The panel behind the modal is inert; the dialog itself stays usable.
+    const panelResult = view.container.querySelector<HTMLElement>(".storage-result")!;
+    expect(panelResult.hasAttribute("inert")).toBe(true);
+    expect(dialog.hasAttribute("inert")).toBe(false);
     expect(dialog.textContent).toContain("ZCode 私有主目录：2.7 GB");
     expect(dialog.textContent).toContain("看板、记录和当前备份不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(panelResult.hasAttribute("inert")).toBe(false));
     expect(f.command.mock.calls.filter(([operation]) => operation === "storage_apply")).toHaveLength(0);
   });
 

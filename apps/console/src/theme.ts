@@ -78,8 +78,18 @@ export function useTheme() {
     const query = window.matchMedia(DARK_QUERY);
     const changed = () => setSystem(query.matches ? "dark" : "light");
     changed();
-    query.addEventListener?.("change", changed);
-    return () => query.removeEventListener?.("change", changed);
+    // Older engines ship only the deprecated MediaQueryList.addListener pair;
+    // preferring addEventListener when present keeps modern behavior first.
+    if (typeof query.addEventListener !== "function") {
+      const legacy = query as MediaQueryList & {
+        addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+        removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+      };
+      legacy.addListener?.(changed);
+      return () => legacy.removeListener?.(changed);
+    }
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
   }, [choice]);
   const setChoice = useCallback((next: ThemeChoice) => {
     storeChoice(next);

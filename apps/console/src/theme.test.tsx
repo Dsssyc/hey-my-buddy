@@ -117,8 +117,32 @@ describe("light and dark themes", () => {
     await waitFor(() => expect(reloaded.listeners.size).toBe(1));
   });
 
-  it("stops tracking the system once an explicit theme is chosen", async () => {
-    const system = stubSystemScheme(true);
+  it("falls back to addListener/removeListener when the query has no addEventListener", async () => {
+    const state = { dark: true };
+    const added: Array<() => void> = [];
+    const removed: Array<() => void> = [];
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      get matches() { return query === "(prefers-color-scheme: dark)" ? state.dark : false; },
+      media: query,
+      addListener: (listener: () => void) => { added.push(listener); },
+      removeListener: (listener: () => void) => { removed.push(listener); },
+    })));
+    const user = userEvent.setup();
+    render(<App suppliedApi={api()} />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    await user.click(await screen.findByRole("radio", { name: "跟随系统" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    await waitFor(() => expect(added).toHaveLength(1));
+    // The deprecated listener pair still tracks the system without a reload.
+    act(() => { state.dark = false; for (const listener of [...added]) listener(); });
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    // Leaving the system choice detaches the legacy listener too.
+    await user.click(screen.getByRole("radio", { name: "浅色" }));
+    await waitFor(() => expect(removed).toHaveLength(1));
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("stops tracking the system once an explicit theme is chosen", async () => {    const system = stubSystemScheme(true);
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));

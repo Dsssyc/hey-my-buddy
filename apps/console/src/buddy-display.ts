@@ -1,4 +1,5 @@
 import type { ModelFamilyGroup } from "./console-data";
+import { effortText, profileName } from "./profile-display";
 import type { OverrideMode, PreferenceMode, Profile } from "./types";
 
 /** Product names for the known harness ids; an unknown id is shown as recorded. */
@@ -11,6 +12,19 @@ const HARNESS_NAMES: Record<string, string> = {
 
 export function harnessName(adapter: string): string {
   return HARNESS_NAMES[adapter.trim().toLowerCase()] ?? adapter;
+}
+
+/**
+ * Case-insensitive search text for one family entry (docs/design/buddy-settings.md):
+ * the model's display name, its recorded label/model and effort, the provider,
+ * and both the adapter id and its harness display name, so "claude code" finds
+ * the `claude` harness exactly like "claude" does.
+ */
+export function familySearchText(profile: Profile): string {
+  return [
+    profileName(profile), profile.label, profile.model, profile.effort,
+    profile.provider, profile.adapter, harnessName(profile.adapter), effortText(profile.effort),
+  ].join(" ").toLowerCase();
 }
 
 /**

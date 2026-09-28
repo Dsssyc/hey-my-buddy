@@ -5,14 +5,13 @@ import { historyView } from "./draft";
 import type { Editor } from "./use-editor";
 import type { Snapshot } from "./types";
 import { Empty, Help } from "./ui";
-import { effortText } from "./profile-display";
 import { familyKey, modelFamilies } from "./console-data";
 import { MAX_HISTORY_PROFILES, useProfileHistory } from "./use-profile-history";
 import { SplitView } from "./SplitView";
 import { EvaluationHistory } from "./EvaluationHistory";
 import { FamilyDetail, effortTagId } from "./FamilyDetail";
 import { RoutingStatusBar } from "./RoutingStatusBar";
-import { harnessGroups, harnessUnavailableText } from "./buddy-display";
+import { familySearchText, harnessGroups, harnessUnavailableText } from "./buddy-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 
 /**
@@ -45,7 +44,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   const families = modelFamilies(data.profiles);
   const needle = query.trim().toLowerCase();
   const visible = families.filter(g => (!enabledOnly || g.profiles.some(p => p.enabled))
-    && (!needle || g.profiles.some(p => [p.label, p.model, p.provider, p.adapter, effortText(p.effort)].join(" ").toLowerCase().includes(needle))));
+    && (!needle || g.profiles.some(p => familySearchText(p).includes(needle))));
   const groups = harnessGroups(visible, data.profiles);
   // `unavailableProfileCount` is the table-wide count of every unavailable row,
   // including one the bounded snapshot still lists (the retained Router).

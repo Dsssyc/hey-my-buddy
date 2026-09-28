@@ -186,12 +186,49 @@ describe("console interactions", () => {
     await user.type(await screen.findByLabelText("家族备注"), "本地草稿");
     expect(await screen.findByRole("region", { name: "未保存的修改" })).toBeTruthy();
     await user.click(screen.getByRole("link", { name: "设置" }));
+    // The save bar belongs to Buddy 配置 alone; the draft is kept without any
+    // leave confirmation and no save happens by navigating away.
+    expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "本地草稿");
+    expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     // The automatic assessment is program-owned and stays read-only.
     expect(screen.queryByLabelText("当前评价")).toBeNull();
     expect(screen.getAllByText("待积累实际证据").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "放弃" }));
+    expect(api.command).not.toHaveBeenCalled();
+  });
+
+  it("opens Buddy 配置 from the retired #settings and #models bookmarks and keeps 设置 at #system", async () => {
+    const state = initial();
+    const api = {
+      snapshot: vi.fn(async () => structuredClone(state)),
+      command: vi.fn(),
+      task: vi.fn(),
+      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+      objectives: vi.fn(async () => emptyObjectives()),
+    } as unknown as ConsoleApi;
+    const user = userEvent.setup();
+    // The old 路由配置 bookmark opens Buddy 配置, where its settings moved.
+    window.location.hash = "#settings";
+    const first = render(<App suppliedApi={api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.getByRole("heading", { name: "Buddy 配置" })).toBeTruthy();
+    first.unmount();
+    // The old 模型卡片 bookmark keeps landing on the same successor.
+    window.location.hash = "#models";
+    const second = render(<App suppliedApi={api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    second.unmount();
+    // The system settings page keeps a hash of its own, addressable on reload.
+    window.location.hash = "#system";
+    render(<App suppliedApi={api} />);
+    await screen.findByRole("heading", { name: "显示" });
+    await user.click(screen.getByRole("link", { name: "Buddy 配置" }));
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    await screen.findByRole("heading", { name: "显示" });
+    expect(window.location.hash).toBe("#system");
     expect(api.command).not.toHaveBeenCalled();
   });
 

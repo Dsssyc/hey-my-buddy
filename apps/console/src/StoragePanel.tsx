@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConsoleApi, StorageApplyResult, StoragePlan } from "./api";
 import { ApiError, errorText, uncertainResponse } from "./api";
 import { clockTime } from "./objective-display";
+import { useBackgroundInert } from "./modal";
 
 /** Fixed display order (0.16 storage panel); unknown ids stay visible after these. */
 const CATEGORY_ORDER = ["zcode", "workspaces", "runtimes", "backup", "durable"] as const;
@@ -351,6 +352,7 @@ function StorageConfirmDialog({ plan, total, expired, onCancel, onConfirm }: {
   const backdrop = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  useBackgroundInert(backdrop);
   useEffect(() => { cancelRef.current?.focus(); }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
