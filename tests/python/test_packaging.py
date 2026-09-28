@@ -36,6 +36,7 @@ def current_environment(**overrides) -> dict:
         if not key.startswith("BUDDY_")
         and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PLUGIN_DATA"}
     }
+    values["BUDDY_CONSOLE_PORT"] = "0"
     values["BUDDY_CLAUDE_CLI"] = str(ROOT / "tests/python/fixtures/claude-not-installed")
     values.update(overrides)
     return values

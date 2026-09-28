@@ -45,7 +45,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("BUDDY_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_CLAUDE_CLI=str(FIXTURE), BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
+        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FIXTURE), BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
                                 BUDDY_DEV_SOURCE="1")

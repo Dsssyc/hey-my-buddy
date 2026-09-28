@@ -30,7 +30,7 @@ class ZcodeFixtureCase(unittest.TestCase):
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
         FIXTURE.chmod(0o755)
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_") and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
+        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
         self.adapter = ZcodeAdapter()

@@ -27,7 +27,7 @@ class CodexAdapterTests(unittest.TestCase):
         FIXTURE.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_CODEX_CLI=str(FIXTURE), BUDDY_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
+        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CODEX_CLI=str(FIXTURE), BUDDY_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
                                 BUDDY_DEV_SOURCE="1")
         self.adapter = CodexAdapter()

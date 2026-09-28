@@ -114,6 +114,7 @@ def private_runtime_root(directory: Path):
         if not name.startswith("BUDDY_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
     }
     environment.update(
+        BUDDY_CONSOLE_PORT="0",
         BUDDY_STATE_DIR=str(directory.parent / "state"),
         BUDDY_RUNTIME_ROOT=str(directory),
         BUDDY_DEV_SOURCE="1",
