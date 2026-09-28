@@ -1,7 +1,7 @@
 """Bounded NDJSON transport and root-turn evidence for ZCode's native app server."""
 from __future__ import annotations
 
-import fcntl
+from .. import locking
 import hashlib
 import hmac
 import json
@@ -331,7 +331,7 @@ def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
     except OSError:
         return None
     try:
-        fcntl.flock(fd, fcntl.LOCK_SH)
+        locking.lock(fd, shared=True)
         if os.fstat(fd).st_size > max_bytes:
             return b""
         chunks = bytearray()

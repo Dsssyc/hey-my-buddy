@@ -99,6 +99,34 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
         self.assertIn("codex plugin remove", result["next"])
 
+    def test_claude_falls_back_to_a_refreshed_copy_when_links_are_unavailable(self):
+        with patch("pathlib.Path.symlink_to", side_effect=OSError("symlinks need Developer Mode")):
+            first = self.install()
+            self.assertEqual(first["claude"]["status"], "copied")
+            copy = self.claude / "buddy"
+            self.assertFalse(copy.is_symlink())
+            self.assertEqual((copy / "skill.json").read_text(), (self.agents / "buddy/skill.json").read_text())
+            self.assertEqual(self.install()["claude"]["status"], "already-copied")
+            current = json.loads((copy / "skill.json").read_text())
+            (copy / "skill.json").write_text(json.dumps({**current, "version": "0.0.1"}))
+            self.assertEqual(self.install()["claude"]["status"], "copied")
+            self.assertEqual(json.loads((copy / "skill.json").read_text())["version"], current["version"])
+        # Once links work, the managed copy becomes a link.
+        self.assertEqual(self.install()["claude"]["status"], "linked")
+        self.assertTrue((self.claude / "buddy").is_symlink())
+        self.assertEqual(sorted(path.name for path in self.claude.iterdir()), ["buddy"])
+
+    def test_windows_data_root_is_local_app_data(self):
+        from pathlib import PurePosixPath
+        from buddy import home
+        # Only the branch is exercised here; a WindowsPath cannot exist on POSIX.
+        with patch.object(home.os, "name", "nt"), patch.object(home, "Path", PurePosixPath), \
+                patch.dict(os.environ, {"LOCALAPPDATA": "/Local"}):
+            self.assertEqual(home.default_state_dir(), PurePosixPath("/Local/hey-my-buddy/state"))
+            self.assertEqual(home.default_runtime_root(), PurePosixPath("/Local/hey-my-buddy/runtime"))
+        with patch.object(home.os, "name", "posix"):
+            self.assertEqual(home.data_root(), Path.home() / ".local/share/hey-my-buddy")
+
     def test_paths_reports_skill_data_and_runtime_locations_without_starting_anything(self):
         from buddy.skill_install import paths
         with patch.dict(os.environ, self.environment):

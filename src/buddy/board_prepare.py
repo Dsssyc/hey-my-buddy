@@ -16,7 +16,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import fcntl
+from . import locking
 import hashlib
 import json
 import os
@@ -81,11 +81,11 @@ def _refuse_active_owner(source: Path) -> None:
         fd = os.open(path, os.O_RDONLY)
         try:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locking.lock(fd, blocking=False)
             except BlockingIOError:
                 raise BoardError("SOURCE_ACTIVE", "A service still owns the source board; stop it first",
                                  lock=name) from None
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            locking.unlock(fd)
         finally:
             os.close(fd)
 

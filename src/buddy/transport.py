@@ -6,7 +6,7 @@ C-Two operation here.
 """
 from __future__ import annotations
 
-import fcntl
+from . import home, locking
 import json
 import os
 from pathlib import Path
@@ -118,7 +118,7 @@ class ServiceError(BoardError):
 
 def get_state_dir(state_dir: str | Path | None = None) -> Path:
     return Path(
-        state_dir or os.environ.get("BUDDY_STATE_DIR") or Path.home() / ".local/share/hey-my-buddy/state"
+        state_dir or os.environ.get("BUDDY_STATE_DIR") or home.default_state_dir()
     ).expanduser().resolve()
 
 
@@ -263,7 +263,7 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
     directory.chmod(0o700)
     lock_fd = os.open(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locking.lock(lock_fd)
         endpoint = _attach_read_only(directory)
         if endpoint:
             return endpoint
@@ -318,7 +318,7 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
             time.sleep(0.05)
         raise ServiceError("SERVICE_START_TIMEOUT", "The board daemon did not become ready; inspect control.log")
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        locking.unlock(lock_fd)
         os.close(lock_fd)
 
 

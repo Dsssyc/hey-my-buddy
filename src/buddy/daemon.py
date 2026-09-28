@@ -7,7 +7,7 @@ and capability, never by PID.
 """
 from __future__ import annotations
 
-import fcntl
+from . import locking
 import hmac
 import json
 import os
@@ -74,12 +74,12 @@ class SupervisorHandle:
         self.prepare()
         fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.lock(fd, blocking=False)
         except BlockingIOError:
             return True
         finally:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                locking.unlock(fd)
             except OSError:
                 pass
             os.close(fd)
@@ -549,7 +549,7 @@ class Daemon:
         for name in ("control-daemon.lock", "board-owner.lock"):
             fd = os.open(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locking.lock(fd, blocking=False)
             except BlockingIOError:
                 os.close(fd)
                 raise ServiceError(
@@ -812,7 +812,7 @@ class Daemon:
             pass
         for fd in self.lock_fds:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                locking.unlock(fd)
                 os.close(fd)
             except OSError:
                 continue

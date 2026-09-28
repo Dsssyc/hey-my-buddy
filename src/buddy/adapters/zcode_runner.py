@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
+from .. import locking
 import hashlib
 import json
 import math
@@ -235,7 +235,7 @@ class InquiryBridge:
             return False
         committed_length: int | None = None
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            locking.lock(fd)
             committed_length = os.fstat(fd).st_size
             if committed_length + len(raw) > MAX_JOURNAL_BYTES:
                 self.truncated = True

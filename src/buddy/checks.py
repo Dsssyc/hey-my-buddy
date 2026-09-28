@@ -21,7 +21,7 @@ prints environment content.
 """
 from __future__ import annotations
 
-import fcntl
+from . import locking
 import json
 import os
 from pathlib import Path
@@ -101,10 +101,10 @@ def lock_is_held(path: Path) -> bool:
         return False
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.lock(fd, blocking=False)
         except BlockingIOError:
             return True
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        locking.unlock(fd)
         return False
     finally:
         os.close(fd)

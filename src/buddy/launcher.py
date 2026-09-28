@@ -110,7 +110,8 @@ def runtime_environment(target: Path) -> dict[str, str]:
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        state = Path(os.environ.get('BUDDY_STATE_DIR') or Path.home() / '.local/share/hey-my-buddy/state').expanduser().resolve()
+        from buddy.home import default_state_dir
+        state = Path(os.environ.get('BUDDY_STATE_DIR') or default_state_dir()).expanduser().resolve()
         if args and args[0] not in {'upgrade','install','paths','--help','-h'}:
             if (state / 'upgrade.json').exists():
                 from buddy.errors import BoardError

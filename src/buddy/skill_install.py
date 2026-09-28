@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import tempfile
 
-from . import schemas, skill_package
+from . import locking, schemas, skill_package
 from .errors import BoardError
 from .runtime import project_root
 from .transport import get_state_dir
@@ -72,6 +72,12 @@ def _place(source: Path, target: Path, marker: dict) -> str:
 
 
 def _link_claude(target: Path) -> dict:
+    """Point ~/.claude/skills/buddy at the canonical skill.
+
+    A symbolic link is preferred. Where one cannot be created (Windows without
+    Developer Mode), a copy carrying the same skill.json marker is used instead and
+    refreshed by every later install. Anything else at that path is left unchanged.
+    """
     home = claude_skills_home()
     link = home / SKILL
     if link.is_symlink():
@@ -82,9 +88,30 @@ def _link_claude(target: Path) -> dict:
             return {"path": str(link), "status": "conflict", "reason": "links to a different skill; left unchanged"}
         link.unlink()
     elif link.exists():
-        return {"path": str(link), "status": "conflict", "reason": "is a separate directory; left unchanged"}
+        if _marker(link) is None:
+            return {"path": str(link), "status": "conflict", "reason": "is a separate directory; left unchanged"}
+        # Our own earlier copy: replace it with a link when possible, else refresh it.
+        copy = _marker(link)
+        wanted = _marker(target)
+        stale = link.with_name(f".{SKILL}-copy-{os.getpid()}")
+        link.rename(stale)
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            if copy and wanted and all(copy.get(key) == wanted.get(key) for key in ("version", "sourceCommit")):
+                stale.rename(link)
+                return {"path": str(link), "status": "already-copied"}
+            shutil.copytree(target, link, symlinks=True)
+            shutil.rmtree(stale, ignore_errors=True)
+            return {"path": str(link), "status": "copied"}
+        shutil.rmtree(stale, ignore_errors=True)
+        return {"path": str(link), "status": "linked"}
     home.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(target, target_is_directory=True)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        shutil.copytree(target, link, symlinks=True)
+        return {"path": str(link), "status": "copied"}
     return {"path": str(link), "status": "linked"}
 
 
@@ -113,15 +140,13 @@ def install(params: dict) -> dict:
     schemas.reject_unknown(params, set(), "install")
     if os.environ.get("BUDDY_AGENT_CREDENTIAL") or os.environ.get("BUDDY_AGENT_CREDENTIAL_FILE"):
         raise BoardError("UNAUTHORIZED", "A Worker cannot install the shared skill")
-    import fcntl  # POSIX-only lock; imported here so read-only commands stay portable.
-
     home = agent_skills_home()
     home.mkdir(parents=True, exist_ok=True)
     target = home / SKILL
     lock = os.open(home / f".{SKILL}-install.lock", os.O_CREAT | os.O_RDWR, 0o600)
     built = None
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        locking.lock(lock)
         source = packaged_skill()
         if source is None:
             built = Path(tempfile.mkdtemp(prefix=".buddy-source-", dir=home))
@@ -136,7 +161,7 @@ def install(params: dict) -> dict:
     finally:
         if built is not None:
             shutil.rmtree(built, ignore_errors=True)
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        locking.unlock(lock)
         os.close(lock)
     result = {"skill": {"path": str(target), "version": marker["version"], "contract": marker["contract"],
                         "placement": placement},
@@ -152,7 +177,13 @@ def _claude_status(target: Path) -> str:
     link = claude_skills_home() / SKILL
     if link.is_symlink():
         return "linked" if Path(os.path.realpath(link)) == Path(os.path.realpath(target)) else "conflict"
-    return "conflict" if link.exists() else "missing"
+    if not link.exists():
+        return "missing"
+    copy, wanted = _marker(link), _marker(target)
+    if copy is None:
+        return "conflict"
+    same = wanted is not None and all(copy.get(key) == wanted.get(key) for key in ("version", "sourceCommit"))
+    return "copied" if same else "stale-copy"
 
 
 def paths(params: dict) -> dict:

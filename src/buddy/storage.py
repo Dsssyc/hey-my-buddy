@@ -2,7 +2,7 @@
 from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-import fcntl
+from . import locking
 import hashlib
 import json
 import os
@@ -234,7 +234,7 @@ def locked(store):
     path.mkdir(mode=0o700, exist_ok=True)
     fd = os.open(path / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        locking.lock(fd, blocking=False)
         yield path
     except BlockingIOError as error:
         raise BoardError('STORAGE_BUSY', 'A storage operation is already running') from error

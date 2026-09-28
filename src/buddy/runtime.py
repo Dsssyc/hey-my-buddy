@@ -21,7 +21,7 @@ node_modules and any existing virtual environment are never copied.
 """
 from __future__ import annotations
 
-import fcntl
+from . import home, locking
 import hashlib
 import json
 import os
@@ -37,7 +37,7 @@ from .errors import BoardError
 
 RUNTIME_FORMAT = 1
 READY_FILE = "READY.json"
-DEFAULT_RUNTIME_ROOT = Path.home() / ".local/share/hey-my-buddy/runtime"
+DEFAULT_RUNTIME_ROOT = home.default_runtime_root()
 
 #: The one explicit asset manifest; nothing else describes the distributable layout.
 ASSET_MANIFEST = Path("packaging") / "runtime-assets.json"
@@ -307,7 +307,7 @@ def materialize(
     lock_path = target.parent / f".{target.name}.install.lock"
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locking.lock(lock_fd)
         if is_ready(target):
             return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
         working = Path(tempfile.mkdtemp(prefix=f".{target.name}.build-", dir=target.parent))
@@ -389,7 +389,7 @@ def materialize(
     finally:
         if working is not None and working.exists():
             shutil.rmtree(working, ignore_errors=True)
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        locking.unlock(lock_fd)
         os.close(lock_fd)
         # Keep the lock inode. Unlinking it could let a later installer lock a
         # new inode while an existing waiter still holds this one open.

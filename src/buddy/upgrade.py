@@ -1,7 +1,7 @@
 """Idle-only package launcher cutover with a verified backup and rollback."""
 from __future__ import annotations
 from contextlib import ExitStack, contextmanager, closing
-import fcntl
+from . import locking
 import gzip
 import hashlib
 import json
@@ -38,7 +38,7 @@ def file_lock(path: Path, *, timeout: float = 0):
     try:
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locking.lock(fd, blocking=False)
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:

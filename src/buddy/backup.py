@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import ctypes
-import fcntl
+from . import locking
 import gzip
 import hashlib
 import json
@@ -136,7 +136,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
     os.chmod(root, 0o700)
     lock = os.open(root / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        locking.lock(lock, blocking=False)
     except BlockingIOError:
         os.close(lock)
         raise BoardError('BACKUP_BUSY', 'Another backup is in progress')
@@ -208,7 +208,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             shutil.rmtree(incoming)
         raise
     finally:
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        locking.unlock(lock)
         os.close(lock)
 
 

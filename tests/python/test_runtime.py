@@ -380,16 +380,17 @@ class RuntimeMaterializationTests(unittest.TestCase):
         second_attempted = Event()
         locked_inodes = []
         real_flock = fcntl.flock
+        real_lock = runtime.locking.lock
 
-        def observe_lock(fd, operation):
-            if operation == fcntl.LOCK_EX:
+        def observe_lock(fd, **options):
+            if not options.get("shared"):
                 locked_inodes.append(os.fstat(fd).st_ino)
                 if len(locked_inodes) == 2:
                     second_attempted.set()
-            return real_flock(fd, operation)
+            return real_lock(fd, **options)
 
         options = {"destination": self.runtime_root, "uv_bin": str(self.uv), "timeout_seconds": 10}
-        with ThreadPoolExecutor(max_workers=2) as pool, patch.object(runtime.fcntl, "flock", side_effect=observe_lock):
+        with ThreadPoolExecutor(max_workers=2) as pool, patch.object(runtime.locking, "lock", side_effect=observe_lock):
             first = pool.submit(runtime.materialize, self.root, **options)
             try:
                 readable, _, _ = select.select([started_fd], [], [], 5)

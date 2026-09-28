@@ -8,7 +8,7 @@ ignored environments and caches are excluded unless selected. This is not an OS
 sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import contextmanager
-import fcntl
+from . import locking
 import hashlib
 import json
 import os
@@ -315,7 +315,7 @@ def _lock(directory):
     descriptor = os.open(directory / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.lock(descriptor, blocking=False)
         except BlockingIOError as error:
             raise BoardError("WORKSPACE_BUSY", "Another operation is preparing or sealing this workspace") from error
         yield

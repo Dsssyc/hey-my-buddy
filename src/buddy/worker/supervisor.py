@@ -8,7 +8,7 @@ does not own.
 from __future__ import annotations
 
 import argparse
-import fcntl
+from .. import locking
 import os
 import signal
 import sys
@@ -69,14 +69,14 @@ class Supervisor:
         # a dead one look alive.
         lock_fd = os.open(self.directory / "supervisor.lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.lock(lock_fd, blocking=False)
         except BlockingIOError:
             os.close(lock_fd)
             return 0
         try:
             return self._loop(max_restarts=max_restarts)
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            locking.unlock(lock_fd)
             os.close(lock_fd)
             if self.start_stop_request:
                 self.start_stop_request.unlink(missing_ok=True)
