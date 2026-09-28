@@ -20,6 +20,6 @@ A private `CODEX_HOME` uses the native `buddy-router` permission profile: deny t
 
 The controller counts both canonical command events and raw tool requests, so sandbox-denied calls are not omitted. Counts describe observable native requests; code-mode and command events can have different granularity. `bytesRead` remains null when unavailable, and no dollar limit is provided. One format correction is allowed within the original attempt and deadline. Probe evidence includes native call IDs and results; ordinary routing does not retain raw tool content in the blackboard.
 
-Use the enabled `codex / openai / gpt-6-sol / high` profile with the `standard` Router budget after installing this candidate. The verified native probe used 5 tools and about 163 seconds; `quick` (60 seconds) did not complete. The user chooses the Router in Buddy 配置; installation does not change that setting.
+Use the enabled `codex / openai / gpt-6-sol / high` profile with the `standard` Router budget after installing this candidate. The verified native probe used 5 tools and about 148 seconds; `quick` (60 seconds) did not complete. The user chooses the Router in Buddy 配置; installation does not change that setting.
 
 Router certification is limited to the recorded macOS Codex 0.157.0 version. A newly discovered native version may remain healthy for coding after its handshake, but does not inherit the `decision` capability before equivalent native verification. This certificate is distinct from CLI compatibility, which has no hardcoded version range.
