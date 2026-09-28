@@ -74,7 +74,13 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 continue
             view = CatalogView.from_payload({**payload, 'providers': [p for p in payload['providers'] if p['adapter'] == name]})
             view.discovery_id = discovery_id
-            entries = view.proposed_profiles()
+            from .harness_health import read_health
+            from .harness_runtime import bound
+            # Publication can run in a background discovery thread with no
+            # request context. Derive certificates from this transaction's
+            # authoritative health version, not a stale or absent caller bind.
+            with bound([read_health(db, name)]):
+                entries = view.proposed_profiles()
             seen = {p['profileId'] for p in entries}
             # Missing entries become unavailable; enabled remains the user's intent.
             for old in db.execute('SELECT profile_id FROM evaluation_profiles WHERE adapter=?', (name,)).fetchall():

@@ -1,0 +1,29 @@
+{
+  "status": "passed",
+  "modelCalls": 0,
+  "root": "/private/tmp/b017-catalog-vy08fj5y",
+  "harness": {
+    "adapter": "codex",
+    "status": "ready",
+    "version": "0.157.0",
+    "executable": "/Users/soku/.nvm/versions/node/v24.21.0/bin/codex",
+    "command": [
+      "/Users/soku/.nvm/versions/node/v24.21.0/bin/node",
+      "/Users/soku/.nvm/versions/node/v24.21.0/bin/codex"
+    ],
+    "source": "nvm"
+  },
+  "routerProfile": {
+    "profileId": "codex:openai:gpt-6-sol:high",
+    "available": true,
+    "enabled": false,
+    "capabilities": [
+      "execution:codex",
+      "effort:high",
+      "input:text",
+      "input:image",
+      "decision"
+    ]
+  },
+  "stopped": true
+}
