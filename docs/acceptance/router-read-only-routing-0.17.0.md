@@ -111,7 +111,7 @@ Host 又误把广告 effort 当作用户可用配置：文档 7e363262-0130-4b90
 - 工具调用预算：原实现在调用数达到上限时即中断，上限 N 实际只允许 N−1 次；现在允许 N 次，第 N+1 次中断。
 - 控制台：状态未知的路由片段改为点线，与取消的虚线区分，不再只靠颜色；`api.ts` 中误改为 0.17.0 的 0.16.0 存储接口注释已恢复。
 
-复核验证：test_router、test_selection_policy 共 34 项通过；test_decision、test_codex、test_claude、test_workflow_routing、test_routing_history、test_routing_preferences、test_objectives、test_router_probe、test_evaluation 共 215 项通过（按 buddy.checks 的做法清除了 Claude 会话导出的 ANTHROPIC_* 变量）；控制台 npm test 39 个文件 486 项通过，npm run build 通过并重建 console_assets。完整 buddy.checks 结果见下一段。
+复核验证：test_router、test_selection_policy 共 34 项通过；test_decision、test_codex、test_claude、test_workflow_routing、test_routing_history、test_routing_preferences、test_objectives、test_router_probe、test_evaluation 共 215 项通过（按 buddy.checks 的做法清除了 Claude 会话导出的 ANTHROPIC_* 变量）；控制台 npm test 39 个文件 486 项通过，npm run build 通过并重建 console_assets。复核者对原分支与修正后分支各完整运行一次 `uv run --frozen python -m buddy.checks`：原分支 1,228 项 Python（2 项跳过）与 139 项 Node 通过；修正后 1,229 项 Python（2 项跳过）与 139 项 Node 通过，均退出 0。
 
 ## 开放边界
 
