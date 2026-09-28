@@ -188,7 +188,7 @@ class DecisionCoordinator:
             return None, f"the configured decision profile {profile_id} has no installed native adapter"
         if not (implementation.read_only_structured and implementation.read_only_structured_verified):
             return None, f"the configured decision profile {profile_id} has no verified read-only structured capability"
-        usable, reason = implementation.decision_available()
+        usable, reason = implementation.available()
         if not usable:
             return None, reason or f"the configured decision profile {profile_id} is unavailable for decision execution"
         if not row["provider"] or not row["model"] or not row["effort"]:
@@ -556,7 +556,7 @@ class DecisionCoordinator:
                 status = "needs-host"
                 reason = needs_host_reason
             elif not available:
-                status = "failed"
+                status = "needs-host"
                 error = f"ADAPTER_UNAVAILABLE: {unavailable_reason or 'the bounded decision helper is unavailable'}"
                 reason = "the bounded decision helper is not available in this build, so no model call was made"
             elif profile_row is None:
@@ -582,6 +582,7 @@ class DecisionCoordinator:
                     status, reason = "needs-host", problem
                 else:
                     frozen_input["budget"] = request["budget"]
+                    frozen_input["executionWorkspace"] = request.get("executionWorkspace")
                     frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]])
             create_task = status == "queued"
             task_id = None
@@ -651,7 +652,7 @@ class DecisionCoordinator:
             self.board._notify(head)
         return self._request_response(connection=None if owns_transaction else connection, row=row, duplicate=False)
 
-    def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict) -> dict:
+    def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None) -> dict:
         """Admit a fixed-selector task with the Goal in its existing transaction.
 
         The selector itself is always the configured decision profile. Only the
@@ -659,9 +660,15 @@ class DecisionCoordinator:
         and no provider/model call occurs during admission.
         """
         task_text = spec["task"]
+        continuation = connection.execute("SELECT input_text,helper_outcomes_json FROM workflow_continuations"
+                                          " WHERE run_id=? AND state='queued' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
+        if continuation:
+            task_text += "\n\nContinuation:\n" + continuation["input_text"]
+            task_text += "\nHelper outcomes:\n" + continuation["helper_outcomes_json"]
         task_bytes = len(task_text.encode("utf-8"))
         request = {
             "kind": "select", "task": task_text,
+            "executionWorkspace": manifest,
             "requiredCapabilities": spec.get("requiredCapabilities", []),
             "constraints": schemas.configuration_constraints(spec),
             "routingPreferences": spec.get("routingPreferences", []),
@@ -1085,6 +1092,14 @@ class DecisionCoordinator:
         still fence adoption; publication itself never starts a retry.
         """
         document = json.loads(row["input_json"]) if row["input_json"] else {}
+        manifest = document.get("executionWorkspace")
+        verification = output.get("inputVerification")
+        if manifest and (not isinstance(verification, dict) or verification.get("unchanged") is not True
+                         or verification.get("manifestSha256") != manifest.get("manifestSha256")):
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": "router-input-changed"}, error="router-input-changed",
+                         reason="Router input verification is missing or differs from the frozen manifest")
+            return
         profiles = document.get("profiles") or []
         try:
             decision = router.validate_answer(output.get("decision"), [item["profileId"] for item in profiles])

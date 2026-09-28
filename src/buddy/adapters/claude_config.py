@@ -267,7 +267,7 @@ def discovery_args() -> list[str]:
             "--mcp-config", EMPTY_MCP_CONFIG, "--setting-sources", ""]
 
 
-def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool) -> list[str]:
+def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool, output_schema: dict | None = None) -> list[str]:
     """The strict isolated execution invocation; never ``--resume``, never global settings."""
     args = [*base_args(),
             "--safe-mode", "--strict-mcp-config", "--mcp-config", EMPTY_MCP_CONFIG,
@@ -291,7 +291,11 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--permission-mode", "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]
-    args += ["--json-schema", canonical_json(OUTCOME_SCHEMA)]
+    if output_schema is not None:
+        # --tools does not limit MCP; keep the native deny layer explicit.
+        index = args.index("--disallowedTools") + 1
+        args[index] += ",mcp__*,WebFetch,WebSearch,Agent,Task"
+    args += ["--json-schema", canonical_json(output_schema if output_schema is not None else OUTCOME_SCHEMA)]
     return args
 
 

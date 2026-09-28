@@ -163,11 +163,54 @@ def execution_deadline(timeout_seconds) -> float:
     return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
+def _read_only_call(connection, control, result, catalog, early_messages, user_sent, process):
+    """Use native restricted file tools and JSON Schema without a workflow turn."""
+    from .read_only import valid_answer
+    spec, request, session_id = control["spec"], control["readOnlyRequest"], control["sessionId"]
+    if spec.get("provider") != "anthropic" or not any(
+            model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
+            for model in catalog["providers"][0]["models"]):
+        raise ClaudeProtocolError("invalid-configuration", "Unknown native read-only configuration")
+    connection.pump_available()
+    connection.send({"type": "user", "message": {"role": "user",
+                    "content": [{"type": "text", "text": request["prompt"]}]}})
+    user_sent["value"] = True
+    evidence = TurnEvidence(session_id, control["cwd"])
+    def observed(frame):
+        activity = evidence.observe(frame)
+        result["usage"] = {"toolCalls": evidence.tool_calls, "bytesRead": None}
+        if evidence.tool_calls >= request["budget"]["toolCalls"]:
+            raise ClaudeProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
+        if activity:
+            _activity(control, evidence, *activity)
+    connection.on_message = observed
+    for was_sent, message in early_messages:
+        if not was_sent and message.get("type") in ("assistant", "result", "stream_event"):
+            raise ClaudeProtocolError("native-turn-started-early", "Model output preceded the read-only request")
+        observed(message)
+    early_messages.clear()
+    while evidence.result is None:
+        connection.pump()
+    process.stdin.close()
+    connection.drain_until_closed(min(10.0, max(0.0, connection.deadline - time.monotonic())))
+    native_result = evidence.result
+    if (not evidence.init_observed or native_result.get("session_id") != session_id
+            or native_result.get("subtype") != "success" or native_result.get("is_error") is not False
+            or evidence.unsettled_background_tasks()):
+        raise ClaudeProtocolError("native-turn-failed", "No completed native structured answer")
+    raw = native_result.get("structured_output")
+    result.update(status="ok", rawAnswer=raw, answerValid=valid_answer(raw, request["outputSchema"]),
+                  resolved=dict(spec), nativeIdentity={"sessionId": session_id},
+                  usage={"toolCalls": evidence.tool_calls, "bytesRead": None})
+    return evidence
+
+
 def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     directory = Path(control["directory"])
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     native_root = Path(control.get("nativeRoot") or directory)
     native_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    started = time.monotonic()
     deadline = execution_deadline(control["timeoutSeconds"])
     result = {"status": "error", "mode": "claude", "harnessVersion": "unknown",
               "requested": control.get("spec"), "resolved": None, "observed": None}
@@ -201,11 +244,15 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 uuid.UUID(session_id, version=4)
             except ValueError:
                 raise ClaudeProtocolError("invalid-control", "the preallocated Claude session id is not a UUID") from None
-            private_json(native_root / "settings.json", sandbox_settings())
+            settings = sandbox_settings()
+            if control.get("readOnlyRequest"):
+                settings["sandbox"]["network"]["allowedDomains"] = []
+            private_json(native_root / "settings.json", settings)
             spec = control["spec"]
             args = execution_args(session_id=session_id, model=spec["model"], effort=spec["effort"],
                                   settings_path=str(native_root / "settings.json"),
-                                  read_only=control.get("access") == "read")
+                                  read_only=control.get("access") == "read",
+                                  output_schema=(control.get("readOnlyRequest") or {}).get("outputSchema"))
         # Version is diagnostic only. Discovery never makes a paid model call.
         try:
             version_result = subprocess.run([*command, "--version"], cwd=control["cwd"], env=environment,
@@ -270,6 +317,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             command, cwd=control["cwd"], environment=environment))
         if discover:
             result.update(status="ok", catalog=catalog, account=account)
+        elif control.get("readOnlyRequest"):
+            evidence = _read_only_call(connection, control, result, catalog, early_messages, user_sent, process)
         else:
             turn_input = decode_json(Path(control["inputFile"]).read_bytes())
             if not isinstance(turn_input, dict):
@@ -398,7 +447,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     except ClaudeProtocolError as error:
         result.update(status="cancelled" if error.code == "user-cancel" else "error", code=error.code, error=str(error))
         record = None
-        if error.code in ("user-cancel", "deadline"):
+        if error.code in ("user-cancel", "deadline", "readonly-budget-exhausted"):
+            result["nativeInterruptRequested"] = True
             result["nativeInterruptAcknowledged"] = _interrupt(connection)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         result.update(status="error", code="invalid-native-result", error="Claude returned invalid or incomplete native data")
@@ -428,6 +478,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         record = None
     if record is not None:
         private_json(Path(control["outputFile"]), record, exclusive=True)
+    if control.get("readOnlyRequest"):
+        result.setdefault("usage", {"toolCalls": None, "bytesRead": None})["elapsedMs"] = round((time.monotonic() - started) * 1000)
     return result, 0 if result["status"] == "ok" else 1
 
 

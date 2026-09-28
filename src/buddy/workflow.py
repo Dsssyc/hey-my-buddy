@@ -1096,6 +1096,7 @@ class WorkflowCoordinator:
         sequence = connection.execute("SELECT COUNT(*) FROM workflow_routes WHERE run_id=?", (run_id,)).fetchone()[0] + 1
         response = self.board.decisions.route_workflow(
             connection, run_id=run_id, sequence=sequence, spec=json.loads(run["goal_json"]),
+            manifest=json.loads(run["workspace_manifest_json"]),
         )
         decision_id = response["decisionId"]
         connection.execute(
@@ -2478,7 +2479,12 @@ class WorkflowCoordinator:
                              "routingPreferences": json.loads(updated_run["goal_json"]).get("routingPreferences", [])},
                 )
             elif reroute:
-                self._start_routing(connection, run_id, now)
+                # The durable continuation event below records the intent. No Router
+                # is allowed to inspect the previous turn's input while preparation waits.
+                connection.execute("UPDATE workflow_runs SET execution_configuration_json=NULL,"
+                                   " current_routing_id=NULL,validated_configuration_revision=NULL WHERE run_id=?", (run_id,))
+                connection.execute("UPDATE tasks SET adapter='unresolved',queue_reason='awaiting-workspace-preparation'"
+                                   " WHERE task_id=?", (run_id,))
             if run_id != owner_run_id:
                 target = self._run_row(connection, run_id)
                 connection.execute("UPDATE workflow_children SET state=?,updated_at=?,revision=revision+1 WHERE child_task_id=?",
@@ -2491,6 +2497,7 @@ class WorkflowCoordinator:
                 payload={
                     "continuationId": continuation_id,
                     "authorizedBy": "manual",
+                    "reroute": reroute,
                     "helperPolicy": policy,
                     "actor": actor,
                     "controllingRunId": owner_run_id,
@@ -5041,6 +5048,13 @@ class WorkflowCoordinator:
                     if recovered_attempt is not None:
                         event["recoveredAttemptId"] = recovered_attempt
                 self.board._append_event(connection, kind, task_id=row["run_id"], revision=run["revision"] + 1, payload=event)
+                if problem is None:
+                    routing_intent = connection.execute(
+                        "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.continued'"
+                        " AND json_extract(payload_json,'$.continuationId')=? ORDER BY seq DESC LIMIT 1",
+                        (row["run_id"], row["continuation_id"])).fetchone()
+                    if routing_intent and json.loads(routing_intent["payload_json"]).get("reroute") is True:
+                        self._start_routing(connection, row["run_id"], now)
                 head = self.board._head_of(connection)
             self.board._notify(head)
 

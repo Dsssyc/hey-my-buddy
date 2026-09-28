@@ -91,6 +91,9 @@ def main():
             if case == "hang":
                 time.sleep(60)
                 continue
+            if case == "readonly-budget":
+                send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "read-1"}}})
             if case in ("approval", "approval-failed"):
                 send({"id": 99, "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": thread_id, "turnId": turn_id, "itemId": "tool-1", "startedAtMs": 1}})
@@ -99,6 +102,10 @@ def main():
                     raise RuntimeError("the controller unexpectedly approved the native request")
             item = {"type": "agentMessage", "id": "final-1", "phase": "final_answer",
                     "text": json.dumps({"outcome": outcome(case)}) if case != "invalid-json" else "not json"}
+            if "profileId" in params.get("outputSchema", {}).get("properties", {}):
+                item["text"] = json.dumps({"profileId": "foreign" if case == "readonly-outside" else "legal", "reason": "Read-only fixture", "evidence": []})
+                if case == "readonly-repair" and not state['threads'][thread_id]['turns']:
+                    item["text"] = "not-json"
             if case != "no-final":
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
                                                             "item": item, "completedAtMs": 1}})

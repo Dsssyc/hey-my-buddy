@@ -93,7 +93,8 @@ def _activity(control: dict, evidence: TurnEvidence | None, phase: str, tool: st
         return
     payload = {"phase": phase, "observedAt": now, "eventSeq": evidence.event_seq,
                "nativeSessionId": evidence.thread_id, "lastNativeActivityAt": now,
-               "counts": {"modelTurns": evidence.model_turns, "toolCalls": evidence.tool_calls}}
+               "counts": {"modelTurns": evidence.model_turns + control.get("_readonlyTurnBase", 0),
+                          "toolCalls": evidence.tool_calls + control.get("_readonlyToolBase", 0)}}
     if state.get("lastToolActivityAt"):
         payload.update(lastToolActivityAt=state["lastToolActivityAt"], toolName=state["toolName"])
     record = {"version": 1, "taskId": control["taskId"], "attemptId": control["attemptId"],
@@ -124,13 +125,93 @@ def execution_deadline(timeout_seconds) -> float:
     return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
+def _read_only_call(connection, control, result, catalog):
+    """A structured native call with no workflow identity or completion tools."""
+    from .read_only import valid_answer
+    spec, request = control["spec"], control["readOnlyRequest"]
+    if spec.get("provider") != "openai" or not any(
+            model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
+            for model in catalog["providers"][0]["models"]):
+        raise CodexProtocolError("invalid-configuration", "Unknown native read-only configuration")
+    response = connection.call("thread/start", {
+        "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
+        "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "hey-my-buddy",
+        "config": {"web_search": "disabled", "features.apps": False, "features.multi_agent": False},
+    })
+    thread = response.get("thread") or {}
+    thread_id = thread.get("id")
+    if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
+        raise CodexProtocolError("wrong-native-workspace", "Read-only native checkout differs")
+    result.update(sessionId=thread_id, resolved=dict(spec))
+    previous_tools = 0
+    prompt = request["prompt"]
+    for call_index in range(2):
+        pending = []
+        connection.on_notification = lambda message: pending.append(message)
+        control["_readonlyToolBase"] = previous_tools
+        control["_readonlyTurnBase"] = call_index
+        response = connection.call("turn/start", {
+            "threadId": thread_id, "cwd": control["cwd"], "model": spec["model"], "effort": spec["effort"],
+            "input": [{"type": "text", "text": prompt}], "approvalPolicy": "never",
+            "sandboxPolicy": {"type": "readOnly", "access": {"type": "restricted",
+                              "includePlatformDefaults": True, "readableRoots": [control["cwd"]]}},
+            "outputSchema": request["outputSchema"],
+        })
+        turn_id = (response.get("turn") or {}).get("id")
+        if not isinstance(turn_id, str):
+            raise CodexProtocolError("wrong-native-turn", "No read-only turn identity")
+        result["nativeTurnId"] = turn_id
+        evidence = TurnEvidence(thread_id, turn_id)
+        def observed(message):
+            activity = evidence.observe(message)
+            result["usage"] = {"toolCalls": previous_tools + evidence.tool_calls, "bytesRead": None}
+            if previous_tools + evidence.tool_calls >= request["budget"]["toolCalls"]:
+                raise CodexProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
+            if activity:
+                _activity(control, evidence, *activity)
+        connection.on_notification = observed
+        for message in pending:
+            observed(message)
+        while evidence.completed is None:
+            connection.pump()
+        item = evidence.final_item
+        if not evidence.started or evidence.completed.get("status") != "completed" or not isinstance(item, dict):
+            raise CodexProtocolError("native-turn-failed", "No completed native structured answer")
+        raw = item.get("text")
+        if not valid_answer(raw, request["outputSchema"]):
+            # Raw output survives for the caller's semantic boundary classification.
+            result.update(status="ok", rawAnswer=raw, answerValid=False)
+        else:
+            result.update(status="ok", rawAnswer=raw, answerValid=True)
+        result["usage"] = {"toolCalls": previous_tools + evidence.tool_calls, "bytesRead": None}
+        result["nativeIdentity"] = {"sessionId": thread_id, "turnId": turn_id}
+        result["correctionCount"] = call_index
+        from .read_only import correction_code
+        correction = correction_code(raw, request["outputSchema"])
+        if call_index or correction is None:
+            break
+        previous_tools += evidence.tool_calls
+        prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
+
+
 def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     directory = Path(control["directory"])
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     native_root = Path(control.get("nativeRoot") or directory)
     native_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     deadline = execution_deadline(control["timeoutSeconds"])
+    started = time.monotonic()
     environment = native_environment(dict(os.environ))
+    if control.get("readOnlyRequest"):
+        # Keep user/project tool integrations out of this independent native server.
+        old_home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
+        private_home = native_root / "codex-home"
+        private_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        auth = old_home / "auth.json"
+        if auth.is_file() and not (private_home / "auth.json").exists():
+            (private_home / "auth.json").symlink_to(auth)
+        (private_home / "config.toml").write_text('web_search = "disabled"\n[features]\napps = false\nmulti_agent = false\n')
+        environment["CODEX_HOME"] = str(private_home)
     command = cli_command(environment)
     # Version is diagnostic only. Discovery never makes a paid model call.
     try:
@@ -175,6 +256,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         catalog = _catalog(connection, version)
         if control.get("discover"):
             result.update(status="ok", catalog=catalog)
+        elif control.get("readOnlyRequest"):
+            control["_earlyReadOnlyNotifications"] = early_notifications
+            _read_only_call(connection, control, result, catalog)
         else:
             turn_input = decode_json(Path(control["inputFile"]).read_bytes())
             if not isinstance(turn_input, dict):
@@ -287,12 +371,17 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     except CodexProtocolError as error:
         result.update(status="cancelled" if error.code == "user-cancel" else "error", code=error.code, error=str(error))
         record = None
-        if connection and thread_id and turn_id and error.code in ("user-cancel", "deadline"):
+        thread_id = thread_id or result.get("sessionId")
+        turn_id = turn_id or result.get("nativeTurnId")
+        if connection and thread_id and turn_id and error.code in ("user-cancel", "deadline", "readonly-budget-exhausted"):
             try:
                 # A fresh short control budget permits a native interrupt after the main deadline.
+                connection.on_notification = lambda message: None
+                result["nativeInterruptRequested"] = True
                 connection.cancelled = threading.Event()
                 connection.deadline = time.monotonic() + 2
                 connection.call("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
+                result["nativeInterruptAcknowledged"] = True
             except CodexProtocolError:
                 pass
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -319,6 +408,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                    "configuration": result["resolved"], "lastTurnId": turn_id}
         _write_binding(native_root, thread_id, binding)
         private_json(Path(control["outputFile"]), record, exclusive=True)
+    if control.get("readOnlyRequest"):
+        result.setdefault("usage", {"toolCalls": None, "bytesRead": None})["elapsedMs"] = round((time.monotonic() - started) * 1000)
     return result, 0 if result["status"] == "ok" else 1
 
 

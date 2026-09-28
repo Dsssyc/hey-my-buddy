@@ -127,6 +127,10 @@ def auth_status():
 
 def result_frame(case, session_id):
     structured = {"outcome": outcome(case)} if case != "bad-structured" else "not-an-object"
+    if "--json-schema" in sys.argv:
+        schema = json.loads(sys.argv[sys.argv.index("--json-schema") + 1])
+        if "profileId" in schema.get("properties", {}):
+            structured = {"profileId": "legal", "reason": "Read-only fixture", "evidence": []}
     result = {"type": "result", "subtype": "success", "is_error": False, "session_id": session_id,
               "result": "fixture final text", "structured_output": structured,
               "permission_denials": [{"tool_name": "WebFetch", "reason": "fixture denial"}]

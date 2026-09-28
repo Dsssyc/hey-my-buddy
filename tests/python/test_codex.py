@@ -202,5 +202,70 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
 
+    def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        context = self.context()
+        context.turn = None
+        context.agent_credential = "must-not-reach-native"
+        context.environment["BUDDY_AGENT_CREDENTIAL"] = "must-not-reach-native"
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        result = collect(handle)
+        self.assertEqual(result.status, "ok", result.result)
+        self.assertTrue(result.shutdown_confirmed)
+        raw = result.result["rawAnswer"]
+        answer = json.loads(raw) if isinstance(raw, str) else raw
+        self.assertEqual(answer["profileId"], "legal")
+        self.assertIsNone(result.result["usage"]["bytesRead"])
+        self.assertFalse(context.turn_output_file().exists())
+
+
+    def test_router_budget_interrupts_and_keeps_unknown_read_bytes(self):
+        from buddy.adapters.decision import DecisionAdapter
+        from buddy.router import answer_schema, budget
+        context = self.context('readonly-budget')
+        context.turn = None
+        context.decision_input = {
+            'profile': {'adapter': 'codex', 'provider': 'openai', 'model': 'fixture-model', 'effort': 'low'},
+            'profiles': [{'profileId': 'legal'}], 'task': 'Select', 'tableRevision': 1,
+            'budget': {**budget(), 'toolCalls': 1}, 'outputSchema': answer_schema(['legal']),
+        }
+        adapter = DecisionAdapter()
+        with mock.patch.object(CodexAdapter, 'read_only_structured_verified', True):
+            handle = adapter.start(context)
+            self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+            self.assertIsNotNone(handle.wait(20))
+            outcome = adapter.collect(handle, context)
+        self.assertEqual(outcome.status, 'failed', outcome.result)
+        self.assertEqual(outcome.result['code'], 'router-budget-exhausted')
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertTrue(outcome.result['stopEvidence']['nativeInterruptAcknowledged'])
+        self.assertIsNone(outcome.result['usage']['bytesRead'])
+        self.assertEqual(outcome.result['usage']['toolCalls'], 1)
+
+
+    def test_readonly_repairs_format_once_in_same_thread_but_not_bounds(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        for index, (case, calls) in enumerate((('readonly-repair', 2), ('readonly-outside', 1)), 1):
+            with self.subTest(case=case):
+                context = self.context(case, index=index)
+                context.turn = None
+                request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
+                handle = self.adapter.start_read_only_structured(context, request)
+                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.2) if h.group_alive() else None)
+                self.assertIsNotNone(handle.wait(20))
+                result = collect(handle)
+                self.assertEqual(result.status, 'ok', result.result)
+                self.assertEqual(result.result['correctionCount'], calls - 1)
+                state = json.loads((self.root / 'fixture.json').read_text())
+                self.assertEqual(len(state['threads'][result.result['sessionId']]['turns']), calls)
+
+
 if __name__ == "__main__":
     unittest.main()

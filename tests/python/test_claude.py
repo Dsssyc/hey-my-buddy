@@ -574,5 +574,27 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(activity["activity"]["nativeSessionId"], self.control()["sessionId"])
 
 
+    def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        context = self.context()
+        context.turn = None
+        context.agent_credential = "must-not-reach-native"
+        context.environment["BUDDY_AGENT_CREDENTIAL"] = "must-not-reach-native"
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        result = collect(handle)
+        self.assertEqual(result.status, "ok", result.result)
+        self.assertTrue(result.shutdown_confirmed)
+        raw = result.result["rawAnswer"]
+        answer = json.loads(raw) if isinstance(raw, str) else raw
+        self.assertEqual(answer["profileId"], "legal")
+        self.assertIsNone(result.result["usage"]["bytesRead"])
+        self.assertFalse(context.turn_output_file().exists())
+
+
 if __name__ == "__main__":
     unittest.main()

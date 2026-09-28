@@ -37,6 +37,11 @@ class ClaudeAdapter(Adapter):
     capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline")
     native_resume = False
     model_discovery = True
+    read_only_structured = True
+
+    def start_read_only_structured(self, context, request):
+        from .read_only import start
+        return start(self.name, context, request)
 
     def available(self) -> tuple[bool, str | None]:
         usable, reason = self.discovery_available()

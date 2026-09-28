@@ -42,7 +42,7 @@ def answer_schema(profile_ids: list[str]) -> dict:
         "type": "object", "additionalProperties": False,
         "required": ["profileId", "reason", "evidence"],
         "properties": {
-            "profileId": {"enum": [*profile_ids, None]},
+            "profileId": {"type": ["string", "null"], "enum": [*profile_ids, None]},
             "reason": {"type": "string", "minLength": 1, "maxLength": MAX_REASON},
             "evidence": {"type": "array", "maxItems": MAX_REFERENCES, "items": {
                 "type": "object", "additionalProperties": False, "required": ["kind", "ref"],

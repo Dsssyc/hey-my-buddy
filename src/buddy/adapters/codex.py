@@ -23,6 +23,12 @@ class CodexAdapter(Adapter):
     capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
+    read_only_structured = True
+    read_only_structured_resume = True
+
+    def start_read_only_structured(self, context, request):
+        from .read_only import start
+        return start(self.name, context, request)
 
     def available(self) -> tuple[bool, str | None]:
         try:

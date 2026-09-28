@@ -142,7 +142,8 @@ def verify_workspace(context: ExecutionContext) -> None:
         context.effective_workspace = None
         return
     from ..workflow import workspace_module
-    workspace_module().verify(manifest, require_unchanged=manifest.get("access") == "read")
+    routing = (context.turn_input.get("context") or {}).get("routing") or {}
+    workspace_module().verify(manifest, require_unchanged=manifest.get("access") == "read" or bool(routing.get("decisionId")))
     context.effective_workspace = manifest
 
 
