@@ -103,10 +103,10 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
         {otherPreferences.length > 0 && <details><summary>其他候选偏好（{otherPreferences.length} 条）</summary>
           <ul className="reason-list">{otherPreferences.map(preferenceItem)}</ul></details>}
       </> : <p className="small muted">候选快照中没有用户偏好。</p> : <p className="small muted">本次没有保存模型输入快照，无法展示当时的偏好。</p>}
-      <p className="small muted">仅展示这次决定保存的候选范围，不用当前模型卡片补写历史。</p>
+      <p className="small muted">仅展示这次决定保存的候选范围，不用当前 Buddy 配置补写历史。</p>
     </>}
     {audit.kind === "maintain" && audit.proposal != null && <details className="detail-section"><summary>查看整理建议</summary>
-      <p className="small muted">{audit.publishedRevision != null ? "已按记录的版本发布。" : "建议尚未发布。核对后可在模型卡片中编辑评价并发布。"}</p>
+      <p className="small muted">{audit.publishedRevision != null ? "已按记录的版本发布。" : "建议尚未发布。核对后可在 Buddy 配置中编辑评价并发布。"}</p>
       <pre className="result-text">{JSON.stringify(audit.proposal, null, 2)}</pre></details>}
     {audit.noOp && <p className="small muted">本次无需发布新的评价版本。</p>}
     {table && <details className="detail-section"><summary>候选、评价与证据（{profiles.length} 个配置）</summary>

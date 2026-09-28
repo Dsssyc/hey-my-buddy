@@ -176,29 +176,22 @@ describe("console interactions", () => {
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    await user.click(screen.getByRole("link", { name: "Buddy 配置" }));
     await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("link", { name: "路由配置" }));
-    expect(await screen.findByLabelText("路由模型配置")).toHaveProperty("disabled", true);
-    expect(screen.queryByRole("button", { name: "请求推荐" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
-    expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
-    expect(screen.queryByText(/整理经验/)).toBeNull();
-    // Turning the switch on only creates a local draft shared across pages.
-    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    // There is no global edit switch: controls are directly editable, and no
+    // save bar appears until the user actually changes something.
+    expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
-    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
-    await user.type(await screen.findByLabelText("我的意见"), "本地草稿");
-    await user.click(screen.getByRole("link", { name: "路由配置" }));
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "本地草稿");
-    // The automatic assessment is program-owned and stays read-only in edit mode.
+    await user.type(await screen.findByLabelText("家族备注"), "本地草稿");
+    expect(await screen.findByRole("region", { name: "未保存的修改" })).toBeTruthy();
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "本地草稿");
+    // The automatic assessment is program-owned and stays read-only.
     expect(screen.queryByLabelText("当前评价")).toBeNull();
     expect(screen.getAllByText("待积累实际证据").length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
-    await user.click(await screen.findByRole("button", { name: "放弃修改" }));
+    await user.click(screen.getByRole("button", { name: "放弃" }));
     expect(api.command).not.toHaveBeenCalled();
   });
 
@@ -223,7 +216,7 @@ describe("console interactions", () => {
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("button", { name: /Flash 决策/ }));
-    await user.click(screen.getByRole("tab", { name: "证据" }));
+    await user.click(screen.getAllByText("待积累实际证据", { exact: false })[0]);
     expect(await screen.findByText("一条只读证据")).toBeTruthy();
     expect(screen.queryByLabelText("补充观察")).toBeNull();
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();

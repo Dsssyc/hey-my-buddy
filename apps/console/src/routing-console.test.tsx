@@ -23,7 +23,8 @@ function snapshot(records: Task[] = []): Snapshot {
     configuration: { revision: 9, decisionProfileId: worker.profileId },
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
-    cards: [], annotations: [], evidence: [], decisions: [], sampleCounts: {},
+    familyPreferences: [], preferenceOverrides: [],
+    cards: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: {},
     modelConcurrency: [],
     tasks: { runs: records, total: records.length },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
@@ -84,24 +85,24 @@ function deferred<T>() {
 afterEach(() => { cleanup(); window.location.hash = ""; });
 
 describe("routing configuration", () => {
-  it("keeps a large decision history out of the settings page and performs no decision request", async () => {
+  it("keeps a large decision history out of the Buddy config page and performs no decision request", async () => {
     const state = snapshot();
     state.decisions = Array.from({ length: 50 }, (_, i) => decision(`history-${i}`, {
       task: "不应出现在配置页的长任务说明。".repeat(200),
     }));
     const command = vi.fn();
-    window.location.hash = "#settings";
+    window.location.hash = "#buddy";
+    const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command)} />);
-    expect(await screen.findByLabelText("路由模型配置")).toHaveProperty("disabled", true);
-    expect(screen.getByLabelText("路由预算")).toHaveProperty("disabled", true);
-    expect(screen.getByLabelText("路由预算")).toHaveProperty("value", "standard");
+    await user.click(await screen.findByRole("button", { name: "详情" }));
+    const budget = screen.getByRole("radiogroup", { name: "路由预算" });
+    expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
     expect(screen.getByText(/上限待实测：快速 60 秒/)).toBeTruthy();
-    expect(screen.queryByRole("checkbox")).toBeNull();
-    expect(screen.getByText(/用于检查委派输入并选择执行配置/)).toBeTruthy();
-    expect(screen.queryByText(/整理经验/)).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
     expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
+    expect(screen.queryByText(/整理经验/)).toBeNull();
     expect(screen.queryByText(/不应出现在配置页的长任务说明/)).toBeNull();
     expect(command).not.toHaveBeenCalled();
   });

@@ -267,9 +267,11 @@ describe("direct editing and the save bar", () => {
     await user.type(note(), "结果不明");
     await user.click(save());
     await screen.findByText(/保存结果未确认/);
-    // The draft and its staged payload survive an edit freeze until confirmed.
+    // The draft and its staged payload survive an edit freeze until confirmed;
+    // the field stays read-only rather than disabled, so it is still copyable.
     expect(note().value).toBe("原备注结果不明");
-    expect(note().disabled).toBe(true);
+    expect(note().readOnly).toBe(true);
+    expect(note().disabled).toBe(false);
     expect(within(saveBar()!).getByText("有 1 项未保存修改")).toBeTruthy();
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await screen.findByText(PUBLISHED);

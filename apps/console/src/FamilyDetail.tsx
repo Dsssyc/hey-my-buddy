@@ -290,7 +290,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
               {preferenceUnsaved && <span className="unsaved-mark">未保存</span>}
             </div>
             {familyPreference && <input className="reason-input" aria-label="偏好理由" placeholder="理由（可选）" maxLength={500}
-              value={familyPreference.reason} disabled={!editor.editing}
+              value={familyPreference.reason} readOnly={!editor.editing}
               onChange={e => editor.update(d => setFamilyPreference(d, family.profiles[0], familyPreference.mode, e.target.value))} />}
           </div>
         </div>
@@ -302,7 +302,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
         <div className="family-field">
           <span className="family-label">备注 <Help label="家族备注说明">备注属于整个模型家族，单独存储，不覆盖评价、证据或样本计数；留空表示清除。</Help></span>
           <div className="family-value">
-            <textarea rows={3} value={note} maxLength={4000} aria-label="家族备注" disabled={!editor.editing}
+            <textarea rows={3} value={note} maxLength={4000} aria-label="家族备注" readOnly={!editor.editing}
               placeholder="记录使用感受与适用条件"
               onChange={e => editor.update(d => setFamilyAnnotation(d, family.profiles[0], e.target.value))} />
             {noteUnsaved && <span className="unsaved-mark">未保存</span>}

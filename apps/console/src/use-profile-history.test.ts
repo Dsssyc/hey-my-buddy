@@ -36,7 +36,6 @@ function page(
   return {
     profiles: ids.map((id) => profile(id)),
     cards: [],
-    annotations: [],
     preferences: [],
     sampleCounts: {},
     modelConcurrency: [],

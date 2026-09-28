@@ -45,7 +45,7 @@ function fixture(records: Task[] = []) {
     profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, origin: "maintenance",
       summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
-    preferences: [], annotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
+    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
     modelConcurrency: [],
     tasks: { runs: records, total: records.length },
     capabilities: { selection: false, maintenance: false, evaluationWriteGate: true } };
@@ -81,72 +81,58 @@ describe("desktop console", () => {
     const user = userEvent.setup();
     const { container } = render(<App suppliedApi={f.api} />);
     const navigation = await screen.findByRole("navigation", { name: "主要导航" });
-    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["委派记录", "模型卡片", "路由配置"]);
+    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["委派记录", "Buddy 配置", "设置"]);
     expect(navigation.closest("header")).not.toBeNull();
     expect(container.querySelector(".sidebar")).toBeNull();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
-    await user.click(within(navigation).getByRole("link", { name: "模型卡片" }));
-    expect(await screen.findByText("6 个模型 · 22 个执行配置")).toBeTruthy();
-    const list = screen.getByRole("region", { name: "模型目录" });
-    expect(list.querySelectorAll(".profile-row")).toHaveLength(6);
+    await user.click(within(navigation).getByRole("link", { name: "Buddy 配置" }));
+    expect(await screen.findByRole("heading", { name: "模型 6" })).toBeTruthy();
+    const list = screen.getByRole("region", { name: "模型家族" });
+    expect(list.querySelectorAll(".family-row")).toHaveLength(6);
     await user.click(within(list).getByRole("button", { name: /^deepseek-flash/ }));
-    const detail = screen.getByRole("complementary", { name: "评价卡片详情" });
-    expect(within(within(detail).getByRole("tabpanel")).getByText("原评价 deepseek-flash off")).toBeTruthy();
-    expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
-    expect(within(detail).getByRole("button", { name: /非思考，已启用，正在查看/ })).toBeTruthy();
-    expect(within(detail).getByRole("button", { name: /low，未启用/ })).toBeTruthy();
-    await user.click(within(detail).getByRole("tab", { name: "评价与意见" }));
-    // The automatic assessment stays read-only; only the separate opinion is editable.
-    expect(within(detail).getByText("自动评价（只读）")).toBeTruthy();
-    expect(within(detail).getByText("由维护 Harness 依据证据发布")).toBeTruthy();
-    expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
+    const detail = screen.getByRole("complementary", { name: "模型家族详情" });
+    // The automatic assessment stays read-only; there is no editable opinion field.
     expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
-    await user.click(within(detail).getByRole("tab", { name: "证据" }));
+    expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
+    expect(within(detail).getByRole("switch", { name: "启用 非思考" })).toBeTruthy();
+    expect(within(detail).getByRole("switch", { name: "启用 low" })).toBeTruthy();
+    expect(within(detail).getAllByText(/由维护 Harness 依据证据发布/).length).toBeGreaterThan(0);
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
-    expect(within(detail).getByText(/暂无评价证据/)).toBeTruthy();
-    await user.click(within(detail).getByRole("tab", { name: "偏好与启用" }));
-    expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
+    expect(within(detail).getAllByText(/暂无评价证据/).length).toBeGreaterThan(0);
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("keeps one opinion draft across efforts, models, detail tabs and main pages without a lease", async () => {
+  it("keeps one note draft per family across models, models detail and main pages without a lease", async () => {
     const f = fixture();
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("switch", { name: "编辑设置" }));
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
-    await user.type(await screen.findByLabelText("我的意见"), "off 人工意见");
-    await user.click(screen.getByRole("button", { name: /^max，已启用/ }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "");
-    await user.type(screen.getByLabelText("我的意见"), "max 人工意见");
+    await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
+    await user.type(await screen.findByLabelText("家族备注"), "flash 家族备注");
+    await user.click(screen.getByRole("button", { name: /^deepseek-v4-pro/ }));
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "");
+    await user.type(screen.getByLabelText("家族备注"), "pro 家族备注");
     await user.click(screen.getByRole("button", { name: /^GLM-5\.3(?!-Flash)/ }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "");
-    await user.type(screen.getByLabelText("我的意见"), "ZCode 人工意见");
-    await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
-    await user.selectOptions(screen.getByLabelText("用户偏好"), "prefer");
-    await user.click(screen.getByRole("link", { name: "路由配置" }));
-    expect(screen.queryByRole("textbox", { name: "我的意见" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "ZCode 人工意见");
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "");
+    await user.type(screen.getByLabelText("家族备注"), "ZCode 家族备注");
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    expect(screen.queryByRole("textbox", { name: "家族备注" })).toBeNull();
+    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "ZCode 家族备注");
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "off 人工意见");
-    await user.click(screen.getByRole("button", { name: /^max/ }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "max 人工意见");
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "flash 家族备注");
+    await user.click(screen.getByRole("button", { name: /^deepseek-v4-pro/ }));
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "pro 家族备注");
     // A read-only refresh keeps the draft; only Save would take a lease.
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "max 人工意见");
-    // The automatic card stays program-owned in edit mode and cannot be typed into.
-    expect(screen.getAllByText("原评价 deepseek-flash max").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "pro 家族备注");
+    // The automatic card stays program-owned and cannot be typed into.
+    expect(screen.getAllByText(/原评价 deepseek-v4-pro/).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("当前评价")).toBeNull();
-    await user.click(screen.getByRole("tab", { name: "证据" }));
     expect(screen.queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
-    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
-    await user.click(await screen.findByRole("button", { name: "放弃修改" }));
-    await screen.findByText("已放弃未发布的修改。");
+    await user.click(await screen.findByRole("button", { name: "放弃" }));
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -157,15 +143,12 @@ describe("desktop console", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
-    const detail = screen.getByRole("complementary", { name: "评价卡片详情" });
-    await user.click(within(detail).getByRole("tab", { name: "评价与意见" }));
+    const detail = screen.getByRole("complementary", { name: "模型家族详情" });
     // The card was not recorded as maintenance-published, so it is not called
     // an automatic assessment; it stays read-only either way.
-    expect(within(detail).queryByText("自动评价（只读）")).toBeNull();
     expect(within(detail).getAllByText(/发布者未记录/).length).toBeGreaterThan(0);
     expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
-    expect(screen.queryByLabelText("我的意见")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -188,7 +171,7 @@ describe("desktop console", () => {
       query: "目标", projectId: "source-project", hostId: "codex-source" }), expect.any(AbortSignal)));
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 280;
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     expect(screen.getByLabelText("搜索委派")).toHaveProperty("value", "目标");
     expect(screen.getByLabelText("项目筛选")).toHaveProperty("value", "source-project");
@@ -271,7 +254,7 @@ describe("desktop console", () => {
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /目标 two/ }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);

@@ -52,8 +52,10 @@ function catalogSnapshot(): Snapshot {
     },
     profiles: [flashOff, proMax],
     preferences: [],
+    familyPreferences: [],
+    preferenceOverrides: [],
     cards: [],
-    annotations: [],
+    familyAnnotations: [],
     evidence: [],
     decisions: [],
     sampleCounts: { [flashOffId]: 6 },
@@ -61,13 +63,6 @@ function catalogSnapshot(): Snapshot {
     tasks: { runs: [], total: 0 },
     capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
   };
-}
-
-function optionEntries(select: HTMLElement) {
-  return Array.from(select.querySelectorAll("option")).map((option) => [
-    option.value,
-    option.textContent,
-  ]);
 }
 
 afterEach(() => {
@@ -145,7 +140,7 @@ describe("profile display", () => {
 });
 
 describe("decision profile selector", () => {
-  it("offers only decision-capable candidates and publishes one configuration patch", async () => {
+  it("sets the Router from an effort tag menu, confirms a replacement, and publishes one configuration patch", async () => {
     let state = catalogSnapshot();
     let published: Record<string, any> | null = null;
     const grant: WriterGrant = {
@@ -186,30 +181,22 @@ describe("decision profile selector", () => {
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     } as unknown as ConsoleApi;
-    window.location.hash = "#settings";
+    window.location.hash = "#buddy";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    expect(
-      optionEntries(await screen.findByLabelText("路由模型配置")),
-    ).toEqual([
-      ["", "尚未配置"],
-      [flashOffId, "DeepSeek-V41-Flash · 非思考"],
-      [proMaxId, "DeepSeek-V4-Pro · max"],
-    ]);
-    expect(screen.getByText("deepseek-official / max")).toBeTruthy();
+    // The Router is a role on an effort tag now: no "路由模型配置" selector exists.
+    expect(screen.queryByLabelText("路由模型配置")).toBeNull();
+    expect((await screen.findAllByText("DeepSeek-V4-Pro · max")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /^DeepSeek-V41-Flash/ }));
+    await user.click(screen.getByRole("button", { name: "非思考 档位菜单" }));
+    await user.click(screen.getByRole("button", { name: "设为 Router" }));
+    // An existing Router asks for confirmation before being replaced.
+    expect(await screen.findByRole("heading", { name: "替换 Router" })).toBeTruthy();
+    expect(screen.getByText(/将替换当前 Router DeepSeek-V4-Pro · max，改为 DeepSeek-V41-Flash · 非思考/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "替换" }));
+    expect((await screen.findAllByText("DeepSeek-V41-Flash · 非思考")).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
-    await waitFor(() =>
-      expect(screen.getByLabelText("路由模型配置")).toHaveProperty(
-        "disabled",
-        false,
-      ),
-    );
-    await user.selectOptions(screen.getByLabelText("路由模型配置"), flashOffId);
-    expect(await screen.findByText("deepseek-official / 非思考")).toBeTruthy();
-    expect(screen.getByText(/草稿中的路由模型/)).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(published!.configuration.decisionProfileId).toBe(flashOffId);
     expect(published!.configuration).not.toHaveProperty("autoMaintain");
@@ -218,7 +205,7 @@ describe("decision profile selector", () => {
     expect(published).not.toHaveProperty("profiles");
     expect(published).not.toHaveProperty("cards");
     expect(published).not.toHaveProperty("preferenceChanges");
-    expect(published).not.toHaveProperty("annotationChanges");
+    expect(published).not.toHaveProperty("familyAnnotationChanges");
     expect(Object.keys(published!).sort()).toEqual([
       "commandId", "configuration", "expectedRevision", "generation", "writerId", "writerToken",
     ]);
@@ -226,7 +213,7 @@ describe("decision profile selector", () => {
 });
 
 describe("model list display", () => {
-  it("shows the catalog name once and localizes the effort badge", async () => {
+  it("shows the family name once and localizes the effort tag", async () => {
     const api = {
       snapshot: vi.fn(async () => catalogSnapshot()),
       command: vi.fn(),
@@ -234,13 +221,15 @@ describe("model list display", () => {
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     } as unknown as ConsoleApi;
-    window.location.hash = "#models";
+    window.location.hash = "#buddy";
+    const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     expect(
       await screen.findByRole("button", { name: /^DeepSeek-V41-Flash/ }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /^DeepSeek-V4-Pro/ })).toBeTruthy();
-    expect(screen.getByText("非思考")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^DeepSeek-V41-Flash/ }));
+    expect(screen.getAllByText("非思考").length).toBeGreaterThan(0);
     expect(screen.queryByText("DeepSeek-V41-Flash · off")).toBeNull();
   });
 });

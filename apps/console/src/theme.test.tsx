@@ -41,13 +41,13 @@ describe("light and dark themes", () => {
   it("defaults to light and marks the document color scheme", async () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一个工作目标" });
-    const toggle = screen.getByRole("switch", { name: "深色主题" });
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    const dark = await screen.findByRole("radio", { name: "深色" });
+    expect(dark).toHaveProperty("checked", false);
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
     expect(document.documentElement.style.colorScheme).toBe("light");
-    await user.click(toggle);
-    expect(screen.getByRole("switch", { name: "深色主题" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(dark);
+    expect(screen.getByRole("radio", { name: "深色" })).toHaveProperty("checked", true);
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.documentElement.style.colorScheme).toBe("dark");
   });
@@ -55,8 +55,8 @@ describe("light and dark themes", () => {
   it("persists only the theme choice and restores it on the next page", async () => {
     const user = userEvent.setup();
     const first = render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一个工作目标" });
-    await user.click(screen.getByRole("switch", { name: "深色主题" }));
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    await user.click(await screen.findByRole("radio", { name: "深色" }));
     expect(Object.keys(window.localStorage)).toEqual([THEME_STORAGE_KEY]);
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     first.unmount();
@@ -64,8 +64,8 @@ describe("light and dark themes", () => {
     expect(applyStoredTheme()).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一个工作目标" });
-    expect(screen.getByRole("switch", { name: "深色主题" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    expect(await screen.findByRole("radio", { name: "深色" })).toHaveProperty("checked", true);
   });
 
   it("keeps the switch usable when storage is unavailable", async () => {
@@ -73,24 +73,27 @@ describe("light and dark themes", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage disabled"); });
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一个工作目标" });
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    await screen.findByRole("radio", { name: "深色" });
     expect(document.documentElement.dataset.theme).toBe("light");
-    await user.click(screen.getByRole("switch", { name: "深色主题" }));
+    await user.click(screen.getByRole("radio", { name: "深色" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(screen.getByRole("switch", { name: "深色主题" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "深色" })).toHaveProperty("checked", true);
   });
 
-  it("toggles from the keyboard through the same switch role", async () => {
+  it("toggles from the keyboard through the same radio group", async () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一个工作目标" });
-    const toggle = screen.getByRole("switch", { name: "深色主题" });
-    toggle.focus();
-    expect(document.activeElement).toBe(toggle);
-    await user.keyboard("{Enter}");
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    const dark = await screen.findByRole("radio", { name: "深色" });
+    const light = screen.getByRole("radio", { name: "浅色" });
+    dark.focus();
+    expect(document.activeElement).toBe(dark);
     await user.keyboard(" ");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(dark).toHaveProperty("checked", true);
+    await user.click(light);
+    expect(light).toHaveProperty("checked", true);
+    expect(dark).toHaveProperty("checked", false);
   });
 
   it("defines every semantic token for both themes and keeps styles token-only", () => {
