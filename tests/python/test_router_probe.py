@@ -103,7 +103,7 @@ class RouterProbeTests(unittest.TestCase):
                 sentinel = next(self.root.glob("outside-*.txt"))
                 self.assertNotIn(marker, report["request"]["prompt"])
                 self.assertNotIn(sentinel.read_text().strip(), report["request"]["prompt"])
-                self.assertEqual((self.root / "frozen/marker.txt").stat().st_mode & 0o222, 0)
+                self.assertEqual((self.root / "frozen/marker.txt").stat().st_mode & 0o777, 0o600)  # native policy, not file modes, must deny writes
 
     def test_explicit_execute_refuses_dsh_and_zcode_without_start(self):
         for adapter in ("dsh", "zcode"):

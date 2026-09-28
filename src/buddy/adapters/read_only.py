@@ -90,7 +90,7 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
         "activityFile": str(context.directory / "activity.json"),
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                            "budget": request.budget},
+                            "budget": request.budget, "captureEvidence": request.capture_evidence},
     }
     path = context.directory / "readonly-control.json"
     private_json(path, control)

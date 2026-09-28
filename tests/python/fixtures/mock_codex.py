@@ -67,7 +67,13 @@ def main():
             state["next"] += 1
             state["threads"][thread_id] = {"cwd": params["cwd"], "turns": []}
             write_state(state)
-            send({"id": ident, "result": {"thread": {"id": thread_id, "cwd": params["cwd"],
+            policy = ({'activePermissionProfile': {'id': params['permissions']},
+                       'sandbox': {'type': 'readOnly', 'networkAccess': False}, 'approvalPolicy': 'never',
+                       'model': params['model'], 'modelProvider': 'openai', 'cwd': params['cwd']}
+                      if params.get('permissions') else {})
+            if case == 'readonly-policy-mismatch':
+                policy['sandbox']['networkAccess'] = True
+            send({"id": ident, "result": {**policy, "thread": {"id": thread_id, "cwd": params["cwd"],
                                                        "modelProvider": "openai", "turns": []}}})
         elif method == "thread/read":
             state = read_state()["threads"].get(params["threadId"])

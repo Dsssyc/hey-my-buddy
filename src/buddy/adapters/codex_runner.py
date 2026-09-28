@@ -135,9 +135,21 @@ def _read_only_call(connection, control, result, catalog):
         raise CodexProtocolError("invalid-configuration", "Unknown native read-only configuration")
     response = connection.call("thread/start", {
         "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
-        "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "hey-my-buddy",
+        "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
         "config": {"web_search": "disabled", "features.apps": False, "features.multi_agent": False},
     })
+    profile = response.get('activePermissionProfile') or {}
+    native_sandbox = response.get('sandbox') or {}
+    if (profile.get('id') != 'buddy-router' or response.get('approvalPolicy') != 'never'
+            or native_sandbox.get('type') != 'readOnly' or native_sandbox.get('networkAccess', False) is not False):
+        raise CodexProtocolError('readonly-policy-unverified', 'Codex did not acknowledge the private read-only permission profile')
+    if response.get('model') != spec['model'] or response.get('modelProvider') != 'openai' or Path(response.get('cwd') or '').resolve() != Path(control['cwd']).resolve():
+        raise CodexProtocolError('readonly-configuration-mismatch', 'Codex acknowledged a different read-only configuration')
+    result['nativePolicy'] = {'activePermissionProfile': profile, 'sandbox': native_sandbox,
+                              'approvalPolicy': response['approvalPolicy'], 'model': response.get('model'),
+                              'modelProvider': response.get('modelProvider'), 'cwd': response.get('cwd')}
+    if request.get('captureEvidence'):
+        result['nativeToolEvents'] = []
     thread = response.get("thread") or {}
     thread_id = thread.get("id")
     if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
@@ -154,8 +166,7 @@ def _read_only_call(connection, control, result, catalog):
         response = connection.call("turn/start", {
             "threadId": thread_id, "cwd": control["cwd"], "model": spec["model"], "effort": spec["effort"],
             "input": [{"type": "text", "text": prompt}], "approvalPolicy": "never",
-            "sandboxPolicy": {"type": "readOnly", "access": {"type": "restricted",
-                              "includePlatformDefaults": True, "readableRoots": [control["cwd"]]}},
+            "permissions": "buddy-router",
             "outputSchema": request["outputSchema"],
         })
         turn_id = (response.get("turn") or {}).get("id")
@@ -164,6 +175,15 @@ def _read_only_call(connection, control, result, catalog):
         result["nativeTurnId"] = turn_id
         evidence = TurnEvidence(thread_id, turn_id)
         def observed(message):
+            if request.get('captureEvidence') and message.get('method') in ('item/started', 'item/completed'):
+                item = (message.get('params') or {}).get('item') or {}
+                if item.get('type') not in ('agentMessage', 'reasoning', 'userMessage'):
+                    events = result['nativeToolEvents']
+                    encoded = canonical_json(message)
+                    if len(events) < 64 and len(encoded.encode()) <= 8192 and sum(len(canonical_json(e).encode()) for e in events) + len(encoded.encode()) <= 131072:
+                        events.append(message)
+                    else:
+                        result['nativeEvidenceTruncated'] = True
             activity = evidence.observe(message)
             result["usage"] = {"toolCalls": previous_tools + evidence.tool_calls, "bytesRead": None}
             # A limit of N allows N native tool calls; the next one is interrupted.
@@ -214,7 +234,12 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         auth = old_home / "auth.json"
         if auth.is_file() and not (private_home / "auth.json").exists():
             (private_home / "auth.json").symlink_to(auth)
-        (private_home / "config.toml").write_text('web_search = "disabled"\n[features]\napps = false\nmulti_agent = false\n')
+        (private_home / "config.toml").write_text(
+            'web_search = "disabled"\napproval_policy = "never"\ndefault_permissions = "buddy-router"\n'
+            '[features]\napps = false\nmulti_agent = false\n'
+            '[permissions.buddy-router.filesystem]\n":minimal" = "read"\n'
+            + json.dumps(str(Path(control['cwd']).resolve())) + ' = "read"\n'
+            '[permissions.buddy-router.network]\nenabled = false\n')
         environment["CODEX_HOME"] = str(private_home)
     # Version is diagnostic only. Discovery never makes a paid model call.
     try:
@@ -254,7 +279,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             connection.send({"id": message["id"], "error": {"code": -32601,
                 "message": "This Buddy Worker cannot approve interactive requests; report attention in the structured outcome"}})
         connection.on_request = on_request
-        connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}})
+        connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"},
+                                        **({'capabilities': {'experimentalApi': True}} if control.get('readOnlyRequest') else {})})
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         if not isinstance(account, dict) or account.get("type") != "chatgpt":

@@ -120,6 +120,7 @@ class ReadOnlyStructuredRequest:
     prompt: str
     output_schema: dict
     budget: dict
+    capture_evidence: bool = False
 
 
 class Adapter:

@@ -202,6 +202,22 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
 
+    def test_read_only_refuses_an_unacknowledged_policy_before_model_input(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        context = self.context('readonly-policy-mismatch')
+        context.turn = None
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'No model work before policy acknowledgement', answer_schema(['legal']), budget(), capture_evidence=True)
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        result = collect(handle)
+        self.assertEqual(result.status, 'failed')
+        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
+        self.assertIs(result.result['modelStarted'], False)
+        self.assertTrue(result.shutdown_confirmed)
+
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
         from buddy.adapters.base import ReadOnlyStructuredRequest
         from buddy.adapters.read_only import collect
