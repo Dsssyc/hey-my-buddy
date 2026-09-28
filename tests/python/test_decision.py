@@ -336,6 +336,10 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(
             [profile["profileId"] for profile in pinned_decision["input"]["profiles"]], [SECOND_PROFILE_ID]
         )
+        # The Router input carries the effective preference with its source.
+        self.assertEqual(pinned_decision["input"]["preferences"],
+                         [{"profileId": SECOND_PROFILE_ID, "mode": "pin",
+                           "reason": "only this one", "source": "override"}])
 
     def test_requested_capabilities_filter_the_candidate_set(self):
         board = self.board()

@@ -17,7 +17,8 @@ from buddy.adapters.claude import ClaudeAdapter
 from buddy.adapters.zcode import ZcodeAdapter
 from buddy import router
 from buddy.errors import BoardError
-from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE_ID
+from test_evaluation import family_key
 from test_workflow import CONFIGURATION, WorkflowTestCase
 
 NONCE = "n" * 16
@@ -140,7 +141,7 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
             "commandId": "annotations-publish", "writerId": grant["writerId"],
             "generation": grant["generation"], "writerToken": grant["writerToken"],
             "expectedRevision": grant["tableRevision"],
-            "annotationChanges": [{"profileId": PROFILE_ID, "text": "Human preference for this workflow"}],
+            "familyAnnotationChanges": [{**family_key(PROFILE), "text": "Human preference for this workflow"}],
         })
 
     def routed(self, board, *, request_id, preferences, **constraints):
@@ -177,7 +178,12 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
         view = self.routed(board, request_id="route-soft", preferences=prefs)
         document = self.select(board, view, PROFILE_ID)
         self.assertEqual(document["routingPreferences"], prefs)
-        self.assertEqual(document["annotations"][0]["text"], "Human preference for this workflow")
+        note = document["annotations"][0]
+        self.assertEqual({key: note[key] for key in ("adapter", "provider", "model", "text")},
+                         {**family_key(PROFILE), "text": "Human preference for this workflow"})
+        self.assertTrue(note["revision"])
+        self.assertTrue(note["updatedAt"])
+        self.assertEqual(document["preferences"], [])
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "fallback")
         self.assertEqual(routed["routing"]["source"], "model-selection")

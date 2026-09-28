@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from support import FakeClock
-from test_evaluation import EvaluationTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID
+from test_evaluation import EvaluationTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, family_key
 
 from buddy import evaluation as evaluation_module
 
@@ -296,7 +296,7 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
         self.assertTrue(packet["progress"]["complete"])
         self.assertEqual(packet["remaining"], {"pendingEvidence": 0, "reviewedBacklog": 0})
         self.assertEqual(packet["skipped"], [])
-        self.assertEqual(packet["preferences"], [{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}])
+        self.assertEqual(packet["preferences"], [{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap", "source": "override"}])
 
         runs = {entry["runId"]: entry for entry in packet["evidence"]}
         self.assertEqual(set(runs), {first, second})
@@ -882,7 +882,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         # The rewritten card carries the code-owned count derived from the aggregate.
         self.assertEqual(cards[PROFILE_ID]["sampleCount"], 1)
         self.assertEqual(cards[SECOND_PROFILE_ID]["summary"], "second card")
-        self.assertEqual(snapshot["preferences"], [{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}])
+        self.assertEqual(snapshot["preferences"], [{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap", "source": "override"}])
         self.assertEqual(snapshot["configuration"], before_configuration)
         self.assertEqual([profile["profileId"] for profile in snapshot["profiles"] if profile["enabled"]], [PROFILE_ID, SECOND_PROFILE_ID])
         # The reference consumer leaves the pending ledger, and the next packet is empty.
@@ -986,7 +986,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
             board,
             request_id="human-later",
             command_id="human-later",
-            annotationChanges=[{"profileId": PROFILE_ID, "text": "human edit while maintenance prepared"}],
+            familyAnnotationChanges=[{**family_key(PROFILE), "text": "human edit while maintenance prepared"}],
         )
         grant = board.call(
             "evaluation_write_begin",
@@ -1074,7 +1074,7 @@ class EvaluationHistoryTests(ExternalEvaluationTestCase):
             board,
             request_id="human-2",
             command_id="human-2",
-            annotationChanges=[{"profileId": PROFILE_ID, "text": "second human revision"}],
+            familyAnnotationChanges=[{**family_key(PROFILE), "text": "second human revision"}],
         )
         before = self.snapshot(board)
         page = self.history(board, limit=1)
@@ -1085,8 +1085,8 @@ class EvaluationHistoryTests(ExternalEvaluationTestCase):
         self.assertEqual(page["revisions"][0]["revision"], 4)
         self.assertEqual(page["revisions"][0]["kind"], "human")
         self.assertIsInstance(page["revisions"][0]["actor"], str)
-        self.assertEqual(page["revisions"][0]["counts"]["annotationChanges"], 1)
-        self.assertEqual(page["revisions"][0]["counts"]["provided"], ["annotationChanges"])
+        self.assertEqual(page["revisions"][0]["counts"]["familyAnnotationChanges"], 1)
+        self.assertEqual(page["revisions"][0]["counts"]["provided"], ["familyAnnotationChanges"])
         older = self.history(board, limit=1, before=page["nextCursor"])
         self.assertEqual(older["revisions"][0]["revision"], 3)
         self.assertEqual(older["revisions"][0]["counts"]["cards"], 2)
@@ -1110,7 +1110,7 @@ class EvaluationHistoryTests(ExternalEvaluationTestCase):
                 board,
                 request_id=f"human-{index}",
                 command_id=f"human-{index}",
-                annotationChanges=[{"profileId": PROFILE_ID, "text": f"revision {index}"}],
+                familyAnnotationChanges=[{**family_key(PROFILE), "text": f"revision {index}"}],
             )
         first = self.history(board, limit=2)
         self.assertEqual([entry["revision"] for entry in first["revisions"]], [7, 6])
@@ -1121,7 +1121,7 @@ class EvaluationHistoryTests(ExternalEvaluationTestCase):
             board,
             request_id="human-9",
             command_id="human-9",
-            annotationChanges=[{"profileId": PROFILE_ID, "text": "newest"}],
+            familyAnnotationChanges=[{**family_key(PROFILE), "text": "newest"}],
         )
         older = self.history(board, limit=2, before=cursor)
         self.assertEqual([entry["revision"] for entry in older["revisions"]], [5, 4])

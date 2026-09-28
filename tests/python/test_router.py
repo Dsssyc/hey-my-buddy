@@ -140,7 +140,7 @@ class RouterPublicationTests(WorkflowTestCase):
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')
         self.assertEqual(configured['decisionProfileId'], PROFILE_ID)
-        self.assertEqual(SCHEMA_VERSION, 12)
+        self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
     def test_budget_update_does_not_change_selection_request_replay(self):
         board = self.board()

@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from support import BoardTestCase, PYTHON_ROOT
+from buddy.db import SCHEMA_VERSION
 
 #: Tests run inside a Buddy-managed process may inherit runtime, worker and agent
 #: credential variables. Every daemon construction here starts from a clean base so
@@ -286,7 +287,7 @@ class DaemonHealthTests(BoardTestCase):
                 self.assertNotEqual(process.poll(), 0)
                 endpoint = _read_endpoint(self.directory)
                 health = _request(endpoint, "health", {})
-                self.assertEqual(health["schemaVersion"], 12)
+                self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
                 self.assertEqual(health["maxConcurrent"], 2)
                 self.assertEqual(set(health["capacity"]), {"totalLimit", "totalActive", "models"})
                 self.assertEqual(health["capacity"]["totalLimit"], 2)

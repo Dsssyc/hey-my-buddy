@@ -140,6 +140,8 @@ def private_environment(root: Path, **overrides) -> dict:
     values["PYTHONPATH"] = os.pathsep.join([str(PYTHON), str(TESTS)] + ([inherited] if inherited else []))
     values["BUDDY_DEV_SOURCE"] = "1"
     values["BUDDY_RUNTIME_ROOT"] = str(root / "runtime-root")
+    # Never contend for the console's fixed default port with a running daily service.
+    values["BUDDY_CONSOLE_PORT"] = "0"
     values.update(overrides)
     return values
 

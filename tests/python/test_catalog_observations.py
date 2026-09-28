@@ -21,7 +21,7 @@ class CatalogObservationTests(BoardTestCase):
         profile_id = 'dsh:fixture:alpha:max'
         with self.e.db.write() as db:
             db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
-            db.execute("INSERT INTO evaluation_annotations VALUES(?,'human text',1,'now')", (profile_id,))
+            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','human text',1,'now')")
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason',1)", (profile_id,))
         self.record(catalog(models=()))
         retired = catalog_store.profiles(self.e, {'includeUnavailable': True})
@@ -33,7 +33,9 @@ class CatalogObservationTests(BoardTestCase):
         current = self.e.snapshot({})
         self.assertTrue(current['profiles'][0]['available'])
         self.assertTrue(current['profiles'][0]['enabled'])
-        self.assertEqual(current['annotations'][0]['text'], 'human text')
+        self.assertEqual(current['familyAnnotations'][0]['text'], 'human text')
+        self.assertEqual({key: current['familyAnnotations'][0][key] for key in ('adapter', 'provider', 'model')},
+                         {'adapter': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
         with self.e.db.read() as db:
             self.assertIsNotNone(self.e._catalog(db).lookup('dsh', 'fixture', 'alpha'))
 

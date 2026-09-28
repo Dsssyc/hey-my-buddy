@@ -41,6 +41,11 @@ CARD = {"profileId": PROFILE_ID, "summary": "fixture assessment", "strengths": [
 SECOND_CARD = {**CARD, "profileId": SECOND_PROFILE_ID}
 
 
+def family_key(profile: dict) -> dict:
+    """The ``(adapter, provider, model)`` key a family-keyed row or patch uses."""
+    return {key: profile[key] for key in ("adapter", "provider", "model")}
+
+
 class EvaluationTestCase(BoardTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -252,8 +257,10 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
         self.assertEqual(snapshot["sampleCounts"], {})
         self.assertEqual(snapshot["profiles"], [])
+        self.assertEqual(snapshot["familyPreferences"], [])
+        self.assertEqual(snapshot["preferenceOverrides"], [])
         self.assertEqual(snapshot["preferences"], [])
-        self.assertEqual(snapshot["annotations"], [])
+        self.assertEqual(snapshot["familyAnnotations"], [])
         self.assertEqual(snapshot["cards"], [])
         self.assertEqual(snapshot["evidence"], [])
         self.assertEqual(snapshot["decisions"], [])
@@ -271,18 +278,20 @@ class EvaluationPublishTests(EvaluationTestCase):
         first = self.publish(board, request_id="w1", command_id="c1",
                              profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
                              preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}],
-                             annotationChanges=[{"profileId": PROFILE_ID, "text": "human context"}])
+                             familyAnnotationChanges=[{**family_key(PROFILE), "text": "human context"}])
         self.assertEqual(first["revision"], catalog["tableRevision"] + 1)
         card = self.publish_cards(board, request_id="m1", command_id="m1", cards=[CARD])
         self.assertEqual(card["revision"], first["revision"] + 1)
         snapshot = self.snapshot(board)
         self.assertTrue(next(item for item in snapshot["profiles"] if item["profileId"] == PROFILE_ID)["enabled"])
         self.assertEqual(snapshot["preferences"][0]["reason"], "cheap and fast")
-        self.assertEqual(snapshot["annotations"][0]["text"], "human context")
+        self.assertEqual(snapshot["preferences"][0]["source"], "override")
+        note = snapshot["familyAnnotations"][0]
+        self.assertEqual((note["model"], note["text"]), (PROFILE["model"], "human context"))
         self.assertEqual(snapshot["cards"][0]["summary"], CARD["summary"])
         self.publish_cards(board, request_id="m2", command_id="m2", cards=[])
         self.assertEqual(self.snapshot(board)["cards"][0]["summary"], CARD["summary"], "an empty maintenance patch preserves prior cards")
-        self.assertEqual(self.snapshot(board)["annotations"][0]["text"], "human context")
+        self.assertEqual(self.snapshot(board)["familyAnnotations"][0]["text"], "human context")
 
     def test_unknown_collection_fields_and_fabricated_counters_are_rejected(self):
         board = self.board()
@@ -316,11 +325,11 @@ class EvaluationPublishTests(EvaluationTestCase):
                      configuration={"decisionProfileId": SECOND_PROFILE_ID})
         self.publish(board, request_id="w4", command_id="c4",
                      profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": False}],
-                     annotationChanges=[{"profileId": PROFILE_ID, "text": "other edit"}])
+                     familyAnnotationChanges=[{**family_key(PROFILE), "text": "other edit"}])
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["preferences"][0]["mode"], "pin")
         self.assertEqual(snapshot["configuration"]["decisionProfileId"], SECOND_PROFILE_ID)
-        self.assertEqual(snapshot["annotations"][0]["text"], "other edit")
+        self.assertEqual(snapshot["familyAnnotations"][0]["text"], "other edit")
 
     def test_configuration_carries_router_profile_and_budget_without_maintenance(self):
         from fixtures import mock_readonly
@@ -366,16 +375,16 @@ class EvaluationPublishTests(EvaluationTestCase):
         base = {"commandId": "same-command", "writerId": grant["writerId"],
                 "generation": grant["generation"], "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"]}
-        payload = {**base, "annotationChanges": [{"profileId": PROFILE_ID, "text": "first"}]}
+        payload = {**base, "familyAnnotationChanges": [{**family_key(PROFILE), "text": "first"}]}
         first = board.console_call("user_policy_publish", payload)
         self.assertTrue(board.console_call("user_policy_publish", payload)["duplicate"])
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
-                         {**base, "annotationChanges": []})
+                         {**base, "familyAnnotationChanges": []})
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
-                         {**base, "annotationChanges": None})
+                         {**base, "familyAnnotationChanges": None})
         other = self.begin(board, request_id="w2")
         self.assert_code("INVALID_ARGUMENT", self.publish_with, board, other, "fresh-command",
-                         annotationChanges=None)
+                         familyAnnotationChanges=None)
         self.assertEqual(self.snapshot(board)["tableRevision"], first["revision"])
 
     def test_expired_or_unknown_writer_cannot_publish(self):
@@ -383,7 +392,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         grant = self.begin(board, request_id="w1")
         base = {"commandId": "c1", "writerId": grant["writerId"], "generation": grant["generation"],
                 "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
-                "annotationChanges": [{"profileId": "missing", "text": "x"}]}
+                "familyAnnotationChanges": [{**family_key(PROFILE), "text": "x"}]}
         self.assert_code("UNAUTHORIZED", board.console_call, "user_policy_publish",
                          {**base, "writerToken": "0" * 64})
         self.assert_code("STALE_GENERATION", board.console_call, "user_policy_publish",
@@ -395,12 +404,91 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.begin(board, request_id="w1")
         self.publish_with(board, grant, "c1",
-                          annotationChanges=[{"profileId": PROFILE_ID, "text": "visible opinion"}])
+                          familyAnnotationChanges=[{**family_key(PROFILE), "text": "visible opinion"}])
         raw = json.dumps(self.snapshot(board))
         self.assertNotIn(grant["writerToken"], raw)
         self.assertNotIn(board.service.token, raw)
         self.assertNotIn("writerToken", raw)
         self.assertNotIn("token_verifier", raw)
+
+    def test_family_preference_covers_every_effort_and_a_none_override_wins(self):
+        board = self.board()
+        self.seed_catalog(board)
+        published = self.publish(
+            board, request_id="w1", command_id="c1",
+            familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer", "reason": "cheap for the family"}],
+        )
+        self.assertEqual(published["counts"]["familyPreferenceChanges"], 1)
+        snapshot = self.snapshot(board)
+        self.assertEqual(
+            snapshot["familyPreferences"],
+            [{**family_key(PROFILE), "mode": "prefer", "reason": "cheap for the family"}],
+        )
+        self.assertEqual(snapshot["preferenceOverrides"], [])
+        efforts = [item for item in snapshot["profiles"] if item["model"] == PROFILE["model"]]
+        self.assertGreater(len(efforts), 1, "the family has several effort profiles")
+        self.assertEqual(
+            {entry["profileId"] for entry in snapshot["preferences"]},
+            {item["profileId"] for item in efforts},
+        )
+        self.assertTrue(all(
+            (entry["mode"], entry["reason"], entry["source"]) == ("prefer", "cheap for the family", "family")
+            for entry in snapshot["preferences"]
+        ))
+        # One effort opts out explicitly; only that effort leaves the effective view.
+        self.publish(board, request_id="w2", command_id="c2",
+                     preferenceChanges=[{"profileId": PROFILE_ID, "mode": "none", "reason": "this effort is not preferred"}])
+        snapshot = self.snapshot(board)
+        self.assertNotIn(PROFILE_ID, {entry["profileId"] for entry in snapshot["preferences"]})
+        self.assertEqual(snapshot["preferenceOverrides"],
+                         [{"profileId": PROFILE_ID, "mode": "none", "reason": "this effort is not preferred"}])
+        self.assertTrue(all(entry["source"] == "family" for entry in snapshot["preferences"]))
+        # Deleting the override restores the family default for that effort.
+        self.publish(board, request_id="w3", command_id="c3",
+                     preferenceChanges=[{"profileId": PROFILE_ID, "mode": None}])
+        snapshot = self.snapshot(board)
+        restored = next(entry for entry in snapshot["preferences"] if entry["profileId"] == PROFILE_ID)
+        self.assertEqual((restored["mode"], restored["reason"], restored["source"]),
+                         ("prefer", "cheap for the family", "family"))
+        self.assertEqual(snapshot["preferenceOverrides"], [])
+
+    def test_family_preference_null_clears_and_bad_families_are_refused(self):
+        board = self.board()
+        self.seed_catalog(board)
+        self.publish(board, request_id="w1", command_id="c1",
+                     familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer"}])
+        self.assertEqual(len(self.snapshot(board)["familyPreferences"]), 1)
+        self.publish(board, request_id="w2", command_id="c2",
+                     familyPreferenceChanges=[{**family_key(PROFILE), "mode": None}])
+        snapshot = self.snapshot(board)
+        self.assertEqual(snapshot["familyPreferences"], [])
+        self.assertEqual(snapshot["preferences"], [])
+        self.refused_publish(board, "NOT_FOUND", request_id="w3", command_id="c3",
+                             familyPreferenceChanges=[{**family_key(PROFILE), "model": "no-such-model",
+                                                       "mode": "prefer"}])
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w4", command_id="c4",
+                             familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer"},
+                                                      {**family_key(PROFILE), "mode": "pin"}])
+        self.assertEqual(self.snapshot(board)["familyPreferences"], [])
+
+    def test_family_annotations_write_update_and_clear(self):
+        board = self.board()
+        self.seed_catalog(board)
+        first = self.publish(board, request_id="w1", command_id="c1",
+                             familyAnnotationChanges=[{**family_key(PROFILE), "text": "first note"}])
+        self.assertEqual(first["counts"]["familyAnnotationChanges"], 1)
+        note = self.snapshot(board)["familyAnnotations"][0]
+        self.assertEqual((note["adapter"], note["provider"], note["model"]),
+                         (PROFILE["adapter"], PROFILE["provider"], PROFILE["model"]))
+        self.assertEqual((note["text"], note["revision"]), ("first note", first["revision"]))
+        self.assertTrue(note["updatedAt"])
+        second = self.publish(board, request_id="w2", command_id="c2",
+                              familyAnnotationChanges=[{**family_key(PROFILE), "text": "second note"}])
+        updated = self.snapshot(board)["familyAnnotations"][0]
+        self.assertEqual((updated["text"], updated["revision"]), ("second note", second["revision"]))
+        self.publish(board, request_id="w3", command_id="c3",
+                     familyAnnotationChanges=[{**family_key(PROFILE), "text": ""}])
+        self.assertEqual(self.snapshot(board)["familyAnnotations"], [])
 
 
 # ---------------------------------------------------------------------------

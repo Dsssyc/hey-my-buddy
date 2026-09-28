@@ -6,6 +6,7 @@ from support import BoardTestCase
 
 from buddy.client import BoardClient
 from buddy.contracts import CONTRACT_VERSION
+from buddy.db import SCHEMA_VERSION
 from buddy.errors import BoardError
 from buddy.service import call_operation
 
@@ -20,7 +21,7 @@ class LivenessTests(BoardTestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["serviceId"], "fixture-service")
         self.assertEqual(result["contractVersion"], CONTRACT_VERSION)
-        self.assertEqual(result["schemaVersion"], 12)
+        self.assertEqual(result["schemaVersion"], SCHEMA_VERSION)
 
     def test_each_client_attach_uses_light_ping(self):
         board = self.board()

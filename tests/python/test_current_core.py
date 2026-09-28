@@ -31,11 +31,10 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        self.assertEqual(SCHEMA_VERSION, 12)
         self.assertEqual(CONTRACT_VERSION, "0.18.0")
         board = self.board()
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "12")
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(tasks)")}
         self.assertTrue({"input_fingerprint", "fingerprint_version", "selected_attempt_id"}.issubset(columns))
         self.assertFalse(any(name.startswith("legacy") for name in columns))
@@ -50,7 +49,9 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(replay["task"]["fingerprintVersion"], schemas.FINGERPRINT_VERSION_CURRENT)
 
     def test_unsupported_schema_is_rejected_without_rewriting_archive(self):
-        for version in ("5", "6", "7", "8", "9", "10", "11", "999", None, "unrecognized"):
+        # The immediately previous schema is included: only ``upgrade`` migrates it,
+        # never startup.
+        for version in ("5", "6", "7", "8", "9", "10", "11", "12", "999", None, "unrecognized"):
             with self.subTest(version=version):
                 directory = self.directory / str(version)
                 path = self.old_database(directory, version)
@@ -60,7 +61,7 @@ class CurrentCoreTests(BoardTestCase):
                 with self.assertRaises(Corruption) as caught:
                     Database(directory).initialize()
                 self.assertIn("clean state directory", str(caught.exception))
-                self.assertIn("only schema 12", str(caught.exception))
+                self.assertIn(f"only schema {SCHEMA_VERSION}", str(caught.exception))
                 self.assertNotIn("migrate", str(caught.exception))
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(sorted(item.name for item in directory.iterdir()), before_entries)

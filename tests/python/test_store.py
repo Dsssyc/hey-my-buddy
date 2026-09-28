@@ -12,7 +12,7 @@ import unittest
 from support import BoardTestCase
 from test_evaluation import EvaluationTestCase as EvaluationFixtures
 
-from buddy.db import Corruption
+from buddy.db import SCHEMA_VERSION, Corruption
 from buddy.store import BoardStore
 
 FAMILY_A = ("dsh", "deepseek-official", "deepseek-flash")
@@ -70,7 +70,7 @@ class CurrentSchemaTests(BoardTestCase):
     def test_fresh_board_is_the_current_schema_with_the_model_concurrency_table(self):
         board = self.board()
         integrity = board.store.integrity()
-        self.assertEqual(integrity["schemaVersion"], 12)
+        self.assertEqual(integrity["schemaVersion"], SCHEMA_VERSION)
         with board.store.db.read() as connection:
             columns = {
                 row["name"]

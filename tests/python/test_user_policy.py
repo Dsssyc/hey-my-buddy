@@ -4,6 +4,9 @@ import json
 from support import BoardTestCase
 from buddy.errors import BoardError
 
+#: ``live`` and ``retired`` are each their own model family in this fixture.
+LIVE_FAMILY = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live'}
+
 
 class UserPolicyTests(BoardTestCase):
     def setUp(self):
@@ -39,18 +42,18 @@ class UserPolicyTests(BoardTestCase):
         credentials = {k: grant[k] for k in ('writerId', 'generation', 'writerToken')}
         self.assert_denied('evaluation_write_renew', credentials)
         self.assert_denied('evaluation_write_abort', {**credentials, 'commandId': 'forged-abort'})
-        self.assert_denied('user_policy_publish', self.payload(grant, annotationChanges=[{'profileId': 'live', 'text': 'forged'}]))
-        result = self.user('user_policy_publish', self.payload(grant, annotationChanges=[{'profileId': 'live', 'text': 'human opinion'}]))
+        self.assert_denied('user_policy_publish', self.payload(grant, familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'forged'}]))
+        result = self.user('user_policy_publish', self.payload(grant, familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'human opinion'}]))
         self.assertTrue(result['published'])
-        self.assert_denied('user_policy_publish', self.payload(grant, annotationChanges=[{'profileId': 'live', 'text': 'human opinion'}]))
+        self.assert_denied('user_policy_publish', self.payload(grant, familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'human opinion'}]))
 
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.grant()
-        payload = self.payload(grant, profileSettings=[{'profileId': 'retired', 'enabled': False}], annotationChanges=[{'profileId': 'live', 'text': 'prefer local evidence'}])
+        payload = self.payload(grant, profileSettings=[{'profileId': 'retired', 'enabled': False}], familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'prefer local evidence'}])
         self.user('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
         snapshot = self.board_.call('console_snapshot', {})
-        self.assertEqual(snapshot['annotations'][0]['text'], 'prefer local evidence')
+        self.assertEqual(snapshot['familyAnnotations'][0]['text'], 'prefer local evidence')
         self.assertEqual(snapshot['configuration']['decisionProfileId'], 'retired')
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['enabled'])
@@ -64,13 +67,13 @@ class UserPolicyTests(BoardTestCase):
 
     def test_maintenance_cannot_write_user_fields_and_preserves_them(self):
         human = self.grant()
-        self.user('user_policy_publish', self.payload(human, annotationChanges=[{'profileId': 'live', 'text': 'my assessment'}]))
+        self.user('user_policy_publish', self.payload(human, familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'my assessment'}]))
         grant = self.grant('maintenance', 'maintainer')
-        self.assert_denied('assessment_publish', self.payload(grant, annotationChanges=[]), 'INVALID_ARGUMENT')
+        self.assert_denied('assessment_publish', self.payload(grant, familyAnnotationChanges=[]), 'INVALID_ARGUMENT')
         card = {'profileId': 'live', 'summary': 'No verified observations yet.', 'strengths': [], 'limitations': [], 'risks': [], 'evidenceIds': []}
         self.board_.call('assessment_publish', self.payload(grant, 'maintenance-publish', cards=[card]))
         snapshot = self.board_.call('console_snapshot', {})
-        self.assertEqual(snapshot['annotations'][0]['text'], 'my assessment')
+        self.assertEqual(snapshot['familyAnnotations'][0]['text'], 'my assessment')
         self.assertEqual(snapshot['cards'][0]['summary'], card['summary'])
         self.assertEqual(snapshot['cards'][0]['origin'], 'maintenance')
 
@@ -79,20 +82,21 @@ class UserPolicyTests(BoardTestCase):
         for changes in [
             {'profileSettings': [{'profileId': 'live', 'enabled': False}, {'profileId': 'retired', 'enabled': True}]},
             {'profileSettings': [{'profileId': 'retired', 'enabled': False, 'available': True}]},
-            {'annotationChanges': [{'profileId': 'live', 'text': 'x'}, {'profileId': 'live', 'text': 'y'}]},
+            {'familyAnnotationChanges': [{**LIVE_FAMILY, 'text': 'x'}, {**LIVE_FAMILY, 'text': 'y'}]},
         ]:
             with self.assertRaises(BoardError):
                 self.user('user_policy_publish', self.payload(grant, **changes))
         snapshot = self.board_.call('console_snapshot', {})
         self.assertEqual(snapshot['tableRevision'], 0)
-        self.assertEqual(snapshot['annotations'], [])
+        self.assertEqual(snapshot['familyAnnotations'], [])
         self.assertTrue(next(p for p in snapshot['profiles'] if p['profileId'] == 'live')['enabled'])
 
     def test_maintenance_packet_keeps_human_annotation_attributed_and_archive_targetable(self):
         grant = self.grant()
-        self.user('user_policy_publish', self.payload(grant, annotationChanges=[{'profileId': 'live', 'text': 'human experience'}]))
+        self.user('user_policy_publish', self.payload(grant, familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'human experience'}]))
         packet = self.board_.call('evaluation_prepare', {'requestId': 'prepare-live', 'limit': 1})
         self.assertEqual([p['profileId'] for p in packet['profiles']], ['live'])
+        self.assertEqual(packet['annotations'][0]['model'], 'live')
         self.assertEqual(packet['annotations'][0]['text'], 'human experience')
         archived = self.board_.call('evaluation_prepare', {'requestId': 'prepare-retired', 'profileId': 'retired', 'limit': 1})
         self.assertEqual([p['profileId'] for p in archived['profiles']], ['retired'])

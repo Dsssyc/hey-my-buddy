@@ -1,4 +1,4 @@
-"""Explicit offline preparation of a schema-12 board from an idle schema-11 board."""
+"""Explicit offline preparation of a schema-13 board from an idle schema-11 board."""
 from __future__ import annotations
 
 import fcntl
@@ -12,7 +12,7 @@ from pathlib import Path
 from test_workflow import WorkflowTestCase
 
 from buddy import board_prepare
-from buddy.db import DB_FILE, Database
+from buddy.db import DB_FILE, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, Database
 from buddy.errors import BoardError
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "schema-11.sql"
@@ -29,7 +29,7 @@ class BoardPrepareTests(WorkflowTestCase):
         self.addCleanup(shutil.rmtree, self.scratch, True)
 
     def finished_board(self):
-        """A schema-12 board whose runs are all terminal with confirmed stop."""
+        """A current-schema board whose runs are all terminal with confirmed stop."""
         board = self.board()
         self.register(board)
         first = self.submit(board, request_id='old-1', kind='worktree', task='first historical goal')
@@ -48,8 +48,14 @@ class BoardPrepareTests(WorkflowTestCase):
             target.execute("ATTACH DATABASE ? AS current", (str(self.directory / DB_FILE),))
             tables = [row[0] for row in target.execute(
                 "SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            # The live board no longer has ``evaluation_annotations`` (schema 13):
+            # a table the current schema dropped is left empty for the migration.
+            current_tables = {row[0] for row in target.execute(
+                "SELECT name FROM current.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             target.execute("PRAGMA foreign_keys=OFF")
             for table in tables:
+                if table not in current_tables:
+                    continue
                 columns = [row[1] for row in target.execute(f"PRAGMA main.table_info('{table}')")]
                 joined = ",".join(f'"{column}"' for column in columns)
                 target.execute(f'INSERT INTO main."{table}"({joined}) SELECT {joined} FROM current."{table}"')
@@ -60,7 +66,7 @@ class BoardPrepareTests(WorkflowTestCase):
             target.close()
         return target_dir
 
-    def test_prepared_copy_opens_as_schema_12_and_preserves_every_row(self):
+    def test_prepared_copy_opens_as_schema_13_and_preserves_every_row(self):
         board, first, second = self.finished_board()
         with board.store.db.read() as db:
             runtime_activity = {row['run_id']: row['activity_seq'] for row in db.execute(
@@ -70,7 +76,9 @@ class BoardPrepareTests(WorkflowTestCase):
         destination = self.scratch / f'prepared'
         report = board_prepare.prepare(source, destination)
         self.assertTrue(report['verified'])
-        self.assertEqual((report['sourceSchema'], report['schema']), (11, 12))
+        self.assertEqual((report['sourceSchema'], report['schema']), (11, SCHEMA_VERSION))
+        self.assertEqual((report['migration']['fromSchema'], report['migration']['toSchema']),
+                         (PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION))
         self.assertEqual(report['objectivesCreated'], 0)
         self.assertEqual(sha256(source / DB_FILE), before, 'the source is never written')
         self.assertEqual(os.stat(destination / DB_FILE).st_mode & 0o777, 0o600)
