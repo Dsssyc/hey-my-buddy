@@ -245,7 +245,7 @@ if __name__=="__main__":
         if not args.approved_run_id or not args.mode or not args.root or not args.settings_policy:
             parser.error("A model turn requires --mode, a fresh --root, explicit --settings-policy and per-run --approved-run-id")
         os.umask(0o077)
-        lock_path=REPO/".dsh-skill-build/claude-p1-probes.lock"
+        lock_path=REPO/"tmp/claude-p1-probes.lock"
         lock_path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
         lock_fd=os.open(lock_path,os.O_CREAT|os.O_RDWR,0o600)
         try:

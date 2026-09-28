@@ -55,7 +55,7 @@ Tests always use private state/runtime roots. When invoked inside a hey-my-buddy
 
 Verify real diffs, artifacts and relevant checks before acceptance. Admission, process completion and Host acceptance are separate facts. A private cold-start and staged-plugin test must verify stable interpreter/package/resource paths, including after the source directory is replaced.
 
-Build the skill with `uv run --frozen python packaging/build-skill.py --destination <separate directory>/buddy`; install with that skill's `scripts/buddy install` only under the user's installation authorization. No compatibility facades are shipped. Keep raw local logs and experiment scripts in ignored `.dsh-skill-build/`.
+Build the skill with `uv run --frozen python packaging/build-skill.py --destination <separate directory>/buddy`; install with that skill's `scripts/buddy install` only under the user's installation authorization. No compatibility facades are shipped. Keep raw local logs and experiment scripts in ignored `tmp/`.
 
 ## Documentation
 

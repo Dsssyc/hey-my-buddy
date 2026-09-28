@@ -31,7 +31,7 @@ assembles the private workspace, self-tests the hook process, lists plugins,
 hashes the global root and asks the CLI for its version.
 
 Raw CLI stdout/stderr stay inside the work directory (default: the ignored
-``.dsh-skill-build/`` tree); everything printed or summarized is redacted.
+``tmp/`` tree); everything printed or summarized is redacted.
 This probe is a bounded experiment. It declares no production capability and
 must not be treated as acceptance of a production integration.
 """
@@ -676,14 +676,14 @@ def run_probe(
 def default_work_dir() -> Path:
     repo_root = Path(__file__).resolve().parents[2]
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    return repo_root / ".dsh-skill-build" / "zcode-hooks-probe" / stamp
+    return repo_root / "tmp" / "zcode-hooks-probe" / stamp
 
 
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bundle", default=DEFAULT_BUNDLE, help="native zcode.cjs bundle path")
     parser.add_argument("--node", default=None, help="node runtime path (auto-detected when omitted)")
-    parser.add_argument("--work-dir", default=None, help="private work directory (default: .dsh-skill-build/zcode-hooks-probe/<ts>)")
+    parser.add_argument("--work-dir", default=None, help="private work directory (default: tmp/zcode-hooks-probe/<ts>)")
     parser.add_argument("--global-root", default=DEFAULT_GLOBAL_ROOT, help="user state root to hash before/after")
     parser.add_argument("--timeout-seconds", type=int, default=240, help="wall-clock limit for the paid prompt run")
     parser.add_argument("--hook-via", choices=HOOK_VIA_CHOICES, default="plugin", help="register the hook via a workspace-scoped inline plugin (default) or via the private storage config.json hooks block")

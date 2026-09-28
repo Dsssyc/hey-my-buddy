@@ -27,7 +27,7 @@ in the minified file are recorded in the acceptance document):
   interferes, so an unanswered question fails as a cancelled tool call.
 
 No production adapter file is modified. The probe keeps every artifact inside one
-private root (default: the git-ignored ``.dsh-skill-build`` area), clears inherited
+private root (default: the git-ignored ``tmp`` area), clears inherited
 Buddy runtime/worker variables, snapshots provider files read-only, and closes the
 owned child process group before exiting.
 """
@@ -491,7 +491,7 @@ def verify_checks(report: dict, log: EventLog, captured: dict, session_id: str |
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="private ZCode requestUserInput probe")
-    parser.add_argument("--root", type=Path, default=None, help="private probe root (default: .dsh-skill-build/…)")
+    parser.add_argument("--root", type=Path, default=None, help="private probe root (default: tmp/…)")
     parser.add_argument("--cwd", type=Path, default=None, help="private working directory for the child")
     parser.add_argument("--provider"), parser.add_argument("--model"), parser.add_argument("--effort")
     parser.add_argument("--nonce", default="probe-nonce-" + secrets.token_hex(6))
@@ -501,7 +501,7 @@ def main() -> int:
     args = parser.parse_args()
     # Absolute paths only: the child receives --cwd verbatim after its own chdir,
     # so a relative value would be resolved twice and point outside the probe root.
-    root = (args.root or (REPO_ROOT / ".dsh-skill-build" / "zcode-request-input-probe" /
+    root = (args.root or (REPO_ROOT / "tmp" / "zcode-request-input-probe" /
                           datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))).expanduser().resolve()
     cwd = (args.cwd or (root / "scratch")).expanduser().resolve()
     report = run_probe(root, cwd=cwd, provider=args.provider, model=args.model, effort=args.effort,
