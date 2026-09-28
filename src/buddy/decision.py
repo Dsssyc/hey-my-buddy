@@ -35,7 +35,7 @@ import uuid
 from typing import Any
 
 from . import schemas
-from . import selection_policy
+from . import selection_policy, router
 from .db import canonical_json, sha256_text
 from .errors import BoardError
 
@@ -186,8 +186,8 @@ class DecisionCoordinator:
             implementation = adapter(row["adapter"])
         except BoardError:
             return None, f"the configured decision profile {profile_id} has no installed native adapter"
-        if not implementation.decision_execution:
-            return None, f"the configured decision profile {profile_id} has no verified tool-free decision capability"
+        if not (implementation.read_only_structured and implementation.read_only_structured_verified):
+            return None, f"the configured decision profile {profile_id} has no verified read-only structured capability"
         usable, reason = implementation.decision_available()
         if not usable:
             return None, reason or f"the configured decision profile {profile_id} is unavailable for decision execution"
@@ -211,6 +211,7 @@ class DecisionCoordinator:
             clauses.append("EXISTS(SELECT 1 FROM json_each(p.capabilities_json) WHERE value=?)")
             values.append(capability)
         if coding_only:
+            clauses.extend(["p.provider IS NOT NULL AND p.provider!=''", "p.model IS NOT NULL AND p.model!=''", "p.effort IS NOT NULL AND p.effort!=''"])
             clauses.append("p.adapter IN (" + ",".join("?" for _ in schemas.CODING_ADAPTERS) + ")")
             values.extend(schemas.CODING_ADAPTERS)
         for key, value in (constraints or {}).items():
@@ -252,7 +253,13 @@ class DecisionCoordinator:
             "strengths": json.loads(row["strengths_json"]),
             "limitations": json.loads(row["limitations_json"]),
             "risks": json.loads(row["risks_json"]),
-            "evidenceIds": json.loads(row["evidence_ids_json"]),
+            "evidence": json.loads(row["evidence_ids_json"]),
+            "policyCheck": (output or {}).get("policyCheck"),
+            "budget": request.get("budget"),
+            "usage": (output or {}).get("usage"),
+            "nativeIdentity": (output or {}).get("nativeIdentity"),
+            "stopEvidence": (output or {}).get("stopEvidence"),
+            "inputVerification": (output or {}).get("inputVerification"),
             "sampleCount": int(row["sample_count"]),
             "updatedAt": row["updated_at"],
         }
@@ -492,8 +499,10 @@ class DecisionCoordinator:
         task_text, _size = schemas.bounded_text(params, "task", max_bytes=MAX_DECISION_TASK_BYTES)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
         routing_preferences = schemas.normalize_routing_preferences(params.get("routingPreferences", []))
+        with self.db.read() as connection:
+            default_timeout = router.configured_budget(connection)["timeoutSeconds"]
         timeout = schemas.optional_int(
-            params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
+            params, "timeoutSeconds", default_timeout, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
         )
         request = {
             "kind": "select",
@@ -522,6 +531,8 @@ class DecisionCoordinator:
             decision_id = f"dec-{uuid.uuid4()}"
             now = self._now()
             state = self._state(connection)
+            request = {**request, "budget": router.configured_budget(connection)}
+            request["budget"]["timeoutSeconds"] = request.get("timeoutSeconds", request["budget"]["timeoutSeconds"])
             available, unavailable_reason = self._adapter_available() if needs_host_reason is None else (True, None)
             profile_row, profile_reason = self._decision_profile(connection) if needs_host_reason is None else (None, None)
             # A writer intent means the table is about to move. The request is created
@@ -548,17 +559,30 @@ class DecisionCoordinator:
                 status = "failed"
                 error = f"ADAPTER_UNAVAILABLE: {unavailable_reason or 'the bounded decision helper is unavailable'}"
                 reason = "the bounded decision helper is not available in this build, so no model call was made"
-            elif profile_row is None and not writer_pending:
+            elif profile_row is None:
                 status = "needs-host"
                 reason = profile_reason or NEEDS_HOST_NO_PROFILE
             elif (
-                not writer_pending
-                and not self._select_candidates(connection, request["requiredCapabilities"],
+                not self._select_candidates(connection, request["requiredCapabilities"],
                                                 constraints=request.get("constraints"),
-                                                coding_only=bool(request.get("workflowRouting")))
+                                                coding_only=True)
             ):
                 status = "needs-host"
                 reason = NEEDS_HOST_NO_CANDIDATE
+            frozen_input = None
+            if status == "queued":
+                candidates = self._select_candidates(connection, request.get("requiredCapabilities", []),
+                                                     constraints=request.get("constraints"), coding_only=True)
+                frozen_input, problem = self._select_input(
+                    connection, request_id=request_id, revision=expected_revision, profile_row=profile_row,
+                    task_text=task_text, candidates=candidates,
+                    routing_preferences=request.get("routingPreferences", []),
+                    hard_constraints=request.get("constraints") or {})
+                if frozen_input is None:
+                    status, reason = "needs-host", problem
+                else:
+                    frozen_input["budget"] = request["budget"]
+                    frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]])
             create_task = status == "queued"
             task_id = None
             if create_task:
@@ -603,6 +627,9 @@ class DecisionCoordinator:
                     now,
                 ),
             )
+            if frozen_input is not None:
+                connection.execute("UPDATE decision_requests SET input_json=?,input_sha256=? WHERE decision_id=?",
+                                   (canonical_json(frozen_input), sha256_text(canonical_json(frozen_input)), decision_id))
             self._append_event(
                 connection,
                 "decision.requested",
@@ -638,7 +665,7 @@ class DecisionCoordinator:
             "requiredCapabilities": spec.get("requiredCapabilities", []),
             "constraints": schemas.configuration_constraints(spec),
             "routingPreferences": spec.get("routingPreferences", []),
-            "workflowRouting": True, "timeoutSeconds": DEFAULT_TIMEOUT_SECONDS,
+            "workflowRouting": True, "timeoutSeconds": router.configured_budget(connection)["timeoutSeconds"],
         }
         needs_host_reason = None
         if task_bytes > MAX_DECISION_TASK_BYTES:
@@ -757,37 +784,17 @@ class DecisionCoordinator:
             self._finish(connection, row, status="needs-host", reason=profile_reason, now=now)
             self._cancel_queued_task(connection, task, now, "the decision had no compatible decision profile")
             return "decision-closed", None
-        candidates = self._select_candidates(connection, request.get("requiredCapabilities") or [],
-                                             constraints=request.get("constraints"),
-                                             coding_only=bool(request.get("workflowRouting")))
-        if not candidates:
-            self._finish(connection, row, status="needs-host", reason=NEEDS_HOST_NO_CANDIDATE, now=now)
-            self._cancel_queued_task(connection, task, now, "the decision had no legal candidate profile")
+        document = json.loads(row["input_json"]) if row["input_json"] else None
+        if not document:
+            self._finish(connection, row, status="needs-host", reason="No frozen Router input is recorded", now=now)
+            self._cancel_queued_task(connection, task, now, "missing frozen Router input")
             return "decision-closed", None
-        table_revision = int(self._state(connection)["table_revision"])
-        document, oversized = self._select_input(
-            connection,
-            request_id=row["request_id"],
-            revision=table_revision,
-            profile_row=profile_row,
-            task_text=request.get("task") or "",
-            candidates=candidates,
-            routing_preferences=request.get("routingPreferences", []),
-            hard_constraints=request.get("constraints") or {},
-        )
-        if document is None:
-            self._finish(
-                connection,
-                row,
-                status="needs-host",
-                reason=oversized or (
-                    "the bounded current table does not fit one decision input; curate the published cards and "
-                    "evidence before asking for a selection"
-                ),
-                now=now,
-            )
-            self._cancel_queued_task(connection, task, now, "the bounded decision input would be oversized")
+        requested_profile = document.get("profile") or {}
+        if any(profile_row[key] != requested_profile.get(key) for key in schemas.CONFIGURATION_FIELDS):
+            self._finish(connection, row, status="stale", reason="The configured Router changed before claim", now=now)
+            self._cancel_queued_task(connection, task, now, "Router configuration changed")
             return "decision-closed", None
+        table_revision = int(document["tableRevision"])
         reader_id = self._admit_reader(connection, now, timeout_seconds=timeout)
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation, reader_id=reader_id,
@@ -1006,7 +1013,7 @@ class DecisionCoordinator:
             if isinstance(output, dict)
             and output.get("status") == "error"
             and isinstance(output.get("code"), str)
-            and (output.get("code").startswith("policy-") or output.get("code") in ANSWER_VALIDATION_CODES)
+            and (output.get("code").startswith("router-") or output.get("code") in ANSWER_VALIDATION_CODES)
             else None
         )
         if status == "cancelled" or task["state"] == "cancelling":
@@ -1078,128 +1085,38 @@ class DecisionCoordinator:
         still fence adoption; publication itself never starts a retry.
         """
         document = json.loads(row["input_json"]) if row["input_json"] else {}
-        supplied = {
-            profile["profileId"]: {
-                evidence["evidenceId"]
-                for evidence in document.get("evidence", [])
-                if evidence.get("profileId") == profile["profileId"]
-            }
-            for profile in document.get("profiles", [])
-        }
-        decision = output.get("decision")
-        if not isinstance(decision, dict):
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason="the helper returned no select decision; the Host decides",
-            )
+        profiles = document.get("profiles") or []
+        try:
+            decision = router.validate_answer(output.get("decision"), [item["profileId"] for item in profiles])
+        except BoardError as failure:
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": failure.code}, reason=failure.message,
+                         error=failure.code)
             return
-        if set(decision) != {"profileId", "reason", "evidenceIds", "policyCheck", "support"}:
-            # The current strict shape only; there is no legacy result fallback.
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    "the recommendation does not carry the current decision shape "
-                    "{profileId, reason, evidenceIds, policyCheck, support}; nothing was adopted"
-                ),
-            )
-            return
-        reason = self._bounded_text(decision.get("reason"), MAX_DECISION_REASON) or "the model recorded no reason"
-        evidence_ids = decision.get("evidenceIds")
-        if not isinstance(evidence_ids, list) or any(not isinstance(value, str) for value in evidence_ids):
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason="the recommendation carried malformed evidence references",
-            )
-            return
-        if len(evidence_ids) > MAX_DECISION_EVIDENCE_IDS or len(set(evidence_ids)) != len(evidence_ids):
-            # Never trimmed into shape: an out-of-bound or repeated reference list is
-            # refused as returned, before any adoption.
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    f"the recommendation carried {len(evidence_ids)} evidence references, above the "
-                    f"{MAX_DECISION_EVIDENCE_IDS}-reference bound or with repeats; nothing was adopted"
-                ),
-            )
-            return
-        profile_id = decision.get("profileId")
+        reason, profile_id = decision["reason"], decision["profileId"]
+        evidence_ids = decision["evidence"]
         if profile_id is None:
-            _, _, failure = selection_policy.validate_decision(decision, {}, [], set(), set())
-            if failure is not None:
-                self._finish(
-                    connection, row, status="needs-host", output=output, now=now,
-                    reason=f"the abstention violated the routing policy ({failure[0]}: {failure[1]}); the Host decides",
-                )
-                return
-            output = {**output, "decision": {**decision, "policyCheck": None}}
-            self._finish(connection, row, status="needs-host", output=output, now=now, reason=reason)
+            self._finish(connection, row, status="needs-host", output={**output, "policyCheck": None},
+                         now=now, reason=reason)
             return
-        if not isinstance(profile_id, str) or profile_id not in supplied:
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=f"the model recommended {profile_id!r}, which was not a legal candidate; the Host decides",
-            )
-            return
-        current = connection.execute(
-            "SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)
-        ).fetchone()
-        if current is None or not current["enabled"] or not current["available"]:
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=f"the recommended profile {profile_id} is no longer an enabled, available profile",
-            )
-            return
-        foreign = [value for value in evidence_ids if value not in supplied[profile_id]]
-        if foreign:
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    f"the recommendation cited evidence {foreign[0]!r} that was not supplied for {profile_id}; "
-                    "the Host decides"
-                ),
-            )
+        request = json.loads(row["requested_json"])
+        current_ids = {item["profile_id"] for item in self._select_candidates(
+            connection, request.get("requiredCapabilities") or [],
+            constraints=request.get("constraints"), coding_only=True)}
+        if profile_id not in current_ids:
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": "router-out-of-bounds"},
+                         reason="The selected configuration no longer satisfies the original hard bounds",
+                         error="router-out-of-bounds")
             return
         routing_preferences = document.get("routingPreferences") or []
         expected_facts = selection_policy.policy_facts(
-            profiles=document.get("profiles") or [],
-            routing_preferences=routing_preferences,
-            prefer_profile_ids=[
-                entry["profileId"]
-                for entry in document.get("preferences") or []
-                if isinstance(entry, dict) and entry.get("mode") == "prefer"
-            ],
-            # Re-derived from the frozen request, independent of the input document's
-            # own stored copy: an invented or drifted constraint cannot pass here.
-            hard_constraints=json.loads(row["requested_json"]).get("constraints") or {},
-        )
-        if document.get("policyFacts") != expected_facts:
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    "the frozen decision input carries policy facts that disagree with its own bounded table "
-                    "and request; nothing was adopted and the Host decides"
-                ),
-            )
-            return
-        card_profile_ids = {
-            entry.get("profileId") for entry in document.get("cards") or [] if isinstance(entry, dict)
-        }
-        annotation_profile_ids = {
-            entry.get("profileId") for entry in document.get("annotations") or [] if isinstance(entry, dict)
-        }
-        policy_check, _, failure = selection_policy.validate_decision(
-            decision, expected_facts, routing_preferences, card_profile_ids, annotation_profile_ids
-        )
-        if failure is not None:
-            self._finish(
-                connection, row, status="needs-host", output=output, now=now,
-                reason=(
-                    f"the recommendation violated the routing policy ({failure[0]}: {failure[1]}); "
-                    "the Host decides on the same goal"
-                ),
-            )
-            return
-        output = {**output, "decision": {**decision, "policyCheck": policy_check}}
+            profiles=profiles, routing_preferences=routing_preferences,
+            prefer_profile_ids=[item["profileId"] for item in document.get("preferences", [])
+                                if item.get("mode") == "prefer"],
+            hard_constraints=request.get("constraints") or {})
+        policy_check = selection_policy.expected_policy_check(expected_facts, routing_preferences, profile_id)
+        output = {**output, "decision": decision, "policyCheck": policy_check}
         if not self._reader_open(connection, row, now):
             self._finish(
                 connection, row, status="stale", output=output, now=now,
@@ -1353,17 +1270,19 @@ class DecisionCoordinator:
         streak = 0
         still_failing = True
         abstentions = cancellations = stale = 0
+        special_counts = {"router-budget-exhausted": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
         for row in rows:
             output = json.loads(row["output_json"]) if row["output_json"] else {}
             output = output if isinstance(output, dict) else {}
             decision = output.get("decision") or {}
             abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
-                         and isinstance(decision, dict)
-                         and set(decision) == {"profileId", "reason", "evidenceIds", "policyCheck", "support"}
-                         and decision["profileId"] is None and decision.get("policyCheck") is None
-                         and decision.get("evidenceIds") == []
-                         and decision.get("support") == {"cardProfileIds": [], "annotationProfileIds": []})
-            is_failure = row["kind"] == "decision.failed" or (row["kind"] == "decision.needs_host" and not abstained)
+                         and isinstance(decision, dict) and decision.get("profileId", False) is None
+                         and set(decision) == {"profileId", "reason", "evidence"})
+            special = output.get("code") in special_counts
+            if special:
+                special_counts[output["code"]] += 1
+            is_failure = not special and (row["kind"] == "decision.failed" or
+                         (row["kind"] == "decision.needs_host" and not abstained))
             if still_failing and is_failure:
                 streak += 1
             else:
@@ -1379,6 +1298,9 @@ class DecisionCoordinator:
                 failed.append({"decisionId":row["decision_id"], "runId":row["goal_id"] or row["task_id"],
                                "at":row["created_at"], "code":code})
         return {"windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
+                "budgetExhaustedCount":special_counts["router-budget-exhausted"],
+                "boundsRejectedCount":special_counts["router-out-of-bounds"],
+                "inputChangedCount":special_counts["router-input-changed"],
                 "consecutiveFailures":streak, "abstentionCount":abstentions,
                 "cancelledCount":cancellations, "staleCount":stale,
                 "lastSuccessAt":success["created_at"] if success else None,
@@ -1496,7 +1418,13 @@ class DecisionCoordinator:
             ),
             "noOp": bool(row["status"] == "completed" and row["published_revision"] is None and row["kind"] == "maintain"),
             "reason": row["reason"],
-            "evidenceIds": json.loads(row["evidence_ids_json"]),
+            "evidence": json.loads(row["evidence_ids_json"]),
+            "policyCheck": (output or {}).get("policyCheck"),
+            "budget": request.get("budget"),
+            "usage": (output or {}).get("usage"),
+            "nativeIdentity": (output or {}).get("nativeIdentity"),
+            "stopEvidence": (output or {}).get("stopEvidence"),
+            "inputVerification": (output or {}).get("inputVerification"),
             "createdAt": row["created_at"],
             "updatedAt": row["request_updated_at"],
         }

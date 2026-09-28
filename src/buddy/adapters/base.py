@@ -112,6 +112,16 @@ class AdapterOutcome:
         }
 
 
+@dataclass(frozen=True)
+class ReadOnlyStructuredRequest:
+    """Generic native read-only call; no workflow turn or agent authority."""
+
+    cwd: str
+    prompt: str
+    output_schema: dict
+    budget: dict
+
+
 class Adapter:
     """Base class for the built-in adapters."""
 
@@ -120,6 +130,14 @@ class Adapter:
     native_resume = False
     model_discovery = False
     decision_execution = False
+    read_only_structured = False
+    # Mock coverage is not native verification. Enable only after an approved probe.
+    read_only_structured_verified = False
+    read_only_structured_resume = False
+
+    def start_read_only_structured(self, context: ExecutionContext,
+                                   request: ReadOnlyStructuredRequest) -> "ProcessHandle":
+        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} has no native read-only structured call")
 
     def discover_models(self) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")

@@ -141,13 +141,21 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         )
     if 'configuration' in provided:
         configuration = evaluation._validate_configuration(params['configuration'])
-        profile_id = configuration['decisionProfileId']
-        if profile_id is not None:
+        profile_id = configuration.get('decisionProfileId', evaluation._state(connection)['decision_profile_id'])
+        if 'decisionProfileId' in configuration and profile_id is not None:
             profile = connection.execute('SELECT * FROM evaluation_profiles WHERE profile_id=?', (profile_id,)).fetchone()
             if profile is None or not profile['available'] or not profile['enabled']:
                 raise BoardError('CONFIGURATION_UNAVAILABLE', 'A new selector must be available and enabled')
-            if 'decision' not in json.loads(profile['capabilities_json']):
+            from .adapters import adapter
+            native = adapter(profile['adapter'])
+            if ('decision' not in json.loads(profile['capabilities_json']) or not native.read_only_structured
+                    or not native.read_only_structured_verified):
                 raise BoardError('UNSUPPORTED', 'This configuration has no verified decision capability')
+        if 'routingBudget' in configuration:
+            connection.execute("INSERT INTO meta(key,value) VALUES('router_budget_preset',?)"
+                               " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (configuration['routingBudget'],))
+            evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',
+                                           payload={'preset': configuration['routingBudget'], 'revision': revision})
         configuration_revision += 1
         connection.execute('UPDATE evaluation_state SET decision_profile_id=?,configuration_revision=? WHERE id=1', (profile_id, configuration_revision))
     counts = {

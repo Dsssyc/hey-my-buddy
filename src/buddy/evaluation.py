@@ -104,7 +104,7 @@ CARD_FIELDS = frozenset({"profileId", "summary", "strengths", "limitations", "ri
 #: The published configuration carries only the fixed decision profile. There is no
 #: automatic-maintenance or scheduler setting: maintenance synthesis is performed by
 #: an external Harness through ``evaluation_prepare`` and the ordinary writer gate.
-CONFIGURATION_FIELDS = frozenset({"decisionProfileId"})
+CONFIGURATION_FIELDS = frozenset({"decisionProfileId", "routingBudget"})
 #: The Harness-owned maintenance reads. ``evaluation.prepare`` is a bounded,
 #: deterministic fact collection with no model call and no writer lease;
 #: ``evaluation.history`` is a bounded read of the existing publication log.
@@ -350,7 +350,15 @@ class EvaluationStore:
         # The published configuration is the fixed decision profile only. Maintenance
         # is not a blackboard setting any more: an external Harness prepares bounded
         # facts and publishes cards through the ordinary writer gate.
-        return {"decisionProfileId": decision_profile}
+        result = {}
+        if "decisionProfileId" in entry:
+            result["decisionProfileId"] = decision_profile
+        if "routingBudget" in entry:
+            from .router import budget
+            result["routingBudget"] = budget(entry["routingBudget"])["preset"]
+        if not result:
+            raise BoardError("INVALID_ARGUMENT", "configuration requires a routing model or budget")
+        return result
 
 
     # -- publish -------------------------------------------------------------
@@ -699,6 +707,9 @@ class EvaluationStore:
                 for profile in profiles
             }
             model_concurrency = self.board.model_capacity_rows(connection, families)
+        from .router import configured_budget
+        with self.board.db.read() as connection:
+            routing_budget = configured_budget(connection)
         tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
             "csrfToken": "",
@@ -707,6 +718,8 @@ class EvaluationStore:
             "configuration": {
                 "revision": int(state["configuration_revision"]),
                 "decisionProfileId": state["decision_profile_id"],
+                "routingBudget": routing_budget["preset"],
+                "routingBudgetLimits": routing_budget,
             },
             "profiles": profiles,
             "modelConcurrency": model_concurrency,
