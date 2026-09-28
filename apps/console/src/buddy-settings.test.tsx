@@ -1,0 +1,383 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { App } from "./App";
+import { PREFERENCE_ICON } from "./buddy-display";
+import type { ConsoleApi } from "./api";
+import type {
+  FamilyPreference,
+  Preference,
+  PreferenceOverride,
+  Profile,
+  Snapshot,
+  WriterGrant,
+} from "./types";
+
+/**
+ * The Buddy settings page tests the requirements docs/design/buddy-settings.md
+ * names explicitly: the enabled-only filter, the harness grouping with a
+ * collapsed unavailable harness, effort overrides (including an explicit
+ * "无偏好" and a return to "跟随家族"), the non-colour preference marker, the
+ * Router refusal reason, and the storage panel on the settings page.
+ */
+
+const sonnet = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5" };
+const sol = { adapter: "codex", provider: "openai", model: "gpt-6-sol" };
+const glm = { adapter: "zcode", provider: "zhipu", model: "glm-5" };
+
+const mediumId = "claude:anthropic:claude-sonnet-5:medium";
+const highId = "claude:anthropic:claude-sonnet-5:high";
+const solMediumId = "codex:openai:gpt-6-sol:medium";
+const solLowId = "codex:openai:gpt-6-sol:low";
+const glmId = "zcode:zhipu:glm-5:default";
+
+function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" | "adapter" | "provider" | "model" | "effort">): Profile {
+  return {
+    available: true, enabled: false, capabilities: [], contextWindow: null,
+    description: "", source: "catalog:fixture", ...entry,
+  };
+}
+
+/** Three harnesses: one available family, one all-disabled family, one offline family. */
+function profiles(): Profile[] {
+  return [
+    profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+      enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
+    profile({ profileId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+      capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
+    profile({ profileId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+      capabilities: ["execution:codex"] }),
+    profile({ profileId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
+      capabilities: ["execution:codex"] }),
+    profile({ profileId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+      unavailableReason: "本机未检测到 zcode CLI" }),
+  ];
+}
+
+/** The schema 13 `effective_preferences` view, mirrored independently of draft.ts. */
+function effective(state: Snapshot): Preference[] {
+  const overrides = new Map(state.preferenceOverrides.map(entry => [entry.profileId, entry]));
+  const families = new Map(state.familyPreferences.map(entry => [JSON.stringify([entry.adapter, entry.provider, entry.model]), entry]));
+  return state.profiles.flatMap((entry): Preference[] => {
+    const override = overrides.get(entry.profileId);
+    if (override) {
+      return override.mode === "none"
+        ? []
+        : [{ profileId: entry.profileId, mode: override.mode, reason: override.reason, source: "override" as const }];
+    }
+    const family = families.get(JSON.stringify([entry.adapter, entry.provider, entry.model]));
+    return family
+      ? [{ profileId: entry.profileId, mode: family.mode, reason: family.reason, source: "family" as const }]
+      : [];
+  });
+}
+
+type Options = { familyPreferences?: FamilyPreference[]; preferenceOverrides?: PreferenceOverride[] };
+
+function snapshot(options: Options = {}): Snapshot {
+  const base: Snapshot = {
+    csrfToken: "csrf",
+    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    tableRevision: 4,
+    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+    configuration: { revision: 1, decisionProfileId: mediumId, routingBudget: "standard" },
+    profiles: profiles(),
+    preferences: [],
+    familyPreferences: options.familyPreferences ?? [],
+    preferenceOverrides: options.preferenceOverrides ?? [],
+    cards: [],
+    familyAnnotations: [],
+    evidence: [],
+    decisions: [],
+    sampleCounts: {},
+    modelConcurrency: [
+      { ...sonnet, limit: 2, active: 0 },
+      { ...sol, limit: 2, active: 0 },
+      { ...glm, limit: 2, active: 0 },
+    ],
+    tasks: { runs: [], total: 0 },
+    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+  };
+  return { ...base, preferences: effective(base) };
+}
+
+function applyPublication(state: Snapshot, params: Record<string, any>): Snapshot {
+  const next: Snapshot = {
+    ...state,
+    tableRevision: state.tableRevision + 1,
+    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+    familyPreferences: [...state.familyPreferences],
+    preferenceOverrides: [...state.preferenceOverrides],
+    familyAnnotations: [...state.familyAnnotations],
+    configuration: { ...state.configuration, ...(params.configuration ?? {}) },
+  };
+  for (const setting of params.profileSettings ?? []) {
+    next.profiles = next.profiles.map(entry => entry.profileId === setting.profileId ? { ...entry, enabled: setting.enabled } : entry);
+  }
+  const key = (entry: { adapter: string; provider: string; model: string }) => JSON.stringify([entry.adapter, entry.provider, entry.model]);
+  for (const change of params.familyPreferenceChanges ?? []) {
+    next.familyPreferences = next.familyPreferences.filter(entry => key(entry) !== key(change));
+    if (change.mode !== null) {
+      next.familyPreferences.push({ adapter: change.adapter, provider: change.provider, model: change.model, mode: change.mode, reason: change.reason });
+    }
+  }
+  for (const change of params.preferenceChanges ?? []) {
+    next.preferenceOverrides = next.preferenceOverrides.filter(entry => entry.profileId !== change.profileId);
+    if (change.mode !== null) {
+      next.preferenceOverrides.push({ profileId: change.profileId, mode: change.mode, reason: change.reason });
+    }
+  }
+  for (const change of params.familyAnnotationChanges ?? []) {
+    next.familyAnnotations = next.familyAnnotations.filter(entry => key(entry) !== key(change));
+    next.familyAnnotations.push({ ...change, revision: 1, updatedAt: null });
+  }
+  return { ...next, preferences: effective(next) };
+}
+
+function fixture(options: Options = {}) {
+  let state = snapshot(options);
+  const operations: string[] = [];
+  const published: Record<string, any>[] = [];
+  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",
+    state: "active", tableRevision: 4, expiresAt: new Date(Date.now() + 120_000).toISOString() };
+  const command = vi.fn(async (operation: string, params: Record<string, any>, _csrfToken?: string) => {
+    operations.push(operation);
+    if (operation === "evaluation_write_begin") {
+      state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
+      return grant;
+    }
+    if (operation === "user_policy_publish") {
+      published.push(params);
+      state = applyPublication(state, params);
+      return { published: true, tableRevision: state.tableRevision };
+    }
+    if (operation === "storage_plan") {
+      return { planId: "plan-1", createdAt: "2026-09-28T12:00:00Z",
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        categories: [{ id: "runtimes", label: "", bytes: 1_000_000, reclaimableBytes: 1_000_000, count: 3, eligibleCount: 3, reasons: [] }],
+        candidates: [], orphanProcesses: [] };
+    }
+    throw new Error(`Unexpected command: ${operation}`);
+  });
+  const api = {
+    snapshot: vi.fn(async () => structuredClone(state)),
+    command,
+    task: vi.fn(),
+    tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    storagePlan: vi.fn(async (csrfToken: string) => command("storage_plan", {}, csrfToken)),
+    storageApply: vi.fn(),
+  } as unknown as ConsoleApi;
+  return { api, command, operations, published };
+}
+
+async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setup>) {
+  window.location.hash = "#buddy";
+  render(<App suppliedApi={api} />);
+  await screen.findByRole("heading", { name: "模型 3" });
+}
+
+function familyRow(name: string) {
+  return screen.getByRole("button", { name: new RegExp(`^${name}`) });
+}
+
+async function selectFamily(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(familyRow(name));
+}
+
+const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
+
+afterEach(() => {
+  cleanup();
+  window.location.hash = "";
+  document.documentElement.dataset.theme = "";
+});
+
+describe("the model family list", () => {
+  it("filters to families with an enabled effort and restores the full list", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    // Three families are listed: Claude Sonnet 5, GPT-6 Sol and the folded ZCode family.
+    expect(familyRow("Claude Sonnet 5")).toBeTruthy();
+    expect(familyRow("GPT-6 Sol")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    // GPT-6 Sol has no enabled effort; the whole ZCode harness stays unusable.
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^▸ ZCode/ })).toBeNull();
+    expect(familyRow("Claude Sonnet 5")).toBeTruthy();
+    expect(f.command).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await screen.findByRole("heading", { name: "模型 3" });
+    expect(familyRow("GPT-6 Sol")).toBeTruthy();
+  });
+
+  it("groups by harness and folds an unavailable harness with its recorded reason", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    const claude = screen.getByRole("button", { name: /^▾ Claude Code/ });
+    expect(claude.getAttribute("aria-expanded")).toBe("true");
+    const zcode = screen.getByRole("button", { name: /^▸ ZCode（不可用）/ });
+    expect(zcode.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("原因：本机未检测到 zcode CLI")).toBeTruthy();
+    // A folded harness hides its families but never drops its explanation.
+    expect(screen.queryByRole("button", { name: /^GLM-5/ })).toBeNull();
+    await user.click(zcode);
+    expect(familyRow("GLM-5")).toBeTruthy();
+  });
+
+  it("counts enabled efforts and marks the Router's family", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    expect(screen.getByRole("button", { name: "Claude Sonnet 5，已启用 1/2，Router" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "GPT-6 Sol，已启用 0/2" })).toBeTruthy();
+    expect(screen.getByText("Router")).toBeTruthy();
+  });
+});
+
+describe("effort tags and preference overrides", () => {
+  const familyReason = "用于日常工作的稳定配置";
+
+  it("shows the family default, sets an explicit 无偏好 override and publishes mode none", async () => {
+    const f = fixture({ familyPreferences: [{ ...sonnet, mode: "prefer", reason: familyReason }] });
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    await selectFamily(user, "Claude Sonnet 5");
+    const tag = screen.getByRole("group", { name: "medium 档位" });
+    // The family default colours the tag, and the glyph and border carry the
+    // same meaning without colour (see the styles.css check below).
+    expect(tag.className).toContain("pref-prefer");
+    expect(tag.className).not.toContain("override");
+    expect(tag.querySelector(".pref-icon")!.textContent).toBe("▲");
+    expect(tag.textContent).toContain("偏好：优先（来自家族）");
+    expect(tag.getAttribute("title")).toBe(`优先：${familyReason}`);
+
+    await user.click(within(tag).getByRole("button", { name: "medium 档位菜单" }));
+    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
+    expect(within(menu).getByRole("radio", { name: "跟随家族（优先）" })).toHaveProperty("checked", true);
+    await user.click(within(menu).getByRole("radio", { name: "无偏好" }));
+
+    const overridden = screen.getByRole("group", { name: "medium 档位" });
+    expect(overridden.className).toContain("override");
+    expect(overridden.className).not.toContain("pref-");
+    expect(overridden.querySelector(".pref-icon")).toBeNull();
+    expect(overridden.textContent).toContain("偏好：无偏好（档位覆盖）");
+    expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("有 1 项未保存修改")).toBeTruthy();
+    await user.click(saveButton());
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: "none", reason: "" }]);
+    expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
+    expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
+  });
+
+  it("returns an overridden effort to 跟随家族 and publishes mode null", async () => {
+    const f = fixture({
+      familyPreferences: [{ ...sonnet, mode: "prefer", reason: familyReason }],
+      preferenceOverrides: [{ profileId: mediumId, mode: "exclude", reason: "成本过高" }],
+    });
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    await selectFamily(user, "Claude Sonnet 5");
+    const tag = screen.getByRole("group", { name: "medium 档位" });
+    // An override notch marks that this effort does not follow the family.
+    expect(tag.className).toContain("pref-exclude");
+    expect(tag.className).toContain("override");
+    expect(tag.querySelector(".pref-icon")!.textContent).toBe("⊘");
+    expect(tag.textContent).toContain("偏好：排除（档位覆盖）");
+    // The other effort still follows the family default and carries no notch.
+    const other = screen.getByRole("group", { name: "high 档位" });
+    expect(other.className).toContain("pref-prefer");
+    expect(other.className).not.toContain("override");
+
+    await user.click(within(tag).getByRole("button", { name: "medium 档位菜单" }));
+    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
+    expect(within(menu).getByRole("radio", { name: "排除" })).toHaveProperty("checked", true);
+    await user.click(within(menu).getByRole("radio", { name: "跟随家族（优先）" }));
+
+    const following = screen.getByRole("group", { name: "medium 档位" });
+    expect(following.className).toContain("pref-prefer");
+    expect(following.className).not.toContain("override");
+    expect(following.textContent).toContain("偏好：优先（来自家族）");
+    await user.click(saveButton());
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
+    expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
+  });
+
+  it("marks every preference with a glyph and a distinct border, never colour alone", () => {
+    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+    const rule = (selector: string) => {
+      const start = styles.indexOf(selector);
+      expect(start, `missing ${selector}`).toBeGreaterThan(-1);
+      return styles.slice(start, styles.indexOf("}", start));
+    };
+    // Each effort tag keeps the icon and its own border style/width weight.
+    expect(rule(".effort-tag.pref-prefer")).toMatch(/border:\s*2px solid/);
+    expect(rule(".effort-tag.pref-pin")).toMatch(/border:\s*3px double/);
+    expect(rule(".effort-tag.pref-exclude")).toMatch(/border:\s*2px dashed/);
+    expect(styles).toMatch(/\.effort-tag\.pref-exclude \.effort-name \{[^}]*line-through/);
+    // The override notch is a shape, not a colour.
+    expect(rule(".effort-tag.override::after")).toContain("content:");
+    // Every mode also has its own glyph, so the tag never depends on colour.
+    expect(Object.values(PREFERENCE_ICON).every(icon => icon.length > 0)).toBe(true);
+    expect(new Set(Object.values(PREFERENCE_ICON)).size).toBe(3);
+  });
+});
+
+describe("the Router menu", () => {
+  it("disables 设为 Router without the decision capability and writes the reason", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    await selectFamily(user, "GPT-6 Sol");
+    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
+    const menu = screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" });
+    const action = within(menu).getByRole("button", { name: "设为 Router" });
+    expect(action.getAttribute("aria-disabled")).toBe("true");
+    expect(within(menu).getByText("能力列表不含 decision：该档位没有经过验证的只读路由能力")).toBeTruthy();
+    await user.click(action);
+    expect(screen.queryByRole("dialog", { name: "替换 Router" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeTruthy();
+    expect(f.published).toHaveLength(0);
+  });
+
+  it("disables 设为 Router for a disabled effort and names the switch to turn on", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    await selectFamily(user, "Claude Sonnet 5");
+    await user.click(screen.getByRole("button", { name: "high 档位菜单" }));
+    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · high 档位设置" });
+    const action = within(menu).getByRole("button", { name: "设为 Router" });
+    expect(action.getAttribute("aria-disabled")).toBe("true");
+    expect(within(menu).getByText("该档位未启用：先打开它的开关")).toBeTruthy();
+  });
+});
+
+describe("the settings page", () => {
+  it("offers the three theme choices and the storage panel without any buddy settings", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    const themes = screen.getByRole("radiogroup", { name: "主题" });
+    expect(within(themes).getAllByRole("radio").map(radio => radio.closest("label")!.textContent))
+      .toEqual(["浅色", "深色", "跟随系统"]);
+    const storage = screen.getByRole("region", { name: "存储" });
+    expect(within(storage).getByRole("heading", { name: "存储" })).toBeTruthy();
+    // The panel keeps its explicit check: mounting the page calls nothing.
+    expect(f.command).not.toHaveBeenCalled();
+    await user.click(within(storage).getByRole("button", { name: "检查占用" }));
+    await waitFor(() => expect(f.operations).toEqual(["storage_plan"]));
+    expect(within(storage).getByRole("table")).toBeTruthy();
+    // No buddy settings leak into the system settings page.
+    expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /设为 Router/ })).toBeNull();
+  });
+});

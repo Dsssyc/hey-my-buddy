@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -35,7 +35,26 @@ afterEach(() => {
   delete document.documentElement.dataset.theme;
   document.documentElement.style.colorScheme = "";
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+/** A controllable `prefers-color-scheme` media query for the system choice. */
+function stubSystemScheme(dark: boolean) {
+  const state = { dark };
+  const listeners = new Set<() => void>();
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+    // A real MediaQueryList updates `matches` in place; a snapshot value would
+    // freeze the resolved theme at the moment the query was created.
+    get matches() { return query === "(prefers-color-scheme: dark)" ? state.dark : false; },
+    media: query,
+    addEventListener: (_type: string, listener: () => void) => { listeners.add(listener); },
+    removeEventListener: (_type: string, listener: () => void) => { listeners.delete(listener); },
+  })));
+  return { state, listeners, change(next: boolean) {
+    state.dark = next;
+    act(() => { for (const listener of [...listeners]) listener(); });
+  } };
+}
 
 describe("light and dark themes", () => {
   it("defaults to light and marks the document color scheme", async () => {
@@ -66,6 +85,51 @@ describe("light and dark themes", () => {
     render(<App suppliedApi={api()} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));
     expect(await screen.findByRole("radio", { name: "深色" })).toHaveProperty("checked", true);
+  });
+
+  it("follows the system scheme and keeps tracking it while the page stays open", async () => {
+    const system = stubSystemScheme(true);
+    const user = userEvent.setup();
+    render(<App suppliedApi={api()} />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    const follow = await screen.findByRole("radio", { name: "跟随系统" });
+    expect(follow).toHaveProperty("checked", false);
+    await user.click(follow);
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toHaveProperty("checked", true);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    // Only the choice is persisted, and it stays "system" rather than the
+    // currently resolved colour.
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
+    await waitFor(() => expect(system.listeners.size).toBe(1));
+    // The operating system switching to light is followed without a reload.
+    system.change(false);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    // A reload restores the stored system choice and resolves it again.
+    cleanup();
+    delete document.documentElement.dataset.theme;
+    const reloaded = stubSystemScheme(true);
+    render(<App suppliedApi={api()} />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    expect(await screen.findByRole("radio", { name: "跟随系统" })).toHaveProperty("checked", true);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    await waitFor(() => expect(reloaded.listeners.size).toBe(1));
+  });
+
+  it("stops tracking the system once an explicit theme is chosen", async () => {
+    const system = stubSystemScheme(true);
+    const user = userEvent.setup();
+    render(<App suppliedApi={api()} />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    await user.click(await screen.findByRole("radio", { name: "跟随系统" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    await user.click(screen.getByRole("radio", { name: "浅色" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    system.change(true);
+    await waitFor(() => expect(system.listeners.size).toBe(0));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
   });
 
   it("keeps the switch usable when storage is unavailable", async () => {

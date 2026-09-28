@@ -80,7 +80,8 @@ type PlanPhase =
  * it, because a plan scans disk and is private and expiring. Cleanup requires
  * a modal confirmation bound to the exact plan; a lost reply keeps the same
  * command identity so 重试同一请求 replays it. Orphan processes are listed
- * only. The panel does not depend on the 编辑设置 switch.
+ * only. Reclamation is not an evaluation-table draft: the panel takes no draft,
+ * no edit switch and no writer lease, so any authenticated window may use it.
  */
 export function StoragePanel({ api, csrfToken, connectionError }: {
   api: ConsoleApi;

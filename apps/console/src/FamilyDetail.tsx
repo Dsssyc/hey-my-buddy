@@ -85,8 +85,12 @@ function EffortTag({
   const refusal = isRouter ? "已是 Router" : routerRefusal(profile);
   const pinLocked = baselineOverrideMode !== "pin" && (!profile.available || !profile.enabled);
   const overrideValue: OverrideMode | "" = override?.mode ?? "";
+  // The snapshot names where each effective preference came from; a row without
+  // a recorded source is shown without the claim rather than guessed as family.
+  const sourceText = effective?.source === "override" ? "（档位覆盖）"
+    : effective?.source === "family" ? "（来自家族）" : "";
   const preferenceText = effective
-    ? `偏好：${PREFERENCE_LABEL[effective.mode]}（${effective.source === "override" ? "档位覆盖" : "来自家族"}）`
+    ? `偏好：${PREFERENCE_LABEL[effective.mode]}${sourceText}`
     : override?.mode === "none" ? "偏好：无偏好（档位覆盖）" : "偏好：无";
   const classes = ["effort-tag",
     profile.enabled ? "enabled" : "",

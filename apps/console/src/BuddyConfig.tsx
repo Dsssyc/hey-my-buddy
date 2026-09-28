@@ -59,6 +59,9 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     : 0;
   const routerId = data.configuration.decisionProfileId;
   const family = selected ? families.find(g => g.key === selected) : undefined;
+  // A refusal recorded by 发现模型 is stale once the page can act again: it is
+  // shown only while the action would still be refused, never as a lingering
+  // banner over usable controls.
   const shownGuard = editor.editing && mutationsAvailable ? "" : guard;
   // Loaded retained rows join the local view and, while editing, the draft. The
   // revision dependency also clears a page that belonged to the previous table
