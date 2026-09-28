@@ -232,7 +232,8 @@ class CodexAdapterTests(unittest.TestCase):
         context.decision_input = {
             'profile': {'adapter': 'codex', 'provider': 'openai', 'model': 'fixture-model', 'effort': 'low'},
             'profiles': [{'profileId': 'legal'}], 'task': 'Select', 'tableRevision': 1,
-            'budget': {**budget(), 'toolCalls': 1}, 'outputSchema': answer_schema(['legal']),
+            # A zero-call budget interrupts the fixture's first native tool call.
+            'budget': {**budget(), 'toolCalls': 0}, 'outputSchema': answer_schema(['legal']),
         }
         adapter = DecisionAdapter()
         with mock.patch.object(CodexAdapter, 'read_only_structured_verified', True):

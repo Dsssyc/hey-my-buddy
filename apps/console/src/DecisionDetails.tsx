@@ -86,7 +86,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
         <dt>预算配置</dt><dd>{audit.budget?.preset ? ({ quick: "快速", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
         <dt>耗时 / 上限</dt><dd>{recorded(audit.usage?.elapsedMs)} 毫秒 / {recorded(audit.budget?.timeoutSeconds)} 秒</dd>
         <dt>工具调用 / 上限</dt><dd>{recorded(audit.usage?.toolCalls)} / {recorded(audit.budget?.toolCalls)}</dd>
-        <dt>读取字节 / 上限</dt><dd>{recorded(audit.usage?.bytesRead)} / {recorded(audit.budget?.bytesRead)}</dd>
+        <dt>读取字节</dt><dd>{recorded(audit.usage?.bytesRead)}</dd>
       </dl>
       <h3>引用证据</h3>
       {evidence == null ? <p className="small muted">未记录</p> : evidence.length ? <ul className="reason-list">{evidence.map((entry, index) => <li key={index}>{entry.kind} · {entry.ref}</li>)}</ul> : <p className="small muted">没有引用证据。</p>}

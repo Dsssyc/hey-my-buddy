@@ -155,15 +155,26 @@ class RouterAnswerTests(unittest.TestCase):
 
     def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
         from buddy import router
-        from jsonschema import Draft202012Validator
+        from buddy.adapters.read_only import correction_code, schema_errors, valid_answer
         schema = router.answer_schema([DSH_ID, ZCODE_ID])
         self.assertEqual(schema["properties"]["profileId"]["enum"], [DSH_ID, ZCODE_ID, None])
         self.assertEqual(set(schema["properties"]), {"profileId", "reason", "evidence"})
-        validator = Draft202012Validator(schema)
-        self.assertTrue(validator.is_valid(self.answer()))
-        self.assertTrue(validator.is_valid(self.answer(profileId=None)))
-        self.assertFalse(validator.is_valid(self.answer(profileId="ghost")))
-        self.assertFalse(validator.is_valid(self.answer(policyCheck={})))
+        self.assertTrue(valid_answer(self.answer(), schema))
+        self.assertTrue(valid_answer(self.answer(profileId=None), schema))
+        self.assertFalse(valid_answer(self.answer(profileId="ghost"), schema))
+        self.assertFalse(valid_answer(self.answer(policyCheck={}), schema))
+        self.assertFalse(valid_answer(self.answer(reason=""), schema))
+        self.assertFalse(valid_answer(self.answer(evidence=[{"kind": "card"}]), schema))
+        self.assertFalse(valid_answer(self.answer(evidence=[{"kind": "web", "ref": "x"}]), schema))
+        self.assertFalse(valid_answer(self.answer(profileId=True), schema))
+        self.assertFalse(valid_answer("not json", schema))
+        # Out-of-bounds choices are never format-corrected; shape errors are.
+        self.assertIsNone(correction_code(self.answer(profileId="ghost"), schema))
+        self.assertEqual(correction_code(self.answer(reason=""), schema), "answer-shape")
+        self.assertEqual(correction_code("{", schema), "answer-invalid-json")
+        self.assertIsNone(correction_code(self.answer(), schema))
+        with self.assertRaises(ValueError):
+            schema_errors({}, {"type": "object", "pattern": "x"})
 
 
 if __name__ == "__main__":

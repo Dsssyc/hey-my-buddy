@@ -4,10 +4,15 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+import shutil
 import subprocess
+import time
 
 from .errors import BoardError
 from . import workspace
+
+#: Upper bound for writing the private mirror before the Router starts.
+MATERIALIZE_SECONDS = 120
 
 
 def digest(root: Path) -> str:
@@ -54,10 +59,31 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         if result.returncode:
             raise BoardError("router-input-unavailable", "A frozen Git object is unavailable")
         return result.stdout
+    reader = None
     try:
         # Git archive/checkout can apply export-ignore, export-subst or smudge
-        # filters. Read raw blobs so Router bytes equal the immutable input tree.
+        # filters. Read raw blobs so Router bytes equal the immutable input tree,
+        # through one `cat-file --batch` process rather than one process per file.
         entries = git("ls-tree", "-rz", "--full-tree", manifest["inputTree"])
+        reader = subprocess.Popen(["git", "-C", manifest["checkoutRoot"], "cat-file", "--batch"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  env=environment)
+        deadline = time.monotonic() + MATERIALIZE_SECONDS
+
+        def blob(object_id: str) -> bytes:
+            if time.monotonic() > deadline:
+                raise BoardError("router-input-unavailable", "The frozen input took too long to materialize")
+            reader.stdin.write(object_id.encode("ascii") + b"\n")
+            reader.stdin.flush()
+            header = reader.stdout.readline().split()
+            if len(header) != 3 or header[0].decode("ascii") != object_id or header[1] != b"blob":
+                raise BoardError("router-input-unavailable", "A frozen Git object is unavailable")
+            size = int(header[2])
+            contents = reader.stdout.read(size)
+            if len(contents) != size or reader.stdout.read(1) != b"\n":
+                raise BoardError("router-input-unavailable", "A frozen Git object is truncated")
+            return contents
+
         links = []
         for entry in entries.split(b"\0"):
             if not entry:
@@ -69,7 +95,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
                 raise BoardError("router-input-unavailable", "Unsupported frozen tree entry")
             path = root.joinpath(*relative.parts)
             path.parent.mkdir(parents=True, exist_ok=True)
-            contents = git("cat-file", "blob", object_id)
+            contents = blob(object_id)
             if mode == "120000":
                 path.symlink_to(os.fsdecode(contents))
                 links.append(path)
@@ -84,8 +110,28 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
             if not resolved.is_relative_to(root.resolve()):
                 raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
         return root, digest(root)
+    except BoardError:
+        discard(root)
+        raise
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+        discard(root)
         raise BoardError("router-input-unavailable", "The frozen input cannot be safely materialized") from None
+    finally:
+        if reader is not None:
+            try:
+                reader.stdin.close()
+            except OSError:
+                pass
+            try:
+                reader.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                reader.kill()
+                reader.wait()
+
+
+def discard(root: Path) -> None:
+    """Remove a Router mirror; the manifest and digests remain the durable evidence."""
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def verify(manifest: dict, root: Path, expected: str) -> dict:

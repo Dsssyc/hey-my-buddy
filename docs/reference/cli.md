@@ -237,7 +237,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | Governed continuation input | — | 64 KiB |
 | Helpers per Host decision | — | 8 |
 | Selection request task text | — | 8192 UTF-8 bytes |
-| Routing budget preset | `standard` | `quick` 60 s/8 calls/128 KiB, `standard` 300 s/24 calls/512 KiB, `deep` 600 s/64 calls/2 MiB; `timeoutSeconds` 5–1800 overrides the preset timeout, plus a 10 s Worker shutdown margin |
+| Routing budget preset | `standard` | `quick` 60 s/8 calls, `standard` 300 s/24 calls, `deep` 600 s/64 calls (the recorded read-byte limits 128 KiB/512 KiB/2 MiB apply only where an adapter can observe read bytes, which neither current adapter can); `timeoutSeconds` 5–1800 overrides the preset timeout, plus a 10 s Worker shutdown margin |
 | Compact governed view | 5 requests / 10 turns / 32 children / 32 artifacts | `counts`/`truncated` describe omissions |
 | Attempt lease `BUDDY_LEASE_SECONDS` | 120 s | 15–3600 s |
 | Cleanup plan expiry | 900 s | fixed; an expired plan authorizes nothing |

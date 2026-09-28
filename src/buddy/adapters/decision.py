@@ -38,7 +38,11 @@ class DecisionAdapter(Adapter):
         child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)},
                                 turn=None, agent_credential=None)
         started = time.monotonic()
-        handle = native.start_read_only_structured(child_context, request)
+        try:
+            handle = native.start_read_only_structured(child_context, request)
+        except BaseException:
+            router_input.discard(root)
+            raise
         handle.router_input = (manifest, root, digest)
         handle.router_started = started
         return handle
@@ -50,6 +54,11 @@ class DecisionAdapter(Adapter):
         verification = None
         if outcome.shutdown_confirmed:
             verification = router_input.verify(*handle.router_input)
+            # The mirror is a full copy of the frozen input. Once the native group is
+            # proven stopped and the copy verified, the digests are the evidence; keep
+            # a changed copy for inspection only.
+            if verification["unchanged"]:
+                router_input.discard(handle.router_input[1])
         usage = native_result.get("usage") or {
             "elapsedMs": round((time.monotonic() - handle.router_started) * 1000),
             "toolCalls": None, "bytesRead": None,

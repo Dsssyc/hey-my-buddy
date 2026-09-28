@@ -750,6 +750,9 @@ class DecisionFailureTests(DecisionTestCase):
             self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
             self.assertIsNone(decision["selectedProfile"])
         self.assertFalse(decision["inputVerification"]["unchanged"])
+        # A changed copy is kept for inspection.
+        _, changed_root, _ = self.input_verify.call_args.args
+        self.assertTrue(Path(changed_root).exists())
         report = board.call("health", {})["routingHealth"]
         self.assertEqual(report["budgetExhaustedCount"], 2)
         self.assertEqual(report["inputChangedCount"], 1)
@@ -1162,6 +1165,8 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.assertEqual(request_view.cwd, str(frozen_root))
         self.input_prepare.assert_called_once_with(manifest, context.directory)
         self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest)
+        # A verified, stopped Router leaves only digests behind, not a repository copy.
+        self.assertFalse(Path(frozen_root).exists())
         self.publish_cards(board, request_id="worker-card", command_id="worker-card", cards=[{
             "profileId": PROFILE_ID, "summary": "patched by the external Harness",
             "strengths": [], "limitations": [], "risks": ["open fixture risk"], "evidenceIds": [],

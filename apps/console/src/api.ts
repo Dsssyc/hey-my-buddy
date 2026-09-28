@@ -75,7 +75,7 @@ export function isAbortError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 }
 
-/* ---- 0.17.0 storage wire shapes (docs/reference/operations.md) ---- */
+/* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
 
 export type StorageCategory = {
   id: string;
@@ -302,7 +302,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       return data;
     },
     /**
-     * `storage_plan` (0.17.0): a private, expiring reclamation plan. It scans
+     * `storage_plan` (0.16.0): a private, expiring reclamation plan. It scans
      * disk, so the panel only ever calls it on an explicit 检查占用 click —
      * never on page entry and never from the 3-second refresh.
      */
@@ -310,7 +310,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       return parseStoragePlan(await command("storage_plan", {}, csrfToken));
     },
     /**
-     * `storage_apply` (0.17.0): applies one exact confirmed plan. The command
+     * `storage_apply` (0.16.0): applies one exact confirmed plan. The command
      * identity is the caller's; a lost reply keeps it so 重试同一请求 replays
      * the same command instead of minting a second one. A reply whose planId
      * does not match the request, or that lacks `complete: true`, resolves

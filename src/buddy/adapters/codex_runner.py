@@ -165,7 +165,8 @@ def _read_only_call(connection, control, result, catalog):
         def observed(message):
             activity = evidence.observe(message)
             result["usage"] = {"toolCalls": previous_tools + evidence.tool_calls, "bytesRead": None}
-            if previous_tools + evidence.tool_calls >= request["budget"]["toolCalls"]:
+            # A limit of N allows N native tool calls; the next one is interrupted.
+            if previous_tools + evidence.tool_calls > request["budget"]["toolCalls"]:
                 raise CodexProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
             if activity:
                 _activity(control, evidence, *activity)

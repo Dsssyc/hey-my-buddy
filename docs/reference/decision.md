@@ -20,7 +20,7 @@ A native read-only structured controller may make at most one answer-format corr
 
 ## Provisional budgets
 
-Each routing call carries a preset budget of wall-clock seconds, native tool calls and read bytes. `quick` is 60 seconds, 8 tool calls and 128 KiB; `standard` is 300 seconds, 24 tool calls and 512 KiB; `deep` is 600 seconds, 64 tool calls and 2 MiB; the default is `standard`. These values are provisional and await a separately authorized native measurement. The global preset is stored in `meta.router_budget_preset`, and an authenticated console user publication may update `configuration.routingBudget`; Hosts and Workers cannot change it. Actual usage is reported as `elapsedMs`, `toolCalls` and `bytesRead`, and an unavailable counter stays `null` rather than being invented.
+Each routing call carries a preset budget of wall-clock seconds, native tool calls and read bytes. `quick` is 60 seconds, 8 tool calls and 128 KiB; `standard` is 300 seconds, 24 tool calls and 512 KiB; `deep` is 600 seconds, 64 tool calls and 2 MiB; the default is `standard`. These values are provisional and await a separately authorized native measurement. The global preset is stored in `meta.router_budget_preset`, and an authenticated console user publication may update `configuration.routingBudget`; Hosts and Workers cannot change it. Actual usage is reported as `elapsedMs`, `toolCalls` and `bytesRead`, and an unavailable counter stays `null` rather than being invented. Neither current adapter can observe read bytes, so the read-byte limit is recorded but not enforced, and the console shows only the time and tool-call limits. A tool-call limit of N allows N native tool calls; the next call is interrupted.
 
 ## Frozen input materialization
 

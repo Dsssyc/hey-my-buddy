@@ -210,6 +210,33 @@ class RouterInputTests(unittest.TestCase):
         self.assertEqual((mirror / 'src/file.txt').read_text(), 'dirty frozen input')
         self.assertEqual(router_input.verify(manifest, mirror, fingerprint)['code'], 'router-input-changed')
 
+    def test_many_files_are_read_through_one_batch_process_and_failures_leave_no_copy(self):
+        from unittest import mock
+        from buddy import router_input
+        for index in range(40):
+            (self.repo / f'src/many-{index}.txt').write_text(f'file {index}\n')
+        self.git('add', 'src')
+        manifest = self.prepare(kind='existing')
+        attempt = self.root / 'batch-attempt'
+        attempt.mkdir()
+        real_popen, real_run = router_input.subprocess.Popen, router_input.subprocess.run
+        with mock.patch.object(router_input.subprocess, 'Popen', wraps=real_popen) as popen, \
+                mock.patch.object(router_input.subprocess, 'run', wraps=real_run) as run:
+            mirror, _ = router_input.prepare(manifest, attempt)
+        # subprocess.run is built on Popen, so count only the blob readers.
+        readers = [call for call in popen.call_args_list if 'cat-file' in call.args[0]]
+        self.assertEqual(len(readers), 1)
+        self.assertFalse([call for call in run.call_args_list if 'cat-file' in call.args[0]])
+        self.assertEqual((mirror / 'src/many-39.txt').read_text(), 'file 39\n')
+        router_input.discard(mirror)
+        self.assertFalse(mirror.exists())
+        broken = dict(manifest, inputTree='0' * 40)
+        attempt = self.root / 'broken-attempt'
+        attempt.mkdir()
+        with mock.patch.object(router_input.workspace, 'verify'), self.assertRaises(BoardError):
+            router_input.prepare(broken, attempt)
+        self.assertFalse((attempt / 'frozen-input').exists())
+
     def test_git_replace_cannot_substitute_frozen_blob_contents(self):
         from buddy import router_input
         old = self.git('rev-parse', 'HEAD:src/file.txt').decode().strip()

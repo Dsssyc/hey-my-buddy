@@ -188,7 +188,7 @@ export function Settings({
             <option value="quick">快速</option><option value="standard">标准</option><option value="deep">深入</option>
           </select>
         </label>
-        <p className="small muted">上限待实测：快速 60 秒 / 8 次工具调用 / 128 KiB；标准 300 秒 / 24 次工具调用 / 512 KiB；深入 600 秒 / 64 次工具调用 / 2 MiB。保存并发布后用于后续路由。</p>
+        <p className="small muted">上限待实测：快速 60 秒 / 8 次工具调用；标准 300 秒 / 24 次工具调用；深入 600 秒 / 64 次工具调用。保存并发布后用于后续路由。</p>
         <div className="policy-note">
           <h3>用户偏好与事实分别保存</h3>
           <p>

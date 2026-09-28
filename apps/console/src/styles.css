@@ -356,12 +356,12 @@ button.tl-label:hover { background: var(--subtle); }
 .sp.routing.running { border-style: double; border-width: 3px; }
 .sp.routing.failed { min-width: 14px; border-color: var(--danger); }
 .sp.routing.cancelled { border: 1.5px dashed var(--muted); }
-.sp.routing.unknown { border: 1.5px dashed var(--line-strong); }
+.sp.routing.unknown { border: 1.5px dotted var(--line-strong); }
 .swatch.routing { position: relative; border: 1px solid var(--line-strong); }
 .swatch.routing.running { border-style: double; border-width: 3px; }
 .swatch.routing.failed { border-color: var(--danger); }
 .swatch.routing.cancelled { border: 1.5px dashed var(--muted); }
-.swatch.routing.unknown { border: 1.5px dashed var(--line-strong); }
+.swatch.routing.unknown { border: 1.5px dotted var(--line-strong); }
 .routing-cross { position: absolute; inset: 0; pointer-events: none; }
 .routing-cross::before, .routing-cross::after {
   content: ""; position: absolute; top: 50%; left: 50%; width: 9px; height: 1px;

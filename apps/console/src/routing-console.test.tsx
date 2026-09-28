@@ -126,7 +126,8 @@ describe("recorded decision details", () => {
     expect(within(detail).getByText("快速")).toBeTruthy();
     expect(within(detail).getByText("1234 毫秒 / 60 秒")).toBeTruthy();
     expect(within(detail).getByText("0 / 8")).toBeTruthy();
-    expect(within(detail).getByText("未记录 / 131072")).toBeTruthy();
+    expect(within(detail).getByText("读取字节").nextElementSibling!.textContent).toBe("未记录");
+    expect(within(detail).queryByText(/131072/)).toBeNull();
     expect(within(detail).getByText("原生身份、停止证据与输入核验").closest("details")!.open).toBe(false);
     expect(within(detail).getByText("calculation-new-fields").closest("details")!.open).toBe(false);
     expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: audit.decisionId, includeAudit: true }, "csrf");
