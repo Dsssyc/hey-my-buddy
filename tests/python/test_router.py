@@ -210,6 +210,17 @@ class RouterInputTests(unittest.TestCase):
         self.assertEqual((mirror / 'src/file.txt').read_text(), 'dirty frozen input')
         self.assertEqual(router_input.verify(manifest, mirror, fingerprint)['code'], 'router-input-changed')
 
+    def test_git_replace_cannot_substitute_frozen_blob_contents(self):
+        from buddy import router_input
+        old = self.git('rev-parse', 'HEAD:src/file.txt').decode().strip()
+        replacement = self.git('hash-object', '-w', '--stdin', data=b'replacement content').decode().strip()
+        self.git('replace', old, replacement)
+        manifest = self.prepare(kind='existing')
+        attempt = self.root / 'replace-attempt'
+        attempt.mkdir()
+        mirror, _ = router_input.prepare(manifest, attempt)
+        self.assertEqual((mirror / 'src/file.txt').read_bytes(), b'base\n')
+
     def test_frozen_symlink_cycle_has_a_bounded_input_error(self):
         from buddy import router_input
         (self.repo / 'src/a').symlink_to('b')

@@ -47,7 +47,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
     root = directory / "frozen-input"
     root.mkdir(mode=0o700)
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    environment.update(GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0")
+    environment.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1", GIT_TERMINAL_PROMPT="0")
     def git(*arguments):
         result = subprocess.run(["git", "-C", manifest["checkoutRoot"], *arguments],
                                 capture_output=True, env=environment, timeout=30, check=False)

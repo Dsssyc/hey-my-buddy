@@ -37,6 +37,7 @@ Router 是 decision attempt，不写 workflow_turns，不持有 agent 凭据。�
 | focused.py test_objectives test_router_probe | 35 项通过；全部离线/mock |
 | uv run --frozen python -m buddy.checks | 首轮 Python 2 failures、17 errors；第二轮 1,227 项 Python、139 项 Node 全通过，退出 0 |
 | focused.py test_router test_workflow_routing test_routing_history | 全量后最后的只读路由视图补正：51 项通过 |
+| Git replace 原始对象隔离补正 | 4 项真实 Git 输入测试通过；不读取替换对象 |
 | uv lock --check、git diff --check | 通过 |
 
 日志保存在 .dsh-skill-build/：m0-tests.log、m1-focused.log、m2-final-focused.log、m3-routing-final.log、m4-vitest.log、m4-final-build.log、final-checks.log、final-checks-rerun.log、last-routing-view.log。失败轮次未被改写成通过。
@@ -69,7 +70,7 @@ DOM 实测四个桌面片段均高 22 px、没有片段文字、保留点阵。�
 
 执行 uv run --frozen python packaging/stage-plugin.py --destination .dsh-skill-build/stage-final/hey-my-buddy，再通过 stage_smoke.py 在独立临时根目录冷启动包内 CLI。移走分发源目录后仍可读取 health/runtime，stable=true、leaks=[]、resourcesMissing=[]。未验证 Router 的 selection-request 返回 needs-host、runId=null，没有启动模型。私有服务通过自身 CLI stop 收尾。
 
-运行时内容 ID：a237de06566040f88be790ebe6221c05。详细路径、身份和停止回执见 .dsh-skill-build/stage-smoke.json。文档收尾后重新生成分发目录，并核验运行资产与已验证运行时的字节一致；文档不是运行时依赖。
+运行时内容 ID：15366b8e3dfaa43add6f6073aeef9fd7。详细路径、身份和停止回执见 .dsh-skill-build/stage-smoke.json。文档收尾后重新生成分发目录，并核验运行资产与已验证运行时的字节一致；文档不是运行时依赖。
 
 ## 待批准的原生探针
 
