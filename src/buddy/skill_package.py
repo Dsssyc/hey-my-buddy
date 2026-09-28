@@ -96,6 +96,8 @@ def assemble(source: Path, skill: Path) -> dict:
     (skill / "scripts").mkdir()
     shutil.copy2(source / "skills/buddy/scripts/buddy", skill / "scripts/buddy")
     (skill / "scripts/buddy").chmod(0o755)
+    for name in ("buddy.cmd", "buddy.ps1"):
+        shutil.copy2(source / "skills/buddy/scripts" / name, skill / "scripts" / name)
     (skill / "references").mkdir()
     for reference in sorted((source / "docs/reference").glob("*.md")):
         (skill / "references" / reference.name).write_text(_rewrite(reference.read_text(), _reference_link))

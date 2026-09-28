@@ -12,6 +12,7 @@ import secrets
 import sqlite3
 import subprocess
 import time
+import uuid
 
 from . import backup, runtime, schemas
 from .contracts import CONTRACT_VERSION
@@ -66,9 +67,11 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
 
 
 def _environment(state: Path, target: Path) -> dict:
-    env = {key: value for key, value in os.environ.items() if key not in {
+    from .launcher import is_model_endpoint
+    excluded = {
         'PYTHONPATH', 'VIRTUAL_ENV', 'UV_PROJECT_ENVIRONMENT', 'BUDDY_DEV_SOURCE', 'BUDDY_RUNTIME',
-        'BUDDY_RUNTIME_IDENTITY', 'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID', 'BUDDY_AGENT_CREDENTIAL', 'BUDDY_AGENT_CREDENTIAL_FILE'}}
+        'BUDDY_RUNTIME_IDENTITY', 'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID', 'BUDDY_AGENT_CREDENTIAL', 'BUDDY_AGENT_CREDENTIAL_FILE'}
+    env = {key: value for key, value in os.environ.items() if key not in excluded and not is_model_endpoint(key)}
     marker = state / 'upgrade.json'
     if marker.exists():
         preserved = json.loads(marker.read_text()).get('environment', {})
@@ -76,7 +79,7 @@ def _environment(state: Path, target: Path) -> dict:
             if key in preserved:
                 env[key] = str(preserved[key])
     env.update(BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name,
-               BUDDY_PYTHON=str(target / 'venv/bin/python'))
+               BUDDY_PYTHON=str(runtime.runtime_python(target)))
     return env
 
 
@@ -87,7 +90,7 @@ def command(state: Path, target: Path, method: str, params: dict | None = None) 
         payload['action'] = 'restart'
     # No auto-start while holding the startup fence, including a stale endpoint.
     script = "import json,sys; from pathlib import Path; from buddy.client import BoardClient; print(json.dumps(BoardClient(Path(sys.argv[1]),autostart=False).call(sys.argv[2],json.loads(sys.argv[3]))))"
-    result = subprocess.run([str(target / 'venv/bin/python'), '-c', script, str(state), operations[method], json.dumps(payload)],
+    result = subprocess.run([str(runtime.runtime_python(target)), '-c', script, str(state), operations[method], json.dumps(payload)],
                             env=_environment(state, target), cwd=target, capture_output=True, text=True, timeout=45)
     try:
         data = json.loads(result.stdout)
@@ -143,7 +146,7 @@ def detach(state: Path, target: Path) -> None:
 def start(state: Path, target: Path) -> dict:
     log = os.open(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
-        child = subprocess.Popen([str(target / 'venv/bin/python'), '-m', 'buddy.daemon'], cwd=target,
+        child = subprocess.Popen([str(runtime.runtime_python(target)), '-m', 'buddy.daemon'], cwd=target,
                                  env=_environment(state, target), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                  start_new_session=True, close_fds=True)
     finally:
@@ -170,6 +173,7 @@ def start(state: Path, target: Path) -> dict:
 
 
 def restore(state: Path, current: Path) -> None:
+    backup.recover(state)
     state = state.resolve()
     current = current.resolve()
     backup.verify(current)
@@ -232,7 +236,88 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
     return summary, expected
 
 
-def upgrade(params: dict) -> dict:
+def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
+    if not journal.get('skillTarget'):
+        return None
+    from .skill_install import agent_skills_home, claude_skills_home, SKILL
+    import re
+    try:
+        target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
+        expected = agent_skills_home().resolve() / SKILL
+        suffix = staged.name.removeprefix('.buddy-upgrade-stage-')
+        if (not all(path.is_absolute() and not path.is_symlink() for path in (target, staged, previous))
+                or target.resolve() != expected or staged.parent.resolve() != expected.parent
+                or previous.parent.resolve() != expected.parent
+                or re.fullmatch(r'[0-9a-f]{32}', suffix) is None
+                or staged.name != '.buddy-upgrade-stage-' + suffix
+                or previous.name != '.buddy-upgrade-previous-' + suffix):
+            raise ValueError('unsafe skill paths')
+        if journal.get('claudeLink') and Path(journal['claudeLink']).absolute() != claude_skills_home() / SKILL:
+            raise ValueError('unsafe Claude link')
+        return target, staged, previous
+    except (KeyError, TypeError, ValueError):
+        raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal skill paths do not match this installation') from None
+
+
+def _restore_skill(journal: dict) -> None:
+    paths = _skill_paths(journal)
+    if paths is None:
+        return
+    target, staged, previous = paths
+    if previous.exists():
+        if target.exists():
+            shutil.rmtree(target)
+        previous.rename(target)
+    elif journal.get('skillHadPrevious') is False and target.exists() and not staged.exists():
+        shutil.rmtree(target)
+    if staged.exists():
+        shutil.rmtree(staged)
+    link = journal.get('claudeLink')
+    if journal.get('claudeLinkWasMissing') and link and Path(link).is_symlink() and Path(os.path.realpath(link)) == target:
+        Path(link).unlink()
+
+
+def _publish_skill(journal: dict) -> None:
+    paths = _skill_paths(journal)
+    if paths is None:
+        return
+    target, staged, previous = paths
+    if target.exists():
+        target.rename(previous)
+    staged.rename(target)
+    from .skill_install import _link_claude
+    linked = _link_claude(target)
+    if linked['status'] == 'linked':
+        journal['createdClaudeLink'] = linked['path']
+
+
+def _verify_skill_generation(journal: dict, target: Path, health: dict) -> None:
+    paths = _skill_paths(journal)
+    if paths is None:
+        return
+    from .skill_install import _marker
+    skill = paths[1] if paths[1].exists() else paths[0]
+    marker = _marker(skill)
+    ready = runtime.read_ready(target)
+    if (marker is None or marker.get('contract') != health.get('contractVersion')
+            or marker.get('sourceCommit') != ready.get('sourceCommit')):
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'Skill, launcher and runtime generation do not match')
+
+
+def _finish_skill(journal: dict) -> None:
+    paths = _skill_paths(journal)
+    if paths is None:
+        return
+    _, staged, previous = paths
+    for path in (previous, staged):
+        try:
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     from .store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
     if os.environ.get('BUDDY_AGENT_CREDENTIAL') or os.environ.get('BUDDY_AGENT_CREDENTIAL_FILE'):
@@ -263,7 +348,7 @@ def upgrade(params: dict) -> dict:
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize()
     target = Path(materialized['runtimeDir'])
-    if previous == target:
+    if previous == target and skill_source is None:
         return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name}
     marker = state / 'upgrade.json'
     with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
@@ -274,20 +359,42 @@ def upgrade(params: dict) -> dict:
             raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
         before = idle_snapshot(state)
         before['runtimeSettings'] = runtime_settings
+        skill_stage = None
+        skill_previous = None
+        if skill_source is not None:
+            if skill_target is None or skill_target.is_symlink():
+                raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is missing or linked')
+            from .skill_install import _marker, _is_buddy_skill
+            if skill_target.exists() and not (_marker(skill_target) or _is_buddy_skill(skill_target)):
+                raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is not a buddy skill')
+            suffix = uuid.uuid4().hex
+            skill_stage = skill_target.with_name(f'.buddy-upgrade-stage-{suffix}')
+            skill_previous = skill_target.with_name(f'.buddy-upgrade-previous-{suffix}')
+            shutil.copytree(skill_source, skill_stage, symlinks=True)
+            from .skill_install import write_runtime_hint
+            write_runtime_hint(skill_stage, target)
         backup_token = secrets.token_urlsafe(32)
         journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight', 'before':before, 'environment':preserved, 'backupTokenHash':hashlib.sha256(backup_token.encode()).hexdigest()}
+        if skill_stage is not None:
+            from .skill_install import claude_skills_home, SKILL
+            claude_link = claude_skills_home() / SKILL
+            journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
+                           skillHadPrevious=skill_target.exists(), claudeLink=str(claude_link),
+                           claudeLinkWasMissing=not claude_link.exists() and not claude_link.is_symlink())
         write_journal(marker, journal)
         backed_up = None
         active = previous
         detached = False
         try:
-            # 0.15.1 has no backup RPC or admission fence. After its idle detach,
-            # this exclusive maintenance owner executes the SAME service backup
-            # implementation before the new runtime ever opens the board.
-            if health_before.get('contractVersion') == CONTRACT_VERSION:
-                backed_up = command(state, previous, 'backup', {'upgradeToken':backup_token})
-                journal.update(phase='backed-up', backup=backed_up)
-                write_journal(marker, journal)
+            # A request may have entered the previous daemon before its entry
+            # fence became visible. Recheck after fencing, and take the backup
+            # only after detach proves there are no remaining database writers.
+            before = idle_snapshot(state)
+            before['runtimeSettings'] = runtime_settings
+            journal['before'] = before
+            write_journal(marker, journal)
+            # The exclusive maintenance owner uses the same backup implementation
+            # after all previous daemon writers have stopped.
             detach(state, previous)
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
@@ -310,29 +417,37 @@ def upgrade(params: dict) -> dict:
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)
-            write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
-            from .storage import prune_old_runtimes
-            try:
-                pruning = prune_old_runtimes(BoardStore(state))
-            except Exception as cleanup_error:
-                pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
+            _verify_skill_generation(journal, target, health)
+            journal.update(phase='skill-switching', expected=expected)
+            write_journal(marker, journal)
+            _publish_skill(journal)
+            write_journal(marker, journal)
             from .launcher import write_active_runtime
             write_active_runtime(state, target, preserved)
-            journal.update(phase='verified', verification=evidence, runtimePruning=pruning)
+            journal.update(phase='verified', verification=evidence)
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             clear_journal(marker)
+            _finish_skill(journal)
+            try:
+                from .storage import prune_old_runtimes
+                write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
+                pruning = prune_old_runtimes(BoardStore(state))
+            except Exception as cleanup_error:
+                pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
             return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
                     'rollback':None, 'runtimePruning':pruning}
         except Exception as failure:
             try:
+                _restore_skill(journal)
                 if active == previous and not detached:
                     surviving = probe(state, previous)
                     if surviving is not None:
                         from .launcher import write_active_runtime
                         write_active_runtime(state, previous, preserved)
                         clear_journal(marker)
-                        return {'upgraded':False, 'error':{'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}, 'failure':getattr(failure,'code',type(failure).__name__)}
+                        error = failure.payload() if isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
+                        return {'upgraded':False, 'error':error, 'failure':getattr(failure,'code',type(failure).__name__)}
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active)
@@ -348,7 +463,8 @@ def upgrade(params: dict) -> dict:
                 journal.update(phase='rolled-back', rollback=evidence, failure=getattr(failure, 'code', type(failure).__name__))
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
-                return {'upgraded':False, 'error':{'code':'UPGRADE_ROLLED_BACK','message':'Upgrade failed; the previous runtime and backup were restored'},
+                error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_ROLLED_BACK','message':'Upgrade failed; the previous runtime and backup were restored'}
+                return {'upgraded':False, 'error':error,
                         'backup':backed_up, 'rollback':evidence, 'failure':journal['failure']}
             except Exception as recovery:
                 journal.update(phase='recovery-required', failure=getattr(failure,'code',type(failure).__name__), recoveryFailure=getattr(recovery,'code',type(recovery).__name__))
@@ -360,6 +476,7 @@ def recover(state: Path, root: Path) -> dict:
     """Resume an interrupted journal under both launcher fences; never cancel work."""
     marker = state / 'upgrade.json'
     journal = json.loads(marker.read_text())
+    _skill_paths(journal)  # Validate destructive recovery paths before touching a service.
     from .launcher import write_active_runtime
     previous, target = Path(journal['previous']), Path(journal['target'])
     for path in (previous, target):
@@ -369,8 +486,10 @@ def recover(state: Path, root: Path) -> dict:
     previous_health = probe(state, previous)
     if journal.get('phase') == 'verified' and target_health is not None:
         evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
+        _verify_skill_generation(journal, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
         write_journal(state / 'upgrade-last.json', journal)
+        _finish_skill(journal)
         clear_journal(marker)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence}
     if journal.get('phase') == 'preflight':
@@ -383,6 +502,7 @@ def recover(state: Path, root: Path) -> dict:
             # raced the old-version preflight rather than attempting to retire it.
             previous_health = start(state, previous)
         write_active_runtime(state, previous, journal.get('environment'))
+        _restore_skill(journal)
         clear_journal(marker)
         return {'upgraded':False, 'recoveredJournal':True, 'rollback':{'runtimeContentId':previous.name,'workPreserved':True}}
     if target_health is not None or previous_health is not None:
@@ -403,6 +523,7 @@ def recover(state: Path, root: Path) -> dict:
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before)
     write_active_runtime(state, previous, journal.get('environment'))
+    _restore_skill(journal)
     journal.update(phase='rolled-back', rollback=evidence)
     write_journal(state / 'upgrade-last.json', journal)
     clear_journal(marker)

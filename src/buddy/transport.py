@@ -10,11 +10,14 @@ from . import home, locking
 import json
 import os
 from pathlib import Path
+import socket
+import tempfile
 import stat
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from typing import Any
 
 import c_two as cc
@@ -137,6 +140,8 @@ def _private_directory(directory: Path) -> bool:
     """True only for a real directory this user owns with no group/other access."""
     try:
         info = os.lstat(directory)
+        if os.name == 'nt':
+            return stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
         return (
             stat.S_ISDIR(info.st_mode)
             and not stat.S_ISLNK(info.st_mode)
@@ -149,6 +154,8 @@ def _private_directory(directory: Path) -> bool:
 
 def _trusted_ancestors(directory: Path) -> bool:
     """True when no ancestor above the state directory can be swapped by another user."""
+    if os.name == 'nt':
+        return True  # Windows ACL ownership needs a native acceptance probe.
     try:
         current = directory.parent
         while True:
@@ -181,7 +188,7 @@ def _read_endpoint(directory: Path) -> dict | None:
     try:
         fd = os.open(directory / "control.json", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        if not stat.S_ISREG(info.st_mode) or (os.name != 'nt' and (info.st_uid != os.geteuid() or info.st_mode & 0o077)):
             return None
         value = json.loads(os.read(fd, MAX_MESSAGE_BYTES + 1))
         if (
@@ -254,6 +261,90 @@ def _attach_read_only(directory: Path) -> dict | None:
     return _healthy(directory)
 
 
+def _cold_start_preflight(directory: Path) -> None:
+    """Prove state writes and local IPC before inheriting this process into a daemon."""
+    probe = directory / ('.launch-probe-' + uuid.uuid4().hex[:12])
+    socket_directory = None
+    address = None
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not _trusted_directory(directory):
+            raise OSError('State directory is not owner-private')
+        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        if os.name == 'nt':
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            connector = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                listener.settimeout(1)
+                connector.settimeout(1)
+                listener.bind(('127.0.0.1', 0))
+                listener.listen(1)
+                connector.connect(listener.getsockname())
+                accepted, _ = listener.accept()
+                accepted.close()
+            finally:
+                connector.close()
+                listener.close()
+        else:
+            # State paths need not fit sockaddr_un; C-Two also uses short private
+            # IPC names. Keep the probe independent of a deeply nested checkout.
+            socket_directory = Path(tempfile.mkdtemp(prefix='buddy-ipc-', dir='/tmp'))
+            address = str(socket_directory / 's')
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                listener.settimeout(1)
+                connector.settimeout(1)
+                listener.bind(address)
+                listener.listen(1)
+                connector.connect(address)
+                accepted, _ = listener.accept()
+                accepted.close()
+            finally:
+                connector.close()
+                listener.close()
+    except OSError as error:
+        raise ServiceError('LAUNCH_ACCESS_DENIED',
+                           'Cold start needs state-directory writes and local IPC; allow this skill launcher outside the Host sandbox and retry') from error
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            if address:
+                Path(address).unlink(missing_ok=True)
+            if socket_directory:
+                socket_directory.rmdir()
+        except OSError:
+            pass
+
+
+def _retire_stale_endpoint(directory: Path) -> None:
+    """Called under the start lock; lifetime locks prove absence of a board owner.
+
+    This makes no assertion about Worker processes or stored PIDs. Their
+    reconciliation and unconfirmed-stop rules remain the new daemon's job.
+    """
+    if not (directory / 'control.json').exists():
+        return
+    locks = []
+    try:
+        for name in ('control-daemon.lock', 'board-owner.lock'):
+            fd = os.open(directory / name, os.O_CREAT | os.O_RDWR, 0o600)
+            locks.append(fd)
+            try:
+                locking.lock(fd, blocking=False)
+            except BlockingIOError:
+                raise ServiceError('SERVICE_UNAVAILABLE',
+                    'The recorded owner did not answer; allow this launcher outside the Host sandbox or inspect the existing service') from None
+        (directory / 'control.json').unlink(missing_ok=True)
+    finally:
+        for fd in reversed(locks):
+            os.close(fd)
+
+
 def ensure_service(state_dir: str | Path | None = None, *, resource: str = "control") -> dict:
     """Attach to a healthy daemon or cold-start one, preserving read-only attach."""
     directory = get_state_dir(state_dir)
@@ -263,14 +354,14 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
     if resource == "wait":
         # A wait may never cold-start a service: waiting on nothing would be a lie.
         raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.chmod(0o700)
+    _cold_start_preflight(directory)
     lock_fd = os.open(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
         locking.lock(lock_fd)
         endpoint = _attach_read_only(directory)
         if endpoint:
             return endpoint
+        _retire_stale_endpoint(directory)
         from . import runtime
 
         # Cold start installs and runs from the content-addressed stable runtime, so

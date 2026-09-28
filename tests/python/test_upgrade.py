@@ -1,5 +1,6 @@
 """Private upgrade refusal, admission fence and backup restoration."""
 import json
+import os
 from pathlib import Path
 from unittest import mock
 from buddy import backup, upgrade
@@ -7,6 +8,110 @@ from buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
+        board = self.board()
+        state = board.directory
+        root = self.directory / 'runtimes'
+        previous = root / ('a' * 32)
+        previous.mkdir(parents=True)
+        skill = self.directory / 'skills/buddy'
+        (skill / 'scripts').mkdir(parents=True)
+        (skill / 'SKILL.md').write_text('old skill')
+        (skill / 'scripts/buddy').write_text('old launcher')
+        source = self.directory / 'new-skill'
+        source.mkdir()
+        (source / 'SKILL.md').write_text('new skill')
+        control = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'existing', 'pid': 123}
+        (state / 'control.json').write_text(json.dumps(control))
+        active = state / 'active-runtime.json'
+        active.write_text(json.dumps({'runtimeDir': str(previous)}))
+        before = [(skill / 'SKILL.md').read_bytes(), (skill / 'scripts/buddy').read_bytes(),
+                  active.read_bytes(), (state / 'control.json').read_bytes()]
+        health = {'serviceId': 'existing', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32}
+        busy = BoardError('UPGRADE_NOT_IDLE', 'running work', active=[{'runId': 'busy', 'state': 'running'}])
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
+                mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
+                mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
+                mock.patch('buddy.upgrade.probe', return_value=health), \
+                mock.patch('buddy.upgrade.idle_snapshot', side_effect=busy), \
+                mock.patch('buddy.upgrade.runtime.materialize') as materialize:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.upgrade({}, skill_source=source, skill_target=skill)
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+        self.assertEqual(caught.exception.details['active'][0]['runId'], 'busy')
+        materialize.assert_not_called()
+        self.assertEqual(before, [(skill / 'SKILL.md').read_bytes(), (skill / 'scripts/buddy').read_bytes(),
+                                  active.read_bytes(), (state / 'control.json').read_bytes()])
+
+    def test_skill_swap_failure_restores_old_skill_and_launcher(self):
+        skill = self.directory / 'skills/buddy'
+        previous = skill.with_name('.buddy-upgrade-previous-' + 'a' * 32)
+        staged = skill.with_name('.buddy-upgrade-stage-' + 'a' * 32)
+        for directory, value in ((skill, 'old'), (staged, 'new')):
+            (directory / 'scripts').mkdir(parents=True)
+            (directory / 'SKILL.md').write_text(value)
+            (directory / 'scripts/buddy').write_text(value + ' launcher')
+        journal = {'skillTarget': str(skill), 'skillStage': str(staged),
+                   'skillPrevious': str(previous), 'skillHadPrevious': True}
+        with mock.patch('buddy.skill_install.agent_skills_home', return_value=skill.parent), \
+             mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}):
+            upgrade._publish_skill(journal)
+            self.assertEqual((skill / 'SKILL.md').read_text(), 'new')
+            upgrade._restore_skill(journal)
+        self.assertEqual((skill / 'SKILL.md').read_text(), 'old')
+        self.assertEqual((skill / 'scripts/buddy').read_text(), 'old launcher')
+        self.assertFalse(previous.exists())
+        self.assertFalse(staged.exists())
+
+    def test_recovery_rejects_unrelated_skill_paths_before_deleting(self):
+        unrelated = self.directory / 'unrelated'
+        unrelated.mkdir()
+        keep = unrelated / 'keep.txt'
+        keep.write_text('user data')
+        journal = {'skillTarget': str(unrelated), 'skillStage': str(self.directory / 'stage'),
+                   'skillPrevious': str(self.directory / 'previous'), 'skillHadPrevious': False}
+        with self.assertRaises(BoardError) as caught:
+            upgrade._restore_skill(journal)
+        self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
+        self.assertEqual(keep.read_text(), 'user data')
+
+    def test_raced_admission_aborts_before_backup_and_keeps_previous_owner(self):
+        board = self.board()
+        state = board.directory
+        root = self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        previous.mkdir(parents=True)
+        endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old', 'pid': 123}
+        (state / 'control.json').write_text(json.dumps(endpoint))
+        health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
+        before = upgrade.idle_snapshot(state)
+        busy = BoardError('UPGRADE_NOT_IDLE', 'raced task', active=[{'runId': 'raced', 'state': 'queued'}])
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
+             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
+             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('buddy.upgrade.probe', return_value=health), \
+             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('buddy.upgrade.idle_snapshot', side_effect=[before, before, busy]), \
+             mock.patch('buddy.upgrade.detach') as detach, \
+             mock.patch('buddy.upgrade.backup.create') as create:
+            result = upgrade.upgrade({})
+        self.assertEqual(result['error']['code'], 'UPGRADE_NOT_IDLE')
+        self.assertEqual(result['error']['details']['active'][0]['runId'], 'raced')
+        detach.assert_not_called()
+        create.assert_not_called()
+        self.assertFalse((state / 'upgrade.json').exists())
+        self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
+
+    def test_transaction_admission_rechecks_a_fence_after_rpc_entry(self):
+        board = self.board()
+        (board.directory / 'upgrade.json').write_text('{}')
+        # Bypass the outer RPC guard, as a call that entered just before fencing would.
+        with self.assertRaises(BoardError) as caught:
+            board.store.task_submit({'requestId': 'late', 'task': 'late work', 'cwd': str(self.workdir()),
+                                     'adapter': 'command', 'argv': ['/bin/true']})
+        self.assertEqual(caught.exception.code, 'UPGRADE_IN_PROGRESS')
+        self.assertEqual(board.store.count_tasks(), 0)
+
     def test_nonidle_preflight_refuses_without_cancelling(self):
         board=self.board()
         run=board.call('task_submit', {'requestId':'busy', 'task':'protected work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok']})['task']['runId']

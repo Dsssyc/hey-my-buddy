@@ -578,8 +578,8 @@ def main(argv: list[str] | None = None) -> int:
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)
         if args.method == "upgrade":
-            from .upgrade import upgrade
-            result = upgrade(params)
+            from .skill_install import install
+            result = install(params)
         elif args.method == "install":
             from .skill_install import install
             result = install(params)
@@ -621,12 +621,16 @@ def main(argv: list[str] | None = None) -> int:
         print(_dumps(cli_views.render(args.method, result, mode)))
         return 1 if isinstance(result, dict) and result.get("error") else 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope
-        print(_dumps({"error": {"code": getattr(error, "code", "SERVICE_ERROR"), "message": str(error)}}))
+        payload = error.payload() if isinstance(error, BoardError) else {"code": "SERVICE_ERROR", "message": str(error)}
+        print(_dumps({"error": payload}))
         return 1
 
 
 def _dumps(value) -> str:
     """One compact JSON object: indentation is whitespace a Host model re-reads on every request."""
+    from .contracts import CONTRACT_VERSION
+    if isinstance(value, dict):
+        value = {"contractVersion": CONTRACT_VERSION, **value}
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 

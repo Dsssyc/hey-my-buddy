@@ -1,13 +1,5 @@
 #!/bin/sh
-# The hey-my-buddy CLI, shipped inside the shared `buddy` skill.
-#
-# An installed skill carries its uv project in `package/` next to this script's
-# directory; a source checkout keeps the project at the repository root two levels
-# above `skills/buddy`. The project is resolved from this file's own location, never
-# from the caller's cwd, and every argument is forwarded verbatim:
-#
-#   ~/.agents/skills/buddy/scripts/buddy health
-#   ~/.agents/skills/buddy/scripts/buddy submit '<controlled task JSON>'
+# The shared skill's POSIX command entry. Daily calls use the active Python.
 set -eu
 BUDDY_SKILL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 if [ -f "$BUDDY_SKILL_DIR/package/pyproject.toml" ]; then
@@ -15,6 +7,20 @@ if [ -f "$BUDDY_SKILL_DIR/package/pyproject.toml" ]; then
 else
   BUDDY_PROJECT_DIR=$(CDPATH= cd -- "$BUDDY_SKILL_DIR/../.." && pwd)
 fi
-PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH:-/usr/bin:/bin}"
-export PATH BUDDY_SKILL_DIR
-exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"
+export BUDDY_SKILL_DIR
+case "${1:-}" in
+  install|upgrade)
+    exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"
+    ;;
+esac
+if [ "${BUDDY_DEV_SOURCE:-}" = 1 ]; then
+  exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"
+fi
+if [ -z "${BUDDY_BOOTSTRAP_PYTHON:-}" ] && [ -f "$BUDDY_SKILL_DIR/.runtime-python" ]; then
+  IFS= read -r BUDDY_BOOTSTRAP_PYTHON < "$BUDDY_SKILL_DIR/.runtime-python"
+fi
+if ! command -v "${BUDDY_BOOTSTRAP_PYTHON:-python3}" >/dev/null 2>&1; then
+  printf '%s\n' '{"contractVersion":"unknown","error":{"code":"ACTIVE_RUNTIME_UNAVAILABLE","message":"Run the fixed-version package install command to repair the runtime interpreter"}}'
+  exit 1
+fi
+exec "${BUDDY_BOOTSTRAP_PYTHON:-python3}" "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"

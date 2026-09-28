@@ -701,6 +701,8 @@ class BoardStore:
         family, so the queue reason names the limit that is actually full. Workspace
         and exclusive-resource admission applies to all work unchanged.
         """
+        if (self.directory / 'upgrade.json').exists():
+            raise BoardError('UPGRADE_IN_PROGRESS', 'Admission is fenced until the coordinated upgrade finishes')
         if self._total_active(connection) >= self.max_concurrent:
             return scheduling.REASON_TOTAL_CAPACITY
         family = scheduling.model_family(spec)

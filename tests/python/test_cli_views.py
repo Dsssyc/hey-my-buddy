@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from buddy.contracts import CONTRACT_VERSION
 import os
 import unittest
 from pathlib import Path
@@ -134,7 +135,7 @@ class CliViewTests(RealWorkspaceTestCase):
             self.assertNotIn(omitted, brief)
         code, full, _ = self.cli("get", {"runId": run_id, "output": "full"})
         self.assertEqual(code, 0, full)
-        self.assertEqual(full, json.loads(json.dumps(self.view(self.board_instance, run_id))))
+        self.assertEqual(full, {"contractVersion": CONTRACT_VERSION, **json.loads(json.dumps(self.view(self.board_instance, run_id)))})
         code, audited, _ = self.cli("get", {"runId": run_id, "includeAudit": True})
         self.assertIn("audit", audited)
 
@@ -230,6 +231,13 @@ class ProjectionUnitTests(unittest.TestCase):
         self.assertIs(cli_views.render("health", health), health)
         full = {"governed": True, "runId": "r", "goal": {"task": "t"}}
         self.assertIs(cli_views.render("get", full, cli_views.OUTPUT_FULL), full)
+
+
+class ContractVersionTests(unittest.TestCase):
+    def test_every_printed_result_including_error_has_contract_version(self):
+        from buddy.contracts import CONTRACT_VERSION
+        self.assertEqual(json.loads(cli._dumps({"error": {"code": "DENIED"}}))["contractVersion"], CONTRACT_VERSION)
+        self.assertEqual(json.loads(cli._dumps(cli_views.render("list", {"runs": []})))["contractVersion"], CONTRACT_VERSION)
 
 
 if __name__ == "__main__":

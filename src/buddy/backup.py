@@ -27,11 +27,31 @@ def digest(path: Path) -> str:
 
 
 def sync_dir(path: Path) -> None:
+    """Flush POSIX directory metadata.
+
+    Python has no portable Windows directory flush. On Windows the backup
+    journal and payload files are flushed, but a power-loss guarantee for
+    directory renames is not claimed; recovery covers process interruption.
+    """
+    if _windows():
+        return
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _windows() -> bool:
+    return sys.platform == 'win32'
+
+
+def _rename(source: Path, target: Path) -> None:
+    os.replace(source, target)
+
+
+def _linked(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
 
 
 def exchange(left: Path, right: Path) -> None:
@@ -52,17 +72,17 @@ def exchange(left: Path, right: Path) -> None:
 
 
 def _regular_files(root: Path):
+    if _linked(root):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source cannot be a symlink')
     if not root.exists():
         return
-    if root.is_symlink():
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source cannot be a symlink')
     for directory, dirs, files in os.walk(root, followlinks=False):
         parent = Path(directory)
-        if any((parent / d).is_symlink() for d in dirs):
+        if any(_linked(parent / d) for d in dirs):
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source contains a linked directory')
         for name in files:
             path = parent / name
-            if path.is_symlink() or not path.is_file():
+            if _linked(path) or not path.is_file():
                 raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source contains a nonregular file')
             yield path
 
@@ -97,6 +117,16 @@ def database_snapshot(connection, *, event_head: int | None = None) -> dict:
 
 
 def verify(directory: Path) -> dict:
+    """Verify a generation, recovering an interrupted current publication first."""
+    directory = Path(directory)
+    if directory.name == 'current' and directory.parent.name == 'backups':
+        recover(directory.parent.parent)
+    return _verify(directory)
+
+
+def _verify(directory: Path) -> dict:
+    if _linked(directory) or _linked(directory / 'manifest.json'):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation cannot be linked')
     manifest = json.loads((directory / 'manifest.json').read_text())
     if manifest.get('format') != 1 or manifest.get('schema') not in (SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
@@ -105,7 +135,7 @@ def verify(directory: Path) -> dict:
         raise BoardError('BACKUP_INVALID', 'Backup inventory mismatch')
     for relative, row in manifest['files'].items():
         path = directory / relative
-        if Path(relative).is_absolute() or '..' in Path(relative).parts or path.is_symlink():
+        if Path(relative).is_absolute() or '..' in Path(relative).parts or _linked(path):
             raise BoardError('BACKUP_INVALID', 'Unsafe manifest path')
         if path.stat().st_size != row['bytes'] or digest(path) != row['sha256']:
             raise BoardError('BACKUP_INVALID', 'Backup payload hash mismatch', file=relative)
@@ -131,12 +161,143 @@ def verify(directory: Path) -> dict:
     return manifest
 
 
+def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path, Path]:
+    if _linked(root) or (root.exists() and not root.is_dir()):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup root must be a real directory')
+    incoming, current, previous = (root / name for name in ('.incoming', 'current', '.previous'))
+    journal, temporary = root / '.publish.json', root / '.publish.tmp'
+    for path in (incoming, current, previous, journal, temporary, root / '.lock'):
+        if _linked(path):
+            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup publication path cannot be linked')
+    for path in (incoming, current, previous):
+        if path.exists() and not path.is_dir():
+            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation must be a directory')
+    for path in (journal, temporary):
+        if path.exists() and not path.is_file():
+            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup journal must be a regular file')
+    return incoming, current, previous, journal, temporary
+
+
+def _publication_journal(root: Path, *, had_current: bool) -> None:
+    _, _, _, journal, temporary = _backup_paths(root)
+    if journal.exists() or temporary.exists():
+        raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Existing publication journal must be recovered')
+    with temporary.open('x') as stream:
+        os.chmod(temporary, 0o600)
+        json.dump({'format': 1, 'hadCurrent': had_current}, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    _rename(temporary, journal)
+    sync_dir(root)
+
+
+def _recover_publication(root: Path) -> None:
+    """Converge a journaled Windows publication under the backup lock."""
+    incoming, current, previous, journal, temporary = _backup_paths(root)
+    if not journal.exists():
+        if previous.exists():
+            raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Previous backup exists without a publication journal')
+        temporary.unlink(missing_ok=True)  # An unpublished journal draft.
+        if _windows() and not current.exists() and incoming.exists():
+            # A first publication can stop immediately before its journal
+            # rename. A fully verified candidate is the only available copy.
+            _verify(incoming)
+            _rename(incoming, current)
+            sync_dir(root)
+        elif current.exists() and incoming.exists():
+            _verify(current)
+            shutil.rmtree(incoming)
+            sync_dir(root)
+        return
+    try:
+        record = json.loads(journal.read_text())
+    except (OSError, ValueError) as error:
+        raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Publication journal is unreadable') from error
+    if (not isinstance(record, dict) or set(record) != {'format', 'hadCurrent'}
+            or type(record['format']) is not int or record['format'] != 1
+            or type(record['hadCurrent']) is not bool):
+        raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Publication journal has invalid or unsafe fields')
+    had_current = record['hadCurrent']
+    if previous.exists() and not had_current:
+        raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Unexpected previous backup for first publication')
+
+    if previous.exists():
+        # After the first rename, the old copy is parked in .previous. After
+        # the second, current is the candidate and .incoming is absent.
+        if current.exists() and incoming.exists():
+            raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Ambiguous backup publication paths')
+        if current.exists():
+            try:
+                _verify(current)
+            except Exception:
+                # Retain both copies if the old copy cannot be proved valid.
+                _verify(previous)
+                _rename(current, incoming)
+                sync_dir(root)
+                _rename(previous, current)
+                sync_dir(root)
+            else:
+                shutil.rmtree(previous)
+                sync_dir(root)
+        else:
+            _verify(previous)
+            _rename(previous, current)
+            sync_dir(root)
+    elif current.exists():
+        # This is either the pre-first-rename old copy or the published new
+        # copy. An incoming candidate alongside current identifies the former.
+        _verify(current)
+        if had_current and not incoming.exists():
+            # Previous was already retired after the new current was verified.
+            pass
+        elif not had_current and incoming.exists():
+            raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Ambiguous first publication paths')
+    elif incoming.exists() and not had_current:
+        _verify(incoming)
+        _rename(incoming, current)
+        sync_dir(root)
+    else:
+        raise BoardError('BACKUP_RECOVERY_REQUIRED', 'No complete backup generation can be recovered')
+
+    # The recovered current must be whole before any remaining candidate is
+    # discarded. An interrupted cleanup leaves the journal for another pass.
+    _verify(current)
+    if incoming.exists():
+        shutil.rmtree(incoming)
+        sync_dir(root)
+    temporary.unlink(missing_ok=True)
+    journal.unlink()
+    sync_dir(root)
+
+
+def recover(state: Path) -> Path:
+    """Recover an interrupted publication before reading backups/current.
+
+    Call this before resolving a restore path or comparing it with an upgrade
+    journal. Only fixed entries below state/backups are ever renamed/deleted.
+    """
+    root = Path(state) / 'backups'
+    _backup_paths(root)
+    if not root.exists():
+        return root / 'current'
+    lock = os.open(root / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
+    try:
+        locking.lock(lock)
+        locked = True
+        _recover_publication(root)
+        return root / 'current'
+    finally:
+        if locked:
+            locking.unlock(lock)
+        os.close(lock)
+
+
 def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
     started = time.monotonic()
     state = store.directory.resolve()
     root = state / 'backups'
-    if root.is_symlink():
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup root cannot be linked')
+    incoming, current, previous, journal, _ = _backup_paths(root)
     root.mkdir(mode=0o700, exist_ok=True)
     os.chmod(root, 0o700)
     lock = os.open(root / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
@@ -145,14 +306,17 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
     except BlockingIOError:
         os.close(lock)
         raise BoardError('BACKUP_BUSY', 'Another backup is in progress')
-    incoming, current = root / '.incoming', root / 'current'
     published = False
     try:
-        for path in (incoming, current):
-            if path.is_symlink():
-                raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation cannot be linked')
-        # A crash before swap left an incomplete candidate; after swap it left the
-        # previous verified backup. In either case current has never disappeared.
+        if _windows() and not journal.exists() and not current.exists() and incoming.exists():
+            try:
+                _verify(incoming)
+            except Exception:
+                # No valid backup existed yet; let this call rebuild it.
+                shutil.rmtree(incoming)
+        _recover_publication(root)
+        # An unpublished POSIX candidate can be removed; Windows journaled
+        # publication has already been recovered above.
         if incoming.exists():
             shutil.rmtree(incoming)
         incoming.mkdir(mode=0o700)
@@ -170,16 +334,16 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         for name in ('attempts', 'controls', 'submissions'):
             for path in _regular_files(state / name):
                 _private_copy(path, incoming / 'state' / path.relative_to(state))
-        if (state / 'workers').is_symlink():
+        if _linked(state / 'workers'):
             raise BoardError('BACKUP_UNSAFE_PATH', 'Worker root cannot be linked')
         for path in sorted([*(state / 'workers').glob('*/receipts/*.json'), *(state / 'workers').glob('*/startup.json'), *(state / 'workers').glob('*/orphaned.json')]):
-            if path.is_symlink() or any(p.is_symlink() for p in (path.parent, path.parent.parent)):
+            if _linked(path) or any(_linked(p) for p in (path.parent, path.parent.parent)):
                 raise BoardError('BACKUP_UNSAFE_PATH', 'Receipt spool cannot be linked')
             _private_copy(path, incoming / 'state' / path.relative_to(state))
         for name in ('console-sessions.json', 'console-settings.json', 'worker-pool.json', 'runtime-retention.json', 'active-runtime.json', 'launch-settings.json'):
             source = state / name
             if source.exists():
-                if source.is_symlink():
+                if _linked(source):
                     raise BoardError('BACKUP_UNSAFE_PATH', 'State record cannot be linked')
                 _private_copy(source, incoming / 'state' / source.name)
         files = {str(path.relative_to(incoming)): {'bytes': path.stat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
@@ -197,7 +361,20 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
                 os.fsync(stream.fileno())
         for directory, _, _ in os.walk(incoming, topdown=False):
             sync_dir(Path(directory))
-        if current.exists():
+        if _windows():
+            _publication_journal(root, had_current=current.exists())
+            if current.exists():
+                _rename(current, previous)
+                sync_dir(root)
+            _rename(incoming, current)
+            sync_dir(root)
+            _verify(current)
+            if previous.exists():
+                shutil.rmtree(previous)
+                sync_dir(root)
+            journal.unlink()
+            sync_dir(root)
+        elif current.exists():
             exchange(incoming, current)
         else:
             os.replace(incoming, current)
@@ -210,7 +387,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
                 'fileCount': len(files), 'durationSeconds': round(time.monotonic() - started, 3)}
     except Exception:
-        if not published and incoming.exists() and not incoming.is_symlink():
+        if not published and not journal.exists() and incoming.exists() and not _linked(incoming):
             shutil.rmtree(incoming)
         raise
     finally:

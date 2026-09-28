@@ -3,8 +3,8 @@
 The canonical copy lives in ``~/.agents/skills/buddy`` (read by Codex); Claude Code
 reaches it through ``~/.claude/skills/buddy``, a symbolic link to that directory. A
 second Host running the same version finds the marker and only repairs the link.
-When a service is running, the installed skill's own launcher runs ``upgrade`` so the
-daily service switches to this package with the usual idle checks and backup.
+The new package coordinates the skill swap and idle service cutover under one
+upgrade journal; the old installed launcher never chooses the candidate code.
 """
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
+import uuid
+import sys
 
 from . import locking, schemas, skill_package
 from .errors import BoardError
@@ -39,12 +40,42 @@ def _marker(skill: Path) -> dict | None:
     return value if isinstance(value, dict) and value.get("name") == SKILL else None
 
 
+def write_runtime_hint(skill: Path, target: Path) -> None:
+    """Bootstrap with a stable interpreter; active-runtime remains authority."""
+    from .runtime import runtime_python
+    temporary = skill / ('.runtime-python-' + uuid.uuid4().hex)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(str(runtime_python(target)) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, skill / '.runtime-python')
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _is_buddy_skill(path: Path) -> bool:
     try:
         head = (path / "SKILL.md").read_text().split("\n---\n", 1)[0]
     except OSError:
         return False
     return any(line.strip() == f"name: {SKILL}" for line in head.splitlines())
+
+
+def _matches(source: Path, target: Path, marker: dict) -> bool:
+    """A version marker alone cannot prove that an installed skill is intact."""
+    current = _marker(target) if target.is_dir() and not target.is_symlink() else None
+    if not current or any(current.get(key) != marker.get(key) for key in ('version', 'contract', 'sourceCommit')):
+        return False
+    from .runtime import iter_assets
+    names = ['SKILL.md', 'skill.json', 'scripts/buddy', 'scripts/buddy.cmd', 'scripts/buddy.ps1', 'package/LICENSE']
+    names.extend(str(path.relative_to(source)) for path in (source / 'references').glob('*.md'))
+    names.extend('package/' + relative for relative, _ in iter_assets(source / 'package'))
+    try:
+        return all(not (target / name).is_symlink() and (target / name).read_bytes() == (source / name).read_bytes() for name in names)
+    except OSError:
+        return False
 
 
 def packaged_skill() -> Path | None:
@@ -56,19 +87,27 @@ def packaged_skill() -> Path | None:
     return None
 
 
-def _place(source: Path, target: Path, marker: dict) -> str:
+def _place(source: Path, target: Path, marker: dict) -> tuple[str, Path | None]:
     current = _marker(target) if target.is_dir() and not target.is_symlink() else None
-    if current and all(current.get(key) == marker.get(key) for key in ("version", "sourceCommit")):
-        return "already-current"
+    if _matches(source, target, marker):
+        return "already-current", None
     if target.is_symlink() or (target.exists() and not current and not _is_buddy_skill(target)):
         raise BoardError("SKILL_TARGET_CONFLICT", f"{target} exists and is not a buddy skill; move it away first")
     staged = Path(tempfile.mkdtemp(prefix=".buddy-install-", dir=target.parent))
+    previous = target.with_name(f".buddy-install-previous-{uuid.uuid4().hex}") if target.exists() else None
     try:
         shutil.copytree(source, staged / SKILL, symlinks=True)
-        skill_package.publish(staged / SKILL, target)
+        if previous is not None:
+            target.rename(previous)
+        try:
+            (staged / SKILL).rename(target)
+        except OSError:
+            if previous is not None:
+                previous.rename(target)
+            raise
     finally:
         shutil.rmtree(staged, ignore_errors=True)
-    return "updated" if current else "installed"
+    return ("updated" if current else "installed"), previous
 
 
 def _link_claude(target: Path) -> dict:
@@ -100,20 +139,13 @@ def _link_claude(target: Path) -> dict:
     return {"path": str(link), "status": "linked"}
 
 
-def _service(target: Path) -> dict:
-    state = get_state_dir()
-    if not (state / "control.json").exists():
-        return {"action": "none", "reason": "no running service; the next command starts it from the installed runtime pin or this package"}
-    environment = {key: value for key, value in os.environ.items()
-                   if key not in {"BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY", "BUDDY_PYTHON", "PYTHONPATH",
-                                  "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}}
-    completed = subprocess.run([str(target / "scripts" / SKILL), "upgrade"], env=environment,
-                               capture_output=True, text=True, timeout=3600, check=False)
-    try:
-        result = json.loads(completed.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        raise BoardError("SKILL_UPGRADE_FAILED", "The installed launcher returned no upgrade result") from None
-    return {"action": "upgrade", "result": result}
+def _check_claude_link(target: Path) -> None:
+    link = claude_skills_home() / SKILL
+    if link.is_symlink():
+        if Path(os.path.realpath(link)) != Path(os.path.realpath(target)):
+            raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to another skill; move it away before installing")
+    elif link.exists():
+        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away before installing")
 
 
 def _legacy_plugins() -> list[str]:
@@ -126,23 +158,110 @@ def install(params: dict) -> dict:
     if os.environ.get("BUDDY_AGENT_CREDENTIAL") or os.environ.get("BUDDY_AGENT_CREDENTIAL_FILE"):
         raise BoardError("UNAUTHORIZED", "A Worker cannot install the shared skill")
     home = agent_skills_home()
+    state = get_state_dir()
+    from .runtime import runtime_root
+    planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
+    print(json.dumps({'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
+    if (state / 'board.sqlite3').exists() and not (state / 'upgrade.json').exists():
+        from .upgrade import idle_snapshot
+        idle_snapshot(state)
     home.mkdir(parents=True, exist_ok=True)
     target = home / SKILL
     lock = os.open(home / f".{SKILL}-install.lock", os.O_CREAT | os.O_RDWR, 0o600)
     built = None
     try:
         locking.lock(lock)
+        if (state / 'upgrade.json').exists():
+            from .upgrade import upgrade
+            upgrade({})  # Recover the recorded generation before starting another install.
+        if (state / 'board.sqlite3').exists():
+            from .upgrade import idle_snapshot
+            idle_snapshot(state)
+        _check_claude_link(target)
         source = packaged_skill()
         if source is None:
-            built = Path(tempfile.mkdtemp(prefix=".buddy-source-", dir=home))
+            built = Path(tempfile.mkdtemp(prefix=".buddy-source-"))
             skill_package.assemble(project_root(), built / SKILL)
             source = built / SKILL
         marker = _marker(source)
-        if Path(os.path.realpath(source)) == Path(os.path.realpath(target)):
-            placement = "already-current"
+        state = get_state_dir()
+        pointer = state / "active-runtime.json"
+        from . import runtime
+        from .launcher import selected_runtime
+        intact = _matches(source, target, marker)
+        if source.resolve() == target.resolve() and not intact:
+            raise BoardError('SKILL_INVALID', 'The installed copy is incomplete; rerun the fixed-version package install command')
+        if pointer.exists() and intact:
+            active = selected_runtime(state, allow_overrides=False)
+            expected = runtime.runtime_dir(source / 'package')
+            if active == expected and runtime.content_id(active) == active.name:
+                claude = _link_claude(target)
+                write_runtime_hint(target, active)
+                return {'skill': {'path': str(target), 'version': marker['version'], 'contract': marker['contract'], 'placement': 'already-current'},
+                        'claude': claude, 'service': {'action': 'none', 'reason': 'same complete generation'}, 'writePaths': planned_paths,
+                        'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
+                                        'launcher': str(target / 'scripts/buddy')}}
+        if pointer.exists() and not (state / "control.json").exists():
+            if (state / "board.sqlite3").exists():
+                from .upgrade import idle_snapshot
+                idle_snapshot(state)
+            from .launcher import selected_runtime
+            from .transport import ensure_service
+            old_dev = os.environ.pop("BUDDY_DEV_SOURCE", None)
+            old_pin = os.environ.get("BUDDY_RUNTIME")
+            try:
+                os.environ.pop("BUDDY_RUNTIME", None)
+                previous = selected_runtime(state, allow_overrides=False)
+                os.environ["BUDDY_RUNTIME"] = str(previous)
+                ensure_service(state)
+            finally:
+                if old_dev is not None:
+                    os.environ["BUDDY_DEV_SOURCE"] = old_dev
+                if old_pin is None:
+                    os.environ.pop("BUDDY_RUNTIME", None)
+                else:
+                    os.environ["BUDDY_RUNTIME"] = old_pin
+        if (state / "control.json").exists():
+            from .upgrade import upgrade
+            current = _marker(target) if target.is_dir() else None
+            result = upgrade({}, skill_source=source, skill_target=target)
+            if result.get("error"):
+                error = result["error"]
+                raise BoardError(error["code"], error["message"], **{**error.get('details', {}), **{k: v for k, v in result.items() if k != "error"}})
+            placement = "already-current" if current and all(current.get(k) == marker.get(k) for k in ("version", "sourceCommit")) else "updated"
+            claude = {"path": str(claude_skills_home() / SKILL), "status": _claude_status(target)}
+            service = {"action": "upgrade", "result": result}
         else:
-            placement = _place(source, target, marker)
-        claude = _link_claude(target)
+            from . import runtime
+            from .launcher import write_active_runtime
+            if (state / "board.sqlite3").exists():
+                raise BoardError("UPGRADE_NO_ROLLBACK_RUNTIME",
+                                 "Existing board has no provable service runtime; recover its previous package before installing")
+            installed = runtime.materialize()
+            ready = runtime.read_ready(Path(installed["runtimeDir"]))
+            if ready.get("sourceCommit") != marker.get("sourceCommit"):
+                raise BoardError("INSTALL_GENERATION_MISMATCH", "Skill and materialized runtime came from different source generations")
+            placement, previous_skill = (("already-current", None) if Path(os.path.realpath(source)) == Path(os.path.realpath(target)) else _place(source, target, marker))
+            created_link = False
+            try:
+                claude = _link_claude(target)
+                created_link = claude["status"] == "linked"
+                state.mkdir(mode=0o700, parents=True, exist_ok=True)
+                write_runtime_hint(target, Path(installed['runtimeDir']))
+                write_active_runtime(state, Path(installed["runtimeDir"]))
+            except Exception:
+                pointer.unlink(missing_ok=True)
+                if created_link:
+                    (claude_skills_home() / SKILL).unlink(missing_ok=True)
+                if previous_skill is not None:
+                    shutil.rmtree(target)
+                    previous_skill.rename(target)
+                elif placement == "installed":
+                    shutil.rmtree(target)
+                raise
+            if previous_skill is not None:
+                shutil.rmtree(previous_skill, ignore_errors=True)
+            service = {"action": "none", "reason": "the first command starts the installed runtime"}
     finally:
         if built is not None:
             shutil.rmtree(built, ignore_errors=True)
@@ -150,7 +269,11 @@ def install(params: dict) -> dict:
         os.close(lock)
     result = {"skill": {"path": str(target), "version": marker["version"], "contract": marker["contract"],
                         "placement": placement},
-              "claude": claude, "service": _service(target)}
+              "claude": claude, "service": service}
+    result['writePaths'] = planned_paths
+    result['diagnostics'] = {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
+                             'launcher': str(target / 'scripts/buddy'),
+                             'next': 'A new Host session loads the skill. This session can use the absolute launcher path outside its sandbox.'}
     legacy = _legacy_plugins()
     if legacy:
         result["legacyPlugins"] = legacy

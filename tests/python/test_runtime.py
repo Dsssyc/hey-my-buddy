@@ -16,12 +16,21 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from threading import Event
 import unittest
 from unittest.mock import patch
 
 from buddy import runtime
 from buddy.errors import BoardError
+
+
+class RuntimeInterpreterTests(unittest.TestCase):
+    def test_platform_interpreter_layout(self):
+        directory = Path('/private/runtime')
+        with patch.object(runtime, 'os', SimpleNamespace(name='nt')):
+            self.assertEqual(str(runtime.runtime_python(directory)).replace('\\', '/'), '/private/runtime/venv/Scripts/python.exe')
+        self.assertEqual(runtime.runtime_python(directory), directory / 'venv/bin/python')
 
 REAL_ROOT = Path(__file__).resolve().parents[2]
 

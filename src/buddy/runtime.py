@@ -37,6 +37,7 @@ from .errors import BoardError
 
 RUNTIME_FORMAT = 1
 READY_FILE = "READY.json"
+PRIVATE_UV_VERSION = "0.12.19"
 DEFAULT_RUNTIME_ROOT = home.default_runtime_root()
 
 #: The one explicit asset manifest; nothing else describes the distributable layout.
@@ -48,7 +49,22 @@ IGNORED_SUFFIXES = (".pyc", ".pyo")
 
 def project_root() -> Path:
     """The project directory that owns ``pyproject.toml`` and the asset manifest."""
+    delivered = Path(__file__).resolve().parent / '_distribution/package'
+    if (delivered / ASSET_MANIFEST).is_file():
+        return delivered
     return Path(__file__).resolve().parents[2]
+
+
+def installation_uv() -> str:
+    """The installer may own uv privately without changing the user's PATH."""
+    if os.environ.get('UV_BIN'):
+        return os.environ['UV_BIN']
+    found = shutil.which('uv')
+    if found:
+        return found
+    data = home.data_root() if os.name == 'nt' else Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'hey-my-buddy'
+    private = data / 'uv' / PRIVATE_UV_VERSION / ('uv.exe' if os.name == 'nt' else 'uv')
+    return str(private) if private.is_file() else 'uv'
 
 
 def manifest_path(root: Path | None = None) -> Path:
@@ -249,6 +265,11 @@ def runtime_root() -> Path:
     return Path(os.environ.get("BUDDY_RUNTIME_ROOT") or DEFAULT_RUNTIME_ROOT).expanduser()
 
 
+def runtime_python(directory: Path) -> Path:
+    """The interpreter inside a materialized runtime on this platform."""
+    return Path(directory) / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
 def runtime_dir(root: Path | None = None, destination: Path | None = None) -> Path:
     base = Path(destination) if destination else runtime_root()
     return base / content_id(root)
@@ -328,7 +349,7 @@ def materialize(
         working.rename(target)
         environment = target / "venv"
         command = [
-            uv_bin or os.environ.get("UV_BIN") or "uv",
+            uv_bin or installation_uv(),
             "sync",
             "--frozen",
             "--no-dev",
@@ -364,7 +385,7 @@ def materialize(
                 "uv sync failed while installing the stable runtime; see the install log",
                 log=str(log_path) if log_path else None,
             )
-        interpreter = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        interpreter = runtime_python(target)
         if not interpreter.is_file():
             shutil.rmtree(target, ignore_errors=True)
             raise BoardError("RUNTIME_INSTALL_FAILED", "The runtime environment has no Python interpreter")
