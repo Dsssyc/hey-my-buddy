@@ -16,19 +16,40 @@ Use it for scoped implementation, testing, reproducible investigations, document
 2. The Worker acts with its own tools and internal subagents. When it needs help, it ends the turn with a structured request, and the Host approves explicit helpers, declines with a reason, continues with new input or supplies a complete configuration at a routing boundary. Ownership is fenced by a private control capability; a Host name alone is never authority.
 3. The Host inspects the real diff, runs the relevant checks, records the verified integration (or an explicit not-required decision) bound to the fixed final artifact and acknowledges it, then reclaims the managed checkout through a recorded two-step cleanup. Execution, helper completion, integration and acceptance are separate facts.
 
-## Install and try
+## Install
 
-You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for DSH and the runtime required by your installed ZCode CLI, and a working local `dsh` and/or ZCode installation with its own provider credentials. Codex uses the installed App Server with your existing native account-plan login instead of an API key. hey-my-buddy uses the credentials already configured for the harness and leaves global model settings alone.
+hey-my-buddy is one shared Agent Skill, `buddy`, that carries its own CLI, plus one local service per state directory. This repository's daily installation is 0.18.0 (contract 0.18.0, schema 13): the skill is placed in `~/.agents/skills/buddy`, Claude Code reaches the same directory through the `~/.claude/skills/buddy` link, and the retired Codex plugin is no longer used. Source and daily installation are separate facts. The current source candidate is 0.19.0 (contract 0.19.0, schema 14); it is not installed, the daily board is not migrated, and no package is published.
 
-hey-my-buddy is one shared Agent Skill, `buddy`, that carries its own CLI. Install it once from a checkout:
+Once the user decides the release channel and the exact version, the install entry is one fixed-version package command:
 
 ```sh
-/abs/path/to/hey-my-buddy/skills/buddy/scripts/buddy install
+# After the release channel and version are decided; not available today
+uvx hey-my-buddy@0.19.0 install
 ```
 
-This places the skill in `~/.agents/skills/buddy`, where Codex reads it, and links `~/.claude/skills/buddy` to the same directory for Claude Code; a second Host running the same version only repairs the link. If a service is already running, the same command upgrades it with a verified backup. The [installation reference](docs/reference/operations.md#installation) covers building a distributable skill, retiring an older Codex plugin and the verification steps. Start a new Host task so the skill loads. The first command that needs the service installs a stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the skill later does not disturb running work.
+The package name's availability and whether it is published on PyPI are still the user's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:
 
-Start with a bounded goal:
+```sh
+uv build --out-dir dist
+uvx --from /absolute/path/hey_my_buddy-0.19.0-py3-none-any.whl hey-my-buddy install
+```
+
+On a machine without `uv`, the release's `install.sh` (macOS, Linux) or `install.ps1` (Windows) prepares a fixed private `uv` and then calls the same entry; they never change `PATH`, shell or Host settings and never install a global `buddy` command. An install prints the paths it will write, materializes the versioned runtime, refuses while work is running (`UPGRADE_NOT_IDLE`, listing the running tasks), then switches the whole generation — skill, launcher, runtime and service — with one verified rolling backup and rollback. Rerunning the same complete version repairs what is missing without restarting the service, and damaged content is repaired by rerunning the same fixed-version command. Installing or upgrading the daily service needs the user's separate authorization. The code and scripts are portable to Windows, but no real Windows machine has been validated yet.
+
+### Hand this prompt to the installing agent
+
+```text
+Install hey-my-buddy <version> on this machine for me.
+
+1. Use my selected release channel and exact version, or my supplied wheel. Ask only for missing release details; do not assume a PyPI publication.
+2. Run the install command outside any agent or Host sandbox, with the Host's supported permission mechanism, without sudo: `uvx hey-my-buddy@<version> install`, or `uvx --from <absolute path to wheel> hey-my-buddy install` for an unpublished build. Without uv, use the matching install.sh or install.ps1 from the release.
+3. Before it writes anything, list every path it will create or replace (the skill in ~/.agents/skills/buddy, the Claude Code link ~/.claude/skills/buddy, data and runtimes under ~/.local/share/hey-my-buddy, plus a private uv if needed; on Windows use the reported %LOCALAPPDATA% data path).
+4. Report the install result: skill version and placement, Claude Code link status, service action, and whether a backup was taken.
+5. Verify with the installed launcher, using the paths and versions it actually reports: `~/.agents/skills/buddy/scripts/buddy health`, `... runtime` and `... adapters`. A new Host session loads the skill; this session can use the absolute launcher path outside the sandbox.
+6. If it returns LAUNCH_ACCESS_DENIED, allow that exact launcher command outside the sandbox and retry; do not disable the sandbox globally. If the service is busy it returns UPGRADE_NOT_IDLE and lists the tasks: report them and wait, and never cancel work to force an upgrade.
+```
+
+Then start with a bounded goal:
 
 ```sh
 BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
@@ -37,7 +58,7 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" await '{"runId":"<returned-runId>"}'
 ```
 
-The example leaves the model choice to routing and disables DSH session grouping with `workspace:false`. Grouping is a DSH option independent of Git isolation; `executionWorkspace` is the ownership and artifact-verification contract. `submit` returns a private `controlFile` that later Host commands must present.
+The example leaves the model choice to routing and disables DSH session grouping with `workspace:false`. Grouping is a DSH option independent of Git isolation; `executionWorkspace` is the ownership and artifact-verification contract. `submit` returns a private `controlFile` that later Host commands must present. [Operations](docs/reference/operations.md#installation) owns the exact install steps, error codes, harness discovery commands and recovery.
 
 ## Console, routing and models
 
@@ -47,11 +68,13 @@ Open the private local console:
 "$BUDDY" console
 ```
 
-The 0.13.0 source candidate opens the default browser with a single-use entry link valid for 60 seconds. A newly opened session takes write access; older sessions stay readable and preserve local drafts. Use `console '{"browser":false}'` to open the link yourself, or `console '{"wait":true}'` to keep the CLI attached and close only that console on Ctrl-C. [Console entry](docs/reference/console.md) explains session expiry and the separate installation boundary.
+The console opens the default browser with a single-use entry link valid for 60 seconds. Every authenticated session may edit settings under revision checks; drafts and conflicts stay per window. Use `console '{"browser":false}'` to open the link yourself, or `console '{"wait":true}'` to keep the CLI attached and close only that console on Ctrl-C. [Console entry](docs/reference/console.md) owns session lifetime, security and the separate installation boundary.
 
-The returned loopback URL opens three pages: 委派记录, Buddy 配置 and 设置. Records are grouped by source project and show original/current Host attribution, execution turns and frozen routing rationale. Buddy 配置 groups model families by harness and keeps thinking efforts as independent evaluation targets; each family row shows its enabled efforts and a Router mark, and enabled variants have a visible check. Editing is direct, with no global edit switch: a draft starts as soon as a control changes, a bottom save bar offers only discard and save, and saving acquires a short publication grant; conflicts or uncertain replies preserve recovery state. It touches only your own family preferences and notes, per-effort overrides, enablement, model concurrency and the Router: automatic assessments, evidence and catalog facts stay read-only. Each model family also carries a user-owned concurrent-attempt limit; it takes effect at the next claim, and lowering it never stops already-running attempts. The same page can show unavailable configurations and page their retained history; a stale pin or Router is a warning that never blocks unrelated saves. `更新记录` shows published revisions, and the 设置 page holds the light/dark/follow-system theme plus the local storage check and reclaim panel. Viewing, refreshing and editing drafts call no model.
+The returned loopback URL opens three pages: 委派记录, Buddy 配置 and 设置. Records are grouped by source project and show original/current Host attribution, execution turns and frozen routing rationale; work objectives open as overview cards with a delegation timeline, and standalone delegations fold under 未归档委派. Buddy 配置 groups model families by harness and keeps thinking efforts as independent evaluation targets; each family row shows its enabled efforts and a Router mark, and enabled variants have a visible check. Editing is direct, with no global edit switch: a draft starts as soon as a control changes, a bottom save bar offers only discard and save, and saving acquires a short publication grant; conflicts or uncertain replies preserve recovery state. It touches only your own family preferences and notes, per-effort overrides, enablement, model concurrency and the Router: automatic assessments, evidence and catalog facts stay read-only. Each model family also carries a user-owned concurrent-attempt limit; it takes effect at the next claim, and lowering it never stops already-running attempts. The same page shows the recorded harness status with an explicit 重新检测 action and an advanced manual path for when automatic detection fails; refreshing runs no model. `更新记录` shows published revisions, and the 设置 page holds the light/dark/follow-system theme plus the local storage check and reclaim panel. Viewing, refreshing and editing drafts call no model.
 
 Ask a skill-equipped Harness to “update the blackboard's model evaluations,” or schedule that request with the Harness's own scheduler when you explicitly want recurring updates. The [maintenance workflow](docs/reference/evaluation-maintenance.md) incrementally collects reviewed facts across Hosts/projects, preserves qualified failed and retried attempts, and publishes a bounded card-only update without changing user preferences or notes. Task acknowledgement does not trigger a model call. When no new material is available, skip synthesis without claiming a fresh assessment.
+
+Python freezes legal routing candidates and validates answer bounds; unhealthy harnesses are excluded. The 0.19.0 source verifies the Codex `openai / gpt-6-sol / high` read-only Router on macOS with CLI 0.157.0 and recommends the `standard` budget. Linux/Windows and the other harnesses remain unverified; the daily 0.18.0 DSH Router remains unavailable. After installation, the user selects the enabled Codex profile in Buddy 配置; this candidate does not change that setting. See the [routing contract](docs/reference/decision.md), [harness discovery](docs/reference/harnesses.md) and [acceptance evidence](docs/acceptance/local-harness-discovery-0.19.0.md).
 
 ## Execution and recovery
 
@@ -61,30 +84,18 @@ A wait timeout, a closed terminal or a lost connection never cancels work. Recov
 
 For user-authorized long tasks, `"timeoutSeconds": 0` explicitly removes the execution deadline; the ordinary default remains 1800 seconds. The Host can still cancel the task, and a bounded `await` call ending does not stop it. Read [execution duration and wait windows](docs/reference/cli.md#defaults-and-bounds) before choosing this option.
 
-The service and its Workers run from that stable private runtime. A fresh board lives under `~/.local/share/hey-my-buddy/state`; an older board directory at the previous default location is retained as an archive and is never read, converted or imported. Directories and Git worktrees are not OS sandboxes.
+The service and its Workers run from that stable private runtime. Daily commands execute the active runtime's own Python directly, without `uv`; `uv` is used only by install and upgrade. A fresh board lives under `~/.local/share/hey-my-buddy/state`; an older board directory at the previous default location is retained as an archive and is never read, converted or imported. Directories and Git worktrees are not OS sandboxes.
 
-Current limits: POSIX only; local single-user SQLite state. ZCode supports API-key providers, activity observation and cooperative inquiry: questions wait for the root's next tool checkpoint or finish attempt, and cannot interrupt a running tool or open a new turn. Native permission requests and long Host decisions still use the governed attention/assistance boundary. Codex uses the experimental App Server and does not declare inquiry; like Claude P1 it exposes only an unverified read-only structured candidate for routing, so no Router model is available in this source candidate. Claude P1 requires first-party Anthropic authentication, uses isolated settings by default and reconstructs every continuation without inquiry. Its [reference](docs/reference/claude.md) records verified native paths, the installed read-only lifecycle, simulated regression coverage and remaining limits. No monetary budgets, automatic community research, built-in periodic maintenance or native App post-turn wakeup are provided. A background follow-up requires an explicit user request.
+## Current status and limits
 
-The [verified 0.15.0 installation](docs/acceptance/installed-0.15.0.md) uses contract 0.15.0 and schema 12 for [work objectives and delegation timelines](docs/reference/objectives.md), on top of [console entry and single-writer sessions](docs/reference/console.md) and the installed [task-title fallback](docs/acceptance/title-fallback-0.12.0.md). Its idle cutover retained the schema-12 board, user assessments and model limits; [0.14.0 preparation](docs/acceptance/installed-0.14.0.md) remains in the installation history. Routine attachment uses lightweight `ping`; explicit `health` retains full storage diagnostics. Use `health` and `runtime` to identify the running installation.
+The daily installation is [0.18.0/contract 0.18.0/schema 13](docs/acceptance/installed-0.18.0.md), verified after an idle cutover that kept the schema-13 board, user assessments and model limits. The 0.19.0 source candidate adds the fixed-version package install entry, a launcher that executes the active runtime's Python directly, the sandbox refusal with `LAUNCH_ACCESS_DENIED` and inherited-environment cleaning, schema-14 harness health with shared discovery, the manual-path and re-detection controls, and the idle whole-generation switch with one verified backup; it is not installed, not migrated and not published, and its verification status is owned by the new [local harness discovery 0.19.0 record](docs/acceptance/local-harness-discovery-0.19.0.md).
+
+The daily runtime is supported on macOS and Linux with local single-user SQLite state; Windows code and scripts are portable but unvalidated on a real machine. ZCode supports API-key providers, activity observation and cooperative inquiry: questions wait for the root's next tool checkpoint or finish attempt, and cannot interrupt a running tool or open a new turn. Native permission requests and long Host decisions still use the governed attention/assistance boundary. Codex uses the experimental App Server and does not declare inquiry. The 0.19.0 source verifies its read-only Router on macOS with `openai / gpt-6-sol / high` and recommends the `standard` budget; Linux/Windows and other harnesses remain unverified. The daily 0.18.0 installation has no verified Router, and upgrading does not change the user's Router setting. Claude P1 requires first-party Anthropic authentication, uses isolated settings by default and reconstructs every continuation without inquiry. Its [reference](docs/reference/claude.md) records verified native paths, the installed read-only lifecycle, simulated regression coverage and remaining limits. No monetary budgets, automatic community research, built-in periodic maintenance or native App post-turn wakeup are provided. A background follow-up requires an explicit user request.
 
 ## Documentation and development
 
-Version 0.15.0 repairs routing validation, adds one bounded format correction with redacted diagnostics, and improves objective browsing. Hosts route by default and group each user agenda explicitly. Source and installation evidence remain separately recorded. See the [decision contract](docs/reference/decision.md) and [objective presentation](docs/reference/objectives.md).
-
-In the 0.15.0 console, 委派记录 opens grouped work objectives with overview cards and a delegation timeline; standalone delegations are collapsed under 未归档委派, and 全部执行记录 preserves the previous history. A single click pins facts in the inspector; Enter, double-click or the explicit Open action opens details in a desktop dock or a narrow-screen layer. The [source acceptance](docs/acceptance/routing-objective-browser-0.15.0.md) and [installation record](docs/acceptance/installed-0.15.0.md) separate those verification boundaries.
-
-Start with the [documentation index](docs/README.md) for commands, architecture, harness adapters and design history. [AGENTS.md](AGENTS.md) covers repository invariants; end users do not need npm or a frontend build. Report problems through [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
+Start with the [documentation index](docs/README.md) for commands, architecture, harness adapters and design history. The [operations reference](docs/reference/operations.md) owns installation, error codes and recovery; [harnesses](docs/reference/harnesses.md) owns discovery and health; [console](docs/reference/console.md) and [evaluation](docs/reference/evaluation.md) own the console surface and the evaluation table. [AGENTS.md](AGENTS.md) covers repository invariants; end users do not need npm or a frontend build. Report problems through [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
 
 ## License
 
 [MIT](LICENSE).
-
-The 0.15.1 source candidate makes delegation records read-only, with one confirmed “停止目标” action for the whole selected objective. Details open beside a readable, adjustable timeline; short intent titles, objective descriptions and task/result summaries clarify the hierarchy. Host decisions and acceptance stay in the CLI; user settings retain single-writer editing. Schema remains 12. Installation is separate and has not been authorized for this candidate.
-
-## 0.16.0 maintenance
-
-The 0.16.0 source adds service-owned single rolling `buddy backup`, idle-only new-package `buddy upgrade` with verified rollback, and guarded `buddy storage plan` / `buddy storage apply`. The console uses a bookmarkable loopback URL and renewable login; every authenticated window can edit settings subject to revision checks. See [operations](docs/reference/operations.md) and [console](docs/reference/console.md). Source validation and the separately authorized daily installation are distinct.
-
-## 0.17.0 routing
-
-The 0.17.0 source candidate replaces the DSH-only tool-free decision helper with a harness-neutral Router. Python owns protocol version 9, freezes the legal candidate ids into the answer schema, validates the answer against the routing bounds only, records a program-computed preference check, and adds provisional `quick`/`standard`/`deep` budgets and a private read-only copy of the goal's frozen input tree. A Router turn is not a workflow turn and receives no agent credential; it returns only one configuration choice or an abstention. The same source candidate moves user preferences and notes to the model family (schema 13) and replaces the console's two settings pages with Buddy 配置 plus a 设置 page; both changes are source facts with dedicated tests, and the daily installation keeps schema 12 until a separately authorized upgrade. No native read-only structured capability is verified yet — Claude and Codex ship unverified candidates, DSH does not confine reads or networking, and ZCode has no implementation — so a routing request opens the Host boundary instead of calling a model, and this candidate is not installed. See the [routing contract](docs/reference/decision.md) and the [source record](docs/acceptance/router-read-only-routing-0.17.0.md).

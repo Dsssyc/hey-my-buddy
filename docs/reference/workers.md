@@ -12,7 +12,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 | `zcode` | `built-in-worker` | `zcode`, `observe`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed ZCode CLI and an API-key provider; OAuth account providers are unavailable |
 | `codex` | `built-in-worker` | `codex`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed Codex App Server and an existing native account-plan login; API-key accounts are refused |
 | `claude` | `built-in-worker` | `claude`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery (0.11.0 candidate, no `native-session` or `inquiry`) | The installed Claude Code CLI with first-party Anthropic authentication; third-party provider overrides are refused, and execution is gated on an explicit `BUDDY_CLAUDE_SETTINGS_POLICY` — see [claude.md](claude.md) |
-| `decision` | `built-in-worker` | `decision` (Router attempt) | A native adapter with a verified read-only structured capability; Codex is verified on macOS in 0.19.0; an unavailable or unverified Router opens the Host boundary |
+| `decision` | `built-in-worker` | `decision` (Router attempt) | A native adapter with a verified read-only structured capability; Codex is verified on macOS with Codex CLI 0.157.0 in 0.19.0; an unavailable or unverified Router opens the Host boundary |
 | `command` | `built-in-worker` | `command`, `cancel`, `artifacts`, `deadline`, `argv` | `argv` with 1–256 entries; `argv[0]` must resolve |
 | `external` | `caller-owned-agent` | `external`, `artifacts`, `task-text` | no local process; the caller's agent claims and reports the task itself |
 

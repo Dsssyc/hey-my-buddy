@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：用户于 2026-09-28 在讨论中确认了下列方向，并在审阅本文后接受。尚未实现，也未安装；实现、发布与日常安装都需另行授权。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
+已接受：用户于 2026-09-28 在讨论中确认了下列方向，并在审阅本文后接受。用户随后授权实现并单独同意 schema 14；0.19.0 源码已实现下列范围，验收见 [local-harness-discovery-0.19.0.md](../acceptance/local-harness-discovery-0.19.0.md)。日常仍是 0.18.0/schema 13；日常安装、迁移、配置与发布未执行，仍需单独授权。Windows 真机与 Linux/Windows Router 尚未验证，CI 仅构建产物与校验信息，尚未发布。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
 
 ## 背景
 
@@ -66,7 +66,7 @@
 
 ## 影响
 
-- 需要新增共用的 harness 定位模块、黑板中的 harness 健康记录与认领前检查；各 adapter 的 `*_config.py` 改为使用它，`available` 的语义改为包含握手结果。harness 健康记录可能需要 schema 变更，实现前按现有规则单独确认。
+- 需要新增共用的 harness 定位模块、黑板中的 harness 健康记录与认领前检查；各 adapter 的 `*_config.py` 改为使用它，`available` 的语义改为包含握手结果。harness 健康记录使用单独批准的 schema 14；upgrade 在空闲、备份与独占锁下迁移，并校验原表指纹，启动不迁移。
 - `skills/buddy/scripts/buddy` 改为直接执行运行时，并增加沙盒自检与变量剥离；Windows 需要 `buddy.cmd` 或 `buddy.ps1`。
 - 需要 CI 在 tag 上构建发布包与校验信息，新增 `install.sh` 与 `install.ps1`；`buddy install` 扩展为物化运行时、列出写入路径、忙时拒绝并输出诊断。
 - `buddy adapters` 增加刷新与诊断，新增 `buddy harness set`；Buddy 配置页增加 harness 状态与重新检测。

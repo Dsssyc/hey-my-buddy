@@ -4,6 +4,8 @@
 
 已接受：用户于 2026-09-28 批准 ADR-012 提案中"单一全局 CLI 加单一 skill 取代按 Host 维护的插件"的方向，并确定了本文的三项选择。0.18.0 源码实现本决定，日常安装需另行授权。本决定取代 [ADR-007](007-neutral-core-and-single-current-contract.md) 中"只通过插件分发 skill、只有插件内的 `bin/buddy` 一个启动器"的规定；ADR-007 的其他内容不变。
 
+后续扩展（实施边界，见文末）：[ADR-017](017-local-installation-and-harness-discovery.md) 于同日接受，扩展了本文的安装入口、启动器、版本切换与 harness 发现。当前源码候选为 0.19.0/contract 0.19.0/schema 14，日常已安装版本为 [0.18.0/contract 0.18.0/schema 13](../acceptance/installed-0.18.0.md)；安装入口、启动器与发现以 ADR-017 和现行参考文档为准，本文以下原文保留 0.18.0 时的决定记录。
+
 ## 背景
 
 目前 Host 只能通过 Codex 插件拿到 `$buddy` skill 和 `bin/buddy` 启动器，Claude Code 没有对应入口。`SKILL.md` 链接仓库里的 `docs/reference/...`，并从插件根目录解析启动器，离开插件就无法使用。真正的服务、运行时、状态和备份一直在 `~/.local/share/hey-my-buddy`，与插件无关。
@@ -34,3 +36,16 @@
 - 需要新增 `buddy install`，并扩展 `buddy upgrade` 以更新 skill；安装与升级都要在私有根目录下测试，包括并发安装、已安装跳过、链接缺失补齐和升级中断恢复。
 - Windows 适配时，`scripts/` 需要提供 `buddy.cmd` 或 `buddy.ps1`；Claude Code 入口仍只用链接，不复制。
 - 真实安装、卸载插件和日常升级仍需用户单独授权。
+
+## 实施边界（ADR-017 扩展）
+
+本节只记录边界，不修改以上历史内容。[ADR-017](017-local-installation-and-harness-discovery.md) 已扩展本文的安装、启动器与发现约定；现行步骤和稳定错误码由 [operations.md](../reference/operations.md) 拥有，harness 发现与健康由 [harnesses.md](../reference/harnesses.md) 拥有：
+
+- 安装入口改为一条固定版本的发布包命令：发布后为 `uvx hey-my-buddy@<版本> install`（包名可用性与是否发布到 PyPI 仍待用户决定，未发布前不可声称可从 PyPI 安装）；未发布时用本地构建的 wheel，例如 `uvx --from /绝对路径/hey_my_buddy-0.19.0-py3-none-any.whl hey-my-buddy install`。`install.sh`/`install.ps1` 只准备固定私有 uv 后调用该入口，不改 PATH、shell 或 Host 设置，也不安装全局 `buddy` 命令。
+- `scripts/buddy` 的日常命令直接执行 `active-runtime.json` 指向运行时的 Python，不再经过 uv；uv 只用于安装与升级，以及显式 `BUDDY_DEV_SOURCE=1` 的源码开发。
+- `install` 先列出将写入的路径、物化版本化运行时；忙时以 `UPGRADE_NOT_IDLE` 拒绝并列出任务，空闲时整体切换 skill、启动器、运行时与服务，并保留唯一一份校验过的滚动备份用于回滚；完整同版本可重跑且不重启，损坏内容可用同一固定版本命令修复。
+- 沙盒不能写状态目录或建立本地通信时，启动器返回 `LAUNCH_ACCESS_DENIED`，而不是拉起继承沙盒限制的残缺服务；Host 入口清除残留的服务内部身份变量与第三方模型端点变量，用户开发变量照常生效。
+- harness 发现、健康缓存、手动路径与重新检测改由服务负责，每个 harness 只记录一条健康记录；健康未通过即从可用性与路由候选中排除，新发现的模型默认不启用。每个 adapter 的 `read_only_structured_verified` 仍为 false，验证状态以新的 [local harness discovery 0.19.0 记录](../acceptance/local-harness-discovery-0.19.0.md)为准。
+- 第 1–4 条（正本位置、CLI 位置、Claude Code 链接、只安装一次）与第 6–8 条（数据位置、插件退役、不设项目级 skill）继续有效；第 5 条"由 `install` 更新、由 `upgrade` 完成空闲检查、备份、切换与校验"仍然成立，但入口与执行顺序以本节为准。
+
+当前源码候选是 0.19.0/contract 0.19.0/schema 14，日常已安装版本仍是 0.18.0/contract 0.18.0/schema 13；真实安装、Board 迁移、发布到 PyPI 与日常升级都需要用户单独授权。Windows 只有代码与脚本可移植，真机未验证。

@@ -16,17 +16,38 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 2. Worker 使用自己的工具和内部 subagent 完成工作。需要协助时，它以结构化结果结束当前回合；Host 可以批准明确的辅助任务、说明理由后拒绝、补充新的接续输入，或在路由边界给出完整配置。控制权由私有 control 凭据约束，Host 名称本身不是权限。
 3. Host 检查真实 diff、运行相关验证，把已验证的整合记录（或明确的无需整合决定）绑定到固定产物后完成验收，再通过记录在案的两步回收释放受管 checkout。执行、辅助任务完成、整合与验收是彼此独立的事实。
 
-## 安装并试用
+## 安装
 
-需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、DSH 所需的 Node.js 20+ 及所安装 ZCode CLI 要求的运行环境，以及已配置服务商凭据的本地 `dsh` 和/或 ZCode。Codex 使用已安装的 App Server 和既有原生账户登录，不需要 API key。hey-my-buddy 使用 harness 已配置的凭据，不修改全局模型设置。
+hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。本仓库的日常安装是 0.18.0（contract 0.18.0、schema 13）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.19.0（contract 0.19.0、schema 14）；它尚未日常安装、日常黑板尚未迁移，也还没有发布任何安装包。
 
-hey-my-buddy 是一个公共 Agent Skill `buddy`，自带命令行。从 checkout 安装一次即可：
+在用户确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
-/abs/path/to/hey-my-buddy/skills/buddy/scripts/buddy install
+# 发布渠道与版本确定之后使用；目前不可用
+uvx hey-my-buddy@0.19.0 install
 ```
 
-它把 skill 放到 Codex 读取的 `~/.agents/skills/buddy`，并让 Claude Code 的 `~/.claude/skills/buddy` 链接到同一目录；另一个 Host 再运行同一版本时只会补齐链接。如果服务已在运行，同一命令会先做校验过的备份再升级。构建可分发的 skill、退役旧的 Codex 插件和核验步骤见[安装说明](docs/reference/operations.md#installation)。新建 Host 任务以加载 skill。首次需要服务的命令会在 `~/.local/share/hey-my-buddy/runtime` 安装稳定运行时，之后替换 skill 不会中断正在运行的工作。
+包名是否可用、是否发布到 PyPI 仍待用户决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
+
+```sh
+uv build --out-dir dist
+uvx --from /absolute/path/hey_my_buddy-0.19.0-py3-none-any.whl hey-my-buddy install
+```
+
+机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有任务在运行时拒绝并列出这些任务（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留唯一一份校验过的滚动备份用于回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
+
+### 可直接交给安装 agent 的提示
+
+```text
+请在本机为我安装 hey-my-buddy <版本>。
+
+1. 使用我指定的发布渠道和确切版本，或我提供的 wheel。只对缺失的发布信息询问，不要假设已经发布到 PyPI。
+2. 通过 Host 支持的放行方式，在 agent 或 Host 沙盒之外运行安装命令，不要 sudo：`uvx hey-my-buddy@<版本> install`；未发布的构建用 `uvx --from <wheel 绝对路径> hey-my-buddy install`。没有 uv 时改用发布包中对应的 install.sh 或 install.ps1。
+3. 在写入任何内容之前，列出它将创建或替换的全部路径（skill 位于 ~/.agents/skills/buddy，Claude Code 链接 ~/.claude/skills/buddy，数据与运行时位于 ~/.local/share/hey-my-buddy，bootstrap 脚本可能另建私有 uv；Windows 使用输出中的 %LOCALAPPDATA% 数据目录）。
+4. 汇报安装结果：skill 版本与放置结果、Claude Code 链接状态、服务动作，以及是否已生成备份。
+5. 用已安装启动器核验，并以它实际报告的路径与版本为准：`~/.agents/skills/buddy/scripts/buddy health`、`... runtime`、`... adapters`。新 Host 会话会加载 skill；当前会话可在沙盒外直接使用启动器绝对路径。
+6. 如果返回 LAUNCH_ACCESS_DENIED，就把这一条启动器命令放行到沙盒外后重试，不要全局关闭沙盒。如果服务忙碌会返回 UPGRADE_NOT_IDLE 并列出任务：如实汇报并等待，绝不为强行升级而取消工作。
+```
 
 先提交一个有界目标：
 
@@ -37,7 +58,7 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" await '{"runId":"<returned-runId>"}'
 ```
 
-示例把模型选择交给路由，并用 `workspace:false` 关闭 DSH 会话分组。分组是独立于 Git 隔离的 DSH 选项；`executionWorkspace` 才是工作区所有权和产物校验契约。`submit` 会返回一个私有 `controlFile`，后续 Host 命令必须提供它。
+示例把模型选择交给路由，并用 `workspace:false` 关闭 DSH 会话分组。分组是独立于 Git 隔离的 DSH 选项；`executionWorkspace` 才是工作区所有权和产物校验契约。`submit` 会返回一个私有 `controlFile`，后续 Host 命令必须提供它。确切的安装步骤、稳定错误码、harness 发现命令与恢复流程见[运维文档](docs/reference/operations.md#installation)。
 
 ## 控制台、路由与模型
 
@@ -47,11 +68,13 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" console
 ```
 
-0.13.0 源码候选通过有效期 60 秒的一次性入口打开默认浏览器。新打开的会话接管写权限，旧会话保持只读并保留本地草稿。使用 `console '{"browser":false}'` 可自行打开链接；使用 `console '{"wait":true}'` 可让 CLI 留在前台，Ctrl-C 只关闭对应控制台。[控制台入口说明](docs/reference/console.md)记录会话过期行为与独立的安装边界。
+控制台通过有效期 60 秒的一次性入口打开默认浏览器。每个通过认证的会话都可以在版本检查下编辑设置；草稿与冲突按窗口保留。使用 `console '{"browser":false}'` 可自行打开链接；使用 `console '{"wait":true}'` 可让 CLI 留在前台，Ctrl-C 只关闭对应控制台。会话有效期、安全边界与独立的安装边界见[控制台入口说明](docs/reference/console.md)。
 
-打开命令返回的 loopback 地址，顶部提供“委派记录 / Buddy 配置 / 设置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据。Buddy 配置按 harness 归组模型家族，各思考档位保留独立评价；家族行显示已启用档位数与 Router 标记，已启用档位有勾选标记。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑只涉及你自己的家族偏好与备注、档位覆盖、启用状态、模型并发设置和 Router：自动评价、证据和目录事实始终只读。每个模型家族还有用户拥有的并发上限，在下一次认领时生效，调低上限不会停止正在运行的任务。同一页可以显示不可用配置并分页查看保留历史；失效的 pin 或 Router 只给出提示，不阻止保存其他修改。“更新记录”显示已发布版本，“设置”页放浅色/深色/跟随系统主题和本地存储检查与回收面板。查看、刷新和编辑草稿都不调用模型。
+打开命令返回的 loopback 地址，顶部提供“委派记录 / Buddy 配置 / 设置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据；工作目标以概览卡与委派时间轴呈现，独立委派折叠在“未归档委派”中。Buddy 配置按 harness 归组模型家族，各思考档位保留独立评价；家族行显示已启用档位数与 Router 标记，已启用档位有勾选标记。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑只涉及你自己的家族偏好与备注、档位覆盖、启用状态、模型并发设置和 Router：自动评价、证据和目录事实始终只读。每个模型家族还有用户拥有的并发上限，在下一次认领时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“重新检测”和自动检测失败时的高级手动路径；重新检测不调用模型。“更新记录”显示已发布版本，“设置”页放浅色/深色/跟随系统主题和本地存储检查与回收面板。查看、刷新和编辑草稿都不调用模型。
 
 可以直接让具备 skill 的 Harness“更新黑板中的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工备注。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
+
+路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 尚未验证；日常 0.18.0 的 DSH Router 仍不可用。安装后由用户在 Buddy 配置中选择已启用的 Codex 配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/local-harness-discovery-0.19.0.md)。
 
 ## 执行与恢复
 
@@ -61,30 +84,18 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 用户授权的长任务可显式设置 `"timeoutSeconds": 0`，使执行没有总时限；省略该字段仍默认 1800 秒。Host 仍可主动取消，单次 `await` 等待结束也不会停止任务。选择该配置前可查阅[执行期限与等待窗口](docs/reference/cli.md#defaults-and-bounds)。
 
-服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
+服务和 Worker 从上述稳定私有运行时执行。日常命令直接执行 active 运行时自己的 Python，不经过 `uv`；`uv` 只用于安装与升级。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
 
-当前限制：仅支持 POSIX；本地单用户 SQLite 状态。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。[参考文档](docs/reference/claude.md) 记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+## 当前状态与限制
 
-[已验证的 0.15.0 安装](docs/acceptance/installed-0.15.0.md)使用 contract 0.15.0、schema 12，提供[工作目标与委派时间轴](docs/reference/objectives.md)，并包含[控制台入口与单写会话](docs/reference/console.md)及已安装的[任务标题回退](docs/acceptance/title-fallback-0.12.0.md)。空闲切换保留了 schema 12 黑板、用户评价及模型上限；[0.14.0 离线准备](docs/acceptance/installed-0.14.0.md)保留在安装历史中。日常连接使用轻量 `ping`；显式 `health` 保留完整存储诊断。用 `health` 和 `runtime` 核对实际运行的安装。
+日常安装是 [0.18.0/contract 0.18.0/schema 13](docs/acceptance/installed-0.18.0.md)，经空闲切换验证，保留了 schema 13 黑板、用户评价和模型上限。0.19.0 源码候选新增固定版本包安装入口、直接执行 active 运行时 Python 的启动器、以 `LAUNCH_ACCESS_DENIED` 拒绝沙盒并清理继承环境的逻辑、schema 14 的 harness 共享发现与健康缓存、手动路径与“重新检测”控件，以及空闲整体切换与唯一一份校验备份；它尚未安装、尚未迁移、尚未发布，验证状态以新的 [local harness discovery 0.19.0 记录](docs/acceptance/local-harness-discovery-0.19.0.md)为准。
+
+日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。日常 0.18.0 没有已验证 Router，升级也不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
 ## 文档与开发
 
-0.15.0 修复路由校验，增加一次有界格式纠错与脱敏诊断，并改善工作目标浏览。Host 默认使用智能路由，并为每项用户议程建立工作目标。源码与安装的验证证据分别记录。详见[决策契约](docs/reference/decision.md)和[工作目标呈现](docs/reference/objectives.md)。
-
-0.15.0 控制台的“委派记录”默认展示按项目归组的工作目标、概览卡和委派时间轴；独立委派折叠在“未归档委派”中，“全部执行记录”保留原有历史。单击将事实固定在检查器中；Enter、双击或显式打开按钮才打开详情，桌面端使用停靠栏，窄屏使用详情层。[源码验收](docs/acceptance/routing-objective-browser-0.15.0.md)与[安装记录](docs/acceptance/installed-0.15.0.md)分别说明验证边界。
-
-[文档索引](docs/README.md)提供命令、架构、harness 适配器和设计历史的入口。[AGENTS.md](AGENTS.md)说明仓库开发约束；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
+从[文档索引](docs/README.md)进入命令、架构、harness 适配器和设计历史；[运维文档](docs/reference/operations.md)拥有安装、错误码与恢复，[harness 发现](docs/reference/harnesses.md)拥有发现与健康，[控制台](docs/reference/console.md)与[评价](docs/reference/evaluation.md)分别拥有控制台界面和评价表。[AGENTS.md](AGENTS.md)说明仓库开发约束；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 
 ## 许可证
 
 [MIT](LICENSE)。
-
-0.15.1 源码候选将委派记录改为只读，仅保留带二次确认的整组“停止目标”。详情与可调宽度的时间轴并排；短意图标题、工作目标描述、任务与结果摘要说明工作层级。Host 决定和验收保留在 CLI，用户设置仍采用单写会话。schema 保持 12；本候选尚未获准安装。
-
-## 0.16.0 维护
-
-0.16.0 源码新增服务执行的单份滚动 `buddy backup`、新包启动器执行的空闲升级 `buddy upgrade`（含校验与失败回滚），以及受保护规则约束的 `buddy storage plan` / `buddy storage apply`。控制台使用可收藏的回环地址和自动续期登录；所有已登录窗口均可编辑设置，冲突由版本检查拒绝。详见 [运维](docs/reference/operations.md) 和 [控制台](docs/reference/console.md)。源码验证与需要单独授权的日常安装分别记录。
-
-## 0.17.0 路由
-
-0.17.0 源码候选把 DSH 专属的无工具决策助手替换为 harness 中立的 Router。Python 拥有协议版本 9，把合法候选 ID 冻结进答案 schema，只按路由边界校验答案，记录程序计算的偏好检查，并新增临时的 `quick`/`standard`/`deep` 预算档位和目标的冻结输入树的私有只读副本。Router 回合不是 workflow 回合，不获得 agent 凭据，只返回一个配置选择或放弃。同一源码候选还把用户偏好与备注移到模型家族（schema 13），并用“Buddy 配置”加“设置”页替换控制台原来的两个设置类页面；两项都只是源码事实并有对应测试，日常安装在有单独授权的升级之前仍保持 schema 12。目前没有任何原生只读结构化能力通过验证——Claude 与 Codex 只有未验证候选，DSH 不限制读取与联网，ZCode 没有实现——因此路由请求会打开 Host 边界而不调用模型，且本候选尚未安装。详见[路由契约](docs/reference/decision.md)和[源码记录](docs/acceptance/router-read-only-routing-0.17.0.md)。

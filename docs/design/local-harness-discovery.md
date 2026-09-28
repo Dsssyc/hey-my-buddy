@@ -2,7 +2,7 @@
 
 This plan is prepared against `dcd482a` for the 0.19.0 source candidate. Implementation is authorized; the schema 14 change below was separately approved by the user on 2026-09-28. No daily installation, board migration, configuration change or package publication is authorized.
 
-## Proposed schema 14
+## Approved schema 14
 
 Add one service-owned `harness_health` row per supported harness (`dsh`, `zcode`, `codex`, `claude`). The row holds `adapter` (primary key), `manual_path` (nullable user setting), `revision` (compare-and-swap generation), `status` (`unknown`, `ready`, `missing`, `login-required`, `unhealthy`), `record_json` (bounded diagnostic facts), `checked_at`, `expires_at` and `scan_after`. Diagnostic facts contain selected executable/interpreter paths, version, source, file fingerprints (real path, size, mtime), version-manager record fingerprints, bounded attempted locations, stable failure code and repair advice. No environment values, authentication output, account identities or raw subprocess output are persisted.
 
@@ -18,4 +18,4 @@ Healthy version changes trigger the existing monotone per-harness catalog public
 
 ## Delivery
 
-Stage 1 implements discovery, health, effective availability and diagnostics, with focused tests and its own commit. Stage 2 switches the daily launcher to the active runtime, enforces sandbox preflight and coordinated idle cutover, and documents verified Host permission configuration. Stage 3 builds an installable distribution and private-uv bootstrap scripts without publishing. Codex GPT-6 Sol high Router probes start only after Stage 1 and a separate user approval for each fresh output directory; capability remains unverified until the recorded native evidence meets every acceptance criterion. The cleanup and SQLite warning repairs are independent commits. Final acceptance includes the complete checks and an explicit list of remaining native/Windows/publication boundaries.
+Stage 1 implements discovery, health, effective availability and diagnostics, with focused tests and its own commit. Stage 2 switches the daily launcher to the active runtime, enforces sandbox preflight and coordinated idle cutover, and documents verified Host permission configuration. Stage 3 builds an installable distribution and private-uv bootstrap scripts without publishing. Codex GPT-6 Sol high Router probes start only after Stage 1 and user authorization for each fresh output directory (the user subsequently granted continuing probe authorization during this agenda); capability remains unverified until the recorded native evidence meets every acceptance criterion. The cleanup and SQLite warning repairs are independent commits. Final acceptance includes the complete checks and an explicit list of remaining native/Windows/publication boundaries.

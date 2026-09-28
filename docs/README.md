@@ -119,3 +119,5 @@ The [0.15.1 design](design/objective-browser-0.15.1.md) and [acceptance record](
 The [0.16.0 acceptance record](acceptance/maintenance-and-console-0.16.0.md) covers rolling backup, idle upgrade and rollback, guarded storage reclamation, persistent multi-window access, console usability and C-Two 0.6.0. It separates source and test evidence from the separately authorized daily installation.
 
 The [0.16.0 installation record](acceptance/installed-0.16.0.md) identifies the actual daily runtime, verified rolling backup, retained rollback runtime, storage reclamation and stable console URL.
+
+The current source delivery is [ADR-017 local installation and harness discovery, 0.19.0](acceptance/local-harness-discovery-0.19.0.md): schema 14, active-runtime launcher, installable wheel, private uv bootstrap and verified macOS Codex Router evidence. The actual daily installation remains [0.18.0/schema 13](acceptance/installed-0.18.0.md). Follow [harnesses](reference/harnesses.md), [operations](reference/operations.md) and [Codex](reference/codex.md) for current contracts.
