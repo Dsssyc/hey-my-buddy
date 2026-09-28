@@ -19,6 +19,9 @@ import subprocess
 import tempfile
 
 from .errors import BoardError
+from . import windows_paths
+
+_WINDOWS = os.name == "nt"
 
 
 _EXCLUSION_POLICY = {"version": 1, "kind": "git-standard",
@@ -114,6 +117,10 @@ def _relative(value, *, allow_root=False):
     if PurePosixPath(value).is_absolute() or any(part in ("..", ".git") or part.lower() == ".git" for part in parts):
         raise BoardError("INVALID_WORKSPACE", "Workspace paths cannot escape the checkout or address Git metadata", path=value)
     normalized = str(PurePosixPath(value))
+    if _WINDOWS:
+        if normalized != value:
+            raise BoardError("WORKSPACE_UNSUPPORTED", "A Git path has a Windows alias", path=value)
+        windows_paths.validate_git_path(value)
     if normalized == "." and not allow_root:
         raise BoardError("INVALID_WORKSPACE", "An explicit file or directory path is required", path=value)
     return normalized
@@ -126,6 +133,11 @@ def _in_scope(path, scope):
 @contextmanager
 def _parent(root, relative, *, create=False):
     """Open each parent by directory descriptor, never following symlinks."""
+    if _WINDOWS:
+        _relative(relative)
+        with windows_paths.parent(Path(root) / relative, create=create) as (api, path):
+            yield api, path
+        return
     descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         parts = PurePosixPath(relative).parts
@@ -143,10 +155,18 @@ def _parent(root, relative, *, create=False):
         os.close(descriptor)
 
 
-def _file(root, relative):
+def _file(root, relative, *, mode_hint=None):
     # dir_fd and O_NOFOLLOW also cover races in intermediate path components.
     # https://docs.python.org/3/library/os.html#files-and-directories
     try:
+        if _WINDOWS:
+            _relative(relative)
+            item = windows_paths.read(Path(root) / relative, allow_symlink=True)
+            # Windows cannot represent Git's executable bit in chmod. The index
+            # remains authoritative for a tracked regular file's Git mode.
+            if item is not None and item[0] != "120000" and mode_hint in ("100644", "100755"):
+                return mode_hint, item[1]
+            return item
         with _parent(root, relative) as (parent, name):
             before = os.stat(name, dir_fd=parent, follow_symlinks=False)
             if stat.S_ISLNK(before.st_mode):
@@ -163,6 +183,10 @@ def _file(root, relative):
             return "100755" if before.st_mode & 0o111 else "100644", data
     except FileNotFoundError:
         return None
+
+
+def _file_with_git_mode(root, relative, mode):
+    return _file(root, relative, mode_hint=mode) if _WINDOWS else _file(root, relative)
 
 
 def _blob(root, data, *, write=False):
@@ -192,6 +216,8 @@ def _entries(root, revision=None):
         entries[name] = [mode, oid]
     if not revision and any(entry.startswith(b"S ") for entry in _git(root, "ls-files", "-t", "-z").split(b"\0")):
         raise BoardError("WORKSPACE_UNSUPPORTED", "Sparse checkouts require an explicit full checkout")
+    if _WINDOWS:
+        windows_paths.validate_unique(entries)
     return entries
 
 
@@ -202,7 +228,10 @@ def _untracked(root, selected):
     paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"))
     if selected:
         paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected).split(b"\0"))
-    return sorted(_relative(os.fsdecode(path)) for path in paths if path)
+    result = sorted(_relative(os.fsdecode(path)) for path in paths if path)
+    if _WINDOWS:
+        windows_paths.validate_unique(result)
+    return result
 
 
 def _observe(root, selected, *, write=False, require_selected=False):
@@ -210,7 +239,7 @@ def _observe(root, selected, *, write=False, require_selected=False):
     index = _entries(root)
     tracked, untracked, included = {}, {}, {}
     for path in index:
-        item = _file(root, path)
+        item = _file_with_git_mode(root, path, index[path][0])
         if item is not None:
             mode, data = item
             tracked[path] = [mode, _blob(root, data, write=write)]
@@ -222,6 +251,8 @@ def _observe(root, selected, *, write=False, require_selected=False):
         untracked[path] = [mode, _sha(data)]
         if _in_scope(path, selected):
             included[path] = [mode, _blob(root, data, write=write)]
+    if _WINDOWS:
+        windows_paths.validate_unique([*index, *untracked])
     if require_selected:
         for path in selected:
             if not any(_in_scope(candidate, [path]) for candidate in included):
@@ -268,6 +299,8 @@ def _diff(root, before, after):
 
 def _read(path):
     try:
+        if _WINDOWS:
+            return windows_paths.read(path)
         with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
             return stream.read()
     except FileNotFoundError:
@@ -285,6 +318,9 @@ def _record(path):
 
 
 def _write_once(path, data):
+    if _WINDOWS:
+        windows_paths.write_once(path, data)
+        return
     existing = _read(path)
     if existing is not None:
         if existing != data:
@@ -312,7 +348,8 @@ def _write_once(path, data):
 
 @contextmanager
 def _lock(directory):
-    descriptor = os.open(directory / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    descriptor = (windows_paths.lock_fd(directory / ".lock") if _WINDOWS else
+                  os.open(directory / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600))
     try:
         try:
             locking.lock(descriptor, blocking=False)
@@ -438,6 +475,17 @@ def _worktree_record(root, target):
 
 
 def _materialize(root, entries):
+    if _WINDOWS:
+        windows_paths.validate_unique(entries)
+        for path, (mode, oid) in entries.items():
+            _relative(path)
+            data = _git(root, "cat-file", "blob", oid)
+            target = Path(root) / path
+            if mode == "120000":
+                windows_paths.symlink(target, os.fsdecode(data))
+            else:
+                windows_paths.write_new(target, data, create_parents=True)
+        return
     for path, (mode, oid) in entries.items():
         data = _git(root, "cat-file", "blob", oid)
         with _parent(root, path, create=True) as (parent, name):
@@ -614,13 +662,13 @@ def _entry_state(entries, path):
     return None if item is None else {"mode": item[0], "oid": item[1]}
 
 
-def _observed_file(root, path):
+def _observed_file(root, path, *, mode_hint=None):
     """The current managed state of one path as mode plus content digest.
 
     The digest is the raw sha256 of the file bytes, so a later compare-and-swap
     never depends on Git objects that a failed worker could have moved.
     """
-    item = _file(root, path)
+    item = _file_with_git_mode(root, path, mode_hint)
     if item is None:
         return None
     mode, data = item
@@ -638,7 +686,7 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
             "path": path,
             "authorized": _entry_state(initial, path),
             "authorizedIndex": _entry_state(initial_index, path),
-            "observed": _observed_file(root, path),
+            "observed": _observed_file(root, path, mode_hint=(observation["index"].get(path) or [None])[0]),
             "observedIndex": _entry_state(observation["index"], path),
             "changed": path in changed,
             "indexChanged": path in index_changes,
@@ -874,13 +922,13 @@ def _entry_is_authorized(root, entry, current):
         return current is None
     if not isinstance(current, dict) or current.get("mode") != authorized.get("mode"):
         return False
-    item = _file(root, entry["path"])
+    item = _file_with_git_mode(root, entry["path"], authorized.get("mode"))
     return item is not None and _blob(root, item[1]) == authorized.get("oid")
 
 
 def _entry_matches(root, entry, index_entries):
     """Compare-and-swap test: the recorded site or its already-authorized state."""
-    current = _observed_file(root, entry["path"])
+    current = _observed_file(root, entry["path"], mode_hint=(index_entries.get(entry["path"]) or [None])[0])
     if not _entry_state_matches(current, entry.get("observed")) and not _entry_is_authorized(root, entry, current):
         return False
     index = _entry_state(index_entries, entry["path"])
@@ -888,6 +936,13 @@ def _entry_matches(root, entry, index_entries):
 
 
 def _write_path(root, path, entry):
+    if _WINDOWS:
+        _relative(path)
+        target = Path(root) / path
+        data = _git(root, "cat-file", "blob", entry["oid"]) if entry is not None else None
+        windows_paths.restore(target, None if entry is None or entry["mode"] == "120000" else data,
+                              symlink_target=os.fsdecode(data) if entry is not None and entry["mode"] == "120000" else None)
+        return
     with _parent(root, path, create=True) as (parent, name):
         try:
             os.unlink(name, dir_fd=parent)
