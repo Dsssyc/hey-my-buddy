@@ -244,11 +244,12 @@ class EvaluationTestCase(BoardTestCase):
 # Published revisions and validation
 # ---------------------------------------------------------------------------
 class EvaluationPublishTests(EvaluationTestCase):
-    def test_fresh_snapshot_is_unconfigured_with_available_decision_operations(self):
+    def test_fresh_snapshot_is_unconfigured_without_a_verified_router(self):
         board = self.board()
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["tableRevision"], 0)
-        self.assertEqual(snapshot["configuration"], {"revision": 0, "decisionProfileId": None})
+        self.assertEqual({key: snapshot["configuration"][key] for key in ("revision", "decisionProfileId")}, {"revision": 0, "decisionProfileId": None})
+        self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
         self.assertEqual(snapshot["sampleCounts"], {})
         self.assertEqual(snapshot["profiles"], [])
         self.assertEqual(snapshot["preferences"], [])
@@ -259,7 +260,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(snapshot["gate"], {"phase": "open", "readers": 0, "writer": None, "waitingWriters": 0})
         self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
-        self.assertTrue(snapshot["capabilities"]["selection"])
+        self.assertFalse(snapshot["capabilities"]["selection"])
         self.assertFalse(snapshot["capabilities"]["maintenance"])
         self.assertIn("runs", snapshot["tasks"])
 
@@ -304,6 +305,8 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(current["source"], original["source"])
 
     def test_dangling_references_are_refused_and_existing_intent_is_retained(self):
+        from fixtures import mock_readonly
+        mock_readonly.install(self)
         board = self.board()
         self.seed_profiles(board, PROFILE, SECOND_PROFILE)
         self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
@@ -319,13 +322,16 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["configuration"]["decisionProfileId"], SECOND_PROFILE_ID)
         self.assertEqual(snapshot["annotations"][0]["text"], "other edit")
 
-    def test_configuration_is_the_fixed_decision_profile_only(self):
+    def test_configuration_carries_router_profile_and_budget_without_maintenance(self):
+        from fixtures import mock_readonly
+        mock_readonly.install(self)
         board = self.board()
         self.seed_profiles(board)
         published = self.publish(board, request_id="w2", command_id="c2",
                                  configuration={"decisionProfileId": PROFILE_ID})
-        self.assertEqual(self.snapshot(board)["configuration"],
-                         {"revision": 1, "decisionProfileId": PROFILE_ID})
+        self.assertEqual(self.snapshot(board)["configuration"]["decisionProfileId"], PROFILE_ID)
+        self.assertEqual(self.snapshot(board)["configuration"]["revision"], 1)
+        self.assertEqual(self.snapshot(board)["configuration"]["routingBudget"], "standard")
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
                              configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True})
         self.refused_publish(board, "CONFIGURATION_UNAVAILABLE", request_id="w4", command_id="c4",
@@ -1055,6 +1061,8 @@ class EvaluationEvidenceTests(EvaluationTestCase):
 
 
     def test_pending_evidence_tracks_incorporation_not_publication(self):
+        from fixtures import mock_readonly
+        mock_readonly.install(self)
         board = self.board()
         self.seed(board)
         run_id = self.completed_task(board)

@@ -29,6 +29,7 @@ class DelegationTestCase(WorkflowTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
+        DecisionTestCase.use_helper(self)
 
     def execution_task(self, board, request_id: str, *, cwd=None, task_text=None):
         return board.call(

@@ -25,6 +25,13 @@ PROFILE_EFFORT_HIGH = SECOND_PROFILE
 class ExternalEvaluationTestCase(EvaluationTestCase):
     """The shared evaluation fixtures plus the external-maintenance helpers."""
 
+    def setUp(self):
+        super().setUp()
+        # Maintenance tests preserve a configured Router without asserting that
+        # any installed native harness has passed its separate Router probe.
+        from fixtures import mock_readonly
+        mock_readonly.install(self)
+
     def prepare(self, board, request_id: str = "prepare-1", **params) -> dict:
         return board.evaluation.prepare({"requestId": request_id, **params})
 
@@ -848,6 +855,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         board = self.board()
         self.seed_maintenance_board(board)
         self.model_task(board, "goal-1", profile=PROFILE)
+        before_configuration = self.snapshot(board)["configuration"]
         packet = self.prepare(board, "prep-patch")
         evidence_id = packet["newEvidenceIds"][0]
 
@@ -875,7 +883,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         self.assertEqual(cards[PROFILE_ID]["sampleCount"], 1)
         self.assertEqual(cards[SECOND_PROFILE_ID]["summary"], "second card")
         self.assertEqual(snapshot["preferences"], [{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}])
-        self.assertEqual(snapshot["configuration"], {"revision": 1, "decisionProfileId": PROFILE_ID})
+        self.assertEqual(snapshot["configuration"], before_configuration)
         self.assertEqual([profile["profileId"] for profile in snapshot["profiles"] if profile["enabled"]], [PROFILE_ID, SECOND_PROFILE_ID])
         # The reference consumer leaves the pending ledger, and the next packet is empty.
         self.assertEqual(snapshot["pendingEvidence"], 0)
