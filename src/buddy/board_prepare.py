@@ -1,10 +1,11 @@
-"""Explicit offline preparation of a schema-12 board from an idle schema-11 board.
+"""Explicit offline preparation of a current-schema board from an idle schema-11 board.
 
 The runtime never converts a board at startup. This tool is the separate, explicit
 step the work-objective slice needs: it copies an idle, verified schema-11 board
 into a *new* state directory, adds the objective table, the nullable grouping and
-display columns and the activity indexes, and derives the latest-activity
-projection from the events already recorded. It never writes to the source, never
+display columns and the activity indexes, derives the latest-activity
+projection from the events already recorded, and then applies the same 12 → 13
+migration ``upgrade`` uses. It never writes to the source, never
 overwrites a destination and never invents an objective for a historical run:
 old roots stay standalone delegations. Activating the prepared copy is a separate
 coordinated cutover.
@@ -24,8 +25,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from .db import DB_FILE, SCHEMA, SCHEMA_VERSION, SECRET_KEY
+from .db import DB_FILE, PREVIOUS_SCHEMA_VERSION, SCHEMA, SCHEMA_VERSION, SECRET_KEY
 from .errors import BoardError
+from .migrations import MIGRATED_TABLES, migrate_12_to_13
 from .objectives import record_activity
 
 SOURCE_SCHEMA_VERSION = 11
@@ -98,6 +100,7 @@ def _schema_shape(connection: sqlite3.Connection) -> dict:
                    for table in tables},
         "indexes": sorted(row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")),
+        "views": sorted(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='view'")),
     }
 
 
@@ -111,7 +114,7 @@ def _reference_shape() -> dict:
 
 
 def prepare(source: Path | str, destination: Path | str) -> dict:
-    """Prepare a verified schema-12 copy of an idle schema-11 board; return a report."""
+    """Prepare a verified current-schema copy of an idle schema-11 board; return a report."""
     source, destination = Path(source).resolve(), Path(destination).resolve()
     source_db = source / DB_FILE
     if not source_db.is_file():
@@ -165,14 +168,17 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
             for event in connection.execute("SELECT seq, task_id, created_at FROM events ORDER BY seq").fetchall():
                 record_activity(connection, event["task_id"], int(event["seq"]), event["created_at"])
                 derived += 1
-            connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+            connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(PREVIOUS_SCHEMA_VERSION),))
             connection.execute("COMMIT")
         except BaseException:
             connection.execute("ROLLBACK")
             raise
+        migration = migrate_12_to_13(connection)
+        connection.execute("PRAGMA foreign_keys=ON")
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         shape = _schema_shape(connection)
+        tables = [table for table in tables if table not in MIGRATED_TABLES]
         target_counts = {table: connection.execute(f"SELECT COUNT(*) FROM '{table}'").fetchone()[0] for table in tables}
         target_secret = connection.execute("SELECT value FROM meta WHERE key=?", (SECRET_KEY,)).fetchone()
         runs_with_activity = connection.execute("SELECT COUNT(*) FROM workflow_runs WHERE activity_seq > 0").fetchone()[0]
@@ -184,7 +190,7 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
     if violations:
         problems.append(f"{len(violations)} foreign-key violation(s)")
     if shape != _reference_shape():
-        problems.append("the prepared schema differs from a fresh schema-12 board")
+        problems.append(f"the prepared schema differs from a fresh schema-{SCHEMA_VERSION} board")
     changed = {table: (source_counts[table], target_counts[table]) for table in tables
                if source_counts[table] != target_counts[table]}
     if changed:
@@ -208,6 +214,7 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
         "eventsReplayed": derived,
         "runsWithActivity": runs_with_activity,
         "objectivesCreated": 0,
+        "migration": migration,
         "verified": True,
     }
 

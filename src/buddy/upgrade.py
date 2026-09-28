@@ -15,7 +15,7 @@ import time
 
 from . import backup, runtime, schemas
 from .contracts import CONTRACT_VERSION
-from .db import SCHEMA_VERSION, utc_now
+from .db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, utc_now
 from .errors import BoardError
 from .transport import get_state_dir
 
@@ -53,8 +53,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
-            raise BoardError('UNSUPPORTED_SCHEMA', 'Upgrade accepts schema 12 only; no conversion was performed')
+        if schema is None or str(schema[0]) not in (str(SCHEMA_VERSION), str(PREVIOUS_SCHEMA_VERSION)):
+            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {PREVIOUS_SCHEMA_VERSION} or {SCHEMA_VERSION} only; no conversion was performed')
         active = connection.execute("SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')").fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
         if active or unresolved:
@@ -62,7 +62,7 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        return backup.database_snapshot(connection, event_head=event_head)
+        return {**backup.database_snapshot(connection, event_head=event_head), 'schema': int(schema[0])}
 
 
 def _environment(state: Path, target: Path) -> dict:
@@ -193,7 +193,7 @@ def restore(state: Path, current: Path) -> None:
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
-    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != SCHEMA_VERSION:
+    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match')
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
@@ -207,7 +207,29 @@ def verify_started(state: Path, target: Path, health: dict, before: dict) -> dic
     inspected = command(state, target, 'runtime')
     if inspected.get('leaks'):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Runtime still depends on replaceable source paths')
-    return {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION, 'retainedDataFingerprints': True, 'sourceLeaks': []}
+    return {'runtimeContentId': target.name, 'schemaVersion': before.get('schema', SCHEMA_VERSION), 'retainedDataFingerprints': True, 'sourceLeaks': []}
+
+
+def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
+    """Migrate the idle, backed-up board in place; prove untouched tables kept their values."""
+    from . import migrations
+    board = state / 'board.sqlite3'
+    def meta_rows():
+        with closing(sqlite3.connect(board.as_uri() + '?mode=ro', uri=True)) as connection:
+            return sorted(row for row in connection.execute('SELECT key, value FROM meta') if row[0] != 'schema_version')
+    meta_before = meta_rows()
+    try:
+        with closing(sqlite3.connect(board, isolation_level=None, timeout=10)) as connection:
+            summary = migrations.migrate_12_to_13(connection)
+    except (sqlite3.Error, ValueError) as error:
+        raise BoardError('UPGRADE_MIGRATION_FAILED', f'Board migration failed: {error}') from None
+    expected = idle_snapshot(state, event_head=before.get('eventHead'))
+    changed = [name for name, value in before['fingerprints'].items()
+               if name not in migrations.MIGRATED_TABLES and expected['fingerprints'].get(name) != value]
+    if changed or meta_rows() != meta_before or expected.get('schema') != SCHEMA_VERSION:
+        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration changed data outside its declared tables', tables=changed)
+    expected['runtimeSettings'] = before.get('runtimeSettings', {})
+    return summary, expected
 
 
 def upgrade(params: dict) -> dict:
@@ -276,13 +298,18 @@ def upgrade(params: dict) -> dict:
                     backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'])
                 stored = backup.verify(Path(backed_up['path']))
                 if stored.get('databaseSnapshot') is not None:
-                    before = {**stored['databaseSnapshot'], 'runtimeSettings':runtime_settings}
+                    before = {**stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
                     journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
+                expected = before
+                if before.get('schema') == PREVIOUS_SCHEMA_VERSION:
+                    migration, expected = migrate_board(state, before)
+                    journal.update(phase='migrated', migration=migration, expected=expected)
+                    write_journal(marker, journal)
             active = target
             health = start(state, target)
-            evidence = verify_started(state, target, health, before)
+            evidence = verify_started(state, target, health, expected)
             write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
             from .storage import prune_old_runtimes
             try:
@@ -341,7 +368,7 @@ def recover(state: Path, root: Path) -> dict:
     target_health = probe(state, target)
     previous_health = probe(state, previous)
     if journal.get('phase') == 'verified' and target_health is not None:
-        evidence = verify_started(state, target, target_health, journal['before'])
+        evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
         write_active_runtime(state, target, journal.get('environment'))
         write_journal(state / 'upgrade-last.json', journal)
         clear_journal(marker)

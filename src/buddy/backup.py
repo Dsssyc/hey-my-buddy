@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from .db import SCHEMA_VERSION, Database, utc_now
+from .db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, Database, utc_now
 from .contracts import CONTRACT_VERSION
 from .errors import BoardError
 
@@ -98,7 +98,7 @@ def database_snapshot(connection, *, event_head: int | None = None) -> dict:
 
 def verify(directory: Path) -> dict:
     manifest = json.loads((directory / 'manifest.json').read_text())
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p != directory / 'manifest.json'}
     if actual != set(manifest['files']):
@@ -121,6 +121,11 @@ def verify(directory: Path) -> dict:
                 raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
             if manifest.get('databaseSnapshot') is not None and database_snapshot(connection) != manifest['databaseSnapshot']:
                 raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
+        if manifest.get('schema') == PREVIOUS_SCHEMA_VERSION:
+            # A pre-upgrade backup must also prove it migrates cleanly.
+            from .migrations import migrate_12_to_13
+            with closing(sqlite3.connect(trial / 'board.sqlite3', isolation_level=None)) as connection:
+                migrate_12_to_13(connection)
         # Exercise the real current-schema opener in a separate private directory.
         Database(trial).initialize()
     return manifest
@@ -157,6 +162,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         os.chmod(snapshot, 0o600)
         with closing(sqlite3.connect(snapshot)) as connection:
             snapshot_metadata = database_snapshot(connection)
+            schema = int(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
         with snapshot.open('rb') as source, gzip.open(incoming / 'board.sqlite3.gz', 'wb', compresslevel=6) as target:
             shutil.copyfileobj(source, target)
         os.chmod(incoming / 'board.sqlite3.gz', 0o600)
@@ -177,7 +183,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
                     raise BoardError('BACKUP_UNSAFE_PATH', 'State record cannot be linked')
                 _private_copy(source, incoming / 'state' / source.name)
         files = {str(path.relative_to(incoming)): {'bytes': path.stat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
-        manifest = {'format': 1, 'createdAt': utc_now(), 'schema': SCHEMA_VERSION, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
+        manifest = {'format': 1, 'createdAt': utc_now(), 'schema': schema, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
                     'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata', 'files': files}
         manifest_path = incoming / 'manifest.json'
         with manifest_path.open('x') as stream:
@@ -200,7 +206,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         if incoming.exists():
             shutil.rmtree(incoming)
             sync_dir(root)
-        return {'path': str(current), 'verified': True, 'schema': SCHEMA_VERSION,
+        return {'path': str(current), 'verified': True, 'schema': schema,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
                 'fileCount': len(files), 'durationSeconds': round(time.monotonic() - started, 3)}
     except Exception:

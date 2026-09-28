@@ -664,14 +664,7 @@ class EvaluationStore:
             profile_ids = [profile["profileId"] for profile in profiles]
             marks = ",".join("?" for _ in profile_ids) or "NULL"
             cards = [self._card_view(row) for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)]
-            preferences = [
-                {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
-                for row in connection.execute(f"SELECT * FROM evaluation_preferences WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)
-            ]
-            annotations = [
-                {"profileId": row["profile_id"], "text": row["text"], "revision": row["revision"], "updatedAt": row["updated_at"]}
-                for row in connection.execute(f"SELECT * FROM evaluation_annotations WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)
-            ]
+            policy = user_policy.policy_view(connection, profile_ids)
             evidence = [
                 self._evidence_view(row)
                 for row in connection.execute(
@@ -724,8 +717,7 @@ class EvaluationStore:
             "profiles": profiles,
             "modelConcurrency": model_concurrency,
             "unavailableProfileCount": unavailable_count,
-            "preferences": preferences,
-            "annotations": annotations,
+            **policy,
             "cards": cards,
             "sampleCounts": sample_counts,
             "evidence": evidence,
@@ -2374,14 +2366,10 @@ class EvaluationStore:
                 self._card_view(row)
                 for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({assessed_marks}) ORDER BY rowid", assessed_ids)
             ]
-            preferences = [
-                {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
-                for row in connection.execute(f"SELECT * FROM evaluation_preferences WHERE profile_id IN ({assessed_marks}) ORDER BY rowid", assessed_ids)
-            ]
-            annotations = [
-                {"profileId": row["profile_id"], "text": row["text"], "revision": row["revision"], "updatedAt": row["updated_at"]}
-                for row in connection.execute(f"SELECT * FROM evaluation_annotations WHERE profile_id IN ({assessed_marks}) ORDER BY rowid", assessed_ids)
-            ]
+            # Effective user policy (with its source) and the family notes; both are
+            # context for the assessment, never facts it may rewrite.
+            preferences = user_policy.effective_preferences(connection, assessed_ids)
+            annotations = user_policy.family_annotations(connection, assessed_ids)
             # Every evidence reference a current card depends on is required input and
             # is never dropped to fit the packet.
             referenced_ids: list[str] = []
@@ -2572,7 +2560,8 @@ class EvaluationStore:
             "kind": row["kind"],
             "actor": row["actor"],
             "counts": {name: int(counts[name]) for name in (
-                "profiles", "cards", "preferences", "profileSettings", "preferenceChanges", "annotationChanges"
+                "profiles", "cards", "preferences", "profileSettings", "preferenceChanges", "annotationChanges",
+                "familyPreferenceChanges", "familyAnnotationChanges",
             ) if name in counts},
             "createdAt": row["created_at"],
         }

@@ -16,7 +16,7 @@ import sqlite3
 import uuid
 from typing import Any
 
-from . import schemas
+from . import schemas, user_policy
 from . import selection_policy, router
 from .db import canonical_json, sha256_text
 from .errors import BoardError
@@ -186,7 +186,7 @@ class DecisionCoordinator:
         """
         clauses = [
             "p.enabled=1", "p.available=1", "COALESCE(f.mode,'')!='exclude'",
-            "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')",
+            "(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')",
         ]
         values = []
         for capability in sorted(set(required_capabilities)):
@@ -203,7 +203,7 @@ class DecisionCoordinator:
             values.append(value)
         values.append(MAX_DECISION_PROFILES + 1)
         return list(connection.execute(
-            "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id "
+            "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id "
             "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values))
 
     # -- bounded model input -------------------------------------------------
@@ -284,10 +284,7 @@ class DecisionCoordinator:
         ]
         preferences: list[dict] = []
         if include_preferences:
-            preferences = [
-                {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
-                for row in connection.execute(f"SELECT * FROM evaluation_preferences WHERE profile_id IN ({markers}) ORDER BY rowid", profile_ids)
-            ]
+            preferences = user_policy.effective_preferences(connection, profile_ids)
         seen: set[str] = set()
         evidence: list[dict] = []
         for row in evidence_rows:
@@ -300,14 +297,8 @@ class DecisionCoordinator:
             "cards": cards,
             "preferences": preferences,
             "evidence": evidence,
-            "annotations": [
-                {"profileId": row["profile_id"], "text": row["text"],
-                 "revision": int(row["revision"]), "updatedAt": row["updated_at"]}
-                for row in connection.execute(
-                    f"SELECT profile_id,text,revision,updated_at FROM evaluation_annotations WHERE profile_id IN ({markers}) ORDER BY profile_id",
-                    profile_ids,
-                )
-            ],
+            # User notes are kept per model family; the family key is on every profile.
+            "annotations": user_policy.family_annotations(connection, profile_ids),
         }
 
     def _referenced_evidence(self, connection: sqlite3.Connection, cards: list[dict]) -> list[sqlite3.Row]:
