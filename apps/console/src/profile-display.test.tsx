@@ -190,7 +190,7 @@ describe("decision profile selector", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     expect(
-      optionEntries(await screen.findByLabelText("决策模型配置")),
+      optionEntries(await screen.findByLabelText("路由模型配置")),
     ).toEqual([
       ["", "尚未配置"],
       [flashOffId, "DeepSeek-V41-Flash · 非思考"],
@@ -200,14 +200,14 @@ describe("decision profile selector", () => {
 
     await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("决策模型配置")).toHaveProperty(
+      expect(screen.getByLabelText("路由模型配置")).toHaveProperty(
         "disabled",
         false,
       ),
     );
-    await user.selectOptions(screen.getByLabelText("决策模型配置"), flashOffId);
+    await user.selectOptions(screen.getByLabelText("路由模型配置"), flashOffId);
     expect(await screen.findByText("deepseek-official / 非思考")).toBeTruthy();
-    expect(screen.getByText(/草稿中的决策模型/)).toBeTruthy();
+    expect(screen.getByText(/草稿中的路由模型/)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");

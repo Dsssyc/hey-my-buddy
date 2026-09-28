@@ -367,7 +367,7 @@ describe("stale settings and unrelated saves", () => {
     const user = userEvent.setup();
     window.location.hash = "#settings";
     render(<App suppliedApi={f.api} />);
-    const select = await screen.findByLabelText("决策模型配置");
+    const select = await screen.findByLabelText("路由模型配置");
     expect(select).toHaveProperty("value", retiredMax);
     const staleOption = within(select).getByRole("option", { name: /retired-model · max（需要处理）/ });
     expect(staleOption).toHaveProperty("disabled", true);
@@ -375,7 +375,7 @@ describe("stale settings and unrelated saves", () => {
     // The selector is disabled while read-only; entering edit mode never takes a grant.
     expect(select).toHaveProperty("disabled", true);
     await user.click(screen.getByRole("switch", { name: "编辑设置" }));
-    await waitFor(() => expect(screen.getByLabelText("决策模型配置")).toHaveProperty("disabled", false));
+    await waitFor(() => expect(screen.getByLabelText("路由模型配置")).toHaveProperty("disabled", false));
     expect(f.command).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("link", { name: "模型卡片" }));

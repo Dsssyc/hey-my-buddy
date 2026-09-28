@@ -12,6 +12,9 @@ export type DetailTarget = {
   runId: string;
   /** Existing detail tab to preselect once on open. */
   section?: SectionId;
+  decisionId?: string | null;
+  /** A repeated open is a fresh navigation even when it targets the same span. */
+  openRevision?: number;
   /** Short span facts for the locator's 来自时间轴 line. */
   locator?: string;
   /** Timeline item key that keeps its selected outline on return. */
@@ -76,12 +79,12 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
       {target.locator && <span className="from" title={`来自时间轴：${target.locator}`}>来自时间轴：{target.locator}</span>}
     </div>
     {remote
-      ? <TaskDetails key={remote.runId} task={remote} snapshot={snapshot} api={api} refresh={refresh}
+      ? <TaskDetails key={`${remote.runId}:${target.openRevision ?? 0}`} task={remote} snapshot={snapshot} api={api} refresh={refresh}
         selectTask={runId => { if (runId) onNavigate(runId); }} active={active}
         onTaskUpdate={next => setRemote(previous =>
           previous?.runId === next.runId && previous.revision === next.revision
           && previous.workflow?.revision === next.workflow?.revision ? previous : next)}
-        hideBackButton initialSection={target.section} stopStatusNode={stopStatusNode} overviewRow={overviewRow} />
+        hideBackButton initialSection={target.section} routingDecisionId={target.decisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} />
       : error
         ? <div className="detail-placeholder">
           <h2>读取委派失败</h2>

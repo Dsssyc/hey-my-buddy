@@ -33,7 +33,7 @@ function decision(id: string, overrides: Partial<Decision> = {}) {
   return {
     decisionId: id, kind: "select" as const, status: "completed", task: `原始任务 ${id}`,
     profileId: worker.profileId, selectedProfile: { ...worker }, tableRevision: 3,
-    configurationRevision: 2, reason: `${id} 的持久选择依据`, evidenceIds: ["evidence-at-selection"],
+    configurationRevision: 2, reason: `${id} 的持久选择依据`, evidence: [{ kind: "card" as const, ref: "evidence-at-selection" }],
     createdAt: "2026-09-24T08:00:00Z", runId: `calculation-${id}`,
     decisionModel: { requested: { provider: selector.provider, model: selector.model, reasoningEffort: "off" }, resolved: null, observed: null },
     requested: { constraints: { adapter: "dsh" } },
@@ -92,9 +92,12 @@ describe("routing configuration", () => {
     const command = vi.fn();
     window.location.hash = "#settings";
     render(<App suppliedApi={apiFor(state, command)} />);
-    expect(await screen.findByLabelText("决策模型配置")).toHaveProperty("disabled", true);
+    expect(await screen.findByLabelText("路由模型配置")).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("路由预算")).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("路由预算")).toHaveProperty("value", "standard");
+    expect(screen.getByText(/上限待实测：快速 60 秒/)).toBeTruthy();
     expect(screen.queryByRole("checkbox")).toBeNull();
-    expect(screen.getByText(/用于在智能路由中比较候选执行配置/)).toBeTruthy();
+    expect(screen.getByText(/用于检查委派输入并选择执行配置/)).toBeTruthy();
     expect(screen.queryByText(/整理经验/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
@@ -105,6 +108,40 @@ describe("routing configuration", () => {
 });
 
 describe("recorded decision details", () => {
+  it("shows saved evidence, program preferences and unknown native usage without current facts", async () => {
+    const audit = {
+      ...decision("new-fields"),
+      policyCheck: { taskPreference: { ruleIndex: 2, outcome: "alternative" }, userPreference: "matched" },
+      budget: { preset: "quick", timeoutSeconds: 60, toolCalls: 8, bytesRead: 131072 },
+      usage: { elapsedMs: 1234, toolCalls: 0, bytesRead: null },
+      nativeIdentity: { sessionId: "native-session" }, stopEvidence: { shutdownConfirmed: true },
+      inputVerification: { unchanged: true }, evidence: [{ kind: "file" as const, ref: "src/frozen.ts" }],
+    };
+    const command = vi.fn(async () => ({ decision: audit }));
+    render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
+    const detail = await screen.findByRole("region", { name: "决策依据详情" });
+    expect(within(detail).getByText("file · src/frozen.ts")).toBeTruthy();
+    expect(within(detail).getByText("选择其他配置（规则 2）")).toBeTruthy();
+    expect(within(detail).getByText("符合")).toBeTruthy();
+    expect(within(detail).getByText("快速")).toBeTruthy();
+    expect(within(detail).getByText("1234 毫秒 / 60 秒")).toBeTruthy();
+    expect(within(detail).getByText("0 / 8")).toBeTruthy();
+    expect(within(detail).getByText("未记录 / 131072")).toBeTruthy();
+    expect(within(detail).getByText("原生身份、停止证据与输入核验").closest("details")!.open).toBe(false);
+    expect(within(detail).getByText("calculation-new-fields").closest("details")!.open).toBe(false);
+    expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: audit.decisionId, includeAudit: true }, "csrf");
+  });
+
+  it("does not fill in evidence or budget for historic records that omitted them", async () => {
+    const { evidence: _evidence, ...audit } = decision("historic-fields");
+    const command = vi.fn(async () => ({ decision: audit }));
+    render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
+    const detail = await screen.findByRole("region", { name: "决策依据详情" });
+    expect(within(detail).getByText("引用证据").nextElementSibling!.textContent).toBe("未记录");
+    expect(within(detail).getByText("预算配置").nextElementSibling!.textContent).toBe("未记录");
+    expect(within(detail).getByText("工具调用 / 上限").nextElementSibling!.textContent).toBe("未记录 / 未记录");
+  });
+
   it("keeps other candidate preferences collapsed while showing the selected preference", async () => {
     const audit = decision("preference-scope");
     audit.input.preferences.push({ profileId: "another-profile", mode: "prefer", reason: "另一候选的偏好" });
@@ -248,6 +285,14 @@ describe("delegation routing rationale", () => {
     await user.click(screen.getByRole("button", { name: "返回当前配置" }));
     expect(await screen.findByText("decision-current 的持久选择依据")).toBeTruthy();
     expect(command.mock.calls.some(([operation]) => operation === "selection_list")).toBe(false);
+  });
+
+  it("does not replace an unrecorded historical decision with the current route", () => {
+    const command = vi.fn();
+    render(<RoutingDetails value={workflow()} api={apiFor(snapshot(), command)} csrfToken="csrf" active initialDecisionId={null} />);
+    expect(screen.getByRole("status").textContent).toContain("决策 ID 未记录");
+    expect(screen.queryByRole("region", { name: "所选路由决定" })).toBeNull();
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("uses recorded turn bindings and leaves an older unbound turn explicitly unknown", async () => {

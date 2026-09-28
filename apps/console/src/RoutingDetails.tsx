@@ -6,20 +6,28 @@ import { configurationText, DecisionDetails } from "./DecisionDetails";
 import { decisionStatus } from "./decision-types";
 import { formatDate } from "./ui";
 
-export function RoutingDetails({ value, api, csrfToken, active }: {
-  value: Workflow; api: ConsoleApi; csrfToken: string; active: boolean;
+export function RoutingDetails({ value, api, csrfToken, active, initialDecisionId }: {
+  value: Workflow; api: ConsoleApi; csrfToken: string; active: boolean; initialDecisionId?: string | null;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialDecisionId ?? null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [page, setPage] = useState<RoutingHistory | null>(null);
   const [before, setBefore] = useState<number | undefined>();
   const [cursors, setCursors] = useState<(number | undefined)[]>([]);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [retry, setRetry] = useState(0);
   const currentId = value.routing?.decisionId || null;
-  const chosenId = selected || currentId;
+  // Explicit null comes from an old timeline span: its identity was not
+  // recorded, so the current route cannot stand in for that historical fact.
+  const chosenId = selected || (initialDecisionId === null ? null : currentId);
   const chosen = page?.entries.find(d => d.decisionId === chosenId);
   const rationale = useRef<HTMLElement>(null);
   const [focusRequest, setFocusRequest] = useState(0);
+  useEffect(() => {
+    if (initialDecisionId !== undefined) {
+      setSelected(initialDecisionId); setHistoryOpen(false);
+      if (initialDecisionId) setFocusRequest(n => n + 1);
+    }
+  }, [initialDecisionId]);
   function inspect(decisionId: string | null) {
     setSelected(decisionId); setHistoryOpen(false); setFocusRequest(n => n + 1);
   }
@@ -40,6 +48,7 @@ export function RoutingDetails({ value, api, csrfToken, active }: {
     return () => { current = false; };
   }, [api, csrfToken, value.runId, currentId, value.routing?.status, active, historyOpen, before, retry]);
   return <>
+    {initialDecisionId === null && <p className="small muted" role="status">这次路由的决策 ID 未记录，无法定位这次决定。可查看当前配置或此前的路由记录。</p>}
     <section aria-label="当前执行配置"><h3>当前执行配置</h3>
       <p className="read-text">{value.executionConfiguration ? configurationText(value.executionConfiguration) : "尚未确定执行配置。"}</p>
       <dl className="facts"><dt>配置版本</dt><dd>{value.executionConfigurationRevision == null ? "未记录" : `V${value.executionConfigurationRevision}`}</dd>
@@ -50,7 +59,7 @@ export function RoutingDetails({ value, api, csrfToken, active }: {
         <p className="error-message" role="status">本次路由未能用于执行：{value.routing.reason}</p>}
       {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">原始硬约束：{configurationText(value.routing?.constraints)}</p>}
     </section>
-    {chosenId && <section className="detail-section" ref={rationale} tabIndex={-1} aria-label="所选路由决定">
+    {chosenId && <section className="detail-section" ref={rationale} tabIndex={-1} aria-label="所选路由决定" data-decision-id={chosenId}>
       {chosenId !== currentId && <div className="row-between"><h3>此前的路由依据</h3>
         <button className="button small-button" onClick={() => inspect(null)}>返回当前配置</button></div>}
       <DecisionDetails key={chosenId} decisionId={chosenId} api={api} csrfToken={csrfToken} active={active}

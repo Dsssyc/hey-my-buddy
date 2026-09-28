@@ -21,7 +21,7 @@ export const DETAIL_READ_ONLY_NOTE = "只读 · 操作由 Host 在 CLI 完成";
  * never locked; the objective-level 停止目标 lives on the work-objective
  * header instead.
  */
-export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onTaskUpdate, hideBackButton = false, initialSection, stopStatusNode, overviewRow }: {
+export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onTaskUpdate, hideBackButton = false, initialSection, routingDecisionId, stopStatusNode, overviewRow }: {
   task: Task; snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   selectTask: (runId: string | null) => void; active: boolean;
   onTaskUpdate: (value: Task) => void;
@@ -29,6 +29,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   hideBackButton?: boolean;
   /** Section of the existing detail tabs to preselect once on open. */
   initialSection?: string;
+  routingDecisionId?: string | null;
   /** Objective-level stop status for the overview tab (timeline context only). */
   stopStatusNode?: ReactNode;
   /** The timeline's own row for the fixed three-row overview block. */
@@ -72,7 +73,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
         selectTask={selectTask} active={active} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
-        initialSection={initialSection} stopStatusNode={stopStatusNode} overviewRow={overviewRow} /> : <div className="detail-body">
+        initialSection={initialSection} routingDecisionId={routingDecisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} /> : <div className="detail-body">
       {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
       {recordInfo}

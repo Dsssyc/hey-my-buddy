@@ -78,6 +78,10 @@ function harness(options: StopOptions = {}) {
       if (!task) throw new Error(`Unknown run: ${String(params.runId)}`);
       return workflowFixture(task);
     }
+    if (operation === "selection_get") return { decision: {
+      decisionId: params.decisionId, status: "completed", kind: "select", task: "路由合成数据", profileId: null,
+      tableRevision: 1, reason: "第一轮的路由依据", evidence: [], createdAt: "2026-09-26T01:21:00Z",
+    } };
     if (operation === "objective_stop") {
       stopAttempts += 1;
       if (options.stopError) throw options.stopError;
@@ -225,13 +229,34 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     expect(f.api.command).not.toHaveBeenCalled();
   });
 
-  it("routes a routing span to the decision task's own detail", async () => {
+  it("opens the routed delegation and locates the exact decision in its routing tab", async () => {
     stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-r");
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("run-d02b"));
-    expect((document.querySelector(".locator .crumbs") as HTMLElement).textContent).toContain("run-d02b");
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r2"));
+    expect(f.api.task).not.toHaveBeenCalledWith("run-d02b");
+    expect(screen.getByRole("tab", { name: "路由依据" }).getAttribute("aria-selected")).toBe("true");
+    await screen.findByText("第一轮的路由依据");
+    const rationale = screen.getByRole("region", { name: "所选路由决定" });
+    expect(rationale.getAttribute("data-decision-id")).toBe("decision-r2-first");
+    expect(document.activeElement).toBe(rationale);
+    expect(f.api.command).toHaveBeenCalledWith("selection_get", { decisionId: "decision-r2-first", includeAudit: true }, "csrf");
+  });
+
+  it("reopening the same routing span restores its exact decision and tab after browsing", async () => {
+    stubViewport(false);
+    const f = harness();
+    await openObjective(f);
+    await openSpan(f, "s-r2-r");
+    await screen.findByText("第一轮的路由依据");
+    await f.user.click(screen.getByRole("button", { name: "返回当前配置" }));
+    expect(screen.queryByRole("region", { name: "所选路由决定" })).toBeNull();
+    await f.user.click(screen.getByRole("tab", { name: "概览" }));
+    await openSpan(f, "s-r2-r");
+    await screen.findByText("第一轮的路由依据");
+    expect(screen.getByRole("tab", { name: "路由依据" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("region", { name: "所选路由决定" }).getAttribute("data-decision-id")).toBe("decision-r2-first");
   });
 
   it("single clicks never open a detail; the inspector pins instead", async () => {

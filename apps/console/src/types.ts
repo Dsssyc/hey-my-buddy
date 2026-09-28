@@ -63,7 +63,7 @@ export type Decision = {
   profileId: string | null;
   tableRevision: number;
   reason: string;
-  evidenceIds: string[];
+  evidence?: { kind: "card" | "annotation" | "preference" | "file"; ref: string }[] | null;
   createdAt: string;
   error?: string | null;
   updatedAt?: string;
@@ -192,13 +192,16 @@ export type ModelConcurrencySetting = ModelFamily & { limit: number };
  * publishes it.
  */
 export type ModelConcurrencyEntry = ModelConcurrencySetting & { active: number };
+export type RoutingBudget = "quick" | "standard" | "deep";
 export type Configuration = {
   revision: number;
   decisionProfileId: string | null;
+  routingBudget?: RoutingBudget;
 };
 export type RoutingHealth = {
   windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
   abstentionCount: number; cancelledCount: number; staleCount: number;
+  budgetExhaustedCount?: number; boundsRejectedCount?: number; inputChangedCount?: number;
   lastSuccessAt: string | null; lastSuccessDecisionId: string | null;
   recentFailures: { decisionId: string; runId: string | null; at: string; code: string }[];
 };

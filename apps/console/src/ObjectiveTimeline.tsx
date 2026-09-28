@@ -355,11 +355,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (!timeline) return map;
     for (const row of timeline.rows) {
       for (const span of spansByRun.get(row.runId) ?? []) {
-        map.set(span.spanId, spanFacts(span, row, observedAtMs));
+        map.set(span.spanId, spanFacts(span, row, observedAtMs, props.profiles));
       }
     }
     return map;
-  }, [timeline, spansByRun, observedAtMs]);
+  }, [timeline, spansByRun, observedAtMs, props.profiles]);
 
   const itemsByKey = useMemo(() => {
     const map = new Map<string, TimelineItem>();
@@ -488,7 +488,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   }
 
   function itemAria(item: TimelineItem): string {
-    return `${item.head}，${item.parts.join("，")}`;
+    return item.ariaLabel ?? `${item.head}，${item.parts.join("，")}`;
   }
 
   /** The screen-x of a time instant inside the scroll viewport, or null when off-canvas. */
@@ -743,7 +743,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (span.kind === "routing") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        {widthPxSpan >= 34 ? <span className="sp-text">路由</span> : null}
+        {facts.outcome === "failed" && <i className="routing-cross" aria-hidden="true" />}
       </button>;
     }
     if (span.kind === "host") {

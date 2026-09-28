@@ -272,7 +272,9 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   function openItem(item: TimelineItem) {
     setSelection({ type: "item", key: item.key });
-    setDetail({ runId: item.runId, section: item.section, locator: item.locator, key: item.key });
+    setDetail(previous => ({ runId: item.runId, section: item.section, locator: item.locator, key: item.key,
+      decisionId: item.section === "routing" ? item.decisionId ?? null : undefined,
+      openRevision: (previous?.openRevision ?? 0) + 1 }));
   }
   function openRun(runId: string) {
     // Opening from a row/card carries no span fact: the detail shows no

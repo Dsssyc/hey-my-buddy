@@ -83,6 +83,21 @@ export type TimelineSpan = {
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
   requestKind?: string; summary?: string; decisionTaskId?: string;
+  /** Exact recorded decision; never infer it from the run's current route. */
+  decisionId?: string | null;
+  /** Optional projection for historic spans without routing facts. */
+  routing?: {
+    selectedProfile?: TimelineConfiguration | null;
+    reason?: string | null;
+    policyCheck?: {
+      taskPreference?: { ruleIndex?: number | null; outcome?: string | null } | null;
+      userPreference?: string | null;
+      [key: string]: unknown;
+    } | null;
+    /** Host owns the budget schema; preserve it without offering budget controls. */
+    budget?: Record<string, unknown> | null;
+    usage?: { elapsedMs?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
+  } | null;
 };
 export type TimelineEventKind =
   "dispatch" | "decide" | "continue" | "integrate" | "accept" | "reject" | "cancel" | "takeover";

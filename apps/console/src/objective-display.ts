@@ -27,7 +27,7 @@ const OPEN_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "r
 
 export type SpanOutcome =
   | "open" | "claimed" | "resolved" | "running" | "failed"
-  | "cancelled" | "unknown" | "finished" | "unplaced";
+  | "cancelled" | "unknown" | "finished" | "unplaced" | "abstention";
 
 export function spanOutcome(span: TimelineSpan): SpanOutcome {
   const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
@@ -37,6 +37,8 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
   // stop is never labelled plain failed/cancelled, though the failure text stays.
   if (span.uncertain === true || state === "uncertain") return "unknown";
   if (span.resultStatus === "cancelled") return "cancelled";
+  if (span.kind === "routing" && span.disposition === "routing-failed") return "failed";
+  if (span.kind === "routing" && (state === "abstention" || span.disposition === "abstention")) return "abstention";
   if (span.resultStatus === "failed") return "failed";
   if (span.resultStatus !== "ok" && typeof span.error === "string" && span.error.trim()) return "failed";
   if (span.endAt == null) {
@@ -48,7 +50,7 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
 export const OUTCOME_LABEL: Record<SpanOutcome, string> = {
   open: "仍在等待", claimed: "已认领", resolved: "已决定", running: "执行中",
   failed: "执行失败", cancelled: "已取消", unknown: "结束未确认", finished: "执行完成",
-  unplaced: "时间缺失",
+  unplaced: "时间缺失", abstention: "已放弃选择",
 };
 
 /** Host-request decision labels use the recorded request state, not a guess. */
@@ -57,6 +59,11 @@ const HOST_STATE_LABEL: Record<string, string> = {
 };
 
 export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
+  if (span.kind === "routing") {
+    if (outcome === "running") return "路由中";
+    if (outcome === "failed") return "路由失败";
+    if (outcome === "finished") return "已完成";
+  }
   if (span.kind === "queue") return outcome === "open" ? "仍在排队" : "已认领";
   if (span.kind === "host" && outcome === "resolved") {
     const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
@@ -432,8 +439,11 @@ export function rangeText(startMs: number | null, endMs: number | null): string 
 
 export type TimelineItem = {
   key: string;
-  /** Run whose existing detail opens on Enter/click (a decision task for routing spans). */
+  /** Governed delegation whose existing detail opens on Enter/double click. */
   runId: string;
+  /** Exact recorded routing decision to locate in the delegation's routing tab. */
+  decisionId?: string;
+  ariaLabel?: string;
   section: SectionId;
   /** Inspector bold head. */
   head: string;
@@ -469,6 +479,7 @@ export function spanFacts(
   span: TimelineSpan,
   row: TimelineRow,
   observedAtMs: number | null,
+  profiles?: readonly FriendlyProfile[] | null,
 ): { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome } {
   const outcome = spanOutcome(span);
   const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
@@ -476,7 +487,6 @@ export function spanFacts(
   const parts: string[] = [displayTitle(row.titleSource, row.title).text];
   if (span.kind === "execution" || span.kind === "routing") {
     if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);
-    if (span.kind === "routing" && span.decisionTaskId) parts.push(`内部路由计算 ${span.decisionTaskId}`);
   }
   if (span.kind === "execution" && span.configuration) parts.push(configurationLabel(span.configuration));
   if (span.kind === "host" && span.summary) parts.push(span.summary);
@@ -487,7 +497,6 @@ export function spanFacts(
   if (duration) parts.push(duration);
   parts.push(outcomeLabel(span, outcome));
   if (typeof span.error === "string" && span.error.trim()) parts.push(span.error.trim());
-  const targetRun = span.kind === "routing" && span.decisionTaskId ? span.decisionTaskId : row.runId;
   // The detail locator states only the recorded fact — round and time — never
   // the delegation title, which the detail already shows once (0.16 T4).
   const roundPrefix = span.turnIndex != null ? `第 ${span.turnIndex} 轮` : spanHead(span.kind);
@@ -503,7 +512,8 @@ export function spanFacts(
   return {
     item: {
       key: `span:${span.spanId}`,
-      runId: targetRun,
+      runId: row.runId,
+      ...(span.kind === "routing" ? { decisionId: span.decisionId || undefined, ariaLabel: routingSpanLabel(span, profiles) } : {}),
       section: SPAN_SECTION[span.kind],
       head,
       parts,
@@ -663,4 +673,10 @@ export function buildChronology(
     gapIndex += 1;
   }
   return result;
+}
+
+/** Describe the selected target, never the Router's own configuration. */
+export function routingSpanLabel(span: TimelineSpan, profiles?: readonly FriendlyProfile[] | null): string {
+  const selected = span.routing?.selectedProfile;
+  return `路由 · 已选 ${selected ? configurationLabel(selected, profiles) : "未记录"} · ${outcomeLabel(span, spanOutcome(span))}`;
 }

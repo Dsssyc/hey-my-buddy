@@ -53,6 +53,41 @@ async function expandHostEvents(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("objective timeline rendering", () => {
+  it("keeps routing failure, cancellation, abstention and unknown stop distinct", () => {
+    const timeline = objectiveTimelineFixture();
+    const route = timeline.spans.find(span => span.spanId === "s-r2-r")!;
+    route.resultStatus = "failed";
+    const props = baseProps(timeline);
+    const view = render(<ObjectiveTimeline {...props} />);
+    expect(item("span:s-r2-r")!.querySelector(".routing-cross")).toBeTruthy();
+    expect(item("span:s-r2-r")!.getAttribute("title")).toBe(item("span:s-r2-r")!.getAttribute("aria-label"));
+    route.resultStatus = "cancelled";
+    route.disposition = "abstention";
+    view.rerender(<ObjectiveTimeline {...baseProps(structuredClone(timeline))} />);
+    expect(item("span:s-r2-r")!.className).toContain("cancelled");
+    expect(item("span:s-r2-r")!.querySelector(".routing-cross")).toBeNull();
+    route.resultStatus = "ok";
+    view.rerender(<ObjectiveTimeline {...baseProps(structuredClone(timeline))} />);
+    expect(item("span:s-r2-r")!.getAttribute("aria-label")).toContain("已放弃选择");
+    expect(item("span:s-r2-r")!.className).not.toContain("failed");
+    route.uncertain = true;
+    route.shutdownConfirmed = false;
+    view.rerender(<ObjectiveTimeline {...baseProps(structuredClone(timeline))} />);
+    expect(item("span:s-r2-r")!.className).toContain("unknown");
+    expect(item("span:s-r2-r")!.getAttribute("aria-label")).toContain("结束未确认");
+  });
+
+  it("opens the exact routing decision with double click and Enter", () => {
+    const timeline = objectiveTimelineFixture();
+    const onOpenItem = vi.fn();
+    render(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem })} />);
+    fireEvent.doubleClick(item("span:s-r2-r")!);
+    expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "r2", section: "routing", decisionId: "decision-r2-first" }));
+    fireEvent.keyDown(item("span:s-r2-r")!, { key: "Enter" });
+    expect(onOpenItem).toHaveBeenCalledTimes(2);
+    expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ decisionId: "decision-r2-first" }));
+  });
+
   it("shows receipt cancellation even with an error reason and no cancelled turn disposition", () => {
     const timeline = objectiveTimelineFixture();
     const cancelled = timeline.spans.find(span => span.spanId === "s-r5-e")!;
@@ -97,7 +132,7 @@ describe("objective timeline rendering", () => {
     expect(help.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(help);
     const popover = await screen.findByRole("dialog", { name: "层级说明" });
-    expect(popover.textContent).toContain("工作目标是一项议程；委派是交给 Buddy、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。");
+    expect(popover.textContent).toContain("工作目标是一项议程；委派是交给 Worker、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。");
     fireEvent.click(help);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "层级说明" })).toBeNull());
   });
@@ -115,7 +150,7 @@ describe("objective timeline rendering", () => {
     expect(item("span:s-r1-q")!.className).toContain("sp queue");
     const routing = item("span:s-r2-r")!;
     expect(routing.className).toContain("routing");
-    expect(routing.getAttribute("aria-label")).toContain("路由，实现 objectives 表、objective_list 与只读时间轴接口，内部路由计算 run-d02b");
+    expect(routing.getAttribute("aria-label")).toContain("路由 · 已选 Claude Opus 5.5 · high · 已完成");
     const failed = item("span:s-r3-e1")!;
     expect(failed.className).toContain("failed");
     expect(failed.querySelector(".end-mark.bad")!.textContent).toBe("✕");
@@ -705,7 +740,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ key: "span:s-r2-r" }));
     expect(onOpenItem).not.toHaveBeenCalled();
     fireEvent.keyDown(entries.find(node => node.getAttribute("data-key") === "span:s-r2-r")!, { key: "Enter" });
-    expect(onOpenItem).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-d02b", section: "routing" }));
+    expect(onOpenItem).toHaveBeenCalledWith(expect.objectContaining({ runId: "r2", section: "routing", decisionId: "decision-r2-first" }));
   });
 
   it("restores both scroll axes and refocuses the visible item, including the chronology", async () => {

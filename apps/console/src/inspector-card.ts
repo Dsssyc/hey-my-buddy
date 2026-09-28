@@ -184,6 +184,27 @@ export function buildInspectorCard(
       fields.push(span.summary
         ? { label: "结果", value: outcomeLabel(span, outcome), title: span.summary }
         : { label: "结果", value: outcomeLabel(span, outcome) });
+    } else if (span.kind === "routing") {
+      const routing = span.routing;
+      const preference = (value: string | null | undefined) => ({
+        matched: "符合偏好", alternative: "偏离偏好", none: "没有偏好", fallback: "偏好无可用候选",
+      }[value ?? ""] ?? (value || UNRECORDED));
+      const taskPreference = routing?.policyCheck?.taskPreference?.outcome;
+      const userPreference = routing?.policyCheck?.userPreference;
+      const deviated = taskPreference === "alternative" || userPreference === "alternative";
+      const reason = routing?.reason?.trim() || UNRECORDED;
+      const amount = (value: number | null | undefined, unit: string) =>
+        value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
+      fields.push({ label: "类型", value: "路由" }, delegationField(row));
+      fields.push({ label: "已选配置", value: routing?.selectedProfile ? configurationLabel(routing.selectedProfile, profiles) : UNRECORDED });
+      fields.push({ label: "理由", value: reason });
+      fields.push({ label: "偏好结果", value: routing?.policyCheck
+        ? `任务：${preference(taskPreference)}；用户：${preference(userPreference)}${deviated ? `；偏离理由：${reason}` : ""}`
+        : UNRECORDED });
+      fields.push(spanTimingValue(span, observedAtMs), { label: "结果", value: outcomeLabel(span, outcome) });
+      fields.push({ label: "用时（elapsedMs）", value: amount(routing?.usage?.elapsedMs, "ms") },
+        { label: "工具调用（toolCalls）", value: amount(routing?.usage?.toolCalls, "次") },
+        { label: "读取量（bytesRead）", value: amount(routing?.usage?.bytesRead, "bytes") });
     } else {
       fields.push({ label: "类型", value: spanHead(span.kind) }, delegationField(row));
       fields.push({
@@ -196,9 +217,6 @@ export function buildInspectorCard(
         title: configurationRawLabel(span.configuration),
       });
       fields.push(spanTimingValue(span, observedAtMs), spanResultValue(span, outcome));
-      if (span.kind === "routing" && span.decisionTaskId) {
-        fields.push({ label: "备注", value: `内部路由计算 ${span.decisionTaskId}`, tone: "muted" });
-      }
     }
     return {
       key: selection.key,

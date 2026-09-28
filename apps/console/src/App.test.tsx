@@ -177,7 +177,7 @@ describe("console interactions", () => {
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("link", { name: "路由配置" }));
-    expect(await screen.findByLabelText("决策模型配置")).toHaveProperty("disabled", true);
+    expect(await screen.findByLabelText("路由模型配置")).toHaveProperty("disabled", true);
     expect(screen.queryByRole("button", { name: "请求推荐" })).toBeNull();
     expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();

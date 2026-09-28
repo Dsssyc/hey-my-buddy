@@ -273,3 +273,105 @@ class ObjectiveReadTests(WorkflowTestCase):
         with board.store.db.read() as db:
             after = [tuple(row) for row in db.execute('SELECT objective_id, activity_seq FROM objectives')]
         self.assertEqual(before, after)
+
+
+class RoutingSpanTests(WorkflowTestCase):
+    def recorded_task(self, *, result_status='ok', shutdown=True):
+        board = self.board()
+        self.register(board)
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board, run_id=run['runId'])
+        self.finish_turn(board, claim, runner_status=result_status, shutdown=shutdown)
+        return board, run['runId']
+
+    def decision(self, board, task_id, *, output=None, status='completed', selected=None, profile_id='frozen-profile'):
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,created_at)"
+                       " VALUES('recorded-decision',?,'task',?,1,'frozen reason','2026-01-01T00:00:00Z')", (status, profile_id))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,selected_json,output_json,requested_json,created_at,updated_at)"
+                       " VALUES('recorded-decision','recorded-request','select','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+                       (task_id, json.dumps(selected) if selected else None, json.dumps(output) if output else None,
+                        json.dumps({'budget': {'preset': 'deep'}})))
+
+    def spans(self, board, task_id):
+        from buddy.objectives import _routing_spans
+        with board.store.db.read() as db:
+            return _routing_spans(db, task_id, task_id)
+
+    def test_frozen_selection_and_top_level_facts_come_from_exact_decision_task(self):
+        board, task_id = self.recorded_task()
+        selected = {'adapter': 'codex', 'provider': 'openai', 'model': 'historic-model', 'effort': 'high'}
+        output = {'status': 'ok', 'decision': {'profileId': 'frozen-profile', 'reason': 'frozen reason',
+                  'evidence': [], 'policyCheck': {'ignored': True}},
+                  'policyCheck': {'taskPreference': {'ruleIndex': 2, 'outcome': 'matched'}, 'userPreference': 'alternative'},
+                  'budget': {'preset': 'quick', 'toolCalls': 8},
+                  'usage': {'elapsedMs': 120, 'toolCalls': 3, 'bytesRead': None},
+                  'stopEvidence': {'shutdownConfirmed': True}}
+        self.decision(board, task_id, output=output, selected=selected)
+        before = self.spans(board, task_id)[0]
+        self.assertEqual(before['decisionId'], 'recorded-decision')
+        self.assertEqual(before['routing'], {'selectedProfile': selected, 'reason': 'frozen reason',
+                         'policyCheck': output['policyCheck'], 'budget': output['budget'], 'usage': output['usage']})
+        # Changing the owner's current execution configuration cannot rewrite this history.
+        with board.store.db.write() as db:
+            db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.model','current-model') WHERE task_id=?", (task_id,))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,created_at)"
+                       " VALUES('current-decision','completed','current task','current-profile',2,'current reason','2026-01-02T00:00:00Z')")
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,selected_json,output_json,created_at,updated_at)"
+                       " VALUES('current-decision','current-request','select','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')",
+                       (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'budget': {'preset': 'deep'}})))
+            for decision_id in ('recorded-decision', 'current-decision'):
+                db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
+                           " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')", (decision_id, task_id))
+        self.assertEqual(self.spans(board, task_id)[0], before)
+
+    def test_missing_records_are_null_and_reads_do_not_backfill(self):
+        board, task_id = self.recorded_task()
+        before = self.spans(board, task_id)[0]
+        self.assertIsNone(before['decisionId'])
+        self.assertEqual(before['routing'], {'selectedProfile': None, 'reason': None, 'policyCheck': None,
+                         'budget': None, 'usage': {'elapsedMs': None, 'toolCalls': None, 'bytesRead': None}})
+        self.decision(board, task_id)
+        span = self.spans(board, task_id)[0]
+        self.assertEqual(span['decisionId'], 'recorded-decision')
+        for field in ('selectedProfile', 'policyCheck', 'budget'):
+            self.assertIsNone(span['routing'][field])
+        with board.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT output_json FROM decision_requests").fetchone()[0])
+        self.assertEqual(self.spans(board, 'no-task-or-attempt'), [])
+        with board.store.db.write() as db:
+            db.execute("UPDATE decision_requests SET task_id='not-started'")
+        self.assertEqual(self.spans(board, 'not-started'), [])
+
+    def test_only_new_valid_abstention_is_marked_and_cancel_is_not(self):
+        cases = [
+            ('ok', True, 'needs-host', {'status': 'ok', 'decision': {'profileId': None, 'reason': 'insufficient', 'evidence': []}}, True),
+            ('ok', False, 'needs-host', {'status': 'ok', 'decision': {'profileId': None, 'reason': 'insufficient', 'evidence': []}}, True),
+            ('cancelled', True, 'needs-host', {'status': 'ok', 'decision': {'profileId': None, 'reason': 'insufficient', 'evidence': []}}, False),
+            ('ok', True, 'needs-host', {'status': 'ok', 'decision': {'profileId': None, 'reason': 'legacy', 'evidenceIds': []}}, False),
+            ('ok', True, 'needs-host', {'status': 'error', 'decision': {'profileId': None, 'reason': 'failed', 'evidence': []}}, False),
+            ('ok', True, 'completed', {'status': 'ok', 'decision': {'profileId': None, 'reason': 'other', 'evidence': []}}, False),
+        ]
+        board, task_id = self.recorded_task()
+        self.decision(board, task_id, profile_id=None)
+        for result_status, shutdown, status, output, expected in cases:
+            with self.subTest(result_status=result_status, shutdown=shutdown, status=status, output=output):
+                with board.store.db.write() as db:
+                    db.execute("UPDATE evaluation_decisions SET status=?", (status,))
+                    db.execute("UPDATE decision_requests SET output_json=?", (json.dumps(output),))
+                    db.execute("UPDATE attempts SET result_json=?, shutdown_confirmed=? WHERE task_id=?",
+                               (json.dumps({'status': result_status}), int(shutdown), task_id))
+                span = self.spans(board, task_id)[0]
+                self.assertEqual(span.get('disposition') == 'abstention', expected)
+                if not shutdown:
+                    self.assertTrue(span['uncertain'])
+                    self.assertIsNone(span['endAt'])
+
+    def test_program_boundary_rejection_is_visible_after_native_success(self):
+        board, task_id = self.recorded_task()
+        self.decision(board, task_id, status='needs-host', profile_id=None,
+                      output={'status': 'ok', 'code': 'router-out-of-bounds',
+                              'decision': {'profileId': 'old-candidate', 'reason': 'chosen', 'evidence': []}})
+        span = self.spans(board, task_id)[0]
+        self.assertEqual(span['resultStatus'], 'ok')
+        self.assertEqual(span['disposition'], 'routing-failed')

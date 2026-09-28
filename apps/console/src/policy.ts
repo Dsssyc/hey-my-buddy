@@ -1,6 +1,6 @@
 import type { Draft, Profile } from "./types";
 import {
-  configurationChanged,
+  decisionProfileChanged,
   preferenceChanges,
   profileSettings,
 } from "./draft";
@@ -134,7 +134,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       });
     }
   }
-  if (configurationChanged(baseline, draft)) {
+  if (decisionProfileChanged(baseline, draft)) {
     const target = draft.configuration.decisionProfileId;
     if (target) {
       const profile = profiles.get(target);
@@ -142,25 +142,25 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
         issues.push({
           profileId: target,
           label: target,
-          message: `决策配置 ${target} 已不在当前目录中，不能新设为决策模型。请改用其他配置。`,
+          message: `路由配置 ${target} 已不在当前目录中，不能新设为路由模型。请改用其他配置。`,
         });
       } else if (!profile.available) {
         issues.push({
           profileId: target,
           label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} ${availabilityReason(profile)}，不能新设为决策模型。请改用其他配置。`,
+          message: `${labelOf(profile, target)} ${availabilityReason(profile)}，不能新设为路由模型。请改用其他配置。`,
         });
       } else if (!profile.enabled) {
         issues.push({
           profileId: target,
           label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} 处于停用状态，不能新设为决策模型。请先启用它，或选择其他可用配置。`,
+          message: `${labelOf(profile, target)} 处于停用状态，不能新设为路由模型。请先启用它，或选择其他可用配置。`,
         });
       } else if (!hasDecisionCapability(profile)) {
         issues.push({
           profileId: target,
           label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} 没有声明决策能力，不能新设为决策模型。请选择带有决策能力的配置。`,
+          message: `${labelOf(profile, target)} 没有经过验证的路由能力，不能新设为路由模型。请选择经过验证支持只读结构化回合的配置。`,
         });
       }
     }
@@ -181,28 +181,28 @@ export function decisionAttention(source: Draft): PolicyIssue | null {
     return {
       profileId: decisionId,
       label: decisionId,
-      message: `当前决策配置 ${decisionId} 已不在目录中；需要处理，但不影响保存其他修改。`,
+      message: `当前路由配置 ${decisionId} 已不在目录中；需要处理，但不影响保存其他修改。`,
     };
   }
   if (!profile.available) {
     return {
       profileId: decisionId,
       label: labelOf(profile, decisionId),
-      message: `当前决策配置 ${labelOf(profile, decisionId)} ${availabilityReason(profile)}；需要处理，但不影响保存其他修改。`,
+      message: `当前路由配置 ${labelOf(profile, decisionId)} ${availabilityReason(profile)}；需要处理，但不影响保存其他修改。`,
     };
   }
   if (!profile.enabled) {
     return {
       profileId: decisionId,
       label: labelOf(profile, decisionId),
-      message: `当前决策配置 ${labelOf(profile, decisionId)} 已停用，路由暂时无法使用它；不影响保存其他修改。`,
+      message: `当前路由配置 ${labelOf(profile, decisionId)} 已停用，路由暂时无法使用它；不影响保存其他修改。`,
     };
   }
   if (!hasDecisionCapability(profile)) {
     return {
       profileId: decisionId,
       label: labelOf(profile, decisionId),
-      message: `当前决策配置 ${labelOf(profile, decisionId)} 没有声明决策能力；需要处理，但不影响保存其他修改。`,
+      message: `当前路由配置 ${labelOf(profile, decisionId)} 没有经过验证的路由能力；需要处理，但不影响保存其他修改。`,
     };
   }
   return null;

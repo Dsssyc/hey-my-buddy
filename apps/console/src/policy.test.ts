@@ -200,9 +200,9 @@ describe("blocking new changes", () => {
       ...baseline,
       configuration: { ...baseline.configuration, decisionProfileId: profileId },
     });
-    expect(blockingIssues(baseline, select(retired.profileId))[0].message).toContain("不能新设为决策模型");
+    expect(blockingIssues(baseline, select(retired.profileId))[0].message).toContain("不能新设为路由模型");
     expect(blockingIssues(baseline, select(disabled.profileId))[0].message).toContain("停用状态");
-    expect(blockingIssues(baseline, select(coder.profileId))[0].message).toContain("没有声明决策能力");
+    expect(blockingIssues(baseline, select(coder.profileId))[0].message).toContain("没有经过验证的路由能力");
     expect(blockingIssues(baseline, select(worker.profileId))).toEqual([]);
     expect(blockingIssues(baseline, {
       ...baseline,

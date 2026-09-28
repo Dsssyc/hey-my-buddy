@@ -12,7 +12,7 @@ import { objectiveMetrics, rootRollups, type RunRollup } from "./objective-metri
 
 /** The single hierarchy explanation (0.16 T2): one sentence, no list, no heading. */
 export const HIERARCHY_HELP_TEXT =
-  "工作目标是一项议程；委派是交给 Buddy、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。";
+  "工作目标是一项议程；委派是交给 Worker、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。";
 
 /**
  * The detail overview's two rows (0.16 T4): 目标摘要 and the Worker's own

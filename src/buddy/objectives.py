@@ -17,7 +17,7 @@ import re
 import uuid
 from typing import Any
 
-from . import delegation, schemas
+from . import delegation, router, schemas
 from .errors import BoardError
 
 LIST_DEFAULT_LIMIT = 50
@@ -598,6 +598,30 @@ def _run_spans(connection, row) -> list[dict]:
 
 
 def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list[dict]:
+    # Resolve the immutable decision from its own calculation task, never from
+    # the owner's current workflow route (which may have been retried).
+    record = connection.execute(
+        "SELECT d.decision_id, d.status, d.profile_id, d.reason, r.selected_json, r.output_json"
+        " FROM decision_requests r JOIN evaluation_decisions d USING(decision_id)"
+        " WHERE r.task_id=?", (decision_task_id,)
+    ).fetchone()
+    output = json.loads(record["output_json"]) if record and record["output_json"] else {}
+    output = output if isinstance(output, dict) else {}
+    usage = output.get("usage") if isinstance(output.get("usage"), dict) else {}
+    routing = {
+        "selectedProfile": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
+        "reason": (record["reason"] or None) if record else None,
+        "policyCheck": output.get("policyCheck"),
+        "budget": output.get("budget"),
+        "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead")},
+    }
+    abstention = False
+    if record and record["status"] == "needs-host" and output.get("status") == "ok" and record["profile_id"] is None:
+        try:
+            answer = router.validate_answer(output.get("decision"), [])
+            abstention = answer["profileId"] is None
+        except BoardError:
+            pass
     spans = []
     for attempt in connection.execute(
         "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at,"
@@ -607,11 +631,16 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         state, confirmed, uncertain = _attempt_state(attempt)
         spans.append(_span(
             "routing", f"routing:{attempt['attempt_id']}", owner_run_id,
-            attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" else None,
+            attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" and not uncertain else None,
             state, attempt_id=attempt["attempt_id"], shutdown_confirmed=confirmed, uncertain=uncertain,
             decisionTaskId=decision_task_id, resultStatus=attempt["result_status"],
+            routing=routing,
+            disposition=("abstention" if abstention and attempt["result_status"] != "cancelled"
+                         else "routing-failed" if record and record["status"] in ("failed", "needs-host") and output.get("code")
+                         else None),
             error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
         ))
+        spans[-1]["decisionId"] = record["decision_id"] if record else None
     return spans
 
 

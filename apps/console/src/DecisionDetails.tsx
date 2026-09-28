@@ -52,23 +52,49 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <strong>{named(p.profileId)}</strong> · {{ prefer: "优先考虑", pin: "固定选择", exclude: "排除" }[p.mode]}{p.reason ? `：${p.reason}` : ""}
   </li>;
   const model = audit.decisionModel?.resolved || audit.decisionModel?.requested || audit.input?.profile;
-  const reason = audit.reason || audit.error || "尚无决策依据。";
+  const reason = audit.reason || audit.error || "未记录";
+  const recorded = (value: unknown) => value == null ? "未记录" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+  const outcomeText = (value: string | null | undefined) => value == null ? "未记录" : ({ matched: "符合", alternative: "选择其他配置", absent: "无偏好", none: "无偏好", fallback: "采用回退候选", "not-applicable": "不适用" }[value] ?? value);
+  const output = audit.output as { status?: string; decision?: { profileId?: string | null; reason?: string; evidence?: unknown } } | null;
+  const abstention = audit.status === "needs-host" && audit.profileId == null
+    && output?.status === "ok" && output.decision?.profileId === null
+    && typeof output.decision.reason === "string" && !!output.decision.reason.trim()
+    && Array.isArray(output.decision.evidence)
+    && Object.keys(output.decision).sort().join(",") === "evidence,profileId,reason";
+  const evidence = Array.isArray(audit.evidence) && audit.evidence.every(entry =>
+    entry != null && typeof entry === "object" && typeof entry.kind === "string" && typeof entry.ref === "string")
+    ? audit.evidence : null;
   return <section className="decision-detail" aria-label={audit.kind === "maintain" ? "评价整理详情" : "决策依据详情"}>
     <div className="row-between"><h3>{audit.kind === "maintain" ? "整理结果" : "选择依据"}</h3>
-      <Badge tone={["failed", "needs-host", "stale", "cancelled"].includes(audit.status) ? "amber" : "neutral"}>
-        {decisionStatus[audit.status] || audit.status}</Badge></div>
+      <Badge tone={!abstention && ["failed", "needs-host", "stale", "cancelled"].includes(audit.status) ? "amber" : "neutral"}>
+        {abstention ? decisionStatus.abstention : decisionStatus[audit.status] || audit.status}</Badge></div>
     <p className="read-text decision-reason">{reason.length > 360 ? reason.slice(0, 360) + "…" : reason}</p>
     {reason.length > 360 && <details><summary>展开完整依据</summary><p className="read-text">{reason}</p></details>}
     {audit.error && audit.error !== audit.reason && <p className="error-message">{audit.error}</p>}
     <dl className="facts">
       {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}
-      <dt>决策模型</dt><dd>{configurationText(model)}</dd>
+      <dt>路由模型</dt><dd>{configurationText(model)}</dd>
       <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
       <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>
       {audit.publishedRevision != null && <><dt>发布版本</dt><dd>V{audit.publishedRevision}</dd></>}
     </dl>
     {audit.kind !== "maintain" && <>
+      <dl className="facts">
+        <dt>程序任务偏好结果</dt><dd>{outcomeText(audit.policyCheck?.taskPreference?.outcome)}{audit.policyCheck?.taskPreference?.ruleIndex != null ? `（规则 ${audit.policyCheck.taskPreference.ruleIndex}）` : ""}</dd>
+        <dt>程序用户偏好结果</dt><dd>{outcomeText(audit.policyCheck?.userPreference)}</dd>
+        <dt>预算配置</dt><dd>{audit.budget?.preset ? ({ quick: "快速", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
+        <dt>耗时 / 上限</dt><dd>{recorded(audit.usage?.elapsedMs)} 毫秒 / {recorded(audit.budget?.timeoutSeconds)} 秒</dd>
+        <dt>工具调用 / 上限</dt><dd>{recorded(audit.usage?.toolCalls)} / {recorded(audit.budget?.toolCalls)}</dd>
+        <dt>读取字节 / 上限</dt><dd>{recorded(audit.usage?.bytesRead)} / {recorded(audit.budget?.bytesRead)}</dd>
+      </dl>
+      <h3>引用证据</h3>
+      {evidence == null ? <p className="small muted">未记录</p> : evidence.length ? <ul className="reason-list">{evidence.map((entry, index) => <li key={index}>{entry.kind} · {entry.ref}</li>)}</ul> : <p className="small muted">没有引用证据。</p>}
+      <details className="detail-section"><summary>原生身份、停止证据与输入核验</summary>
+        <dl className="facts"><dt>原生身份</dt><dd><pre className="result-text">{recorded(audit.nativeIdentity)}</pre></dd>
+          <dt>停止证据</dt><dd><pre className="result-text">{recorded(audit.stopEvidence)}</pre></dd>
+          <dt>输入核验</dt><dd><pre className="result-text">{recorded(audit.inputVerification)}</pre></dd></dl>
+      </details>
       <h3>当时的约束与偏好</h3>
       <p className="small muted">{Object.keys(constraints).length ? `硬约束：${configurationText(constraints)}` : "未记录指定配置的硬约束。"}</p>
       {!!audit.requested?.requiredCapabilities?.length && <p className="small wrap">所需能力：{audit.requested.requiredCapabilities.join("、")}</p>}
@@ -88,7 +114,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <details className="detail-section"><summary>记录标识与原始快照</summary>
       <dl className="facts"><dt>决策 ID</dt><dd>{audit.decisionId}</dd><dt>计算任务</dt><dd>{audit.runId || "未启动计算任务"}</dd>
         <dt>输入 SHA-256</dt><dd>{audit.inputSha256 || "未记录"}</dd></dl>
-      <details><summary>发送给决策模型的快照</summary><pre className="result-text">{JSON.stringify(audit.input ?? null, null, 2)}</pre></details>
+      <details><summary>发送给路由模型的快照</summary><pre className="result-text">{JSON.stringify(audit.input ?? null, null, 2)}</pre></details>
       <details><summary>持久模型回执</summary><pre className="result-text">{JSON.stringify(audit.output ?? null, null, 2)}</pre></details>
     </details>
   </section>;

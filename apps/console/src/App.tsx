@@ -85,7 +85,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const saveLabel = editor.confirming ? "重试同一保存" : "保存更改";
   const draftCount = editor.changedProfiles.length
     ? ` · ${editor.changedProfiles.length} 个配置`
-    : editor.configurationDirty ? " · 决策模型配置" : "";
+    : editor.configurationDirty ? " · 路由配置" : "";
   const saveRefusal = editor.saveBlockedReason
     || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
   function requestExit() {

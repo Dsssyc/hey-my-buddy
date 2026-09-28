@@ -19,6 +19,7 @@ import {
   setPreference,
   withHistory,
 } from "./draft";
+import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
 import type { Draft, Profile, Snapshot, WriterGrant } from "./types";
 
@@ -676,5 +677,39 @@ describe("private same-origin API", () => {
     await expect(
       createApi("/private", fetcher).command("save", {}, "csrf"),
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
+  });
+});
+
+
+describe("independent routing model and budget fields", () => {
+  it("defaults absent budgets to standard and publishes budget alone with a stale model", () => {
+    const baseline = makeDraft({ ...snapshot, profiles: [], configuration: { revision: 2, decisionProfileId: "retired" } } as Snapshot);
+    const equivalent = { ...baseline, configuration: { ...baseline.configuration, routingBudget: "standard" as const } };
+    expect(draftDiffers(baseline, equivalent)).toBe(false);
+    const draft = { ...equivalent, configuration: { ...equivalent.configuration, routingBudget: "quick" as const } };
+    expect(draftDiffers(baseline, draft)).toBe(true);
+    expect(configurationChanged(baseline, draft)).toBe(true);
+    expect(publication(baseline, draft, grant(), "budget").configuration).toEqual({ routingBudget: "quick" });
+    expect(blockingIssues(baseline, draft)).toEqual([]);
+  });
+
+  it("rebases model and budget independently and preserves the original draft on budget conflict", () => {
+    const baseline = makeDraft(snapshot);
+    const draft = { ...baseline, configuration: { ...baseline.configuration, routingBudget: "quick" as const } };
+    const fresh = { ...snapshot, tableRevision: 4, configuration: { revision: 3, decisionProfileId: "new-model", routingBudget: "standard" as const } };
+    const merged = rebaseDraft(draft, baseline, fresh);
+    expect(merged.conflicts).toEqual([]);
+    expect(merged.draft.configuration).toMatchObject({ decisionProfileId: "new-model", routingBudget: "quick" });
+    expect(publication(merged.baseline, merged.draft, grant(), "budget")).toMatchObject({ expectedRevision: 4, configuration: { routingBudget: "quick" } });
+    const conflicted = rebaseDraft(draft, baseline, { ...fresh, configuration: { ...fresh.configuration, routingBudget: "deep" } });
+    expect(conflicted.conflicts[0].field).toBe("routingBudget");
+    expect(conflicted.draft).toBe(draft);
+    expect(conflicted.baseline).toBe(baseline);
+    expect(conflicted.draft.tableRevision).toBe(3);
+    const modelDraft = { ...baseline, configuration: { ...baseline.configuration, decisionProfileId: "another-model" } };
+    const modelMerge = rebaseDraft(modelDraft, baseline, { ...snapshot, tableRevision: 4, configuration: { ...snapshot.configuration, routingBudget: "deep" } });
+    expect(modelMerge.conflicts).toEqual([]);
+    expect(modelMerge.draft.configuration.routingBudget).toBe("deep");
+    expect(publication(modelMerge.baseline, modelMerge.draft, grant(), "model").configuration).toEqual({ decisionProfileId: "another-model" });
   });
 });

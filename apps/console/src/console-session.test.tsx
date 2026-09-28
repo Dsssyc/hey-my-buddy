@@ -133,7 +133,7 @@ function fixture(options: {
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
         task: "路由计算", profileId: flashOff, tableRevision: 1, reason: "记录的选择依据",
-        evidenceIds: [], createdAt: "2026-09-25T10:00:00Z" } };
+        evidence: [], createdAt: "2026-09-25T10:00:00Z" } };
     }
     throw new ApiError("FORBIDDEN", "board refused a mutation");
   });

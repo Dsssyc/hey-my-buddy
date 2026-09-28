@@ -26,7 +26,7 @@ const integrationLabel = (record: IntegrationRecord) =>
  * helper composer and the record drafts are gone; browsing needs no Host
  * credential and locks nothing.
  */
-export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onTaskUpdate, recordInfo, routingRequest = 0, initialSection, stopStatusNode, overviewRow }: {
+export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onTaskUpdate, recordInfo, routingRequest = 0, initialSection, routingDecisionId, stopStatusNode, overviewRow }: {
   task: Task;
   snapshot: Snapshot;
   api: ConsoleApi;
@@ -38,6 +38,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   routingRequest?: number;
   /** Section to preselect once when opened from the timeline; later tab use stays the user's. */
   initialSection?: string;
+  routingDecisionId?: string | null;
   /** Objective-level stop status for this detail's overview tab (timeline context). */
   stopStatusNode?: ReactNode;
   /** The timeline's own row powering the fixed three-row overview block. */
@@ -56,7 +57,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
     }
   }, [routingRequest]);
   // Seeding preselects the tab once; later tab use stays the user's own choice.
-  useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection]);
+  useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection, routingDecisionId]);
   useEffect(() => { if (value) onTaskUpdate?.({ ...task, ...value.task }); }, [value, onTaskUpdate]);
   const artifact = finalArtifact(value);
   const integration = finalIntegration(value, artifact);
@@ -110,7 +111,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       </section>
       </div>
       <div id={tabsId + "-routing"} role="tabpanel" aria-labelledby={tabsId + "-routing-tab"} hidden={selectedSection !== "routing"}>
-        {selectedSection === "routing" && <RoutingDetails key={value.runId} value={value} api={api} csrfToken={snapshot.csrfToken} active={active} />}
+        {selectedSection === "routing" && <RoutingDetails key={value.runId} value={value} api={api} csrfToken={snapshot.csrfToken} active={active} initialDecisionId={routingDecisionId} />}
       </div>
       <div id={tabsId + "-assistance"} role="tabpanel" aria-labelledby={tabsId + "-assistance-tab"} hidden={selectedSection !== "assistance"}>
       <RoutingPanel key={value.activeRequest?.requestId || value.runId} value={value} />

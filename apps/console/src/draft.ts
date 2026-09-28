@@ -7,6 +7,7 @@ import type {
   ModelFamily,
   Preference,
   Profile,
+  Configuration,
   Snapshot,
   WriterGrant,
 } from "./types";
@@ -245,7 +246,7 @@ export type UserPolicyPublication = {
   profileSettings?: ProfileSettingPatch[];
   preferenceChanges?: PreferenceChangePatch[];
   annotationChanges?: AnnotationChangePatch[];
-  configuration?: { decisionProfileId: string | null };
+  configuration?: Partial<Pick<Configuration, "decisionProfileId" | "routingBudget">>;
   /** Per-family limit patches; the board refuses any `active` occupancy here. */
   modelConcurrency?: ModelConcurrencySetting[];
 };
@@ -314,11 +315,16 @@ export function annotationChanges(
   return changed.sort(byProfileId);
 }
 
+export function decisionProfileChanged(baseline: Draft, draft: Draft): boolean {
+  return baseline.configuration.decisionProfileId !== draft.configuration.decisionProfileId;
+}
+
+export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
+  return (baseline.configuration.routingBudget ?? "standard") !== (draft.configuration.routingBudget ?? "standard");
+}
+
 export function configurationChanged(baseline: Draft, draft: Draft): boolean {
-  return (
-    baseline.configuration.decisionProfileId !==
-    draft.configuration.decisionProfileId
-  );
+  return decisionProfileChanged(baseline, draft) || routingBudgetChanged(baseline, draft);
 }
 
 /**
@@ -348,7 +354,10 @@ export function publication(
     ...(annotations.length ? { annotationChanges: annotations } : {}),
     ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
-      ? { configuration: { decisionProfileId: draft.configuration.decisionProfileId } }
+      ? { configuration: {
+          ...(decisionProfileChanged(baseline, draft) ? { decisionProfileId: draft.configuration.decisionProfileId } : {}),
+          ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration.routingBudget ?? "standard" } : {}),
+        } }
       : {}),
   };
 }
@@ -369,6 +378,7 @@ function fingerprint(draft: UserEditable): string {
       .sort(byProfileId),
     configuration: {
       decisionProfileId: draft.configuration.decisionProfileId,
+      routingBudget: draft.configuration.routingBudget ?? "standard",
     },
     modelConcurrency: [...draft.modelConcurrency]
       .sort((a, b) => familyKey(a).localeCompare(familyKey(b))),
@@ -445,7 +455,7 @@ export function changedProfileIds(baseline: Draft, draft: Draft): string[] {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "annotation" | "configuration" | "modelConcurrency";
+  field: "enabled" | "preference" | "annotation" | "configuration" | "routingBudget" | "modelConcurrency";
   profileId: string;
   message: string;
 };
@@ -460,13 +470,14 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
   preference: "用户偏好",
   annotation: "人工意见",
-  configuration: "决策模型配置",
+  configuration: "路由模型配置",
+  routingBudget: "路由预算",
   modelConcurrency: "并发上限",
 };
 
 function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
   return field === "configuration"
-    ? `决策模型配置${profileId ? ` ${profileId}` : "（空）"}`
+    ? `路由模型配置${profileId ? ` ${profileId}` : "（空）"}`
     : `配置 ${profileId} 的${FIELD_NAMES[field]}`;
 }
 
@@ -588,12 +599,20 @@ export function rebaseDraft(
 
   // The fixed decision configuration is a single global field.
   let decisionProfileId = nextBaseline.configuration.decisionProfileId;
-  if (configurationChanged(baseline, draft)) {
+  if (decisionProfileChanged(baseline, draft)) {
     const old = baseline.configuration.decisionProfileId;
     const wanted = draft.configuration.decisionProfileId;
     const fresh = nextBaseline.configuration.decisionProfileId;
     if (fresh === old || fresh === wanted) decisionProfileId = wanted;
     else fail("changed", "configuration", wanted ?? "");
+  }
+
+  let routingBudget = nextBaseline.configuration.routingBudget ?? "standard";
+  if (routingBudgetChanged(baseline, draft)) {
+    const old = baseline.configuration.routingBudget ?? "standard";
+    const wanted = draft.configuration.routingBudget ?? "standard";
+    if (routingBudget === old || routingBudget === wanted) routingBudget = wanted;
+    else fail("changed", "routingBudget", "", `（现为 ${routingBudget}）`);
   }
 
   // Family concurrency limits: the key is the exact adapter/provider/model
@@ -648,7 +667,7 @@ export function rebaseDraft(
       ),
       preferences,
       annotations,
-      configuration: { ...nextBaseline.configuration, decisionProfileId },
+      configuration: { ...nextBaseline.configuration, decisionProfileId, routingBudget },
       modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
         mergedConcurrency.get(familyKey(entry)) ?? entry),
     },

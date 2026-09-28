@@ -60,7 +60,9 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
       const helper = entry.row.kind === "helper" ? "↳ 协助 · " : "";
       const swatch = span.kind === "execution" && style
         ? <span className="swatch" style={{ "--c": `var(--cfg-${style.color})` } as CSSProperties} aria-hidden="true" />
-        : <span className={"swatch " + (span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : "wait")} aria-hidden="true" />;
+        : <span className={"swatch " + (span.kind === "queue" ? "queue" : span.kind === "routing" ? `routing ${outcome}` : "wait")} aria-hidden="true">
+          {span.kind === "routing" && outcome === "failed" && <i className="routing-cross" />}
+        </span>;
       const duration = durationText(entry.endMs !== null ? entry.endMs - entry.atMs : null);
       const titleLine = displayTitle(entry.row.titleSource, entry.row.title);
       return <button key={entry.item.key} data-key={entry.item.key}
@@ -73,14 +75,15 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
             onOpenItem(entry.item);
           }
         }}
-        aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
+        aria-label={entry.item.ariaLabel ?? entry.item.head + "，" + entry.item.parts.join("，")} title={entry.item.ariaLabel}>
         <time>{clockTime(entry.atMs)}</time>
         {swatch}
         <span className="e-title single-line" title={titleLineTooltip(titleLine)}>{entry.item.head} · {helper}{titleLine.text}</span>
         <span className="e-meta">
           {span.kind === "execution" && <span>{configurationLabel(span.configuration)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}
-          {resultGlyph && <span>{resultGlyph} {outcomeLabel(span, outcome)}</span>}
+          {span.kind === "routing" ? <span>{outcomeLabel(span, outcome)}</span>
+            : resultGlyph && <span>{resultGlyph} {outcomeLabel(span, outcome)}</span>}
         </span>
       </button>
     })}

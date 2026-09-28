@@ -110,7 +110,10 @@ export function objectiveTimelineFixture(overrides: Partial<ObjectiveTimeline> =
     span("s-r1-e", "r1", "execution", "2026-09-26T01:14:00Z", "2026-09-26T01:58:00Z",
       { turnIndex: 1, attemptId: "att-r1", configuration: OPUS, shutdownConfirmed: true, resultStatus: "ok" }),
     span("s-r2-q", "r2", "queue", "2026-09-26T01:20:00Z", "2026-09-26T01:21:00Z"),
-    span("s-r2-r", "r2", "routing", "2026-09-26T01:21:00Z", "2026-09-26T01:24:00Z", { decisionTaskId: "run-d02b" }),
+    span("s-r2-r", "r2", "routing", "2026-09-26T01:21:00Z", "2026-09-26T01:24:00Z", { decisionTaskId: "run-d02b", decisionId: "decision-r2-first", routing: {
+      selectedProfile: OPUS, reason: "适合接口审阅", policyCheck: { taskPreference: { ruleIndex: 0, outcome: "matched" }, userPreference: "none" },
+      usage: { elapsedMs: 180000, toolCalls: 3, bytesRead: 1024 },
+    } }),
     span("s-r2-e1", "r2", "execution", "2026-09-26T01:24:00Z", "2026-09-26T02:10:00Z",
       { turnIndex: 1, attemptId: "att-r2a", configuration: CODEX, shutdownConfirmed: true }),
     span("s-r2-w", "r2", "host", "2026-09-26T02:10:00Z", "2026-09-26T03:00:00Z",

@@ -512,7 +512,7 @@ describe("edit mode and the write lease", () => {
     expect(disabled.getAttribute("aria-pressed")).toBe("false");
     expect(disabled.textContent).not.toContain("已启用");
     expect(screen.getByText(/5 个验证样本/)).toBeTruthy();
-    expect(screen.getByText(/已设为决策模型/)).toBeTruthy();
+    expect(screen.getByText(/已设为路由模型/)).toBeTruthy();
     await user.click(disabled);
     expect(screen.getByRole("button", { name: "high，未启用，正在查看" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "非思考，已启用" }).getAttribute("aria-pressed")).toBe("false");

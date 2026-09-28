@@ -138,7 +138,7 @@ export function ModelDetail({
           })}
         </div>
         <p className="small muted">当前查看：{profile.model} / {effortText(profile.effort)} · {samples} 个验证样本
-          {decisionProfileId === profile.profileId ? " · 已设为决策模型" : ""}
+          {decisionProfileId === profile.profileId ? " · 已设为路由模型" : ""}
           {editor.configurationDirty && decisionProfileId === profile.profileId ? " · 未保存" : ""}</p>
         {editor.mode && <p className="small muted">{draftFrozen
           ? "登录已失效：草稿仍保留在本页，重新登录后可继续编辑。"

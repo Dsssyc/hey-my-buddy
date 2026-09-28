@@ -204,7 +204,8 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
          confirmed: bool | None = None, uncertain: bool = False, generation: int | None = None,
          disposition: str | None = None, error: str | None = None, request_kind: str | None = None,
          summary: str | None = None, decision_task: str | None = None,
-         turn_index: int | None = None, result_status: str | None = None) -> dict:
+         turn_index: int | None = None, result_status: str | None = None,
+         routing_record: dict | None = None) -> dict:
     view = {"spanId": span_id, "kind": kind, "startAt": start, "endAt": end, "state": state,
             "attemptId": attempt_id, "turnId": f"turn-{attempt_id}" if attempt_id else None,
             "turnIndex": turn_index, "requestId": request_id, "configuration": configuration,
@@ -213,6 +214,10 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
     extras = {"generation": generation, "disposition": disposition, "error": error,
               "requestKind": request_kind, "summary": summary, "decisionTaskId": decision_task}
     view.update({key: value for key, value in extras.items() if value is not None})
+    if routing_record is not None:
+        view["decisionId"] = routing_record["decisionId"]
+        view["routing"] = {key: routing_record[key] for key in
+                           ("selectedProfile", "reason", "policyCheck", "budget", "usage")}
     if kind in ("execution", "routing") and state == "finished":
         view["resultStatus"] = result_status or ("failed" if error else "ok")
     return view
@@ -234,22 +239,35 @@ ACTIVE_REQUEST = {
     "acceptance": "合成预览：仅检查渲染分支，不产生真实验收", "childTaskId": None,
 }
 def routing(decision_id: str, task_id: str, status: str, selected: dict | None, reason: str,
-            constraints: dict, configuration_revision: int | None) -> dict:
+            constraints: dict, configuration_revision: int | None, *,
+            task_outcome: str = "none", user_outcome: str = "none",
+            elapsed_ms: int = 180000, tool_calls: int = 3, bytes_read: int = 32768) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
     return {"status": status, "decisionId": decision_id, "taskId": task_id, "attemptId": f"att-{task_id}",
             "generation": 1, "tableRevision": 7 if decision_id else None,
             "configurationRevision": configuration_revision, "selectedProfile": selected, "reason": reason,
-            "constraints": constraints, "routingPreferences": [],
-            "source": "model-selection" if decision_id else None, "preferenceOutcome": None}
+            "constraints": constraints,
+            "routingPreferences": [{"match": selected}] if task_outcome == "matched" else [],
+            "source": "model-selection" if decision_id else None, "preferenceOutcome": None,
+            "policyCheck": {"hardConstraints": constraints,
+                            "taskPreference": {"ruleIndex": 0 if task_outcome != "none" else None,
+                                               "outcome": task_outcome},
+                            "userPreference": user_outcome},
+            # Illustrative fixture values only; these are not runtime defaults.
+            "budget": {"elapsedMs": 180000, "toolCalls": 12, "bytesRead": 262144},
+            "usage": {"elapsedMs": elapsed_ms, "toolCalls": tool_calls, "bytesRead": bytes_read}}
 
 
 ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed", CFG_FLASH,
-                     "synthetic preview routing decision: dsh/deepseek-flash chosen", {"adapter": "dsh"}, 2)
-ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "needs-host", None,
-                     "synthetic preview: routing needs Host configuration", {"adapter": "claude"}, 1)
-ROUTING_A3 = routing("preview-decision-a3", "preview-run-a3-router", "completed", CFG_CLAUDE,
-                     "synthetic preview routing decision: claude/claude-opus-5-5 chosen",
-                     {"adapter": "claude"}, 2)
+                     "合成预览：选择 DeepSeek Flash；符合委派偏好，偏离用户偏好以缩短路由等待。",
+                     {}, 2, task_outcome="matched", user_outcome="alternative")
+ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
+                     "合成预览：候选超出路由边界，等待 Host 选择配置。", {"adapter": "claude"}, 1)
+ROUTING_A3 = routing("preview-decision-a3", "preview-run-a3-router", "cancelled", None,
+                     "合成预览：Host 取消路由并显式指定执行配置。", {"adapter": "claude"}, 1)
+ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a2-router-abstention",
+                               "abstention", None, "合成预览：证据不足，主动放弃选择并等待 Host。",
+                               {"adapter": "claude"}, 1, elapsed_ms=60000, tool_calls=2, bytes_read=16384)
 
 
 def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
@@ -301,7 +319,7 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
 
 
 def build_runs() -> dict[str, dict]:
-    """The nine governed delegations and three internal routing rows."""
+    """The nine governed delegations and four internal routing rows."""
     runs = [
         run("preview-run-a1", project="alpha", group=OBJ_A,
             title=long_title("工作目标时间轴：预览服务器合成夹具与只读接口验证 —— 这是一个刻意加长的委派标题，"
@@ -315,7 +333,8 @@ def build_runs() -> dict[str, dict]:
                 span("queue:att-a1-1", "queue", instant(6, 0), instant(6, 2), "claimed",
                      attempt_id="att-a1-1"),
                 span("routing:att-router-a1", "routing", instant(6, 2), instant(6, 5), "finished",
-                     attempt_id="att-router-a1", confirmed=True, decision_task="preview-run-a1-router"),
+                     attempt_id="att-router-a1", confirmed=True, decision_task="preview-run-a1-router",
+                     disposition="completed", routing_record=ROUTING_A1),
                 span("execution:att-a1-1", "execution", instant(6, 5), instant(6, 40), "finished",
                      attempt_id="att-a1-1", configuration=CFG_FLASH, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
@@ -396,19 +415,24 @@ def build_runs() -> dict[str, dict]:
             task_text="核对等待 Host 的开放片段、决定标记与协助请求在时间轴和详情中的呈现。",
             created=instant(8, 30), updated=instant(9, 20), state="awaiting-host", status="completed",
             category="host", configuration=CFG_CLAUDE, result=True, continuation_count=1,
-            result_summary="核对 Host 等待片段与决定标记的渲染", routing=ROUTING_A2,
+            result_summary="核对 Host 等待片段与决定标记的渲染", routing=ROUTING_A2_ABSTENTION,
             active_request=ACTIVE_REQUEST,
             spans=[
                 span("queue:att-a2-1", "queue", instant(8, 30), instant(8, 33), "claimed",
                      attempt_id="att-a2-1"),
                 span("routing:att-router-a2", "routing", instant(8, 33), instant(8, 36), "finished",
-                     attempt_id="att-router-a2", confirmed=True, decision_task="preview-run-a2-router"),
+                     attempt_id="att-router-a2", confirmed=True, decision_task="preview-run-a2-router",
+                     disposition="completed", result_status="failed", routing_record=ROUTING_A2,
+                     error="synthetic preview: routing bounds rejected"),
                 span("execution:att-a2-1", "execution", instant(8, 36), instant(8, 55), "finished",
                      attempt_id="att-a2-1", configuration=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
                 span("host:req-a2-1", "host", instant(8, 55), instant(9, 0), "declined",
                      request_id="req-a2-1", request_kind="routing",
                      summary="合成预览：路由需要 Host 决定，已按预览策略拒绝"),
+                span("routing:att-router-a2-abstention", "routing", instant(9, 0), instant(9, 1), "finished",
+                     attempt_id="att-router-a2-abstention", confirmed=True, disposition="abstention",
+                     decision_task="preview-run-a2-router-abstention", routing_record=ROUTING_A2_ABSTENTION),
                 span("queue:att-a2-2", "queue", instant(9, 1), instant(9, 2), "claimed",
                      attempt_id="att-a2-2"),
                 span("execution:att-a2-2", "execution", instant(9, 2), instant(9, 20), "finished",
@@ -438,7 +462,8 @@ def build_runs() -> dict[str, dict]:
                 span("queue:att-a3-1", "queue", instant(9, 35), instant(9, 36), "claimed",
                      attempt_id="att-a3-1"),
                 span("routing:att-router-a3", "routing", instant(9, 36), instant(9, 39), "finished",
-                     attempt_id="att-router-a3", confirmed=True, decision_task="preview-run-a3-router"),
+                     attempt_id="att-router-a3", confirmed=True, decision_task="preview-run-a3-router",
+                     disposition="cancelled", result_status="cancelled", routing_record=ROUTING_A3),
                 span("execution:att-a3-1", "execution", instant(9, 39), None, "executing",
                      attempt_id="att-a3-1", configuration=CFG_CLAUDE, confirmed=False, generation=1,
                      disposition="completed", turn_index=1),
@@ -541,16 +566,19 @@ def build_runs() -> dict[str, dict]:
                                 "/synthetic-preview/diffs/c1h.diff", ["apps/console/src/task-title.ts"])]),
     ]
     # Internal routing rows: real task history, never objective rows.
-    for router, owner, decision, label in (
-            ("preview-run-a1-router", "preview-run-a1", "preview-decision-a1", "dsh/deepseek-flash"),
-            ("preview-run-a2-router", "preview-run-a2", "preview-decision-a2", "Host boundary"),
-            ("preview-run-a3-router", "preview-run-a3", "preview-decision-a3", "claude/claude-opus-5-5")):
-        runs.append(run(router, project="alpha", parent=owner, title=f"内部路由计算：选择 {label}",
+    for owner, record in (("preview-run-a1", ROUTING_A1), ("preview-run-a2", ROUTING_A2),
+                          ("preview-run-a3", ROUTING_A3), ("preview-run-a2", ROUTING_A2_ABSTENTION)):
+        router = record["taskId"]
+        owner_entry = next(entry for entry in runs if entry["runId"] == owner)
+        recorded_span = next(item for item in owner_entry["spans"] if item.get("decisionId") == record["decisionId"])
+        runs.append(run(router, project="alpha", parent=owner, title=f"内部路由计算：{record['status']}",
                         title_source="task", task_text="为合成预览夹具选择执行配置。",
-                        created=instant(0, 0), updated=instant(0, 0), state="accepted",
-                        status="completed", category="ended", configuration=None, governed=False,
+                        created=recorded_span["startAt"], updated=recorded_span["endAt"],
+                        state="cancelled" if record["status"] == "cancelled" else "accepted",
+                        status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
+                        category="ended", configuration=None, governed=False, routing=record,
                         adapter="decision", revision=1))
-        runs[-1]["decisionId"] = decision
+        runs[-1]["decisionId"] = record["decisionId"]
         runs[-1]["requestId"] = f"request-{router}"
     by_id = {entry["runId"]: entry for entry in runs}
     for entry in runs:
@@ -1009,10 +1037,13 @@ def task_page(params: dict) -> dict:
 
 
 def profile_views() -> list[dict]:
+    # All profile claims here are synthetic, including decision support. They
+    # provide UI choices without asserting native verification of real models.
     return [{"profileId": f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}",
              "label": f"{cfg['model']} · {cfg['effort']} (synthetic preview)",
              "adapter": cfg["adapter"], "provider": cfg["provider"], "model": cfg["model"],
-             "effort": cfg["effort"], "available": True, "enabled": True, "capabilities": ["execution"],
+             "effort": cfg["effort"], "available": True, "enabled": True,
+             "capabilities": ["execution", "decision"] if cfg["adapter"] in ("dsh", "codex") else ["execution"],
              "contextWindow": 200000, "description": "synthetic preview profile",
              "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None}
             for cfg in CONFIGS]
@@ -1040,11 +1071,12 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "modelConcurrency": concurrency_rows(),
         "unavailableProfileCount": 0,
         "preferences": [], "annotations": [], "cards": [], "evidence": [], "decisions": [],
-        "routingHealth": {"windowSize": 20, "sampleCount": 5, "failureCount": 3,
-                          "consecutiveFailures": 3, "abstentionCount": 1, "cancelledCount": 0, "staleCount": 0,
-                          "lastSuccessAt": instant(11, 15), "lastSuccessDecisionId": "synthetic-success",
-                          "recentFailures": [{"decisionId": "synthetic-routing-refusal", "runId": "preview-run-a1",
-                                              "at": instant(14, 5), "code": "policy-check-shape"}]},
+        "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
+                          "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1, "staleCount": 0,
+                          "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
+                          "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
+                          "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
+                                              "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
         "pendingEvidence": 0, "sampleCounts": {profile["profileId"]: 0 for profile in profiles},
         "tasks": {"runs": tasks, "total": len(tasks), "nextCursor": None},
         "capabilities": {"selection": True, "maintenance": False, "maintenanceMode": "harness-owned",
@@ -1056,14 +1088,15 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
 
 
 def decision_view(router: dict) -> dict:
-    """One compact decision record, built from the router row and its owner's routing."""
-    routing = FIXTURES["runs"][router["parentRunId"]]["routing"]
+    """One compact decision record from this exact internal router row."""
+    routing = router["routing"]
     return {"decisionId": router["decisionId"], "requestId": router["requestId"], "kind": "select",
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
             "profileId": None, "selectedProfile": routing["selectedProfile"],
             "decisionModel": {"requested": None, "resolved": None, "observed": None},
             "tableRevision": routing["tableRevision"] or 7, "expectedRevision": 7,
             "publishedRevision": None, "noOp": False, "reason": routing["reason"], "evidenceIds": [],
+            "policyCheck": routing["policyCheck"], "budget": routing["budget"], "usage": routing["usage"],
             "createdAt": router["createdAt"], "updatedAt": router["updatedAt"],
             "pendingEvidenceRemaining": 0}
 
@@ -1081,7 +1114,7 @@ def selection_get(params: dict) -> dict:
         raise PreviewError("NOT_FOUND", "Unknown decisionId")
     view = decision_view(router)
     if params.get("includeAudit"):
-        routing = FIXTURES["runs"][router["parentRunId"]]["routing"]
+        routing = router["routing"]
         view.update({"attemptId": None, "generation": 1,
                      "configurationRevision": routing["configurationRevision"], "readerId": None,
                      "writerId": None, "writerGeneration": None, "autoPublish": False,
@@ -1113,14 +1146,19 @@ def workflow_get(params: dict) -> dict:
     if history is not None:
         if not isinstance(history, dict):
             raise PreviewError("INVALID_ARGUMENT", "routingHistory must be an object")
-        routing = entry["routing"]
-        entries = ([{"status": routing["status"], "decisionId": routing["decisionId"],
+        records = sorted((router for router in FIXTURES["runs"].values()
+                          if router["kind"] == "decision" and router["parentRunId"] == run_id),
+                         key=lambda router: (router["createdAt"], router["decisionId"]), reverse=True)
+        entries = []
+        for router in records:
+            routing = router["routing"]
+            entries.append({"status": routing["status"], "decisionId": routing["decisionId"],
                      "taskId": routing["taskId"], "tableRevision": routing["tableRevision"],
                      "configurationRevision": routing["configurationRevision"],
                      "selectedProfile": routing["selectedProfile"], "reason": routing["reason"],
-                     "constraints": routing["constraints"], "createdAt": entry["createdAt"],
-                     "ownerGeneration": 1, "current": True}]
-                   if routing and routing["decisionId"] else [])
+                     "constraints": routing["constraints"], "createdAt": router["createdAt"],
+                     "policyCheck": routing["policyCheck"], "budget": routing["budget"], "usage": routing["usage"],
+                     "ownerGeneration": 1, "current": routing["decisionId"] == entry["routing"]["decisionId"]})
         view["routingHistory"] = {"entries": entries, "nextCursor": None, "total": len(entries)}
     return view
 
@@ -1542,6 +1580,49 @@ def validate_fixtures() -> list[str]:
     kinds = {item["kind"] for _run_id, item in FIXTURES["markers"]}
     if set(MARKER_LABELS) - kinds:
         problems.append(f"missing marker kinds: {sorted(set(MARKER_LABELS) - kinds)}")
+    routing_spans = [item for item in timeline["spans"] if item["kind"] == "routing"]
+    statuses: set[str] = set()
+    for item in routing_spans:
+        decision = selection_get({"decisionId": item["decisionId"], "includeAudit": True})["decision"]
+        statuses.add(decision["status"])
+        router = FIXTURES["runs"][item["decisionTaskId"]]
+        if router["parentRunId"] != item["runId"] or router["decisionId"] != item["decisionId"]:
+            problems.append(f"{item['spanId']}: routing decision attributed to another run")
+        projection = item["routing"]
+        if any(projection[key] != decision[key] for key in projection):
+            problems.append(f"{item['spanId']}: decision detail differs from span projection")
+        expected_result = {"completed": "ok", "failed": "failed", "cancelled": "cancelled", "abstention": "ok"}
+        if item.get("resultStatus") != expected_result[decision["status"]]:
+            problems.append(f"{item['spanId']}: routing result status is inconsistent")
+        if decision["status"] == "abstention" and (item.get("error") or item.get("disposition") != "abstention"):
+            problems.append("routing abstention must not project as a failure")
+        policy = projection["policyCheck"]
+        if set(policy) != {"hardConstraints", "taskPreference", "userPreference"} or set(
+                policy["taskPreference"]) != {"ruleIndex", "outcome"}:
+            problems.append(f"{item['spanId']}: policyCheck differs from Python selection policy shape")
+        if any(not isinstance(value, int) or value < 0 or value > projection["budget"][key]
+               for key, value in projection["usage"].items()):
+            problems.append(f"{item['spanId']}: synthetic usage exceeds its budget")
+        entries = workflow_get({"runId": item["runId"], "routingHistory": {}})["routingHistory"]["entries"]
+        if not any(entry["decisionId"] == item["decisionId"] and entry["status"] == decision["status"]
+                   for entry in entries):
+            problems.append(f"{item['spanId']}: precise decision missing from owner routing history")
+    if len(routing_spans) != 4 or statuses != {"completed", "failed", "cancelled", "abstention"}:
+        problems.append(f"routing fixtures must cover four outcomes: {sorted(statuses)}")
+    history_a2 = workflow_get({"runId": "preview-run-a2", "routingHistory": {}})["routingHistory"]
+    if history_a2["total"] != 2 or sum(entry["current"] for entry in history_a2["entries"]) != 1:
+        problems.append("rerouting history must preserve both decisions with one current decision")
+    if json.dumps(FIXTURES, sort_keys=True) != json.dumps(build_runs(), sort_keys=True):
+        problems.append("routing fixture construction is not deterministic")
+    snapshot = console_snapshot("normal", False)
+    health = snapshot["routingHealth"]
+    for status, field in (("failed", "failureCount"), ("cancelled", "cancelledCount"), ("abstention", "abstentionCount")):
+        if health[field] != sum(selection_get({"decisionId": item["decisionId"]})["decision"]["status"] == status
+                                for item in routing_spans):
+            problems.append(f"routingHealth.{field} differs from synthetic decisions")
+    if any(not isinstance(health.get(key), int) or health[key] < 0 for key in
+           ("budgetExhaustedCount", "boundsRejectedCount", "inputChangedCount")):
+        problems.append("routing health must expose nonnegative synthetic budget/bounds/input statistics")
     return problems
 
 
