@@ -47,6 +47,10 @@ Daily [installation is 0.17.0/schema 12](acceptance/installed-0.17.0.md). The cu
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
+## Proposed design direction
+
+[ADR-017: local installation, on-demand service and harness discovery](decisions/017-local-installation-and-harness-discovery.md) (proposed, not implemented) keeps every Worker on the local machine, starts the single service on demand from any Host but never from inside a Host sandbox, installs and updates through one versioned command that refuses while work is running, and makes the service find and handshake harness executables itself without running shell configuration files or storing environment values.
+
 ## Accepted design direction
 
 [ADR-015: shared `.agents` skill distribution](decisions/015-shared-agent-skill-distribution.md) replaces the Codex plugin with one `buddy` skill in `~/.agents/skills` that carries its CLI, linked into `~/.claude/skills` for Claude Code, and supersedes ADR-007's plugin-only distribution rule.
