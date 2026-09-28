@@ -78,7 +78,7 @@ class BoardPrepareTests(WorkflowTestCase):
         self.assertTrue(report['verified'])
         self.assertEqual((report['sourceSchema'], report['schema']), (11, SCHEMA_VERSION))
         self.assertEqual((report['migration']['fromSchema'], report['migration']['toSchema']),
-                         (PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION))
+                         (12, SCHEMA_VERSION))
         self.assertEqual(report['objectivesCreated'], 0)
         self.assertEqual(sha256(source / DB_FILE), before, 'the source is never written')
         self.assertEqual(os.stat(destination / DB_FILE).st_mode & 0o777, 0o600)

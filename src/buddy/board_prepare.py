@@ -25,9 +25,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from .db import DB_FILE, PREVIOUS_SCHEMA_VERSION, SCHEMA, SCHEMA_VERSION, SECRET_KEY
+from .db import DB_FILE, SCHEMA, SCHEMA_VERSION, SECRET_KEY
 from .errors import BoardError
-from .migrations import MIGRATED_TABLES, migrate_12_to_13
+from .migrations import MIGRATED_TABLES_13, migrate_12_to_13, migrate_13_to_14
 from .objectives import record_activity
 
 SOURCE_SCHEMA_VERSION = 11
@@ -168,17 +168,18 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
             for event in connection.execute("SELECT seq, task_id, created_at FROM events ORDER BY seq").fetchall():
                 record_activity(connection, event["task_id"], int(event["seq"]), event["created_at"])
                 derived += 1
-            connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(PREVIOUS_SCHEMA_VERSION),))
+            connection.execute("UPDATE meta SET value='12' WHERE key='schema_version'")
             connection.execute("COMMIT")
         except BaseException:
             connection.execute("ROLLBACK")
             raise
         migration = migrate_12_to_13(connection)
+        migration = {**migration, "healthMigration": migrate_13_to_14(connection), "toSchema": SCHEMA_VERSION}
         connection.execute("PRAGMA foreign_keys=ON")
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         shape = _schema_shape(connection)
-        tables = [table for table in tables if table not in MIGRATED_TABLES]
+        tables = [table for table in tables if table not in MIGRATED_TABLES_13]
         target_counts = {table: connection.execute(f"SELECT COUNT(*) FROM '{table}'").fetchone()[0] for table in tables}
         target_secret = connection.execute("SELECT value FROM meta WHERE key=?", (SECRET_KEY,)).fetchone()
         runs_with_activity = connection.execute("SELECT COUNT(*) FROM workflow_runs WHERE activity_seq > 0").fetchone()[0]

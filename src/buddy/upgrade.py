@@ -220,7 +220,7 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
     meta_before = meta_rows()
     try:
         with closing(sqlite3.connect(board, isolation_level=None, timeout=10)) as connection:
-            summary = migrations.migrate_12_to_13(connection)
+            summary = migrations.migrate_13_to_14(connection)
     except (sqlite3.Error, ValueError) as error:
         raise BoardError('UPGRADE_MIGRATION_FAILED', f'Board migration failed: {error}') from None
     expected = idle_snapshot(state, event_head=before.get('eventHead'))

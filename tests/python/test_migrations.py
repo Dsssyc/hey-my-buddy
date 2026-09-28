@@ -46,6 +46,7 @@ class MigrationTests(unittest.TestCase):
         fresh = sqlite3.connect(":memory:")
         self.addCleanup(fresh.close)
         fresh.executescript(SCHEMA)
+        fresh.execute("DROP TABLE harness_health")
         self.assertEqual(shape(self.connection), shape(fresh))
         self.assertEqual(migrations.schema_version(self.connection), 13)
 

@@ -18,9 +18,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 #: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 12
+PREVIOUS_SCHEMA_VERSION = 13
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -1032,8 +1032,22 @@ CREATE INDEX IF NOT EXISTS workflow_suggestions_run_idx ON workflow_suggestions(
 
 WORKFLOW_SCHEMA = "\n".join(WORKFLOW_TABLES)
 
+HARNESS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS harness_health (
+    adapter TEXT PRIMARY KEY CHECK (adapter IN ('dsh','zcode','codex','claude')),
+    manual_path TEXT,
+    revision INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (status IN ('unknown','ready','missing','login-required','unhealthy')),
+    record_json TEXT NOT NULL DEFAULT '{}',
+    checked_at TEXT,
+    expires_at TEXT,
+    scan_after TEXT
+);
+"""
+
 #: The only supported schema; used to create a fresh state directory.
-SCHEMA = CORE_SCHEMA + "\n" + EVALUATION_SCHEMA + "\n" + WORKFLOW_SCHEMA
+SCHEMA = CORE_SCHEMA + "\n" + EVALUATION_SCHEMA + "\n" + WORKFLOW_SCHEMA + "\n" + HARNESS_SCHEMA
 
 
 def utc_now() -> str:

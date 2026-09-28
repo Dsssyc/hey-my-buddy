@@ -1,27 +1,20 @@
-"""In-place board migration from the previous schema, run only by ``upgrade``.
+"""Explicit board migrations; runtime startup never converts a database.
 
-The runtime still never converts a board at startup. ``upgrade`` calls
-``migrate_12_to_13`` after the verified backup exists and while it holds the
-exclusive daemon and board-owner locks; one ``BEGIN IMMEDIATE`` transaction either
-applies every change or none, and any later failure restores that backup.
-
-Schema 13 moves user preferences and notes to the model family (design and data
-contract in ``docs/design/buddy-settings.md``): a preference shared by every effort of a family
-becomes the family default; anything else stays a per-effort override. Notes are
-merged per family, labelled with their source effort when they differ, and never
-truncated. Tables other than the three preference/note tables and the schema marker
-must be byte-for-byte unchanged, which ``upgrade`` verifies by fingerprint.
+Upgrade migrates an idle, backed-up schema-13 board to 14 under exclusive owner
+locks and verifies every retained table fingerprint. The historical 12-to-13
+step remains only for the separately invoked offline board preparation helper.
 """
 from __future__ import annotations
 
 from collections import defaultdict
 import sqlite3
 
-from .db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION
+from .db import HARNESS_SCHEMA
 
 #: Tables this migration may rewrite; every other table must keep its fingerprint.
-MIGRATED_TABLES = frozenset({"evaluation_preferences", "evaluation_annotations",
+MIGRATED_TABLES_13 = frozenset({"evaluation_preferences", "evaluation_annotations",
                              "family_preferences", "family_annotations", "meta"})
+MIGRATED_TABLES = frozenset({"harness_health", "meta"})
 
 _STATEMENTS = (
     """CREATE TABLE family_preferences (
@@ -76,8 +69,8 @@ def _families(connection: sqlite3.Connection) -> dict[tuple, list[tuple[str, str
 
 def migrate_12_to_13(connection: sqlite3.Connection) -> dict:
     """Apply the whole migration in one transaction and return what moved."""
-    if schema_version(connection) != PREVIOUS_SCHEMA_VERSION:
-        raise ValueError(f"migration expects schema {PREVIOUS_SCHEMA_VERSION}")
+    if schema_version(connection) != 12:
+        raise ValueError("migration expects schema 12")
     connection.execute("PRAGMA foreign_keys=OFF")
     connection.execute("BEGIN IMMEDIATE")
     try:
@@ -126,7 +119,7 @@ def migrate_12_to_13(connection: sqlite3.Connection) -> dict:
             raise ValueError("annotations reference unknown profiles")
         connection.execute("DROP TABLE evaluation_annotations")
         connection.execute(_VIEW)
-        connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+        connection.execute("UPDATE meta SET value='13' WHERE key='schema_version'")
         if connection.execute("PRAGMA foreign_key_check").fetchall():
             raise ValueError("foreign key check failed after migration")
         connection.execute("COMMIT")
@@ -137,6 +130,27 @@ def migrate_12_to_13(connection: sqlite3.Connection) -> dict:
         connection.execute("PRAGMA foreign_keys=ON")
     if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         raise ValueError("integrity check failed after migration")
-    return {"fromSchema": PREVIOUS_SCHEMA_VERSION, "toSchema": SCHEMA_VERSION,
+    return {"fromSchema": 12, "toSchema": 13,
             "familyPreferences": merged_families, "preferenceOverrides": overrides,
             "familyAnnotations": merged_notes, "annotationsMerged": len(notes)}
+
+
+def migrate_13_to_14(connection: sqlite3.Connection) -> dict:
+    """Add empty service-owned health records; never probe or change user policy."""
+    if schema_version(connection) != 13:
+        raise ValueError("migration expects schema 13")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='harness_health'").fetchone():
+            raise ValueError("unexpected harness_health table in schema 13")
+        connection.execute(HARNESS_SCHEMA)
+        connection.execute("UPDATE meta SET value='14' WHERE key='schema_version'")
+        if connection.execute("PRAGMA foreign_key_check").fetchall():
+            raise ValueError("foreign key check failed after migration")
+        if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
+            raise ValueError("integrity check failed after migration")
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
+    return {"fromSchema": 13, "toSchema": 14, "harnessHealth": 0}
