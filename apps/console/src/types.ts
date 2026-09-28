@@ -1,4 +1,38 @@
+/** The five recorded states of one harness in the console snapshot. */
+export type HarnessStatus = "unknown" | "ready" | "missing" | "login-required" | "unhealthy";
+/** One location discovery tried, and why it was not chosen. */
+export type HarnessCandidate = {
+  path?: string;
+  source?: string;
+  reasonCode?: string;
+  status?: string;
+};
+/**
+ * One harness's recorded health. `ready` carries the chosen executable, its
+ * version and where it came from; every other status carries the attempted
+ * locations and a remedy. `manualPath` is the user's stored override (`null`
+ * means automatic detection) and `revision` fences a concurrent change, so a
+ * save is refused rather than overwriting a newer check.
+ */
+export type HarnessHealth = {
+  adapter: string;
+  status: HarnessStatus;
+  available: boolean;
+  revision: number;
+  manualPath: string | null;
+  command?: string[];
+  executable?: string;
+  version?: string;
+  source?: string;
+  candidates?: HarnessCandidate[];
+  reasonCode?: string;
+  remedy?: string;
+  checkedAt?: string | null;
+  expiresAt?: string | null;
+};
+
 export type Profile = {
+  newlyDiscovered?: boolean;
   profileId: string;
   label: string;
   adapter: string;
@@ -230,6 +264,7 @@ export type ConsoleSession = {
   reason: null;
 };
 export type Snapshot = {
+  harnesses?: HarnessHealth[];
   csrfToken: string;
   /** Authenticated browser session; missing or malformed fails closed. */
   consoleSession: ConsoleSession;

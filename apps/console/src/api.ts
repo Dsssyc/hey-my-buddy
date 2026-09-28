@@ -171,6 +171,58 @@ function validTimelineRows(rows: unknown): boolean {
   });
 }
 
+/* ---- harness health wire shapes (ADR-017 §15) ---- */
+
+export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
+import type { HarnessHealth } from "./types";
+
+/** The supported harnesses, in the Buddy 配置 page's fixed display order. */
+export const HARNESS_ADAPTERS = ["dsh", "zcode", "codex", "claude"] as const;
+
+/**
+ * Strict parse of one harness row. A malformed row is dropped as unknown rather
+ * than presented as health; an absent snapshot field is not invented either.
+ */
+function harnessRow(value: unknown): HarnessHealth | null {
+  const row = value as HarnessHealth | null;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  if (typeof row.adapter !== "string" || !row.adapter.trim()) return null;
+  if (!["unknown", "ready", "missing", "login-required", "unhealthy"].includes(row.status)) return null;
+  if ((row.status === "ready") !== row.available) return null;
+  if (typeof row.available !== "boolean" || !Number.isInteger(row.revision) || row.revision < 0) return null;
+  if (!(row.manualPath === null || row.manualPath === undefined || typeof row.manualPath === "string")) return null;
+  for (const key of ["executable", "version", "source", "reasonCode", "remedy", "checkedAt", "expiresAt"] as const) {
+    if (row[key] != null && typeof row[key] !== "string") return null;
+  }
+  if (row.command != null && (!Array.isArray(row.command) || row.command.some(value => typeof value !== "string"))) return null;
+  if (row.candidates != null && (!Array.isArray(row.candidates) || row.candidates.some(candidate =>
+    !candidate || typeof candidate !== "object" || ["path", "source", "reasonCode", "status"].some(key =>
+      (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")))) return null;
+  return { ...row, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null };
+}
+
+/** Known harnesses first in their fixed order; anything else keeps its own order. */
+function harnessRows(value: unknown): HarnessHealth[] {
+  if (!Array.isArray(value)) return [];
+  const rank = (adapter: string) => {
+    const index = (HARNESS_ADAPTERS as readonly string[]).indexOf(adapter.trim().toLowerCase());
+    return index === -1 ? HARNESS_ADAPTERS.length : index;
+  };
+  return value.map(harnessRow)
+    .filter((row): row is HarnessHealth => row !== null)
+    .sort((a, b) => rank(a.adapter) - rank(b.adapter));
+}
+
+/** The snapshot's `harnesses` rows; a missing field reads as no recorded health. */
+export function snapshotHarnesses(snapshot: Snapshot): HarnessHealth[] {
+  return harnessRows(snapshot.harnesses);
+}
+
+/** The `harnesses` rows carried by a `capabilities` reply. */
+export function commandHarnesses(reply: unknown): HarnessHealth[] {
+  return harnessRows((reply as { harnesses?: unknown } | null)?.harnesses);
+}
+
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
   const base = prefix.replace(/\/+$/, "");
   async function request(path: string, init: RequestInit = {}) {
@@ -326,6 +378,47 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         throw new ApiError("INVALID_RESPONSE", "清理尚未完成：回复不完整或与本计划不符，结果未知；可重试同一请求。");
       }
       return result;
+    },
+    /**
+     * `capabilities` with `refresh: true` (ADR-017 §15): one explicit, bounded
+     * harness re-check, optionally for a single adapter. It performs no model
+     * call, and the reply is the capabilities object carrying the refreshed
+     * `harnesses` rows. Nothing is cached here: the caller reloads the snapshot
+     * so the page shows the recorded health rather than a local guess.
+     */
+    async harnessRefresh(csrfToken: string, adapter?: string): Promise<HarnessHealth[]> {
+      const reply = await command<unknown>(
+        "capabilities",
+        adapter ? { refresh: true, adapter } : { refresh: true },
+        csrfToken,
+      );
+      const rows = commandHarnesses(reply);
+      if (!rows.length) {
+        throw new ApiError("INVALID_RESPONSE", "重新检测的回复不完整，请检查服务版本。");
+      }
+      return rows;
+    },
+    /**
+     * `harness_set` (ADR-017 §15): stores one manual absolute path, or `null`
+     * to restore automatic detection. `expectedRevision` fences the write
+     * against a concurrent check; a conflict is reported, never overwritten.
+     */
+    async harnessSet(
+      adapter: string,
+      path: string | null,
+      expectedRevision: number,
+      csrfToken: string,
+    ): Promise<HarnessHealth> {
+      const reply = await command<unknown>(
+        "harness_set",
+        { adapter, path, expectedRevision },
+        csrfToken,
+      );
+      const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
+      if (!row || row.adapter.toLowerCase() !== adapter.trim().toLowerCase()) {
+        throw new ApiError("INVALID_RESPONSE", "手动路径保存结果不完整，请检查服务版本。");
+      }
+      return row;
     },
   };
   async function command<T = unknown>(operation: string, params: unknown, csrfToken: string): Promise<T> {

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { PREFERENCE_ICON } from "./buddy-display";
-import type { ConsoleApi } from "./api";
+import type { ConsoleApi, HarnessHealth } from "./api";
 import type {
   FamilyPreference,
   Preference,
@@ -76,7 +76,26 @@ function effective(state: Snapshot): Preference[] {
 
 type Options = { familyPreferences?: FamilyPreference[]; preferenceOverrides?: PreferenceOverride[] };
 
-function snapshot(options: Options = {}): Snapshot {
+/**
+ * The snapshot's harness health (ADR-017 §15): the Claude harness used by the
+ * available family is ready, and the ZCode harness behind the unavailable
+ * family is recorded as missing with an attempted location and a remedy.
+ */
+function harnesses(): HarnessHealth[] {
+  return [
+    { adapter: "claude", status: "ready", available: true, revision: 2, manualPath: null,
+      executable: "/Users/fixture/.local/bin/claude", version: "2.0.1",
+      source: "版本管理器（nvm 默认版本）", checkedAt: "2026-09-28T09:30:00.000Z", candidates: [] },
+    { adapter: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
+      reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。",
+      checkedAt: "2026-09-28T09:30:00.000Z",
+      candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" }] },
+  ];
+}
+
+type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
+
+function snapshot(options: Options = {}): HarnessSnapshot {
   const base: Snapshot = {
     csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
@@ -100,11 +119,11 @@ function snapshot(options: Options = {}): Snapshot {
     tasks: { runs: [], total: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
-  return { ...base, preferences: effective(base) };
+  return { ...base, preferences: effective(base), harnesses: harnesses() };
 }
 
-function applyPublication(state: Snapshot, params: Record<string, any>): Snapshot {
-  const next: Snapshot = {
+function applyPublication(state: HarnessSnapshot, params: Record<string, any>): HarnessSnapshot {
+  const next: HarnessSnapshot = {
     ...state,
     tableRevision: state.tableRevision + 1,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
@@ -238,6 +257,19 @@ describe("the model family list", () => {
     expect(screen.getByRole("button", { name: "Claude Sonnet 5，已启用 1/2，Router" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "GPT-6 Sol，已启用 0/2" })).toBeTruthy();
     expect(screen.getByText("Router")).toBeTruthy();
+  });
+
+  it("shows the recorded harness health beside the family list without calling anything", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    const strip = screen.getByRole("region", { name: "Harness 状态" });
+    expect(within(strip).getByText("可用 1/2")).toBeTruthy();
+    expect(within(strip).getByText(/^找到：路径 \/Users\/fixture\/\.local\/bin\/claude · 版本 2\.0\.1/)).toBeTruthy();
+    expect(within(strip).getByText("未找到可执行文件（已尝试 1 处）")).toBeTruthy();
+    // The strip is read-only on entry: no command, no draft.
+    expect(f.command).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
   });
 
   it("matches adapter id, harness display name, provider and model name, case-insensitively", async () => {

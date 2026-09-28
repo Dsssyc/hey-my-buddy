@@ -714,6 +714,38 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .routing-details .routing-status { margin-top: 0; padding-top: 0; border-top: 0; }
 .router-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 
+/* ADR-017 §15: the harness strip under the routing line. Each harness keeps a
+   badge plus wording, never colour alone; details and the advanced manual path
+   stay folded until asked for, and a warning border marks a non-ready row. */
+.harness-status-bar { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 12px; }
+.harness-status-bar.warning { border-color: var(--warning-line); }
+.harness-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px; }
+.harness-status-facts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); min-width: 0; }
+.harness-status-line > .button { margin-left: auto; }
+.harness-status-bar > .guard-banner, .harness-status-bar > .success-message { margin: 0; padding: 6px 12px; }
+.harness-status-list { border-top: 1px solid var(--line); }
+.harness-status-row { border-top: 1px solid var(--line); }
+.harness-status-list > .harness-status-row:first-child { border-top: 0; }
+.harness-status-rowline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 12px; }
+.harness-name { font-weight: 600; min-width: 5.5em; }
+.harness-summary { flex: 1 1 240px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harness-row-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+.harness-detail { display: grid; gap: 8px; padding: 6px 12px 10px; border-top: 1px dashed var(--line); }
+.harness-facts { display: grid; gap: 2px; margin: 0; }
+.harness-facts > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+.harness-facts dt { color: var(--muted); }
+.harness-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.harness-path { overflow-wrap: anywhere; }
+.harness-remedy { margin: 0; overflow-wrap: anywhere; }
+.harness-candidates h4 { font-size: 12px; margin: 0 0 4px; }
+.harness-candidates ul { display: grid; gap: 3px; }
+.harness-candidates li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.harness-manual { display: grid; gap: 6px; }
+.harness-manual h4 { font-size: 12px; margin: 0; }
+.harness-manual p { margin: 0; }
+.harness-manual-field { display: grid; gap: 4px; }
+.harness-manual-field input { max-width: 34em; font-size: 12px; }
+
 /* The family list: harness groups, folded when unavailable. */
 .harness-heading { cursor: pointer; }
 .harness-reason { padding: 4px 12px 6px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
@@ -786,4 +818,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 @media (max-width: 760px) {
   .family-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .routing-status-line > .button { margin-left: 0; }
+  .harness-status-line > .button, .harness-row-actions { margin-left: 0; }
+  .harness-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
