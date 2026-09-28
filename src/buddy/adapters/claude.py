@@ -22,6 +22,7 @@ from pathlib import Path
 from ..errors import BoardError
 from . import turn_io
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
+from .windows_process import owned_popen
 from .claude_config import ClaudeUnavailable, cli_command, settings_policy, third_party_overrides
 from .claude_protocol import QUOTA_REJECTED_ERROR, decode_json
 
@@ -120,7 +121,7 @@ class ClaudeAdapter(Adapter):
         paths = context.log_paths()
         stdout, stderr = open_logs(paths)
         try:
-            process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.claude_runner", "--control",
+            process = owned_popen([sys.executable, "-m", "buddy.adapters.claude_runner", "--control",
                                         str(context.directory / "claude-control.json")],
                                        cwd=turn_io.workspace_cwd(context), env=controller_environment(context.directory, context.environment),
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
@@ -269,7 +270,7 @@ def _probe_native_metadata() -> dict:
         logs = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
         stdout, stderr = open_logs(logs)
         try:
-            process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.claude_runner", "--control", str(control)],
+            process = owned_popen([sys.executable, "-m", "buddy.adapters.claude_runner", "--control", str(control)],
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, env=controller_environment(directory))
         finally:
             os.close(stdout)

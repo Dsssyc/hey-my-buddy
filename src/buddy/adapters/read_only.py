@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .base import AdapterOutcome, ExecutionContext, ProcessHandle, ReadOnlyStructuredRequest, open_logs
+from .windows_process import owned_popen
 from .turn_io import private_json
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
@@ -98,7 +99,7 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     environment = controller_environment(context.directory, context.environment, read_only=True)
     stdout, stderr = open_logs(context.log_paths())
     try:
-        process = subprocess.Popen([sys.executable, "-m", f"buddy.adapters.{name}_runner", "--control", str(path)],
+        process = owned_popen([sys.executable, "-m", f"buddy.adapters.{name}_runner", "--control", str(path)],
                                    cwd=request.cwd, env=environment, stdin=subprocess.DEVNULL,
                                    stdout=stdout, stderr=stderr, start_new_session=True, close_fds=True)
     finally:

@@ -21,6 +21,8 @@ from pathlib import Path
 
 from .turn_io import canonical_json
 
+_WINDOWS_PIPE = os.name == "nt"
+
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_PENDING_RESPONSES = 16
 MAX_RATE_LIMIT_TYPES = 16
@@ -120,7 +122,10 @@ class Connection:
                     size = os.write(self.process.stdin.fileno(), raw)
                     raw = raw[size:]
                 except BlockingIOError:
-                    select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
+                    if _WINDOWS_PIPE:
+                        self.cancelled.wait(min(0.05, remaining))
+                    else:
+                        select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
         except OSError:
             raise ClaudeProtocolError("transport-error", "Claude input closed") from None
 

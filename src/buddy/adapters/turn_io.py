@@ -51,21 +51,25 @@ def private_json(path: Path, value: dict, *, exclusive: bool = False) -> None:
     """Write a bounded private artifact; immutable receipts must not overwrite."""
     raw = canonical_json(value).encode()
     target = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp") if exclusive else path
-    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if exclusive else os.O_TRUNC)
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | (os.O_EXCL if exclusive else os.O_TRUNC)
     fd = os.open(target, flags, 0o600)
     try:
         with os.fdopen(fd, "wb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(stream.fileno(), 0o600)
+            else:
+                os.chmod(target, 0o600)
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
         if exclusive:
             os.link(target, path)
-        parent = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(parent)
-        finally:
-            os.close(parent)
+        if os.name != "nt":
+            parent = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
     finally:
         if exclusive:
             target.unlink(missing_ok=True)

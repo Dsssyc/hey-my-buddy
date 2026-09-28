@@ -420,9 +420,9 @@ def _read_control(path_value: str) -> dict:
         raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be inspected") from exc
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
         raise BoardError("INSECURE_CONTROL_FILE", "The control file must be a regular file, not a symlink")
-    if info.st_uid != os.geteuid():
+    if os.name != 'nt' and info.st_uid != os.geteuid():
         raise BoardError("INSECURE_CONTROL_FILE", "The control file must be owned by the current user")
-    if stat.S_IMODE(info.st_mode) != 0o600:
+    if os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600:
         raise BoardError("INSECURE_CONTROL_FILE", "The control file must have mode 0600")
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -430,7 +430,7 @@ def _read_control(path_value: str) -> dict:
         raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be opened safely") from exc
     try:
         opened = os.fstat(fd)
-        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or opened.st_uid != os.geteuid():
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or (os.name != 'nt' and opened.st_uid != os.geteuid()):
             raise BoardError("INSECURE_CONTROL_FILE", "The control file changed while it was being opened")
         raw = b""
         while len(raw) <= MAX_CONTROL_FILE_BYTES:

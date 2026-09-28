@@ -11,6 +11,7 @@ import time
 from .turn_io import canonical_json
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+_WINDOWS_PIPE = os.name == "nt"
 
 
 class CodexProtocolError(Exception):
@@ -75,7 +76,10 @@ class Connection:
                     size = os.write(self.process.stdin.fileno(), raw)
                     raw = raw[size:]
                 except BlockingIOError:
-                    select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
+                    if _WINDOWS_PIPE:
+                        self.cancelled.wait(min(0.05, remaining))
+                    else:
+                        select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
         except OSError:
             raise CodexProtocolError("transport-error", "Codex input closed") from None
 

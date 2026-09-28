@@ -42,6 +42,8 @@ INQUIRY_JOURNAL_VERSION = 1
 MAX_RETAINED_INQUIRY_CALLS = 64
 
 
+_WINDOWS_PIPE = os.name == "nt"
+
 class NativeError(Exception):
     def __init__(self, code: str, message: str, failure: dict | None = None):
         super().__init__(message)
@@ -327,7 +329,7 @@ def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
     ``b""`` when it exceeds its byte bound.
     """
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None
     try:
@@ -548,7 +550,10 @@ class NativeConnection:
                     count = os.write(self.process.stdin.fileno(), raw)
                     raw = raw[count:]
                 except BlockingIOError:
-                    select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
+                    if _WINDOWS_PIPE:
+                        self.cancelled.wait(min(0.05, remaining))
+                    else:
+                        select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
         except (OSError, ValueError):
             raise NativeError("native-disconnected", "the native app server input closed") from None
 

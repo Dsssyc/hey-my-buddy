@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ..errors import BoardError
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
+from .windows_process import owned_popen
 
 TERMINATE_GRACE_SECONDS = 3.0
 
@@ -50,7 +51,7 @@ class CommandAdapter(Adapter):
         try:
             # ``shell=False`` is explicit: an operator-provided argv is one program
             # plus arguments, never a shell string.
-            process = subprocess.Popen(
+            process = owned_popen(
                 argv,
                 cwd=context.cwd,
                 env=environment,

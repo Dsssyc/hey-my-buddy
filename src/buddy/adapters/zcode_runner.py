@@ -21,6 +21,7 @@ from pathlib import Path
 from ..activity import ActivitySidecar
 from ..errors import BoardError
 from .base import ProcessHandle
+from .windows_process import owned_popen
 from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 from .zcode_config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
 from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES,
@@ -229,7 +230,7 @@ class InquiryBridge:
         merged = {**self.entries.get(inquiry_id, {}), **record}
         raw = (canonical_json({"version": INQUIRY_JOURNAL_VERSION, **record}) + "\n").encode()
         try:
-            fd = os.open(self.journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            fd = os.open(self.journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
         except OSError:
             self.error = self.error or "journal-unavailable: the inquiry record could not be appended durably"
             return False
@@ -723,9 +724,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         # suppress the actual native capability/catalog handshake below.
         version = "unknown"
     native_stderr = directory / "native.stderr.log"
-    fd = os.open(native_stderr, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    fd = os.open(native_stderr, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
-        process = subprocess.Popen([*command, "app-server", "--cwd", control["cwd"]], env=environment,
+        process = owned_popen([*command, "app-server", "--cwd", control["cwd"]], env=environment,
                                    cwd=control["cwd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
                                    start_new_session=True, close_fds=True)
     except OSError:
@@ -929,7 +930,8 @@ def main() -> int:
     parser.add_argument("--control", required=True)
     args = parser.parse_args()
     cancelled = threading.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in (signal.SIGTERM, signal.SIGINT,
+                *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
         signal.signal(sig, lambda _sig, _frame: cancelled.set())
     try:
         result, code = run(json.loads(Path(args.control).read_text()), cancelled)

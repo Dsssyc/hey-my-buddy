@@ -167,7 +167,7 @@ class Adapter:
 
 
 class ProcessHandle:
-    """One owned child process group.
+    """One owned child process group or Windows Job.
 
     Only the object that created the child may signal it: stored PIDs are diagnostic
     values and a restarted service never sends signals from them.
@@ -179,12 +179,13 @@ class ProcessHandle:
         self.log_paths = log_paths
         self.cancel_requested = False
         self.signalled_at: float | None = None
+        self.job = vars(process).get("_buddy_job")
         # Capture the process-group id while the leader is alive. Looking it up
         # later with os.getpgid(child.pid) would fail as soon as the leader exits,
         # even while its descendants are still running, and would then report a
         # live group as stopped.
         self.pgid: int | None = None
-        if own_group and process.pid is not None:
+        if own_group and self.job is None and os.name != "nt" and process.pid is not None:
             try:
                 self.pgid = os.getpgid(process.pid)
             except OSError:
@@ -202,15 +203,27 @@ class ProcessHandle:
         if self.process.pid is None:
             return
         try:
-            if self.own_group and self.pgid is not None:
+            if self.job is not None:
+                if sig == signal.SIGTERM and hasattr(signal, "CTRL_BREAK_EVENT"):
+                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                elif sig != signal.SIGTERM:
+                    self.job.terminate()
+            elif self.own_group and self.pgid is not None:
                 os.killpg(self.pgid, sig)
             else:
                 self.process.send_signal(sig)
-        except (ProcessLookupError, PermissionError, OSError):
+        except (ProcessLookupError, PermissionError, OSError, ValueError):
             pass
 
     def group_alive(self) -> bool:
         """Remain live unless the owned group is observed gone, including descendants."""
+        if self.job is not None:
+            try:
+                return self.job.active() != 0
+            except OSError:
+                return True
+        if self.own_group and os.name == 'nt':
+            return True  # A root PID without a held Job cannot prove tree shutdown.
         if self.process.pid is None:
             return False
         try:
@@ -229,7 +242,7 @@ class ProcessHandle:
             return True
 
     def terminate(self, *, grace_seconds: float = 3.0) -> None:
-        """Ask this owned process group to stop, escalating to SIGKILL in bounded time."""
+        """Ask the child to stop, then terminate only its owned group or Job."""
         self.cancel_requested = True
         self.signalled_at = time.monotonic()
         self.signal_group(signal.SIGTERM)
@@ -238,7 +251,12 @@ class ProcessHandle:
             if self.process.poll() is not None and not self.group_alive():
                 return
             time.sleep(0.05)
-        self.signal_group(signal.SIGKILL)
+        if self.job is not None:
+            self.signal_group(-1)
+        elif os.name == 'nt':
+            self.process.kill()
+        else:
+            self.signal_group(signal.SIGKILL)
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             if self.process.poll() is not None and not self.group_alive():
@@ -258,9 +276,20 @@ class ProcessHandle:
         deadline = time.monotonic() + settle_seconds
         while time.monotonic() < deadline:
             if not self.group_alive():
+                if self.job is not None:
+                    try:
+                        self.job.close(confirmed=True)
+                    except OSError:
+                        return False
                 return True
             time.sleep(0.025)
-        return not self.group_alive()
+        stopped = not self.group_alive()
+        if stopped and self.job is not None:
+            try:
+                self.job.close(confirmed=True)
+            except OSError:
+                return False
+        return stopped
 
 
 def open_logs(paths: dict) -> tuple[Any, Any]:

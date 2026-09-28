@@ -86,7 +86,7 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
 
 
 def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str]:
-    if not known:
+    if not known or os.name == 'nt':
         return ['process-inspection-unavailable']
     if any(str(directory) in command for command in commands):
         return ['runtime-in-use']

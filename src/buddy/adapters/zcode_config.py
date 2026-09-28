@@ -77,9 +77,12 @@ def snapshot_provider_files(directory: Path, environment: dict) -> tuple[dict, d
         # snapshot of these two files prevents writes to the source preferences;
         # OAuth stores and the rest of ~/.zcode are never copied.
         target = directory / name
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
         with os.fdopen(fd, "wb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(stream.fileno(), 0o600)
+            else:
+                os.chmod(target, 0o600)
             stream.write(source.read_bytes())
         result[variable] = str(target)
     result.pop("ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", None)

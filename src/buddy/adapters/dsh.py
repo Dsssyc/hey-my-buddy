@@ -21,6 +21,7 @@ from ..errors import BoardError
 from . import turn_io
 from ..runtime import resource_path
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
+from .windows_process import owned_popen
 
 UNIX_SOCKET_PATH_BUDGET = 105 if sys.platform.startswith('linux') else 101
 TERMINATE_GRACE_SECONDS = 3.0
@@ -190,7 +191,7 @@ class DshAdapter(Adapter):
                 if key in context.environment:
                     environment[key] = context.environment[key]
         try:
-            process = subprocess.Popen(
+            process = owned_popen(
                 self.arguments(context, inquiry),
                 cwd=self.workspace_cwd(context),
                 env=environment,
@@ -243,9 +244,9 @@ class DshAdapter(Adapter):
         payload = {**payload, "inquiryBridge": {k: inquiry.get(k) for k in ("socketPath", "resultsPath", "errorPath")}}
         native_activity = payload.get("nativeActivity") if isinstance(payload.get("nativeActivity"), dict) else {}
         payload["nativeActivity"] = {**native_activity, "sidecarWritten": activity_sidecar_path(context).is_file()}
-        shutdown_confirmed = bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
+        shutdown_confirmed = (bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
             exit_code, stdout_path
-        )
+        )) and handle.shutdown_confirmed()
         status = payload.get("status")
         if handle.cancel_requested or status == "cancelled":
             final = "cancelled" if shutdown_confirmed else "failed"

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .base import ProcessHandle
+from .windows_process import owned_popen
 from .codex_config import cli_command, native_environment
 from .codex_protocol import CodexProtocolError, Connection, OUTCOME_SCHEMA, TurnEvidence, decode_json, parse_outcome
 from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
@@ -283,9 +284,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     except (OSError, subprocess.TimeoutExpired):
         version = "unknown"
     native_stderr = directory / "native.stderr.log"
-    fd = os.open(native_stderr, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    fd = os.open(native_stderr, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
-        process = subprocess.Popen([*command, "app-server", "--listen", "stdio://"], cwd=control["cwd"],
+        process = owned_popen([*command, "app-server", "--listen", "stdio://"], cwd=control["cwd"],
                                    env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
                                    start_new_session=True, close_fds=True)
     except OSError:
@@ -492,7 +493,8 @@ def main() -> int:
     parser.add_argument("--control", required=True)
     args = parser.parse_args()
     cancelled = threading.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in (signal.SIGTERM, signal.SIGINT,
+                *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
         signal.signal(sig, lambda _sig, _frame: cancelled.set())
     try:
         result, code = _run(json.loads(Path(args.control).read_text()), cancelled)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..errors import BoardError
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
+from .windows_process import owned_popen
 from . import turn_io
 from .zcode_config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths
 from .zcode_protocol import NativeError, decode_json
@@ -92,7 +93,7 @@ class ZcodeAdapter(Adapter):
         paths = context.log_paths()
         stdout, stderr = open_logs(paths)
         try:
-            process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.zcode_runner", "--control",
+            process = owned_popen([sys.executable, "-m", "buddy.adapters.zcode_runner", "--control",
                                         str(context.directory / "zcode-control.json")],
                                        cwd=turn_io.workspace_cwd(context), env=controller_environment(context.directory, context.environment),
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
@@ -202,7 +203,7 @@ class ZcodeAdapter(Adapter):
             logs = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
             stdout, stderr = open_logs(logs)
             try:
-                process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.zcode_runner", "--control", str(control)],
+                process = owned_popen([sys.executable, "-m", "buddy.adapters.zcode_runner", "--control", str(control)],
                                            stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, env=controller_environment(directory))
             finally:
                 os.close(stdout)
