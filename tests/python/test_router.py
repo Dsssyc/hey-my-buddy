@@ -146,6 +146,8 @@ class RouterInputTests(unittest.TestCase):
     def test_existing_input_is_materialized_without_live_or_ignored_files(self):
         from buddy import router_input
         (self.repo / 'src/file.txt').write_text('dirty frozen input')
+        (self.repo / '.gitattributes').write_text('src/file.txt export-ignore\n')
+        self.git('add', '.gitattributes')
         (self.repo / '.gitignore').write_text('secret-cache\n')
         (self.repo / 'secret-cache').write_text('not frozen')
         manifest = self.prepare(kind='existing')
@@ -167,6 +169,7 @@ class RouterInputTests(unittest.TestCase):
         attempt = self.root / 'attempt'
         attempt.mkdir()
         mirror, fingerprint = router_input.prepare(manifest, attempt)
+        (mirror / 'src/file.txt').chmod(0o644)
         (mirror / 'src/file.txt').write_text('unexpected native write')
         self.assertFalse(router_input.verify(manifest, mirror, fingerprint)['unchanged'])
         (self.repo / 'src/escape').symlink_to(self.root / 'outside')

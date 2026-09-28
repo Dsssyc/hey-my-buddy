@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
-import tarfile
 
 from .errors import BoardError
 from . import workspace
@@ -18,6 +17,7 @@ def digest(root: Path) -> str:
         for name in sorted(names + files):
             path = Path(directory) / name
             value.update(path.relative_to(root).as_posix().encode() + b"\0")
+            value.update(str(path.lstat().st_mode & 0o777).encode() + b"\0")
             if path.is_symlink():
                 value.update(b"link\0" + os.readlink(path).encode())
             elif path.is_file():
@@ -42,21 +42,41 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
     workspace.verify(manifest, require_unchanged=True)
     root = directory / "frozen-input"
     root.mkdir(mode=0o700)
-    archive = directory / "frozen-input.tar"
-    try:
-        with archive.open('xb') as output:
-            result = subprocess.run(["git", "-C", manifest["checkoutRoot"], "archive", "--format=tar", manifest["inputTree"]],
-                                    stdout=output, stderr=subprocess.PIPE, timeout=30, check=False)
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0")
+    def git(*arguments):
+        result = subprocess.run(["git", "-C", manifest["checkoutRoot"], *arguments],
+                                capture_output=True, env=environment, timeout=30, check=False)
         if result.returncode:
-            raise BoardError("router-input-unavailable", "The frozen input tree is unavailable")
-        with tarfile.open(archive) as packed:
-            # Reject escaping links and special files; do not follow live filesystem data.
-            packed.extractall(root, filter="data")
+            raise BoardError("router-input-unavailable", "A frozen Git object is unavailable")
+        return result.stdout
+    try:
+        # Git archive/checkout can apply export-ignore, export-subst or smudge
+        # filters. Read raw blobs so Router bytes equal the immutable input tree.
+        entries = git("ls-tree", "-rz", "--full-tree", manifest["inputTree"])
+        links = []
+        for entry in entries.split(b"\0"):
+            if not entry:
+                continue
+            metadata, raw_path = entry.split(b"\t", 1)
+            mode, kind, object_id = metadata.decode('ascii').split()
+            relative = PurePosixPath(os.fsdecode(raw_path))
+            if relative.is_absolute() or any(part in ("..", ".git") for part in relative.parts) or kind != "blob":
+                raise BoardError("router-input-unavailable", "Unsupported frozen tree entry")
+            path = root.joinpath(*relative.parts)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            contents = git("cat-file", "blob", object_id)
+            if mode == "120000":
+                path.symlink_to(os.fsdecode(contents))
+                links.append(path)
+            else:
+                path.write_bytes(contents)
+                path.chmod(0o555 if mode == "100755" else 0o444)
+        if any(not link.resolve().is_relative_to(root.resolve()) for link in links):
+            raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
         return root, digest(root)
-    except (OSError, tarfile.TarError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         raise BoardError("router-input-unavailable", "The frozen input cannot be safely materialized") from None
-    finally:
-        archive.unlink(missing_ok=True)
 
 
 def verify(manifest: dict, root: Path, expected: str) -> dict:
