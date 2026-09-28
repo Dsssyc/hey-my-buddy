@@ -4460,10 +4460,15 @@ class WorkflowCoordinator:
             sealed = self._latest_handoff(connection, run_row, manifest)
         path = Path(plan["path"])
         inspection = None
-        if path.exists():
+        if path.exists() or path.is_symlink():
             inspection = workspace_module().cleanup_inspect(self.board.directory, manifest, sealed=sealed,
                                                            retained=retained)
-            if inspection["reasons"]:
+            # The registered owner of this allocation may complete the same removal
+            # while the eligibility is proven, or the checkout may already have been
+            # deleted out of band. A path that is factually gone leaves nothing to
+            # delete, so its reasons cannot block; anything still occupying the exact
+            # planned path keeps every NOT_READY reason.
+            if inspection["reasons"] and (path.exists() or path.is_symlink()):
                 raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=inspection["reasons"])
         now = self.now()
         with self.db.write() as connection:
@@ -4491,7 +4496,7 @@ class WorkflowCoordinator:
             head = self.board._head_of(connection)
         self.board._notify(head)
         removed = None
-        if path.exists():
+        if path.exists() or path.is_symlink():
             removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
@@ -4500,7 +4505,8 @@ class WorkflowCoordinator:
             ).fetchone()
             if plan["state"] not in ("applying", "applied"):
                 raise BoardError("REVISION_CONFLICT", "The cleanup plan changed while the removal ran", planId=plan_id)
-            result = {"removed": True, "path": plan["path"], "alreadyRemoved": removed is None,
+            result = {"removed": True, "path": plan["path"],
+                      "alreadyRemoved": removed is None or bool(removed.get("alreadyRemoved")),
                       "repositoryId": plan["repository_id"], "checkoutId": plan["checkout_id"],
                       "retention": json.loads(plan["retention_json"])}
             if plan["state"] == "applying":

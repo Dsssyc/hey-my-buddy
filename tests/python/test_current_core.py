@@ -21,7 +21,7 @@ class CurrentCoreTests(BoardTestCase):
     def old_database(self, directory, version, *, has_meta=True):
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "board.sqlite3"
-        with sqlite3.connect(path) as connection:
+        with contextlib.closing(sqlite3.connect(path)) as connection, connection:
             connection.execute("CREATE TABLE archived_records(id TEXT PRIMARY KEY, value TEXT)")
             connection.execute("INSERT INTO archived_records VALUES('kept', 'unchanged')")
             if has_meta:

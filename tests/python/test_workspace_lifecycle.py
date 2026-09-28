@@ -519,6 +519,127 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(repeat["duplicate"])
         self.assertEqual(repeat["plan"]["planId"], plan["planId"])
 
+    def test_cleanup_apply_reports_a_checkout_that_vanished_before_the_delete(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanished")
+        planned = self.plan(board, view)
+        plan = planned["plan"]
+        self.assertEqual(plan["state"], "planned")
+        shutil.rmtree(checkout)
+        self.assertFalse(checkout.exists())
+        applied = self.apply(board, planned, plan, command_id="clean-apply-vanished")
+        self.assertTrue(applied["removed"])
+        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        # The retained manifest, not the vanished cwd, still answers compact/get.
+        after = self.view(board, submitted["runId"], includeAudit=True)
+        self.assertEqual(after["cleanup"]["state"], "applied")
+        self.assertEqual(after["workspace"]["path"], manifest["path"])
+        self.assertTrue(after["audit"]["turns"])
+        # The original commandId still replays its own recorded request.
+        replay = self.apply(board, planned, plan, command_id="clean-apply-vanished")
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["plan"]["planId"], plan["planId"])
+
+    def test_cleanup_remove_is_idempotent_for_an_already_removed_allocation(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-twice")
+        first = workspace_module.cleanup_remove(self.directory, manifest)
+        self.assertTrue(first["removed"])
+        self.assertFalse(first.get("alreadyRemoved", False))
+        self.assertFalse(checkout.exists())
+        # The allocation record is the authorization; its checkout being gone is the
+        # achieved outcome, not an I/O failure for the daemon sweep or a retry.
+        second = workspace_module.cleanup_remove(self.directory, manifest)
+        self.assertTrue(second["removed"])
+        self.assertTrue(second["alreadyRemoved"])
+        self.assertEqual(second["workspaceId"], manifest["workspaceId"])
+
+    def test_cleanup_apply_does_not_report_a_dangling_symlink_as_removed(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id='cleanup-dangling')
+        planned = self.plan(board, view)
+        workspace_module.cleanup_remove(self.directory, manifest)
+        checkout.symlink_to(self.directory / 'absent-target', target_is_directory=True)
+        with self.assertRaises(BoardError):
+            self.apply(board, planned, planned['plan'])
+        self.assertTrue(checkout.is_symlink())
+        self.assertNotEqual(self.view(board, submitted['runId'])['cleanup']['state'], 'applied')
+
+    def test_cleanup_remove_keeps_a_real_git_failure_on_a_present_checkout(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-git-fail")
+        real_git = workspace_module._git
+
+        def failing_remove(root, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "remove"):
+                raise BoardError("WORKSPACE_GIT_ERROR", "Git workspace operation failed", operation="worktree")
+            return real_git(root, *arguments, **kwargs)
+
+        with mock.patch.object(workspace_module, "_git", failing_remove):
+            with self.assertRaises(BoardError) as raised:
+                workspace_module.cleanup_remove(self.directory, manifest)
+        self.assertEqual(raised.exception.code, "WORKSPACE_GIT_ERROR")
+        self.assertTrue(checkout.exists(), "a refused removal must never be reported as achieved")
+
+    def test_cleanup_apply_converges_when_another_owner_finishes_the_removal(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-race")
+        planned = self.plan(board, view)
+        plan = planned["plan"]
+        real_remove = workspace_module.cleanup_remove
+        real_record = workspace_module._worktree_record
+        state = {"removing": False, "raced": False}
+
+        def racing_record(repository, target):
+            record = real_record(repository, target)
+            if state["removing"] and record is not None and not state["raced"]:
+                # The daemon's own accepted-workspace sweep removes this exact
+                # worktree after its registration was read and before the removal
+                # transaction below runs: the proof is stale but the deletion is real.
+                state["raced"] = True
+                workspace_module._git(repository, "worktree", "unlock", str(target), allowed=(0, 1))
+                workspace_module._git(repository, "worktree", "remove", "--force", str(target), allowed=(0,))
+            return record
+
+        def racing_remove(state_dir, target_manifest, **kwargs):
+            state["removing"] = True
+            try:
+                return real_remove(state_dir, target_manifest, **kwargs)
+            finally:
+                state["removing"] = False
+
+        with mock.patch.object(workspace_module, "_worktree_record", racing_record), \
+                mock.patch.object(workspace_module, "cleanup_remove", racing_remove):
+            applied = self.apply(board, planned, plan, command_id="clean-race-apply")
+        self.assertTrue(state["raced"])
+        self.assertFalse(checkout.exists())
+        self.assertTrue(applied["removed"])
+        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        # The event stream records the achieved deletion once, with its real cause.
+        with board.store.db.read() as connection:
+            events = connection.execute(
+                "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.cleanup_applied' ORDER BY seq",
+                (submitted["runId"],),
+            ).fetchall()
+        self.assertEqual([json.loads(row["payload_json"])["alreadyRemoved"] for row in events], [True])
+
+    def test_cleanup_apply_converges_when_the_checkout_vanishes_during_the_proof(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanish-proof")
+        planned = self.plan(board, view)
+        plan = planned["plan"]
+        real_refs = workspace_module._allocation_refs
+
+        def vanishing_refs(repository, allocation_id, target_manifest, retained):
+            refs = real_refs(repository, allocation_id, target_manifest, retained)
+            # Mid-proof: the other remover deletes the checkout and its registration.
+            workspace_module._git(repository, "worktree", "unlock", str(checkout), allowed=(0, 1))
+            workspace_module._git(repository, "worktree", "remove", "--force", str(checkout), allowed=(0,))
+            return refs
+
+        with mock.patch.object(workspace_module, "_allocation_refs", vanishing_refs):
+            applied = self.apply(board, planned, plan, command_id="clean-vanish-proof")
+        self.assertFalse(checkout.exists())
+        self.assertTrue(applied["removed"])
+        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+
     def test_delivered_output_without_integration_yields_a_blocked_cleanup_plan(self):
         board = self.board()
         self.register(board)

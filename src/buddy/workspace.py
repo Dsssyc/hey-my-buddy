@@ -1369,6 +1369,16 @@ def _workspace_identifier(value):
             and all(character in "0123456789abcdef" for character in value[3:]))
 
 
+def _path_present(path: Path) -> bool:
+    """True while anything still occupies this exact path, including a dangling link.
+
+    Cleanup convergence asks whether the deletion target is gone, not whether it
+    resolves: a broken symlink left at the managed path is still an occupant that a
+    later proof must refuse, not an achieved removal.
+    """
+    return path.exists() or path.is_symlink()
+
+
 def _inside(path, root):
     """True when an absolute path stays inside one known checkout root."""
     if not isinstance(path, str) or not path or "\0" in path:
@@ -1494,51 +1504,67 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
         for field in ("checkoutRoot", "checkoutId", "repositoryId"):
             if actual[field] != manifest[field]:
                 result["reasons"].append("identity-changed")
-        repository = Path(actual["repositoryPath"])
-        record = _worktree_record(repository, checkout_root)
-        if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
-            result["reasons"].append("unregistered-checkout")
-        else:
-            result["worktree"] = True
-            result["locked"] = record.get("locked")
-        result["refs"] = _allocation_refs(repository, allocation["workspaceId"], manifest, retained)
-        if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
-            result["reasons"].append("no-sealed-output")
-            return result
-        snapshot = sealed["snapshot"]
-        result["sealedObservation"] = snapshot.get("observationSha256")
-        # Cleanup compares the latest seal with its own prepared input. Integration
-        # separately compares the run's original input with this final output.
-        if (sealed.get("manifestSha256") != manifest["manifestSha256"]
-                or snapshot.get("inputCommit") != manifest["inputCommit"]):
-            result["reasons"].append("unsealed-handoff")
-            return result
         try:
-            _artifact_binding(manifest, manifest, sealed)
+            _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed, result)
         except BoardError:
-            result["reasons"].append("sealed-output-invalid")
-            return result
-        observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"], write=True)
-        unsealed = []
-        try:
-            entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation)
-            current_tree = _tree(checkout_root, entries_now)
-            if current_tree != sealed["tree"]:
-                unsealed = sorted(_tree_changes(checkout_root, sealed["tree"], current_tree))
-            if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
-                unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
-        except BoardError as error:
-            if error.code == "WORKSPACE_UNSUPPORTED":
-                result["reasons"].append("unsealed-changes")
-                return result
-            if error.code != "WORKSPACE_SCOPE_VIOLATION":
+            # The registered owner of this exact path may complete the same removal
+            # while its eligibility is still being proven. The checkout then holds no
+            # Git facts to prove and nothing left to delete, so it reads exactly like
+            # the deterministic missing case. A checkout that is still present keeps
+            # the original failure instead of hiding it.
+            if _path_present(checkout_root):
                 raise
-            unsealed = list(error.details.get("paths") or [])
-        if unsealed or observation["fingerprint"] != snapshot.get("observationSha256"):
-            result["reasons"].append("unsealed-changes")
-            result["unsealedPaths"] = unsealed[:32]
+            result["reasons"].append("checkout-missing")
+            return result
         result["eligible"] = not result["reasons"]
         return result
+
+
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result) -> None:
+    """Fill one cleanup view with the worktree, seal and unsealed-change proof."""
+    record = _worktree_record(repository, checkout_root)
+    if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
+        result["reasons"].append("unregistered-checkout")
+    else:
+        result["worktree"] = True
+        result["locked"] = record.get("locked")
+    result["refs"] = _allocation_refs(repository, allocation["workspaceId"], manifest, retained)
+    if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
+        result["reasons"].append("no-sealed-output")
+        return
+    snapshot = sealed["snapshot"]
+    result["sealedObservation"] = snapshot.get("observationSha256")
+    # Cleanup compares the latest seal with its own prepared input. Integration
+    # separately compares the run's original input with this final output.
+    if (sealed.get("manifestSha256") != manifest["manifestSha256"]
+            or snapshot.get("inputCommit") != manifest["inputCommit"]):
+        result["reasons"].append("unsealed-handoff")
+        return
+    try:
+        _artifact_binding(manifest, manifest, sealed)
+    except BoardError:
+        result["reasons"].append("sealed-output-invalid")
+        return
+    observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"], write=True)
+    unsealed = []
+    try:
+        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation)
+        current_tree = _tree(checkout_root, entries_now)
+        if current_tree != sealed["tree"]:
+            unsealed = sorted(_tree_changes(checkout_root, sealed["tree"], current_tree))
+        if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
+            unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
+    except BoardError as error:
+        if error.code == "WORKSPACE_UNSUPPORTED":
+            result["reasons"].append("unsealed-changes")
+            return
+        if error.code != "WORKSPACE_SCOPE_VIOLATION":
+            raise
+        unsealed = list(error.details.get("paths") or [])
+    if unsealed or observation["fingerprint"] != snapshot.get("observationSha256"):
+        result["reasons"].append("unsealed-changes")
+        result["unsealedPaths"] = unsealed[:32]
+    return
 
 
 def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
@@ -1551,6 +1577,12 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
     A borrowed existing checkout, a sibling worktree and a registry entry that
     belongs to someone else are never this cleanup's business. No repository-wide
     ``worktree prune`` runs here.
+
+    Removing an already removed allocation is the same achieved outcome, not a
+    failure: the accepted plan and the allocation record are the authorization, and
+    the daemon's own sweep or a retry may complete the same deletion first. Only
+    this exact allocation's path counts as gone; a Git failure with anything still
+    occupying the path stays fatal.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -1560,6 +1592,12 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
             raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable Buddy checkout",
                              path=manifest["checkoutRoot"])
         checkout_root = Path(allocation["path"])
+        removal = {"removed": True, "path": str(checkout_root),
+                   "repositoryPath": manifest["snapshot"]["repositoryPath"],
+                   "workspaceId": allocation["workspaceId"], "manifestWorkspaceId": manifest["workspaceId"],
+                   "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
+        if not _path_present(checkout_root):
+            return removal
         actual = inspect(str(checkout_root))
         for field in ("checkoutRoot", "checkoutId", "repositoryId"):
             if actual[field] != manifest[field]:
@@ -1569,10 +1607,18 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
         if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
             raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is not this allocation's registered worktree",
                              path=str(checkout_root))
-        _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
-        _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
-        if checkout_root.exists():
+        removal["repositoryPath"] = str(repository)
+        try:
+            _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
+            _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
+        except BoardError:
+            # A concurrent owner of this same allocation completed the removal in
+            # this window; the Git refusal is about a registration that no longer
+            # names a live checkout, and the target is provably gone.
+            if _path_present(checkout_root):
+                raise
+            return removal
+        if _path_present(checkout_root):
             raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
-        return {"removed": True, "path": str(checkout_root), "repositoryPath": str(repository),
-                "workspaceId": allocation["workspaceId"], "manifestWorkspaceId": manifest["workspaceId"],
-                "checkoutId": manifest["checkoutId"]}
+        removal["alreadyRemoved"] = False
+        return removal
