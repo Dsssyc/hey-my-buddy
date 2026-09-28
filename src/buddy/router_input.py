@@ -39,7 +39,11 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         return root, digest(root)
     if not isinstance(manifest, dict) or not manifest.get("inputTree"):
         raise BoardError("router-input-unavailable", "Routing requires a frozen Git input manifest")
-    workspace.verify(manifest, require_unchanged=True)
+    try:
+        workspace.verify(manifest, require_unchanged=True)
+    except BoardError as error:
+        code = "router-input-changed" if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_MANIFEST_CHANGED", "WORKSPACE_CONFLICT"} else "router-input-unavailable"
+        raise BoardError(code, "The frozen Router input could not be verified") from None
     root = directory / "frozen-input"
     root.mkdir(mode=0o700)
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -72,10 +76,15 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
             else:
                 path.write_bytes(contents)
                 path.chmod(0o555 if mode == "100755" else 0o444)
-        if any(not link.resolve().is_relative_to(root.resolve()) for link in links):
-            raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
+        for link in links:
+            try:
+                resolved = link.resolve(strict=True)
+            except FileNotFoundError:
+                resolved = link.resolve(strict=False)
+            if not resolved.is_relative_to(root.resolve()):
+                raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
         return root, digest(root)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
         raise BoardError("router-input-unavailable", "The frozen input cannot be safely materialized") from None
 
 

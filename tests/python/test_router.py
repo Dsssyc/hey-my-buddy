@@ -31,6 +31,20 @@ class RouterContractTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 router.validate_answer(value, [])
 
+    def test_cancelled_native_receipt_without_stop_proof_is_not_cancelled(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from buddy.adapters.read_only import collect
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'native.json'
+            output.write_text(json.dumps({'status': 'cancelled', 'processState': {'shutdownConfirmed': False}}))
+            handle = SimpleNamespace(log_paths={'stdout': str(output)}, process=SimpleNamespace(returncode=1),
+                                     shutdown_confirmed=lambda: True)
+            result = collect(handle)
+        self.assertEqual(result.status, 'failed')
+        self.assertFalse(result.shutdown_confirmed)
+
     def test_prompt_prefix_stays_stable_and_excludes_display_metadata(self):
         doc = {"profiles": [{"profileId": "legal"}], "task": "first", "title": "display-only"}
         first = router.render_prompt(doc)
@@ -193,6 +207,18 @@ class RouterInputTests(unittest.TestCase):
         (self.repo / 'src/file.txt').write_text('Host changed after Router start')
         self.assertEqual((mirror / 'src/file.txt').read_text(), 'dirty frozen input')
         self.assertEqual(router_input.verify(manifest, mirror, fingerprint)['code'], 'router-input-changed')
+
+    def test_frozen_symlink_cycle_has_a_bounded_input_error(self):
+        from buddy import router_input
+        (self.repo / 'src/a').symlink_to('b')
+        (self.repo / 'src/b').symlink_to('a')
+        self.git('add', 'src/a', 'src/b')
+        manifest = self.prepare(kind='existing')
+        attempt = self.root / 'loop-attempt'
+        attempt.mkdir()
+        with self.assertRaises(BoardError) as caught:
+            router_input.prepare(manifest, attempt)
+        self.assertEqual(caught.exception.code, 'router-input-unavailable')
 
     def test_changed_router_copy_and_escaping_link_are_rejected(self):
         from buddy import router_input

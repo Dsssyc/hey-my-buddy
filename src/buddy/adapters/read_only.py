@@ -77,7 +77,7 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
     stopped = (payload.get("processState", {}).get("shutdownConfirmed") is True
                and handle.shutdown_confirmed())
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"
-    if payload.get("status") == "cancelled":
+    if stopped and payload.get("status") == "cancelled":
         status = "cancelled"
     return AdapterOutcome(status=status, result=payload, error=payload.get("code") if status != "ok" else None,
                           exit_code=handle.process.returncode, shutdown_confirmed=stopped)

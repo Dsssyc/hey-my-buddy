@@ -495,6 +495,7 @@ class Worker:
         the owned process group is terminated and a receipt is still written, so a
         failure can never leave an orphaned child with no record.
         """
+        started_at = time.monotonic()
         attempt = claim["attempt"]
         task = claim["task"]
         spec = task["spec"]
@@ -547,7 +548,10 @@ class Worker:
                 claim,
                 {
                     "status": "failed",
-                    "result": None,
+                    "result": ({"status": "error", "code": error.code,
+                                "usage": {"elapsedMs": round((time.monotonic() - started_at) * 1000),
+                                          "toolCalls": None, "bytesRead": None}}
+                               if isinstance(error, BoardError) and not holder.get("started") else None),
                     "error": f"worker failure: {error!r}",
                     "exitCode": None,
                     "signal": None,

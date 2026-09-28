@@ -628,6 +628,16 @@ class DecisionFailureTests(DecisionTestCase):
         self.run_worker(board, worker_id=f"w-{request_id}")
         return self.decision(board, request["decisionId"])
 
+    def test_changed_input_before_spawn_keeps_its_router_boundary_code(self):
+        from unittest.mock import patch
+        board = self.board()
+        self.seed(board)
+        with patch('buddy.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
+            decision = self.outcome(board, 'select_first')
+        self.assertEqual(decision['status'], 'needs-host')
+        self.assertEqual(board.store.decisions.health_summary()['inputChangedCount'], 1)
+        self.readonly_start.assert_not_called()
+
     def test_malformed_native_output_fails_without_touching_the_table(self):
         board = self.board()
         self.seed(board)
