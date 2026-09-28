@@ -94,7 +94,7 @@ def _activity(control: dict, evidence: TurnEvidence | None, phase: str, tool: st
     payload = {"phase": phase, "observedAt": now, "eventSeq": evidence.event_seq,
                "nativeSessionId": evidence.thread_id, "lastNativeActivityAt": now,
                "counts": {"modelTurns": evidence.model_turns + control.get("_readonlyTurnBase", 0),
-                          "toolCalls": evidence.tool_calls + control.get("_readonlyToolBase", 0)}}
+                          "toolCalls": max(evidence.tool_calls, control.get('_readonlyRawCalls', 0)) + control.get("_readonlyToolBase", 0)}}
     if state.get("lastToolActivityAt"):
         payload.update(lastToolActivityAt=state["lastToolActivityAt"], toolName=state["toolName"])
     record = {"version": 1, "taskId": control["taskId"], "attemptId": control["attemptId"],
@@ -133,9 +133,24 @@ def _read_only_call(connection, control, result, catalog):
             model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
             for model in catalog["providers"][0]["models"]):
         raise CodexProtocolError("invalid-configuration", "Unknown native read-only configuration")
+    import tomllib
+    from .codex_config import read_only_config
+    expected = tomllib.loads(read_only_config(control['cwd']))
+    configured = connection.call('config/read', {'cwd': control['cwd'], 'includeLayers': False}).get('config') or {}
+    def matches(actual, wanted):
+        if isinstance(wanted, dict):
+            return isinstance(actual, dict) and all(matches(actual.get(key), value) for key, value in wanted.items())
+        return type(actual) is type(wanted) and actual == wanted
+    profile = (configured.get('permissions') or {}).get('buddy-router') or {}
+    filesystem = {key: value for key, value in (profile.get('filesystem') or {}).items() if value is not None}
+    if (not matches(configured, expected) or configured.get('mcp_servers')
+            or filesystem != expected['permissions']['buddy-router']['filesystem'] or profile.get('extends')):
+        raise CodexProtocolError('readonly-policy-unverified', 'Codex effective configuration differs from the private read-only policy')
+    result['nativeConfigPolicy'] = expected
     response = connection.call("thread/start", {
         "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
+        "experimentalRawEvents": True,
         "config": {"web_search": "disabled", "features.apps": False, "features.multi_agent": False},
     })
     profile = response.get('activePermissionProfile') or {}
@@ -150,6 +165,7 @@ def _read_only_call(connection, control, result, catalog):
                               'modelProvider': response.get('modelProvider'), 'cwd': response.get('cwd')}
     if request.get('captureEvidence'):
         result['nativeToolEvents'] = []
+        result['nativeRawToolEvents'] = []
     thread = response.get("thread") or {}
     thread_id = thread.get("id")
     if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
@@ -173,8 +189,28 @@ def _read_only_call(connection, control, result, catalog):
         if not isinstance(turn_id, str):
             raise CodexProtocolError("wrong-native-turn", "No read-only turn identity")
         result["nativeTurnId"] = turn_id
+        result['nativeIdentity'] = {'sessionId': thread_id, 'turnId': turn_id}
         evidence = TurnEvidence(thread_id, turn_id)
+        raw_calls = set()
+        control['_readonlyRawCalls'] = 0
         def observed(message):
+            params = message.get('params') or {}
+            if params.get('threadId') != thread_id or params.get('turnId') not in (None, turn_id):
+                return
+            raw_item = params.get('item') or {}
+            raw_type = raw_item.get('type')
+            if message.get('method') == 'rawResponseItem/completed':
+                if raw_type in ('function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call', 'image_generation_call'):
+                    call_id = raw_item.get('call_id') or raw_item.get('id')
+                    if isinstance(call_id, str):
+                        raw_calls.add(call_id)
+                if request.get('captureEvidence') and raw_type in ('function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output', 'local_shell_call', 'web_search_call'):
+                    events = result['nativeRawToolEvents']
+                    encoded = canonical_json(message)
+                    if len(events) < 128 and len(encoded.encode()) <= 16384 and sum(len(canonical_json(e).encode()) for e in events) + len(encoded.encode()) <= 262144:
+                        events.append(message)
+                    else:
+                        result['nativeEvidenceTruncated'] = True
             if request.get('captureEvidence') and message.get('method') in ('item/started', 'item/completed'):
                 item = (message.get('params') or {}).get('item') or {}
                 if item.get('type') not in ('agentMessage', 'reasoning', 'userMessage'):
@@ -185,9 +221,11 @@ def _read_only_call(connection, control, result, catalog):
                     else:
                         result['nativeEvidenceTruncated'] = True
             activity = evidence.observe(message)
-            result["usage"] = {"toolCalls": previous_tools + evidence.tool_calls, "bytesRead": None}
+            observed_tools = max(evidence.tool_calls, len(raw_calls))
+            control['_readonlyRawCalls'] = len(raw_calls)
+            result["usage"] = {"toolCalls": previous_tools + observed_tools, "bytesRead": None}
             # A limit of N allows N native tool calls; the next one is interrupted.
-            if previous_tools + evidence.tool_calls > request["budget"]["toolCalls"]:
+            if previous_tools + observed_tools > request["budget"]["toolCalls"]:
                 raise CodexProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
             if activity:
                 _activity(control, evidence, *activity)
@@ -205,14 +243,14 @@ def _read_only_call(connection, control, result, catalog):
             result.update(status="ok", rawAnswer=raw, answerValid=False)
         else:
             result.update(status="ok", rawAnswer=raw, answerValid=True)
-        result["usage"] = {"toolCalls": previous_tools + evidence.tool_calls, "bytesRead": None}
+        result["usage"] = {"toolCalls": previous_tools + max(evidence.tool_calls, len(raw_calls)), "bytesRead": None}
         result["nativeIdentity"] = {"sessionId": thread_id, "turnId": turn_id}
         result["correctionCount"] = call_index
         from .read_only import correction_code
         correction = correction_code(raw, request["outputSchema"])
         if call_index or correction is None:
             break
-        previous_tools += evidence.tool_calls
+        previous_tools += max(evidence.tool_calls, len(raw_calls))
         prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
 
 
@@ -234,12 +272,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         auth = old_home / "auth.json"
         if auth.is_file() and not (private_home / "auth.json").exists():
             (private_home / "auth.json").symlink_to(auth)
-        (private_home / "config.toml").write_text(
-            'web_search = "disabled"\napproval_policy = "never"\ndefault_permissions = "buddy-router"\n'
-            '[features]\napps = false\nmulti_agent = false\n'
-            '[permissions.buddy-router.filesystem]\n":minimal" = "read"\n'
-            + json.dumps(str(Path(control['cwd']).resolve())) + ' = "read"\n'
-            '[permissions.buddy-router.network]\nenabled = false\n')
+        from .codex_config import read_only_config
+        (private_home / "config.toml").write_text(read_only_config(control['cwd']))
         environment["CODEX_HOME"] = str(private_home)
     # Version is diagnostic only. Discovery never makes a paid model call.
     try:
@@ -276,6 +310,12 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             method = message.get("method")
             if isinstance(params, dict) and isinstance(method, str) and len(method) <= 80:
                 denied_requests.append({"method": method, "threadId": params.get("threadId"), "turnId": params.get("turnId")})
+                if (control.get('readOnlyRequest') or {}).get('captureEvidence'):
+                    trace = result.setdefault('nativeDeniedRequests', [])
+                    if len(trace) < 32:
+                        trace.append({'method': method, 'requestId': message.get('id'),
+                                      'params': {key: params[key] for key in ('threadId', 'turnId', 'itemId', 'command', 'cwd', 'reason') if key in params},
+                                      'response': {'code': -32601, 'denied': True}})
             connection.send({"id": message["id"], "error": {"code": -32601,
                 "message": "This Buddy Worker cannot approve interactive requests; report attention in the structured outcome"}})
         connection.on_request = on_request
@@ -351,6 +391,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             if not isinstance(turn_id, str) or not turn_id:
                 raise CodexProtocolError("wrong-native-turn", "Codex did not acknowledge a native turn")
             result["nativeTurnId"] = turn_id
+            result['nativeIdentity'] = {'sessionId': thread_id, 'turnId': turn_id}
             evidence = TurnEvidence(thread_id, turn_id)
             _activity(control, evidence, "waiting-model")
             def on_notification(message):

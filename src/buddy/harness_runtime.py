@@ -48,9 +48,29 @@ def native_environment(environment, *, adapter):
     return clean(environment, command=command_for(adapter, environment))
 
 
-def controller_environment(directory):
+def controller_environment(directory, environment=None, *, read_only=False):
     """Only trusted Python controllers receive the private command selection."""
-    env = dict(os.environ)
+    source = os.environ if environment is None else environment
+    from .harness_discovery import native_environment
+    env = native_environment(source)
+    allowed = ('PYTHONPATH', 'PYTHONSAFEPATH', 'PYTHONUTF8', 'PYTHONIOENCODING',
+               'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
+               'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
+               'BUDDY_PYTHON', 'BUDDY_HARNESS_RECORD_FILE', 'BUDDY_CLAUDE_SETTINGS_POLICY')
+    for key in allowed:
+        if key in source:
+            env[key] = source[key]
+    if not read_only:
+        for key in ('BUDDY_AGENT_CREDENTIAL', 'BUDDY_AGENT_CREDENTIAL_FILE', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID'):
+            if key in source:
+                env[key] = source[key]
+    if source.get('BUDDY_DEV_SOURCE') == '1':
+        for key in ('BUDDY_DEV_SOURCE', 'BUDDY_CLAUDE_CLI', 'BUDDY_CODEX_CLI', 'BUDDY_ZCODE_CLI',
+                    'BUDDY_NODE', 'BUDDY_CODEX_FIXTURE_CASE', 'BUDDY_CODEX_FIXTURE_STATE',
+                    'BUDDY_CLAUDE_FIXTURE_CASE', 'BUDDY_CLAUDE_FIXTURE_STATE', 'BUDDY_CLAUDE_FIXTURE_AUTH_STATUS',
+                    'BUDDY_ZCODE_TEST_CASE'):
+            if key in source:
+                env[key] = source[key]
     records = _records.get()
     if records is not None:
         from .adapters.turn_io import private_json

@@ -7,6 +7,22 @@ from support import BoardTestCase
 
 
 class HarnessStartupTests(BoardTestCase):
+    def test_controllers_use_a_whitelist_and_router_has_no_attempt_authority(self):
+        from buddy.harness_runtime import controller_environment
+        class NoEnvironmentDump(dict):
+            def items(self):
+                raise AssertionError('Do not collect arbitrary environment values')
+        source = NoEnvironmentDump(HOME='/private/home', PATH='/usr/bin', BUDDY_STATE_DIR='/private/state',
+                                   BUDDY_AGENT_CREDENTIAL_FILE='/private/credential', OPENAI_API_KEY='fixture-secret',
+                                   UNKNOWN_SECRET='fixture-secret', OPENAI_BASE_URL='https://fixture.invalid')
+        controller = controller_environment(self.directory, source)
+        router = controller_environment(self.directory, source, read_only=True)
+        self.assertEqual(controller['BUDDY_AGENT_CREDENTIAL_FILE'], '/private/credential')
+        self.assertNotIn('BUDDY_AGENT_CREDENTIAL_FILE', router)
+        for key in ('OPENAI_API_KEY', 'UNKNOWN_SECRET', 'OPENAI_BASE_URL'):
+            self.assertNotIn(key, controller)
+            self.assertNotIn(key, router)
+
     def setUp(self):
         super().setUp()
         self.client = Mock()

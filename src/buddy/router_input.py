@@ -127,6 +127,8 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
             except subprocess.TimeoutExpired:
                 reader.kill()
                 reader.wait()
+            finally:
+                reader.stdout.close()
 
 
 def discard(root: Path) -> None:

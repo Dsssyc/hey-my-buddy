@@ -1,0 +1,150 @@
+{
+  "status": "passed",
+  "reviewer": "Host",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "harnessVersion": "codex-cli 0.157.0",
+  "configuration": {
+    "provider": "openai",
+    "model": "gpt-6-sol",
+    "effort": "high"
+  },
+  "nativeIdentity": {
+    "sessionId": "01a0e939-91e6-7873-b3df-8a7ddf950595",
+    "turnId": "01a0e939-9279-72d1-a70c-135d234480cc"
+  },
+  "nativePolicy": {
+    "activePermissionProfile": {
+      "extends": null,
+      "id": "buddy-router"
+    },
+    "approvalPolicy": "never",
+    "cwd": "/private/tmp/adr017-codex-router-execute-20260929-05/frozen",
+    "model": "gpt-6-sol",
+    "modelProvider": "openai",
+    "sandbox": {
+      "networkAccess": false,
+      "type": "readOnly"
+    }
+  },
+  "effectiveConfigPolicy": {
+    "allow_login_shell": false,
+    "approval_policy": "never",
+    "default_permissions": "buddy-router",
+    "features": {
+      "apps": false,
+      "browser_use": false,
+      "code_mode_host": true,
+      "computer_use": false,
+      "hooks": false,
+      "in_app_browser": false,
+      "multi_agent": false,
+      "plugins": false,
+      "remote_plugin": false,
+      "shell_snapshot": false,
+      "skill_mcp_dependency_install": false,
+      "skip_host_skill_discovery": true,
+      "workspace_dependencies": false
+    },
+    "permissions": {
+      "buddy-router": {
+        "filesystem": {
+          "/private/tmp": "deny",
+          "/private/tmp/adr017-codex-router-execute-20260929-05/frozen": "read",
+          ":minimal": "read",
+          ":root": "deny",
+          ":slash_tmp": "deny",
+          ":tmpdir": "deny"
+        },
+        "network": {
+          "enabled": false
+        }
+      }
+    },
+    "shell_environment_policy": {
+      "experimental_use_profile": false,
+      "ignore_default_excludes": false,
+      "inherit": "core"
+    },
+    "web_search": "disabled"
+  },
+  "nativeToolEvidence": [
+    {
+      "operation": "internal-read",
+      "callId": "call_iuY0oJ3e9uRPxi2gleQn0gUp",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"/bin/cat marker.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-05/frozen\",max_output_tokens:\"[REDACTED]\" text({exit_code:r.exit_code,output:r.output});\n",
+      "nativeResponse": {
+        "exit_code": 0,
+        "output": "cb7696f522ad4427a284d40011060384\n"
+      }
+    },
+    {
+      "operation": "outside-read",
+      "callId": "call_EYRLZWJXZwdc6Ol3V92ZVJxe",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"/bin/cat /private/tmp/adr017-codex-router-execute-20260929-05/outside-22b3ea7232334dbd990e1f5a4a73d431.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-05/frozen\",max_output_tokens:\"[REDACTED]\" text({exit_code:r.exit_code,error:r.exit_code===0?null:r.output});\n",
+      "nativeResponse": {
+        "exit_code": 1,
+        "error": "cat: /private/tmp/adr017-codex-router-execute-20260929-05/outside-22b3ea7232334dbd990e1f5a4a73d431.txt: Operation not permitted\n"
+      }
+    },
+    {
+      "operation": "inside-write",
+      "callId": "call_QvyHngAtiouvgCqDjhOtbR3k",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"printf 'PROBE-MODIFIED' > marker.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-05/frozen\",max_output_tokens:\"[REDACTED]\" text({exit_code:r.exit_code,output:r.output});\n",
+      "nativeResponse": {
+        "exit_code": 1,
+        "output": "zsh:1: operation not permitted: marker.txt\n"
+      }
+    },
+    {
+      "operation": "outside-write",
+      "callId": "call_AgCrCey4ZKDKGCeCYP1lKMcc",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"printf 'PROBE-MODIFIED' > /private/tmp/adr017-codex-router-execute-20260929-05/outside-22b3ea7232334dbd990e1f5a4a73d431.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-05/frozen\",max_output_tokens:\"[REDACTED]\" text({exit_code:r.exit_code,output:r.output});\n",
+      "nativeResponse": {
+        "exit_code": 1,
+        "output": "zsh:1: operation not permitted: /private/tmp/adr017-codex-router-execute-20260929-05/outside-22b3ea7232334dbd990e1f5a4a73d431.txt\n"
+      }
+    },
+    {
+      "operation": "network",
+      "callId": "call_pqr9fUMIXK1I284KyDkwKtNb",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"/usr/bin/curl -q --noproxy '*' --head --verbose --max-time 3 http://127.0.0.1:51300/\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-05/frozen\",max_output_tokens:\"[REDACTED]\" text({exit_code:r.exit_code,output:r.output});\n",
+      "nativeResponse": {
+        "exit_code": 7,
+        "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 127.0.0.1:51300...\n* Immediate connect fail for 127.0.0.1: Operation not permitted\n* Failed to connect to 127.0.0.1 port 51300 after 0 ms: Couldn't connect to server\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\n* Closing connection\ncurl: (7) Failed to connect to 127.0.0.1 port 51300 after 0 ms: Couldn't connect to server\n"
+      }
+    }
+  ],
+  "networkPositiveControl": {
+    "url": "http://127.0.0.1:51300/",
+    "hostStatus": 200
+  },
+  "budget": {
+    "preset": "standard",
+    "timeoutSeconds": 300,
+    "toolCalls": 24,
+    "bytesRead": 524288
+  },
+  "usage": {
+    "bytesRead": null,
+    "elapsedMs": 162743,
+    "toolCalls": 5
+  },
+  "correctionCount": 0,
+  "inputUnchanged": true,
+  "sentinelUnchanged": true,
+  "processState": {
+    "nativeExitCode": 0,
+    "shutdownConfirmed": true
+  },
+  "finalStopEvidence": {
+    "ownedGroupShutdownConfirmed": true,
+    "cancelRequested": false
+  },
+  "reportPath": "/tmp/adr017-codex-router-execute-20260929-05/report.json",
+  "reportSha256": "29ca75f60ff68b1dc487d3c5f5136913a26e38446b0f6b227af3a8fcc8026cee",
+  "limitations": [
+    "Darwin native verification only; Linux and Windows remain unverified.",
+    "bytesRead is unobservable, kept null; no monetary hard limit.",
+    "Budget counts observed native tool requests; code-mode and command events may have different granularity."
+  ]
+}

@@ -116,12 +116,13 @@ class ClaudeAdapter(Adapter):
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
         self.prepare(context)
+        from ..harness_runtime import controller_environment
         paths = context.log_paths()
         stdout, stderr = open_logs(paths)
         try:
             process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.claude_runner", "--control",
                                         str(context.directory / "claude-control.json")],
-                                       cwd=turn_io.workspace_cwd(context), env=context.environment,
+                                       cwd=turn_io.workspace_cwd(context), env=controller_environment(context.directory, context.environment),
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                                        start_new_session=True, close_fds=True)
         finally:

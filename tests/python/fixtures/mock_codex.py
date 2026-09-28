@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 
@@ -53,6 +54,9 @@ def main():
         method, params, ident = req["method"], req.get("params") or {}, req["id"]
         if method == "initialize":
             send({"id": ident, "result": {"userAgent": "fixture"}})
+        elif method == 'config/read':
+            configured = tomllib.loads((Path(os.environ['CODEX_HOME']) / 'config.toml').read_text())
+            send({'id': ident, 'result': {'config': configured}})
         elif method == "account/read":
             send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
                                                             "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
@@ -100,6 +104,9 @@ def main():
             if case == "readonly-budget":
                 send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
                       "item": {"type": "commandExecution", "id": "read-1"}}})
+            if case == 'readonly-denied-budget':
+                send({'method': 'rawResponseItem/completed', 'params': {'threadId': thread_id, 'turnId': turn_id,
+                      'item': {'type': 'function_call', 'call_id': 'denied-1', 'name': 'exec_command', 'arguments': '{"cmd":"denied"}'}}})
             if case in ("approval", "approval-failed"):
                 send({"id": 99, "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": thread_id, "turnId": turn_id, "itemId": "tool-1", "startedAtMs": 1}})

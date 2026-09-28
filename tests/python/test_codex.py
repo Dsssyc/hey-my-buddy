@@ -202,6 +202,15 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
 
+    def test_router_certificate_follows_the_selected_native_version_without_a_probe(self):
+        from buddy.harness_runtime import bound
+        import sys
+        with bound([{'adapter': 'codex', 'status': 'ready', 'version': '0.157.0'}]):
+            self.assertEqual(self.adapter.read_only_structured_verified, sys.platform == 'darwin')
+        with bound([{'adapter': 'codex', 'status': 'ready', 'version': '0.158.0'}]):
+            self.assertFalse(self.adapter.read_only_structured_verified)
+            self.assertTrue(self.adapter.available()[0])
+
     def test_read_only_refuses_an_unacknowledged_policy_before_model_input(self):
         from buddy.adapters.base import ReadOnlyStructuredRequest
         from buddy.adapters.read_only import collect
@@ -263,6 +272,23 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.result['stopEvidence']['nativeInterruptAcknowledged'])
         self.assertIsNone(outcome.result['usage']['bytesRead'])
         self.assertEqual(outcome.result['usage']['toolCalls'], 1)
+
+    def test_denied_raw_tool_call_still_consumes_router_budget(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        context = self.context('readonly-denied-budget')
+        context.turn = None
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']),
+                                             {**budget(), 'toolCalls': 0}, capture_evidence=True)
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        result = collect(handle)
+        self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
+        self.assertEqual(result.result['usage']['toolCalls'], 1)
+        self.assertTrue(result.shutdown_confirmed)
+        self.assertEqual(result.result['nativeRawToolEvents'][0]['params']['item']['call_id'], 'denied-1')
 
 
     def test_readonly_repairs_format_once_in_same_thread_but_not_bounds(self):

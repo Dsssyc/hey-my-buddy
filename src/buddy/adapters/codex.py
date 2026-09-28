@@ -25,6 +25,14 @@ class CodexAdapter(Adapter):
     model_discovery = True
     read_only_structured = True
     read_only_structured_resume = True
+    @property
+    def read_only_structured_verified(self):
+        # Compatibility is handshake-based; native permission certification is
+        # separately bound to the platform/version actually exercised by probes.
+        from ..harness_runtime import selected
+        record = selected('codex')
+        return bool(sys.platform == 'darwin' and record and record.get('status') == 'ready'
+                    and record.get('version') == '0.157.0')
 
     def start_read_only_structured(self, context, request):
         from .read_only import start
@@ -74,12 +82,13 @@ class CodexAdapter(Adapter):
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
         self.prepare(context)
+        from ..harness_runtime import controller_environment
         paths = context.log_paths()
         stdout, stderr = open_logs(paths)
         try:
             process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.codex_runner", "--control",
                                         str(context.directory / "codex-control.json")],
-                                       cwd=turn_io.workspace_cwd(context), env=context.environment,
+                                       cwd=turn_io.workspace_cwd(context), env=controller_environment(context.directory, context.environment),
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                                        start_new_session=True, close_fds=True)
         finally:

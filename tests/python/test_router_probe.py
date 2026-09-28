@@ -71,7 +71,10 @@ class RouterProbeTests(unittest.TestCase):
             handle.process.returncode = 0 if status == "ok" else 1
             return handle
         native.start_read_only_structured.side_effect = start
-        with patch.object(probe, "adapter_for", return_value=native):
+        with patch.object(probe, "adapter_for", return_value=native), \
+             patch.object(probe, "start_network_control", return_value=(Mock(), {
+                 'url': 'http://127.0.0.1:54321/', 'hostStatus': 200,
+             })):
             report = probe.run(self.args(adapter, execute=True))
         return report, native, handle
 

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import sys
 import shutil
 from pathlib import Path
 
@@ -41,3 +43,19 @@ def native_environment(environment: dict) -> dict:
             if key in environment:
                 result[key] = environment[key]
     return result
+
+
+def read_only_config(cwd: str) -> str:
+    """No implicit root/temp grant may widen a Router's frozen read scope."""
+    mac_temp = '\n"/private/tmp" = "deny"' if sys.platform == 'darwin' else ''
+    return ('web_search = "disabled"\napproval_policy = "never"\ndefault_permissions = "buddy-router"\n'
+            'allow_login_shell = false\n'
+            '[shell_environment_policy]\ninherit = "core"\nexperimental_use_profile = false\nignore_default_excludes = false\n'
+            '[features]\napps = false\nmulti_agent = false\nplugins = false\nremote_plugin = false\n'
+            'hooks = false\nshell_snapshot = false\ncode_mode_host = true\nbrowser_use = false\ncomputer_use = false\n'
+            'in_app_browser = false\nworkspace_dependencies = false\nskill_mcp_dependency_install = false\n'
+            'skip_host_skill_discovery = true\n'
+            '[permissions.buddy-router.filesystem]\n":root" = "deny"\n":minimal" = "read"\n'
+            '":tmpdir" = "deny"\n":slash_tmp" = "deny"' + mac_temp + '\n'
+            + json.dumps(str(Path(cwd).resolve())) + ' = "read"\n'
+            '[permissions.buddy-router.network]\nenabled = false\n')

@@ -94,8 +94,8 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     }
     path = context.directory / "readonly-control.json"
     private_json(path, control)
-    environment = {key: value for key, value in context.environment.items()
-                   if not key.startswith(("BUDDY_AGENT_", "BUDDY_WORKER_"))}
+    from ..harness_runtime import controller_environment
+    environment = controller_environment(context.directory, context.environment, read_only=True)
     stdout, stderr = open_logs(context.log_paths())
     try:
         process = subprocess.Popen([sys.executable, "-m", f"buddy.adapters.{name}_runner", "--control", str(path)],
