@@ -25,7 +25,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-Daily [installation is 0.16.0/schema 12](acceptance/installed-0.16.0.md). The 0.17.0 source candidate replaces the DSH tool-free decision helper with the harness-neutral [Router protocol](reference/decision.md), freezes the legal candidate ids into the answer schema, validates only the routing bounds, adds provisional `quick`/`standard`/`deep` budgets and verifies a private read-only input mirror. Every native read-only structured capability is unverified and the candidate is not installed; the [0.17.0 source record](acceptance/router-read-only-routing-0.17.0.md) owns that evidence. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
+Daily [installation is 0.16.0/schema 12](acceptance/installed-0.16.0.md). The current source candidate replaces the DSH tool-free decision helper with the harness-neutral [Router protocol](reference/decision.md), freezes the legal candidate ids into the answer schema, validates only the routing bounds, adds provisional `quick`/`standard`/`deep` budgets and verifies a private read-only input mirror. It also stores user preferences and notes per model family (schema 13, resolved by the `effective_preferences` view) and replaces the console's two settings pages with [Buddy 配置 and 设置](reference/evaluation.md#console-http-surface); the console pages and the schema change are implemented in source and not installed. Every native read-only structured capability is unverified and the candidate is not installed; the [0.17.0 source record](acceptance/router-read-only-routing-0.17.0.md) owns that evidence. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
 
 | Document | Role |
 | --- | --- |
@@ -36,14 +36,14 @@ Daily [installation is 0.16.0/schema 12](acceptance/installed-0.16.0.md). The 0.
 | [reference/claude.md](reference/claude.md) | Claude Code Worker P1: verified metadata and native-probe boundaries, isolated execution, quota classification and the user-directed bootstrap division |
 | [reference/cli.md](reference/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, result envelopes, event kinds and error codes |
 | [reference/operations.md](reference/operations.md) | Installation, runtime lifecycle, private state and environment, the DSH workspace bridge, recovery and removal |
-| [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, preferences, evidence, the reader/writer gate, the private console HTTP surface and the configured Router profile |
+| [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, family preferences and notes, evidence, the reader/writer gate, the private console HTTP surface, the Buddy 配置/设置 pages and the configured Router profile |
 | [reference/console.md](reference/console.md) | One-time console entry, authenticated browser sessions, single-writer handoff, inactivity and CLI lifecycle |
-| [reference/objectives.md](reference/objectives.md) | Work-objective grouping, `objective-list`/`objective-timeline` read shapes, timeline presentation and the schema-12 offline preparation tool |
+| [reference/objectives.md](reference/objectives.md) | Work-objective grouping, `objective-list`/`objective-timeline` read shapes, timeline presentation and the schema-13 offline preparation tool |
 | [reference/evaluation-maintenance.md](reference/evaluation-maintenance.md) | Harness-owned bounded fact preparation, archived reviews, shared card updates, publication and history |
 | [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol: read-only structured request, frozen candidates, answer bounds, provisional budgets, input verification and the unverified native capability boundary |
 | [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`codex`/`command`/`external` adapters, the public `BoardClient` contract, worker identity, reconciliation, bounded activity and receipts, and supervisors |
 | [reference/runner.md](reference/runner.md) | DSH-specific `harnesses/dsh/scripts/run.mjs` runner and bridge scripts: options, precedence, governed turn protocol, exit codes and attach mode |
-| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 12, the shared attempt ceiling and model-family concurrency, identity, recovery, catalog observation and packaging |
+| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 13, the shared attempt ceiling and model-family concurrency, identity, recovery, catalog observation and packaging |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
