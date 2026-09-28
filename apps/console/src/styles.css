@@ -28,17 +28,12 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .nav-count { padding: 0 5px; background: var(--warning-wash); color: var(--warning); border-radius: 3px; font-size: 11px; }
 .header-status { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .connection { font-size: 12px; color: var(--muted); }
-/* One top-right edit switch shared by the model and routing pages. */
-.edit-cluster { display: flex; align-items: center; gap: 8px; }
-.edit-switch { display: inline-flex; align-items: center; gap: 7px; }
-.edit-switch[aria-checked="true"] { border-color: var(--accent); background: var(--accent-wash); color: var(--accent); }
+.nav-unsaved { color: var(--warning); font-size: 16px; line-height: 1; }
+/* A real switch track: the effort tags' enable switches. */
 .switch-track { position: relative; display: inline-block; flex-shrink: 0; width: 30px; height: 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--subtle); transition: background .15s ease, border-color .15s ease; }
 .switch-thumb { position: absolute; top: 1px; left: 1px; width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: transform .15s ease; }
-.edit-switch[aria-checked="true"] .switch-track { border-color: var(--accent); background: var(--accent); }
-.edit-switch[aria-checked="true"] .switch-thumb { border-color: var(--accent); background: var(--on-accent); transform: translateX(14px); }
-.edit-state { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.edit-state.active { color: var(--accent); font-weight: 600; }
-.edit-state.unsaved { color: var(--warning); font-weight: 600; }
+[role="switch"][aria-checked="true"] .switch-track { border-color: var(--accent); background: var(--accent); }
+[role="switch"][aria-checked="true"] .switch-thumb { border-color: var(--accent); background: var(--on-accent); transform: translateX(14px); }
 .unsaved-mark { display: inline-block; margin-left: 6px; padding: 1px 5px; border: 1px solid var(--warning-line); border-radius: 3px; background: var(--warning-wash); color: var(--warning); font-size: 10px; font-weight: 600; }
 .chip-row { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .edit-summary { flex-shrink: 0; padding: 2px 4px; }
@@ -52,12 +47,6 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .annotation-readonly { display: block; }
 .activity-view { display: block; margin-top: 12px; }
 .activity-view .facts dd { max-width: 60ch; }
-/* Restrained editing visuals, scoped to the model/settings view panels only:
-   tinted surfaces and borders, never a layout shift or a delegation panel. */
-.edit-mode .detail-panel, .edit-mode .settings-panel { background: var(--edit-wash); }
-.edit-mode .detail-body input:not([type="checkbox"]), .edit-mode .detail-body textarea, .edit-mode .detail-body select,
-.edit-mode .settings-panel input:not([type="checkbox"]), .edit-mode .settings-panel select { background: var(--edit-surface); border-color: var(--edit-line); }
-.edit-mode .detail-header, .edit-mode .detail-tabs { border-color: var(--edit-line); }
 .evidence-readonly { display: block; }
 .evidence-empty { max-width: 60ch; line-height: 1.7; }
 .history-item { display: grid; gap: 3px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
@@ -690,3 +679,111 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .storage-outcome p { margin: 2px 0; }
 .storage-skipped { list-style: disc; padding-left: 18px; font-size: 11px; color: var(--muted); margin: 4px 0; }
 .storage-actions { margin-top: 12px; }
+
+/* `?` tooltips: explanations appear on hover or focus, Escape hides them. */
+.help { position: relative; display: inline-flex; vertical-align: middle; margin-left: 4px; font-weight: 400; }
+.help .help-button { min-width: 20px; min-height: 20px; padding: 0; font-size: 11px; background: var(--surface); }
+.help-tip { position: absolute; z-index: 25; left: 50%; top: calc(100% + 6px); transform: translateX(-50%); inline-size: max-content; max-inline-size: min(26em, 70vw); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.6; font-weight: 400; white-space: normal; box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 16%, transparent); visibility: hidden; opacity: 0; pointer-events: none; }
+.help:hover .help-tip, .help-button:focus-visible + .help-tip { visibility: visible; opacity: 1; }
+.help.dismissed .help-tip { visibility: hidden; opacity: 0; }
+
+/* Segmented radio groups (preference, budget, theme). */
+.segment { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
+.segment input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.segment:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.segment.checked { border-color: var(--accent); background: var(--accent-wash); color: var(--accent); font-weight: 600; }
+.segment.checked.pref-prefer { border-color: var(--pref-prefer); background: var(--pref-prefer-wash); color: var(--pref-prefer); }
+.segment.checked.pref-pin { border-color: var(--pref-pin); background: var(--pref-pin-wash); color: var(--pref-pin); border-style: double; border-width: 3px; }
+.segment.checked.pref-exclude { border-color: var(--pref-exclude); background: var(--pref-exclude-wash); color: var(--pref-exclude); border-style: dashed; }
+.segment:has(input:disabled) { cursor: not-allowed; opacity: .6; }
+
+/* Buddy 配置: one routing line on top, then the list/detail split. */
+.buddy-page { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.buddy-page > .workspace-grid { flex: 1 1 auto; min-height: 0; height: auto; }
+.routing-status-bar { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 12px; }
+.routing-status-bar.warning { border-color: var(--warning-line); background: var(--warning-wash); }
+.routing-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px; }
+.routing-status-facts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); min-width: 0; }
+.routing-status-facts strong { color: var(--ink); font-weight: 600; }
+.routing-sep { color: var(--faint); }
+.routing-status-line > .button { margin-left: auto; }
+.routing-warning { flex-basis: 100%; margin: 0; color: var(--warning); font-weight: 600; overflow-wrap: anywhere; }
+.routing-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--surface); border-radius: 0 0 6px 6px; }
+.routing-details[hidden] { display: none; }
+.routing-details h3 { margin: 0 0 6px; font-size: 13px; }
+.routing-details .routing-status { margin-top: 0; padding-top: 0; border-top: 0; }
+.router-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+
+/* The family list: harness groups, folded when unavailable. */
+.harness-heading { cursor: pointer; }
+.harness-reason { padding: 4px 12px 6px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.family-row { gap: 3px; padding-block: 9px; }
+.family-row-marks { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.router-mark { display: inline-flex; padding: 0 5px; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+.family-new-mark { padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); font-size: 10px; font-weight: 600; }
+.retained-footer { display: grid; gap: 6px; padding: 10px 14px; }
+.retained-footer p { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+
+/* The family detail: a label column and a value column. */
+.family-header h2 { font-size: 17px; }
+.family-fields { display: grid; gap: 14px; }
+.family-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-items: start; }
+.family-label { display: inline-flex; align-items: center; min-height: 28px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.family-value { display: grid; gap: 8px; min-width: 0; }
+.family-value textarea { width: 100%; }
+.reason-input { max-width: 36em; font-size: 12px; }
+.concurrency-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.concurrency-row input { width: 80px; }
+.evaluation-list { gap: 4px; }
+.evaluation-list > p { margin: 4px 0 6px; }
+.effort-evaluation { border: 1px solid var(--line); border-radius: 5px; }
+.effort-evaluation > summary { padding: 6px 10px; font-size: 12px; overflow-wrap: anywhere; }
+.effort-evaluation-body { padding: 4px 12px 10px; border-top: 1px solid var(--line); }
+.effort-evaluation-body h4, .reading-section h4 { margin: 12px 0 6px; font-size: 12px; }
+
+/* Effort tags: switch + name + preference glyph + Router mark + menu. The
+   effective preference sets colour, glyph and border style together; an
+   override adds a corner notch. */
+.effort-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.effort-tag { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 2px 4px 2px 8px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); color: var(--muted); font-size: 12px; }
+.effort-tag:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.effort-tag.enabled { color: var(--ink); }
+.effort-tag.unavailable { border-style: dotted; }
+.effort-tag .effort-name { font-weight: 600; }
+.effort-tag .tag-switch { display: inline-flex; align-items: center; min-width: 30px; min-height: 24px; padding: 0; border: 0; background: transparent; }
+.effort-tag .tag-menu-button { min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
+.effort-tag .tag-menu-button:hover { background: var(--subtle); }
+.effort-tag .pref-icon { font-size: 11px; }
+.effort-tag.pref-prefer { border: 2px solid var(--pref-prefer); background: var(--pref-prefer-wash); }
+.effort-tag.pref-prefer .pref-icon { color: var(--pref-prefer); }
+.effort-tag.pref-pin { border: 3px double var(--pref-pin); background: var(--pref-pin-wash); }
+.effort-tag.pref-pin .pref-icon { color: var(--pref-pin); }
+.effort-tag.pref-exclude { border: 2px dashed var(--pref-exclude); background: var(--pref-exclude-wash); }
+.effort-tag.pref-exclude .pref-icon { color: var(--pref-exclude); }
+.effort-tag.pref-exclude .effort-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+.effort-tag.override::after { content: ""; position: absolute; top: -3px; right: 10px; width: 7px; height: 7px; border: 1px solid var(--ink); border-radius: 1px; background: var(--surface); transform: rotate(45deg); }
+.unsaved-dot { color: var(--warning); font-weight: 700; }
+.pref-swatch { display: inline-flex; justify-content: center; width: 16px; font-size: 11px; }
+.pref-swatch.pref-prefer { color: var(--pref-prefer); }
+.pref-swatch.pref-pin { color: var(--pref-pin); }
+.pref-swatch.pref-exclude { color: var(--pref-exclude); }
+.effort-menu { display: grid; gap: 10px; }
+.menu-group { display: grid; gap: 4px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.menu-group + .menu-group { padding-top: 8px; border-top: 1px solid var(--line); }
+.menu-group legend { padding: 0; margin-bottom: 4px; font-size: 12px; font-weight: 600; }
+.menu-radio { display: flex; align-items: center; gap: 6px; min-height: 26px; font-size: 12px; }
+.menu-radio:has(input:disabled) { color: var(--faint); }
+.compact-field { margin: 4px 0 0; }
+.menu-action { justify-self: start; }
+.menu-reason { margin: 0; overflow-wrap: anywhere; }
+
+/* The bottom save bar replaces the old global edit switch. */
+.save-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 14px; padding: 8px 12px; border: 1px solid var(--warning-line); border-radius: 6px; background: var(--warning-wash); color: var(--warning); font-size: 12px; font-weight: 600; }
+.save-bar-state { margin-right: auto; }
+
+.theme-choice { margin-top: 10px; }
+.settings-panel h2 { font-size: 14px; }
+@media (max-width: 760px) {
+  .family-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .routing-status-line > .button { margin-left: 0; }
+}

@@ -34,6 +34,14 @@
   --cfg-5: #9b4d6a;
   --cfg-6: #5d6b3a;
   --on-cfg: #ffffff;
+  /* User preference colours on effort tags. Each also has its own glyph and
+     border style, so colour is never the only signal. */
+  --pref-prefer: #2f5f9e;
+  --pref-prefer-wash: #edf3fb;
+  --pref-pin: #6a4a9c;
+  --pref-pin-wash: #f4f0fa;
+  --pref-exclude: #9a3f36;
+  --pref-exclude-wash: #fbefed;
   --radius: 8px;
 }
 
@@ -74,4 +82,10 @@
   --cfg-5: #e39ab5;
   --cfg-6: #b6c27f;
   --on-cfg: #101512;
+  --pref-prefer: #93b6ea;
+  --pref-prefer-wash: #1c2533;
+  --pref-pin: #c3a8ec;
+  --pref-pin-wash: #28213a;
+  --pref-exclude: #eb9e95;
+  --pref-exclude-wash: #362220;
 }

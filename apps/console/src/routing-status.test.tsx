@@ -1,51 +1,66 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Settings } from "./Settings";
+import { RoutingStatusBar } from "./RoutingStatusBar";
 import type { Editor } from "./use-editor";
-import type { Profile, Snapshot } from "./types";
-import { createApi } from "./api";
+import type { ConsoleView, Profile, RoutingHealth, Snapshot } from "./types";
 
 const editor = {
-  editing: false, configurationDirty: false, sessionWritable: true, mode: null, draft: null,
-  setDraft: vi.fn(),
+  editing: false, configurationDirty: false, sessionWritable: true, mode: false, draft: null,
+  update: vi.fn(),
 } as unknown as Editor;
-const api = createApi("/test", vi.fn() as unknown as typeof fetch);
 
-function snapshot(routingHealth: Snapshot["routingHealth"]): Snapshot {
+const router: Profile = {
+  profileId: "codex:openai:test:high", label: "Test", adapter: "codex",
+  provider: "openai", model: "test", effort: "high", available: true, enabled: true,
+  capabilities: ["execution:codex", "decision"], contextWindow: null, description: "", source: "catalog",
+};
+
+function snapshot(routingHealth: RoutingHealth | undefined, extra: Partial<Snapshot> = {}): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "s", canWrite: false, reason: null }, tableRevision: 1,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, decisionProfileId: null },
-    profiles: [], cards: [], preferences: [], annotations: [], evidence: [], decisions: [],
+    configuration: { revision: 1, decisionProfileId: router.profileId },
+    profiles: [router], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [],
+    familyAnnotations: [], evidence: [], decisions: [],
     sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 }, capabilities: {},
     routingHealth,
+    ...extra,
   };
 }
+const healthy: RoutingHealth = {
+  windowSize: 20, sampleCount: 5, failureCount: 0, consecutiveFailures: 0,
+  abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+  lastSuccessAt: "2026-09-27T07:00:00Z", lastSuccessDecisionId: null, recentFailures: [],
+};
+
+function renderBar(state: Snapshot, onShowRouter = vi.fn()) {
+  const view = render(<RoutingStatusBar data={state as unknown as ConsoleView} snapshot={state} editor={editor} onShowRouter={onShowRouter} />);
+  return { ...view, onShowRouter };
+}
+const health = () => screen.getByLabelText("路由健康");
+const bar = () => screen.getByRole("region", { name: "路由状态" });
 
 afterEach(() => cleanup());
 
-describe("settings routing status (R4)", () => {
+describe("routing health details (R4)", () => {
   it("says the summary is unavailable when the snapshot carries no routingHealth", () => {
-    render(<Settings snapshot={snapshot(undefined)} editor={editor} api={api} />);
-    const status = screen.getByLabelText("路由状态");
-    expect(status.textContent).toContain("路由摘要暂不可用");
+    renderBar(snapshot(undefined));
+    expect(health().textContent).toContain("路由摘要暂不可用");
     // Missing data is never rendered as a zero-failure claim.
-    expect(status.textContent).not.toContain("失败 0 次");
+    expect(health().textContent).not.toContain("失败 0 次");
+    expect(bar().textContent).toContain("状态：未知");
   });
 
   it("reports an empty window as no recorded samples rather than zero failures", () => {
-    render(<Settings snapshot={snapshot({
-      windowSize: 20, sampleCount: 0, failureCount: 0, consecutiveFailures: 0,
-      abstentionCount: 0, cancelledCount: 0, staleCount: 0,
-      lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
-    })} editor={editor} api={api} />);
-    const status = screen.getByLabelText("路由状态");
-    expect(status.textContent).toContain("窗口内暂无已记录样本（窗口上限 20 次）");
-    expect(status.textContent).not.toContain("失败 0 次");
+    renderBar(snapshot({ ...healthy, sampleCount: 0, lastSuccessAt: null }));
+    expect(health().textContent).toContain("窗口内暂无已记录样本（窗口上限 20 次）");
+    expect(health().textContent).not.toContain("失败 0 次");
+    expect(bar().textContent).toContain("状态：暂无样本");
   });
 
   it("shows the window counts, separated non-failures, last success and bounded recent failures", () => {
-    render(<Settings snapshot={snapshot({
+    renderBar(snapshot({
       windowSize: 20, sampleCount: 18, failureCount: 4, consecutiveFailures: 2,
       abstentionCount: 3, cancelledCount: 1, staleCount: 2,
       lastSuccessAt: "2026-09-25T08:02:00Z", lastSuccessDecisionId: "dec-41",
@@ -54,8 +69,8 @@ describe("settings routing status (R4)", () => {
         { decisionId: "dec-47", runId: null, at: "2026-09-27T09:12:00Z", code: "needs-host" },
         { decisionId: "dec-46", runId: "run-b", at: "2026-09-27T08:44:00Z", code: "timeout" },
       ],
-    })} editor={editor} api={api} />);
-    const status = screen.getByLabelText("路由状态");
+    }));
+    const status = health();
     expect(status.textContent).toContain("最近 18 次中失败 4 次（窗口上限 20 次）");
     expect(status.textContent).toContain("连续失败 2 次");
     expect(status.textContent).toContain("弃权 3 次");
@@ -68,77 +83,79 @@ describe("settings routing status (R4)", () => {
     expect(status.textContent).toContain("call-failed");
     expect(status.textContent).toContain("needs-host");
     expect(status.textContent).toContain("委派未记录");
-    // Read-only note; no retry or routing control appears.
-    expect(status.textContent).toContain("读取不触发模型");
+    // The read-only note lives in the `?` tooltip; no retry or routing control appears.
+    expect(within(status).getByRole("tooltip", { hidden: true }).textContent).toContain("读取不触发模型");
     expect(screen.queryByRole("button", { name: /重试/ })).toBeNull();
   });
 
-  it("stays visible for read-only sessions and never depends on the draft", () => {
-    const view = render(<Settings snapshot={snapshot({
-      windowSize: 20, sampleCount: 5, failureCount: 1, consecutiveFailures: 1,
-      abstentionCount: 0, cancelledCount: 0, staleCount: 0,
-      lastSuccessAt: "2026-09-27T07:00:00Z", lastSuccessDecisionId: null, recentFailures: [],
-    })} editor={editor} api={api} />);
-    expect(view.container.querySelector(".routing-status")).toBeTruthy();
-    expect(screen.getByLabelText("路由状态").textContent).toContain("最近 5 次中失败 1 次");
-  });
-
   it("reports recorded Router outcomes separately without changing legacy failure semantics", () => {
-    render(<Settings snapshot={snapshot({
+    renderBar(snapshot({
       windowSize: 20, sampleCount: 12, failureCount: 2, consecutiveFailures: 0,
       abstentionCount: 1, cancelledCount: 1, staleCount: 1,
       budgetExhaustedCount: 3, boundsRejectedCount: 2, inputChangedCount: 1,
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
-    })} editor={editor} api={api} />);
-    const status = screen.getByLabelText("路由状态");
-    expect(status.textContent).toContain("最近 12 次中失败 2 次");
-    expect(status.textContent).toContain("弃权 1 次 · 取消 1 次 · 过期 1 次，不计为失败");
-    expect(within(status).getByText("预算耗尽 3 次 · 边界检查拒绝 2 次 · 输入已变化 1 次")).toBeTruthy();
+    }));
+    expect(health().textContent).toContain("最近 12 次中失败 2 次");
+    expect(health().textContent).toContain("弃权 1 次 · 取消 1 次 · 过期 1 次，不计为失败");
+    expect(within(health()).getByText("预算耗尽 3 次 · 边界检查拒绝 2 次 · 输入已变化 1 次")).toBeTruthy();
   });
 
   it("distinguishes recorded zero outcomes from missing optional counters", () => {
-    const state = snapshot({
-      windowSize: 20, sampleCount: 1, failureCount: 0, consecutiveFailures: 0,
-      abstentionCount: 0, cancelledCount: 0, staleCount: 0,
-      lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
-    });
-    const view = render(<Settings snapshot={state} editor={editor} api={api} />);
-    expect(screen.getByLabelText("路由状态").textContent).not.toMatch(/预算耗尽|边界检查拒绝|输入已变化/);
-    view.rerender(<Settings snapshot={{ ...state, routingHealth: {
-      ...state.routingHealth!, budgetExhaustedCount: 0,
-    } }} editor={editor} api={api} />);
-    expect(screen.getByLabelText("路由状态").textContent).toContain("预算耗尽 0 次");
-    expect(screen.getByLabelText("路由状态").textContent).not.toMatch(/边界检查拒绝|输入已变化/);
+    const state = snapshot({ ...healthy, sampleCount: 1, lastSuccessAt: null });
+    const view = renderBar(state);
+    expect(health().textContent).not.toMatch(/预算耗尽|边界检查拒绝|输入已变化/);
+    const next = { ...state, routingHealth: { ...state.routingHealth!, budgetExhaustedCount: 0 } };
+    view.rerender(<RoutingStatusBar data={next as unknown as ConsoleView} snapshot={next} editor={editor} onShowRouter={vi.fn()} />);
+    expect(health().textContent).toContain("预算耗尽 0 次");
+    expect(health().textContent).not.toMatch(/边界检查拒绝|输入已变化/);
   });
 });
 
-describe("settings routing model", () => {
-  const profile: Profile = {
-    profileId: "codex:openai:test:high", label: "Test", adapter: "codex",
-    provider: "openai", model: "test", effort: "high", available: true, enabled: true,
-    capabilities: ["execution:codex"], contextWindow: null, description: "", source: "catalog",
-  };
-
-  it("shows verified routing capability candidates without inferring support from the adapter", () => {
-    const verified = { ...profile, profileId: "zcode:verified:test:high", adapter: "zcode", capabilities: ["decision"] };
-    const state = { ...snapshot(undefined), profiles: [profile, verified] };
-    render(<Settings snapshot={state} editor={editor} api={api} />);
-    expect(screen.getByRole("heading", { name: "路由模型" })).toBeTruthy();
-    const options = within(screen.getByLabelText("路由模型配置")).getAllByRole("option");
-    expect(options.map(option => (option as HTMLOptionElement).value)).toEqual(["", verified.profileId]);
-    expect(screen.queryByText("还没有经过验证的路由模型。")).toBeNull();
+describe("the one-line routing status", () => {
+  it("shows Router, budget and health in one line and no warning when nothing needs handling", () => {
+    renderBar(snapshot(healthy));
+    expect(bar().className).not.toContain("warning");
+    expect(bar().textContent).toContain("Router：Test · high");
+    expect(bar().textContent).toContain("预算：标准");
+    expect(bar().textContent).toContain("状态：正常");
+    expect(bar().querySelector(".routing-warning")).toBeNull();
   });
 
-  it("retains a stale configured model for attention while explaining an empty verified candidate list", () => {
-    const state = { ...snapshot(undefined), profiles: [profile],
-      configuration: { revision: 1, decisionProfileId: profile.profileId } };
-    render(<Settings snapshot={state} editor={editor} api={api} />);
-    expect(screen.getByText("还没有经过验证的路由模型。")).toBeTruthy();
-    const select = screen.getByLabelText("路由模型配置");
-    expect(select).toHaveProperty("value", profile.profileId);
-    expect(within(select).getByRole("option", { name: /需要处理/ })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("status").textContent).toContain("没有经过验证的路由能力；需要处理，但不影响保存其他修改");
-    expect(screen.getByText("路由不可用")).toBeTruthy();
-    expect(screen.queryByText("路由可用")).toBeNull();
+  it("turns into a warning with the resolving action when the Router is not verified", () => {
+    const unverified = { ...router, capabilities: ["execution:codex"] };
+    renderBar(snapshot(healthy, { profiles: [unverified] }));
+    expect(bar().className).toContain("warning");
+    expect(bar().querySelector(".routing-warning")!.textContent)
+      .toContain("当前 Router Test · high 未验证路由能力：请在另一个具备 decision 能力的档位菜单中选择“设为 Router”");
+  });
+
+  it("warns when no Router is set and when routing keeps failing", () => {
+    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, decisionProfileId: null } }));
+    expect(bar().textContent).toContain("Router：尚未指定");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("尚未指定 Router");
+    view.unmount();
+    renderBar(snapshot({ ...healthy, failureCount: 3, consecutiveFailures: 3 }));
+    expect(bar().textContent).toContain("状态：连续失败 3 次");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("请在“详情”中查看失败明细");
+  });
+
+  it("gathers the Router, the budget and health under 详情 and jumps to the Router's family", async () => {
+    const user = userEvent.setup();
+    const { onShowRouter } = renderBar(snapshot(healthy));
+    const details = screen.getByRole("button", { name: "详情" });
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+    expect(document.getElementById("routing-details")!.hidden).toBe(true);
+    await user.click(details);
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+    const panel = document.getElementById("routing-details")!;
+    expect(panel.hidden).toBe(false);
+    expect(within(panel).getByText("可担任")).toBeTruthy();
+    const budget = within(panel).getByRole("radiogroup", { name: /路由预算/ });
+    expect(within(budget).getAllByRole("radio").map(radio => radio.parentElement!.textContent)).toEqual(["快速", "标准", "深入"]);
+    expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
+    // A read-only editor keeps the choice visible but disabled.
+    expect(within(budget).getByRole("radio", { name: "深入" })).toHaveProperty("disabled", true);
+    await user.click(within(panel).getByRole("button", { name: "查看所在家族" }));
+    expect(onShowRouter).toHaveBeenCalledWith(router.profileId);
   });
 });

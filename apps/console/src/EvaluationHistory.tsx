@@ -21,7 +21,10 @@ export type EvaluationRevision = {
     preferences?: number;
     profileSettings?: number;
     preferenceChanges?: number;
+    /** Per-profile opinion patches of publications before schema 13. */
     annotationChanges?: number;
+    familyPreferenceChanges?: number;
+    familyAnnotationChanges?: number;
     provided?: string[];
   };
   createdAt: string;
@@ -46,6 +49,8 @@ const COUNT_KEYS = [
   "profileSettings",
   "preferenceChanges",
   "annotationChanges",
+  "familyPreferenceChanges",
+  "familyAnnotationChanges",
 ] as const;
 
 function count(value: unknown): number {
@@ -80,8 +85,10 @@ function countsText(item: EvaluationRevision): string {
   add("卡片", item.counts.cards);
   add("偏好", item.counts.preferences);
   add("启用补丁", item.counts.profileSettings);
+  add("家族偏好补丁", item.counts.familyPreferenceChanges);
   add("偏好补丁", item.counts.preferenceChanges);
   add("意见补丁", item.counts.annotationChanges);
+  add("备注补丁", item.counts.familyAnnotationChanges);
   const base = parts.join(" · ") || "未记录计数";
   return item.counts.provided?.length ? `${base} · 提供：${item.counts.provided.join("、")}` : base;
 }
@@ -116,7 +123,7 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
   }, [active, api, before, retry]);
   return <>
     <header className="detail-header"><div className="row-between"><h2>更新记录</h2>
-      <button className="button small-button" onClick={onBack}>返回模型卡片</button></div>
+      <button className="button small-button" onClick={onBack}>返回 Buddy 配置</button></div>
       <p className="small muted">只读取已发布版本的元数据；查看记录不会调用模型，也不会修改评价表。</p></header>
     <div className="detail-body">
       <div className="row-between"><h3>已发布版本{page ? ` · ${page.total}` : ""}</h3>

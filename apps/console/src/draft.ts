@@ -1,11 +1,15 @@
 import type {
-  Annotation,
   Card,
   Draft,
+  FamilyAnnotation,
+  FamilyPreference,
   ModelConcurrencyEntry,
   ModelConcurrencySetting,
   ModelFamily,
+  OverrideMode,
   Preference,
+  PreferenceMode,
+  PreferenceOverride,
   Profile,
   Configuration,
   Snapshot,
@@ -22,19 +26,26 @@ export type HistoryEntries = {
    */
   tableRevision: number;
   profiles?: Profile[];
+  /** Effective preferences of the retained rows (read-only). */
   preferences?: Preference[];
-  annotations?: Annotation[];
+  preferenceOverrides?: PreferenceOverride[];
+  familyPreferences?: FamilyPreference[];
+  familyAnnotations?: FamilyAnnotation[];
   cards?: Card[];
   sampleCounts?: Record<string, number>;
   modelConcurrency?: ModelConcurrencyEntry[];
 };
 
+const familyOf = (row: ModelFamily): ModelFamily =>
+  ({ adapter: row.adapter, provider: row.provider, model: row.model });
+
 export function makeDraft(snapshot: Snapshot): Draft {
   return structuredClone({
     tableRevision: snapshot.tableRevision,
     profiles: snapshot.profiles,
-    preferences: snapshot.preferences,
-    annotations: snapshot.annotations ?? [],
+    familyPreferences: snapshot.familyPreferences ?? [],
+    preferenceOverrides: snapshot.preferenceOverrides ?? [],
+    familyAnnotations: snapshot.familyAnnotations ?? [],
     configuration: snapshot.configuration,
     // The draft carries the user limit settings only; occupancy is observation
     // and is dropped here so no publication path can ever emit it.
@@ -57,32 +68,89 @@ export function emptyCard(profileId: string): Card {
   };
 }
 
-export function emptyAnnotation(profileId: string): Annotation {
-  return { profileId, text: "", revision: 0, updatedAt: null };
+export function emptyFamilyAnnotation(family: ModelFamily): FamilyAnnotation {
+  return { ...familyOf(family), text: "", revision: 0, updatedAt: null };
 }
 
-/** One human opinion per profile; empty text is a deliberate clear, not a delete. */
-export function setAnnotation(
+/** One note per family; empty text is a deliberate clear, not a delete. */
+export function setFamilyAnnotation(
   draft: Draft,
-  profileId: string,
+  family: ModelFamily,
   text: string,
 ): Draft {
-  const known = draft.annotations.find((a) => a.profileId === profileId);
-  const next: Annotation = { ...(known ?? emptyAnnotation(profileId)), text };
+  const key = familyKey(family);
+  const known = draft.familyAnnotations.find((a) => familyKey(a) === key);
+  const next: FamilyAnnotation = { ...(known ?? emptyFamilyAnnotation(family)), text };
   return {
     ...draft,
-    annotations: [
-      ...draft.annotations.filter((a) => a.profileId !== profileId),
+    familyAnnotations: [
+      ...draft.familyAnnotations.filter((a) => familyKey(a) !== key),
       next,
     ],
   };
 }
 
-export function annotationText(
-  source: { annotations: Annotation[] },
-  profileId: string,
+export function familyAnnotationText(
+  source: { familyAnnotations: FamilyAnnotation[] },
+  family: ModelFamily,
 ): string {
-  return source.annotations.find((a) => a.profileId === profileId)?.text ?? "";
+  const key = familyKey(family);
+  return source.familyAnnotations.find((a) => familyKey(a) === key)?.text ?? "";
+}
+
+/** Family default preference; an empty mode clears the default. */
+export function setFamilyPreference(
+  draft: Draft,
+  family: ModelFamily,
+  mode: PreferenceMode | "",
+  reason = "",
+): Draft {
+  const key = familyKey(family);
+  const familyPreferences = draft.familyPreferences.filter((p) => familyKey(p) !== key);
+  if (mode) familyPreferences.push({ ...familyOf(family), mode, reason });
+  return { ...draft, familyPreferences };
+}
+
+/**
+ * One effort's override. An empty mode deletes the override so the effort
+ * follows its family default again; `none` is an explicit "no preference".
+ */
+export function setPreferenceOverride(
+  draft: Draft,
+  profileId: string,
+  mode: OverrideMode | "",
+  reason = "",
+): Draft {
+  const preferenceOverrides = draft.preferenceOverrides.filter((p) => p.profileId !== profileId);
+  if (mode) preferenceOverrides.push({ profileId, mode, reason });
+  return { ...draft, preferenceOverrides };
+}
+
+/**
+ * Effective preferences, mirroring the schema 13 `effective_preferences` view:
+ * an override wins (a `none` override yields no row), otherwise the family
+ * default applies. Only the listed profiles get a row.
+ */
+export function effectivePreferences(source: {
+  profiles: Profile[];
+  familyPreferences: FamilyPreference[];
+  preferenceOverrides: PreferenceOverride[];
+}): Preference[] {
+  const overrides = new Map(source.preferenceOverrides.map((p) => [p.profileId, p]));
+  const families = new Map(source.familyPreferences.map((p) => [familyKey(p), p]));
+  const rows: Preference[] = [];
+  for (const profile of source.profiles) {
+    const override = overrides.get(profile.profileId);
+    if (override) {
+      if (override.mode !== "none") {
+        rows.push({ profileId: profile.profileId, mode: override.mode, reason: override.reason, source: "override" });
+      }
+      continue;
+    }
+    const family = families.get(familyKey(profile));
+    if (family) rows.push({ profileId: profile.profileId, mode: family.mode, reason: family.reason, source: "family" });
+  }
+  return rows;
 }
 
 function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | undefined): T[] {
@@ -92,7 +160,7 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | 
   return added.length ? [...current, ...added] : current;
 }
 
-function addMissingFamilies<T extends ModelConcurrencySetting>(
+function addMissingFamilies<T extends ModelFamily>(
   current: T[],
   extra: T[] | undefined,
 ): T[] {
@@ -102,13 +170,15 @@ function addMissingFamilies<T extends ModelConcurrencySetting>(
   return added.length ? [...current, ...added] : current;
 }
 
+type UserRows = Pick<Draft, "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations">
+  & { tableRevision: number; modelConcurrency?: ModelConcurrencySetting[] };
+
 /**
  * Adds retained history rows the snapshot no longer lists. Live snapshot rows
  * always win; history only fills identities that would otherwise be invisible,
  * and only when the page was read at the source's own revision.
  */
-export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "annotations">
-  & { tableRevision: number; modelConcurrency?: ModelConcurrencySetting[] }>(
+export function withHistory<T extends UserRows>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
@@ -120,16 +190,16 @@ export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "
   return {
     ...source,
     profiles: addMissing(source.profiles, entries.profiles),
-    preferences: addMissing(source.preferences, entries.preferences),
-    annotations: addMissing(source.annotations, entries.annotations),
+    preferenceOverrides: addMissing(source.preferenceOverrides, entries.preferenceOverrides),
+    familyPreferences: addMissingFamilies(source.familyPreferences, entries.familyPreferences),
+    familyAnnotations: addMissingFamilies(source.familyAnnotations, entries.familyAnnotations),
     modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], retainedSettings),
   };
 }
 
 /** Full console view: human draft (or snapshot) plus retained history rows. */
-export function historyView<T extends Pick<Draft, "profiles" | "preferences" | "annotations">
-  & { tableRevision: number; cards: Card[]; sampleCounts?: Record<string, number>;
-      modelConcurrency?: ModelConcurrencySetting[] }>(
+export function historyView<T extends UserRows
+  & { cards: Card[]; preferences: Preference[]; sampleCounts?: Record<string, number> }>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
@@ -140,15 +210,17 @@ export function historyView<T extends Pick<Draft, "profiles" | "preferences" | "
   const counts = { ...(entries.sampleCounts ?? {}), ...(source.sampleCounts ?? {}) };
   // Retained family entries keep their recorded occupancy for the read-only view.
   return { ...base, cards: addMissing(source.cards, entries.cards ?? []), sampleCounts: counts,
+    preferences: addMissing(source.preferences, entries.preferences),
     modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], entries.modelConcurrency) };
 }
 
 /**
  * Retained rows that may still be added to an existing draft. A retained row
  * whose identity the draft still holds adds nothing, and a row the draft no
- * longer holds while the baseline does is a deliberate removal (for example
- * "无额外偏好" or a cleared opinion) that retained history must never resurrect.
- * Identities neither the draft nor the baseline ever knew are still filled in.
+ * longer holds while the baseline does is a deliberate removal (for example a
+ * cleared family preference or an override set back to "跟随家族") that
+ * retained history must never resurrect. Identities neither the draft nor the
+ * baseline ever knew are still filled in.
  */
 export function retainedAdditions(
   draft: Draft,
@@ -166,32 +238,24 @@ export function retainedAdditions(
     const inBaseline = new Set(known.map((row) => row.profileId));
     return rows.filter((row) => inDraft.has(row.profileId) || !inBaseline.has(row.profileId));
   };
-  const familyIn = (rows: ModelConcurrencySetting[]) => new Set(rows.map(familyKey));
-  const draftFamilies = familyIn(draft.modelConcurrency);
-  const baselineFamilies = familyIn(baseline.modelConcurrency);
+  const familyAdditions = <T extends ModelFamily>(
+    rows: T[] | undefined,
+    current: ModelFamily[],
+    known: ModelFamily[],
+  ): T[] | undefined => {
+    if (!rows) return rows;
+    const inDraft = new Set(current.map(familyKey));
+    const inBaseline = new Set(known.map(familyKey));
+    return rows.filter((row) => inDraft.has(familyKey(row)) || !inBaseline.has(familyKey(row)));
+  };
   return {
     ...entries,
     profiles: additions(entries.profiles, draft.profiles, baseline.profiles),
-    preferences: additions(entries.preferences, draft.preferences, baseline.preferences),
-    annotations: additions(entries.annotations, draft.annotations, baseline.annotations),
-    modelConcurrency: entries.modelConcurrency?.filter((entry) => {
-      const key = familyKey(entry);
-      return draftFamilies.has(key) || !baselineFamilies.has(key);
-    }),
+    preferenceOverrides: additions(entries.preferenceOverrides, draft.preferenceOverrides, baseline.preferenceOverrides),
+    familyPreferences: familyAdditions(entries.familyPreferences, draft.familyPreferences, baseline.familyPreferences),
+    familyAnnotations: familyAdditions(entries.familyAnnotations, draft.familyAnnotations, baseline.familyAnnotations),
+    modelConcurrency: familyAdditions(entries.modelConcurrency, draft.modelConcurrency, baseline.modelConcurrency),
   };
-}
-
-export function setPreference(
-  draft: Draft,
-  profileId: string,
-  mode: Preference["mode"] | "",
-  reason = "",
-): Draft {
-  const preferences = draft.preferences.filter(
-    (p) => p.profileId !== profileId && !(mode === "pin" && p.mode === "pin"),
-  );
-  if (mode) preferences.push({ profileId, mode, reason });
-  return { ...draft, preferences };
 }
 
 /**
@@ -212,6 +276,8 @@ export function setConcurrencyLimit(
   return { ...draft, modelConcurrency };
 }
 
+const byFamily = (a: ModelFamily, b: ModelFamily) => familyKey(a).localeCompare(familyKey(b));
+
 /** Limit patches, one per family whose user setting changed; never occupancy. */
 export function modelConcurrencyChanges(
   baseline: Draft,
@@ -225,17 +291,24 @@ export function modelConcurrencyChanges(
     if (limit === null || (old && old.limit === limit)) continue;
     changed.push({ adapter: entry.adapter, provider: entry.provider, model: entry.model, limit });
   }
-  return changed.sort((a, b) => familyKey(a).localeCompare(familyKey(b)));
+  return changed.sort(byFamily);
 }
 
 /** The only fields a human may publish; program-owned profile/catalog fields stay out. */
 export type ProfileSettingPatch = { profileId: string; enabled: boolean };
-export type PreferenceChangePatch = {
-  profileId: string;
-  mode: Preference["mode"] | null;
+/** Family default patch; `mode: null` clears the default. */
+export type FamilyPreferenceChangePatch = ModelFamily & {
+  mode: PreferenceMode | null;
   reason: string;
 };
-export type AnnotationChangePatch = { profileId: string; text: string };
+/** Effort override patch; `mode: null` deletes the override (follow the family). */
+export type PreferenceChangePatch = {
+  profileId: string;
+  mode: OverrideMode | null;
+  reason: string;
+};
+/** Family note patch; `text: ""` clears the note. */
+export type FamilyAnnotationChangePatch = ModelFamily & { text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
@@ -244,8 +317,9 @@ export type UserPolicyPublication = {
   writerToken: string;
   expectedRevision: number;
   profileSettings?: ProfileSettingPatch[];
+  familyPreferenceChanges?: FamilyPreferenceChangePatch[];
   preferenceChanges?: PreferenceChangePatch[];
-  annotationChanges?: AnnotationChangePatch[];
+  familyAnnotationChanges?: FamilyAnnotationChangePatch[];
   configuration?: Partial<Pick<Configuration, "decisionProfileId" | "routingBudget">>;
   /** Per-family limit patches; the board refuses any `active` occupancy here. */
   modelConcurrency?: ModelConcurrencySetting[];
@@ -253,7 +327,7 @@ export type UserPolicyPublication = {
 
 type UserEditable = Pick<
   Draft,
-  "profiles" | "preferences" | "annotations" | "configuration" | "modelConcurrency"
+  "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations" | "configuration" | "modelConcurrency"
 >;
 
 const byProfileId = (a: { profileId: string }, b: { profileId: string }) =>
@@ -274,15 +348,38 @@ export function profileSettings(
 }
 
 /**
- * Preference patches. A removed preference is `mode: null`; a changed reason
+ * Family default patches. A removed default is `mode: null`; a changed reason
  * rides along with its mode, and a trailing empty reason is a deliberate clear.
+ */
+export function familyPreferenceChanges(
+  baseline: Draft,
+  draft: Draft,
+): FamilyPreferenceChangePatch[] {
+  const before = new Map(baseline.familyPreferences.map((p) => [familyKey(p), p]));
+  const after = new Map(draft.familyPreferences.map((p) => [familyKey(p), p]));
+  const changed: FamilyPreferenceChangePatch[] = [];
+  for (const key of new Set([...before.keys(), ...after.keys()])) {
+    const previous = before.get(key);
+    const next = after.get(key);
+    if (previous?.mode === next?.mode && (previous?.reason ?? "") === (next?.reason ?? "")) continue;
+    const family = familyOf((next ?? previous)!);
+    changed.push(next
+      ? { ...family, mode: next.mode, reason: next.reason }
+      : { ...family, mode: null, reason: "" });
+  }
+  return changed.sort(byFamily);
+}
+
+/**
+ * Effort override patches. A deleted override is `mode: null` (the effort
+ * follows its family again); `none` is an explicit no-preference override.
  */
 export function preferenceChanges(
   baseline: Draft,
   draft: Draft,
 ): PreferenceChangePatch[] {
-  const before = new Map(baseline.preferences.map((p) => [p.profileId, p]));
-  const after = new Map(draft.preferences.map((p) => [p.profileId, p]));
+  const before = new Map(baseline.preferenceOverrides.map((p) => [p.profileId, p]));
+  const after = new Map(draft.preferenceOverrides.map((p) => [p.profileId, p]));
   const changed: PreferenceChangePatch[] = [];
   for (const profileId of new Set([...before.keys(), ...after.keys()])) {
     const previous = before.get(profileId);
@@ -299,20 +396,20 @@ export function preferenceChanges(
   return changed.sort(byProfileId);
 }
 
-/** Annotation patches; `text: ""` clears the recorded opinion. */
-export function annotationChanges(
+/** Family note patches; `text: ""` clears the recorded note. */
+export function familyAnnotationChanges(
   baseline: Draft,
   draft: Draft,
-): AnnotationChangePatch[] {
-  const before = new Map(baseline.annotations.map((a) => [a.profileId, a.text]));
-  const after = new Map(draft.annotations.map((a) => [a.profileId, a.text]));
-  const changed: AnnotationChangePatch[] = [];
-  for (const profileId of new Set([...before.keys(), ...after.keys()])) {
-    const previous = before.get(profileId) ?? "";
-    const next = after.get(profileId) ?? "";
-    if (previous !== next) changed.push({ profileId, text: next });
+): FamilyAnnotationChangePatch[] {
+  const before = new Map(baseline.familyAnnotations.map((a) => [familyKey(a), a]));
+  const after = new Map(draft.familyAnnotations.map((a) => [familyKey(a), a]));
+  const changed: FamilyAnnotationChangePatch[] = [];
+  for (const key of new Set([...before.keys(), ...after.keys()])) {
+    const previous = before.get(key)?.text ?? "";
+    const next = after.get(key)?.text ?? "";
+    if (previous !== next) changed.push({ ...familyOf((after.get(key) ?? before.get(key))!), text: next });
   }
-  return changed.sort(byProfileId);
+  return changed.sort(byFamily);
 }
 
 export function decisionProfileChanged(baseline: Draft, draft: Draft): boolean {
@@ -330,8 +427,8 @@ export function configurationChanged(baseline: Draft, draft: Draft): boolean {
 /**
  * `user_policy_publish` payload: identity, expected revision and only the dirty
  * user patches. An unchanged field is omitted so the board keeps its value; no
- * provider/model/effort/available/catalog field, no card and no occupancy is
- * ever included.
+ * provider/model/effort/available/catalog field, no card, no effective
+ * preference and no occupancy is ever included.
  */
 export function publication(
   baseline: Draft,
@@ -340,8 +437,9 @@ export function publication(
   commandId: string,
 ): UserPolicyPublication {
   const settings = profileSettings(baseline, draft);
-  const preferences = preferenceChanges(baseline, draft);
-  const annotations = annotationChanges(baseline, draft);
+  const families = familyPreferenceChanges(baseline, draft);
+  const overrides = preferenceChanges(baseline, draft);
+  const notes = familyAnnotationChanges(baseline, draft);
   const concurrency = modelConcurrencyChanges(baseline, draft);
   return {
     commandId,
@@ -350,8 +448,9 @@ export function publication(
     writerToken: grant.writerToken,
     expectedRevision: draft.tableRevision,
     ...(settings.length ? { profileSettings: settings } : {}),
-    ...(preferences.length ? { preferenceChanges: preferences } : {}),
-    ...(annotations.length ? { annotationChanges: annotations } : {}),
+    ...(families.length ? { familyPreferenceChanges: families } : {}),
+    ...(overrides.length ? { preferenceChanges: overrides } : {}),
+    ...(notes.length ? { familyAnnotationChanges: notes } : {}),
     ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
@@ -365,23 +464,31 @@ export function publication(
 /**
  * Order-independent fingerprint of exactly the human-editable content. Program
  * fields (availability, catalog facts, recorded occupancy) are not user changes
- * and never make a draft look dirty after a directory refresh.
+ * and never make a draft look dirty after a directory refresh. An empty note is
+ * the same content as no note.
  */
 function fingerprint(draft: UserEditable): string {
   return JSON.stringify({
     profiles: [...draft.profiles]
       .map(({ profileId, enabled }) => ({ profileId, enabled }))
       .sort(byProfileId),
-    preferences: [...draft.preferences].sort(byProfileId),
-    annotations: [...draft.annotations]
-      .map(({ profileId, text }) => ({ profileId, text }))
+    familyPreferences: [...draft.familyPreferences]
+      .map((p) => ({ key: familyKey(p), mode: p.mode, reason: p.reason }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    preferenceOverrides: [...draft.preferenceOverrides]
+      .map(({ profileId, mode, reason }) => ({ profileId, mode, reason }))
       .sort(byProfileId),
+    familyAnnotations: draft.familyAnnotations
+      .filter((a) => a.text)
+      .map((a) => ({ key: familyKey(a), text: a.text }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
     configuration: {
       decisionProfileId: draft.configuration.decisionProfileId,
       routingBudget: draft.configuration.routingBudget ?? "standard",
     },
     modelConcurrency: [...draft.modelConcurrency]
-      .sort((a, b) => familyKey(a).localeCompare(familyKey(b))),
+      .map(({ adapter, provider, model, limit }) => ({ key: familyKey({ adapter, provider, model }), limit }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
   });
 }
 
@@ -391,59 +498,22 @@ export function draftDiffers(baseline: Draft, draft: Draft): boolean {
 }
 
 /**
- * One tuple per profile over the fields a human owns: its enabled intent, its
- * preference rows, its opinion and its family's concurrency limit (shared with
- * the other effort variants of the same adapter/provider/model tuple). A card
- * is program-owned and is not a human change, so it can no longer hide or
- * fabricate a profile edit.
+ * Number of unsaved user changes, counted as the patches a save would carry.
+ * A family limit that is not a valid setting yet still counts, so the save bar
+ * never says "0 项" while the draft differs.
  */
-function profileTuples(draft: UserEditable): Map<string, string> {
-  type Tuple = {
-    enabled?: boolean; preferences: Preference[]; annotation?: string; concurrencyLimit: number | null;
-  };
-  const collected = new Map<string, Tuple>();
-  const limits = new Map(draft.modelConcurrency.map((entry) => [familyKey(entry), entry.limit]));
-  const tuple = (profileId: string) => {
-    const existing = collected.get(profileId);
-    if (existing) return existing;
-    const created: Tuple = { preferences: [], concurrencyLimit: null };
-    collected.set(profileId, created);
-    return created;
-  };
-  for (const profile of draft.profiles) {
-    const value = tuple(profile.profileId);
-    value.enabled = profile.enabled;
-    value.concurrencyLimit = limits.get(familyKey(profile)) ?? null;
-  }
-  for (const preference of draft.preferences) tuple(preference.profileId).preferences.push(preference);
-  for (const annotation of draft.annotations) {
-    if (annotation.text) tuple(annotation.profileId).annotation = annotation.text;
-  }
-  return new Map(
-    [...collected].map(([profileId, value]) => [
-      profileId,
-      JSON.stringify({
-        enabled: value.enabled ?? null,
-        // Preferences are a set per profile; their storage order is not content.
-        preferences: [...value.preferences].sort(
-          (a, b) => a.mode.localeCompare(b.mode) || a.reason.localeCompare(b.reason),
-        ),
-        annotation: value.annotation ?? "",
-        concurrencyLimit: value.concurrencyLimit,
-      }),
-    ]),
-  );
-}
-
-/** Profiles whose recorded human content differs from the baseline. */
-export function changedProfileIds(baseline: Draft, draft: Draft): string[] {
-  const before = profileTuples(baseline);
-  const after = profileTuples(draft);
-  const changed = new Set<string>();
-  for (const id of new Set([...before.keys(), ...after.keys()])) {
-    if (before.get(id) !== after.get(id)) changed.add(id);
-  }
-  return [...changed].sort();
+export function changeCount(baseline: Draft, draft: Draft): number {
+  const limits = new Map(baseline.modelConcurrency.map((entry) => [familyKey(entry), entry.limit]));
+  const concurrency = draft.modelConcurrency.filter(
+    (entry) => !Object.is(limits.get(familyKey(entry)), entry.limit),
+  ).length;
+  return profileSettings(baseline, draft).length
+    + familyPreferenceChanges(baseline, draft).length
+    + preferenceChanges(baseline, draft).length
+    + familyAnnotationChanges(baseline, draft).length
+    + concurrency
+    + (decisionProfileChanged(baseline, draft) ? 1 : 0)
+    + (routingBudgetChanged(baseline, draft) ? 1 : 0);
 }
 
 /**
@@ -455,7 +525,8 @@ export function changedProfileIds(baseline: Draft, draft: Draft): string[] {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "annotation" | "configuration" | "routingBudget" | "modelConcurrency";
+  field: "enabled" | "familyPreference" | "preference" | "familyAnnotation" | "configuration" | "routingBudget" | "modelConcurrency";
+  /** The profile id, or the `adapter/provider/model` of a family-level field. */
   profileId: string;
   message: string;
 };
@@ -468,17 +539,30 @@ export type RebaseOutcome = {
 
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
-  preference: "用户偏好",
-  annotation: "人工意见",
-  configuration: "路由模型配置",
+  familyPreference: "家族偏好",
+  preference: "档位偏好",
+  familyAnnotation: "家族备注",
+  configuration: "Router",
   routingBudget: "路由预算",
   modelConcurrency: "并发上限",
 };
 
+const familyText = (family: ModelFamily) => `${family.adapter}/${family.provider}/${family.model}`;
+
 function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
-  return field === "configuration"
-    ? `路由模型配置${profileId ? ` ${profileId}` : "（空）"}`
-    : `配置 ${profileId} 的${FIELD_NAMES[field]}`;
+  if (field === "configuration") return `Router${profileId ? ` ${profileId}` : "（空）"}`;
+  if (field === "routingBudget") return "路由预算";
+  if (field === "familyPreference" || field === "familyAnnotation" || field === "modelConcurrency") {
+    return `模型家族 ${profileId} 的${FIELD_NAMES[field]}`;
+  }
+  return `配置 ${profileId} 的${FIELD_NAMES[field]}`;
+}
+
+/** Three-way merge of one field: null means a real competing value. */
+function merge<T>(old: T, wanted: T, fresh: T, same: (a: T, b: T) => boolean = Object.is): { value: T } | null {
+  if (same(old, wanted)) return { value: fresh };
+  if (same(fresh, old) || same(fresh, wanted)) return { value: wanted };
+  return null;
 }
 
 /**
@@ -491,9 +575,10 @@ function conflictSubject(field: RebaseConflict["field"], profileId: string): str
  * already equals the draft intent. Anything else keeps the *original* draft and
  * its `expectedRevision` and reports an actionable conflict, so a stale draft
  * can never silently overwrite another writer's publication. A dirty field
- * whose profile is missing from the bounded snapshot stays unresolved until a
- * retained page read at the refreshed revision supplies the missing row; cached
- * rows from an older revision are never used to mint a new baseline.
+ * whose profile (or, for a family field, every profile of the family) is
+ * missing from the bounded snapshot stays unresolved until a retained page read
+ * at the refreshed revision supplies the missing row; cached rows from an older
+ * revision are never used to mint a new baseline.
  */
 export function rebaseDraft(
   draft: Draft,
@@ -515,11 +600,12 @@ export function rebaseDraft(
       field,
       profileId,
       message: kind === "unread"
-        ? `${subject} 尚不能与 V${snapshot.tableRevision} 核对：它不在最新快照中，保留历史也尚未按 V${snapshot.tableRevision} 重新读取。你的修改和原基于版本都保留；读取“显示不可用配置”的历史后会自动核对。`
+        ? `${subject} 尚不能与 V${snapshot.tableRevision} 核对：它不在最新快照中，保留历史也尚未按 V${snapshot.tableRevision} 重新读取。你的修改和原基于版本都保留；读取保留的历史配置后会自动核对。`
         : `${subject} 已被其他发布修改（V${snapshot.tableRevision}）${detail}；为避免覆盖，草稿仍基于原版本，请重新加载最新版本核对后再提交。`,
     });
   };
   const freshProfiles = new Map(nextBaseline.profiles.map((p) => [p.profileId, p]));
+  const freshFamilies = new Set(nextBaseline.profiles.map(familyKey));
 
   // Enabled intent: only a profile that still exists in the refreshed table can
   // be compared; a missing row is unresolved rather than silently dropped.
@@ -539,65 +625,74 @@ export function rebaseDraft(
     }
   }
 
-  // Preferences: mode and reason are separate fields. A field the human did not
-  // touch keeps the refreshed value, so another writer's reason survives a mode
-  // change of ours.
-  const preferenceMerges = new Map<string, Preference>();
-  const preferenceRemovals = new Set<string>();
-  const baselinePreferences = new Map(baseline.preferences.map((p) => [p.profileId, p]));
-  const draftPreferences = new Map(draft.preferences.map((p) => [p.profileId, p]));
+  // Family defaults: mode and reason are separate fields, so another writer's
+  // reason survives a mode change of ours.
+  const familyMerges = new Map<string, FamilyPreference>();
+  const familyRemovals = new Set<string>();
+  for (const change of familyPreferenceChanges(baseline, draft)) {
+    const key = familyKey(change);
+    if (!freshFamilies.has(key)) {
+      fail("unread", "familyPreference", familyText(change));
+      continue;
+    }
+    const oldRow = baseline.familyPreferences.find((p) => familyKey(p) === key);
+    const draftRow = draft.familyPreferences.find((p) => familyKey(p) === key);
+    const freshRow = nextBaseline.familyPreferences.find((p) => familyKey(p) === key);
+    const mode = merge(oldRow?.mode, draftRow?.mode, freshRow?.mode);
+    if (!mode) {
+      fail("changed", "familyPreference", familyText(change), "（模式）");
+      continue;
+    }
+    const reason = merge(oldRow?.reason ?? "", draftRow?.reason ?? "", freshRow?.reason ?? "");
+    if (!reason) {
+      fail("changed", "familyPreference", familyText(change), "（理由）");
+      continue;
+    }
+    if (mode.value === undefined) familyRemovals.add(key);
+    else familyMerges.set(key, { ...familyOf(change), mode: mode.value, reason: reason.value });
+  }
+
+  // Effort overrides, merged the same way per profile.
+  const overrideMerges = new Map<string, PreferenceOverride>();
+  const overrideRemovals = new Set<string>();
   for (const change of preferenceChanges(baseline, draft)) {
     const profileId = change.profileId;
     if (!freshProfiles.has(profileId)) {
       fail("unread", "preference", profileId);
       continue;
     }
-    const oldRow = baselinePreferences.get(profileId);
-    const draftRow = draftPreferences.get(profileId);
-    const freshRow = nextBaseline.preferences.find((p) => p.profileId === profileId);
-    const oldMode = oldRow?.mode;
-    const draftMode = draftRow?.mode;
-    const freshMode = freshRow?.mode;
-    let mode: Preference["mode"] | undefined;
-    if (oldMode === draftMode) mode = freshMode;
-    else if (freshMode === oldMode || freshMode === draftMode) mode = draftMode;
-    else {
+    const oldRow = baseline.preferenceOverrides.find((p) => p.profileId === profileId);
+    const draftRow = draft.preferenceOverrides.find((p) => p.profileId === profileId);
+    const freshRow = nextBaseline.preferenceOverrides.find((p) => p.profileId === profileId);
+    const mode = merge(oldRow?.mode, draftRow?.mode, freshRow?.mode);
+    if (!mode) {
       fail("changed", "preference", profileId, "（模式）");
       continue;
     }
-    const oldReason = oldRow?.reason ?? "";
-    const draftReason = draftRow?.reason ?? "";
-    const freshReason = freshRow?.reason ?? "";
-    let reason: string;
-    if (oldReason === draftReason) reason = freshReason;
-    else if (freshReason === oldReason || freshReason === draftReason) reason = draftReason;
-    else {
-      fail("changed", "preference", profileId, "（依据）");
+    const reason = merge(oldRow?.reason ?? "", draftRow?.reason ?? "", freshRow?.reason ?? "");
+    if (!reason) {
+      fail("changed", "preference", profileId, "（理由）");
       continue;
     }
-    if (mode === undefined) preferenceRemovals.add(profileId);
-    else preferenceMerges.set(profileId, { profileId, mode, reason });
+    if (mode.value === undefined) overrideRemovals.add(profileId);
+    else overrideMerges.set(profileId, { profileId, mode: mode.value, reason: reason.value });
   }
 
-  // Opinions: the text is the field; an already-equal refreshed value wins.
-  const mergedAnnotations = new Map<string, string>();
-  const baselineAnnotations = new Map(baseline.annotations.map((a) => [a.profileId, a.text]));
-  for (const change of annotationChanges(baseline, draft)) {
-    const profileId = change.profileId;
-    if (!freshProfiles.has(profileId)) {
-      fail("unread", "annotation", profileId);
+  // Family notes: the text is the field; an already-equal refreshed value wins.
+  const mergedNotes = new Map<string, FamilyAnnotationChangePatch>();
+  for (const change of familyAnnotationChanges(baseline, draft)) {
+    const key = familyKey(change);
+    if (!freshFamilies.has(key)) {
+      fail("unread", "familyAnnotation", familyText(change));
       continue;
     }
-    const oldText = baselineAnnotations.get(profileId) ?? "";
-    const freshText = nextBaseline.annotations.find((a) => a.profileId === profileId)?.text ?? "";
-    if (freshText === oldText || freshText === change.text) {
-      mergedAnnotations.set(profileId, change.text);
-    } else {
-      fail("changed", "annotation", profileId);
-    }
+    const oldText = baseline.familyAnnotations.find((a) => familyKey(a) === key)?.text ?? "";
+    const freshText = nextBaseline.familyAnnotations.find((a) => familyKey(a) === key)?.text ?? "";
+    if (freshText === oldText || freshText === change.text) mergedNotes.set(key, change);
+    else fail("changed", "familyAnnotation", familyText(change));
   }
 
-  // The fixed decision configuration is a single global field.
+  // The Router is a single global field.
   let decisionProfileId = nextBaseline.configuration.decisionProfileId;
   if (decisionProfileChanged(baseline, draft)) {
     const old = baseline.configuration.decisionProfileId;
@@ -623,38 +718,40 @@ export function rebaseDraft(
   );
   for (const entry of draft.modelConcurrency) {
     if (concurrencyLimit(entry.limit) === null) {
-      fail("changed", "modelConcurrency", `${entry.adapter}/${entry.provider}/${entry.model}`,
-        "（请先修正草稿中的无效值）");
+      fail("changed", "modelConcurrency", familyText(entry), "（请先修正草稿中的无效值）");
     }
   }
   for (const change of modelConcurrencyChanges(baseline, draft)) {
     const key = familyKey(change);
-    const subject = `${change.adapter}/${change.provider}/${change.model}`;
     const freshEntry = nextBaseline.modelConcurrency.find((entry) => familyKey(entry) === key);
     if (!freshEntry) {
-      fail("unread", "modelConcurrency", subject);
+      fail("unread", "modelConcurrency", familyText(change));
       continue;
     }
     const old = baselineLimits.get(key);
     if (freshEntry.limit === old || freshEntry.limit === change.limit) {
       mergedConcurrency.set(key, change);
     } else {
-      fail("changed", "modelConcurrency", subject, `（现为 ${freshEntry.limit}）`);
+      fail("changed", "modelConcurrency", familyText(change), `（现为 ${freshEntry.limit}）`);
     }
   }
 
   if (conflicts.length) return { draft, baseline, conflicts };
 
-  const preferences = nextBaseline.preferences.filter(
-    (p) => !preferenceMerges.has(p.profileId) && !preferenceRemovals.has(p.profileId),
+  const familyPreferences = nextBaseline.familyPreferences.filter(
+    (p) => !familyMerges.has(familyKey(p)) && !familyRemovals.has(familyKey(p)),
   );
-  for (const preference of preferenceMerges.values()) preferences.push(preference);
-  const annotations = nextBaseline.annotations.filter(
-    (annotation) => !mergedAnnotations.has(annotation.profileId),
+  for (const preference of familyMerges.values()) familyPreferences.push(preference);
+  const preferenceOverrides = nextBaseline.preferenceOverrides.filter(
+    (p) => !overrideMerges.has(p.profileId) && !overrideRemovals.has(p.profileId),
   );
-  for (const [profileId, text] of mergedAnnotations) {
-    const known = nextBaseline.annotations.find((a) => a.profileId === profileId);
-    annotations.push({ ...(known ?? emptyAnnotation(profileId)), profileId, text });
+  for (const override of overrideMerges.values()) preferenceOverrides.push(override);
+  const familyAnnotations = nextBaseline.familyAnnotations.filter(
+    (annotation) => !mergedNotes.has(familyKey(annotation)),
+  );
+  for (const [key, change] of mergedNotes) {
+    const known = nextBaseline.familyAnnotations.find((a) => familyKey(a) === key);
+    familyAnnotations.push({ ...(known ?? emptyFamilyAnnotation(change)), text: change.text });
   }
   return {
     baseline: nextBaseline,
@@ -665,8 +762,9 @@ export function rebaseDraft(
           ? { ...profile, enabled: enabledOverrides.get(profile.profileId)! }
           : profile,
       ),
-      preferences,
-      annotations,
+      familyPreferences,
+      preferenceOverrides,
+      familyAnnotations,
       configuration: { ...nextBaseline.configuration, decisionProfileId, routingBudget },
       modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
         mergedConcurrency.get(familyKey(entry)) ?? entry),

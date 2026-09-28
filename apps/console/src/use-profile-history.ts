@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import { familyKey } from "./console-data";
-import type { ModelConcurrencyEntry, ProfilePage } from "./types";
+import type { ModelFamily, ProfilePage } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
 export const PROFILE_PAGE_SIZE = 100;
@@ -26,11 +26,16 @@ function count(value: unknown): number {
 /** Rejects an incomplete envelope instead of rendering invented profile facts. */
 export function parseProfilePage(value: unknown): ProfilePage {
   const page = value as ProfilePage | null;
+  // The family rows and overrides are optional on a page (absent reads as
+  // none), but a present value must be a list.
+  const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
     && Array.isArray(page.profiles)
     && Array.isArray(page.cards)
-    && Array.isArray(page.annotations)
     && Array.isArray(page.preferences)
+    && optionalList(page.preferenceOverrides)
+    && optionalList(page.familyPreferences)
+    && optionalList(page.familyAnnotations)
     && Array.isArray(page.modelConcurrency)
     && !!page.sampleCounts && typeof page.sampleCounts === "object"
     && Number.isInteger(page.tableRevision)
@@ -67,7 +72,7 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[]): 
   return added.length ? [...current, ...added] : current;
 }
 
-function addMissingFamilies(current: ModelConcurrencyEntry[], extra: ModelConcurrencyEntry[]): ModelConcurrencyEntry[] {
+function addMissingFamilies<T extends ModelFamily>(current: T[], extra: T[]): T[] {
   const known = new Set(current.map(familyKey));
   const added = extra.filter((entry) => !known.has(familyKey(entry)) && (known.add(familyKey(entry)), true));
   return added.length ? [...current, ...added] : current;
@@ -84,8 +89,10 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
   return {
     profiles: addMissing(previous.profiles, next.profiles),
     cards: addMissing(previous.cards, next.cards),
-    annotations: addMissing(previous.annotations, next.annotations),
     preferences: addMissing(previous.preferences, next.preferences),
+    preferenceOverrides: addMissing(previous.preferenceOverrides ?? [], next.preferenceOverrides ?? []),
+    familyPreferences: addMissingFamilies(previous.familyPreferences ?? [], next.familyPreferences ?? []),
+    familyAnnotations: addMissingFamilies(previous.familyAnnotations ?? [], next.familyAnnotations ?? []),
     modelConcurrency: addMissingFamilies(previous.modelConcurrency, next.modelConcurrency),
     sampleCounts: { ...next.sampleCounts, ...previous.sampleCounts },
     tableRevision: next.tableRevision,

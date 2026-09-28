@@ -11,9 +11,10 @@ import { ApiError, errorText, isSessionExpiredRefusal, uncertainResponse } from 
 import { LOGIN_EXPIRED_ACTION_REFUSAL, LOGIN_EXPIRED_SAVE_REFUSAL, UNRESOLVED_SAVE_NOTE, createAuthorityLatch } from "./console-session";
 import type { AuthorityLatch } from "./console-session";
 import {
-  changedProfileIds,
+  changeCount as countChanges,
   configurationChanged as configurationDiffers,
   draftDiffers,
+  effectivePreferences,
   historyView,
   makeDraft,
   publication,
@@ -57,10 +58,12 @@ const isRevisionConflict = (error: unknown) =>
 export type EditorConflict = { basedOn: number; latest: number };
 
 /**
- * One edit-mode switch for the model and routing pages.
+ * Direct editing for the Buddy settings page: there is no edit switch.
  *
- * Turning the switch on is entirely local: it clones the published table into a
- * draft and never asks the board for a lease. Only "保存更改" takes the existing
+ * The first change to any control clones the published table into a local
+ * draft and never asks the board for a lease; a draft that becomes clean again
+ * with nothing in flight is dropped, so the save bar only exists while there is
+ * something to save or resolve. Only "保存" takes the existing
  * evaluation_write_begin grant, waits for it if another writer is ahead, renews
  * it, and publishes the dirty human patches through `user_policy_publish`. A lost
  * reply keeps the same command/request identity so a retry can never republish a
@@ -79,7 +82,6 @@ export function useEditor(
   unavailableReason: string,
   authority?: AuthorityLatch,
 ) {
-  const [mode, setMode] = useState(false);
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<Draft | null>(null);
   const [historyEntries, setHistoryEntries] = useState<HistoryEntries | null>(null);
@@ -93,7 +95,8 @@ export function useEditor(
   const [notice, setNotice] = useState("");
   const [uncertain, setUncertain] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [exitPrompt, setExitPrompt] = useState(false);
+  /** A local draft exists (the page has unsaved or unresolved edits). */
+  const mode = draft !== null;
 
   const csrf = useRef(snapshot.csrfToken);
   csrf.current = snapshot.csrfToken;
@@ -163,8 +166,8 @@ export function useEditor(
     () => (baseline && draft ? draftDiffers(baseline, draft) : false),
     [baseline, draft],
   );
-  const changedProfiles = useMemo(
-    () => (baseline && draft ? changedProfileIds(baseline, draft) : []),
+  const changeCount = useMemo(
+    () => (baseline && draft ? countChanges(baseline, draft) : 0),
     [baseline, draft],
   );
   const configurationDirty = useMemo(
@@ -175,18 +178,21 @@ export function useEditor(
   // the local human draft when editing. Cards, samples, evidence and the
   // recorded occupancy stay taken from the recorded snapshot/history, never
   // from the draft; the draft supplies only the user-owned fields.
+  // The effective preferences come from the board's view while nothing is
+  // drafted, and are recomputed with the same rule from the draft while editing.
   const view: ConsoleView = useMemo(() => {
     const recorded = historyView(snapshot, historyEntries);
-    return draft
-      ? {
-          ...recorded,
-          profiles: draft.profiles,
-          preferences: draft.preferences,
-          annotations: draft.annotations,
-          configuration: draft.configuration,
-          modelConcurrency: draft.modelConcurrency,
-        }
-      : recorded;
+    if (!draft) return recorded;
+    const edited = {
+      ...recorded,
+      profiles: draft.profiles,
+      familyPreferences: draft.familyPreferences,
+      preferenceOverrides: draft.preferenceOverrides,
+      familyAnnotations: draft.familyAnnotations,
+      configuration: draft.configuration,
+      modelConcurrency: draft.modelConcurrency,
+    };
+    return { ...edited, preferences: effectivePreferences(edited) };
   }, [snapshot, draft, historyEntries]);
   // A new enable/pin/selector needs a currently legal model; unrelated patches
   // never wait for an old stale pin or decision setting to be repaired.
@@ -212,7 +218,8 @@ export function useEditor(
   // never be edited out from under its own retry. A read-only session freezes
   // the retained draft without discarding it.
   const busy = saving || auxiliaryBusy;
-  const editing = mode && !busy && !confirming && sessionWritable;
+  /** Controls accept edits: no save, discovery or unconfirmed publication in flight. */
+  const editing = !busy && !confirming && sessionWritable;
   const saveBlockedReason = !mutationsAvailable && mode
     ? unavailableReason || "当前无法提交保存，草稿会保留在本页。"
     : "";
@@ -345,14 +352,12 @@ export function useEditor(
    * itself, but never a command the board may already have committed.
    */
   function closeDraft(preserveIntent = false) {
-    setMode(false);
     setDraft(null);
     setBaselineValue(null);
     draftRef.current = null;
     setConfirming(false);
     setWaiting(false);
     setBlocked("");
-    setExitPrompt(false);
     cancelRequested.current = false;
     pendingRebase.current = null;
     setRebaseConflicts([]);
@@ -365,11 +370,20 @@ export function useEditor(
     }
   }
 
-  /** Local only: no begin, no renew, no model request. */
-  function enter() {
+  /**
+   * Applies one user edit, opening the local draft on the first one. Local
+   * only: no begin, no renew, no model request. A frozen draft (a save,
+   * discovery or unconfirmed publication in flight) and a read-only page refuse
+   * the edit with the reason instead of changing anything.
+   */
+  function update(change: (draft: Draft) => Draft) {
     setBlocked("");
     if (busy) {
-      setBlocked("正在保存或读取目录。请等待结束后再开启编辑设置。");
+      setBlocked("正在保存或读取目录。请等待结束后再修改；草稿不会丢失。");
+      return;
+    }
+    if (confirming) {
+      setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再继续修改。");
       return;
     }
     if (!mayWrite()) {
@@ -377,8 +391,8 @@ export function useEditor(
       setBlocked(LOGIN_EXPIRED_ACTION_REFUSAL);
       return;
     }
-    setNotice("");
     if (!draftRef.current) {
+      setNotice("");
       // Retained history rows join the draft from the start, so disabling a
       // retired configuration is an ordinary local edit with a recorded baseline.
       const next = withHistory(makeDraft(snapshot), historyRef.current);
@@ -386,8 +400,18 @@ export function useEditor(
       setDraft(next);
       setBaselineValue(structuredClone(next));
     }
-    setMode(true);
+    setDraft((current) => (current ? change(current) : current));
   }
+
+  // A draft that is clean again, with nothing dispatched, pending or
+  // conflicting, is dropped: the page falls back to the published table and the
+  // save bar disappears. Anything unresolved keeps the draft for the user.
+  useEffect(() => {
+    if (!draft || dirty || busy || confirming || uncertain || waiting) return;
+    if (rebaseConflicts.length || pendingRebase.current) return;
+    if (grantRef.current || pendingBegin.current || unresolvedAbort.current || pendingSave.current) return;
+    closeDraft();
+  }, [draft, dirty, busy, confirming, uncertain, waiting, grant, rebaseConflicts]);
 
   /**
    * Sends one begin intent. A definite reply clears the uncertainty; an unknown
@@ -556,44 +580,6 @@ export function useEditor(
     if (!alive.current) return false;
     setGrant(null);
     return released;
-  }
-
-  async function requestExit() {
-    setBlocked("");
-    if (busy) {
-      setBlocked(waiting
-        ? "正在等待其他保存完成。请先取消等待，或等待保存结束。"
-        : "正在保存。请等待保存结束；结果未确认前不会丢弃草稿。");
-      return;
-    }
-    if (confirming) {
-      setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再决定是否退出编辑设置。");
-      return;
-    }
-    if (!dirty) {
-      // Nothing to lose, but every intent this page may hold is resolved first.
-      let released = true;
-      if (grantRef.current || pendingBegin.current || unresolvedAbort.current) {
-        setSaving(true);
-        try {
-          released = await releaseIntents();
-        } finally {
-          if (alive.current) setSaving(false);
-        }
-        if (!alive.current) return;
-      }
-      closeDraft(!released);
-      if (!released) {
-        setUncertain(true);
-        setError("退出前未能确认编辑资格已释放；该资格会自动过期，下次保存前会重试释放。");
-      }
-      return;
-    }
-    setExitPrompt(true);
-  }
-
-  function keepEditing() {
-    setExitPrompt(false);
   }
 
   async function acquire(current: Draft): Promise<WriterGrant | null> {
@@ -937,11 +923,6 @@ export function useEditor(
     }
   }
 
-  async function saveAndExit() {
-    setExitPrompt(false);
-    await save();
-  }
-
   async function discard() {
     if (busy) {
       setBlocked(waiting ? "正在等待其他保存完成，请先取消等待。" : "正在保存，请等待结果；草稿不会被静默丢弃。");
@@ -951,7 +932,6 @@ export function useEditor(
       setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再决定是否放弃草稿。");
       return;
     }
-    setExitPrompt(false);
     setSaving(true);
     setError("");
     setNotice("");
@@ -1107,7 +1087,7 @@ export function useEditor(
     uncertain,
     confirming,
     dirty,
-    changedProfiles,
+    changeCount,
     configurationDirty,
     blocking,
     attention,
@@ -1116,13 +1096,9 @@ export function useEditor(
     error,
     notice,
     blocked,
-    exitPrompt,
     saveBlockedReason,
-    enter,
-    requestExit,
-    keepEditing,
+    update,
     save,
-    saveAndExit,
     discard,
     reloadLatest,
     rebase,

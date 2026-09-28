@@ -1,4 +1,21 @@
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
+
+/**
+ * A `?` hover/focus tooltip for explanations that used to be permanent text.
+ * The explanation is the button's description, so a screen reader announces it
+ * with the button; Escape hides it without moving focus (WCAG 1.4.13).
+ */
+export function Help({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId();
+  const [dismissed, setDismissed] = useState(false);
+  return <span className={"help" + (dismissed ? " dismissed" : "")} onMouseLeave={() => setDismissed(false)}>
+    <button type="button" className="help-button" aria-label={label} aria-describedby={id}
+      onBlur={() => setDismissed(false)}
+      onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setDismissed(true); } }}>?</button>
+    <span role="tooltip" id={id} className="help-tip">{children}</span>
+  </span>;
+}
 
 export function Icon({
   name,

@@ -13,11 +13,24 @@ export type Profile = {
   source: string;
   unavailableReason?: string;
 };
+/** A user preference mode; `none` exists only as an effort override. */
+export type PreferenceMode = "prefer" | "pin" | "exclude";
+export type OverrideMode = PreferenceMode | "none";
+/**
+ * Effective preference of one effort (schema 13 `effective_preferences` view):
+ * the effort's override when it has one (a `none` override never appears
+ * here), otherwise its family default. Read-only; the console never publishes it.
+ */
 export type Preference = {
   profileId: string;
-  mode: "prefer" | "pin" | "exclude";
+  mode: PreferenceMode;
   reason: string;
+  source?: "override" | "family";
 };
+/** Family default preference, applied to every effort without an override. */
+export type FamilyPreference = ModelFamily & { mode: PreferenceMode; reason: string };
+/** One effort's override of its family default; `none` means explicitly no preference. */
+export type PreferenceOverride = { profileId: string; mode: OverrideMode; reason: string };
 /**
  * Automatic, evidence-linked assessment. Published only by a maintenance
  * Harness through `assessment_publish`; the human console never writes it.
@@ -35,9 +48,8 @@ export type Card = {
   updatedAt: string | null;
   origin?: string;
 };
-/** One human opinion, stored apart from the automatic card and its evidence. */
-export type Annotation = {
-  profileId: string;
+/** The family's human note, stored apart from the automatic cards and evidence. */
+export type FamilyAnnotation = ModelFamily & {
   text: string;
   revision: number;
   updatedAt: string | null;
@@ -225,10 +237,15 @@ export type Snapshot = {
   gate: Gate;
   configuration: Configuration;
   profiles: Profile[];
+  /** Effective preferences (read-only view); `source` names where each came from. */
   preferences: Preference[];
+  /** Family default preferences, keyed by the exact adapter/provider/model tuple. */
+  familyPreferences: FamilyPreference[];
+  /** Per-effort overrides of the family default; `mode` may be `none`. */
+  preferenceOverrides: PreferenceOverride[];
   cards: Card[];
-  /** Human opinions, kept apart from the automatic evidence-linked cards. */
-  annotations: Annotation[];
+  /** Family notes, kept apart from the automatic evidence-linked cards. */
+  familyAnnotations: FamilyAnnotation[];
   /**
    * Every unavailable configuration in the table, including one the snapshot
    * still lists (the retained decision selector). The console subtracts the
@@ -267,7 +284,7 @@ export type WriterGrant = {
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "profiles" | "preferences" | "annotations" | "configuration"
+  "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations" | "configuration"
 > & {
   tableRevision: number;
   /**
@@ -284,8 +301,12 @@ export type ConsoleView = Omit<Snapshot, "modelConcurrency"> & {
 export type ProfilePage = {
   profiles: Profile[];
   cards: Card[];
-  annotations: Annotation[];
+  /** Effective preferences of the listed profiles. */
   preferences: Preference[];
+  /** Overrides and family rows for the listed profiles; absent reads as none. */
+  preferenceOverrides?: PreferenceOverride[];
+  familyPreferences?: FamilyPreference[];
+  familyAnnotations?: FamilyAnnotation[];
   sampleCounts: Record<string, number>;
   /** Concurrent-task entries for the families this page represents. */
   modelConcurrency: ModelConcurrencyEntry[];
