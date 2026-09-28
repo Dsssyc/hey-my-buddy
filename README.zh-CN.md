@@ -12,7 +12,7 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 适合委派的工作包括范围明确的实现、测试、可复现问题调查、文档整理，以及结果可检查的文件转换。改动很小、答案已知或需求尚未明确时，由 Host 直接处理。
 
-1. Host 确定目标、模型参数和执行工作区。完整的 adapter/provider/model/effort 组合经过校验后直接派发；信息不完整时通过已配置的决策配置和有界评价表完成路由，最多八条任务级软路由偏好只影响该目标，不改变共享设置。并行写入使用独立 Git worktree，整合后的结果由明确指定的整合者负责。
+1. Host 确定目标、模型参数和执行工作区。完整的 adapter/provider/model/effort 组合经过校验后直接派发；信息不完整时通过已配置的路由模型和有界评价表完成路由，最多八条任务级软路由偏好只影响该目标，不改变共享设置。并行写入使用独立 Git worktree，整合后的结果由明确指定的整合者负责。
 2. Worker 使用自己的工具和内部 subagent 完成工作。需要协助时，它以结构化结果结束当前回合；Host 可以批准明确的辅助任务、说明理由后拒绝、补充新的接续输入，或在路由边界给出完整配置。控制权由私有 control 凭据约束，Host 名称本身不是权限。
 3. Host 检查真实 diff、运行相关验证，把已验证的整合记录（或明确的无需整合决定）绑定到固定产物后完成验收，再通过记录在案的两步回收释放受管 checkout。执行、辅助任务完成、整合与验收是彼此独立的事实。
 
@@ -85,3 +85,7 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 ## 0.16.0 维护
 
 0.16.0 源码新增服务执行的单份滚动 `buddy backup`、新包启动器执行的空闲升级 `buddy upgrade`（含校验与失败回滚），以及受保护规则约束的 `buddy storage plan` / `buddy storage apply`。控制台使用可收藏的回环地址和自动续期登录；所有已登录窗口均可编辑设置，冲突由版本检查拒绝。详见 [运维](docs/reference/operations.md) 和 [控制台](docs/reference/console.md)。源码验证与需要单独授权的日常安装分别记录。
+
+## 0.17.0 路由
+
+0.17.0 源码候选把 DSH 专属的无工具决策助手替换为 harness 中立的 Router。Python 拥有协议版本 9，把合法候选 ID 冻结进答案 schema，只按路由边界校验答案，记录程序计算的偏好检查，并新增临时的 `quick`/`standard`/`deep` 预算档位和目标的冻结输入树的私有只读副本。Router 回合不是 workflow 回合，不获得 agent 凭据，只返回一个配置选择或放弃。目前没有任何原生只读结构化能力通过验证——Claude 与 Codex 只有未验证候选，DSH 不限制读取与联网，ZCode 没有实现——因此路由请求会打开 Host 边界而不调用模型，且本候选尚未安装。详见[路由契约](docs/reference/decision.md)和[源码记录](docs/acceptance/router-read-only-routing-0.17.0.md)。

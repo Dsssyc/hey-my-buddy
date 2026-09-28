@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-Daily [installation is 0.15.1/schema 12](acceptance/installed-0.15.1.md). The current references specify the accepted 0.15.1 repair: [routing validation and diagnostics](reference/decision.md), objective-first Host guidance and [selection-first objective browsing](design/objective-browser-0.15.md). The [source acceptance](acceptance/routing-objective-browser-0.15.0.md) and [installation record](acceptance/installed-0.15.0.md) keep implementation and daily-runtime evidence distinct; [0.14.0](acceptance/installed-0.14.0.md) remains historical. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
+Daily [installation is 0.16.0/schema 12](acceptance/installed-0.16.0.md). The 0.17.0 source candidate replaces the DSH tool-free decision helper with the harness-neutral [Router protocol](reference/decision.md), freezes the legal candidate ids into the answer schema, validates only the routing bounds, adds provisional `quick`/`standard`/`deep` budgets and verifies a private read-only input mirror. Every native read-only structured capability is unverified and the candidate is not installed; the [0.17.0 source record](acceptance/router-read-only-routing-0.17.0.md) owns that evidence. [Cross-Host membership and human reclassification](design/objective-membership-options.md) are proposals, not implemented permissions. Existing capacity, ownership and Claude P1 boundaries remain in their owning references.
 
 | Document | Role |
 | --- | --- |
@@ -37,11 +37,11 @@ Daily [installation is 0.15.1/schema 12](acceptance/installed-0.15.1.md). The cu
 | [reference/claude.md](reference/claude.md) | Claude Code Worker P1: verified metadata and native-probe boundaries, isolated execution, quota classification and the user-directed bootstrap division |
 | [reference/cli.md](reference/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, result envelopes, event kinds and error codes |
 | [reference/operations.md](reference/operations.md) | Installation, runtime lifecycle, private state and environment, the DSH workspace bridge, recovery and removal |
-| [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, preferences, evidence, the reader/writer gate, the private console HTTP surface and the fixed decision profile |
+| [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, preferences, evidence, the reader/writer gate, the private console HTTP surface and the configured Router profile |
 | [reference/console.md](reference/console.md) | One-time console entry, authenticated browser sessions, single-writer handoff, inactivity and CLI lifecycle |
 | [reference/objectives.md](reference/objectives.md) | Work-objective grouping, `objective-list`/`objective-timeline` read shapes, timeline presentation and the schema-12 offline preparation tool |
 | [reference/evaluation-maintenance.md](reference/evaluation-maintenance.md) | Harness-owned bounded fact preparation, archived reviews, shared card updates, publication and history |
-| [reference/decision.md](reference/decision.md) | The bounded tool-free DSH routing helper: selection input/output, cache layout and process ownership |
+| [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol: read-only structured request, frozen candidates, answer bounds, provisional budgets, input verification and the unverified native capability boundary |
 | [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`codex`/`command`/`external` adapters, the public `BoardClient` contract, worker identity, reconciliation, bounded activity and receipts, and supervisors |
 | [reference/runner.md](reference/runner.md) | DSH-specific `harnesses/dsh/scripts/run.mjs` runner and bridge scripts: options, precedence, governed turn protocol, exit codes and attach mode |
 | [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 12, the shared attempt ceiling and model-family concurrency, identity, recovery, catalog observation and packaging |
@@ -52,7 +52,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 [ADR-013: buddy roles and blackboard terminology](decisions/013-buddy-roles-and-blackboard-terminology.md) names the participants: Host buddies and Worker buddies are peers in standing that interact only through the blackboard and differ in role and authority, while hey-my-buddy names the product. It changes wording only; [CONTEXT.md](../CONTEXT.md) holds the definitions.
 
-[ADR-014: Router buddy and read-only routing](decisions/014-router-buddy-and-read-only-routing.md) accepts the direction of a separate Router role that examines a goal read-only within a budget and whose choice is checked against the routing bounds only, not re-judged. Implementation, native probes and the console changes are not yet authorized; current routing remains the DSH decision helper described in [decision.md](reference/decision.md).
+[ADR-014: Router buddy and read-only routing](decisions/014-router-buddy-and-read-only-routing.md) accepts the direction of a separate Router role that examines a goal read-only within a budget and whose choice is checked against the routing bounds only, not re-judged. The 0.17.0 source candidate implements the Python half — protocol version 9, frozen candidates, boundary validation, program policyCheck, budgets and input verification — and removes the old DSH decision path; every native read-only structured capability remains unverified, so routing opens the Host boundary and nothing is installed. The [source acceptance record](acceptance/router-read-only-routing-0.17.0.md) owns the current evidence and the Host-filled gaps.
 
 [ADR-012: Bounded control overhead](decisions/012-bounded-control-overhead.md) records light liveness, transient empty polls versus durable allocations, and the user-approved order of subsequent reliability and routing repairs. The [0.10.0 acceptance record](acceptance/runtime-efficiency-0.10.0.md) owns progress and installation evidence.
 

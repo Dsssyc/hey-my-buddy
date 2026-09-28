@@ -21,7 +21,7 @@ A participant, normally an agent, that acts on the blackboard in the Host, Worke
 _Avoid_: Buddy (for the product or the blackboard), peer Buddy
 
 **角色 / role**:
-The authority a buddy acts with on the blackboard, Host, Worker or Router, established by the credential it holds rather than by its harness or model.
+The authority a buddy acts with on the blackboard, Host, Worker or Router, established by its authorized operation rather than by its harness or model. Host and Worker operations use scoped credentials; a Router has no direct blackboard credential and returns only a structured answer collected by its Worker runtime.
 
 **Host 伙伴 / Host buddy**:
 A buddy acting with Host authority: it owns the governed goals it submits or takes over, defining their authorization, deciding their boundaries and accepting their results, and may perform Host-only operations such as evaluation maintenance. Short form: Host.

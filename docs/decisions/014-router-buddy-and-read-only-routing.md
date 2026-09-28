@@ -2,7 +2,7 @@
 
 ## 状态
 
-方向已接受：用户于 2026-09-28 确认只读路由、Router 角色，以及只检查路由边界。实现、原生探针和控制台改动均未授权，需要另行批准。本文是目标设计；当前行为以 [decision.md](../reference/decision.md) 和 [workflow.md](../reference/workflow.md#configuration-and-routing) 为准。术语见 [CONTEXT.md](../../CONTEXT.md)，角色划分延续 [ADR-013](013-buddy-roles-and-blackboard-terminology.md)。
+方向已接受：用户于 2026-09-28 确认只读路由、Router 角色，以及只检查路由边界。0.17.0 源码候选已实现 Python 侧：prompt v9、冻结合法候选、边界校验、program policyCheck、三档预算和冻结输入校验，并删除旧 DSH 决策路径（`decision_execution`、`start_decision`、Node 决策模块、`BUDDY_DECISION_HELPER` 与 `dsh.decision` 资源），不保留兼容层。所有原生只读结构化能力仍未验证，因此路由请求会打开 Host 边界而不是调用模型，候选尚未安装；每次真实原生探针仍需单独批准。契约/发布为 0.17.0，schema 仍为 12。当前行为以 [decision.md](../reference/decision.md) 和 [workflow.md](../reference/workflow.md#configuration-and-routing) 为准，源码实现与验证边界见 [0.17.0 源码记录](../acceptance/router-read-only-routing-0.17.0.md)。术语见 [CONTEXT.md](../../CONTEXT.md)，角色划分延续 [ADR-013](013-buddy-roles-and-blackboard-terminology.md)。
 
 ## 背景
 
@@ -12,8 +12,8 @@
 
 ## 决定
 
-1. **Router 是独立角色。** 它与 Worker 的区别不在只读（只读的 Worker 已经存在），而在产出如何生效：Worker 的结果交给 Host 验收，Router 的配置选择不经 Host 验收即生效。它行使的是 Host 省略配置时委托出来的那一部分权限。Router 与 Worker 共用 Worker 运行时和回合协议。
-2. **只读路由。** Router 以只读回合检查委派已冻结的输入快照（而不是 Host 可能仍在编辑的 checkout），并读取评价包。harness 支持时启用原生只读（不写、不联网），其余依靠事后核验输入未变；`access: read` 本身不是 OS 沙箱。
+1. **Router 是独立角色。** 它与 Worker 的区别不在只读（只读的 Worker 已经存在），而在产出如何生效：Worker 的结果交给 Host 验收，Router 的配置选择不经 Host 验收即生效。它行使的是 Host 省略配置时委托出来的那一部分权限。Router 与 Worker 共用 Worker 运行时和 harness 结构化回合通道；Router 是决策 attempt，不写 workflow_turns。
+2. **只读路由。** Router 以只读回合检查委派已冻结的输入快照（而不是 Host 可能仍在编辑的 checkout），并读取评价包。必须由 harness 原生强制只读和工具禁网，并在逐次批准的验证通过后才能担任 Router；事后核验是附加检查，不能代替原生限制；`access: read` 本身不是 OS 沙箱。
 3. **有界预算。** 每次路由都有时限、工具调用次数和读取字节数上限。输出上限约束不了成本，成本主要来自多轮累积的输入；默认值通过实测确定。路由模型宜选便宜、快速的配置。Host 可以附带 ADR-012 提案中的 `routingBrief` 作为探索起点。
 4. **只检查路由边界，不审查判断。** 选择必须落在路由边界内：已发布、启用、可用，满足委派的固定字段、所需能力和用户的 pin/exclude。合法候选的 ID 写进输出 schema 的枚举，检查只是兜底。取消"偏离偏好须引用卡片证据"的规则：偏离偏好时写明理由和依据（卡片或文件），记录下来并在控制台可见，但不拒绝。不增加 Host 复核。Router 放弃选择或用完预算时，照旧打开 Host 路由边界。
 5. **harness 中立。** 路由包、prompt、答案 schema、边界检查和记录都放在 Python 一侧，删除 JS 中的策略副本。每个 harness 只需支持通用的"只读结构化回合"能力，这一能力同样可以用于只读审阅。路由模型可以是任何经过验证具备该能力的配置。

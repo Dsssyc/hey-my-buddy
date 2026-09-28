@@ -49,7 +49,7 @@ codex plugin list --json
 "$BUDDY" capabilities
 ```
 
-Requirements are macOS or Linux, uv with Python 3.12–3.14, Node.js 20+ for the DSH runner and decision helper, and a working local `dsh` and/or ZCode installation with its own provider credentials (or the Codex App Server with an existing account-plan login, which requires no API key). The `claude` 0.11.0 candidate additionally needs the installed Claude Code CLI with a first-party Anthropic account and stays unavailable until that CLI is authenticated. hey-my-buddy never writes global harness model settings.
+Requirements are macOS or Linux, uv with Python 3.12–3.14, Node.js 20+ for the DSH runner, and a working local `dsh` and/or ZCode installation with its own provider credentials (or the Codex App Server with an existing account-plan login, which requires no API key). The `claude` 0.11.0 candidate additionally needs the installed Claude Code CLI with a first-party Anthropic account and stays unavailable until that CLI is authenticated. hey-my-buddy never writes global harness model settings.
 
 ## 0.16.0 backup, upgrade and storage contract
 
@@ -69,7 +69,7 @@ List hey-my-buddy daemons/supervisors not associated with the current daily cont
 
 The [installed 0.15.1 runtime](../acceptance/installed-0.15.1.md) uses contract 0.15.1 and schema 12. It was switched from the idle 0.15.0 service with a verified state/plugin archive and an unchanged database; the recorded runtime identity and preserved configuration are installation facts, distinct from [source acceptance](../acceptance/readonly-objective-browser-0.15.1.md). New Codex tasks load the updated skill; existing Hosts must resolve the new bundled launcher before dispatching work against the upgraded service.
 
-Current source contract is 0.16.0, schema 12 and C-Two 0.6.0. The daily 0.15.1 installation above remains unchanged until separately authorized. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
+Current source contract is 0.17.0, schema 12 and C-Two 0.6.0. The 0.17.0 candidate replaces the DSH decision helper with the harness-neutral Router role; source verification is pending, no native read-only structured capability is verified, and it is not installed. The daily 0.16.0 installation above remains unchanged until separately authorized. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
 
 hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.6.0` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the plugin cache, so replacing the plugin does not disturb a running service.
 
@@ -136,7 +136,7 @@ All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default `~/.loc
 - `worker-pool.json` — exact daemon-managed worker IDs; similarly named custom workers are not inferred as members;
 - `attempts/<runId>/<attemptId>/` — task text, turn input/output, spawn intent/marker, adapter logs, the bounded native-activity sidecar, per-attempt inquiry credentials and, for ZCode/Codex, the provider snapshot or native controller files and finish bridge; the Claude candidate adds its native controller files and `claude-private/settings.json` here, with an empty MCP configuration passed inline;
 - `harnesses/zcode/<taskHash>/` — private native ZCode session database, storage and session bindings;
-- `decisions/<decisionId>/` — private decision workspace;
+- `decisions/<decisionId>/` — private routing workspace; the Router materializes its read-only frozen input mirror here;
 - `worker.log`, `control.log`, `runtime-install.log`, `restart.resume.json`, `stop.request.json`.
 
 | Variable | Default | Meaning |
@@ -151,7 +151,6 @@ All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default `~/.loc
 | `BUDDY_LEASE_SECONDS` | `120` | attempt lease, clamped 15–3600 |
 | `BUDDY_WORKER_ID` | `local` | pool prefix: this ID, then `<prefix>-2`, `<prefix>-3`, up to the machine-wide ceiling |
 | `BUDDY_NODE` / `BUDDY_RUNNER_PATH` | unset | DSH adapter node binary / runner entrypoint overrides |
-| `BUDDY_DECISION_HELPER` | unset | executable override for the bounded decision helper |
 | `BUDDY_ZCODE_CLI` | unset | ZCode CLI path when it is not on `PATH` (the macOS bundle default is used otherwise) |
 | `BUDDY_CLAUDE_SETTINGS_POLICY` | `isolated` | User-approved Claude P1 default: private settings, empty setting sources and strict MCP. Explicit empty or unsupported values are refused before execution; see [claude.md](claude.md) and its installation boundary |
 | `BUDDY_CLAUDE_CLI` | `claude` on `PATH` | Claude Code executable override; discovery is initialize-only and never sends a user message |

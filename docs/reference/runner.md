@@ -2,7 +2,7 @@
 
 `harnesses/dsh/scripts/run.mjs` is the low-level Node runner that the `dsh` adapter spawns for every DSH task. Direct invocation owns one foreground process and prints its result as JSON; optional flags for governed turns also produce a private structured receipt. The runner has no authoritative blackboard records or `requestId` recovery, and its default standalone invocation reports `inquiry.enabled: false`. Use [usage.md](usage.md) and the [governed lifecycle](workflow.md) for durable task ownership, assistance, continuation and acceptance. ZCode uses its own native app-server controller ([workers.md](workers.md#zcode)) and Codex uses the installed App Server controller ([codex.md](codex.md)); neither goes through this runner. Paths on this page are relative to the plugin or repository root, the directory that contains `bin/buddy`.
 
-The same directory also ships the DSH bridge plugins (`harnesses/dsh/plugins/`), the model catalog script (`model-catalog.mjs`), the decision helper (`decision.mjs`, see [decision.md](decision.md)) and the workspace bridge installer (`install-workspace-bridge.mjs`, see [operations.md#workspace-bridge](operations.md#workspace-bridge)). These are DSH-specific harness assets, not public service commands.
+The same directory also ships the DSH bridge plugins (`harnesses/dsh/plugins/`), the model catalog script (`model-catalog.mjs`) and the workspace bridge installer (`install-workspace-bridge.mjs`, see [operations.md#workspace-bridge](operations.md#workspace-bridge)). These are DSH-specific harness assets, not public service commands. The old DSH decision script is removed; routing is owned by the harness-neutral [Router protocol](decision.md).
 
 ## Quick start
 
