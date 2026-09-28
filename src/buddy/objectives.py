@@ -580,17 +580,22 @@ def _run_spans(connection, row) -> list[dict]:
             error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
         ))
         queued_from = attempt["finished_at"] or attempt["created_at"]
-    if row["state"] == "queued":
-        # Waiting for a claim right now: the queue interval is still open.
+    if row["state"] == "queued" and row["run_state"] != "awaiting-host":
+        # Waiting for a claim right now: the queue interval is still open. A run
+        # parked on its Host is not waiting for a Worker; its open host span
+        # below is that interval, and a second open span would cover its label.
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(
-        "SELECT request_id, kind, state, summary, created_at, decided_at FROM workflow_requests"
+        "SELECT request_id, kind, state, summary, created_at, decided_at, updated_at FROM workflow_requests"
         " WHERE run_id=? ORDER BY created_at, request_id", (run_id,)
     ).fetchall():
         open_request = request["state"] == "open"
+        # Cancelling the run closes an open request in the same transaction that
+        # stamps its updated_at; that recorded time is the wait's end.
+        closed_at = request["decided_at"] or (request["updated_at"] if request["state"] == "cancelled" else None)
         spans.append(_span(
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
-            None if open_request else (request["decided_at"] or None), request["state"],
+            None if open_request else (closed_at or None), request["state"],
             request_id=request["request_id"], requestKind=request["kind"],
             summary=(request["summary"] or "")[:SUMMARY_LIMIT] or None,
         ))

@@ -338,8 +338,9 @@ button.tl-label:hover { background: var(--subtle); }
 .sp.routing { height: 22px; padding: 0; border: 1px solid var(--line-strong); color: var(--ink); }
 .sp.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); color: var(--warning); }
 .sp.wait.open { border-right: 0; border-radius: 3px 0 0 3px; }
+.sp.wait.cancelled { border-color: var(--muted); color: var(--muted); }
 .sp.failed { box-shadow: 0 0 0 1.5px var(--danger); }
-.sp.cancelled { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 42%, transparent) 0 2px, transparent 2px 6px); }
+.sp.exec.cancelled { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 42%, transparent) 0 2px, transparent 2px 6px); }
 .sp.striped { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 38%, transparent) 0 1.5px, transparent 1.5px 5px); }
 .sp.running { background: linear-gradient(90deg, var(--c) 72%, color-mix(in srgb, var(--c) 40%, transparent)); }
 .sp.unknown { background: transparent; border: 1.5px dotted var(--c); color: var(--ink); padding: 0; }

@@ -238,6 +238,21 @@ class ObjectiveReadTests(WorkflowTestCase):
         self.assertEqual(timeline['events'][0]['label'], '派发')
         self.assertNotIn('controlToken', json.dumps(timeline))
 
+    def test_a_run_parked_on_its_host_has_one_open_wait_that_cancellation_closes(self):
+        board, first, _second, _loose = self.grouped_board()
+        self.register(board)
+        self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='assistance')
+        spans = board.call('objective_timeline', {'objectiveId': first['objectiveId']})['spans']
+        mine = [span for span in spans if span['runId'] == first['runId']]
+        # The host wait is the whole open interval; no open queue span overlaps it.
+        self.assertEqual([span['kind'] for span in mine if span['endAt'] is None], ['host'])
+        board.call('workflow_cancel', {'runId': first['runId'], 'reason': 'stop', **self.control(first)})
+        spans = board.call('objective_timeline', {'objectiveId': first['objectiveId']})['spans']
+        wait = next(span for span in spans if span['runId'] == first['runId'] and span['kind'] == 'host')
+        self.assertEqual(wait['state'], 'cancelled')
+        self.assertIsNotNone(wait['endAt'])
+        self.assertGreaterEqual(wait['endAt'], wait['startAt'])
+
     def test_timeline_truncation_filters_and_identity(self):
         board, first, second, loose = self.grouped_board()
         limited = board.call('objective_timeline', {'objectiveId': first['objectiveId'], 'limit': 1})
