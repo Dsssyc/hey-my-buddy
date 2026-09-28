@@ -23,7 +23,7 @@ The installed 0.13.0 baseline also carries the user-requested Host token repair:
 
 [ADR-012](docs/decisions/012-bounded-control-overhead.md) defines the user-approved efficiency repair: light authenticated liveness, transient empty claims with durable real allocations, and subsequent ZCode/routing/Host-supervision repairs. That repair's source is contract 0.10.0/schema 11. Use the [0.10.0 acceptance record](docs/acceptance/runtime-efficiency-0.10.0.md) to distinguish implemented slices, verified behavior and actual installation.
 
-ADR-007 defines the accepted 0.6 clean-cut target. The source baseline is released 0.5.0 commit `0b674e9`. Only the plugin's `buddy` skill is distributed. Do not restore standalone skill paths, old CLI aliases, legacy Node records/fingerprints/socket guards, or historical schema conversion branches. Historical design documents are evidence, not current compatibility requirements.
+ADR-007 defines the accepted 0.6 clean-cut target. The source baseline is released 0.5.0 commit `0b674e9`. Only the shared `buddy` skill is distributed ([ADR-015](docs/decisions/015-shared-agent-skill-distribution.md) replaced the plugin). Do not restore standalone skill paths, old CLI aliases, legacy Node records/fingerprints/socket guards, or historical schema conversion branches. Historical design documents are evidence, not current compatibility requirements.
 
 [ADR-008](docs/decisions/008-harness-owned-evaluation-maintenance.md) is implemented in the 0.7 source: Harness-owned evaluation maintenance, read-only console evidence and local drafts with short publication grants. Consult the owning references before changing responsibilities. Source acceptance and the installed/running runtime remain separate facts.
 
@@ -44,8 +44,8 @@ The Python service owns authoritative SQLite state. Workers own child handles an
 - `apps/console/`: React/Vite frontend; built assets are packaged for users without npm.
 - `tests/python/`: Python and cross-component verification.
 - `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence.
-- `packaging/`: explicit runtime resource and plugin assembly; `bin/buddy`: the single bundled launcher.
-- `skills/buddy/SKILL.md`: the single agent entrypoint.
+- `packaging/`: explicit runtime resources and the shared skill build.
+- `skills/buddy/`: the shared agent skill (`SKILL.md` and its `scripts/buddy` launcher).
 
 ## Verification
 
@@ -55,7 +55,7 @@ Tests always use private state/runtime roots. When invoked inside a hey-my-buddy
 
 Verify real diffs, artifacts and relevant checks before acceptance. Admission, process completion and Host acceptance are separate facts. A private cold-start and staged-plugin test must verify stable interpreter/package/resource paths, including after the source directory is replaced.
 
-Stage with `uv run --frozen python packaging/stage-plugin.py --destination <separate hey-my-buddy directory>`. No compatibility facades are shipped. Keep raw local logs and experiment scripts in ignored `.dsh-skill-build/`.
+Build the skill with `uv run --frozen python packaging/build-skill.py --destination <separate directory>/buddy`; install with that skill's `scripts/buddy install` only under the user's installation authorization. No compatibility facades are shipped. Keep raw local logs and experiment scripts in ignored `.dsh-skill-build/`.
 
 ## Documentation
 

@@ -1,52 +1,43 @@
 # Operations
 
-How to install, run, recover and retire a hey-my-buddy installation. Command syntax and fields are in [cli.md](cli.md); internals are in [architecture.md](architecture.md); the practical path is in [usage.md](usage.md). The supported distribution is the Codex plugin: the `.agents` marketplace catalog, one `bin/buddy` launcher, `src/buddy` source, the DSH harness assets, the built console and the `skills/buddy` entrypoint. There is no standalone skill directory and no old-layout launcher.
+How to install, run, recover and retire a hey-my-buddy installation. Command syntax and fields are in [cli.md](cli.md); internals are in [architecture.md](architecture.md); the practical path is in [usage.md](usage.md). The supported distribution is one shared Agent Skill, `buddy`, that carries its own CLI (`scripts/buddy`), its references and the uv package the stable runtime is built from ([ADR-015](../decisions/015-shared-agent-skill-distribution.md)). There is no Codex plugin, no plugin marketplace and no project-level skill.
 
 ## Installation
 
-The supported distribution is the Codex plugin `hey-my-buddy`, and this repository is its own marketplace: the committed `.agents/plugins/marketplace.json` points at the plugin root, so a first installation depends on no personal marketplace entry and no public registry listing. A public listing is optional follow-up work and is not claimed here.
+The canonical copy lives in `~/.agents/skills/buddy`, which Codex reads directly. Claude Code reads `~/.claude/skills/buddy`, a symbolic link to that directory, so both Hosts use one copy. Runtime, state and backups stay under `~/.local/share/hey-my-buddy`.
 
-From Git, register the repository as a marketplace and install the entry it publishes:
+From a source checkout, obtain the user's installation authorization and run the checkout's launcher:
 
 ```sh
-codex plugin marketplace add Dsssyc/hey-my-buddy --ref main
-codex plugin add hey-my-buddy@hey-my-buddy
+/abs/path/to/hey-my-buddy/skills/buddy/scripts/buddy install
 ```
 
-From a local checkout, register that checkout's absolute path instead; the catalog resolves `"path": "./"` against the marketplace root:
+To hand out a built skill instead, build it and run that copy's own launcher:
 
 ```sh
-codex plugin marketplace add /abs/path/to/hey-my-buddy
-codex plugin add hey-my-buddy@hey-my-buddy
+uv run --frozen python packaging/build-skill.py --destination /path/to/dist/buddy
+/path/to/dist/buddy/scripts/buddy install
 ```
 
-A local (non-Git) marketplace resolves in place, so installing copies the working tree — including untracked and ignored content such as `.venv`. Prefer a fresh clone or the staged path below when the source is a development checkout.
+`packaging/build-skill.py` writes `SKILL.md` (links rewritten to `references/`), `skill.json` (name, version, contract and source commit), `scripts/buddy`, the current references and `package/` with the declared runtime assets. It refuses tests, virtual environments, the React source and scratch content and replaces the destination by rename after verifying the inventory.
 
-`packaging/stage-plugin.py` assembles the supported tree and carries the same catalog, which makes a staged plugin directory a marketplace root of its own:
+`buddy install` holds a lock in the skills directory, then:
 
-```sh
-uv run --frozen python packaging/stage-plugin.py --destination /path/to/plugins/hey-my-buddy
-codex plugin marketplace add /path/to/plugins/hey-my-buddy
-codex plugin add hey-my-buddy@hey-my-buddy
-```
+- places the skill in `~/.agents/skills/buddy` unless a copy with the same version and source commit is already there, replacing an older copy by rename; a foreign directory or a symbolic link at that path is refused with `SKILL_TARGET_CONFLICT`;
+- creates or repairs `~/.claude/skills/buddy`; a separate directory or a link to another skill is reported as a conflict and left unchanged;
+- when a service is running, runs the installed skill's `scripts/buddy upgrade`, so the daily service switches to this package with the upgrade guarantees below; without a running service nothing starts, and the next command cold-starts the pinned or packaged runtime;
+- reports any remaining Codex plugin cache under `legacyPlugins`. Retire it with `codex plugin remove hey-my-buddy@<marketplace>`; two `buddy` skills must not stay installed side by side.
 
-An already configured marketplace whose entry points at a staged directory works too: stage into that marketplace (for example `/path/to/marketplace/plugins/hey-my-buddy`) and run `codex plugin add hey-my-buddy@your-marketplace` with its catalog name. `packaging/stage-plugin.py` copies the metadata files including `.agents/plugins/marketplace.json`, both READMEs, `AGENTS.md`, `docs`, `skills/buddy` and the declared runtime assets, refuses tests, virtual environments, the React source and scratch content, and replaces the destination atomically after verifying the inventory.
+A second Host that runs `install` with the same version only repairs the Claude Code link. Installation never runs with a Worker credential. `BUDDY_AGENT_SKILLS_DIR` and `BUDDY_CLAUDE_SKILLS_DIR` redirect the two skill homes for private tests.
 
-Keep the following facts in mind for every install path:
+For a retained-data upgrade, obtain the user's installation authorization and run **the new package's** `scripts/buddy install`. Its upgrade step owns idle checks, rolling backup, daemon and idle-supervisor cutover, verification and rollback. Do not run `stop`, cancel tasks, archive the entire state tree or manually replace the database. An interrupted upgrade resumes recovery by running `scripts/buddy upgrade` again. A legacy 0.15.1 service has no backup RPC: the launcher fences startup, detaches it without cancellation, rechecks idle ownership and runs the same backup implementation under the exclusive maintenance owner before opening the new runtime. A work admission racing that detach aborts the upgrade and returns to the previous service with work intact.
 
-- The manifest `version` is the install cachebuster; `codex plugin add` is both the install and the update path, so publish a new version to publish new code. The repository root `plugin.json` and `.codex-plugin/plugin.json` must keep the same `name` and `version`; staging refreshes the portable copy from the Codex manifest.
-- Do not pass `--sparse` with this repository's catalog: the plugin lives at the marketplace root (`"path": "./"`), and a sparse checkout that omits the cited path leaves an entry Codex silently skips. A Git marketplace snapshot is refreshed with `codex plugin marketplace upgrade <name>`; pin it with `--ref`.
-- The implicit personal marketplace (`~/.agents/plugins/marketplace.json`, listed by Codex with root `$HOME`) is optional and unrelated. Nothing in this installation depends on it, and no public listing is required.
-
-For a retained-data upgrade, obtain the user's installation authorization, install/stage the new package using the chosen marketplace path, then run **that new package's** `bin/buddy upgrade`. This one command owns idle checks, rolling backup, daemon and idle-supervisor cutover, verification and rollback. Do not run `stop`, cancel tasks, archive the entire state tree or manually replace the database. An interrupted upgrade resumes recovery by running the same command again. A legacy 0.15.1 service has no backup RPC: the launcher fences startup, detaches it without cancellation, rechecks idle ownership and runs the same backup implementation under the exclusive maintenance owner before opening the new runtime. A work admission racing that detach aborts the upgrade and returns to the previous service with work intact.
-
-After installation or upgrade, start a new Codex task to load that plugin version's `$buddy` skill and resolve its bundled launcher, then check the installed identity and the resolved marketplace:
+After installation or upgrade, start a new Host task so it loads the installed skill, then check the installed identity:
 
 ```sh
-codex plugin list --json
-"$BUDDY" health
-"$BUDDY" runtime
-"$BUDDY" capabilities
+~/.agents/skills/buddy/scripts/buddy health
+~/.agents/skills/buddy/scripts/buddy runtime
+~/.agents/skills/buddy/scripts/buddy capabilities
 ```
 
 Requirements are macOS or Linux, uv with Python 3.12–3.14, Node.js 20+ for the DSH runner, and a working local `dsh` and/or ZCode installation with its own provider credentials (or the Codex App Server with an existing account-plan login, which requires no API key). The `claude` 0.11.0 candidate additionally needs the installed Claude Code CLI with a first-party Anthropic account and stays unavailable until that CLI is authenticated. hey-my-buddy never writes global harness model settings.
@@ -57,7 +48,7 @@ This section is the authorized target; acceptance records distinguish implemente
 
 `buddy backup` is a service operation using SQLite online backup. Compress the verified database and retain durable attempt receipts, controls and submissions, together with a manifest containing schema, contract, runtime identity, plugin commit and SHA-256 for every payload file. Exclude workspaces, native harness homes, plugin source, caches and process locks. Validate SQLite integrity and foreign keys, all hashes and a private trial open before publication. All manual and upgrade backups share `backups/current/` inside the state root. Build in `backups/.incoming/`, atomically exchange the verified generation into current, then remove the old generation. Validation or publication failure preserves current. A recovery marker resolves a crash during exchange without leaving an ambiguous current backup. Only one completed backup is retained.
 
-Upgrade an existing installation with the new package's `bin/buddy upgrade`; the Host must not compose an ad-hoc copy/restart sequence. The launcher coordinates idle preflight, the same verified backup, client/daemon/idle-supervisor cutover, stable-runtime cold start and health/runtime/data validation. Refuse queued/running/cancelling work and any unconfirmed stop; never cancel work to upgrade. Fence new admissions across the final preflight and cutover. A failure after cutover restores the single backup with the previous runtime and verifies recovery. Preserve current and previous runtime; remove any older runtime only after proving no process uses it. Unknown process usage blocks deletion. The command reports backup bytes/time, cutover identity, validation and rollback evidence. Installing or switching the daily service requires the user's separate authorization.
+Upgrade an existing installation with the new package's `scripts/buddy install` (which runs its `upgrade`); the Host must not compose an ad-hoc copy/restart sequence. The launcher coordinates idle preflight, the same verified backup, client/daemon/idle-supervisor cutover, stable-runtime cold start and health/runtime/data validation. Refuse queued/running/cancelling work and any unconfirmed stop; never cancel work to upgrade. Fence new admissions across the final preflight and cutover. A failure after cutover restores the single backup with the previous runtime and verifies recovery. Preserve current and previous runtime; remove any older runtime only after proving no process uses it. Unknown process usage blocks deletion. The command reports backup bytes/time, cutover identity, validation and rollback evidence. Installing or switching the daily service requires the user's separate authorization.
 
 `buddy storage plan` reports bytes and reclaimable bytes for native homes, managed workspaces, runtimes, backup and durable state, plus explicit protected reasons and orphan daemon/supervisor observations. A plan is private, expiring and binds candidates to their identities/fingerprints. `buddy storage apply` requires the exact confirmed plan and rechecks every condition before deleting; it never follows symlinks or accepts arbitrary caller paths. Concurrent or changed data invalidates the affected candidate. Durable board, receipts, controls, submissions and the current backup remain protected.
 
@@ -71,7 +62,7 @@ The [installed 0.15.1 runtime](../acceptance/installed-0.15.1.md) uses contract 
 
 Current source contract is 0.17.0, schema 12 and C-Two 0.6.0. The 0.17.0 candidate replaces the DSH decision helper with the harness-neutral Router role; source verification is pending, no native read-only structured capability is verified, and it is not installed. The daily 0.16.0 installation above remains unchanged until separately authorized. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
 
-hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.6.0` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the plugin cache, so replacing the plugin does not disturb a running service.
+hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.6.0` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the skill directory, so replacing the skill does not disturb a running service.
 
 - **A cold start installs the runtime automatically.** With no READY runtime, the first command that needs the service copies the runtime assets declared by `packaging/runtime-assets.json` into `BUDDY_RUNTIME_ROOT/<contentId>`, runs `uv sync --frozen --no-dev --python 3.12` there, rewrites environment paths and writes `READY.json` last. Credentials, user data, tests, `node_modules`, the React source and any existing virtual environment are never copied. The first start can therefore take noticeably longer.
 - **Manual materialization is preinstallation**, useful before shipping a bundle or on a machine that should not install at first use:
@@ -81,16 +72,16 @@ hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-tw
   uv run --frozen buddy runtime
   ```
 
-- **`READY` only means installed.** `health` reports `runtimeIdentity`, `runtimeContentId` and `runtimeStable`; `stable` is true only when the running process actually imports `buddy` from that runtime with no path leaking back into a plugin cache or the checkout. `runtime` prints the same identity plus a source-leak report.
+- **`READY` only means installed.** `health` reports `runtimeIdentity`, `runtimeContentId` and `runtimeStable`; `stable` is true only when the running process actually imports `buddy` from that runtime with no path leaking back into the skill package or the checkout. `runtime` prints the same identity plus a source-leak report.
 - **An explicit `BUDDY_RUNTIME` pin always wins**, including over the runtime matching the current assets, so a pin left over from an older release keeps running that older code. Check `runtimeContentId` after every upgrade; leave the pin unset for automatic selection.
 - **`BUDDY_DEV_SOURCE=1` suppresses automatic materialization for source tests.** It uses the checkout when no READY runtime has been selected; an explicit `BUDDY_RUNTIME` pin still takes precedence, so use a private `BUDDY_RUNTIME_ROOT` and check the reported identity when testing source.
-- **Explicit `worker-start` uses the same runtime selection.** Starting an additional supervisor from a staged plugin launcher selects or materializes a READY runtime, uses its Python and package imports, and aligns its Python bridge and environment paths with that runtime. Existing supervisors keep the runtime they already loaded. An attempt's `runtimeIdentity` records the runtime actually executing its Worker.
-- **Changing any hashed asset changes the runtime.** `packaging/runtime-assets.json`, `pyproject.toml`, `uv.lock`, `bin/buddy`, `src/buddy` (including the console build) and `harnesses/dsh/scripts` and `harnesses/dsh/plugins` are hashed, so a code or dependency change produces a new content-addressed directory on the next cold start. A daemon already running keeps its own runtime and code until it is restarted or stopped.
+- **Explicit `worker-start` uses the same runtime selection.** Starting an additional supervisor from a skill launcher selects or materializes a READY runtime, uses its Python and package imports, and aligns its Python bridge and environment paths with that runtime. Existing supervisors keep the runtime they already loaded. An attempt's `runtimeIdentity` records the runtime actually executing its Worker.
+- **Changing any hashed asset changes the runtime.** `packaging/runtime-assets.json`, `pyproject.toml`, `uv.lock`, `src/buddy` (including the console build) and `harnesses/dsh/scripts` and `harnesses/dsh/plugins` are hashed, so a code or dependency change produces a new content-addressed directory on the next cold start. A daemon already running keeps its own runtime and code until it is restarted or stopped.
 - **The daemon and every client process apply hey-my-buddy's private C-Two profile before their first `register`/`connect`** (`buddy.rpc_config.configure_server()`/`configure_client()`). The shared-memory pool is bounded to two 16 MiB segments instead of the default four 256 MiB segments, reassembly to two 16 MiB segments with a 16 MiB reassembled-payload ceiling, and the server callback capacity to 64 — the released C-Two maximum — because the C-Two default of 10 is below the blackboard's 32 admitted waits and delayed an ordinary control call by 7.4 s in a measured run. The profile goes in through C-Two's public Python overrides inside each hey-my-buddy process: it is never written to the environment, never inherited by a coding child (including work on C-Two itself) and never applied to another C-Two project. The existing hey-my-buddy process-local profile is retained for 0.6.0 and checked through hey-my-buddy regressions; this release makes no new claim about C-Two internals. `buddy.rpc_config.report()` publishes only the whitelisted overrides and the bounds they imply; a configured capacity is a ceiling, not RSS, and mapped shared memory and resident memory are separate measurements.
 - **A named C-Two surface change advances `CONTRACT_VERSION`.** Use the new package's `upgrade` for a coordinated idle cutover. This release keeps schema 12 and has no startup conversion. The old stable runtime remains the rollback target; the launcher talks to each version through its own interpreter and named interface.
 - **`restart` is the detach without cancellation.** It writes a resume file, returns, and preserves every independent worker; the next autostart-capable CLI call starts a fresh daemon (which reconciles existing attempts). Use it when the host should move to new code but owned work must survive. It is not a schema upgrade.
 - **`stop` is the explicit "cancel owned work and stop" operation**, not a required cache-refresh step: it cancels queued tasks, writes durable cancel intent for active attempts, drains for a bounded interval and reports `unresolvedAttempts`. Its internal workflow path fences governed roots with in-flight execution or routing and their owned descendants, recording `service-stop` without borrowing a Host capability or relaxing public authorization. Passive delivered and awaiting-Host roots with no in-flight work remain unchanged. Cancellation intent commits before draining; only actual Worker receipts establish shutdown. It cooperatively stops every supervisor recorded in the daemon-managed pool; an independently named supervisor started with `worker-start` needs its own exact-ID `worker-stop`.
-- **Verify after any upgrade:** start a new Codex task so the upgraded plugin skill is loaded, then use its bundled launcher to check that `health` and `runtime` report the expected identity and stability before new work is delegated.
+- **Verify after any upgrade:** start a new Host task so the installed skill is loaded, then use its `scripts/buddy` to check that `health` and `runtime` report the expected identity and stability before new work is delegated.
 - **A mismatched database is refused, never migrated at startup.** The runtime accepts schema 12 only; another version, an unreadable board or failed integrity/foreign-key checks refuse startup and preserve the existing archive. An explicitly planned retained-data upgrade must prepare and verify a separate offline copy before activation; never relabel an unverified database or discard the original.
 
 For a source installation (`runtimeStable: false`), keep its checkout available while work is active. Complete that work before replacing the source, or deliberately cancel it and inspect the shutdown result.
@@ -160,8 +151,6 @@ All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default `~/.loc
 | `BUDDY_DEBUG` | unset | include exception detail in `INTERNAL_ERROR` |
 | `UV_BIN` | `uv` on `PATH` | uv binary used for runtime installs |
 
-The launcher also honours `PLUGIN_DATA` when the Codex plugin host provides it, placing the uv environment under that directory (`UV_PROJECT_ENVIRONMENT`) so the plugin cache stays disposable.
-
 A request ID is an idempotency key: retry the same input and ID after an uncertain start; changed input is rejected. Results survive service restart. Attempts whose shutdown was never confirmed stay `uncertain`/`reconciliation-needed` with their claims retained, are never replayed, and refuse a retry until the worker that owns the process handle reports an observed outcome. No stored PID is used to signal old processes.
 
 **Permissions.** A CLI invocation runs with the invoking shell's permissions, and the launcher grants no extra privilege; an already-running daemon or worker keeps the permissions it was started with, so attaching from another task does not re-sandbox it. Attaching to an already healthy service does not change state-directory permissions or create daemon locks/logs. The launcher may still prepare its uv environment; cold startup also writes under the state and runtime roots.
@@ -177,7 +166,7 @@ A request ID is an idempotency key: retry the same input and ID after an uncerta
 
 ## Removed paths and cleanup
 
-This release ships one skill (`skills/buddy/SKILL.md`), one launcher (`bin/buddy`) and no read-only dashboard, Node-record importer, migration command, MCP registration, handoff helper or compatibility facade. It never edits user harness configuration, and it leaves historical notification files untouched and unread. Only CLI and console reads deliver results now. Removed entrypoints are not recreated as forwarding stubs; do not run an old launcher against the current state directory.
+This release ships one skill (`skills/buddy`, built by `packaging/build-skill.py`), one launcher (its `scripts/buddy`) and no read-only dashboard, Node-record importer, migration command, MCP registration, handoff helper or compatibility facade. It never edits user harness configuration, and it leaves historical notification files untouched and unread. Only CLI and console reads deliver results now. Removed entrypoints are not recreated as forwarding stubs; do not run an old launcher against the current state directory.
 
 ### Storage wire shapes (0.16.0)
 

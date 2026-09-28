@@ -34,6 +34,7 @@ METHODS = [
     "runtime",
     "backup",
     "upgrade",
+    "install",
     "storage-plan",
     "storage-apply",
     # -- single governed goal lifecycle ------------------------------------
@@ -575,6 +576,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.method == "upgrade":
             from .upgrade import upgrade
             result = upgrade(params)
+        elif args.method == "install":
+            from .skill_install import install
+            result = install(params)
         elif args.method in LOCAL_METHODS:
             result = _worker_command(args.method, params)
         elif args.method == "console":

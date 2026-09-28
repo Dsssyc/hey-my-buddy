@@ -20,19 +20,18 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、DSH 所需的 Node.js 20+ 及所安装 ZCode CLI 要求的运行环境，以及已配置服务商凭据的本地 `dsh` 和/或 ZCode。Codex 使用已安装的 App Server 和既有原生账户登录，不需要 API key。hey-my-buddy 使用 harness 已配置的凭据，不修改全局模型设置。
 
-从本仓库自带的插件市场安装 `hey-my-buddy`，不需要个人市场，也不依赖任何公共目录上架。从本地 checkout 安装：
+hey-my-buddy 是一个公共 Agent Skill `buddy`，自带命令行。从 checkout 安装一次即可：
 
 ```sh
-codex plugin marketplace add /abs/path/to/hey-my-buddy
-codex plugin add hey-my-buddy@hey-my-buddy
+/abs/path/to/hey-my-buddy/skills/buddy/scripts/buddy install
 ```
 
-Git 克隆使用同一个市场：`codex plugin marketplace add Dsssyc/hey-my-buddy --ref main` 会注册仓库内的清单；`packaging/stage-plugin.py` 打包出的目录本身也可作为市场根。分阶段本地安装、已有市场条目和安装后的核验步骤见[安装说明](docs/reference/operations.md#installation)。新建任务以加载 `$buddy` skill。skill 会从插件自身位置解析 `bin/buddy` 启动器；没有需要单独安装的 skill，也没有旧目录回退。首次需要服务的命令会在 `~/.local/share/hey-my-buddy/runtime` 安装稳定运行时，之后替换插件不会中断正在运行的工作。
+它把 skill 放到 Codex 读取的 `~/.agents/skills/buddy`，并让 Claude Code 的 `~/.claude/skills/buddy` 链接到同一目录；另一个 Host 再运行同一版本时只会补齐链接。如果服务已在运行，同一命令会先做校验过的备份再升级。构建可分发的 skill、退役旧的 Codex 插件和核验步骤见[安装说明](docs/reference/operations.md#installation)。新建 Host 任务以加载 skill。首次需要服务的命令会在 `~/.local/share/hey-my-buddy/runtime` 安装稳定运行时，之后替换 skill 不会中断正在运行的工作。
 
 先提交一个有界目标：
 
 ```sh
-BUDDY="<absolute-plugin-root>/bin/buddy"
+BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" submit '{"requestId":"doc-links-1","hostId":"codex","task":"检查本仓库 README 中的相对链接，只新增 buddy-doc-review.md，并列出失效链接和修复建议。","cwd":"/abs/repo","timeoutSeconds":3600,"workspace":false,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"],"integrator":"codex"}}'
 "$BUDDY" get '{"runId":"<returned-runId>"}'
 "$BUDDY" await '{"runId":"<returned-runId>"}'

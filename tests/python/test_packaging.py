@@ -1,9 +1,9 @@
-"""Packaging and launcher boundary tests for the current single-entrypoint plugin.
+"""Packaging and launcher boundary tests for the shared ``buddy`` skill (ADR-015).
 
-These stage the real checkout with ``packaging/stage-plugin.py`` and run the one
-public launcher from unrelated working directories against private state/runtime
-roots. Nothing here touches the operator's default state directory or daily board,
-and staging never writes into the source tree.
+These build the real checkout with ``packaging/build-skill.py`` and run the skill's
+launcher from unrelated working directories against private state/runtime roots.
+Nothing here touches the operator's default state directory, daily board or home
+skill directories, and building never writes into the source tree.
 """
 from __future__ import annotations
 
@@ -11,18 +11,19 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / "bin" / "buddy"
+LAUNCHER = ROOT / "skills" / "buddy" / "scripts" / "buddy"
 REQUIRED_RESOURCES = {"dsh.runner", "dsh.catalog", "yaml.bridge", "console.assets"}
 
 
-def load_stage_plugin():
-    spec = importlib.util.spec_from_file_location("buddy_stage_plugin", ROOT / "packaging" / "stage-plugin.py")
+def load_build_skill():
+    spec = importlib.util.spec_from_file_location("buddy_build_skill", ROOT / "packaging" / "build-skill.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -45,17 +46,19 @@ def current_environment(**overrides) -> dict:
 class SingleEntrypointTests(unittest.TestCase):
     """One launcher, one CLI script and one declared runtime manifest."""
 
-    def test_the_plugin_has_exactly_one_public_launcher(self):
-        self.assertTrue(LAUNCHER.is_file(), "bin/buddy is the bundled launcher")
-        launchers = [path.name for path in (ROOT / "bin").iterdir() if path.is_file()]
-        self.assertEqual(launchers, ["buddy"])
+    def test_the_skill_carries_the_one_public_launcher(self):
+        self.assertTrue(LAUNCHER.is_file(), "scripts/buddy is the skill launcher")
+        self.assertTrue(os.access(LAUNCHER, os.X_OK))
+        self.assertFalse((ROOT / "bin").exists())
         pyproject = (ROOT / "pyproject.toml").read_text()
         self.assertEqual(pyproject.count("[project.scripts]"), 1)
         self.assertIn('buddy = "buddy.launcher:main"', pyproject)
 
-    def test_the_only_agent_entrypoint_is_the_plugin_skill(self):
+    def test_the_only_agent_entrypoint_is_the_shared_skill_and_no_plugin_is_published(self):
         self.assertTrue((ROOT / "skills" / "buddy" / "SKILL.md").is_file())
         self.assertEqual(sorted(path.name for path in (ROOT / "skills").iterdir() if path.is_dir()), ["buddy"])
+        for retired in (".codex-plugin", "plugin.json", ".agents", "packaging/stage-plugin.py"):
+            self.assertFalse((ROOT / retired).exists(), retired)
 
     def test_the_declared_runtime_manifest_is_current_and_complete(self):
         from buddy import runtime
@@ -162,59 +165,55 @@ class CheckHarnessTests(unittest.TestCase):
         self.assertFalse(Path(env["BUDDY_CLAUDE_CLI"]).exists())
 
 
-class StagedPluginInventoryTests(unittest.TestCase):
-    """Staging ships the supported layout only, and never writes into the source."""
+class SkillBuildTests(unittest.TestCase):
+    """The built skill is self-contained and follows the Agent Skills layout."""
 
-    def stage(self):
-        directory = tempfile.TemporaryDirectory(prefix="buddy-plugin-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
-        self.addCleanup(directory.cleanup)
-        destination = Path(directory.name) / "hey-my-buddy"
-        return load_stage_plugin().stage(ROOT, destination)
+    @classmethod
+    def setUpClass(cls):
+        cls.base = Path(tempfile.mkdtemp(prefix="buddy-skill-build-")).resolve()
+        cls.skill = load_build_skill().build(ROOT, cls.base / "buddy")
 
-    def test_the_supported_plugin_stages_completely(self):
-        before = (ROOT / "plugin.json").read_bytes()
-        staged = self.stage()
-        self.assertEqual(staged.name, "hey-my-buddy")
-        for relative in (
-            "pyproject.toml",
-            "uv.lock",
-            "bin/buddy",
-            "src/buddy/cli.py",
-            "src/buddy/console_assets/index.html",
-            "harnesses/dsh/scripts/run.mjs",
-            "harnesses/dsh/plugins/turn-result.mjs",
-            "skills/buddy/SKILL.md",
-            "packaging/runtime-assets.json",
-            "plugin.json",
-            ".codex-plugin/plugin.json",
-            "docs/README.md",
-            "README.md",
-            "README.zh-CN.md",
-            "LICENSE",
-        ):
-            self.assertTrue((staged / relative).exists(), relative)
-        manifest = json.loads((staged / "packaging/runtime-assets.json").read_text())
-        self.assertEqual(set(manifest["resources"]), REQUIRED_RESOURCES)
-        for relative in manifest["resources"].values():
-            self.assertTrue((staged / relative).exists(), relative)
-        self.assertEqual((ROOT / "plugin.json").read_bytes(), before, "staging must not rewrite the source metadata")
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.base, ignore_errors=True)
 
-    def test_the_staged_plugin_excludes_tests_venvs_frontend_and_scratch(self):
-        staged = self.stage()
-        unsupported = {"tests", "node_modules", ".venv", "__pycache__", ".git", ".dsh-skill-build", "apps"}
-        for path in staged.rglob("*"):
-            relative = path.relative_to(staged)
-            self.assertFalse(set(relative.parts) & unsupported, relative)
-            self.assertNotIn(path.suffix, (".pyc", ".pyo"), relative)
-        self.assertFalse((staged / "apps/console/src").exists())
-        self.assertFalse((staged / "deepseek-delegate").exists())
+    def test_layout_frontmatter_and_version_marker(self):
+        from buddy.contracts import CONTRACT_VERSION
+        self.assertEqual(sorted(path.name for path in self.skill.iterdir()),
+                         ["SKILL.md", "package", "references", "scripts", "skill.json"])
+        text = (self.skill / "SKILL.md").read_text()
+        head = text.split("\n---\n", 1)[0]
+        self.assertIn("\nname: buddy", head)
+        version = re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text()).group(1)
+        self.assertIn(f'version: "{version}"', head)
+        marker = json.loads((self.skill / "skill.json").read_text())
+        self.assertEqual((marker["name"], marker["version"], marker["contract"]), ("buddy", version, CONTRACT_VERSION))
+        self.assertTrue(os.access(self.skill / "scripts" / "buddy", os.X_OK))
 
-    def test_the_portable_metadata_matches_the_plugin_manifest(self):
-        staged = self.stage()
-        identity = json.loads((staged / ".codex-plugin/plugin.json").read_text())
-        portable = json.loads((staged / "plugin.json").read_text())
-        for key in ("name", "version", "description", "author", "license"):
-            self.assertEqual(portable[key], identity[key], key)
+    def test_links_stay_inside_the_skill(self):
+        for document in [self.skill / "SKILL.md", *sorted((self.skill / "references").glob("*.md"))]:
+            for target in re.findall(r"\]\(([^)\s]+)\)", document.read_text()):
+                if re.match(r"[a-z]+://", target) or target.startswith("#"):
+                    continue
+                path = target.split("#", 1)[0]
+                self.assertNotIn("..", path, f"{document.name}: {target}")
+                self.assertTrue((document.parent / path).is_file(), f"{document.name}: {target}")
+
+    def test_package_carries_runtime_assets_and_no_unsupported_content(self):
+        from buddy import runtime
+        package = self.skill / "package"
+        self.assertEqual(runtime.missing_resources(package), [])
+        self.assertTrue((package / "LICENSE").is_file())
+        self.assertTrue((package / "src/buddy/build-info.json").is_file())
+        for path in self.skill.rglob("*"):
+            parts = path.relative_to(self.skill).parts
+            self.assertFalse({"tests", ".venv", "node_modules", "apps", "__pycache__"} & set(parts), path)
+
+    def test_build_refuses_a_destination_not_named_buddy(self):
+        from buddy.errors import BoardError
+        with self.assertRaises(BoardError):
+            load_build_skill().build(ROOT, self.base / "other")
 
 
 if __name__ == "__main__":

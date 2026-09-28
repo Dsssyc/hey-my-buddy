@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from support import stop_private_workers, wait_for
-from test_packaging import ROOT, load_stage_plugin
+from test_packaging import ROOT, load_build_skill
 from buddy import cli, runtime
 from buddy.client import BoardClient
 from buddy.transport import ServiceError
@@ -85,14 +85,14 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("BUDDY") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PLUGIN_DATA"}}
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_STATE_DIR=str(self.state), BUDDY_RUNTIME_ROOT=str(self.runtime_root),
-                                BUDDY_MAX_CONCURRENT="2", PLUGIN_DATA=str(self.root / "plugin-data"),
+                                BUDDY_MAX_CONCURRENT="2", UV_PROJECT_ENVIRONMENT=str(self.root / "cli-venv"),
                                 BUDDY_CLAUDE_CLI=str(self.root / "claude-not-installed"))
-        # Staging reads the current checkout and never rewrites it, so the real root
-        # is staged directly; the one public launcher is bin/buddy.
-        self.stage = self.root / "stage" / "hey-my-buddy"
+        # Building reads the current checkout and never rewrites it, so the real root
+        # is built directly; the one public launcher is the skill's scripts/buddy.
+        self.stage = self.root / "skill" / "buddy"
         with contextlib.redirect_stdout(io.StringIO()):
-            load_stage_plugin().stage(ROOT, self.stage)
-        self.launcher = self.stage / "bin" / "buddy"
+            load_build_skill().build(ROOT, self.stage)
+        self.launcher = self.stage / "scripts" / "buddy"
         # Controlled ownership: the daemon pool sizes itself from the configured
         # limits (two business slots plus one reserved decision slot). This test
         # holds the lifetime locks of the two spare slots, so the pool sees them as

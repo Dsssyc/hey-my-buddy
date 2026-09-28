@@ -4,7 +4,6 @@
     {"path": "packaging/runtime-assets.json", "kind": "file"},
     {"path": "pyproject.toml", "kind": "file"},
     {"path": "uv.lock", "kind": "file"},
-    {"path": "bin/buddy", "kind": "file"},
     {"path": "src/buddy", "kind": "directory"},
     {"path": "harnesses/dsh/scripts", "kind": "directory"},
     {"path": "harnesses/dsh/plugins", "kind": "directory"}

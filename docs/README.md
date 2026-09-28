@@ -19,9 +19,8 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | `harnesses/dsh/` | DSH-specific Node runner, bridge and decision scripts under `scripts/`, their plugins under `plugins/`, and the DSH Node tests |
 | `apps/console/` | React/Vite console source; built output is checked into `src/buddy/console_assets/` and shipped to users without npm |
 | `tests/python/` | Python and cross-component verification; the DSH Node suites live under `harnesses/dsh/tests/` |
-| `packaging/runtime-assets.json` | The explicit runtime resource manifest consumed by `packaging/stage-plugin.py` and the stable-runtime materializer |
-| `bin/buddy` | The single bundled launcher |
-| `skills/buddy/SKILL.md` | The single agent-facing entrypoint |
+| `packaging/runtime-assets.json` | The explicit runtime resource manifest consumed by `packaging/build-skill.py` and the stable-runtime materializer |
+| `skills/buddy/` | The shared agent skill: `SKILL.md` and its `scripts/buddy` launcher |
 | `docs/reference/`, `docs/decisions/`, `docs/acceptance/` | Current operational contracts, the design record, and versioned evidence |
 
 ## Current references
@@ -49,6 +48,8 @@ Daily [installation is 0.16.0/schema 12](acceptance/installed-0.16.0.md). The 0.
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
 ## Accepted design direction
+
+[ADR-015: shared `.agents` skill distribution](decisions/015-shared-agent-skill-distribution.md) replaces the Codex plugin with one `buddy` skill in `~/.agents/skills` that carries its CLI, linked into `~/.claude/skills` for Claude Code, and supersedes ADR-007's plugin-only distribution rule.
 
 [ADR-013: buddy roles and blackboard terminology](decisions/013-buddy-roles-and-blackboard-terminology.md) names the participants: Host buddies and Worker buddies are peers in standing that interact only through the blackboard and differ in role and authority, while hey-my-buddy names the product. It changes wording only; [CONTEXT.md](../CONTEXT.md) holds the definitions.
 

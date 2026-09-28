@@ -8,26 +8,23 @@ For coding work, use the governed lifecycle. Its normal path is one logical `run
 
 ### 1. Install once
 
-You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for the DSH runner, a working local `dsh` and/or ZCode installation with its provider credentials, and Codex plugin support. hey-my-buddy uses the harness credentials already configured and leaves global model settings alone.
+You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for the DSH runner and a working local `dsh` and/or ZCode installation with its provider credentials. hey-my-buddy uses the harness credentials already configured and leaves global model settings alone.
 
-Install the `hey-my-buddy` plugin from this repository's own marketplace; the committed `.agents/plugins/marketplace.json` serves both a local checkout and a Git clone, so no personal marketplace and no public listing is needed.
-
-```sh
-codex plugin marketplace add /abs/path/to/hey-my-buddy   # or Dsssyc/hey-my-buddy --ref main
-codex plugin add hey-my-buddy@hey-my-buddy
-```
-
-[Installation](operations.md#installation) owns the staged local package, the existing-marketplace path and the post-install verification steps.
-
-Start a new task so the `$buddy` skill loads. The skill resolves the plugin's own `bin/buddy` launcher; there is no separate skill directory to install, no old-layout fallback and no standalone distribution.
-
-From the plugin root, resolve the launcher rather than assuming a working directory:
+hey-my-buddy is one shared Agent Skill, `buddy`, carrying its own CLI. Install it once:
 
 ```sh
-BUDDY="<absolute-plugin-root>/bin/buddy"
+/abs/path/to/hey-my-buddy/skills/buddy/scripts/buddy install
 ```
 
-The first command that needs the service installs a content-addressed stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the plugin later does not disturb running work. A fresh board lives under `~/.local/share/hey-my-buddy/state`. An older board directory at the previous default location is retained as an archive: this release does not read, convert or import it, and it refuses any schema other than the current one. See [operations.md](operations.md#runtime-lifecycle).
+The skill lands in `~/.agents/skills/buddy` (Codex) and `~/.claude/skills/buddy` links to it (Claude Code); a second Host with the same version only repairs the link. [Installation](operations.md#installation) owns building a distributable skill, upgrades, plugin retirement and the post-install verification steps.
+
+Start a new Host task so the `buddy` skill loads, and call its launcher by absolute path rather than relying on PATH or a working directory:
+
+```sh
+BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
+```
+
+The first command that needs the service installs a content-addressed stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the skill later does not disturb running work. A fresh board lives under `~/.local/share/hey-my-buddy/state`. An older board directory at the previous default location is retained as an archive: this release does not read, convert or import it, and it refuses any schema other than the current one. See [operations.md](operations.md#runtime-lifecycle).
 
 ### 2. Choose grouping and the execution workspace
 

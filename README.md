@@ -20,19 +20,18 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for DSH and the runtime required by your installed ZCode CLI, and a working local `dsh` and/or ZCode installation with its own provider credentials. Codex uses the installed App Server with your existing native account-plan login instead of an API key. hey-my-buddy uses the credentials already configured for the harness and leaves global model settings alone.
 
-Install the `hey-my-buddy` plugin from this repository's own marketplace; no personal marketplace and no public registry listing is required. From a local checkout:
+hey-my-buddy is one shared Agent Skill, `buddy`, that carries its own CLI. Install it once from a checkout:
 
 ```sh
-codex plugin marketplace add /abs/path/to/hey-my-buddy
-codex plugin add hey-my-buddy@hey-my-buddy
+/abs/path/to/hey-my-buddy/skills/buddy/scripts/buddy install
 ```
 
-A Git clone is the same marketplace: `codex plugin marketplace add Dsssyc/hey-my-buddy --ref main` registers the committed catalog, and `packaging/stage-plugin.py` produces a staged tree that is itself a marketplace root. The [installation reference](docs/reference/operations.md#installation) has the staged local path, the existing-marketplace path and the verification steps. Start a new task so the `$buddy` skill loads. The skill resolves the plugin's own `bin/buddy` launcher; there is no separate skill to install and no old-layout fallback. The first command that needs the service installs a stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the plugin later does not disturb running work.
+This places the skill in `~/.agents/skills/buddy`, where Codex reads it, and links `~/.claude/skills/buddy` to the same directory for Claude Code; a second Host running the same version only repairs the link. If a service is already running, the same command upgrades it with a verified backup. The [installation reference](docs/reference/operations.md#installation) covers building a distributable skill, retiring an older Codex plugin and the verification steps. Start a new Host task so the skill loads. The first command that needs the service installs a stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the skill later does not disturb running work.
 
 Start with a bounded goal:
 
 ```sh
-BUDDY="<absolute-plugin-root>/bin/buddy"
+BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" submit '{"requestId":"doc-links-1","hostId":"codex","task":"Check the relative links in this repository README, add only buddy-doc-review.md, and report broken links with fixes.","cwd":"/abs/repo","timeoutSeconds":3600,"workspace":false,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"],"integrator":"codex"}}'
 "$BUDDY" get '{"runId":"<returned-runId>"}'
 "$BUDDY" await '{"runId":"<returned-runId>"}'
