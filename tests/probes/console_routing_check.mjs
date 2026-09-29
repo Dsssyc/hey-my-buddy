@@ -13,8 +13,9 @@ const basis = { candidateCount: 1, excludedCount: 1, excludedProfiles: [{
   profileId: 'dsh:deepseek-official:deepseek-flash:off', adapter: 'dsh', provider: 'deepseek-official',
   model: 'deepseek-flash', effort: 'off', reason: '合成：提交时被用户排除', source: 'override',
 }] };
-const selected = { adapter: 'dsh', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
-const fields = { selectedProfile: selected, routingBasis: basis, constraints: { adapter: 'dsh' }, requiredCapabilities: ['execution:dsh'],
+const selected = { profileId: 'dsh:deepseek-official:deepseek-flash:max', adapter: 'dsh', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
+const fields = { selectedProfile: selected, routingPreferences: [],
+  policyCheck: { hardConstraints: { adapter: 'dsh' }, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' }, routingBasis: basis, constraints: { adapter: 'dsh' }, requiredCapabilities: ['execution:dsh'],
   fallback: null, routingMode: 'fast', requestedRoutingMode: 'fast',
   reason: '唯一合法候选，未调用 Router', source: 'single-candidate', status: 'completed',
   taskId: null, attemptId: null, generation: null };
@@ -34,7 +35,8 @@ try {
       data.result.executionConfiguration = selected;
     }
     if (body.operation === 'selection_get') {
-      Object.assign(data.result.decision, fields, { routerCalled: false, runId: null,
+      Object.assign(data.result.decision, fields, { routerCalled: false, runId: null, profileId: selected.profileId,
+        requested: { constraints: fields.constraints, requiredCapabilities: fields.requiredCapabilities },
         budget: null, usage: null, input: null, evidence: [],
         output: { programSelection: { preferences: [] } }, inputVerification: null, nativeIdentity: null, stopEvidence: null });
     }
