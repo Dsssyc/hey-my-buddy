@@ -49,9 +49,13 @@ Daily [installation is 0.18.0/schema 13](acceptance/installed-0.18.0.md): the sh
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
-## Accepted design direction, not yet implemented
+## Proposed design direction
 
-[ADR-017: local installation, on-demand service and harness discovery](decisions/017-local-installation-and-harness-discovery.md) (accepted, not implemented) keeps every Worker on the local machine, starts the single service on demand from any Host but never from inside a Host sandbox, installs and updates through one versioned command that refuses while work is running, and makes the service find and handshake harness executables itself without running shell configuration files or storing environment values.
+[ADR-018: fast and review routing](decisions/018-fast-and-review-routing.md) (proposed, not implemented) splits the Router into a tool-free fast mode that any harness able to disable tools can serve and the existing read-only review mode that needs a verified harness sandbox, renames the review budgets to 简要/标准/深入, keeps two Router slots with a default mode, lets a Host request review routing per submission and falls back to fast routing when the review Router is unavailable.
+
+## Accepted design direction, implemented in source
+
+[ADR-017: local installation, on-demand service and harness discovery](decisions/017-local-installation-and-harness-discovery.md) (accepted, implemented in the 0.19.0 source) keeps every Worker on the local machine, starts the single service on demand from any Host but never from inside a Host sandbox, installs and updates through one versioned command that refuses while work is running, and makes the service find and handshake harness executables itself without running shell configuration files or storing environment values.
 
 ## Accepted design direction
 
