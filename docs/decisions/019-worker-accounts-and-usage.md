@@ -25,6 +25,10 @@
 - Host 提供的 DeepSeek 官方 API 文档称 `GET https://api.deepseek.com/user/balance` 可凭 API key 查询余额；本机未核实文档或接口，亦未联网。该服务商接口不得在原生检查授权前描述为已接通。
 - 各 harness 的登录、私有目录权限与隔离、账户状态及用量读取都尚未做逐次授权的原生检查；Windows 未验证。
 
+### 界面问题（用户报告）
+
+- **Buddy 配置页与设置页在内容超出窗口高度时无法向下滚动。** 2026-09-29 用户在 0.20.0 的 Buddy 配置页上看到：Router 面板、harness 列表之后的模型列表与模型详情被截在窗口底部，页面无法继续向下滚动；设置页有同样的现象。初步判断（未在浏览器中核实）：控制台外壳是固定高度且整体 `overflow: hidden`（`apps/console/src/styles.css` 的 `.app-shell`、`.main-content`、`.view-panel`），只有内部区域自己滚动；Buddy 配置页把几块面板纵向堆叠，外层没有滚动区域，所以最下面的模型区域被压缩。设置页的 `.settings-page` 本身声明了 `overflow-y: auto`，原因仍需查明。建议：两页的外层内容区可以整体滚动，模型列表与详情在其中保留最小高度，并在常见笔记本窗口高度和窄屏下验证。本文要在这两页增加账户、额度入口和备份预检入口，必须先修复此问题。
+
 ## 决定
 
 1. **两种账户来源。** 每个 harness 默认“沿用本机登录”：服务只读取登录状态和可无副作用读取的用量，不发起登录、登出或密钥变更；用户在原生工具中自行处理这些变更。选择“Worker 独立账户”时，服务为该 harness 建立私有配置目录，让 harness 自己的登录或密钥机制保存凭据；服务不解析凭据，不把凭据写入数据库或日志。此选择让 Worker buddy 使用 BYOK 或 OAuth 账户，并使 Host buddy 本人的 Codex、Claude Code 登录与额度保持独立。
@@ -51,5 +55,6 @@
 - 服务需在 `harness_discovery.py` 与 `harness_health.py` 增加账户来源、私有主目录与限频状态；各 `adapters/codex*.py`、`claude*.py`、`zcode*.py`、`dsh.py` 及 DSH bridge 需按已核实能力接入认证检查、登录进程、取消与脱敏用量。Codex 当前的 ChatGPT 套餐限制和 Router 私有目录的本机 `auth.json` 链接尤其需要按账户来源重新划界；ZCode 当前 OAuth 拒绝也需单独解决。
 - `backup.py` 应显式保持账户私有目录及系统凭据库排除，并验证 SQLite、事件、回执、备份清单和评价元数据不含秘密。只保存非秘密账户设置与有界快照，优先使用现有 `meta`；若需要修改 schema，按既有规则另行确认。对外 CLI、服务与控制台契约版本需升级，并由迁移与兼容性检查记录。
 - 第 11 条需要调整各适配器 attempt 私有内容的位置（Codex 的 `native/codex-home`、ZCode 服务商快照等），保留对旧位置的排除，并新增备份安全预检命令与覆盖全部 harness 的不变式测试；预检属于对外 CLI 契约，按第 8 条一并确定名称与参数。
+- 先修复背景中记录的 Buddy 配置页与设置页无法滚动的问题，再增加下述入口。
 - `apps/console/src/BuddyConfig.tsx` 的 harness 行及详情增加“账户”“额度”和经核实的操作入口；CLI 增加第 8 条草案命令。需同步更新 `docs/reference/harnesses.md`、`workers.md`、`codex.md`、`claude.md`、`cli.md`、`console.md`、`operations.md`、`evaluation.md`，以及 README 与共享 `SKILL.md` 摘要；状态为提议期间不把这些入口写成已实现。
 - 实现测试使用私有状态与运行时根、模拟 CLI 与系统凭据库替身，覆盖账户来源切换、运行中 attempt 固定账户、续做重建、秘密不落黑板与备份、按量候选默认排除、显式选择、用量展示与限频。源代码完成、原生检查、安装及用户配置变更分别记录，不互相代替。
