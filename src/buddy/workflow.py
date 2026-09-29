@@ -2445,8 +2445,8 @@ class WorkflowCoordinator:
             run_id = run_row["run_id"]
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             self._assert_lineage_open(connection, run_id)
-            if run_row["state"] in ("accepted", "cancelled"):
-                raise BoardError("CONFLICT", "An accepted or cancelled goal cannot be continued")
+            if run_row["state"] == "accepted":
+                raise BoardError("CONFLICT", "An accepted goal cannot be continued")
             cleanup = connection.execute("SELECT state FROM workspace_cleanup_plans WHERE run_id=? AND state IN ('applying','applied') LIMIT 1", (run_id,)).fetchone()
             if cleanup is not None:
                 raise BoardError("CONFLICT", "This goal's checkout is being cleaned or has been removed")
@@ -3889,11 +3889,23 @@ class WorkflowCoordinator:
                                  conflictId=conflict_id, state=conflict["state"], action=conflict["action"])
             self._lineage_stop_evidence(connection, target_snapshot, "A workspace resolution")
             manifest = self._conflict_manifest(connection, target_snapshot, conflict)
+            original = connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                (target_id,),
+            ).fetchone()
+            if original is None:
+                raise BoardError("NOT_READY", "Workspace resolution requires the goal's fixed original input")
+            original_commit = json.loads(original["manifest_json"])["inputCommit"]
         try:
             result = workspace_module().resolve(
                 self.board.directory, manifest, task_id=target_id, attempt_id=conflict["attempt_id"], action=action,
                 paths=paths, observed_fingerprint=observed, reason=reason, actor=actor,
             )
+            resolved_artifact = result.get("artifact")
+            if action != "abandon" and isinstance(resolved_artifact, dict):
+                resolved_artifact["cumulativePatch"] = workspace_module().cumulative_patch(
+                    manifest, resolved_artifact, original_commit,
+                )
         except BoardError as error:
             if error.code == "WORKSPACE_CONFLICT" and error.details.get("conflictingPaths"):
                 with self.db.write() as connection:

@@ -329,7 +329,20 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(payload["error"]["code"], "INVALID_ARGUMENT")
         self.assertNotIn("Traceback", data.decode())
         # Snapshot reads expose no control or session secrets.
-        self.assertNotIn("token", json.dumps(snapshot_of(board)).lower().replace("csrftoken", ""))
+        snapshot = snapshot_of(board)
+        encoded = json.dumps(snapshot)
+        self.assertNotIn(begin["writerToken"], encoded)
+        self.assertNotIn("test-token", encoded)
+        def keys(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    yield key.lower()
+                    yield from keys(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from keys(child)
+        # tokenUsage/inputTokens are public counters, not credential fields.
+        self.assertFalse(set(keys(snapshot)) & {"token", "writertoken", "controltoken", "servicetoken", "agentcredential", "accesstoken"})
 
     def test_browser_reads_decisions_but_cannot_launch_maintenance(self):
         """The console reads facts/history; only a Harness prepares maintenance."""

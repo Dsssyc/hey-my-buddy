@@ -536,6 +536,11 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["delivery"]["kind"], "host-resolution")
         self.assertEqual(resolved["delivery"]["action"], "restore")
         self.assertEqual(resolved["delivery"]["turnId"], turn_id)
+        cumulative = resolved["artifact"]["cumulativePatch"]
+        self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
+        self.assertEqual(cumulative["outputCommit"], resolved["outputCommit"])
+        self.assertEqual(cumulative["changedPaths"], ["src/feature.py"])
+        self.assertTrue(Path(cumulative["path"]).is_file())
         self.assertIsNone(resolved["nextBoundaryRequestId"])
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
@@ -593,6 +598,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(adopted["state"], "delivered")
         self.assertEqual(adopted["delivery"]["action"], "adopt")
         self.assertEqual(adopted["artifact"]["action"], "adopt")
+        cumulative = adopted["artifact"]["cumulativePatch"]
+        self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
+        self.assertIn("outside.txt", cumulative["changedPaths"])
+        self.assertTrue(Path(cumulative["path"]).is_file())
         self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(), "outside the authorized scope\n")
 

@@ -27,8 +27,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
             inherited = {"PATH": "/plugin/venv/bin:/usr/bin", "PYTHONPATH": "/plugin/python",
                          "BUDDY_PYTHON": "/plugin/venv/bin/python", "VIRTUAL_ENV": "/plugin/venv",
                          "UV_PROJECT_ENVIRONMENT": "/plugin/venv", "BUDDY_RUNTIME": "/old/runtime",
-                         "CLAUDECODE": "1", "CLAUDE_CODE_OAUTH_TOKEN": "session-token",
-                         "BUDDY_AGENT_CREDENTIAL": "attempt-token"}
+                         "CLAUDECODE": "1", "CLAUDE_CODE_OAUTH_TOKEN": "session-token"}
             with patch.dict(os.environ, inherited, clear=True), patch.object(runtime, "launch_target", return_value=target) as select, patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
                 result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": directory})

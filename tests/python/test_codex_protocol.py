@@ -127,6 +127,10 @@ class NativeUsageEvidenceTests(unittest.TestCase):
         self.assertEqual(usage["cachedInputTokens"], 23000)
         self.assertEqual(usage["outputTokens"], 90)
         self.assertEqual(usage["nativeRecords"], 2)
+        self.assertEqual(usage["completeness"], "partial")
+        evidence.observe({"method": "turn/completed", "params": {"threadId": "root",
+                          "turn": {"id": "turn", "status": "completed"}}})
+        usage = attempt_token_usage(evidence)
         self.assertEqual(usage["completeness"], "complete")
 
     def test_a_replayed_notification_never_counts_twice(self):
