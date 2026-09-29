@@ -85,3 +85,11 @@ Host 在隔离合成预览的真实浏览器中核对了逐次用量、缓存子
 环境/分发任务在 `1b716df` 已完成独立整合验收，其余三项整合到最终运行时代码 `18baa33`。控制台任务清理调用返回一次 `REVISION_CONFLICT`，随后只读 `get` 确认同一计划为 applied、removed=true；现场检出不存在，输出 patch 和 6 个固定引用仍可读。CLI 与原生观测各保留 2 个输出 patch、12 个固定引用。没有把错误回执当成成功，也没有盲目重复删除；冲突产生原因未另行推断。
 
 未验证的是新版本在用户日常板的迁移/安装、本次变更的原生 Linux/Windows、实际付费额度失败后的恢复，以及各 provider 后续版本的记录格式。已有原生记录和模拟 harness 证明本次实现的处理路径，不扩大此前 Router 的原生资格。合并到 `socu/buddy-core`、空闲时安装候选与 schema 15 日常迁移均等待用户另行授权。
+
+## Host 合并验收（2026-09-30）
+
+Claude Code Host 在 `socu/integration-0.21` 上把 `socu/host-workflow`（`ce09950`）合入当时的 `socu/buddy-core`（`3f0a91c`），合并提交为 `137dab1`。唯一冲突在 AGENTS.md：保留已改为只含仓库事实的版本，本分支新增的议程段落不收，只吸收了"完整检查前用 `npm --prefix apps/console ci` 准备控制台依赖"这一步骤说明。随后 `02b9479` 删掉了 skill 与参考文档中属于某一位用户的设定：SKILL.md 的"this repository: Chinese"，usage.md 中"本仓库使用中文"及过时的版本标题，以及 claude.md 中关于 Claude Worker 数量与分工的整段个人要求。`02b9479` 上的完整检查通过（Python 1,581 项，Node 161 项）。
+
+Host 自己审查了 schema 14 → 15 迁移：迁移在单个 `BEGIN IMMEDIATE` 事务中只增加列和 Host 结论表，前后比对原有列指纹，完成后做外键与完整性检查，失败整体回滚；历史目标默认不锁定配置，与已同意的方案一致。独立只读审查（run `b90b02a8`，路由按软偏好选中 Codex GPT-6 Sol high，未加硬约束）报告三项，Host 逐条对照代码确认成立：Codex 与 ZCode 在发出请求前就把 `modelStarted` 置为真，模型被拒绝且没有改动时仍会发布空补丁的部分成果；额度中的标识类字段只检查长度，可能存下原生错误原文；新增的服务环境白名单漏掉 CA 证书路径变量。修正任务（run `2483361f`，路由选中 ZCode GLM-5.3 max）使部分成果只在确有改动时发布（防重试的 `modelStarted` 语义不变），额度标识字段只接受 `^[A-Za-z0-9._:/-]{1,64}$`，并把 `SSL_CERT_FILE`、`SSL_CERT_DIR`、`REQUESTS_CA_BUNDLE`、`CURL_CA_BUNDLE`、`NODE_EXTRA_CA_CERTS` 加入服务、原生子进程与 Claude 三处白名单，均有回归测试。Host 读完每处改动后原样整合为 `2f930a6`，其上的完整检查通过（Python 1,590 项，Node 161 项，运行时 PATH 前置 Node 24.21.0）。两项委派都已记录整合并验收。
+
+0.21.0 尚未安装；日常板从 schema 14 迁移到 15 需要用户另行授权。
