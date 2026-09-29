@@ -8,12 +8,17 @@ import queue
 import select
 import threading
 import time
+from datetime import datetime, timezone
 
 from .turn_io import canonical_json
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_CHECKPOINT_MESSAGE_BYTES = 65536
 _WINDOWS_PIPE = os.name == "nt"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class CodexProtocolError(Exception):
@@ -228,6 +233,154 @@ def checkpoint_resumable(payload: dict, checkpoint: dict) -> bool:
     return (checkpoint.get("nativeTurnStatus") == "completed" and checkpoint.get("bindingSaved") is True
             and isinstance(process, dict) and type(process.get("nativeExitCode")) is int and process["nativeExitCode"] == 0)
 
+
+#: One native ``thread/tokenUsage/updated`` breakdown, in camel case.
+_USAGE_KEYS = ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens",
+               "cacheWriteInputTokens", "totalTokens")
+#: Codex ``input_tokens`` already contains ``cached_input_tokens``; these are the
+#: fields every breakdown must carry for the delta arithmetic to be exact.
+_USAGE_REQUIRED = ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens")
+
+
+def _breakdown(value) -> dict | None:
+    """One validated native usage breakdown, or ``None`` when it is unusable."""
+    if not isinstance(value, dict):
+        return None
+    counters = {}
+    for key in _USAGE_KEYS:
+        item = value.get(key)
+        if item is None and key not in _USAGE_REQUIRED:
+            counters[key] = 0
+            continue
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            return None
+        counters[key] = item
+    return counters
+
+
+def attempt_token_usage(evidence) -> dict | None:
+    """This attempt's own Codex usage, never the thread-cumulative total.
+
+    ``thread/tokenUsage/updated`` carries the latest request's breakdown in
+    ``last`` and the thread-cumulative breakdown in ``total``. The first
+    notification of the bound native turn establishes the baseline
+    (``total - last``), and the attempt is the delta from that baseline to the
+    latest observed total. A repeated or replayed notification has a total that
+    does not advance, so it can never be counted twice. When no baseline is
+    provable — missing, or self-contradictory native totals — the usage stays
+    unknown instead of being estimated from the cumulative total.
+    """
+    baseline, totals, events = evidence.usage_baseline, evidence.usage_total, evidence.usage_events
+    if baseline is None or totals is None or not events:
+        return None
+    delta = {}
+    for key in _USAGE_KEYS:
+        value = totals[key] - baseline[key]
+        if value < 0:
+            return None
+        delta[key] = value
+    if delta["cachedInputTokens"] > delta["inputTokens"]:
+        return None
+    return {
+        "source": "codex/app-server-thread-token-usage",
+        "scope": "attempt",
+        "inputBasis": "includes-cached",
+        "inputTokens": delta["inputTokens"],
+        "cachedInputTokens": delta["cachedInputTokens"],
+        "outputTokens": delta["outputTokens"],
+        "reasoningOutputTokens": delta["reasoningOutputTokens"],
+        "nativeRecords": evidence.usage_events,
+        "completeness": "partial" if evidence.usage_anomaly else "complete",
+    }
+
+
+#: The native quota slots a rate-limit snapshot may carry.
+_RATE_WINDOW_SLOTS = ("primary", "secondary")
+
+
+def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usage_allowed=None) -> dict | None:
+    """Build one quota candidate from native rate-limit buckets.
+
+    Only natively reported values are carried. A slot without ``usedPercent``
+    contributes no window, and a missing ``resetsAt`` stays unknown rather than
+    becoming zero. Multi-bucket snapshots keep their native ``limitId`` on each
+    window so two metered buckets can never be merged into one percentage.
+    """
+    if not buckets:
+        return None
+    candidate = {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
+                 "provider": "openai", "windows": []}
+    if isinstance(account_id, str) and account_id:
+        candidate["nativeAccountId"] = account_id
+    if isinstance(ordinary_usage_allowed, bool):
+        candidate["ordinaryUsageAllowed"] = ordinary_usage_allowed
+    for limit_id, bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        plan = bucket.get("planType")
+        if candidate.get("planType") is None and isinstance(plan, str) and plan:
+            candidate["planType"] = plan
+        reached = bucket.get("rateLimitReachedType")
+        if candidate.get("reachedType") is None and isinstance(reached, str) and reached:
+            candidate["reachedType"] = reached
+        if candidate.get("limitId") is None and limit_id:
+            candidate["limitId"] = limit_id
+        for slot in _RATE_WINDOW_SLOTS:
+            window = bucket.get(slot)
+            used = window.get("usedPercent") if isinstance(window, dict) else None
+            if isinstance(used, bool) or not isinstance(used, (int, float)):
+                # A slot without a native percentage is not a window and is never a zero.
+                continue
+            entry = {"name": slot, "usedPercent": used}
+            resets = window.get("resetsAt")
+            if isinstance(resets, int) and not isinstance(resets, bool) and resets > 0:
+                entry["resetsAt"] = resets
+            duration = window.get("windowDurationMins")
+            if isinstance(duration, int) and not isinstance(duration, bool) and duration > 0:
+                entry["windowDurationMins"] = duration
+            if limit_id:
+                entry["limitId"] = limit_id
+            candidate["windows"].append(entry)
+    return candidate
+
+
+def quota_candidate(snapshot, *, observed_at: str, account_id=None, ordinary_usage_allowed=None) -> dict | None:
+    """One native ``RateLimitSnapshot`` (one bucket, as a rolling update carries)."""
+    if not isinstance(snapshot, dict):
+        return None
+    limit_id = snapshot.get("limitId")
+    return _quota_candidate([(limit_id if isinstance(limit_id, str) else None, snapshot)],
+                            observed_at=observed_at, account_id=account_id,
+                            ordinary_usage_allowed=ordinary_usage_allowed)
+
+
+def quota_candidate_from_response(response, *, observed_at: str) -> dict | None:
+    """One ``account/rateLimits/read`` response as an unnormalized candidate.
+
+    The multi-bucket view is preferred when the backend supplies it; otherwise
+    the backward-compatible single view is used. An empty response proves
+    nothing and returns ``None`` instead of an empty observation.
+    """
+    if not isinstance(response, dict):
+        return None
+    buckets: list[tuple[str | None, dict]] = []
+    by_id = response.get("rateLimitsByLimitId")
+    single = response.get("rateLimits") if isinstance(response.get("rateLimits"), dict) else None
+    if isinstance(by_id, dict) and by_id:
+        buckets = [(str(limit_id), by_id[limit_id]) for limit_id in sorted(by_id)]
+    elif single is not None:
+        limit_id = single.get("limitId")
+        buckets = [(limit_id if isinstance(limit_id, str) else None, single)]
+    return _quota_candidate(buckets, observed_at=observed_at, account_id=response.get("accountId"),
+                            ordinary_usage_allowed=response.get("ordinaryUsageAllowed"))
+
+
+def turn_failure_code(turn) -> str | None:
+    """The native structured error code of a failed native turn, when it has one."""
+    error = turn.get("error") if isinstance(turn, dict) else None
+    info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    return info if isinstance(info, str) and info else None
+
 class TurnEvidence:
     def __init__(self, thread_id: str, turn_id: str):
         self.thread_id, self.turn_id = thread_id, turn_id
@@ -238,16 +391,71 @@ class TurnEvidence:
         self.event_seq = 0
         self.model_turns = 0
         self.tool_calls = 0
+        # Per-turn native token usage: the observed baseline and latest thread
+        # totals, never a session-cumulative figure reported as one attempt.
+        self.usage_baseline = None
+        self.usage_total = None
+        self.usage_events = 0
+        self.usage_anomaly = False
+        self.usage_unprovable = False
+        # The most recent non-empty native quota observation for this execution.
+        self.quota_candidate = None
+
+    def _observe_token_usage(self, token_usage) -> None:
+        """Fold one native usage notification into this attempt's delta."""
+        if not isinstance(token_usage, dict) or self.usage_unprovable:
+            return
+        last = _breakdown(token_usage.get("last"))
+        total = _breakdown(token_usage.get("total"))
+        if last is None or total is None:
+            return
+        if self.usage_baseline is None:
+            baseline = {key: total[key] - last[key] for key in _USAGE_KEYS}
+            if any(value < 0 for value in baseline.values()):
+                # The native totals contradict themselves; no interval is
+                # provable, so this attempt's usage must stay unknown rather
+                # than being estimated from the cumulative total.
+                self.usage_unprovable = True
+                return
+            self.usage_baseline = baseline
+        if self.usage_total is not None:
+            if total["totalTokens"] <= self.usage_total["totalTokens"]:
+                # An identical or replayed notification never counts twice.
+                return
+            if any(total[key] < self.usage_total[key] for key in _USAGE_KEYS):
+                self.usage_anomaly = True
+        self.usage_total = total
+        self.usage_events += 1
+
+    def _observe_rate_limits(self, snapshot) -> None:
+        """Keep the newest quota observation a sparse rolling update can prove.
+
+        A rolling update may omit fields; an update that proves nothing replaces
+        nothing, so an earlier complete observation is never cleared by a
+        partial one.
+        """
+        from ..usage import normalize_quota
+        candidate = quota_candidate(snapshot, observed_at=utc_now())
+        if candidate is not None and normalize_quota(candidate) is not None:
+            self.quota_candidate = candidate
 
     def observe(self, message: dict):
         method, params = message.get("method"), message.get("params")
-        if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
+        if not isinstance(params, dict):
+            return None
+        if method == "account/rateLimits/updated":
+            self._observe_rate_limits(params.get("rateLimits"))
+            return None
+        if params.get("threadId") != self.thread_id:
             return None
         turn = params.get("turn")
         native_turn_id = turn.get("id") if isinstance(turn, dict) else params.get("turnId")
         if native_turn_id != self.turn_id:
             return None
         self.event_seq += 1
+        if method == "thread/tokenUsage/updated":
+            self._observe_token_usage(params.get("tokenUsage"))
+            return "streaming-model", None
         if method == "turn/started":
             self.started = True
             self.model_turns += 1

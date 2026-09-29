@@ -17,7 +17,9 @@ from pathlib import Path
 from .base import ProcessHandle
 from .windows_process import owned_popen
 from .codex_config import cli_command, native_environment
-from .codex_protocol import CodexProtocolError, Connection, OUTCOME_SCHEMA, TurnEvidence, decode_json, parse_outcome, native_checkpoint
+from .codex_protocol import (CodexProtocolError, Connection, OUTCOME_SCHEMA, TurnEvidence, attempt_token_usage,
+                             decode_json, native_checkpoint, parse_outcome, quota_candidate_from_response,
+                             turn_failure_code, utc_now)
 from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 
 
@@ -255,6 +257,23 @@ def _read_only_call(connection, control, result, catalog):
         prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
 
 
+def _observe_quota(connection, evidence) -> dict | None:
+    """Best-effort native quota snapshot for this execution.
+
+    The rolling notification is kept unless a fresh ``account/rateLimits/read``
+    proves more. A failed read never fails an otherwise valid turn and never
+    fabricates a window.
+    """
+    from ..usage import normalize_quota
+    candidate = evidence.quota_candidate
+    try:
+        response = connection.call("account/rateLimits/read", {})
+    except CodexProtocolError:
+        return candidate
+    fresh = quota_candidate_from_response(response, observed_at=utc_now())
+    return fresh if fresh is not None and normalize_quota(fresh) is not None else candidate
+
+
 def _remove_private_auth(native_root: Path) -> None:
     auth = native_root / "codex-home" / "auth.json"
     if auth.is_symlink():
@@ -451,6 +470,17 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 if len(finals) == 1:
                     evidence.final_item = finals[0]
             result["nativeCheckpoint"] = native_checkpoint(evidence, turn_input)
+            # Native usage and quota are observations for this attempt only. The
+            # delta comes from the thread-cumulative totals this turn advanced,
+            # so a resumed thread never re-counts its earlier turns.
+            result["tokenUsage"] = attempt_token_usage(evidence)
+            result["quota"] = _observe_quota(connection, evidence)
+            failure_code = turn_failure_code(native_turn)
+            if failure_code is not None:
+                from ..usage import classify_quota_code
+                if classify_quota_code(failure_code) != "unknown":
+                    result["quotaFailure"] = {"nativeCode": failure_code,
+                                              "source": "codex/app-server-turn-error", "observedAt": utc_now()}
             if native_turn.get("status") != "completed" or not evidence.started:
                 raise CodexProtocolError("native-turn-failed", "Codex turn did not complete successfully")
             correlated = next((request for request in denied_requests

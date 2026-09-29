@@ -8,7 +8,9 @@ import time
 import unittest
 from types import SimpleNamespace
 
-from buddy.adapters.codex_protocol import CodexProtocolError, Connection, TurnEvidence, parse_outcome, native_checkpoint, validated_checkpoint, checkpoint_resumable
+from buddy.adapters.codex_protocol import (CodexProtocolError, Connection, TurnEvidence, attempt_token_usage,
+                                           checkpoint_resumable, native_checkpoint, parse_outcome,
+                                           validated_checkpoint)
 from buddy.adapters.codex_runner import execution_deadline
 
 
@@ -99,6 +101,86 @@ class UnlimitedDeadlineTests(unittest.TestCase):
         with self.assertRaises(CodexProtocolError) as error:
             connection.pump()
         self.assertEqual(error.exception.code, "user-cancel")
+
+
+class NativeUsageEvidenceTests(unittest.TestCase):
+    """Per-attempt usage comes from the delta the native turn advanced."""
+
+    def breakdown(self, input_tokens, cached, output, reasoning, total):
+        return {"inputTokens": input_tokens, "cachedInputTokens": cached, "cacheWriteInputTokens": 0,
+                "outputTokens": output, "reasoningOutputTokens": reasoning, "totalTokens": total}
+
+    def notify(self, evidence, last, total, *, turn="turn"):
+        evidence.observe({"method": "thread/tokenUsage/updated",
+                          "params": {"threadId": "root", "turnId": turn,
+                                     "tokenUsage": {"last": last, "total": total}}})
+
+    def test_a_resumed_thread_counts_only_the_delta_this_turn_advanced(self):
+        evidence = TurnEvidence("root", "turn")
+        prior = self.breakdown(250000, 249000, 1000, 0, 250000)
+        first = self.breakdown(12000, 11000, 40, 4, 12040)
+        second = self.breakdown(13000, 12000, 50, 5, 13050)
+        self.notify(evidence, first, {key: prior[key] + first[key] for key in prior})
+        self.notify(evidence, second, {key: prior[key] + first[key] + second[key] for key in prior})
+        usage = attempt_token_usage(evidence)
+        self.assertEqual(usage["inputTokens"], 25000)
+        self.assertEqual(usage["cachedInputTokens"], 23000)
+        self.assertEqual(usage["outputTokens"], 90)
+        self.assertEqual(usage["nativeRecords"], 2)
+        self.assertEqual(usage["completeness"], "complete")
+
+    def test_a_replayed_notification_never_counts_twice(self):
+        evidence = TurnEvidence("root", "turn")
+        last = self.breakdown(100, 40, 20, 5, 120)
+        total = self.breakdown(100, 40, 20, 5, 120)
+        self.notify(evidence, last, total)
+        self.notify(evidence, last, total)
+        self.notify(evidence, last, total)
+        usage = attempt_token_usage(evidence)
+        self.assertEqual(usage["inputTokens"], 100)
+        self.assertEqual(usage["nativeRecords"], 1)
+
+    def test_an_unrelated_turn_or_thread_is_ignored(self):
+        evidence = TurnEvidence("root", "turn")
+        foreign = self.breakdown(100, 40, 20, 5, 120)
+        self.notify(evidence, foreign, foreign, turn="another-turn")
+        evidence.observe({"method": "thread/tokenUsage/updated",
+                          "params": {"threadId": "other", "turnId": "turn",
+                                     "tokenUsage": {"last": foreign, "total": foreign}}})
+        self.assertIsNone(attempt_token_usage(evidence))
+
+    def test_self_contradictory_native_totals_stay_unknown_instead_of_estimated(self):
+        evidence = TurnEvidence("root", "turn")
+        # The thread total is smaller than the request it is supposed to contain:
+        # no interval is provable, so no usage may be reported at all.
+        self.notify(evidence, self.breakdown(500, 400, 100, 5, 600), self.breakdown(100, 40, 20, 5, 120))
+        self.assertTrue(evidence.usage_unprovable)
+        self.assertIsNone(attempt_token_usage(evidence))
+        # A later, internally consistent notification must not resurrect a
+        # baseline that would undercount the requests already missed.
+        self.notify(evidence, self.breakdown(100, 40, 20, 5, 120), self.breakdown(700, 440, 120, 5, 720))
+        self.assertIsNone(attempt_token_usage(evidence))
+
+    def test_a_decreasing_thread_total_marks_the_observation_partial(self):
+        evidence = TurnEvidence("root", "turn")
+        first = self.breakdown(500, 400, 100, 5, 600)
+        self.notify(evidence, first, first)
+        # The thread total advances overall while its input component shrinks:
+        # the delta is still the latest observed total, but the observation is
+        # marked partial rather than presented as complete.
+        self.notify(evidence, self.breakdown(190, 70, 35, 3, 228), self.breakdown(190, 70, 35, 3, 720))
+        usage = attempt_token_usage(evidence)
+        self.assertTrue(evidence.usage_anomaly)
+        self.assertEqual(usage["completeness"], "partial")
+        self.assertEqual(usage["inputTokens"], 190)
+
+    def test_unusable_breakdowns_are_ignored(self):
+        evidence = TurnEvidence("root", "turn")
+        for token_usage in ({"last": None, "total": None}, {"last": {"inputTokens": -1}, "total": {}},
+                            {"last": {"inputTokens": True, "cachedInputTokens": 0, "outputTokens": 0,
+                                      "reasoningOutputTokens": 0, "totalTokens": 0}, "total": {}}):
+            self.notify(evidence, token_usage.get("last"), token_usage.get("total"))
+        self.assertIsNone(attempt_token_usage(evidence))
 
 
 if __name__ == "__main__":
