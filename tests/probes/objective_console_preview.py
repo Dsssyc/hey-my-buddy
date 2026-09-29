@@ -1295,6 +1295,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
+        "consoleAccess": {"requireLogin": False, "revision": 0, "sessions": []},
         "consoleSession": {"id": SYNTHETIC_SESSION_ID, "canWrite": writable,
                            "reason": None if writable else "superseded"},
         "tableRevision": 7,

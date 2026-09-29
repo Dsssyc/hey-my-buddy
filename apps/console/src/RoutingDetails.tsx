@@ -5,7 +5,7 @@ import type { RoutingHistory, Workflow } from "./workflow-types";
 import { configurationText, DecisionDetails } from "./DecisionDetails";
 import { decisionStatus } from "./decision-types";
 import { formatDate } from "./ui";
-import { fallbackDescription, recordedRoutingMode } from "./routing-display";
+import { fallbackDescription, recordedRoutingMode, routingBasisSummary, selectionSourceText } from "./routing-display";
 
 export function RoutingDetails({ value, api, csrfToken, active, initialDecisionId }: {
   value: Workflow; api: ConsoleApi; csrfToken: string; active: boolean; initialDecisionId?: string | null;
@@ -17,6 +17,8 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
   const [cursors, setCursors] = useState<(number | undefined)[]>([]);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [retry, setRetry] = useState(0);
   const currentId = value.routing?.decisionId || null;
+  const sourceText = selectionSourceText(value.routing?.source);
+  const basisLine = routingBasisSummary(value.routing?.routingBasis);
   // Explicit null comes from an old timeline span: its identity was not
   // recorded, so the current route cannot stand in for that historical fact.
   const chosenId = selected || (initialDecisionId === null ? null : currentId);
@@ -54,14 +56,17 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
       <p className="read-text">{value.executionConfiguration ? configurationText(value.executionConfiguration) : "尚未确定执行配置。"}</p>
       <dl className="facts"><dt>配置版本</dt><dd>{value.executionConfigurationRevision == null ? "未记录" : `V${value.executionConfigurationRevision}`}</dd>
         <dt>路由状态</dt><dd>{value.routing ? decisionStatus[value.routing.status] || value.routing.status : "未记录"}</dd>
+        {sourceText && <><dt>选择方式</dt><dd>{sourceText}</dd></>}
         {value.routing && (value.routing.status !== "explicit" || value.routing.routingMode || value.routing.requestedRoutingMode) && <><dt>请求模式</dt><dd>{recordedRoutingMode(value.routing.requestedRoutingMode)}</dd>
-          <dt>实际模式</dt><dd>{recordedRoutingMode(value.routing.routingMode)}</dd>
+          <dt>实际模式</dt><dd>{value.routing.source === "single-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd>
           <dt>模式降级</dt><dd>{fallbackDescription(value.routing.fallback)}</dd></>}</dl>
       {!currentId && <p className="read-text">{value.routing?.status === "explicit"
         ? "Host 指定，未调用智能路由。" : value.routing?.reason || value.activeRequest?.summary || "本次没有可读取的路由决策记录。"}</p>}
       {currentId && value.routing?.reason && ["needs-host", "fenced", "failed"].includes(value.routing.status) &&
         <p className="error-message" role="status">本次路由未能用于执行：{value.routing.reason}</p>}
-      {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">原始硬约束：{configurationText(value.routing?.constraints)}</p>}
+      {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">提交时硬约束：{configurationText(value.routing?.constraints)}</p>}
+      {!!value.routing?.requiredCapabilities?.length && <p className="small muted wrap">所需能力：{value.routing.requiredCapabilities.join("、")}</p>}
+      {basisLine && <p className="small muted wrap">路由依据：{basisLine}（冻结记录，不随当前配置变化）</p>}
     </section>
     {chosenId && <section className="detail-section" ref={rationale} tabIndex={-1} aria-label="所选路由决定" data-decision-id={chosenId}>
       {chosenId !== currentId && <div className="row-between"><h3>此前的路由依据</h3>

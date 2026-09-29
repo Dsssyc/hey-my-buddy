@@ -47,6 +47,15 @@ SECOND_PROFILE = {
     "effort": "high",
     "capabilities": ["execution:dsh", "effort:high"],
 }
+#: A second effort-high profile, so a test can pin or constrain to `effort:
+#: high` and still leave two legal candidates for the Router path.
+THIRD_PROFILE_ID = "dsh:deepseek-official:deepseek-flash:high"
+THIRD_PROFILE = {
+    **PROFILE,
+    "profileId": THIRD_PROFILE_ID,
+    "label": "DeepSeek-V41-Flash · high",
+    "effort": "high",
+}
 
 class DecisionTestCase(BoardTestCase):
     model_claim = EvaluationFixtures.model_claim
@@ -312,13 +321,19 @@ class SelectionRequestTests(DecisionTestCase):
 
     def test_pins_and_excludes_are_enforced_in_python_before_and_after_the_call(self):
         board = self.board()
-        self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "user excluded"}])
+        # Three enabled profiles keep two candidates legal after the exclusion, so
+        # the Router path still runs; a single remaining candidate would be
+        # selected by the program directly (covered in test_sole_candidate_selection).
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
+                  preferences=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "user excluded"}])
+        self.use_helper(profile_id=SECOND_PROFILE_ID)
         request = self.request(board)
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["profileId"], SECOND_PROFILE_ID)
-        self.assertEqual([profile["profileId"] for profile in decision["input"]["profiles"]], [SECOND_PROFILE_ID])
+        self.assertEqual(sorted(profile["profileId"] for profile in decision["input"]["profiles"]),
+                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
 
         # A pin limits the candidate set; a recommendation outside it is refused.
         self.use_helper(profile_id=PROFILE_ID)
@@ -326,20 +341,24 @@ class SelectionRequestTests(DecisionTestCase):
             board,
             request_id="pin-1",
             command_id="pin-1",
-            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "only this one"}],
+            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "only these two"},
+                               {"profileId": THIRD_PROFILE_ID, "mode": "pin", "reason": "only these two"}],
         )
         pinned = self.request(board, request_id="pick-2")
         self.run_worker(board, worker_id="w-pinned")
         pinned_decision = self.decision(board, pinned["decisionId"])
         self.assertEqual(pinned_decision["status"], "needs-host")
         self.assertEqual(pinned_decision["output"]["code"], "router-out-of-bounds")
-        self.assertEqual(
-            [profile["profileId"] for profile in pinned_decision["input"]["profiles"]], [SECOND_PROFILE_ID]
-        )
-        # The Router input carries the effective preference with its source.
+        self.assertEqual(sorted(profile["profileId"] for profile in pinned_decision["input"]["profiles"]),
+                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
+        # The Router input carries the effective preferences with their source.
         self.assertEqual(pinned_decision["input"]["preferences"],
-                         [{"profileId": SECOND_PROFILE_ID, "mode": "pin",
-                           "reason": "only this one", "source": "override"}])
+                         sorted([
+                             {"profileId": SECOND_PROFILE_ID, "mode": "pin",
+                              "reason": "only these two", "source": "override"},
+                             {"profileId": THIRD_PROFILE_ID, "mode": "pin",
+                              "reason": "only these two", "source": "override"},
+                         ], key=lambda entry: entry["profileId"]))
 
     def test_requested_capabilities_filter_the_candidate_set(self):
         board = self.board()
@@ -348,10 +367,15 @@ class SelectionRequestTests(DecisionTestCase):
             "selection_request",
             {"requestId": "pick-caps", "task": "needs image input", "requiredCapabilities": ["input:image"]},
         )
-        self.run_worker(board)
+        # Exactly one capability-matching candidate: the program selects it without
+        # a Router call, and the capability bound is still enforced in Python.
+        self.assertEqual(request["status"], "completed")
+        self.assertIsNone(request["runId"])
         decision = self.decision(board, request["decisionId"])
-        self.assertEqual(decision["status"], "completed")
-        self.assertEqual([profile["profileId"] for profile in decision["input"]["profiles"]], [PROFILE_ID])
+        self.assertEqual(decision["profileId"], PROFILE_ID)
+        self.assertEqual(decision["reason"], "唯一合法候选，未调用 Router")
+        self.assertEqual(decision["routingBasis"]["candidateCount"], 1)
+        self.readonly_start.assert_not_called()
         no_candidate = board.call(
             "selection_request",
             {"requestId": "pick-none", "task": "impossible", "requiredCapabilities": ["capability:nonexistent"]},
@@ -385,7 +409,9 @@ class SelectionRequestTests(DecisionTestCase):
 
     def test_fixed_fields_and_capabilities_are_rechecked_at_adoption(self):
         board = self.board()
-        self.seed(board)
+        # The effort-high constraint leaves two legal candidates, so the frozen
+        # input really reaches a Router and adoption rechecks the hard bounds.
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         for name, constraints, field, replacement in (
             ("fixed", {"effort": "high"}, "effort", "off"),
             ("capability", {"requiredCapabilities": ["execution:dsh"]}, "capabilities_json", "[]"),
@@ -996,6 +1022,9 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "evidence",
                 "policyCheck",
                 "budget",
+                "routingBasis",
+                "constraints", "requiredCapabilities",
+                "routerCalled",
                 "routingMode", "requestedRoutingMode", "fallback",
                 "usage",
                 "nativeIdentity",

@@ -17,7 +17,7 @@ from buddy.adapters.claude import ClaudeAdapter
 from buddy.adapters.zcode import ZcodeAdapter
 from buddy import router
 from buddy.errors import BoardError
-from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE_ID
+from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
 from test_evaluation import family_key
 from test_workflow import CONFIGURATION, WorkflowTestCase
 
@@ -223,11 +223,14 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
     def test_hard_constraint_remains_filter_when_soft_preference_disagrees(self):
         board = self.board()
         self.annotations(board)
-        self.seed(board)
+        # Two effort-high profiles keep the Router path under the hard constraint;
+        # a single constrained candidate would be selected by the program directly.
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         prefs = [{"match": {"effort": "off"}, "reason": "Try the cheaper effort"}]
         view = self.routed(board, request_id="route-hard", preferences=prefs, effort="high")
         document = self.select(board, view, SECOND_PROFILE_ID)
-        self.assertEqual([entry["profileId"] for entry in document["profiles"]], [SECOND_PROFILE_ID])
+        self.assertEqual(sorted(entry["profileId"] for entry in document["profiles"]),
+                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "fallback")
 

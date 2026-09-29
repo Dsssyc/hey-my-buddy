@@ -21,6 +21,8 @@ export type ObjectiveListProps = {
   selected: string | null;
   /** False while the 委派记录 tab is switched away; transient popovers close. */
   active?: boolean;
+  /** Whether this particular list surface is visible (rail, drawer and mobile differ). */
+  visible?: boolean;
   /** Collapsed 48px rail while a detail is open above 760px (0.15.1 U1). */
   rail: boolean;
   /** Focus target restored when the drawer closes. */
@@ -122,6 +124,19 @@ export function ObjectiveList(props: ObjectiveListProps) {
   const projectSelect = useRef<HTMLSelectElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const scrollIntent = useRef(false);
+  const pointerInside = useRef(false);
+  const applying = useRef(false);
+  if (!reorder) applying.current = false;
+  const visible = props.visible ?? (props.active !== false && !props.rail);
+  const apply = () => {
+    if (applying.current) return;
+    applying.current = true;
+    props.onApplyReorder();
+  };
+  const applyIfIdle = () => {
+    if (visible && reorder && !pointerInside.current && (scroll.current?.scrollTop ?? 0) <= 0) apply();
+  };
+  useEffect(() => { applyIfIdle(); }, [reorder, visible]);
   // The filter popup is transient: it closes when the rail hides the list or
   // the tab is inactive, and reopening must not restore it (review §10).
   const filtersHidden = props.rail || props.active === false;
@@ -159,8 +174,13 @@ export function ObjectiveList(props: ObjectiveListProps) {
     void props.onMore();
   }
   const mainRows = show === "standalone" ? standalone : show === "all" ? rows : objectives;
-  return <section className="panel list-panel" aria-label="工作目标列表">
-    <div className="panel-toolbar"><h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2></div>
+  return <section className="panel list-panel" aria-label="工作目标列表"
+    onPointerEnter={() => { pointerInside.current = true; }}
+    onPointerLeave={() => { pointerInside.current = false; applyIfIdle(); }}>
+    <div className="panel-toolbar"><h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2>
+      {reorder && visible && <button type="button" className="objective-update" title="按最近活动重新排序"
+        onClick={() => { apply(); if (scroll.current) scroll.current.scrollTop = 0; }}>有更新</button>}
+    </div>
     <div className="list-filters">
       <div className="list-filter-row">
         <label className="search"><span className="sr-only">搜索工作目标</span><input value={props.query} maxLength={200}
@@ -196,15 +216,13 @@ export function ObjectiveList(props: ObjectiveListProps) {
         </Popover>}
       </div>
     </div>
-    {reorder && <button className="new-records" onClick={() => { props.onApplyReorder(); if (scroll.current) scroll.current.scrollTop = 0; }}>{reorder.count !== null
-      ? `有 ${reorder.count} 个工作目标有新活动 · 按最近活动重新排序`
-      : "有新活动 · 按最近活动重新排序"}</button>}
     {error && <div className="list-error" role="alert">{error}<button className="button small-button" onClick={props.onRetry}>重试读取</button></div>}
     <div ref={scroll} className="list-scroll" tabIndex={0} aria-label="工作目标条目"
       onWheel={() => { scrollIntent.current = true; }} onTouchMove={() => { scrollIntent.current = true; }}
       onKeyDown={event => { if (["ArrowDown", "PageDown", "End"].includes(event.key)) scrollIntent.current = true; }}
       onScroll={event => {
         const element = event.currentTarget;
+        if (element.scrollTop <= 0) { scrollIntent.current = false; applyIfIdle(); }
         if (scrollIntent.current && element.scrollHeight - element.scrollTop - element.clientHeight < 140) loadMore();
       }}>
       <ProjectGroups rows={mainRows} collapsed={collapsed} toggle={toggle}

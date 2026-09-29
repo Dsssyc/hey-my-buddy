@@ -182,8 +182,11 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .profile-avatar { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent); border-radius: 5px; }
 .evidence-item { padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
 .evidence-item > span { display: block; margin-top: 6px; }
-.settings-page { width: 100%; max-width: 960px; height: 100%; margin-inline: auto; display: grid; align-content: start; gap: 16px; overflow-y: auto; scrollbar-gutter: stable; }
+.settings-page { width: 100%; max-width: 960px; height: 100%; margin-inline: auto; display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; gap: 16px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .settings-panel { padding: 20px; }
+.access-note { margin-top: 10px; }
+.access-sessions { margin-top: 12px; }
+.access-sessions li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-block: 10px; border-top: 1px solid var(--line); }
 .settings-panel .panel-heading p { color: var(--muted); margin-top: 8px; font-size: 13px; }
 .panel-heading { margin-bottom: 16px; }
 .configuration-summary { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--subtle); border-radius: 5px; margin: 16px 0; }
@@ -222,6 +225,8 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .success-message { color: var(--accent); font-size: 12px; margin: 8px 0; }
 .inline-message { font-size: 12px; margin-top: 12px; }
 .load-more, .new-records { display: block; width: 100%; border: 0; padding: 12px; font-size: 12px; color: var(--accent); background: var(--accent-wash); flex-shrink: 0; }
+.objective-update { margin-right: auto; border: 0; border-radius: 3px; padding: 3px 6px; font-size: 11px; color: var(--accent); background: var(--accent-wash); white-space: nowrap; }
+.objective-update:hover { background: var(--subtle); }
 .loading-row { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 .small { font-size: 11px; } .muted { color: var(--muted); } .wrap { overflow-wrap: anywhere; }
 .truncate { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -743,8 +748,8 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .segment:has(input:disabled) { cursor: not-allowed; opacity: .6; }
 
 /* Buddy 配置: one routing line on top, then the list/detail split. */
-.buddy-page { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-.buddy-page > .workspace-grid { flex: 1 1 auto; min-height: 0; height: auto; }
+.buddy-page { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
+.buddy-page > .workspace-grid { flex: 1 0 420px; min-height: 420px; height: auto; }
 .routing-status-bar { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 12px; }
 .routing-status-bar.warning { border-color: var(--warning-line); background: var(--warning-wash); }
 .routing-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px; }

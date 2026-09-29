@@ -134,7 +134,8 @@ describe("the one-line routing status", () => {
     expect(changes[1].configuration.routingBudget).toBe("brief");
     expect(screen.getByLabelText("审阅预算上限").textContent).toContain("标准 300 秒 / 24 次工具调用");
     expect(screen.getByLabelText("审阅预算上限").textContent).not.toContain("字节");
-    expect(screen.getByText(/把每个任务的描述发送给快速 Router 所在的模型提供方/).textContent).toContain("读取冻结的仓库副本");
+    expect(screen.getByText(/把任务描述发送给快速 Router 所在的模型提供方/).textContent).toContain("读取冻结的仓库副本");
+    expect(screen.getByText(/唯一合法候选由程序直接选定/)).toBeTruthy();
   });
   it("shows Router, budget and health in one line and no warning when nothing needs handling", () => {
     renderBar(snapshot(healthy));

@@ -372,6 +372,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
     selected={selected}
     active={active}
+    visible={active && !railActive && !(narrowViewport && !!selected)}
     rail={railActive} railButtonRef={railButtonRef}
     onToggleRail={() => {
       setDrawerOpen(current => {
@@ -451,6 +452,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
           filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
           selected={selected}
           active={active}
+          visible={active && drawerOpen}
           rail={false}
           onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
           onSelect={selectObjective} onRetry={list.retry} onMore={list.more}

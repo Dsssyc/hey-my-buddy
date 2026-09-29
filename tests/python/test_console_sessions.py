@@ -13,7 +13,7 @@ from unittest import mock
 import urllib.request
 from urllib.parse import urlsplit
 
-from buddy.console_sessions import MAX_ENTRIES, MAX_SESSIONS, SESSION_SECONDS
+from buddy.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENTRY_SECONDS
 from buddy.errors import BoardError
 from test_console import Browser, ConsoleTestCase, http_call
 from support import _child_environment
@@ -44,7 +44,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         _, first = self.open_console(board)
         pending = board.call('console', {'action': 'open'})
         self.assertTrue(first.bootstrap()['consoleSession']['canWrite'])
-        now[0] += 60
+        now[0] += ENTRY_SECONDS
         self.assertEqual(first.call('GET', urlsplit(pending['url']).path)[0], 410)
         self.assertTrue(first.bootstrap()['consoleSession']['canWrite'])
 
@@ -199,7 +199,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         with self.assertRaises(BoardError) as error:
             board.call('console', {'action': 'open'})
         self.assertEqual(error.exception.code, 'CONSOLE_LIMIT')
-        now[0] += 60
+        now[0] += ENTRY_SECONDS
         self.assertIn('url', board.call('console', {'action': 'open'}))
 
     def test_cookie_duplicates_and_non_ascii_forgery_are_refused(self):
@@ -223,10 +223,13 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(anonymous.call('GET', urlsplit(fresh_ticket['url']).path)[0], 429)
         self.assertEqual(first.get('/api/console')[0], 200)
         self.assertEqual(board.console.status()['sessionCount'], MAX_SESSIONS)
-        now[0] += SESSION_SECONDS
+        now[0] += 800 * 24 * 3600
+        self.assertEqual(first.get('/api/console')[0], 200)
+        csrf = first.bootstrap()['csrfToken']
+        self.assertEqual(first.command('console_logout', {}, csrf=csrf)[0], 200)
         fresh = board.call('console', {'action': 'open'})
         self.assertTrue(Browser(fresh['url']).bootstrap()['consoleSession']['canWrite'])
-        self.assertEqual(board.console.status()['sessionCount'], 1)
+        self.assertEqual(board.console.status()['sessionCount'], MAX_SESSIONS)
 
     def test_close_fence_rejects_invalid_or_misplaced_identity(self):
         board = self.board()

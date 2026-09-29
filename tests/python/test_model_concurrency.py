@@ -42,7 +42,11 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
-                "profileSettings": [{"profileId": DECISION_PROFILE, "enabled": True}],
+                # A second enabled candidate keeps every selection request on the
+                # Router path; a sole candidate would be selected by the program
+                # directly and never reach the family quota check under test.
+                "profileSettings": [{"profileId": DECISION_PROFILE, "enabled": True},
+                                    {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
                 "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": DECISION_PROFILE},
             },
         )

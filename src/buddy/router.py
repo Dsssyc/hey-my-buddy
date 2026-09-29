@@ -203,3 +203,14 @@ def routing_facts(request: dict) -> dict:
     return {"routingMode": request.get("routingMode", "review"),
             "requestedRoutingMode": request.get("requestedRoutingMode", "review"),
             "fallback": request.get("fallback")}
+
+
+def selection_source(request: dict) -> str:
+    """The recorded selection source of one routing request.
+
+    ``model-selection`` is the Router path; ``single-candidate`` marks the
+    program's direct selection of the sole frozen legal candidate, recorded as
+    ``routerCalled: false`` on that request. A record from before program
+    selection existed keeps the Router-path marker; this does not claim a model ran.
+    """
+    return "single-candidate" if request.get("routerCalled") is False else "model-selection"

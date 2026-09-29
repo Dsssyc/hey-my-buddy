@@ -1,9 +1,14 @@
 import type { Decision, Profile, Preference, Evidence, Card, RoutingBudget } from "./types";
-import type { ExecutionConfiguration } from "./workflow-types";
+import type { ExecutionConfiguration, RoutingBasis } from "./workflow-types";
 
 export type DecisionModel = Partial<ExecutionConfiguration> & { reasoningEffort?: string };
 export type DecisionAudit = Decision & {
   selectedProfile?: Partial<ExecutionConfiguration> | null;
+  /** False marks the program's direct selection of the sole legal candidate; null predates that path. */
+  routerCalled?: boolean | null;
+  routingBasis?: RoutingBasis | null;
+  constraints?: Partial<ExecutionConfiguration>;
+  requiredCapabilities?: string[];
   policyCheck?: {
     taskPreference?: { ruleIndex?: number | null; outcome?: string | null } | null;
     userPreference?: string | null;

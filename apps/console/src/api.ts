@@ -1,4 +1,4 @@
-import type { Configuration, ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { Configuration, ConsoleAccess, ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
@@ -61,6 +61,18 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
   }
   return session as ConsoleSession;
 }
+
+export function parseConsoleAccess(value: unknown): ConsoleAccess {
+  const access = value as ConsoleAccess | null;
+  if (!access || typeof access.requireLogin !== "boolean" || !Number.isSafeInteger(access.revision)
+    || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
+    || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
+      || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
+    throw new ApiError("INVALID_RESPONSE", "控制台访问设置无法识别，请刷新后重试。");
+  }
+  return access;
+}
+
 
 /** Contract 0.20.0 / schema 14: settings use two Router slots and one default mode. */
 export function validRoutingConfiguration(value: unknown): value is Configuration {
@@ -298,7 +310,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       }
       // A valid session descriptor is required; a missing or malformed one is
       // never read as write access.
-      return { ...data, consoleSession: parseConsoleSession(data.consoleSession) };
+      return { ...data, consoleSession: parseConsoleSession(data.consoleSession),
+        ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }) };
     },
     async command<T = unknown>(
       operation: string,

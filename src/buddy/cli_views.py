@@ -113,7 +113,11 @@ def _nonzero(mapping: Any) -> dict:
 # -- governed goal views -----------------------------------------------------
 
 _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode")
-_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "preferenceOutcome", "decisionId", "routingMode", "requestedRoutingMode", "fallback")
+#: The routing basis keeps the frozen submission facts (hard constraints and the
+#: user exclusions that narrowed the candidate set) beside the choice itself, so
+#: a Host sees why a route had few candidates without a table read.
+_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "preferenceOutcome", "decisionId",
+                  "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis")
 _WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
 _OUTPUT_ARTIFACT = (
     "artifactId",
