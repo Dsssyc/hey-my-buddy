@@ -581,6 +581,17 @@ def _run_spans(connection, row) -> list[dict]:
         ))
         queued_from = attempt["finished_at"] or attempt["created_at"]
     if row["state"] == "queued" and row["run_state"] != "awaiting-host":
+        # A requeue after a Host wait starts when that wait closed (a decision,
+        # continuation or cancellation), never under the wait it followed.
+        closed = connection.execute(
+            "SELECT MAX(COALESCE(decided_at, CASE WHEN state IN ('cancelled','superseded') THEN updated_at END))"
+            " FROM workflow_requests WHERE run_id=? AND state != 'open'", (run_id,)).fetchone()[0]
+        pending = connection.execute(
+            "SELECT MAX(created_at) FROM workflow_continuations WHERE run_id=? AND attempt_id IS NULL",
+            (run_id,)).fetchone()[0]
+        for later in (closed, pending):
+            if later and (not queued_from or later > queued_from):
+                queued_from = later
         # Waiting for a claim right now: the queue interval is still open. A run
         # parked on its Host is not waiting for a Worker; its open host span
         # below is that interval, and a second open span would cover its label.

@@ -265,6 +265,18 @@ class ObjectiveReadTests(WorkflowTestCase):
         self.assertIsNotNone(wait['endAt'])
         self.assertGreaterEqual(wait['endAt'], wait['startAt'])
 
+    def test_a_requeue_after_a_host_continuation_starts_after_the_wait(self):
+        board, first, _second, _loose = self.grouped_board()
+        self.register(board)
+        self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='assistance')
+        current = board.call('workflow_get', {'runId': first['runId']})
+        self.continue_run(board, {**first, 'revision': current['revision']})
+        spans = board.call('objective_timeline', {'objectiveId': first['objectiveId']})['spans']
+        wait = next(s for s in spans if s['runId'] == first['runId'] and s['kind'] == 'host')
+        queued = [s for s in spans if s['runId'] == first['runId'] and s['kind'] == 'queue' and s['endAt'] is None]
+        self.assertEqual(len(queued), 1)
+        self.assertGreaterEqual(queued[0]['startAt'], wait['endAt'])
+
     def test_timeline_truncation_filters_and_identity(self):
         board, first, second, loose = self.grouped_board()
         limited = board.call('objective_timeline', {'objectiveId': first['objectiveId'], 'limit': 1})
