@@ -281,4 +281,21 @@ describe("work-objective list hook", () => {
     await act(async () => f.requests[3]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "new-cursor")));
     expect(f.result.current.nextCursor).toBe("new-cursor");
   });
+
+  it("recovers the paging cursor when an automatic poll retries a failed reorder refresh", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "old-cursor")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "old-cursor")));
+    act(() => f.result.current.applyReorder());
+    await act(async () => f.requests[2]!.reject(new Error("temporary read failure")));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet"]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[3]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "recovered-cursor")));
+    expect(f.result.current.error).toBe("");
+    expect(f.result.current.nextCursor).toBe("recovered-cursor");
+    act(() => f.result.current.more());
+    expect(f.requests[4]!.query.before).toBe("recovered-cursor");
+  });
 });

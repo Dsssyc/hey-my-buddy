@@ -40,6 +40,9 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
       await waitForRead(() => pending.current);
       if (!current.current.active) return;
     }
+    // A failed reorder refresh invalidated its cursor. The next automatic read
+    // must rebuild the first page before normal polling/paging can resume.
+    if (mode === "poll" && needsFirst.current) mode = "first";
     if (mode === "more" && !current.current.cursor) return;
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true;
