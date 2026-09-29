@@ -1,6 +1,10 @@
 # Repository maintenance
 
-## Current ADR-018 routing modes
+## Current ADR-018 Host workflow
+
+The user authorized ADR-018 Part 2 (items 11–23 and its four independent defects) from `socu/buddy-core` at `cf4d70a`, on `socu/host-workflow`. The user approved the schema 14 → 15 proposal in [the implementation design](docs/design/adr018-host-workflow-schema15.md), including unlocked historical goals, independent Host conclusions, per-attempt token usage and retained harness quota observations. Target source/contract is 0.21.0. Use private test roots, simulated harness quota failures and native DSH/Codex record fixtures; no paid reruns or Claude Workers. Delegate bounded independent work through Buddy, with explicitly configured lightweight monitoring subagents. Do not install, merge, publish or change user configuration. The Host owns schema, core workflow, integration and final acceptance. Supersede historical agenda restrictions only where this paragraph or the current user instruction explicitly does so.
+
+## Historical ADR-018 routing modes
 
 The user authorized ADR-018 Part 1 only (items 1–10), from `socu/buddy-core` at `157e7e1`, on `socu/routing-modes`. Source is 0.20.0/contract 0.20.0/schema 14; routing settings use existing `meta` storage. The [routing-modes acceptance](docs/acceptance/routing-modes-0.20.0.md) owns source checks, individually approved native attempts and unverified paths. DSH fast routing passed its approved provider check; ZCode and Codex passed native offline zero-tool checks, while the final ZCode provider check was rate-limited. No Claude calls were made. Daily installation is 0.20.0 ([record](docs/acceptance/installed-0.20.0.md)); user configuration changes and further installations still require separate authorization. ADR-018 Part 2 and its independent defects are outside this implementation scope.
 
