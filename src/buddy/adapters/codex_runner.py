@@ -149,7 +149,9 @@ def _read_only_call(connection, control, result, catalog):
     if (not matches(configured, expected) or configured.get('mcp_servers')
             or filesystem != expected['permissions']['buddy-router']['filesystem'] or profile.get('extends')):
         raise CodexProtocolError('readonly-policy-unverified', 'Codex effective configuration differs from the private read-only policy')
-    result['nativeConfigPolicy'] = expected
+    # Retain the acknowledged effective config, not our requested TOML. Review
+    # certification must inspect native evidence rather than our own proposal.
+    result['nativeConfigPolicy'] = configured
     response = connection.call("thread/start", {
         "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
