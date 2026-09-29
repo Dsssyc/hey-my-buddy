@@ -83,7 +83,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Design proposals
 
-[ADR-019 proposal: Worker accounts and usage visibility](decisions/019-worker-accounts-and-usage.md) is the user-approved direction for a later goal after ADR-018 Part 2: each harness keeps the shared local login read-only by default or uses a Worker-private account whose credentials the harness itself stores in a service-created private directory (BYOK and OAuth through the harness's own mechanisms, with a bounded OS-credential-store exception), metered or unknown-billing configurations stay out of automatic routing unless the user enables them, and bounded per-account usage snapshots are displayed but never used for routing. It is not implemented; its native facts come from static local checks only.
+[ADR-019 proposal: Worker accounts and usage visibility](decisions/019-worker-accounts-and-usage.md) is the user-approved direction for a later goal after ADR-018 Part 2: each harness keeps the shared local login read-only by default or uses a Worker-private account whose credentials the harness itself stores in a service-created private directory (BYOK and OAuth through the harness's own mechanisms, with a bounded OS-credential-store exception), metered or unknown-billing configurations stay out of automatic routing unless the user enables them, and the 0.21.0 usage and quota records become account-aware for display and reminders but are never used for routing. It is not implemented; its native facts come from static local checks only.
 
 [Backlog](design/backlog.md) lists user-reported issues that are recorded but not yet in an implementation batch, with the cause when known and a suggested fix.
 
