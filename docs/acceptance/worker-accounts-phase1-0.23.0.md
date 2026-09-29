@@ -6,7 +6,7 @@
 
 | 第一阶段条目 | 源码与覆盖 | 验证状态 |
 | --- | --- | --- |
-| 1，控制台文案 | [227 项编号记录](console-copy-b.md)，全部按 Host 更严标准复核；短状态、可处理错误、破坏性确认保留，路由数据流向移入 `?`；同步断言。 | 子分支前端与浏览器通过，组合树完整检查及浏览器待最终记录。 |
+| 1，控制台文案 | [227 项编号记录](console-copy-b.md)，全部按 Host 更严标准复核；短状态、可处理错误、破坏性确认保留，路由数据流向移入 `?`；同步断言。 | 最终组合树前端 596 项通过，真实浏览器验证与完整检查通过。 |
 | 2，取消发起者 | 从各 run 本次取消的持久事件取 actor/reason；续做后的下一次取消使用自己的事件，未知保持未知；控制台、CLI get/result 投影一致。 | 定点覆盖 Host/控制台/历史未知、重复取消、长 Host 标识、已完成结果及续做后再取消。 |
 | 3，计费与耗尽 | 原生 metadata 的 subscription/metered/unknown 标注；与启用、偏好、候选排序分离。原生明确耗尽或适用零余额按 provider/limit 暂时过滤；重置或新可用观测才恢复，展示过期与未知不恢复，利用率及临时 rate limit 仅提醒；Host 明确选择保留并提醒。 | 原生协议夹具、持久记录、候选/Router/pin/显式选择、恢复与模型/服务商范围覆盖。 |
 | 4，Codex 主动查询 | 只发 initialize、account/read（refreshToken:false）与 account/rateLimits/read；按需限频 180 秒，force 与改代不绕过；只保存脱敏 facts，所有持有进程结束后才采用观测。 | 模拟 CLI/限频与健康代际测试；真实账户读取未运行。 |
@@ -19,7 +19,14 @@
 
 ## 完整检查与产物
 
-待最终冻结提交、`npm --prefix apps/console ci`、`uv run --frozen python -m buddy.checks`、组合树浏览器与候选产物验证后填入真实结果，不以子代理完成消息代替验收。
+运行时代码冻结于 `a63d6a76fd1e2cab4d6b2c192e37909b83015ff7`。收尾先运行 `npm --prefix apps/console ci`，再运行 `uv run --frozen python -m buddy.checks`，PATH 前置 Node 24.21.0；完整检查退出码 0。Python 1,658 项通过，耗时 1,329.372 秒；Node 161 项、14 个 suite 全部通过，耗时 28.667 秒，无失败、取消、跳过或 todo。私有根 `/private/tmp/buddy-checks-7mklexno` 经检查器停止/存活核对后已移除，Host 另核对其不存在；原始日志 `tmp/worker-accounts/full-checks-verified.log`。
+
+前端最终全量 50 个文件、596 项通过，TypeScript 与 Vite 构建通过；最后仅活动空态和契约旧断言修正，前端活动测试与 Python current-core 定点复核通过，随后重新准备依赖、构建并跑上述最终完整检查。Vite 保留单 bundle 超过 500 kB 的体积提示。本轮首次完整检查暴露了 `test_current_core` 的旧 `0.22.0` 字面断言，已同步至 `0.23.0`；审查修正期间的一次检查主动中断，退出码 130，其私有根 `/private/tmp/buddy-checks-h2seth4f` 也已核对移除。这两次不作为最终通过证据。
+
+Host 在最终打包前端的真实 Codex 浏览器中核对工作目标、取消 Host 标识与理由、计费、0.159.0 新版本待验证、重验配置与模型数据流向帮助、短错误/状态、设置页说明帮助与路由预算帮助。1440×900 与窄屏请求 390×844（实际内容宽度 375–390）均无页面横向溢出；浏览器 error/warn 日志为空。合成预览带 `X-Buddy-Preview: synthetic-fixture-data`，重验点击被模拟服务拒绝，没有原生或模型调用；预览标签已关闭、覆盖视口已还原、监听端口 58458 已释放。截图保留于 `tmp/worker-accounts/buddy-config-final-desktop.jpg`、`buddy-config-final-mobile.jpg` 和 `settings-mobile.jpg`，不是日常控制台数据。
+
+候选 wheel 为 `tmp/worker-accounts/dist-final/hey_my_buddy-0.23.0-py3-none-any.whl`，1,847,506 字节，SHA-256 `9dfa4df76c40344d35bd4744d8f5888bebb0f121d8b21791e739e621c45f575a`。Host 打开 zip 核对 Python 验证器、quota 路由模块、数据证书、HTML 所引用的全部资源、契约和 skill marker，sourceCommit 均为上述冻结提交；共享 Skill 源文件保持 4,096 字节。没有安装此 wheel。完成的四项实现子任务已按固定提交整合，临时 worktree 已清理，分支与提交仍保留。
+
 
 ## 原生检查与未验证项
 
