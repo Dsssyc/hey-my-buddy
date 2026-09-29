@@ -7,6 +7,12 @@ the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
 ordinary task records that the command/external adapters and internal decision
 infrastructure own. The current command surface is documented in
 ``docs/reference/cli.md``.
+
+The one JSON object may be given as the positional argument, as ``--params-file
+PATH`` or on standard input (``-``); the three are mutually exclusive and the file
+or stream content is decoded as UTF-8 and parsed directly, never through a shell.
+``buddy help`` lists every method and ``buddy help METHOD`` prints the parameters
+that method actually validates (see :mod:`buddy.cli_help`).
 """
 import argparse
 import hashlib
@@ -21,7 +27,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import cli_views, runtime, transport
+from . import cli_help, cli_views, runtime, transport
 from .errors import BoardError
 from .launcher import service_environment
 from .transport import METHOD_MAP, call_service, get_state_dir
@@ -110,8 +116,14 @@ METHODS = [
 
 LOCAL_METHODS = ("worker-start", "worker-stop")
 
+#: Bound on a ``--params-file`` file or a standard-input parameter document. It is
+#: the same 8 MiB the transport accepts for one request, so the CLI refuses an
+#: oversized document before any socket is opened.
+MAX_PARAMS_BYTES = transport.MAX_MESSAGE_BYTES
+
 EPILOG = """\
 examples:
+  Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
   buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
       Admit one governed goal in an explicit executionWorkspace: kind existing|worktree,
       absolute source cwd, access read|write, base {kind:commit|working-tree,ref?},
@@ -215,8 +227,7 @@ examples:
       facts (no model call, no lease); synthesize the cards and publish a short card-only patch with
       `assessment-publish`. `evaluation-history` reads bounded publication pages; there is no autoMaintain.
 
-  Repeating an inquiryId never injects the question twice; the same id with
-  different text is an error.
+  Repeating an inquiryId never injects the question twice; changed text is an error.
 """
 
 
@@ -555,22 +566,118 @@ def _scrub_and_save(result: dict) -> None:
     result["controlFile"] = path
 
 
+def _usage_error(payload: dict) -> None:
+    """Print one structured error envelope for a command-line usage mistake and exit 2."""
+    print(_dumps({"error": payload}))
+    raise SystemExit(2)
+
+
+def _read_params_source(source: str) -> str:
+    """Read one parameter document as UTF-8 bytes, bounded and never through a shell."""
+    if source == "-":
+        label = "standard input"
+        stream = getattr(sys.stdin, "buffer", None)
+        try:
+            if stream is not None:
+                raw = stream.read(MAX_PARAMS_BYTES + 1)
+            else:  # a caller that replaced sys.stdin with a text stream
+                raw = sys.stdin.read(MAX_PARAMS_BYTES + 1).encode("utf-8")
+        except OSError as exc:
+            raise BoardError("INVALID_ARGUMENT", f"The parameters on {label} could not be read: {exc}") from exc
+    else:
+        label = f"params file {source!r}"
+        try:
+            with open(source, "rb") as handle:
+                raw = handle.read(MAX_PARAMS_BYTES + 1)
+        except OSError as exc:
+            raise BoardError("INVALID_ARGUMENT", f"The {label} could not be read: {exc.strerror or exc}") from exc
+    if len(raw) > MAX_PARAMS_BYTES:
+        raise BoardError("INVALID_ARGUMENT", f"The {label} exceeds {MAX_PARAMS_BYTES} bytes")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise BoardError("INVALID_ARGUMENT", f"The {label} is not valid UTF-8") from exc
+
+
+def _parameters_text(args) -> str:
+    """The one JSON object text for this invocation: argument, ``--params-file`` or ``-``.
+
+    The sources are mutually exclusive and the resulting text takes exactly the same
+    path afterwards, so ``controlFile``, ``output`` and the attempt-scoped credential
+    behave identically whichever input a caller chose. A file or stream is decoded as
+    UTF-8 and parsed directly: its content is never re-interpreted by a shell.
+    """
+    if args.params_file is not None and args.params is not None:
+        _usage_error(
+            {
+                "code": "INVALID_ARGUMENT",
+                "message": "Pass the JSON object either as the positional argument or as --params-file, not both",
+            }
+        )
+    if args.params_file is not None:
+        return _read_params_source(args.params_file)
+    if args.params is not None:
+        return _read_params_source("-") if args.params == "-" else args.params
+    return "{}"
+
+
+def _parse_parameters(text: str) -> dict:
+    try:
+        params = json.loads(text)
+    except ValueError as exc:
+        raise BoardError("INVALID_ARGUMENT", f"The method parameters are not valid JSON: {exc}") from exc
+    if not isinstance(params, dict):
+        raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
+    return params
+
+
+def _help_command(arguments: list[str]) -> int:
+    """``buddy help [METHOD]``: generated from the validators, starting nothing."""
+    if len(arguments) > 1:
+        _usage_error({"code": "UNKNOWN_METHOD", "message": "buddy help takes at most one method name"})
+    text, candidates = cli_help.render(arguments[0] if arguments else None, METHODS)
+    if text is not None:
+        print(text)
+        return 0
+    _usage_error(
+        {
+            "code": "UNKNOWN_METHOD",
+            "message": f"Unknown method {arguments[0]!r}",
+            "didYouMean": candidates,
+        }
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["help"]:
+        return _help_command(argv[1:])
+    # The two spelling aliases are rewritten before the method name is checked.
+    if len(argv) >= 2 and argv[0] == "storage" and argv[1] in ("plan", "apply"):
+        argv[:2] = ["storage-" + argv[1]]
+    if len(argv) == 4 and argv[:2] == ['harness', 'set']:
+        argv = ['harness-set', json.dumps({'adapter': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
+    if argv and not argv[0].startswith("-") and argv[0] not in METHODS:
+        candidates = cli_help.nearest_methods(argv[0], METHODS)
+        if candidates:
+            _usage_error(
+                {
+                    "code": "UNKNOWN_METHOD",
+                    "message": f"Unknown method {argv[0]!r}",
+                    "didYouMean": candidates,
+                }
+            )
     parser = argparse.ArgumentParser(
         description="Buddy service: governed goals, durable execution records, independent workers and routed harness execution",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("method", choices=METHODS)
-    parser.add_argument("params", nargs="?", default="{}", help="JSON object")
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if len(argv) >= 2 and argv[0] == "storage" and argv[1] in ("plan", "apply"):
-        argv[:2] = ["storage-" + argv[1]]
-    if len(argv) == 4 and argv[:2] == ['harness', 'set']:
-        argv = ['harness-set', json.dumps({'adapter': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
+    parser.add_argument("method", metavar="METHOD", help="run `buddy help` for every method and its parameters")
+    parser.add_argument("params", nargs="?", default=None, help='one JSON object, or "-" to read it from standard input')
+    parser.add_argument("--params-file", metavar="PATH", default=None, help='read the JSON object from PATH ("-" for standard input)')
     args = parser.parse_args(argv)
     try:
-        params = json.loads(args.params)
+        params = _parse_parameters(_parameters_text(args))
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)

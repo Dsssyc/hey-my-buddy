@@ -1,6 +1,6 @@
 # `buddy` CLI reference
 
-`buddy` is the supported entrypoint: one command per operation, one JSON object argument, one JSON object on stdout. This page is the complete command surface and its defaults, bounds, envelopes and error codes. Usage flows are in [usage.md](usage.md); the governed goal lifecycle is in [workflow.md](workflow.md); runtime lifecycle is in [operations.md](operations.md).
+`buddy` is the supported entrypoint: one command per operation, one JSON object argument — given as the positional argument, as `--params-file PATH`, or on standard input as `-` — and one JSON object on stdout. This page is the complete command surface and its defaults, bounds, envelopes and error codes. Usage flows are in [usage.md](usage.md); the governed goal lifecycle is in [workflow.md](workflow.md); runtime lifecycle is in [operations.md](operations.md).
 
 ## Invocation
 
@@ -9,7 +9,15 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" status '{"runId":"<runId>"}'
 ```
 
-The shared skill's `scripts/buddy` is the single launcher. It resolves the uv project from its own location (the skill's `package/`, or the repository root for `skills/buddy/scripts/buddy` in a checkout) rather than the caller's working directory, selects Python 3.12 through uv, and forwards every argument verbatim. From the repository root the same CLI is `uv run --frozen buddy <command> '<json>'` or `uv run --frozen python -m buddy.cli <command> '<json>'`. An unknown or missing command is an argparse usage error; the JSON argument defaults to `{}`. Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`; the local `worker-start`/`worker-stop` commands validate their own small parameter set.
+The shared skill's `scripts/buddy` is the single launcher. It resolves the uv project from its own location (the skill's `package/`, or the repository root for `skills/buddy/scripts/buddy` in a checkout) rather than the caller's working directory, selects Python 3.12 through uv, and forwards every argument verbatim. From the repository root the same CLI is `uv run --frozen buddy <command> '<json>'` or `uv run --frozen python -m buddy.cli <command> '<json>'`. The JSON argument defaults to `{}`; an unknown method name prints the closest candidates (`didYouMean`) and exits 2. Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`; the local `worker-start`/`worker-stop` commands validate their own small parameter set.
+
+## Parameter input
+
+Every method takes one JSON object. Give it exactly one way: as the positional argument, as `--params-file PATH`, or on standard input as `-` (`buddy status -` and `buddy status --params-file -` are the same thing). The sources are mutually exclusive — naming two exits 2 with a structured `INVALID_ARGUMENT` envelope and never calls the service. A file or stream is read as raw bytes, must decode as UTF-8 (an optional byte-order mark is accepted; invalid UTF-8 is `INVALID_ARGUMENT`), and is capped at 8 MiB, the same bound the transport accepts for one request; an oversized document is refused before any socket or daemon exists. The bytes are parsed as JSON directly and are never re-interpreted by a shell, so quoting, `$(...)`, backticks, backslashes, whitespace and non-ASCII text reach the service verbatim. Everything after parsing is identical to the positional form: `output` stays CLI-local, `controlFile` injection resolves the same private `0600` capability, the attempt-scoped credential is injected the same way, and a document that is not one JSON object fails with `INVALID_ARGUMENT`.
+
+## Method help
+
+`buddy help` lists every method with a one-sentence description and the three input forms. `buddy help METHOD` prints that method's accepted parameters with their defaults and bounds, marks parameters that only apply under other inputs (`conditional`, for example `configuration` and `reroute` on `continue`, or `expectedConsoleId` on `console close`), and names the validator and source line each fact came from. The facts are read statically from the same request validators the service enforces: there is no second parameter schema to drift, and a field the reader cannot bound statically is still reported (as accepted with inline validation, or as a runtime-computed allowed set) rather than silently dropped. Help starts no service, worker or model, opens no socket and reads no credential. A mistyped method name prints the closest candidates and exits 2.
 
 Every CLI name maps to one named C-Two operation. The governed lifecycle keeps the short public names (`submit`, `get`, `decide`, `continue`, `takeover`, `cancel`, `acknowledge`, `suggest`) for the `workflow_*` operations; `execution-submit`, `execution-cancel`, `execution-retry` and `execution-acknowledge` reach the ordinary `task_*` records used by the `command`, `external` and internal `decision` infrastructure. The workspace lifecycle adds `scope-amend` → `workflow_scope_amend`, `workspace-resolve` → `workflow_workspace_resolve`, `integration-record` → `workflow_integration_record`, and `workspace-cleanup-plan`/`workspace-cleanup-apply` → the `workspace_cleanup_*` operations; [workspace-lifecycle.md](workspace-lifecycle.md) owns their fields and eligibility rules. Do not conflate the two spellings: the short name is CLI syntax, the `workflow_*` or `task_*` name is the stable operation identity.
 
@@ -221,6 +229,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 
 | Setting | Default | Bounds |
 | --- | --- | --- |
+| Parameter document (positional, `--params-file` or `-`) | `{}` | one JSON object; UTF-8 (BOM accepted); at most 8 MiB; mutually exclusive sources |
 | Task execution deadline `timeoutSeconds` | 1800 s | explicit `0` for no deadline; positive 10–86400 s |
 | CLI `await` wait window | 86400 s | 1–86400 s |
 | `wait` / `watch` timeout | 30000 ms | 0–30000 ms |
@@ -249,7 +258,8 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 
 | Code | Meaning |
 | --- | --- |
-| `INVALID_ARGUMENT` | A parameter is missing, unknown or out of bounds |
+| `INVALID_ARGUMENT` | A parameter is missing, unknown or out of bounds; also a malformed, non-object, non-UTF-8 or oversized parameter document |
+| `UNKNOWN_METHOD` | The CLI method name is unknown; the envelope's `didYouMean` lists the closest candidates and the process exits 2 |
 | `NOT_FOUND` | The selector matches no task, worker, message or artifact |
 | `NOT_READY` | No persisted result/attempt exists yet (for example `result` before completion) |
 | `CONFLICT` | The same identity with changed input: changed submit input, changed inquiry text, a different repeated acknowledgement, a closed boundary or an already-published command |
