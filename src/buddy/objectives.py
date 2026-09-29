@@ -590,9 +590,11 @@ def _run_spans(connection, row) -> list[dict]:
         " WHERE run_id=? ORDER BY created_at, request_id", (run_id,)
     ).fetchall():
         open_request = request["state"] == "open"
-        # Cancelling the run closes an open request in the same transaction that
-        # stamps its updated_at; that recorded time is the wait's end.
-        closed_at = request["decided_at"] or (request["updated_at"] if request["state"] == "cancelled" else None)
+        # A cancellation or a Host continuation closes an open request without a
+        # decision, in the same transaction that stamps its updated_at; that
+        # recorded time is the wait's end.
+        closed_at = request["decided_at"] or (
+            request["updated_at"] if request["state"] in ("cancelled", "superseded") else None)
         spans.append(_span(
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
             None if open_request else (closed_at or None), request["state"],

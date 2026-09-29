@@ -253,6 +253,18 @@ class ObjectiveReadTests(WorkflowTestCase):
         self.assertIsNotNone(wait['endAt'])
         self.assertGreaterEqual(wait['endAt'], wait['startAt'])
 
+    def test_a_host_continuation_closes_the_superseded_wait(self):
+        board, first, _second, _loose = self.grouped_board()
+        self.register(board)
+        self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='assistance')
+        current = board.call('workflow_get', {'runId': first['runId']})
+        self.continue_run(board, {**first, 'revision': current['revision']})
+        spans = board.call('objective_timeline', {'objectiveId': first['objectiveId']})['spans']
+        wait = next(span for span in spans if span['runId'] == first['runId'] and span['kind'] == 'host')
+        self.assertEqual(wait['state'], 'superseded')
+        self.assertIsNotNone(wait['endAt'])
+        self.assertGreaterEqual(wait['endAt'], wait['startAt'])
+
     def test_timeline_truncation_filters_and_identity(self):
         board, first, second, loose = self.grouped_board()
         limited = board.call('objective_timeline', {'objectiveId': first['objectiveId'], 'limit': 1})
