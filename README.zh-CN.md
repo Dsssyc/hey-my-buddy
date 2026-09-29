@@ -18,7 +18,7 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.20.0（contract 0.20.0、schema 14）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.21.0（contract 0.21.0、schema 15），实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未日常安装或发布；schema 14 → 15 仅通过显式空闲升级迁移。
+hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.21.0（contract 0.21.0、schema 15）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.21.0（contract 0.21.0、schema 15），实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未日常安装或发布；schema 14 → 15 仅通过显式空闲升级迁移。
 
 在用户确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
@@ -90,7 +90,7 @@ Codex Host 为每个运行中的委派派生一个只做监控的原生子代理
 
 ## 当前状态与限制
 
-日常安装是 [0.20.0/contract 0.20.0/schema 14](docs/acceptance/installed-0.20.0.md)。它在 0.19.0 的启动器、harness 共享发现和空闲安装切换之上加入双路由模式（快速与审阅两个 Router 位置、默认模式，以及有记录的审阅到快速降级），并让备份不再包含 attempt 私有的 Codex 主目录和服务商快照。升级把原有 Router 放进审阅位置；快速 Router 与默认模式请在 Buddy 配置中选择。[路由模式验收记录](docs/acceptance/routing-modes-0.20.0.md)区分源码验证、原生检查与剩余限制。
+日常安装是 [0.21.0/contract 0.21.0/schema 15](docs/acceptance/installed-0.21.0.md)。它在双路由模式之上加入 ADR-018 的 Host 工作流：文件与标准输入参数和按方法的帮助、沿用工作目标、Host 直接收尾以及对失败或取消目标记录结论、被打断工作的部分成果、可更换的配置、Host 补充路径、累计补丁、服务环境白名单、逐次 token 用量，以及带提醒的 harness 额度观测。[Host 工作流验收记录](docs/acceptance/host-workflow-0.21.0.md)区分源码验证、原生检查与剩余限制。
 
 日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
