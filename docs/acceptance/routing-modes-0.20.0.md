@@ -60,3 +60,7 @@ ZCode 的真实提供方验收被第 4 次检查的 429 限流阻断；恢复后
 | 文档 | `3f6f1810-9fc7-40db-b1eb-1ce4e9eeff87` | `int-f74b0e42-0937-4bdc-9671-40b10ad547d3` | `f8701fc` |
 
 开发期间 `socu/buddy-core` 前进到 `7e9257e`，新增时间轴重排修正和控制台问题清单。对该提交与本候选执行 `git merge-tree --write-tree --name-only` 的模拟合并无冲突，未修改任何分支；模拟结果尚未作为合并后的运行代码测试。建议获授权后将本候选合入 `socu/buddy-core`，复核并测试合并结果，再在日常服务空闲时从固定提交用 `uv build --wheel` 直接构建候选 wheel，经单独授权后通过该 wheel 的安装入口升级。升级后核对版本、备份、迁移后的两个 Router 位置及控制台提示；用户另行选择空的 Router 位置。当前没有执行合并、日常安装或用户配置变更。
+
+## 合并后补充的 ZCode 真实检查
+
+用户重置 ZCode 额度并授权后，Claude Code Host 于 2026-09-29 用 `tests/probes/router_fast.py --adapter zcode --provider zai-api --model GLM-5.3-Flash --effort max --execute` 在私有输出目录执行一次：通过，模型已开始，原生零工具证明成立（0 次工具调用），0 次格式纠正，耗时 31.67 秒，选中 `dsh / deepseek-official / deepseek-flash / off` 并引用任务偏好。ZCode 快速路由因此已有真实提供方证据；max 档位在 60 秒时限内但明显慢于 DSH。合并提交上的完整检查（Host 独立运行）通过：1,405 个 Python 测试与 142 个 Node 测试。
