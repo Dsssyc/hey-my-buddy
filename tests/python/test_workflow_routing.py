@@ -301,7 +301,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board.console_call("user_policy_publish", {
             "commandId": "changed", "writerId": grant["writerId"], "generation": grant["generation"],
             "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
-            "configuration": {"decisionProfileId": SECOND_PROFILE_ID},
+            "configuration": {"reviewRouterProfileId": SECOND_PROFILE_ID},
         })
         claimed = self.router_claim(board, submitted, claim_id="after-writer")
         self.assertIsNone(claimed["claim"])

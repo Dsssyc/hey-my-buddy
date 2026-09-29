@@ -135,7 +135,7 @@ class CapacityTestCase(BoardTestCase):
             "writerToken": grant["writerToken"],
             "expectedRevision": grant["tableRevision"],
             "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
-            "configuration": {"decisionProfileId": PROFILE_ID},
+            "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": PROFILE_ID},
         }
         if model_limit is not None:
             params["modelConcurrency"] = [{**PROFILE_FAMILY, "limit": model_limit}]
@@ -962,7 +962,7 @@ class DaemonPoolTests(CapacityTestCase):
                 "generation": grant["generation"], "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
-                "configuration": {"decisionProfileId": PROFILE_ID},
+                "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": PROFILE_ID},
                 "modelConcurrency": [{**PROFILE_FAMILY, "limit": 2}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)

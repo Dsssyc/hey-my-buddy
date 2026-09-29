@@ -608,7 +608,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     # Resolve the immutable decision from its own calculation task, never from
     # the owner's current workflow route (which may have been retried).
     record = connection.execute(
-        "SELECT d.decision_id, d.status, d.profile_id, d.reason, r.selected_json, r.output_json"
+        "SELECT d.decision_id, d.status, d.profile_id, d.reason, r.selected_json, r.output_json, r.requested_json"
         " FROM decision_requests r JOIN evaluation_decisions d USING(decision_id)"
         " WHERE r.task_id=?", (decision_task_id,)
     ).fetchone()
@@ -616,6 +616,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     output = output if isinstance(output, dict) else {}
     usage = output.get("usage") if isinstance(output.get("usage"), dict) else {}
     routing = {
+        **router.routing_facts(json.loads(record["requested_json"]) if record else {}),
         "selectedProfile": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
         "reason": (record["reason"] or None) if record else None,
         "policyCheck": output.get("policyCheck"),
@@ -632,16 +633,23 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     spans = []
     for attempt in connection.execute(
         "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at,"
-        " json_extract(result_json,'$.status') AS result_status, error"
+        " json_extract(result_json,'$.status') AS result_status, result_json, error"
         " FROM attempts WHERE task_id=? ORDER BY generation", (decision_task_id,)
     ).fetchall():
         state, confirmed, uncertain = _attempt_state(attempt)
+        attempt_output = (json.loads(attempt['result_json']) if attempt['result_json'] else {}).get('result') or {}
+        span_routing = routing
+        if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
+            span_routing = {**routing, **router.routing_facts(attempt_output)}
+            if attempt_output.get('code') == 'router-review-unavailable':
+                span_routing.update(selectedProfile=None, reason=attempt_output.get('reason'),
+                                    policyCheck=None, budget=attempt_output.get('budget'), usage=None)
         spans.append(_span(
             "routing", f"routing:{attempt['attempt_id']}", owner_run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" and not uncertain else None,
             state, attempt_id=attempt["attempt_id"], shutdown_confirmed=confirmed, uncertain=uncertain,
             decisionTaskId=decision_task_id, resultStatus=attempt["result_status"],
-            routing=routing,
+            routing=span_routing,
             disposition=("abstention" if abstention and attempt["result_status"] != "cancelled"
                          else "routing-failed" if record and record["status"] in ("failed", "needs-host") and output.get("code")
                          else None),

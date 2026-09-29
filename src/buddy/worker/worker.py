@@ -569,6 +569,7 @@ class Worker:
         from ..harness_runtime import bound, RECORD_FILE
 
         name = spec['adapter']
+        review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
             name = (claim.get('decisionInput') or {}).get('profile', {}).get('adapter')
         if name not in HARNESSES:
@@ -586,6 +587,8 @@ class Worker:
             if record is None or not record.get('available'):
                 if not retry:
                     continue
+                if review:
+                    return self._review_unavailable(claim, directory, history, 'router-unavailable')
                 return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
                     'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run buddy adapters with refresh:true'),
                     'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
@@ -597,6 +600,10 @@ class Worker:
             holder['harnessRetry'] = retry
             try:
                 with bound([record]):
+                    if review:
+                        native = get_adapter(name)
+                        if not (native.read_only_structured and native.read_only_structured_verified):
+                            return self._review_unavailable(claim, directory, history, 'router-review-unverified')
                     return self._execute_selected(claim, task, spec, attempt, directory, holder)
             except (OSError, BoardError) as error:
                 # Popen/prepare failures are retryable only before a child exists.
@@ -608,6 +615,17 @@ class Worker:
                 if retry or holder.get('started') or not startup_failure:
                     raise
         raise AssertionError('unreachable harness retry')
+
+    def _review_unavailable(self, claim, directory, history, code):
+        from ..router import routing_facts
+        return self.receipt(claim, {'status': 'failed', 'result': {
+            'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
+            'reason': 'The review harness is unavailable or its current version is not verified',
+            'modelStarted': False, 'harnessAttempts': history,
+            'budget': (claim.get('decisionInput') or {}).get('budget'),
+            **routing_facts(claim.get('decisionInput') or {})},
+            'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
+            'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
 
     def _harness_failed(self, attempt, record):
         self.client.call('harness_prepare', {'workerId': self.worker_id, 'attemptId': attempt['attemptId'],

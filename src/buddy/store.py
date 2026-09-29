@@ -633,10 +633,10 @@ class BoardStore:
             for row in rows
             if row["provider"] and row["model"] and row["adapter"] in schemas.CODING_ADAPTERS
         }
-        if any(row["adapter"] == scheduling.DECISION_ADAPTER for row in rows):
-            selector = self.decisions.selector_family(connection)
-            if selector is not None:
-                families.add(selector)
+        for row in connection.execute("SELECT r.input_json FROM decision_requests r JOIN tasks t ON t.task_id=r.task_id WHERE t.state='queued'"):
+            profile = (json.loads(row["input_json"]) if row["input_json"] else {}).get("profile") or {}
+            if all(profile.get(key) for key in ("adapter", "provider", "model")):
+                families.add(tuple(profile[key] for key in ("adapter", "provider", "model")))
         return families
 
     def _full_families(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
@@ -1584,7 +1584,7 @@ class BoardStore:
                 # already resolved and validated.
                 family = scheduling.model_family(effective_spec)
                 if task["adapter"] == scheduling.DECISION_ADAPTER:
-                    family = self.decisions.selector_family(connection)
+                    family = self.decisions.selector_family(connection, spec)
                     if family is not None:
                         family_reason = self._family_admission_blocker(connection, family)
                         if family_reason is not None:
@@ -2402,6 +2402,9 @@ class BoardStore:
             )
             if decision is not None:
                 response["decision"] = decision
+                if decision.get("preflightFallback"):
+                    task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
+                    response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
             # Governed import and helper fan-in commit with the result: the validated
             # turn outcome, the assistance request and the workspace seal are one
             # durable fact with the attempt that produced them.
