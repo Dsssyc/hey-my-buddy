@@ -80,6 +80,13 @@ def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest.get("repositoryId") or spec["cwd"]
     identifier = presentation.get("objectiveId")
+    if presentation.get("objectiveOf") is not None:
+        source = connection.execute("SELECT objective_id FROM workflow_runs WHERE run_id=?", (presentation["objectiveOf"],)).fetchone()
+        if source is None:
+            raise BoardError("NOT_FOUND", "objectiveOf names an unknown run")
+        if source["objective_id"] is None:
+            raise BoardError("OBJECTIVE_REQUIRED", "objectiveOf must name a run belonging to a work objective")
+        identifier = source["objective_id"]
     if identifier is not None:
         row = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (identifier,)).fetchone()
         if row is None:

@@ -208,9 +208,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         recovered = self.continue_run(board, view, configuration=CONFIGURATION, reason="New Host selected an installed configuration after shutdown confirmation")
         self.assertEqual(recovered["executionConfiguration"], CONFIGURATION)
 
-    def test_host_configuration_cannot_break_original_partial_constraints(self):
+    def test_host_configuration_cannot_break_locked_partial_constraints(self):
         board = self.board()
-        submitted = self.routed(board, effort="high")
+        submitted = self.routed(board, effort="high", configurationLocked=True)
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host attempted to override the original high effort constraint")
         self.assertEqual(raised.exception.code, "CONFIGURATION_CONFLICT")

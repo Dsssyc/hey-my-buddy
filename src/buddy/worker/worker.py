@@ -758,6 +758,8 @@ class Worker:
         if timed_out and outcome.status == "ok":
             outcome.status = "failed"
             outcome.error = f"the worker deadline of {spec['timeoutSeconds']}s was reached before the adapter finished"
+        from ..partial_outputs import enrich
+        enrich(context, outcome)
         report = outcome.to_report()
         if holder.get('harnessHistory'):
             report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
