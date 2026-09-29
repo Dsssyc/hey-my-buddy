@@ -218,7 +218,9 @@ export function routerAttention(source: Pick<Draft, "configuration" | "profiles"
   const refusal = profile ? routerRefusal(profile, mode) : "已不在目录中";
   return refusal ? {
     profileId: id, router: true, label: labelOf(profile, id),
-    message: `当前${mode === "fast" ? "快速" : "审阅"} Router ${labelOf(profile, id)} ${refusal}：请${routerAction(mode)}。`,
+    message: mode === 'review' && profile?.adapter === 'codex' && profile.available && profile.enabled && !profile.capabilities.includes('decision')
+      ? '审阅 Router 待验证，请展开 Codex 详情重新验证。'
+      : `当前${mode === "fast" ? "快速" : "审阅"} Router ${labelOf(profile, id)} ${refusal}：请${routerAction(mode)}。`,
   } : null;
 }
 

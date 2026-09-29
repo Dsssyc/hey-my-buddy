@@ -367,6 +367,11 @@ def normalize_quota(value: Any) -> dict | None:
         normalized['resetsAt'] = resets
     if value.get("ambiguousLimits") is True:
         normalized["ambiguousLimits"] = True
+    if value.get('allLimitsAvailable') is True:
+        limits = value.get('coveredLimits')
+        if isinstance(limits, list) and len(limits) <= MAX_WINDOWS and all(identifier(limit) for limit in limits):
+            normalized['allLimitsAvailable'] = True
+            normalized['coveredLimits'] = list(dict.fromkeys(limits))
     return normalized
 
 

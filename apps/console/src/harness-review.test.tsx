@@ -5,7 +5,7 @@ import { HarnessReview, parseReviewVerification } from "./HarnessReview";
 import type { ConsoleApi } from "./api";
 import type { HarnessHealth, Snapshot } from "./types";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); sessionStorage.clear(); });
 const row: HarnessHealth = { adapter: "codex", version: "0.159.0", status: "ready", available: true, revision: 3, manualPath: null,
   reviewVerification: { adapter: "codex", version: "0.159.0", platform: "darwin", status: "new-version", implemented: true, verified: false } };
 const snapshot = { csrfToken: "fixture-csrf", configuration: { reviewRouterProfileId: "codex-profile" }, profiles: [{ profileId: "codex-profile",
@@ -31,6 +31,23 @@ describe("explicit review verification", () => {
     await userEvent.click(screen.getByRole("button", { name: "重新验证审阅能力" }));
     await userEvent.click(screen.getByRole("button", { name: "核对本次验证" }));
     expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
+  });
+  it('preserves an unconfirmed identity across folding or reloading the details', async () => {
+    const command = vi.fn().mockRejectedValueOnce(new Error('lost reply')).mockResolvedValueOnce({runId: 'verification-1', status: 'completed'});
+    const first = render(<HarnessReview row={row} snapshot={snapshot} api={{command} as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', {name: '重新验证审阅能力'}));
+    first.unmount();
+    render(<HarnessReview row={row} snapshot={snapshot} api={{command} as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', {name: '核对本次验证'}));
+    expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
+    expect(sessionStorage.getItem('buddy-review-intent:codex')).toBeNull();
+  });
+  it('shows the recorded binding failure with a relevant remedy', () => {
+    const failed = {...row, reviewVerification: {...row.reviewVerification!, status: 'failed' as const,
+      reasonCode: 'HARNESS_REVIEW_BINDING_CHANGED', failedChecks: []}};
+    render(<HarnessReview row={failed} snapshot={snapshot} api={{command: vi.fn()} as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
+    expect(screen.getByText('版本或路径已变化，请刷新后重新验证。')).toBeTruthy();
+    expect(screen.queryByText(/检查 CLI 权限/)).toBeNull();
   });
   it("does not submit while writes are unavailable", async () => {
     const command = vi.fn();

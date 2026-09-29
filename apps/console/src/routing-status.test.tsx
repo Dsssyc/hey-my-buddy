@@ -157,7 +157,7 @@ describe("the one-line routing status", () => {
     renderBar(snapshot(healthy, { profiles: [unverified, alternative] }));
     expect(bar().className).toContain("warning");
     expect(bar().querySelector(".routing-warning")!.textContent)
-      .toContain("当前审阅 Router Test · high 当前 Harness 版本尚未验证只读路由调用");
+      .toContain("审阅 Router 待验证，请展开 Codex 详情重新验证。");
     expect(bar().querySelector(".routing-warning")!.textContent).not.toMatch(/routing:fast|decision/);
   });
 
@@ -166,7 +166,7 @@ describe("the one-line routing status", () => {
     const unverified = { ...router, capabilities: ["execution:codex"] };
     renderBar(snapshot(healthy, { profiles: [unverified] }));
     const warning = bar().querySelector(".routing-warning")!.textContent;
-    expect(warning).toContain("当前审阅 Router Test · high 当前 Harness 版本尚未验证只读路由调用");
+    expect(warning).toContain("审阅 Router 待验证，请展开 Codex 详情重新验证。");
     await user.click(screen.getByRole("button", { name: "详情" }));
     expect(screen.getByText(/审阅 Router 需已验证只读调用/)).toBeTruthy();
   });

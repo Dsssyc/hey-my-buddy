@@ -212,3 +212,23 @@ class BillingQuotaTests(BoardTestCase):
             record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-1),
                 'scope': {'limitId': 'codex'}, 'windows': [{'name': 'primary', 'usedPercent': 42, 'resetsAt': stamp(3600)}]})
             self.assertIsNone(exhausted(db, config))
+
+    def test_multiple_native_pools_restore_only_when_every_reported_pool_is_available(self):
+        from buddy.quota_routing import record
+        from buddy.adapters.codex_protocol import quota_candidate_from_response
+        from buddy.usage import normalize_quota
+        board = self.board()
+        config = {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
+        with board.store.db.write() as db:
+            record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60), 'reachedType': 'usage_limit_reached'})
+            record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60),
+                'scope': {'limitId': 'gpt-6-sol'}, 'reachedType': 'usage_limit_reached'})
+            response = {'rateLimitsByLimitId': {'codex': {'primary': {'usedPercent': 42}},
+                'gpt-6-sol': {'primary': {'usedPercent': None}}}}
+            unknown = normalize_quota(quota_candidate_from_response(response, observed_at=stamp(-10)))
+            record(db, 'codex', {**unknown, 'provider': 'openai'})
+            self.assertIsNotNone(exhausted(db, config))
+            response['rateLimitsByLimitId']['gpt-6-sol']['primary']['usedPercent'] = 20
+            usable = normalize_quota(quota_candidate_from_response(response, observed_at=stamp(-1)))
+            record(db, 'codex', {**usable, 'provider': 'openai'})
+            self.assertIsNone(exhausted(db, config))

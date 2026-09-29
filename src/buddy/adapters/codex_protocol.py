@@ -326,6 +326,18 @@ def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usa
                  "provider": "openai", "windows": []}
     if len(buckets) > 1:
         candidate["ambiguousLimits"] = True
+        from ..usage import classify_quota_code
+        def usable(bucket):
+            if not isinstance(bucket, dict) or ordinary_usage_allowed is False:
+                return False
+            if classify_quota_code(bucket.get('rateLimitReachedType') or '') == 'quota-exceeded':
+                return False
+            windows = [bucket[slot] for slot in _RATE_WINDOW_SLOTS if isinstance(bucket.get(slot), dict)]
+            return bool(windows and all(type(w.get('usedPercent')) in (int, float) and 0 <= w['usedPercent'] < 100
+                for w in windows))
+        if all(usable(bucket) for _limit, bucket in buckets):
+            candidate['allLimitsAvailable'] = True
+            candidate['coveredLimits'] = [limit_id for limit_id, _bucket in buckets if isinstance(limit_id, str)]
     if isinstance(account_id, str) and account_id:
         candidate["nativeAccountId"] = account_id
     if isinstance(ordinary_usage_allowed, bool):

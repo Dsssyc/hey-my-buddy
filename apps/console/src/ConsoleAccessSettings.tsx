@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { ApiError, errorText, parseConsoleAccess } from "./api";
 import type { ConsoleAccess } from "./types";
+import { Help } from './ui';
 
 
 export function ConsoleAccessSettings({ api, csrfToken, access, refresh, unavailable }: {
@@ -32,12 +33,11 @@ export function ConsoleAccessSettings({ api, csrfToken, access, refresh, unavail
   const disabled = unavailable || busy || loggedOut || !current;
   return <section className="panel settings-panel" aria-labelledby="console-access-title" aria-busy={busy}>
     <div className="panel-heading"><h2 id="console-access-title">本机访问</h2>
-      <p>默认直接打开本机固定地址。开启登录后，其他浏览器通过 buddy console 的一次性入口登录。</p></div>
+      <Help label="本机访问说明">默认无需登录；开启后用 buddy console 取得 10 分钟入口，关闭会撤销全部登录。</Help></div>
     {current ? <>
       <label className="check-field"><input type="checkbox" role="switch" checked={current.requireLogin} disabled={disabled}
         onChange={event => void run("console_access_set", { requireLogin: event.target.checked, expectedRevision: current.revision },
           event.target.checked ? "已开启登录，当前窗口已登录。" : "已关闭登录，原有登录均已撤销。")}/><span>需要登录</span></label>
-      <p className="small muted access-note">入口有效期为 10 分钟。登录不会因 30 天未使用而过期；关闭此开关会撤销所有登录。</p>
       {current.requireLogin && <ul className="access-sessions" aria-label="控制台登录">
         {current.sessions.map(session => <li key={session.id}>
           <div><span>{session.current ? "当前登录" : `登录 ${session.id.slice(0, 8)}`}</span>

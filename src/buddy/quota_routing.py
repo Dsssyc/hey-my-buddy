@@ -11,8 +11,12 @@ from .usage import classify_quota_code, identifier
 
 def evidence(quota, *, now=None):
     from .native_observations import _time
-    if not isinstance(quota, dict) or quota.get('ambiguousLimits') is True:
+    if not isinstance(quota, dict):
         return None
+    if quota.get('ambiguousLimits') is True:
+        if quota.get('allLimitsAvailable') is not True:
+            return None
+        quota = {**quota, 'scope': {}, 'windows': [], 'ordinaryUsageAllowed': True, 'reachedType': None, 'balanceZero': False}
     observed, present = _time(quota.get('observedAt')), _time(now or utc_now())
     if observed is None or present is None or observed > present:
         return None
@@ -43,6 +47,11 @@ def evidence(quota, *, now=None):
 
 def record(connection, adapter, quota):
     from .native_observations import _time
+    if quota.get('ambiguousLimits') is True and quota.get('allLimitsAvailable') is True:
+        for limit in [None, *quota.get('coveredLimits', [])]:
+            record(connection, adapter, {**quota, 'ambiguousLimits': False, 'windows': [],
+                'scope': {'limitId': limit}, 'ordinaryUsageAllowed': True, 'balanceZero': False, 'reachedType': None})
+        return
     item = evidence(quota)
     if item is None:
         return

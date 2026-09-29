@@ -44,6 +44,7 @@ export type ReviewVerification = {
   verified: boolean;
   runId?: string;
   reasonCode?: string | null;
+  nativeReasonCode?: string;
   failedChecks?: string[];
   checks?: Record<string, boolean>;
 };

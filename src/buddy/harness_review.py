@@ -45,9 +45,9 @@ def verification_view(connection, adapter, health, *, platform=None):
         record = {"adapter": adapter, "version": version, "platform": platform,
                   "status": "new-version" if prior and version else "unverified",
                   "reasonCode": "HARNESS_REVIEW_VERSION_UNVERIFIED" if prior and version else "HARNESS_REVIEW_UNVERIFIED"}
-    if connection and record.get("status") in ("queued", "running") and record.get("runId"):
+    if connection and record.get("runId"):
         task = connection.execute("SELECT state FROM tasks WHERE task_id=?", (record["runId"],)).fetchone()
-        if task:
+        if task and task[0] in ('queued', 'running', 'cancelling', 'reconciliation-needed'):
             record = {**record, "status": {"queued": "queued", "running": "running", "cancelling": "stopping",
                        "reconciliation-needed": "unconfirmed"}.get(task[0], "failed")}
     return {**record, "implemented": adapter == "codex", "verified": bool(
