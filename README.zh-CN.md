@@ -78,7 +78,7 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 ## 执行与恢复
 
-Codex Host 为每个运行中的委派派生一个只做监控的原生子代理，显式指定 GPT-6 Luna low 等低成本模型与档位。父代理继续独立工作，并负责全部决策与验收；Claude Code 保持后台 Bash 等待。权限、等待上限与前台回退见 [Codex 等待指引](docs/reference/usage.md#waiting-from-codex)。
+Codex Host 为每个运行中的委派派生一个只做监控的原生子代理，显式选择当前 Codex 可用、能执行命令的最便宜模型，并使用最低推理档位。父代理继续独立工作，并负责全部决策与验收；Claude Code 保持后台 Bash 等待。权限、等待上限与前台回退见 [Codex 等待指引](docs/reference/usage.md#waiting-from-codex)。
 
 独立任务默认在一个机器级并发总上限下并行运行（默认 8，可配置 1–32），路由与执行共享该上限；在此之上，每个精确的 adapter/provider/model 家族还有用户设置的上限（每个家族默认 2），各思考档位与使用该模型的路由决策共享同一家族计数。服务会自动启动相应的 worker 池；实际安装可配置不同的总上限，请以 `health.capacity` 为准。工作区重叠和独占资源仍会让冲突任务排队；并行修改代码需要使用不同 worktree。可在[容量配置](docs/reference/operations.md#private-state-and-environment)中调整上限，并用 `health.capacity` 查看总量与各模型占用。
 

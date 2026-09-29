@@ -256,6 +256,51 @@ describe("objective timeline rendering", () => {
     view.unmount();
   });
 
+  it("offers exactly one idle-fold toggle whose label follows the fold state", async () => {
+    const user = userEvent.setup();
+    const view = render(<Harness timeline={objectiveTimelineFixture()} />);
+    // name is anchored, so a second 展开全部空闲/折叠空闲 button makes getByRole throw.
+    const toggle = () => screen.getByRole("button", { name: /^(展开全部空闲|折叠空闲)$/ });
+    expect(toggle().textContent).toBe("展开全部空闲");
+    await user.click(toggle());
+    expect(screen.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
+    expect(toggle().textContent).toBe("折叠空闲");
+    await user.click(toggle());
+    expect(screen.getAllByRole("button", { name: /已折叠，展开/ }).length).toBe(2);
+    expect(toggle().textContent).toBe("展开全部空闲");
+    view.unmount();
+  });
+
+  it("keeps only list-appropriate controls in the toolbar while the list view is on", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Harness timeline={objectiveTimelineFixture()} />);
+    const toolbar = () => within(container.querySelector(".tl-toolbar") as HTMLElement);
+    const idleToggle = () => toolbar().queryByRole("button", { name: /^(展开全部空闲|折叠空闲)$/ });
+    expect(idleToggle()).toBeTruthy();
+    expect(toolbar().getByRole("group", { name: "时间轴缩放" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "列表" }));
+    expect(idleToggle()).toBeNull();
+    expect(toolbar().queryByRole("group", { name: "时间轴缩放" })).toBeNull();
+    // Switching back to the timeline restores every timeline-only control.
+    await user.click(screen.getByRole("button", { name: "时间轴" }));
+    expect(idleToggle()).toBeTruthy();
+    expect(toolbar().getByRole("group", { name: "时间轴缩放" })).toBeTruthy();
+  });
+
+  it("keeps the timeline/list switch as the toolbar's last control in both views", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Harness timeline={objectiveTimelineFixture()} />);
+    const lastControl = () => {
+      const controls = [...(container.querySelector(".tl-toolbar") as HTMLElement).querySelectorAll("button")];
+      return controls[controls.length - 1]!;
+    };
+    expect(lastControl().closest(".timeline-view-switch")).toBeTruthy();
+    expect(lastControl().textContent).toBe("列表");
+    await user.click(screen.getByRole("button", { name: "列表" }));
+    expect(lastControl().closest(".timeline-view-switch")).toBeTruthy();
+    expect(lastControl().textContent).toBe("列表");
+  });
+
   it("refuses automatic folding when the read is truncated or filtered and says so in the banner", () => {
     const truncated = objectiveTimelineFixture({
       totals: { rows: 6, spans: 20, events: 12, allRows: 6 },

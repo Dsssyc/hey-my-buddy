@@ -78,7 +78,7 @@ Python freezes legal routing candidates and validates answer bounds; unhealthy h
 
 ## Execution and recovery
 
-Codex Hosts use one monitoring-only native subagent per running delegation, with an explicit inexpensive model and effort such as GPT-6 Luna low. The parent continues independent work and owns every decision and acceptance; Claude Code keeps its background Bash wait. See [waiting from Codex](docs/reference/usage.md#waiting-from-codex) for permissions, wait limits and foreground fallback.
+Codex Hosts use one monitoring-only native subagent per running delegation, explicitly selecting the cheapest model currently available to Codex that can execute commands, at the lowest reasoning effort. The parent continues independent work and owns every decision and acceptance; Claude Code keeps its background Bash wait. See [waiting from Codex](docs/reference/usage.md#waiting-from-codex) for permissions, wait limits and foreground fallback.
 
 Independent work runs in parallel by default under one machine-wide concurrent-attempt ceiling (default 8, configurable 1–32) shared by routing and execution; on top of it, each exact adapter/provider/model family keeps a user-set limit (default 2 per family), and effort variants plus the routing decisions using that model share its counter. The daemon starts the corresponding worker pool automatically; a running installation may be configured with a different ceiling, so read `health.capacity` rather than assuming. Workspace overlap and exclusive resources still serialize conflicting work; parallel editors need separate worktrees. See [capacity settings](docs/reference/operations.md#private-state-and-environment) and inspect `health.capacity` for the total and per-model occupancy.
 

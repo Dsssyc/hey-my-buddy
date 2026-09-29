@@ -426,6 +426,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const eligibleGaps = useMemo(() =>
     (scaled?.gaps ?? []).filter(gap => gap.endMs - gap.startMs > TIMELINE_FOLD_THRESHOLD_MS),
     [scaled]);
+  // One toolbar toggle drives every eligible idle gap: it offers 展开全部空闲
+  // while any of them is still folded and 折叠空闲 once all of them are open.
+  const allIdleExpanded = eligibleGaps.length > 0
+    && eligibleGaps.every(gap => props.expandedGapIds.has(gap.id));
 
   const chronology = useMemo(() => {
     if (!timeline || !layout) return [];
@@ -979,17 +983,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       </div>
       </Popover>}
       <div className="tl-tools">
-        {canFold && eligibleGaps.length > 0 && <button type="button" className="button small-button"
-          aria-pressed={eligibleGaps.every(gap => props.expandedGapIds.has(gap.id))}
-          onClick={() => props.onSetExpanded(new Set(eligibleGaps.map(gap => gap.id)))}>展开全部空闲</button>}
-        {canFold && eligibleGaps.length > 0 && props.expandedGapIds.size > 0 && <button type="button" className="button small-button"
-          onClick={() => props.onSetExpanded(new Set())}>折叠空闲</button>}
-        <div className="timeline-view-switch" role="group" aria-label="时间轴视图">
-          <button ref={listToggleRef} type="button" className="button small-button list-toggle" aria-pressed={!asList}
-            onClick={() => { setAsList(false); setLegendOpen(false); }}>时间轴</button>
-          <button type="button" className="button small-button list-toggle" aria-pressed={asList}
-            onClick={() => { setAsList(true); setLegendOpen(false); }}>列表</button>
-        </div>
+        {!asList && canFold && eligibleGaps.length > 0 && <button type="button" className="button small-button idle-fold-toggle"
+          onClick={() => props.onSetExpanded(allIdleExpanded ? new Set() : new Set(eligibleGaps.map(gap => gap.id)))}>
+          {allIdleExpanded ? "折叠空闲" : "展开全部空闲"}</button>}
         {!asList && <div className="tl-zoom" role="group" aria-label="时间轴缩放">
           <button type="button" className="button small-button" aria-label="缩小" disabled={zoomAtFit}
             title={zoomAtFit ? "已是适应窗口的最小刻度" : "缩小时间轴（键盘 -）"} onClick={zoomOut}>−</button>
@@ -1003,6 +999,13 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
           读取失败 · 显示 {clockTime(timeline.observedAt)} 的数据
         </span>}
         {stale && <button type="button" className="button small-button" onClick={props.onRetry}>重试读取</button>}
+        {/* The view switch stays the toolbar's last control, at the far right. */}
+        <div className="timeline-view-switch" role="group" aria-label="时间轴视图">
+          <button ref={listToggleRef} type="button" className="button small-button list-toggle" aria-pressed={!asList}
+            onClick={() => { setAsList(false); setLegendOpen(false); }}>时间轴</button>
+          <button type="button" className="button small-button list-toggle" aria-pressed={asList}
+            onClick={() => { setAsList(true); setLegendOpen(false); }}>列表</button>
+        </div>
       </div>
     </div>
     {timeline && truncation.length > 0 && <div className="banner trunc-banner" role="status">
