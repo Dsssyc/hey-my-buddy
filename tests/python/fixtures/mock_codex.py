@@ -38,7 +38,10 @@ def outcome(case):
     if case == "completed-request":
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
                    "expectedArtifacts": [], "acceptance": "Already complete"}
-    return {"disposition": disposition, "summary": "fixture work completed", "remaining": [],
+    summary = "fixture work completed"
+    if case == "long-summary-citation":
+        summary = "调研结论。" * 600 + "\n<oai-mem-citation>reference</oai-mem-citation>"
+    return {"disposition": disposition, "summary": summary, "remaining": [],
             "decisions": [], "artifacts": [], "request": request}
 
 

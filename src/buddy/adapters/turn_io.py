@@ -160,8 +160,12 @@ def validate_outcome(outcome: object) -> str | None:
         return isinstance(value, str) and bool(value.strip()) and "\0" not in value and len(value.encode()) <= limit
     def strings(value: object) -> bool:
         return isinstance(value, list) and len(value) <= 32 and all(text(x, 4096) for x in value)
-    if outcome["disposition"] not in ("completed", "assistance", "attention") or not text(outcome["summary"]):
+    if outcome["disposition"] not in ("completed", "assistance", "attention"):
         return "the turn outcome requires a valid disposition and nonblank summary"
+    # A report can occupy the bounded outcome. Request text and references keep
+    # their smaller bounds; JSON framing and all other fields still count below.
+    if not text(outcome["summary"], MAX_OUTCOME_BYTES):
+        return "the turn summary is blank, contains NUL or exceeds its byte bound"
     if not strings(outcome["remaining"]) or not strings(outcome["decisions"]):
         return "remaining and decisions must be bounded string arrays"
     artifacts = outcome["artifacts"]

@@ -1,4 +1,5 @@
 """Codex transport deadline boundary checks; no model network or shared state is used."""
+import json
 import math
 import subprocess
 import sys
@@ -6,8 +7,35 @@ import threading
 import time
 import unittest
 
-from buddy.adapters.codex_protocol import CodexProtocolError, Connection
+from buddy.adapters.codex_protocol import CodexProtocolError, Connection, parse_outcome
 from buddy.adapters.codex_runner import execution_deadline
+
+
+class StructuredOutcomeTests(unittest.TestCase):
+    def outcome(self, summary):
+        return {"outcome": {"disposition": "completed", "summary": summary,
+                            "remaining": [], "decisions": [], "artifacts": [], "request": None}}
+
+    def test_long_utf8_report_with_memory_citation_is_preserved(self):
+        # The reported incident was valid JSON: 8,848 UTF-8 bytes in summary,
+        # with its citation inside the string, not after the JSON document.
+        citation = "\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[context]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>"
+        summary = "调研结论。" * 600 + citation
+        self.assertGreater(len(summary.encode()), 8000)
+        value = self.outcome(summary)
+        self.assertEqual(parse_outcome(json.dumps(value, ensure_ascii=False)), value["outcome"])
+
+    def test_total_outcome_bound_still_rejects_large_reports(self):
+        with self.assertRaisesRegex(ValueError, "byte bound"):
+            parse_outcome(json.dumps(self.outcome("研" * 22000), ensure_ascii=False))
+
+    def test_memory_markup_does_not_relax_the_json_contract(self):
+        value = json.dumps(self.outcome("valid summary"))
+        for raw in (value + "<oai-mem-citation>extra</oai-mem-citation>",
+                    value.replace('"summary":', '"summary":"duplicate", "summary":'),
+                    value.replace('"request": null', '"request": {}')):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                parse_outcome(raw)
 
 
 class UnlimitedDeadlineTests(unittest.TestCase):

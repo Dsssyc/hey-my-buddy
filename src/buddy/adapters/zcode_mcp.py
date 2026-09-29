@@ -51,7 +51,8 @@ OUTCOME_SCHEMA = {
     "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
     "properties": {
         "disposition": {"type": "string", "enum": ["completed", "assistance", "attention"]},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 8000},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 65536,
+                    "description": "The entire serialized outcome, including this report, must fit in 64 KiB of UTF-8."},
         "remaining": STRINGS, "decisions": STRINGS,
         "artifacts": {"type": "array", "maxItems": 32, "items": {"anyOf": [{"type": "string"}, {"type": "object", "additionalProperties": True}]}},
         "request": {"description": "Required for every outcome. Use null when disposition is completed; otherwise provide the complete assistance or attention request.", "anyOf": [

@@ -64,7 +64,7 @@ export const TURN_OUTCOME_SCHEMA = {
   required: ['disposition', 'summary', 'remaining', 'decisions', 'artifacts', 'request'],
   properties: {
     disposition: { type: 'string', enum: ['completed', 'assistance', 'attention'] },
-    summary: { type: 'string', description: 'Nonblank summary, at most 8000 UTF-8 bytes.' },
+    summary: { type: 'string', description: 'Nonblank report; the entire serialized outcome must fit in 64 KiB of UTF-8.' },
     remaining: stringArray, decisions: stringArray,
     artifacts: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] }, description: 'At most 32 file/commit references; these are claims for the Host to verify.' },
     request: { oneOf: [
@@ -81,7 +81,7 @@ export const TURN_OUTCOME_SCHEMA = {
 export function validateTurnOutcome(outcome) {
   fields(outcome, ['disposition', 'summary', 'remaining', 'decisions', 'artifacts', 'request'], [], 'turn outcome');
   if (!['completed', 'assistance', 'attention'].includes(outcome.disposition)) throw new Error('invalid turn disposition');
-  text(outcome.summary, 'summary');
+  text(outcome.summary, 'summary', TURN_LIMITS.outcomeBytes);
   strings(outcome.remaining, 'remaining');
   strings(outcome.decisions, 'decisions');
   if (!Array.isArray(outcome.artifacts) || outcome.artifacts.length > TURN_LIMITS.items) throw new Error('artifacts must contain at most 32 references');

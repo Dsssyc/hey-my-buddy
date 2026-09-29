@@ -134,7 +134,7 @@ def _outcome_branch(dispositions, request_schema):
         "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
         "properties": {
             "disposition": {"type": "string", "enum": dispositions},
-            "summary": {"type": "string"},
+            "summary": {"type": "string", "description": "Nonblank report; the entire serialized outcome must fit in 64 KiB of UTF-8. Keep requests and references concise."},
             "remaining": {"type": "array", "items": {"type": "string"}},
             "decisions": {"type": "array", "items": {"type": "string"}},
             "artifacts": {"type": "array", "items": {"type": "string"}},

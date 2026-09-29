@@ -421,13 +421,15 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             if isinstance(item, dict) and isinstance(item.get("text"), str):
                 try:
                     outcome = parse_outcome(item["text"])
-                except (ValueError, RecursionError):
-                    pass
+                except (ValueError, RecursionError) as error:
+                    # Preserve the validator's bounded reason, never raw output.
+                    result["outcomeValidationError"] = str(error)[:500]
             controller_attention = correlated is not None and (outcome is None or outcome["disposition"] == "completed")
             if controller_attention:
                 outcome = _attention_outcome(correlated["method"])
             elif outcome is None:
-                raise CodexProtocolError("invalid-result", "the native root turn has no strict structured final outcome")
+                reason = result.get("outcomeValidationError", "no completed final message")
+                raise CodexProtocolError("invalid-result", "the native root turn has no strict structured final outcome: " + reason)
             provenance = {"adapter": "codex", "nativeThreadId": thread_id,
                           "nativeTurnId": turn_id, "finalItemId": item.get("id") if isinstance(item, dict) else None,
                           "turnEnd": "completed", "outputSchemaValidated": not controller_attention,
