@@ -28,7 +28,8 @@ from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 from .zcode_config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
 from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES,
                              MAX_INQUIRY_ID_BYTES, MAX_QUESTION_BYTES, ActivityProjection, NativeConnection,
-                             NativeError, RootTurnEvidence, decode_json, read_shared_snapshot)
+                             NativeError, RootTurnEvidence, ZcodeAttemptUsage, decode_json, quota_native_code,
+                             read_shared_snapshot)
 
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
@@ -931,6 +932,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     session_id = None
     connection = None
     inquiry_bridge: InquiryBridge | None = None
+    attempt_usage: ZcodeAttemptUsage | None = None
     try:
         connection = NativeConnection(process, deadline, cancelled, no_tools=bool(control.get("noToolRequest")))
         if control.get("noToolRequest"):
@@ -1012,6 +1014,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id)) if inquiry is not None else None,
             )
             projection = ActivityProjection(session_id)
+            attempt_usage = ZcodeAttemptUsage(session_id, resumed=mode == "native-session")
             # The real helper owns validation, atomic replacement and throttling;
             # its state lives for the whole controller so same-phase updates are
             # coalesced instead of rewriting the sidecar for every token event.
@@ -1038,6 +1041,10 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
 
             def observe(message: dict, ordinal: int) -> None:
                 evidence.observe(message, ordinal)
+                if attempt_usage is not None:
+                    # Attempt usage is observed next to the root-turn evidence; a
+                    # foreign session or an unstarted turn contributes nothing.
+                    attempt_usage.observe(message, evidence.turn_id)
                 projection.note(message, ordinal)
                 if inquiry_bridge is not None:
                     inquiry_bridge.note_event(message, projection.phase)
@@ -1053,6 +1060,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             prompt = governed_prompt(Path(control["taskFile"]).read_text(), turn_input, finish_tool,
                                      checkpoint_tool=checkpoint_tool if inquiry is not None else None,
                                      answer_tool=answer_tool if inquiry is not None else None)
+            # The pre-model cursor is a bounded, optional read: it can never fail
+            # or delay the turn, and without it no message is ever attributed.
+            attempt_usage.capture_baseline(connection)
             result["modelStarted"] = True
             accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id, "content": prompt})
             if accepted.get("accepted") is not True or accepted.get("sessionId") != session_id:
@@ -1061,6 +1071,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 inquiry_bridge.activate(session_id)
             while not evidence.settled_ordinal:
                 connection.pump()
+            # The settlement read is also bounded and optional; the root turn is
+            # already settled, so nothing here may change its result.
+            attempt_usage.capture_final(connection)
             if inquiry_bridge is not None:
                 # Stop accepting observations the instant the root turn settled:
                 # an idle or finished agent is never woken for an inquiry.
@@ -1092,11 +1105,28 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         failure = getattr(error, "failure", None)
         if isinstance(failure, dict):
             result["nativeFailure"] = failure
+            # A structured native failure code that means quota exhaustion is
+            # published as the explicit quota reason; provider prose is never read
+            # and no retry or probe is attempted.
+            native_code = quota_native_code(failure)
+            if native_code is not None:
+                result["quotaFailure"] = {"nativeCode": native_code, "source": "zcode/session-turn-failed",
+                                          "observedAt": _now()}
+        # A failed turn still retains its native observations: the bounded read is
+        # optional, so it can never turn this failure into another one.
+        if attempt_usage is not None and connection is not None:
+            attempt_usage.capture_final(connection)
         record = None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         result.update(status="error", code="invalid-native-result", error="the native execution returned invalid or incomplete data")
         record = None
     finally:
+        if attempt_usage is not None:
+            # ADR-018 items 22/23 and the retained root assistant text: raw native
+            # observations for every path, including a quota or process failure. A
+            # value the native records never proved stays null.
+            result["tokenUsage"] = attempt_usage.raw_usage()
+            result["lastAssistantMessage"] = attempt_usage.last_assistant_message
         if inquiry_bridge is not None:
             # Closing before the process disappears keeps an after-end question
             # honest instead of leaving a dangling observation.

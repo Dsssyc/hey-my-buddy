@@ -17,9 +17,35 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .turn_io import MAX_OUTCOME_BYTES, canonical_json, validate_outcome
+from .native_observations import bound_native_text, native_counter
 from ..activity import MAX_SESSION_ID, MAX_TOOL_NAME, MAX_WAITING_REASON, PHASES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+
+#: Bound on the pre-model ``session/messages`` cursor read: enough to prove which
+#: messages already existed, never an unbounded history read.
+MAX_BASELINE_MESSAGES = 32
+#: Bound on the post-settlement ``session/messages`` page. A page at this bound is
+#: treated as possibly truncated, so a long turn is published as partial.
+MAX_MESSAGE_PAGE = 64
+#: Bound on the deduplicated root ``usage.delta`` identities of one attempt.
+MAX_USAGE_DELTA_RECORDS = 4096
+#: Every optional native metadata read gets its own wall-clock budget at most this
+#: long and always restores the main execution deadline afterwards.
+NATIVE_METADATA_TIMEOUT_SECONDS = 2.0
+
+#: The counter set of one native ``usage.delta`` telemetry event. The native GV
+#: function computes ``total = input + output`` with ``input`` already including
+#: cached input, so ``cacheReadTokens``/``cacheWriteTokens`` are informational and
+#: are never added to the input total a second time.
+USAGE_DELTA_COUNTERS = ("inputTokens", "outputTokens", "totalTokens", "reasoningTokens",
+                        "cacheReadTokens", "cacheWriteTokens")
+
+#: Native structured fields a ``turn.failed`` attribution may carry a quota cause
+#: on, most specific first. Only a code that classifies as a quota/rate failure is
+#: used; provider prose is never read.
+QUOTA_FAILURE_CODE_FIELDS = ("code", "errorType")
+QUOTA_FAILURE_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
 
 #: Shared inquiry bounds, identical to the board and the DSH bridge. The MCP
 #: tools, the controller's verification and the observation bridge all enforce
@@ -448,6 +474,292 @@ def decode_native_failure(payload: object) -> dict | None:
                "attribution": attribution}
     failure["summary"] = _failure_summary(failure) or "no structured failure attribution was exported"
     return failure
+
+
+def quota_native_code(failure: dict) -> str | None:
+    """The first native structured code of a ``turn.failed`` that means quota.
+
+    The whitelisted attribution is scanned most-specific first; only a value the
+    canonical classifier recognises as a quota or rate-limit failure is returned,
+    so an unrelated failure (a context-window or transport error) never becomes a
+    quota reason and no provider prose is ever read.
+    """
+    from ..usage import classify_quota_code
+    attribution = failure.get("attribution") if isinstance(failure.get("attribution"), dict) else {}
+    candidates = [failure.get(key) for key in QUOTA_FAILURE_CODE_FIELDS]
+    candidates.extend(attribution.get(key) for key in QUOTA_FAILURE_ATTRIBUTION_FIELDS)
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate and classify_quota_code(candidate) != "unknown":
+            return candidate
+    return None
+
+
+def optional_native_call(connection, method: str, params: dict,
+                         *, timeout: float = NATIVE_METADATA_TIMEOUT_SECONDS) -> dict | None:
+    """One optional native metadata read with its own bounded wall-clock budget.
+
+    Native usage and message metadata must never change the business result or
+    hang the execution: a refused, malformed or timed-out read returns ``None``,
+    and the main execution deadline is restored immediately afterwards. The read
+    is bounded by the smaller of its own budget and the main deadline, so it can
+    never extend the execution either.
+    """
+    original = connection.deadline
+    connection.deadline = min(original, time.monotonic() + max(0.0, timeout))
+    try:
+        return connection.call(method, params)
+    except (NativeError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        # An optional metadata read is never allowed to become the turn's result.
+        return None
+    finally:
+        connection.deadline = original
+
+
+def _bounded_message_page(response: object, *, session_id: str, limit: int) -> list[dict] | None:
+    """One validated ``session/messages`` page, or ``None`` when unusable.
+
+    Every entry must belong to the root session and carry a bounded string
+    ``messageId``; a page larger than the requested bound is refused rather than
+    trimmed, because the native server honours its own limit.
+    """
+    if not isinstance(response, dict):
+        return None
+    page = response.get("messages")
+    if not isinstance(page, list) or len(page) > limit:
+        return None
+    for item in page:
+        info = item.get("info") if isinstance(item, dict) else None
+        if not isinstance(info, dict) or info.get("sessionId") != session_id:
+            return None
+        message_id = info.get("messageId")
+        if not isinstance(message_id, str) or not message_id or len(message_id) > 128:
+            return None
+    return page
+
+
+def _root_assistant_tokens(message: dict) -> dict | None:
+    """The native per-message token counters of one root assistant message.
+
+    The native ``tokens`` object reports ``input`` already including cached input
+    (the native GV rule), with ``cache.read``/``cache.write`` informational. All
+    counters are required by the exported schema; any missing or invalid counter
+    makes this message unusable instead of contributing zeros.
+    """
+    info = message.get("info")
+    tokens = info.get("tokens") if isinstance(info, dict) else None
+    if not isinstance(tokens, dict):
+        return None
+    cache = tokens.get("cache")
+    if not isinstance(cache, dict):
+        return None
+    counters = {"input": native_counter(tokens.get("input")), "output": native_counter(tokens.get("output")),
+                "reasoning": native_counter(tokens.get("reasoning")),
+                "read": native_counter(cache.get("read")), "write": native_counter(cache.get("write"))}
+    if any(value is None for value in counters.values()):
+        return None
+    return counters
+
+
+def _root_assistant_text(message: dict) -> dict | None:
+    """One root assistant message's own text parts, bounded, never reasoning/tool."""
+    info = message.get("info")
+    if not isinstance(info, dict):
+        return None
+    message_id = info.get("messageId")
+    if not isinstance(message_id, str) or not message_id:
+        return None
+    parts = message.get("parts")
+    if not isinstance(parts, list) or len(parts) > 256:
+        return None
+    texts = []
+    for part in parts:
+        if (not isinstance(part, dict) or part.get("type") != "text"
+                or part.get("messageId") != message_id or part.get("sessionId") != info.get("sessionId")
+                or not isinstance(part.get("text"), str) or not part["text"].strip()):
+            continue
+        texts.append(part["text"])
+    if not texts:
+        return None
+    return bound_native_text("\n".join(texts), source_id=message_id)
+
+
+class ZcodeAttemptUsage:
+    """Attempt-scoped ZCode usage from root-turn telemetry and boundary reads.
+
+    Two native sources are used, in this order of preference:
+
+    1. ``session/messages`` read at both the pre-model boundary and the settlement
+       (or failure) boundary. Only messages strictly after the pre-model cursor,
+       belonging to this root session and carrying a non-empty native
+       ``parentMessageId`` may contribute. The cursor must not reappear in the
+       second page — the native server returns the whole conversation when it
+       cannot resolve it — so a resumed session never re-counts earlier turns.
+    2. The ``v4/telemetry/event`` ``usage.delta`` notifications of the already
+       started root turn, deduplicated by native event identity. The stream is not
+       a durable record, so this fallback is always published as partial.
+
+    Nothing is estimated: a counter no contributing record reported stays absent,
+    a contradictory replay makes the delta sum unknown, and a failed or missing
+    baseline makes the message sum unprovable instead of "all messages".
+    """
+
+    def __init__(self, session_id: str, *, resumed: bool):
+        self.session_id = session_id
+        self.resumed = resumed
+        self.delta_records: dict[str, dict] = {}
+        self.delta_conflict = False
+        self.baseline_ids: frozenset[str] = frozenset()
+        self.baseline_ready = False
+        self.baseline_last: str | None = None
+        self.message_counters: dict | None = None
+        self.message_records = 0
+        self.message_truncated = False
+        self.message_complete = False
+        self.last_assistant_message: dict | None = None
+        self.child_activity = False
+
+    # -- telemetry -----------------------------------------------------------
+    def observe(self, message: dict, turn_id: str | None) -> None:
+        """Fold one native notification into the attempt's observations."""
+        method = message.get("method") if isinstance(message, dict) else None
+        params = message.get("params") if isinstance(message, dict) else None
+        if method == "v4/telemetry/event":
+            self._observe_usage_delta(params, turn_id)
+            return
+        if method == "session/event" and isinstance(params, dict):
+            data = params.get("payload")
+            if isinstance(data, dict) and any(
+                    data.get(key) for key in ("source", "parentToolCallId", "childSessionId",
+                                              "childToolCallId", "agentId", "background")):
+                # Child/subagent work lives in another native session; its usage is
+                # never mixed into this root attempt, and its presence makes the
+                # root-only sum partial.
+                self.child_activity = True
+
+    def _observe_usage_delta(self, params: object, turn_id: object) -> None:
+        if not isinstance(params, dict) or params.get("kind") != "usage.delta":
+            return
+        if not isinstance(turn_id, str) or not turn_id:
+            # The delta must belong to an already started root turn.
+            return
+        if type(params.get("version")) is not int or params["version"] != 1:
+            return
+        if params.get("sessionId") != self.session_id:
+            return
+        native_turn = params.get("turnId")
+        if isinstance(native_turn, str) and native_turn != turn_id:
+            return
+        event_id = params.get("eventId")
+        if isinstance(event_id, str) and 0 < len(event_id) <= 128:
+            key = "event:" + event_id
+        else:
+            sequence = params.get("eventSeq")
+            if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+                return
+            key = f"seq:{sequence}"
+        counters = {}
+        for name in USAGE_DELTA_COUNTERS:
+            value = native_counter(params.get(name))
+            if value is None:
+                return
+            counters[name] = value
+        existing = self.delta_records.get(key)
+        if existing is not None:
+            if existing != counters:
+                # One native identity with two different payloads cannot be summed.
+                self.delta_conflict = True
+            return
+        if len(self.delta_records) >= MAX_USAGE_DELTA_RECORDS:
+            return
+        self.delta_records[key] = counters
+
+    def delta_usage(self) -> dict | None:
+        if self.delta_conflict or not self.delta_records:
+            return None
+        totals = {name: 0 for name in USAGE_DELTA_COUNTERS}
+        for counters in self.delta_records.values():
+            for name, value in counters.items():
+                totals[name] += value
+        return {"source": "zcode/v4-telemetry-usage-delta", "scope": "attempt",
+                "inputBasis": "includes-cached",
+                "inputTokens": totals["inputTokens"], "outputTokens": totals["outputTokens"],
+                "cachedInputTokens": totals["cacheReadTokens"] + totals["cacheWriteTokens"],
+                "reasoningOutputTokens": totals["reasoningTokens"],
+                "nativeRecords": len(self.delta_records), "completeness": "partial"}
+
+    # -- message boundary reads ---------------------------------------------
+    def capture_baseline(self, connection) -> None:
+        """One bounded pre-model read of the messages that already existed."""
+        response = optional_native_call(connection, "session/messages",
+                                        {"sessionId": self.session_id, "limit": MAX_BASELINE_MESSAGES})
+        page = _bounded_message_page(response, session_id=self.session_id, limit=MAX_BASELINE_MESSAGES)
+        if page is None:
+            return
+        self.baseline_ids = frozenset(item["info"]["messageId"] for item in page)
+        self.baseline_last = page[-1]["info"]["messageId"] if page else None
+        self.baseline_ready = True
+
+    def capture_final(self, connection) -> None:
+        """One bounded post-settlement read of this attempt's new root messages."""
+        if not self.baseline_ready or (self.baseline_last is None and self.resumed):
+            # Without a provable cursor nothing may be attributed to this attempt:
+            # a resumed session whose read lost its cursor would otherwise be
+            # counted from its beginning.
+            return
+        params = {"sessionId": self.session_id, "limit": MAX_MESSAGE_PAGE}
+        if self.baseline_last is not None:
+            params["afterMessageId"] = self.baseline_last
+        response = optional_native_call(connection, "session/messages", params)
+        page = _bounded_message_page(response, session_id=self.session_id, limit=MAX_MESSAGE_PAGE)
+        if page is None:
+            return
+        if any(item["info"]["messageId"] in self.baseline_ids for item in page):
+            # The native server could not resolve the cursor and returned the
+            # whole conversation; no entry in this page is provably new.
+            return
+        self.message_truncated = len(page) >= MAX_MESSAGE_PAGE
+        new_messages = [item for item in page
+                        if item["info"].get("role") == "assistant"
+                        and isinstance(item["info"].get("parentMessageId"), str)
+                        and item["info"]["parentMessageId"].strip()]
+        totals = {"input": 0, "output": 0, "reasoning": 0, "read": 0, "write": 0}
+        contributing = 0
+        usable = True
+        for item in new_messages:
+            # The retained text is evidence of its own: a message whose token
+            # counters are unusable still leaves its root text for a continuation.
+            retained = _root_assistant_text(item)
+            if retained is not None:
+                self.last_assistant_message = retained
+            counters = _root_assistant_tokens(item)
+            if counters is None:
+                # A root assistant message without usable native counters means the
+                # root-only sum is a lower bound, not a total.
+                usable = False
+                continue
+            contributing += 1
+            for key in totals:
+                totals[key] += counters[key]
+        if contributing:
+            self.message_counters = totals
+            self.message_records = contributing
+            self.message_complete = usable and not self.message_truncated and not self.child_activity
+
+    def message_usage(self) -> dict | None:
+        if self.message_counters is None:
+            return None
+        totals = self.message_counters
+        return {"source": "zcode/session-messages-root-assistant-tokens", "scope": "attempt",
+                "inputBasis": "includes-cached",
+                "inputTokens": totals["input"], "outputTokens": totals["output"],
+                "cachedInputTokens": totals["read"] + totals["write"],
+                "reasoningOutputTokens": totals["reasoning"],
+                "nativeRecords": self.message_records,
+                "completeness": "complete" if self.message_complete else "partial"}
+
+    def raw_usage(self) -> dict | None:
+        """The strictly bound message tokens when provable, else the delta fallback."""
+        return self.message_usage() or self.delta_usage()
 
 
 def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:

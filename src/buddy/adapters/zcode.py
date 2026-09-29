@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from ..errors import BoardError
+from .. import usage
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
 from . import turn_io
@@ -123,6 +124,15 @@ class ZcodeAdapter(Adapter):
         shutdown = bool(payload and payload.get("processState", {}).get("shutdownConfirmed") is True and handle.shutdown_confirmed())
         if payload is None:
             payload = {"status": "invalid-result", "error": "the ZCode controller produced no complete JSON result"}
+        # ADR-018 items 22/23 and the retained root assistant text. ZCode exposes
+        # no quota-window interface, so ``quota`` is honestly null unless the
+        # native records prove one; the canonical shapes come from ``buddy.usage``
+        # and a value the native records never proved stays null.
+        payload["tokenUsage"] = usage.normalize_token_usage(payload.get("tokenUsage"))
+        payload["quota"] = usage.normalize_quota(payload.get("quota"))
+        payload["quotaFailure"] = usage.normalize_quota_failure(payload.get("quotaFailure"))
+        payload["lastAssistantMessage"] = usage.normalize_last_assistant_message(
+            payload.get("lastAssistantMessage"), source="zcode/session-root-assistant-message")
         status = "cancelled" if (handle.cancel_requested or payload.get("status") == "cancelled") and shutdown else "failed"
         if not handle.cancel_requested and exit_code == 0 and payload.get("status") == "ok" and shutdown:
             status = "ok"

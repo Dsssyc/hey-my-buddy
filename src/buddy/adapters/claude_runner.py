@@ -460,6 +460,13 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     finally:
         if evidence is not None:
             result["rateLimitObservations"] = dict(sorted(evidence.rate_limits.items()))
+            # ADR-018 items 22/23 and the retained root assistant text: raw native
+            # observations for every path, including a quota rejection, a deadline
+            # or a process failure. The adapter normalizes them; a value that the
+            # native stream never reported stays null instead of being estimated.
+            result["tokenUsage"] = evidence.token_usage()
+            result["quota"] = evidence.quota_candidate()
+            result["lastAssistantMessage"] = evidence.last_assistant_message()
         if process is not None:
             try:
                 process.stdin.close()

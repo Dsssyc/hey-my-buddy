@@ -17,8 +17,10 @@ import queue
 import select
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .native_observations import bound_native_text, native_counter
 from .turn_io import canonical_json
 
 _WINDOWS_PIPE = os.name == "nt"
@@ -27,6 +29,15 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_PENDING_RESPONSES = 16
 MAX_RATE_LIMIT_TYPES = 16
 MAX_BACKGROUND_TASKS = 32
+
+#: The per-window view of the native unified rate-limit response headers. Each
+#: member is optional and only natively reported values are carried.
+UNIFIED_WINDOW_NAMES = ("five_hour", "seven_day", "seven_day_overage_included")
+#: Bound on the canonical quota windows one observation may publish.
+MAX_QUOTA_WINDOWS = 8
+#: Bound on the deduplicated native assistant usage records kept for the fallback
+#: sum of one attempt.
+MAX_ASSISTANT_USAGE_RECORDS = 256
 
 #: The exact closed set of statuses that settle one reported native background
 # task or workflow. Substring matching would wrongly settle "incomplete" or
@@ -316,6 +327,39 @@ def rate_limit_observation(frame: dict) -> tuple[str, dict] | None:
     return rate_limit_type, observation
 
 
+def rate_limit_windows(frame: dict) -> dict[str, dict]:
+    """The native ``unifiedWindows`` fractions of one rate-limit event.
+
+    The native schema tracks the 5-hour, weekly and overage-included weekly
+    windows on every observation; ``utilization`` is the fraction of the window
+    used and ``resetsAt`` is Unix epoch seconds. Only the three named windows are
+    read, each value is re-validated, and an absent or non-numeric entry stays
+    absent instead of becoming zero.
+    """
+    info = frame.get("rate_limit_info")
+    raw = info.get("unifiedWindows") if isinstance(info, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    windows: dict[str, dict] = {}
+    for name in UNIFIED_WINDOW_NAMES:
+        item = raw.get(name)
+        if not isinstance(item, dict):
+            continue
+        utilization = item.get("utilization")
+        if isinstance(utilization, bool) or not isinstance(utilization, (int, float)) or not math.isfinite(utilization):
+            continue
+        window = {"utilization": utilization}
+        resets = _bounded_resets_at(item.get("resetsAt"))
+        if resets is not None:
+            window["resetsAt"] = resets
+        windows[name] = window
+    return windows
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def result_quota_denial(result: dict) -> bool:
     """A structured native quota denial in the final result; never prose-based."""
     status = result.get("api_error_status")
@@ -378,6 +422,15 @@ class TurnEvidence:
         self.permission_denials = 0
         self.background_tasks: dict[str, str] = {}
         self.anonymous_task_starts = 0
+        # Native observation material for ADR-018 items 22/23 and the retained
+        # assistant text. These never change the turn's status; they are facts
+        # the adapter publishes, or nothing at all.
+        self.rate_limit_windows: dict[str, dict] = {}
+        self.quota_observed_at: str | None = None
+        self.quota_rejection_type: str | None = None
+        self.usage_result: dict | None = None
+        self.assistant_usage: dict[str, dict] = {}
+        self.assistant_text: dict | None = None
 
     def observe(self, frame: dict):
         """Record one frame; returns an optional (phase, tool) activity update."""
@@ -385,16 +438,26 @@ class TurnEvidence:
         frame_type = frame.get("type")
         if frame_type == "rate_limit_event":
             info = frame.get("rate_limit_info")
+            windows = rate_limit_windows(frame)
+            if windows and self.quota_observed_at is None:
+                self.quota_observed_at = _utc_now()
+            for name, window in windows.items():
+                if name in self.rate_limit_windows or len(self.rate_limit_windows) < len(UNIFIED_WINDOW_NAMES):
+                    self.rate_limit_windows[name] = window
             if isinstance(info, dict) and info.get("status") == "rejected":
                 # A rejection fails the attempt even when the rate-limit identity
                 # is absent or malformed; the published facts stay sanitized.
                 rate_limit_type = info.get("rateLimitType")
                 rate_limit_type = rate_limit_type if isinstance(rate_limit_type, str) and rate_limit_type \
                     and len(rate_limit_type) <= 64 else "unknown"
+                self.quota_observed_at = self.quota_observed_at or _utc_now()
+                self.quota_rejection_type = rate_limit_type
                 raise QuotaRejected(rate_limit_type, _bounded_resets_at(info.get("resetsAt")))
             observation = rate_limit_observation(frame)
             if observation is not None:
                 rate_limit_type, item = observation
+                if self.quota_observed_at is None:
+                    self.quota_observed_at = _utc_now()
                 if rate_limit_type in self.rate_limits or len(self.rate_limits) < MAX_RATE_LIMIT_TYPES:
                     self.rate_limits[rate_limit_type] = item
             return None
@@ -455,6 +518,7 @@ class TurnEvidence:
             return None
         if frame_type == "assistant":
             self.model_messages += 1
+            self._observe_assistant(frame)
             message = frame.get("message")
             content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, list):
@@ -470,8 +534,189 @@ class TurnEvidence:
             if self.result is not None:
                 raise ClaudeProtocolError("invalid-protocol", "duplicate native result")
             self.result = frame
+            usage = frame.get("usage")
+            if isinstance(usage, dict):
+                self.usage_result = usage
             return "finishing", None
         return None
+
+    def _observe_assistant(self, frame: dict) -> None:
+        """Keep one root assistant frame's text and deduplicated usage.
+
+        A frame tied to another native session, or a subagent/tool frame (already
+        filtered by ``parent_tool_use_id`` in :meth:`observe`), contributes
+        neither text nor usage. Text is only ever taken from ``text`` content
+        blocks; reasoning and tool blocks are never assistant output. Usage is
+        deduplicated by the native message identity, so a replayed frame never
+        counts twice and a replayed frame with different counters makes the
+        fallback sum unprovable instead of being silently accumulated.
+        """
+        session_id = frame.get("session_id")
+        if isinstance(session_id, str) and session_id and session_id != self.session_id:
+            return
+        message = frame.get("message")
+        if not isinstance(message, dict):
+            return
+        message_id = message.get("id")
+        message_id = message_id if isinstance(message_id, str) and message_id and len(message_id) <= 128 else None
+        content = message.get("content")
+        if isinstance(content, list):
+            texts = [block["text"] for block in content
+                     if isinstance(block, dict) and block.get("type") == "text"
+                     and isinstance(block.get("text"), str) and block["text"].strip()]
+            if texts:
+                source_id = message_id or (frame.get("uuid") if isinstance(frame.get("uuid"), str) else None)
+                retained = bound_native_text("\n".join(texts), source_id=source_id)
+                if retained is not None:
+                    self.assistant_text = retained
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            return
+        if message_id is None:
+            # Without a native message identity a replay cannot be told from a new
+            # observation, so it never contributes to the fallback sum.
+            return
+        if message_id in self.assistant_usage:
+            # A replay with different counters stays unprovable; the first
+            # observation is kept and the fallback is published as partial.
+            return
+        if len(self.assistant_usage) >= MAX_ASSISTANT_USAGE_RECORDS:
+            return
+        self.assistant_usage[message_id] = usage
+
+    @staticmethod
+    def _counters(usage: object) -> dict | None:
+        """One Anthropic usage object's counters, or ``None`` when unusable.
+
+        ``input_tokens`` excludes cached input by the provider's own definition;
+        the cache read/creation counters are separately nullable, so a missing
+        one stays unknown rather than becoming zero.
+        """
+        if not isinstance(usage, dict):
+            return None
+        input_tokens = native_counter(usage.get("input_tokens"))
+        output_tokens = native_counter(usage.get("output_tokens"))
+        if input_tokens is None and output_tokens is None:
+            return None
+        details = usage.get("output_tokens_details")
+        reasoning = native_counter(details.get("thinking_tokens")) if isinstance(details, dict) else None
+        return {"input": input_tokens, "output": output_tokens, "reasoning": reasoning,
+                "read": native_counter(usage.get("cache_read_input_tokens")),
+                "write": native_counter(usage.get("cache_creation_input_tokens"))}
+
+    @staticmethod
+    def _usage_document(counters: dict, *, source: str, records: int, completeness: str) -> dict:
+        """One canonical-bound raw usage document; never a partial cache total."""
+        read, write = counters["read"], counters["write"]
+        cached = read + write if read is not None and write is not None else None
+        document = {"source": source, "scope": "attempt", "inputBasis": "excludes-cached",
+                    "outputTokens": counters["output"], "nativeRecords": records,
+                    "completeness": completeness if cached is not None else "partial"}
+        if cached is None:
+            # The provider's cache counters are unknown, so the canonical total
+            # (input including cache) cannot be proven. The raw prompt count is
+            # deliberately not published as if it were that total.
+            document["cachedInputTokens"] = None
+        else:
+            document["inputTokens"] = counters["input"]
+            document["cachedInputTokens"] = cached
+            document["cacheReadTokens"] = read
+            document["cacheWriteTokens"] = write
+        if counters["reasoning"] is not None and counters["output"] is not None:
+            document["reasoningOutputTokens"] = counters["reasoning"]
+        return document
+
+    def token_usage(self) -> dict | None:
+        """This CLI execution's usage, or the deduplicated assistant fallback.
+
+        The final ``result`` frame's ``usage`` is the CLI execution summary, so it
+        is preferred and marked complete. When it is absent — a quota rejection, a
+        deadline or a process failure never produce one — the bound, deduplicated
+        root ``assistant.message.usage`` observations are summed and marked
+        partial. A summary that is all zeros while real assistant observations
+        exist is the documented crash/startup-error shape and is not preferred.
+        """
+        summary = self._counters(self.usage_result)
+        if summary is not None:
+            observed = any(summary[key] for key in ("input", "output", "read", "write"))
+            if observed or not self.assistant_usage:
+                return self._usage_document(summary, source="claude/stream-json-result-usage",
+                                            records=1, completeness="complete")
+        records = list(self.assistant_usage.values())
+        if not records:
+            return None
+        counters = {"input": 0, "output": 0, "reasoning": 0, "read": 0, "write": 0}
+        known = {key: True for key in counters}
+        contributing = 0
+        for usage in records:
+            item = self._counters(usage)
+            if item is None:
+                continue
+            contributing += 1
+            for key in counters:
+                if item[key] is None:
+                    known[key] = False
+                else:
+                    counters[key] += item[key]
+        if not contributing:
+            return None
+        for key in counters:
+            if not known[key]:
+                counters[key] = None
+        return self._usage_document(counters, source="claude/stream-json-assistant-usage",
+                                    records=contributing, completeness="partial")
+
+    def quota_candidate(self) -> dict | None:
+        """The native rate-limit observations as an unnormalized quota candidate.
+
+        ``unifiedWindows`` fractions are the authoritative per-window view; a
+        top-level numeric ``utilization`` is the fraction of the currently
+        limiting window and fills a window the per-window view did not name. All
+        values are fractions and are converted to percentages here; a missing or
+        out-of-range value contributes no window instead of a guessed one.
+        """
+        if self.quota_observed_at is None:
+            return None
+        windows: list[dict] = []
+        named: set[str] = set()
+        for name, window in self.rate_limit_windows.items():
+            entry = self._quota_window(name, window.get("utilization"), window.get("resetsAt"))
+            if entry is not None:
+                windows.append(entry)
+                named.add(name)
+        for name, observation in self.rate_limits.items():
+            if name in named:
+                continue
+            entry = self._quota_window(name, observation.get("utilization"), observation.get("resetsAt"))
+            if entry is not None:
+                windows.append(entry)
+        reached = self.quota_rejection_type if self.quota_rejection_type and self.quota_rejection_type != "unknown" else None
+        if not windows and reached is None:
+            return None
+        candidate = {"source": "claude/stream-json-rate-limit-event", "observedAt": self.quota_observed_at,
+                     "provider": "anthropic", "windows": windows[:MAX_QUOTA_WINDOWS]}
+        if reached is not None:
+            candidate["reachedType"] = reached
+        return candidate
+
+    @staticmethod
+    def _quota_window(name: str, utilization: object, resets: object) -> dict | None:
+        if isinstance(utilization, bool) or not isinstance(utilization, (int, float)) or not math.isfinite(utilization):
+            return None
+        # The native field is the fraction of the window used; a value past the
+        # window cap converts past 100% and cannot be represented, so it stays
+        # unknown instead of being clamped.
+        percent = utilization * 100
+        if not 0 <= percent <= 100:
+            return None
+        window = {"name": name, "usedPercent": percent}
+        if resets is not None:
+            window["resetsAt"] = resets
+        return window
+
+    def last_assistant_message(self) -> dict | None:
+        """The bounded last root assistant text observed before the result."""
+        return dict(self.assistant_text) if isinstance(self.assistant_text, dict) else None
 
     def unsettled_background_tasks(self) -> list[str]:
         """Reported native background work that has not settled; bounded identities."""
