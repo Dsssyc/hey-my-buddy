@@ -15,7 +15,9 @@ def for_run(connection, run_id: str) -> dict | None:
     row = connection.execute(
         "SELECT payload_json FROM events WHERE task_id=?"
         " AND kind IN ('workflow.cancelled','workflow.helper_cancelled')"
-        " ORDER BY seq LIMIT 1", (run_id,),
+        " AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task_id=?"
+        " AND kind IN ('workflow.continued','workflow.helper_resumed','workflow.auto_continued')),0)"
+        " ORDER BY seq LIMIT 1", (run_id, run_id),
     ).fetchone()
     if row is None:
         return None

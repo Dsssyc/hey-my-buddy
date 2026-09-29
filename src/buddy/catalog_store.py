@@ -151,6 +151,8 @@ def profiles(evaluation, params):
         from .billing import for_provider
         for value in values:
             value['billing'] = for_provider(db, value['adapter'], value['provider'])
+            from .native_observations import exhausted
+            value['quotaExhausted'] = exhausted(db, value) is not None
         ids = [value['profileId'] for value in values]
         marks = ','.join('?' for _ in ids) or 'NULL'
         cards = [evaluation._card_view(row) for row in db.execute(f'SELECT * FROM evaluation_cards WHERE profile_id IN ({marks})', ids)]

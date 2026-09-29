@@ -47,7 +47,7 @@ class QuotaVisibilityTests(BoardTestCase):
             db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'", (json.dumps(observed),))
             self.assertEqual(len(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")), 1)
             self.assertEqual(warnings(db, {"adapter": "codex", "provider": "different"}, now="2026-09-29T10:01:00Z"), [])
-            self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z"), [])
+            self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['code'], 'HARNESS_QUOTA_EXHAUSTED')
         unknown = quota_view({**observed, "windows": [{"name": "five-hour", "usedPercent": None, "resetsAt": None}]}, now="2026-09-29T10:01:00Z")
         self.assertIsNone(unknown["windows"][0]["usedPercent"])
 

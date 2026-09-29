@@ -104,7 +104,7 @@ class BillingQuotaTests(BoardTestCase):
             health.refresh("codex", force=True)
             self.assertEqual(probe.call_count, 1)
             self.assertEqual(health.get("codex")["billingByProvider"]["openai"]["kind"], "subscription")
-            self.assertEqual(health.get("codex")["reviewVerification"], {"verified": True})
+            self.assertFalse(health.get("codex")["reviewVerification"]['verified'])
         health.close()
 
     def test_only_fresh_matching_explicit_exhaustion_filters_candidates_and_router(self):
@@ -129,21 +129,21 @@ class BillingQuotaTests(BoardTestCase):
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
         self._quota(board, reachedType="usage_limit_reached", windows=[{"name": "hour", "usedPercent": 100, "resetsAt": "not-a-time"}])
         with board.store.db.read() as db:
-            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 0)
         self._quota(board, reachedType="usage_limit_reached")
         with board.store.db.read() as db:
             self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
             self.assertEqual(router.profile_problem(db, PROFILE_ID, "fast")[1], "router-quota-exhausted")
             self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "other"}), None)
             self.assertEqual(warnings(db, {"adapter": "dsh", "provider": "deepseek-official"})[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
-        self._quota(board, reachedType="usage_limit_reached", windows=[{"name": "hour", "usedPercent": 100, "resetsAt": stamp(-1)}])
+        self._quota(board, reachedType="usage_limit_reached", observedAt=stamp(-60), windows=[{"name": "hour", "usedPercent": 100, "resetsAt": stamp(-1)}])
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
         self._quota(board, ordinaryUsageAllowed=True)
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
 
-    def test_zero_balance_requires_metered_or_native_usage_denial(self):
+    def test_native_zero_balance_does_not_depend_on_billing_label(self):
         board = self.board()
         board.call("model_catalog_refresh", {"requestId": "billing-balance-catalog"})
         self._quota(board, balanceZero=True)
@@ -155,7 +155,7 @@ class BillingQuotaTests(BoardTestCase):
                         json.dumps({"source": "codex/app-server-rate-limits", "observedAt": stamp(),
                                     "provider": "openai", "balanceZero": True, "windows": []})))
         with board.store.db.read() as db:
-            self.assertIsNone(exhausted(db, {"adapter": "codex", "provider": "openai"}))
+            self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})['code'], 'HARNESS_BALANCE_ZERO')
         with board.store.db.write() as db:
             db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'",
                        (json.dumps({"source": "codex/app-server-rate-limits", "observedAt": stamp(),
@@ -176,3 +176,36 @@ class BillingQuotaTests(BoardTestCase):
             "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
         self.assertEqual(result["executionConfiguration"]["model"], "deepseek-flash")
         self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+
+    def test_exhaustion_outlives_display_freshness_and_unknown_cannot_clear_it(self):
+        from buddy.quota_routing import record
+        board = self.board()
+        config = {'adapter': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash'}
+        with board.store.db.write() as db:
+            record(db, 'dsh', {'provider': config['provider'], 'source': 'native-fixture', 'observedAt': stamp(-7200), 'reachedType': 'usage_limit_reached'})
+            record(db, 'dsh', {'provider': config['provider'], 'source': 'native-fixture', 'observedAt': stamp(-3600), 'windows': []})
+            self.assertIsNotNone(exhausted(db, config))
+            record(db, 'dsh', {'provider': config['provider'], 'source': 'native-fixture', 'observedAt': stamp(-1), 'ordinaryUsageAllowed': True})
+            self.assertIsNone(exhausted(db, config))
+
+    def test_reset_and_provider_or_limit_scope_are_independent(self):
+        from buddy.quota_routing import record
+        board = self.board()
+        config = {'adapter': 'codex', 'provider': 'openai', 'model': 'limited-model'}
+        with board.store.db.write() as db:
+            record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60),
+                'reachedType': 'usage_limit_reached', 'scope': {'limitId': 'limited-model'}, 'resetsAt': stamp(60)})
+            self.assertIsNotNone(exhausted(db, config))
+            self.assertIsNone(exhausted(db, {**config, 'model': 'other-model'}))
+            self.assertIsNone(exhausted(db, {**config, 'provider': 'other-provider'}))
+            self.assertIsNone(exhausted(db, config, now=stamp(120)))
+
+    def test_account_reset_query_can_restore_a_previous_native_failure(self):
+        from buddy.quota_routing import record
+        board = self.board()
+        config = {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
+        with board.store.db.write() as db:
+            record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60), 'reachedType': 'usage_limit_reached'})
+            record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-1),
+                'scope': {'limitId': 'codex'}, 'windows': [{'name': 'primary', 'usedPercent': 42, 'resetsAt': stamp(3600)}]})
+            self.assertIsNone(exhausted(db, config))

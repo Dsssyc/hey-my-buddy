@@ -43,3 +43,6 @@ def read(command: list[str], environment: dict) -> tuple[dict | None, dict | Non
         for stream in (child.stdin, child.stdout):
             if stream is not None:
                 stream.close()
+        if not handle.shutdown_confirmed():
+            from .errors import BoardError
+            raise BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'The account read process stop could not be confirmed')

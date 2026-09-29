@@ -344,6 +344,7 @@ def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usa
         credits = bucket.get("credits")
         if (isinstance(credits, dict) and credits.get("hasCredits") is True
                 and credits.get("unlimited") is False
+                and ordinary_usage_allowed is False
                 and _zero_balance(credits.get("balance"))):
             candidate["balanceZero"] = True
         for slot in _RATE_WINDOW_SLOTS:

@@ -195,9 +195,17 @@ class HarnessHealth:
             return
         from .native_observations import _time
         checked = _time(health.get("quotaCheckedAt"))
+        with self.board.db.read() as db:
+            saved = db.execute("SELECT value FROM meta WHERE key='codex_account_read_at'").fetchone()
+        if saved:
+            checked = _time(saved[0])
         now = _time(utc_now())
         if checked and now and 0 <= (now - checked).total_seconds() < SCAN_SECONDS:
             return
+        if self._closed or (self.board.directory / 'upgrade.json').exists():
+            return
+        with self.board.db.write() as db:
+            db.execute("INSERT INTO meta(key,value) VALUES('codex_account_read_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (utc_now(),))
         billing = quota = None
         try:
             from .codex_account_probe import read
@@ -217,9 +225,15 @@ class HarnessHealth:
                 record["billingByProvider"] = {"openai": fact("unknown", "codex/account-read", record["quotaCheckedAt"])}
             db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
             if quota is not None:
+                from .quota_routing import record as record_quota
+                record_quota(db, 'codex', {**quota, 'provider': 'openai'})
                 previous = json.loads(row["quota_json"]) if row["quota_json"] else None
                 if previous is None or (_time(quota["observedAt"]) and _time(quota["observedAt"]) > (_time(previous.get("observedAt")) or _time("1970-01-01T00:00:00Z"))):
                     db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'", (canonical_json({**quota, "provider": "openai"}),))
+            self.board._append_event(db, 'harness.account_observed', payload={'adapter': 'codex',
+                'observedAt': record['quotaCheckedAt'], 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
+            head = self.board._head_of(db)
+        self.board._notify(head)
 
     def kick(self):
         """One rate-limited scan borrowed from a Host call; no timer or polling loop."""

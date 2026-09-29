@@ -96,6 +96,7 @@ export type HarnessQuota = {
 
 export type Profile = {
   billing?: BillingFact;
+  quotaExhausted?: boolean;
   newlyDiscovered?: boolean;
   profileId: string;
   label: string;

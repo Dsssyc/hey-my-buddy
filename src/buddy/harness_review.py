@@ -62,6 +62,7 @@ def verified(adapter, health):
         return False
     record = health.get("reviewVerification") or verification_view(None, adapter, health)
     return bool(health.get("status") == "ready" and record.get("verified") is True
+                and record.get('adapter') == adapter
                 and record.get("version") == health.get("version") and record.get("platform") == sys.platform
                 and all((record.get("checks") or {}).get(check) is True for check in CHECKS))
 

@@ -27,7 +27,7 @@ def persist(connection, attempt, result):
     failure = normalize_quota_failure(result.get("quotaFailure"))
     if quota is None and failure is not None and failure["code"] == "quota-exceeded":
         quota = normalize_quota({"source": failure["source"], "observedAt": failure.get("observedAt"),
-                                 "reachedType": failure["nativeCode"], "windows": []})
+                                 "reachedType": failure["nativeCode"], 'resetsAt': failure.get('resetsAt'), "windows": []})
     if quota is None or _time(quota.get("observedAt")) is None:
         return
     old = connection.execute("SELECT quota_json FROM harness_health WHERE adapter=?", (attempt["model_adapter"] or attempt["adapter"],)).fetchone()
@@ -35,9 +35,11 @@ def persist(connection, attempt, result):
         return
     previous = json.loads(old["quota_json"]) if old["quota_json"] else None
     previous_time = _time(previous.get("observedAt")) if previous else None
+    observed = {**quota, "attemptId": attempt["attempt_id"], "provider": (quota.get("scope") or {}).get("provider") or attempt["model_provider"]}
+    from .quota_routing import record
+    record(connection, attempt["model_adapter"] or attempt["adapter"], observed)
     if previous_time and previous_time >= _time(quota["observedAt"]):
         return
-    observed = {**quota, "attemptId": attempt["attempt_id"], "provider": (quota.get("scope") or {}).get("provider") or attempt["model_provider"]}
     connection.execute("UPDATE harness_health SET quota_json=? WHERE adapter=?",
                        (canonical_json(observed), attempt["model_adapter"] or attempt["adapter"]))
 
@@ -57,58 +59,20 @@ def quota_view(value, *, now=None):
 
 
 def exhausted(connection, configuration, *, now=None):
-    """A fresh, matching native exhaustion fact for automatic routing only."""
-    if configuration is not None and not isinstance(configuration, dict):
-        configuration = dict(configuration)
-    if not configuration or not configuration.get("adapter") or not configuration.get("provider"):
-        return None
-    row = connection.execute("SELECT quota_json FROM harness_health WHERE adapter=?", (configuration["adapter"],)).fetchone()
-    from .usage import classify_quota_code
-    try:
-        raw = json.loads(row[0]) if row and row[0] else None
-    except (TypeError, ValueError):
-        return None
-    try:
-        quota = quota_view(raw, now=now)
-    except (AttributeError, KeyError, TypeError):
-        return None
-    if not quota or quota["stale"] or quota.get("provider") != configuration["provider"]:
-        return None
-    if quota.get("ambiguousLimits") is True:
-        return None
-    if any(window.get("stale") for window in quota.get("windows", [])):
-        return None
-    scope = quota.get("scope") or quota
-    limit_id = scope.get("limitId")
-    if limit_id is not None and limit_id not in ({"codex", configuration.get("model")}
-                                                 if configuration["adapter"] == "codex" else
-                                                 {configuration.get("model"), configuration["provider"]}):
-        return None
-    reason = quota.get("reachedType")
-    if reason and classify_quota_code(reason) == "quota-exceeded":
-        return {"code": "HARNESS_QUOTA_EXHAUSTED", "source": quota.get("source"),
-                "observedAt": quota.get("observedAt"), "reason": reason}
-    if quota.get("balanceZero") is True:
-        from .billing import for_provider
-        if quota.get("ordinaryUsageAllowed") is not False and for_provider(
-                connection, configuration["adapter"], configuration["provider"])["kind"] != "metered":
-            return None
-        return {"code": "HARNESS_BALANCE_ZERO", "source": quota.get("source"),
-                "observedAt": quota.get("observedAt")}
-    return None
-
+    from .quota_routing import exhausted as routing_exhausted
+    return routing_exhausted(connection, configuration, now=now)
 
 def warnings(connection, configuration, *, now=None):
     if not configuration or not configuration.get("adapter"):
         return []
     row = connection.execute("SELECT quota_json FROM harness_health WHERE adapter=?", (configuration["adapter"],)).fetchone()
     quota = quota_view(json.loads(row[0]) if row and row[0] else None, now=now)
-    if not quota or quota["stale"] or quota.get("provider") not in (None, configuration.get("provider")):
-        return []
     explicit = exhausted(connection, configuration, now=now)
     if explicit is not None:
         return [{**explicit, "adapter": configuration["adapter"], "provider": configuration["provider"],
                  "message": "A recent native observation reports this selected configuration has exhausted its quota."}]
+    if not quota or quota["stale"] or quota.get("provider") not in (None, configuration.get("provider")):
+        return []
     from .usage import classify_quota_code
     if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
         return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "adapter": configuration["adapter"],

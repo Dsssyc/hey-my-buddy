@@ -288,6 +288,8 @@ def normalize_quota_window(value: Any) -> dict | None:
         return None
     used_percent: int | float = int(used) if float(used).is_integer() else float(used)
     window = {"name": name, "usedPercent": used_percent}
+    if value.get('invalidReset') is True:
+        window['invalidReset'] = True
     resets = value.get("resetsAt")
     if resets is not None:
         timestamp = _timestamp(resets)
@@ -338,7 +340,7 @@ def normalize_quota(value: Any) -> dict | None:
     allowed = value.get("ordinaryUsageAllowed")
     ordinary: bool | None = allowed if isinstance(allowed, bool) else None
     reached = identifier(value.get("reachedType"))
-    if not windows and ordinary is None and reached is None and value.get("balanceZero") is not True:
+    if not windows and ordinary is None and reached is None and type(value.get('balanceZero')) is not bool:
         return None
     scope_source = value.get("scope") if isinstance(value.get("scope"), dict) else value
     scope = {
@@ -358,8 +360,11 @@ def normalize_quota(value: Any) -> dict | None:
         normalized["ordinaryUsageAllowed"] = ordinary
     if reached is not None:
         normalized["reachedType"] = reached
-    if value.get("balanceZero") is True:
-        normalized["balanceZero"] = True
+    if type(value.get("balanceZero")) is bool:
+        normalized["balanceZero"] = value['balanceZero']
+    resets = _timestamp(value.get('resetsAt'))
+    if resets:
+        normalized['resetsAt'] = resets
     if value.get("ambiguousLimits") is True:
         normalized["ambiguousLimits"] = True
     return normalized
@@ -403,6 +408,9 @@ def normalize_quota_failure(value: Any) -> dict | None:
     }
     if observed_at is not None:
         failure["observedAt"] = observed_at
+    reset = _timestamp(value.get('resetsAt'))
+    if reset is not None:
+        failure['resetsAt'] = reset
     return failure
 
 

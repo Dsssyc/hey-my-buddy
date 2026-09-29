@@ -10,10 +10,11 @@ from .command import CommandAdapter
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .decision import DecisionAdapter
+from .review_check import ReviewCheckAdapter
 from .dsh import DshAdapter
 from .zcode import ZcodeAdapter
 
-BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
+BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ReviewCheckAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
 #: ``external`` is a first-class adapter whose execution is owned by the caller's
 #: own agent, not by a built-in worker. That agent claims the task through the
