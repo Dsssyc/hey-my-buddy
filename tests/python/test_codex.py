@@ -87,7 +87,47 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "invalid-result")
         self.assertIn("sessionId", outcome.result)
         self.assertNotIn("turn", outcome.result)
+        self.assertTrue(outcome.result["nativeSession"]["resumable"])
+
+    def test_invalid_result_retains_bound_native_history_for_explicit_continuation(self):
+        first = self.execute(self.context("invalid-json"))
+        self.assertEqual(first.status, "failed")
+        self.assertNotIn("turn", first.result)
+        checkpoint = first.result["nativeCheckpoint"]
+        self.assertEqual(checkpoint["lastAssistantMessage"]["text"], "not json")
+        self.assertTrue(checkpoint["bindingSaved"])
+        self.assertTrue(first.result["nativeSession"]["resumable"])
+        second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
+        self.assertEqual(second.status, "ok", second.to_report())
+        self.assertEqual(second.result["nativeTurnId"], "native-turn-2")
+
+    def test_failed_native_turn_retains_message_without_resume_authority(self):
+        first = self.execute(self.context("failed"))
+        self.assertEqual(first.status, "failed")
+        self.assertIn("fixture work completed", first.result["nativeCheckpoint"]["lastAssistantMessage"]["text"])
+        self.assertFalse(first.result["nativeSession"]["resumable"])
+        second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
+        self.assertEqual(second.result["code"], "native-resume-unavailable")
+
+    def test_disconnect_retains_completed_message_without_inventing_native_completion(self):
+        outcome = self.execute(self.context("disconnect-after-message"))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.result["code"], "transport-error")
+        self.assertTrue(outcome.shutdown_confirmed)
+        checkpoint = outcome.result["nativeCheckpoint"]
+        self.assertEqual(checkpoint["nativeTurnStatus"], "incomplete")
+        self.assertIn("fixture work completed", checkpoint["lastAssistantMessage"]["text"])
         self.assertFalse(outcome.result["nativeSession"]["resumable"])
+
+    def test_changed_native_history_is_not_resumed_after_invalid_result(self):
+        first = self.execute(self.context("invalid-json"))
+        state_path = Path(self.environment["BUDDY_CODEX_FIXTURE_STATE"])
+        state = json.loads(state_path.read_text())
+        state["threads"][first.result["sessionId"]]["turns"].append({"id": "foreign-turn", "status": "completed"})
+        state_path.write_text(json.dumps(state))
+        second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
+        self.assertEqual(second.status, "failed")
+        self.assertEqual(second.result["code"], "native-resume-unavailable")
 
     def test_native_resume_requires_matching_private_binding_and_history(self):
         first = self.execute(self.context())

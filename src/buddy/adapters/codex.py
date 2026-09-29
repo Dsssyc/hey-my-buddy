@@ -16,7 +16,7 @@ from . import turn_io
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
 from .codex_config import CodexUnavailable, cli_command
-from .codex_protocol import decode_json
+from .codex_protocol import decode_json, validated_checkpoint, checkpoint_resumable
 
 
 class CodexAdapter(Adapter):
@@ -113,6 +113,9 @@ class CodexAdapter(Adapter):
         elif exit_code == 0 and payload.get("status") == "ok" and shutdown:
             status = "ok"
         record, error = _read_native_turn(context, shutdown, exit_code)
+        checkpoint = validated_checkpoint(payload, context.turn_input) if shutdown else None
+        if checkpoint is None:
+            payload.pop("nativeCheckpoint", None)
         session_id = payload.get("sessionId")
         payload["nativeSession"] = {
             "adapter": "codex",
@@ -122,7 +125,7 @@ class CodexAdapter(Adapter):
             "storageOwner": "harness-user-store",
             "nativeAppVisibility": "unknown",
             "resumeMode": (context.turn_input or {}).get("resumeMode"),
-            "resumable": bool(record is not None and shutdown),
+            "resumable": bool(shutdown and (record is not None or checkpoint and checkpoint_resumable(payload, checkpoint))),
             "note": "Codex owns the native thread in its configured home; App indexing visibility is unverified. Native continuation rechecks the goal, checkout, configuration and last completed turn binding.",
         }
         payload["turnResultPath"] = str(context.turn_output_file())

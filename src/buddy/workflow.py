@@ -4714,8 +4714,16 @@ class WorkflowCoordinator:
         turn_index = turn_count + 1
         resume_mode = "initial" if turn_index == 1 else "reconstructed-new-session"
         configuration = self._configuration(run_row)
+        native = self._previous_codex_checkpoint(connection, previous)
+        previous_session = previous["session_id"] if previous is not None else None
+        if native is not None:
+            previous_session = native[1]["sessionId"]
+        native_completed = previous is not None and previous["state"] == "concluded"
+        if native is not None:
+            from .adapters.codex_protocol import checkpoint_resumable
+            native_completed = checkpoint_resumable(*native)
         harness_changed = False
-        if previous is not None and previous["state"] == "concluded" and previous["session_id"] and configuration:
+        if previous is not None and native_completed and previous_session and configuration:
             previous_input = json.loads(previous["input_json"])
             if previous_input.get("context", {}).get("executionConfiguration") == configuration:
                 executor = self._execution_adapter(configuration["adapter"])
@@ -4730,6 +4738,17 @@ class WorkflowCoordinator:
                     resume_mode = "native-session"
         turn_id = str(uuid.uuid4())
         context = self._turn_context(connection, run_row, task, spec, continuation, previous, turn_index)
+        if native is not None:
+            checkpoint = native[1]
+            if resume_mode == "native-session":
+                context["nativeResume"] = {key: checkpoint[key] for key in ("nativeTurnId", "attemptId", "inputSha256")}
+            if checkpoint.get("lastAssistantMessage") is not None:
+                context["lastAssistantMessage"] = {
+                    "source": "codex-native-agent-message",
+                    "validatedOutcome": previous["state"] == "concluded" and json.loads(previous["provenance_json"] or "{}").get("outputSchemaValidated") is True,
+                    "sessionId": checkpoint["sessionId"], "nativeTurnId": checkpoint["nativeTurnId"],
+                    **checkpoint["lastAssistantMessage"],
+                }
         if harness_changed:
             context['resumeReason'] = 'harness-version-changed'
         manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
@@ -4743,7 +4762,7 @@ class WorkflowCoordinator:
             "generation": generation,
             "turnId": turn_id,
             "resumeMode": resume_mode,
-            "previousSessionId": previous["session_id"] if previous is not None else None,
+            "previousSessionId": previous_session,
             "context": context,
             "executionWorkspace": execution_workspace,
         }
@@ -4759,7 +4778,7 @@ class WorkflowCoordinator:
                 generation,
                 turn_index,
                 resume_mode,
-                previous["session_id"] if previous is not None else None,
+                previous_session,
                 input_json,
                 now,
                 now,
@@ -4787,6 +4806,18 @@ class WorkflowCoordinator:
             "credential": credential,
             "runId": run_row["run_id"],
         }
+
+    def _previous_codex_checkpoint(self, connection, previous):
+        if previous is None:
+            return None
+        attempt = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (previous["attempt_id"],)).fetchone()
+        if (attempt is None or attempt["adapter"] != "codex" or attempt["execution_state"] != "finished"
+                or attempt["shutdown_confirmed"] != 1):
+            return None
+        from .adapters.codex_protocol import validated_checkpoint
+        payload = self.result_payload(json.loads(attempt["result_json"] or "{}"))
+        checkpoint = validated_checkpoint(payload, json.loads(previous["input_json"]))
+        return (payload, checkpoint) if checkpoint is not None else None
 
     def _turn_workspace(self, connection, run_row, manifest: dict, continuation, turn_index: int) -> dict:
         """The resolved input workspace of one turn.

@@ -6,8 +6,9 @@ import sys
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 
-from buddy.adapters.codex_protocol import CodexProtocolError, Connection, parse_outcome
+from buddy.adapters.codex_protocol import CodexProtocolError, Connection, TurnEvidence, parse_outcome, native_checkpoint, validated_checkpoint, checkpoint_resumable
 from buddy.adapters.codex_runner import execution_deadline
 
 
@@ -36,6 +37,39 @@ class StructuredOutcomeTests(unittest.TestCase):
                     value.replace('"request": null', '"request": {}')):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_outcome(raw)
+
+
+class NativeCheckpointTests(unittest.TestCase):
+    def test_failed_turn_can_retain_only_its_own_completed_assistant_message(self):
+        evidence = TurnEvidence("root", "turn")
+        evidence.observe({"method": "turn/started", "params": {"threadId": "root", "turn": {"id": "turn"}}})
+        for thread, text in (("root", "partial research"), ("child", "unrelated child report")):
+            evidence.observe({"method": "item/completed", "params": {"threadId": thread, "turnId": "turn",
+                "item": {"id": "item-1", "type": "agentMessage", "phase": "commentary", "text": text}}})
+        evidence.observe({"method": "turn/completed", "params": {"threadId": "root", "turn": {"id": "turn", "status": "failed"}}})
+        checkpoint = native_checkpoint(evidence, {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "turn"})
+        self.assertEqual(checkpoint["lastAssistantMessage"]["text"], "partial research")
+        self.assertIsNone(evidence.final_item)
+
+    def test_message_is_bounded_and_truncation_is_honest(self):
+        document = {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "turn"}
+        evidence = SimpleNamespace(thread_id="thread", turn_id="native-turn", started=True,
+                                   completed={"status": "completed"}, event_seq=3,
+                                   final_item={"id": "final", "text": "调研\n" * 15000})
+        checkpoint = native_checkpoint(evidence, document)
+        self.assertTrue(checkpoint["lastAssistantMessage"]["truncated"])
+        payload = {"nativeCheckpoint": checkpoint, "sessionId": "thread", "nativeTurnId": "native-turn",
+                   "processState": {"shutdownConfirmed": True, "nativeExitCode": 0}}
+        self.assertEqual(validated_checkpoint(payload, document), checkpoint)
+        self.assertFalse(checkpoint_resumable(payload, checkpoint))
+        checkpoint["bindingSaved"] = True
+        self.assertTrue(checkpoint_resumable(payload, checkpoint))
+        for change in ({"inputSha256": "foreign"}, {"sessionId": "foreign"}, {"nativeTurnStarted": False},
+                       {"generation": True}, {"eventSeq": 1}):
+            with self.subTest(change=change):
+                self.assertIsNone(validated_checkpoint({**payload, "nativeCheckpoint": {**checkpoint, **change}}, document))
+        self.assertIsNone(validated_checkpoint({**payload, "processState": None}, document))
+        self.assertFalse(checkpoint_resumable({**payload, "processState": {"nativeExitCode": False}}, checkpoint))
 
 
 class UnlimitedDeadlineTests(unittest.TestCase):

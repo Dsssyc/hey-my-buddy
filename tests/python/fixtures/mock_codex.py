@@ -125,6 +125,8 @@ def main():
             if case != "no-final":
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
                                                             "item": item, "completedAtMs": 1}})
+            if case == "disconnect-after-message":
+                return
             status = "failed" if case in ("failed", "approval-failed") else "completed"
             turn = {"id": turn_id, "status": status, "items": [] if case == "no-final" else [item]}
             send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})

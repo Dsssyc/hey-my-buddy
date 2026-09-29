@@ -1,6 +1,7 @@
 """Bounded Codex App Server JSONL transport and native turn observation."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -11,6 +12,7 @@ import time
 from .turn_io import canonical_json
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+MAX_CHECKPOINT_MESSAGE_BYTES = 65536
 _WINDOWS_PIPE = os.name == "nt"
 
 
@@ -165,12 +167,74 @@ def parse_outcome(text: str) -> dict:
         raise ValueError(error)
     return outcome
 
+
+def native_checkpoint(evidence, turn_input: dict) -> dict:
+    """Native history is evidence for continuation, never a workflow outcome."""
+    from .turn_io import input_hash
+    checkpoint = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
+    checkpoint.update(version=1, inputSha256=input_hash(turn_input), sessionId=evidence.thread_id,
+                      nativeTurnId=evidence.turn_id, nativeTurnStarted=evidence.started,
+                      nativeTurnStatus=(evidence.completed or {}).get("status", "incomplete"), eventSeq=evidence.event_seq,
+                      bindingSaved=False)
+    item = evidence.final_item or getattr(evidence, "last_agent_item", None)
+    if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
+        raw = item["text"].encode()
+        text = raw[:MAX_CHECKPOINT_MESSAGE_BYTES].decode("utf-8", errors="ignore")
+        # Bound the serialized string too: escaping can multiply its byte size.
+        while len(canonical_json(text).encode()) > MAX_CHECKPOINT_MESSAGE_BYTES:
+            text = text[:len(text) // 2]
+        checkpoint["lastAssistantMessage"] = {"itemId": item["id"], "text": text, "phase": item.get("phase"), "sourceBytes": len(raw),
+                                      "sha256": hashlib.sha256(raw).hexdigest(), "truncated": text != item["text"]}
+    return checkpoint
+
+
+def validated_checkpoint(payload: dict, turn_input: dict) -> dict | None:
+    """Read only a stopped, exact-attempt native observation from its receipt."""
+    from .turn_io import input_hash
+    value = payload.get("nativeCheckpoint")
+    if not isinstance(value, dict) or value.get("version") != 1:
+        return None
+    expected = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
+    expected["inputSha256"] = input_hash(turn_input)
+    if any(type(value.get(key)) is not type(item) or value.get(key) != item for key, item in expected.items()):
+        return None
+    process = payload.get("processState")
+    if (not isinstance(process, dict) or process.get("shutdownConfirmed") is not True
+            or value.get("nativeTurnStarted") is not True
+            or value.get("nativeTurnStatus") not in ("completed", "failed", "interrupted", "incomplete")
+            or type(value.get("bindingSaved")) is not bool
+            or type(value.get("eventSeq")) is not int or value["eventSeq"] < 2):
+        return None
+    for key in ("sessionId", "nativeTurnId"):
+        if not isinstance(value.get(key), str) or not value[key] or value[key] != payload.get(key):
+            return None
+    message = value.get("lastAssistantMessage")
+    if message is not None:
+        if (not isinstance(message, dict) or not isinstance(message.get("itemId"), str) or not message["itemId"]
+                or not isinstance(message.get("text"), str) or type(message.get("truncated")) is not bool
+                or type(message.get("sourceBytes")) is not int
+                or not isinstance(message.get("sha256"), str) or len(message["sha256"]) != 64
+                or len(canonical_json(message["text"]).encode()) > MAX_CHECKPOINT_MESSAGE_BYTES):
+            return None
+        raw = message["text"].encode()
+        if message["sourceBytes"] < len(raw) or (not message["truncated"] and (
+                message["sourceBytes"] != len(raw) or hashlib.sha256(raw).hexdigest() != message["sha256"])):
+            return None
+    return value
+
+
+def checkpoint_resumable(payload: dict, checkpoint: dict) -> bool:
+    process = payload.get("processState")
+    return (checkpoint.get("nativeTurnStatus") == "completed" and checkpoint.get("bindingSaved") is True
+            and isinstance(process, dict) and type(process.get("nativeExitCode")) is int and process["nativeExitCode"] == 0)
+
 class TurnEvidence:
     def __init__(self, thread_id: str, turn_id: str):
         self.thread_id, self.turn_id = thread_id, turn_id
         self.started = False
         self.completed = None
         self.final_item = None
+        self.last_agent_item = None
         self.event_seq = 0
         self.model_turns = 0
         self.tool_calls = 0
@@ -196,6 +260,8 @@ class TurnEvidence:
             return "streaming-model", None
         if method == "item/completed":
             item = params.get("item") or {}
+            if item.get("type") == "agentMessage":
+                self.last_agent_item = item
             if item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
                 if self.final_item is not None:
                     raise CodexProtocolError("invalid-result", "multiple native final messages completed")
