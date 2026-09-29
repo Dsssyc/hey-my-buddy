@@ -74,9 +74,11 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 可以直接让具备 skill 的 Harness“更新黑板中的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工备注。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
 
-路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 尚未验证；日常 0.18.0 的 DSH Router 仍不可用。安装后由用户在 Buddy 配置中选择已启用的 Codex 配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/local-harness-discovery-0.19.0.md)。
+路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 尚未验证；配置的 Router 还必须可用且已启用。安装后由用户在 Buddy 配置中选择已启用的 Codex 配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/local-harness-discovery-0.19.0.md)。
 
 ## 执行与恢复
+
+Codex Host 为每个运行中的委派派生一个只做监控的原生子代理，显式指定 GPT-6 Luna low 等低成本模型与档位。父代理继续独立工作，并负责全部决策与验收；Claude Code 保持后台 Bash 等待。权限、等待上限与前台回退见 [Codex 等待指引](docs/reference/usage.md#waiting-from-codex)。
 
 独立任务默认在一个机器级并发总上限下并行运行（默认 8，可配置 1–32），路由与执行共享该上限；在此之上，每个精确的 adapter/provider/model 家族还有用户设置的上限（每个家族默认 2），各思考档位与使用该模型的路由决策共享同一家族计数。服务会自动启动相应的 worker 池；实际安装可配置不同的总上限，请以 `health.capacity` 为准。工作区重叠和独占资源仍会让冲突任务排队；并行修改代码需要使用不同 worktree。可在[容量配置](docs/reference/operations.md#private-state-and-environment)中调整上限，并用 `health.capacity` 查看总量与各模型占用。
 
@@ -88,9 +90,9 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 ## 当前状态与限制
 
-日常安装是 [0.18.0/contract 0.18.0/schema 13](docs/acceptance/installed-0.18.0.md)，经空闲切换验证，保留了 schema 13 黑板、用户评价和模型上限。0.19.0 源码候选新增固定版本包安装入口、直接执行 active 运行时 Python 的启动器、以 `LAUNCH_ACCESS_DENIED` 拒绝沙盒并清理继承环境的逻辑、schema 14 的 harness 共享发现与健康缓存、手动路径与“重新检测”控件，以及空闲整体切换与唯一一份校验备份；它尚未安装、尚未迁移、尚未发布，验证状态以新的 [local harness discovery 0.19.0 记录](docs/acceptance/local-harness-discovery-0.19.0.md)为准。
+日常安装是 [0.19.0/contract 0.19.0/schema 14](docs/acceptance/installed-0.19.0.md)，已包含直接执行 active 运行时 Python 的启动器、harness 共享发现和空闲安装切换。最新源码新增登录用户名环境修正、Codex 监控子代理指引，以及结构化结果与原生续做修复；这些改动仍需单独授权安装。[验收记录](docs/acceptance/codex-monitor-and-continuation-0.19.0.md)区分源码验证、付费监控实测与剩余限制。
 
-日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。日常 0.18.0 没有已验证 Router，升级也不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
 ## 文档与开发
 

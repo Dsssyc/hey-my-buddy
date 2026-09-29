@@ -1,6 +1,10 @@
 # Repository maintenance
 
-## Current ADR-017 delivery
+## Current Codex monitoring and continuation repair
+
+This agenda starts from `socu/buddy-core` at `9fcea9a`. Daily installation is 0.19.0/contract 0.19.0/schema 14; the login-name environment fix in that source baseline is not installed yet. The user chose lightweight, explicitly configured Codex monitoring subagents instead of Host foreground await as the default, with foreground fallback; Claude Code background await stays unchanged. Every paid experiment needs its own approval. All test services and runtimes use private roots. No daily installation, configuration change, merge or publication is authorized by implementation or probe approval. See docs/acceptance/codex-monitor-and-continuation-0.19.0.md for this agenda's verified results and limits.
+
+## Historical ADR-017 delivery
 
 The 0.19.0 source candidate implements ADR-017 with the separately approved schema 14 harness-health migration. Daily installation remains 0.18.0/schema 13. The package installer, active-runtime Python launcher, idle generation switch, bounded local discovery and CLI/console diagnostics are implemented; Windows code/scripts and backup interruption logic have POSIX tests, with native Windows still unverified. Codex Router is verified on macOS with GPT-6 Sol high and standard budget; other platforms and harnesses remain unverified. The user authorized subsequent Codex probes during this agenda after approving probes 1 and 2. Do not use Claude workers/probes for this agenda. Daily installation, data migration, settings changes, merge and publication still need separate authorization. See docs/acceptance/local-harness-discovery-0.19.0.md for verification and remaining boundaries. Use private state/runtime roots and explicit enabled Buddy configurations. Wait in appropriately sized windows and avoid frequent polling.
 
