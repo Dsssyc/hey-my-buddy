@@ -267,7 +267,9 @@ def _scan_hash(snapshot: dict) -> str:
 
 def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = ()) -> dict:
     """Build an account-preserving, credential-free environment for native CLIs."""
-    allowed = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+    # The login name is identity, not a credential: Claude Code on macOS looks up
+    # its keychain login by USER and reports "not logged in" without it.
+    allowed = ("HOME", "USER", "LOGNAME", "USERNAME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
                "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
                "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE",

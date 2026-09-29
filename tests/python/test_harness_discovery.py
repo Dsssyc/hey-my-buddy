@@ -299,6 +299,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotIn("ANTHROPIC_BASE_URL", result)
             self.assertNotIn("BUDDY_AGENT_CREDENTIAL", result)
 
+    def test_native_environment_keeps_the_login_name_for_keychain_logins(self):
+        result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user", "USER": "user",
+                                               "LOGNAME": "user", "USERNAME": "user",
+                                               "ANTHROPIC_API_KEY": "secret"})
+        self.assertEqual((result["USER"], result["LOGNAME"], result["USERNAME"]), ("user", "user", "user"))
+        self.assertNotIn("ANTHROPIC_API_KEY", result)
+
 
 if __name__ == "__main__":
     unittest.main()
