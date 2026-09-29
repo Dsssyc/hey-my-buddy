@@ -51,7 +51,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Proposed design direction
 
-[ADR-018: fast and review routing](decisions/018-fast-and-review-routing.md) (proposed, not implemented) splits the Router into a tool-free fast mode that any harness able to disable tools can serve and the existing read-only review mode that needs a verified harness sandbox, renames the review budgets to 简要/标准/深入, keeps two Router slots with a default mode, lets a Host request review routing per submission and falls back to fast routing when the review Router is unavailable.
+[ADR-018: routing modes and Host workflow](decisions/018-routing-modes-and-host-workflow.md) (proposed, not implemented) splits the Router into a tool-free fast mode that any harness able to disable tools can serve and the existing read-only review mode that needs a verified harness sandbox (budgets renamed 简要/标准/深入, two Router slots with a default mode, per-submission mode, automatic fallback to fast routing), and addresses the Claude Code Host trial with a slimmer SKILL.md, file/stdin parameters, per-method help, objective reuse, direct Host closure of integrated work, Host notes and cleanup for failed or cancelled goals, sealed partial artifacts after interruptions, replaceable Host-chosen configurations, Host follow-up paths in integration records and cumulative patches.
 
 ## Accepted design direction, implemented in source
 
