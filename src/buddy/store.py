@@ -494,6 +494,9 @@ class BoardStore:
 
     def _decorate(self, connection: sqlite3.Connection, task: sqlite3.Row, *, delegation_result: dict | None = None) -> dict:
         view = self._task_view(task)
+        if task["state"] in ("cancelled", "cancelling"):
+            from .cancellation import for_run
+            view["cancellation"] = for_run(connection, task["task_id"])
         attempt = self._selected_attempt(connection, task)
         view["tokenUsage"] = json.loads(attempt["token_usage_json"]) if attempt is not None and attempt["token_usage_json"] else None
         if attempt is not None:
@@ -531,6 +534,9 @@ class BoardStore:
             view["workflow"] = workflow
             view["workflowState"] = workflow["state"]
             view["awaitingHost"] = workflow["awaitingHost"]
+            if workflow["state"] == "cancelled" and "cancellation" not in view:
+                from .cancellation import for_run
+                view["cancellation"] = for_run(connection, task["task_id"])
         return view
 
     # -- admission -----------------------------------------------------------

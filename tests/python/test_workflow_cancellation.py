@@ -144,6 +144,63 @@ class WorkflowCancellationTests(WorkflowTestCase):
             self.assertIn((run_id, "released"), self.reservations(board))
         self.assertTrue(self.summary(board, parent["runId"])["descendantsConfirmed"])
 
+    def test_cancellation_attribution_follows_own_event_and_survives_replay(self):
+        from buddy import cli_views
+
+        board, _, parent, child = self.parent_and_child()
+        root_id = parent["runId"]
+        reason = "Host took the remaining work"
+        cancelled = board.call("workflow_cancel", {
+            "runId": root_id, "commandId": "actor-cancel-1", "reason": reason, **self.control(parent),
+        })
+        expected = {"actor": "host:host-1", "reason": reason}
+        self.assertEqual(cancelled["cancellation"], expected)
+        self.assertEqual(board.call("workflow_get", {"runId": root_id})["cancellation"], expected)
+        self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"], expected)
+        self.assertEqual(cli_views.render("get", board.call("workflow_get", {"runId": child}))["cancellation"], expected)
+        task = board.call("task_get", {"runId": child})["task"]
+        self.assertEqual(task["cancellation"], expected)
+        self.assertEqual(cli_views.render("status", task)["cancellation"], expected)
+
+        # A later explicit cancellation of the already fenced helper is not its
+        # original cancellation, including when read through an old receipt.
+        board.store.workflow.cancel({"runId": child, "reason": "later console action"},
+                                    console_authority={"sessionId": "later"})
+        self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"], expected)
+        replay = board.call("workflow_cancel", {
+            "runId": root_id, "commandId": "actor-cancel-1", "reason": reason, **self.control(parent),
+        })
+        self.assertEqual(replay["cancellation"], expected)
+
+    def test_console_stop_attribution_does_not_relabel_completed_result(self):
+        from buddy import cli_views
+
+        board, _, parent, _ = self.parent_and_child()
+        root_id = parent["runId"]
+        before = board.call("task_result", {"runId": root_id})
+        stopped = board.store.workflow.cancel({"runId": root_id, "reason": "Stopped from browser"},
+                                              console_authority={"sessionId": "browser-1"})
+        expected = {"actor": "console:browser-1", "reason": "Stopped from browser"}
+        self.assertEqual(stopped["cancellation"], expected)
+        after = board.call("task_result", {"runId": root_id})
+        self.assertEqual(after["result"], before["result"])
+        self.assertEqual(after["cancellation"], expected)
+        self.assertEqual(cli_views.render("result", after)["cancellation"], expected)
+
+    def test_missing_historical_helper_actor_is_not_filled_from_later_cancel(self):
+        board, _, parent, child = self.parent_and_child()
+        self.cancel(board, parent)
+        with board.store.db.write() as connection:
+            connection.execute(
+                "UPDATE events SET payload_json=json_remove(payload_json,'$.actor')"
+                " WHERE seq=(SELECT MIN(seq) FROM events WHERE task_id=? AND kind='workflow.helper_cancelled')",
+                (child,),
+            )
+        board.store.workflow.cancel({"runId": child, "reason": "later"},
+                                    console_authority={"sessionId": "later"})
+        self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"],
+                         {"actor": None, "reason": "Host stopped this goal"})
+
     def test_cancellation_traverses_completed_intermediary(self):
         board, root, parent, child = self.parent_and_child(kind="worktree")
         grandchild = self.grandchild(board, child, root)
@@ -163,6 +220,8 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.continue_run(board, view, helper_policy="cancel")
         self.assert_cancelled_run(board, child)
         self.assert_cancelled_run(board, grandchild)
+        self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"]["actor"], "host:host-1")
+        self.assertEqual(board.call("workflow_get", {"runId": grandchild})["cancellation"]["actor"], "host:host-1")
         self.assertIn((parent["runId"], "held"), self.reservations(board))
         self.assertNotIn((child, "held"), self.reservations(board))
 

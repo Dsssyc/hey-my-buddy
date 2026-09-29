@@ -581,6 +581,7 @@ class WorkflowCoordinator:
             "hostId": run_row["host_id"],
             "ownerGeneration": run_row["owner_generation"],
             "state": state,
+            "cancellation": self._cancellation(connection, run_row),
             "status": task_row["state"],
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
@@ -631,6 +632,13 @@ class WorkflowCoordinator:
         return view
 
     @staticmethod
+    def _cancellation(connection, run_row):
+        if run_row["state"] != "cancelled":
+            return None
+        from .cancellation import for_run
+        return for_run(connection, run_row["run_id"])
+
+    @staticmethod
     def _goal_view(goal: dict, fingerprint: str) -> dict:
         """The bounded goal summary; the immutable original spec is in audit."""
         task = goal.get("task") if isinstance(goal.get("task"), str) else ""
@@ -654,6 +662,7 @@ class WorkflowCoordinator:
             "adapter": decorated["adapter"],
             "cwd": decorated["cwd"],
             "status": decorated["status"],
+            "cancellation": decorated.get("cancellation"),
             "state": decorated["state"],
             "queueReason": decorated["queueReason"],
             "revision": decorated["revision"],
@@ -2477,7 +2486,8 @@ class WorkflowCoordinator:
                 policy = "keep"
             helper_outcomes = self._helper_outcomes(connection, run_id)
             if policy == "cancel":
-                self._cancel_children(connection, run_id, reason or "manual continuation cancelled live helpers", now)
+                self._cancel_children(connection, run_id, reason or "manual continuation cancelled live helpers", now,
+                                      actor=actor)
             # New manual input supersedes every older unconsumed intent, including
             # an earlier manual input that has not acquired an execution attempt.
             connection.execute(

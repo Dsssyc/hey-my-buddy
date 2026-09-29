@@ -24,6 +24,8 @@ Authenticated GET `/api/objectives` and `/api/objectives/<objectiveId>/timeline`
 
 `objective_stop` accepts only objectiveId, commandId and optional bounded reason with server-attached console authority. It atomically cancels the complete current unaccepted root/helper/routing scope while retaining accepted roots and its replay receipt. Cancellation acknowledgement never proves termination; show 正在停止 or 停止未确认 until recorded shutdown is confirmed. It does not close the group to future Host submissions.
 
+Delegation details read the first cancellation event for that run. Host control shows “Host 取消” with the Host ID and recorded reason; an objective stop from the console shows “在控制台停止” and its reason. Older or incomplete events without a verifiable actor show “取消（发起者未知）”. A completed execution remains completed even if its governed goal was later cancelled.
+
 The HTTP handler also owns `console_access_set`, `console_logout` and `console_session_revoke` under the same write-origin and CSRF checks. These manage only local access settings and browser logins; they are not C-Two operations or Host CLI commands.
 
 ## UI and verification

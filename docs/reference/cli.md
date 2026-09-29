@@ -44,6 +44,8 @@ The projection only omits material the caller already supplied (the goal packet 
 | `await` | The envelope without `note`, `maxWaitSeconds`, `createdAt`, `cwd` and null fields; `logPaths` only when `ok` is false; a governed result without its runner `finalText` when the turn summary is present |
 | `status`, `execution-*` | Task identity (`runId`, `taskId`, `requestId`, `createdAt`) and state, attempt identity/state and `workerId`, `resultAvailable`, `shutdownConfirmed`, acceptance fields, `configuration`, the compact `workflow` summary, `workflowShutdown`, `activity`, `inquiries` and a `title`; no `spec`, task text or runner payload |
 | `result` | The `status` view plus `attemptId`, `resultDelivered`, the verified execution `artifacts`, `resultMeta` without its duplicate artifact list, and the governed result view (or the opaque infrastructure `result`) |
+
+Cancelled governed `get` and execution `result` views expose `cancellation: {actor, reason}` in both brief and full output when their own durable cancellation event exists. A missing event or field stays unknown; the attempt's `terminationReason: user-cancel` describes its stop cause, not who initiated it. A completion already recorded before goal cancellation keeps its completed execution result.
 | `list` | `runs` rows with `runId`, `requestId`, `adapter`, `model`, `status`, `workflowState`, `awaitingHost`, `kind`, `parentRunId`, `currentHostId`, `createdAt` and a `title`; `total`, `cursor`, `nextCursor` |
 
 ## Service
