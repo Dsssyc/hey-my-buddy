@@ -23,8 +23,6 @@ export type ObjectiveListProps = {
   active?: boolean;
   /** Collapsed 48px rail while a detail is open above 760px (0.15.1 U1). */
   rail: boolean;
-  /** The selected objective whose state icon the rail carries. */
-  railState?: ObjectiveSummary | null;
   /** Focus target restored when the drawer closes. */
   railButtonRef?: React.RefObject<HTMLButtonElement | null>;
   onToggleRail?: () => void;
@@ -33,7 +31,6 @@ export type ObjectiveListProps = {
   onProjectChange: (projectId: string) => void;
   onHostChange: (hostId: string) => void;
   onSelect: (objectiveId: string) => void;
-  onRefresh: () => void;
   onRetry: () => void;
   onMore: () => void;
   onApplyReorder: () => void;
@@ -149,15 +146,11 @@ export function ObjectiveList(props: ObjectiveListProps) {
     });
   }
   if (props.rail) {
-    const state = props.railState ?? null;
     return <section className="panel list-panel rail-panel" aria-label="工作目标列表（已收起）">
       <button ref={props.railButtonRef} type="button" className="rail-expand" onClick={props.onToggleRail}
         aria-expanded={false} title="展开工作目标列表">
         <span className="rail-text" aria-hidden="true">工作目标 ›</span>
       </button>
-      {state && <span className={`rail-state st ${state.state === "host" ? "amber" : state.state === "active" ? "green" : "neutral"}`}
-        title={objectiveStateLabel(state)}
-        aria-label={`当前工作目标：${objectiveStateLabel(state)}`}>●</span>}
     </section>;
   }
   function loadMore() {
@@ -167,9 +160,7 @@ export function ObjectiveList(props: ObjectiveListProps) {
   }
   const mainRows = show === "standalone" ? standalone : show === "all" ? rows : objectives;
   return <section className="panel list-panel" aria-label="工作目标列表">
-    <div className="panel-toolbar"><h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2>
-      <button className="button small-button" disabled={loading} onClick={props.onRefresh}>刷新</button>
-    </div>
+    <div className="panel-toolbar"><h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2></div>
     <div className="list-filters">
       <div className="list-filter-row">
         <label className="search"><span className="sr-only">搜索工作目标</span><input value={props.query} maxLength={200}

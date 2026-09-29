@@ -12,6 +12,8 @@ import { Objectives } from "./Objectives";
 import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
 import { Badge, Icon } from "./ui";
+import { errorText } from "./api";
+import { refreshVisibleReads } from "./global-refresh";
 import "./styles.css";
 import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 
@@ -35,7 +37,7 @@ function currentTab(): Tab {
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
-  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
+  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} strictRefresh={() => state.refresh(undefined, true)} connectionError={state.error} updatedAt={state.updatedAt} /> :
     <main className="startup"><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" />
       <h1>{state.error ? "暂时无法连接黑板" : "正在连接本地黑板"}</h1>
       <p role={state.error ? "alert" : "status"}>{state.error || "读取持久记录，不调用模型。"}</p>
@@ -71,10 +73,12 @@ function SaveBar({ editor, mutationsAvailable, describedBy }: {
   </div>;
 }
 
-function Connected({ api, snapshot, refresh, connectionError }: {
-  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
+function Connected({ api, snapshot, refresh, strictRefresh, connectionError, updatedAt }: {
+  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; strictRefresh: () => Promise<Snapshot | null>; connectionError: string; updatedAt: number | null;
 }) {
   const [tab, setTab] = useState<Tab>(currentTab);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState("");
   const [visited, setVisited] = useState(() => new Set<Tab>([currentTab()]));
   const theme = useTheme();
   // One latch for the mounted page: the polling snapshot's own descriptor
@@ -108,9 +112,22 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
   // P1.2: the internal table revision lives only in the connection tooltip.
   const connectionTitle = connectionError
-    ? "与本地黑板的连接已中断；关闭页面不影响后台任务"
+    ? `与本地黑板的连接已中断：${connectionError} 请检查本地服务，或点击刷新重试。`
     : `评价表版本 V${snapshot.tableRevision} · 关闭页面不影响后台任务`;
+  async function refreshAll() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshNote("正在刷新…");
+    try {
+      const outcomes = await Promise.allSettled([strictRefresh(), refreshVisibleReads()]);
+      const failed = outcomes.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed) throw failed.reason;
+      setRefreshNote(`已刷新 · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date())}`);
+    } catch (failure) { setRefreshNote(`刷新失败：${errorText(failure)}`); }
+    finally { setRefreshing(false); }
+  }
   const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
+  const automaticRead = updatedAt === null ? "自动读取尚未完成" : `每 3 秒自动读取 · 数据截至 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(updatedAt)}`;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddy";
   return <div className="app-shell">
@@ -118,7 +135,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       event.preventDefault(); document.getElementById("main")?.focus();
     }}>跳至主要内容</a>
     <header className="app-header">
-      <a className="brand" href="#tasks" aria-label="hey my buddy" onClick={() => select("tasks")}><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" /><strong>hey my buddy</strong></a>
+      <a className="brand" href="#tasks" aria-label="Hey my buddy" onClick={() => select("tasks")}><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" /><strong>Hey my buddy</strong></a>
       <nav className="primary-tabs" aria-label="主要导航">
         {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + tabHashes[key]} onClick={() => select(key)}
           aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""}>
@@ -128,9 +145,9 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         </a>)}
       </nav>
       <div className="header-status">
-        <span className="connection" title={connectionTitle}>{connectionError ? "连接中断" : "已连接"}</span>
+        {connectionError && <span className="connection" title={connectionTitle}>连接中断 · 请检查本地服务并刷新</span>}
         {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
-        <button className="icon-button" aria-label="刷新工作台" title="只读刷新，不调用模型" onClick={() => void refresh()}><Icon name="refresh" /></button>
+        <button className="icon-button" aria-label="刷新工作台" title={`${automaticRead} · ${refreshNote || "点击刷新可见数据"} · 只读，不调用模型`} disabled={refreshing} onClick={() => void refreshAll()}><span className={refreshing ? "refresh-spinning" : undefined}><Icon name="refresh" /></span></button>
       </div>
     </header>
     <main id="main" className="main-content" tabIndex={-1}>

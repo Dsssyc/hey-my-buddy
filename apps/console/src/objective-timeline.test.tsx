@@ -46,6 +46,8 @@ function Harness({ timeline, selectionSource }: {
 afterEach(() => cleanup());
 
 const item = (key: string) => document.querySelector(`[data-key="${key}"]`) as HTMLButtonElement | null;
+const openInspector = () => fireEvent.click(screen.getByRole("button", { name: "展开检查器" }));
+const openLegend = () => fireEvent.click(screen.getByRole("button", { name: "图例" }));
 /** P1.7: the Host event row starts collapsed; tests expand it first. */
 async function expandHostEvents(user: ReturnType<typeof userEvent.setup>) {
   const toggle = screen.getByRole("button", { name: /[▸▾] Host 事件/ });
@@ -185,6 +187,7 @@ describe("objective timeline rendering", () => {
   it("assigns configuration colours in first-appearance order for the legend", () => {
     const timeline = objectiveTimelineFixture();
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    openLegend();
     const legend = screen.getByLabelText("执行配置图例");
     const items = [...legend.querySelectorAll(".legend-item")].map(node => node.textContent);
     // 0.16 0.3: friendly names; unknown ids stay raw.
@@ -276,10 +279,12 @@ describe("objective timeline rendering", () => {
     expect(second.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
   });
 
-  it("keeps the overview cards in creation order with the three single-line rows", () => {
+  it("keeps compact cards in creation order and expands the remaining cards", () => {
     const timeline = objectiveTimelineFixture();
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const strip = container.querySelector(".delegation-strip") as HTMLElement;
+    expect(strip.querySelectorAll(".delegation-card").length).toBe(4);
+    fireEvent.click(screen.getByRole("button", { name: "展开全部 5 个" }));
     const cards = [...strip.querySelectorAll<HTMLElement>(".delegation-card")];
     expect(cards.length).toBe(5);
     // T3: bold two-line title, top-right status, one-line result with the
@@ -445,18 +450,22 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const view = render(<Harness timeline={timeline} selectionSource={source} />);
     const first = item("span:s-r1-e")!;
     await user.click(first);
+    openInspector();
     const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(inspector.querySelector(".inspector-card")).toBeTruthy();
     expect(inspector.textContent).toContain("执行片段");
     expect(inspector.textContent).toContain("设计工作目标时间轴视图与交互规范");
     expect(inspector.textContent).toContain("Claude Opus 5.5 · high");
-    // Hover and focus elsewhere only change the preview row, never the card.
+    // Hover never changes the card or reference line; focus only moves the guide.
+    const guideBefore = document.querySelector(".guide-line")?.getAttribute("style");
     await user.hover(item("span:s-r3-e1")!);
+    expect(document.querySelector(".guide-line")?.getAttribute("style")).toBe(guideBefore);
+    expect(inspector.textContent).not.toContain("预览：");
     act(() => { item("span:s-r3-e1")!.focus(); });
     const after = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(after.textContent).toContain("设计工作目标时间轴视图与交互规范");
     expect(after.textContent).toContain("Claude Opus 5.5 · high");
-    expect(after.textContent).toContain("预览：");
+    expect(after.textContent).not.toContain("预览：");
     // A refresh with the same facts keeps the pinned card.
     view.rerender(<Harness timeline={objectiveTimelineFixture()} selectionSource={source} />);
     expect(document.querySelector(".timeline-inspector")!.textContent).toContain("Claude Opus 5.5 · high");
@@ -470,8 +479,10 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const view = render(<Harness timeline={timeline} selectionSource={source} />);
     // Pin the whole run so the card carries related Host events.
     await user.click(item("row:r3")!);
+    openInspector();
     const card = document.querySelector(".inspector-card") as HTMLElement;
     expect(card.textContent).toContain("整项委派");
+    await user.click(screen.getByRole("button", { name: "收起检查器" }));
     // A filtered refresh that no longer returns the helper's rows or spans.
     const dropped = objectiveTimelineFixture({
       rows: objectiveTimelineFixture().rows.filter(row => row.runId !== "r3"),
@@ -481,6 +492,8 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
       totals: { rows: 5, spans: 13, events: 8, allRows: 6 },
     });
     view.rerender(<Harness timeline={dropped} selectionSource={source} />);
+    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
+    openInspector();
     const kept = document.querySelector(".inspector-card") as HTMLElement;
     expect(kept.textContent).toContain("该记录不在当前读取范围内（可能已截断或被筛选）");
     const open = within(kept).getByRole("button", { name: "打开详情" });
@@ -496,21 +509,22 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     view.unmount();
   });
 
-  it("shows the preview facts when nothing is pinned and a hint on empty canvases", () => {
+  it("starts with a one-line inspector summary and never shows hover previews", () => {
     const timeline = objectiveTimelineFixture();
     const title = "修正时间轴上的重复预览标题";
     timeline.rows = timeline.rows.map(row => ({ ...row, title, titleSource: "title" }));
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
-    const inspector = container.querySelector(".timeline-inspector")!;
-    // Nothing is pinned yet: the row shows one preview line and the hint.
-    expect(inspector.textContent).toContain("执行片段");
-    const preview = inspector.querySelector(".inspector-preview")!;
-    expect(preview.textContent!.split(title)).toHaveLength(2);
-    expect(preview.getAttribute("title")).toBe(preview.textContent);
-    expect(inspector.textContent).toContain("单击选中 · Enter 或双击打开详情");
+    const dock = container.querySelector(".inspector-dock")!;
+    expect(dock.className).toContain("collapsed");
+    expect(dock.textContent).toContain("检查器 · 单击时间轴元素查看详情");
+    fireEvent.mouseEnter(item("span:s-r1-e")!);
+    expect(dock.textContent).not.toContain(title);
+    openInspector();
+    expect(container.querySelector(".timeline-inspector")!.textContent).toContain("单击选中 · Enter 或双击打开详情");
+    expect(container.querySelector(".inspector-preview")).toBeNull();
     const empty = objectiveTimelineFixture({ rows: [], spans: [], events: [], totals: { rows: 0, spans: 0, events: 0, allRows: 0 } });
     const second = render(<ObjectiveTimeline {...baseProps(empty)} />);
-    expect(second.container.querySelector(".timeline-inspector")!.textContent).toContain("单击选中 · Enter 或双击打开详情");
+    expect(second.container.querySelector(".inspector-dock")!.textContent).toContain("检查器 · 单击时间轴元素查看详情");
   });
 
   it("Enter and double-click open details; selection follows the opened item", async () => {
@@ -534,6 +548,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const source = { get: () => null };
     render(<Harness timeline={timeline} selectionSource={source} />);
     await user.click(item("row:r2")!);
+    openInspector();
     // Every span of the row gets the thin run outline; the settle flag of r1 does not.
     expect(item("span:s-r2-q")!.className).toContain("run-member");
     expect(item("span:s-r2-r")!.className).toContain("run-member");
@@ -568,7 +583,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     fireEvent.keyDown(document.activeElement!, { key: "End" });
     expect(document.activeElement!.getAttribute("data-key")).toBe("settle:r1");
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    expect(document.activeElement!.textContent).toContain("以列表查看");
+    expect(document.activeElement!.textContent).toContain("时间轴");
   });
 
   it("opens merged markers as a popover only: no automatic first selection, rows select individually and stay open", async () => {
@@ -715,7 +730,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const timeline = objectiveTimelineFixture();
     const onSelectItem = vi.fn(), onOpenItem = vi.fn();
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline, { onSelectItem, onOpenItem })} />);
-    const toggle = screen.getByRole("button", { name: "以列表查看" })!;
+    const toggle = screen.getByRole("button", { name: "列表" })!;
     await user.click(toggle);
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector(".timeline-body")!.className).toContain("as-list");
@@ -735,7 +750,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const uncertainEntry = entries.find(node => node.getAttribute("data-key") === "span:s-r6-e")!;
     expect(uncertainEntry.textContent).toContain("结束未确认");
     // The inspector stays visible in list mode and single clicks pin it.
-    expect(container.querySelector(".timeline-inspector")).toBeTruthy();
+    expect(container.querySelector(".inspector-dock-title")!.textContent).toContain("检查器");
     await user.click(entries.find(node => node.getAttribute("data-key") === "span:s-r2-r")!);
     expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ key: "span:s-r2-r" }));
     expect(onOpenItem).not.toHaveBeenCalled();
@@ -752,7 +767,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     scroll.scrollTop = 130;
     scroll.scrollLeft = 240;
     // List view: select from a chronology entry so its key owns the focus.
-    await user.click(screen.getByRole("button", { name: "以列表查看" })!);
+    await user.click(screen.getByRole("button", { name: "列表" })!);
     const entry = document.querySelector(".tl-list [data-key='span:s-r6-e']") as HTMLButtonElement;
     await user.click(entry);
     expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ key: "span:s-r6-e" }));
@@ -763,7 +778,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(scroll.scrollTop).toBe(130);
     expect(scroll.scrollLeft).toBe(240);
     // Back in canvas mode, the same key refocuses its canvas span.
-    await user.click(screen.getByRole("button", { name: "以列表查看" })!);
+    await user.click(screen.getByRole("button", { name: "时间轴" })!);
     const canvasSpan = item("span:s-r6-e")!;
     await user.click(canvasSpan);
     view.rerender(<ObjectiveTimeline {...baseProps(timeline, { onSelectItem, hidden: true })} />);
@@ -793,6 +808,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
   it("keeps assigned configuration colours across refreshes and stripes overflow on the bars", () => {
     const first = objectiveTimelineFixture();
     const view = render(<ObjectiveTimeline {...baseProps(first)} />);
+    openLegend();
     const legendColors = () => [...screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch")]
       .map(node => (node as HTMLElement).style.getPropertyValue("--c"));
     expect(legendColors()).toEqual(["var(--cfg-1)", "var(--cfg-2)", "var(--cfg-3)", "var(--cfg-4)"]);
@@ -822,6 +838,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     many.events = [];
     const overflow = render(<ObjectiveTimeline {...baseProps(many)} />);
     expect([...document.querySelectorAll(".sp.exec.striped")].length).toBe(1);
+    openLegend();
     expect(screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
     overflow.unmount();
   });

@@ -3,6 +3,7 @@ import { errorText } from "./api";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
+import { useGlobalRefresh } from "./global-refresh";
 
 /**
  * Read-only workflow read for the delegation detail (0.15.1 U4). The browser
@@ -16,6 +17,12 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, vis
   const [reload, setReload] = useState(0);
   const csrf = snapshot.csrfToken;
   const runId = task.runId;
+  useGlobalRefresh(async () => {
+    const result = await api.command<Workflow>("workflow_get", { runId }, csrf);
+    if (!result.governed || result.runId !== runId || !Number.isInteger(result.revision)) throw new Error("协作记录不完整，请检查服务版本。");
+    setValue(result);
+    setError("");
+  }, visible);
   useEffect(() => {
     if (!visible) return;
     // React 19 cleanup prevents an older request replacing a newer snapshot.

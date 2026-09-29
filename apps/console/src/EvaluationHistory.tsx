@@ -3,6 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot } from "./types";
 import { formatDate } from "./ui";
+import { useGlobalRefresh } from "./global-refresh";
 
 /** Bounded page size: the console never asks for an unbounded publication range. */
 export const HISTORY_PAGE_SIZE = 20;
@@ -106,6 +107,12 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
   const [error, setError] = useState(""), [busy, setBusy] = useState(true), [retry, setRetry] = useState(0);
   const csrf = useRef(snapshot.csrfToken);
   csrf.current = snapshot.csrfToken;
+  useGlobalRefresh(async () => {
+    const value = await api.command<EvaluationHistoryPage>("evaluation_history",
+      { limit: HISTORY_PAGE_SIZE, ...(before === undefined ? {} : { before }) }, csrf.current);
+    setPage(parseHistoryPage(value));
+    setError("");
+  }, active);
   useEffect(() => {
     if (!active) return;
     // A late page from a previously inspected cursor must not replace this one.
@@ -126,8 +133,7 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
       <button className="button small-button" onClick={onBack}>返回 Buddy 配置</button></div>
       <p className="small muted">只读取已发布版本的元数据；查看记录不会调用模型，也不会修改评价表。</p></header>
     <div className="detail-body">
-      <div className="row-between"><h3>已发布版本{page ? ` · ${page.total}` : ""}</h3>
-        <button className="button small-button" disabled={busy} onClick={() => setRetry(n => n + 1)}>刷新记录</button></div>
+      <div className="row-between"><h3>已发布版本{page ? ` · ${page.total}` : ""}</h3></div>
       {error && <p role="alert" className="error-message">{error}
         <button className="button small-button" disabled={busy} onClick={() => setRetry(n => n + 1)}>重试读取</button></p>}
       {busy && <p role="status" className="small muted">正在读取更新记录…</p>}

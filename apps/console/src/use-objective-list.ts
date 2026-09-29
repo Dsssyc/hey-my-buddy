@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
+import { useGlobalRefresh, waitForRead } from "./global-refresh";
 import type { ObjectivePage, ObjectiveQuery, ObjectiveSummary } from "./objective-types";
 
 type PageState = { rows: ObjectiveSummary[]; total: number; nextCursor: string | null };
@@ -45,8 +46,13 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
     setRevision(value => value + 1);
   }, []);
 
-  const fetchPage = useCallback(async (mode: "first" | "more" | "poll") => {
-    if (!current.current.active || pending.current) return;
+  const fetchPage = useCallback(async (mode: "first" | "more" | "poll", strict = false) => {
+    if (!current.current.active) return;
+    if (pending.current) {
+      if (!strict) return;
+      await waitForRead(() => pending.current);
+      if (!current.current.active) return;
+    }
     if (mode === "more" && !current.current.cursor) return;
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true;
@@ -124,10 +130,12 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
       }
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) { pending.current = false; if (mode !== "poll") setLoading(false); }
     }
   }, [api]);
+  useGlobalRefresh(() => fetchPage("poll", true), active);
 
   const loadedKey = useRef<string | null>(null);
   useEffect(() => {

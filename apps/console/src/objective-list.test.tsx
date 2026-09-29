@@ -165,16 +165,16 @@ describe("objective list (0.16 P1.4)", () => {
     expect(other).toHaveProperty("disabled", false);
   });
 
-  it("renders the 48px rail strip with the expand control and the state icon (U1)", () => {
+  it("renders the 48px rail strip with only the expand control", () => {
     const onToggleRail = vi.fn();
-    const view = render(<ObjectiveList { ...{ ...props(), rail: true, railState: rows[0], onToggleRail } } />);
+    const view = render(<ObjectiveList { ...{ ...props(), rail: true, onToggleRail } } />);
     const expand = screen.getByRole("button", { name: /工作目标/ });
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     expect(expand.textContent).toContain("›");
     // The rail shows only the strip: no filters, no rows.
     expect(view.container.querySelector(".list-filters")).toBeNull();
     expect(view.container.querySelector(".task-list")).toBeNull();
-    expect(view.container.querySelector(".rail-state")!.getAttribute("aria-label")).toBe("当前工作目标：进行中");
+    expect(view.container.querySelector(".rail-state")).toBeNull();
     fireEvent.click(expand);
     expect(onToggleRail).toHaveBeenCalled();
     view.unmount();

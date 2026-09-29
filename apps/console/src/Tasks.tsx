@@ -8,6 +8,7 @@ import { TaskDetails } from "./TaskDetails";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { SplitView } from "./SplitView";
 import { mergeLiveTasks, useTaskHistory } from "./use-task-history";
+import { useGlobalRefresh } from "./global-refresh";
 
 export function Tasks({ snapshot, api, refresh, active = true }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
@@ -18,6 +19,13 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   const [detailError, setDetailError] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const history = useTaskHistory(api, { rootsOnly: !internal, query, projectId, hostId, filter }, active);
+  useGlobalRefresh(async () => {
+    if (!selected) return;
+    const value = await api.task(selected);
+    if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== selected || !("task" in value)) throw new Error("委派详情不完整。");
+    setRemote(value as Task);
+    setDetailError("");
+  }, active && !!selected);
   const tasks = mergeLiveTasks(history.runs, snapshot.tasks.runs);
   const listed = tasks.find(t => t.runId === selected) || snapshot.tasks.runs.find(t => t.runId === selected);
   const saved = remote?.runId === selected ? remote : undefined;
@@ -79,7 +87,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   }, [history.runs.length, history.loading]);
   const reload = async () => { const result = await refresh(); history.reset(); return result; };
   const list = <section className="panel list-panel" aria-label="委派列表">
-    <div className="panel-toolbar"><h2>委派记录</h2><button className="button small-button" disabled={history.loading} onClick={() => history.reset()}>刷新记录</button></div>
+    <div className="panel-toolbar"><h2>委派记录</h2></div>
     <div className="list-filters">
       <div className="segmented" aria-label="任务筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
         <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>

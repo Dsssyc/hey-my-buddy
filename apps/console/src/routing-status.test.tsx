@@ -123,10 +123,22 @@ describe("the one-line routing status", () => {
 
   it("turns into a warning with the resolving action when the Router is not verified", () => {
     const unverified = { ...router, capabilities: ["execution:codex"] };
-    renderBar(snapshot(healthy, { profiles: [unverified] }));
+    const alternative = { ...router, profileId: "claude:anthropic:verified:medium", adapter: "claude", provider: "anthropic", model: "verified" };
+    renderBar(snapshot(healthy, { profiles: [unverified, alternative] }));
     expect(bar().className).toContain("warning");
     expect(bar().querySelector(".routing-warning")!.textContent)
       .toContain("当前 Router Test · high 未验证路由能力：请在另一个具备 decision 能力的档位菜单中选择“设为 Router”");
+  });
+
+  it("explains the Host boundary when no verified Router is available", async () => {
+    const user = userEvent.setup();
+    const unverified = { ...router, capabilities: ["execution:codex"] };
+    renderBar(snapshot(healthy, { profiles: [unverified] }));
+    const warning = bar().querySelector(".routing-warning")!.textContent;
+    expect(warning).toContain("暂无已验证的 Router，默认路由会停在 Host 边界；委派时请指定配置");
+    expect(warning).not.toContain("设为 Router");
+    await user.click(screen.getByRole("button", { name: "详情" }));
+    expect(screen.getByText(/目录中没有同时满足已启用、当前可用且具备已验证 decision 能力的档位/)).toBeTruthy();
   });
 
   it("warns when no Router is set and when routing keeps failing", () => {

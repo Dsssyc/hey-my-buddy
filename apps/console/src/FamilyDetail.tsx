@@ -65,8 +65,7 @@ type TagProps = {
 
 /**
  * One effort as a tag: its enable switch, its effective preference (colour,
- * glyph and border style together, never colour alone), an override notch
- * when the effort overrides its family, and the Router mark. The menu holds
+ * glyph and border style together, never colour alone), and the Router mark. The menu holds
  * the effort's preference override and "设为 Router".
  */
 function EffortTag({
@@ -82,7 +81,7 @@ function EffortTag({
   const switchTitle = !editor.sessionWritable ? "登录已失效；重新登录后可修改"
     : !editor.editing ? "保存进行中或结果未确认，暂不能修改"
       : !profile.available && !profile.enabled ? "该档位当前不可用，不能新启用" : undefined;
-  const refusal = isRouter ? "已是 Router" : routerRefusal(profile);
+  const refusal = isRouter ? null : routerRefusal(profile);
   const pinLocked = baselineOverrideMode !== "pin" && (!profile.available || !profile.enabled);
   const overrideValue: OverrideMode | "" = override?.mode ?? "";
   // The snapshot names where each effective preference came from; a row without
@@ -124,6 +123,7 @@ function EffortTag({
       onClose={() => setMenuOpen(false)} className="effort-menu" width="min(20em, calc(100vw - 16px))">
       <fieldset className="menu-group" disabled={!editor.editing}>
         <legend>档位偏好 <Help label="档位偏好说明">{`档位覆盖优先于家族偏好。“无偏好”表示这个档位明确不带偏好，即使家族有默认值；“跟随家族”删除覆盖。${PREFERENCE_HELP}`}</Help></legend>
+        <p className="small muted">当前设置：{override ? "档位覆盖" : "跟随家族"}</p>
         <label className="menu-radio"><input type="radio" name={`override-${profile.profileId}`} checked={overrideValue === ""}
           onChange={() => setOverride("")} />跟随家族（{familyPreference ? PREFERENCE_LABEL[familyPreference.mode] : "无"}）</label>
         {(["none", ...PREFERENCE_MODES] as OverrideMode[]).map(mode => {
@@ -140,14 +140,17 @@ function EffortTag({
             onChange={e => editor.update(d => setPreferenceOverride(d, profile.profileId, override.mode, e.target.value))} /></label>}
       </fieldset>
       <div className="menu-group">
-        <button type="button" className="button small-button menu-action" aria-disabled={!!refusal || !editor.editing || undefined}
-          aria-describedby={refusal ? reasonId : undefined}
-          onClick={() => {
-            if (refusal || !editor.editing) return;
-            setMenuOpen(false);
-            onSetRouter(profile);
-          }}>设为 Router</button>
-        {refusal && <p id={reasonId} className="small muted menu-reason">{refusal}</p>}
+        {isRouter ? <p className="small menu-current-router">当前 Router</p> : <>
+          <button type="button" className="button small-button menu-action" disabled={!!refusal || !editor.editing}
+            aria-disabled={!!refusal || !editor.editing || undefined}
+            aria-describedby={refusal ? reasonId : undefined}
+            onClick={() => {
+              if (refusal || !editor.editing) return;
+              setMenuOpen(false);
+              onSetRouter(profile);
+            }}>设为 Router</button>
+          {refusal && <p id={reasonId} className="small muted menu-reason">{refusal}</p>}
+        </>}
       </div>
     </Popover>}
   </div>;
@@ -267,7 +270,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
       {!!attention.length && <p className="banner attention-banner" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
       <div className="family-fields">
         <div className="family-field">
-          <span className="family-label">档位 <Help label="档位说明">点开关即启用或停用该档位；标签颜色、图标和描边表示生效偏好（▲ 优先、◆ 固定、⊘ 排除），右上角缺口表示该档位覆盖了家族偏好。偏好覆盖和“设为 Router”在标签菜单 ▾ 中。</Help></span>
+          <span className="family-label">档位 <Help label="档位说明">点开关即启用或停用该档位；标签颜色、图标和描边表示生效偏好（▲ 优先、◆ 固定、⊘ 排除）。是否为档位覆盖及其理由、Router 设置都在标签菜单 ▾ 中。</Help></span>
           <div className="effort-tags" role="group" aria-label="档位">
             {efforts.map(profile => <EffortTag key={profile.profileId} profile={profile} editor={editor}
               recordedEnabled={recorded.profiles.find(p => p.profileId === profile.profileId)?.enabled}

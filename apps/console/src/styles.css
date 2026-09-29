@@ -28,6 +28,9 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .nav-count { padding: 0 5px; background: var(--warning-wash); color: var(--warning); border-radius: 3px; font-size: 11px; }
 .header-status { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .connection { font-size: 12px; color: var(--muted); }
+.refresh-spinning { display: inline-flex; animation: refresh-spin .8s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .refresh-spinning { animation: none; } }
 .nav-unsaved { color: var(--warning); font-size: 16px; line-height: 1; }
 /* A real switch track: the effort tags' enable switches. */
 .switch-track { position: relative; display: inline-block; flex-shrink: 0; width: 30px; height: 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--subtle); transition: background .15s ease, border-color .15s ease; }
@@ -160,8 +163,8 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .profile-avatar { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent); border-radius: 5px; }
 .evidence-item { padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
 .evidence-item > span { display: block; margin-top: 6px; }
-.settings-page { height: 100%; overflow-y: auto; scrollbar-gutter: stable; }
-.settings-panel { padding: 20px; max-width: 960px; margin-inline: auto; }
+.settings-page { width: 100%; max-width: 960px; height: 100%; margin-inline: auto; display: grid; align-content: start; gap: 16px; overflow-y: auto; scrollbar-gutter: stable; }
+.settings-panel { padding: 20px; }
 .settings-panel .panel-heading p { color: var(--muted); margin-top: 8px; font-size: 13px; }
 .panel-heading { margin-bottom: 16px; }
 .configuration-summary { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--subtle); border-radius: 5px; margin: 16px 0; }
@@ -658,8 +661,11 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .tl-head.compact .objective-vitals { font-size: 11px; }
 
 /* The storage panel (0.16). */
-.storage-panel { padding: 20px; max-width: 960px; margin-inline: auto; border-top: 1px solid var(--line); }
-.settings-page .settings-panel { border-radius: 6px 6px 0 0; }
+.storage-panel { padding: 20px; }
+.storage-overview { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+.storage-overview > div { flex: 1 1 160px; display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); }
+.storage-overview span { color: var(--muted); font-size: 11px; }
+.storage-overview strong { color: var(--ink); font-size: 16px; font-weight: 600; }
 .storage-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .storage-table th, .storage-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-weight: 400; }
 .storage-table thead th { color: var(--faint); font-size: 11px; }
@@ -730,6 +736,8 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-name { font-weight: 600; min-width: 5.5em; }
 .harness-summary { flex: 1 1 240px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .harness-row-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+.harness-row-toggle { min-width: 24px; min-height: 24px; align-self: center; font-size: 15px; line-height: 1; }
+.harness-row-toggle:hover { color: var(--ink); background: var(--subtle); }
 .harness-detail { display: grid; gap: 8px; padding: 6px 12px 10px; border-top: 1px dashed var(--line); }
 .harness-facts { display: grid; gap: 2px; margin: 0; }
 .harness-facts > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
@@ -746,8 +754,9 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-manual-field { display: grid; gap: 4px; }
 .harness-manual-field input { max-width: 34em; font-size: 12px; }
 
-/* The family list: harness groups, folded when unavailable. */
+/* The family list: harness groups with no enabled effort start folded. */
 .harness-heading { cursor: pointer; }
+.harness-heading .group-count { white-space: nowrap; }
 .harness-reason { padding: 4px 12px 6px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .family-row { gap: 3px; padding-block: 9px; }
 .family-row-marks { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
@@ -774,8 +783,7 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .effort-evaluation-body h4, .reading-section h4 { margin: 12px 0 6px; font-size: 12px; }
 
 /* Effort tags: switch + name + preference glyph + Router mark + menu. The
-   effective preference sets colour, glyph and border style together; an
-   override adds a corner notch. */
+   effective preference sets colour, glyph and border style together. */
 .effort-tags { display: flex; flex-wrap: wrap; gap: 8px; }
 .effort-tag { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 2px 4px 2px 8px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); color: var(--muted); font-size: 12px; }
 .effort-tag:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -793,7 +801,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .effort-tag.pref-exclude { border: 2px dashed var(--pref-exclude); background: var(--pref-exclude-wash); }
 .effort-tag.pref-exclude .pref-icon { color: var(--pref-exclude); }
 .effort-tag.pref-exclude .effort-name { text-decoration: line-through; text-decoration-thickness: 1px; }
-.effort-tag.override::after { content: ""; position: absolute; top: -3px; right: 10px; width: 7px; height: 7px; border: 1px solid var(--ink); border-radius: 1px; background: var(--surface); transform: rotate(45deg); }
 .unsaved-dot { color: var(--warning); font-weight: 700; }
 .pref-swatch { display: inline-flex; justify-content: center; width: 16px; font-size: 11px; }
 .pref-swatch.pref-prefer { color: var(--pref-prefer); }
@@ -803,21 +810,65 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .menu-group { display: grid; gap: 4px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .menu-group + .menu-group { padding-top: 8px; border-top: 1px solid var(--line); }
 .menu-group legend { padding: 0; margin-bottom: 4px; font-size: 12px; font-weight: 600; }
-.menu-radio { display: flex; align-items: center; gap: 6px; min-height: 26px; font-size: 12px; }
+.menu-radio { display: flex; align-items: center; gap: 6px; min-height: 26px; min-width: 0; font-size: 12px; white-space: nowrap; }
+.effort-menu .menu-radio input[type="radio"] { flex: 0 0 auto; width: auto; min-width: auto; margin: 0; padding: 0; }
+.effort-menu .menu-radio .pref-swatch { flex: 0 0 16px; }
 .menu-radio:has(input:disabled) { color: var(--faint); }
 .compact-field { margin: 4px 0 0; }
 .menu-action { justify-self: start; }
 .menu-reason { margin: 0; overflow-wrap: anywhere; }
+.menu-current-router { margin: 0; color: var(--accent); font-weight: 600; }
 
 /* The bottom save bar replaces the old global edit switch. */
 .save-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 14px; padding: 8px 12px; border: 1px solid var(--warning-line); border-radius: 6px; background: var(--warning-wash); color: var(--warning); font-size: 12px; font-weight: 600; }
 .save-bar-state { margin-right: auto; }
 
-.theme-choice { margin-top: 10px; }
-.settings-panel h2 { font-size: 14px; }
+.theme-choice { display: flex; flex-wrap: wrap; gap: 6px; }
+.settings-page .panel-heading h2 { font-size: 16px; font-weight: 600; }
+.settings-page .segment { min-height: 36px; justify-content: center; }
 @media (max-width: 760px) {
   .family-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .routing-status-line > .button { margin-left: 0; }
   .harness-status-line > .button, .harness-row-actions { margin-left: 0; }
   .harness-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+
+/* Console polish: keep the timeline canvas as the scrolling surface. */
+.timeline-view { overflow: hidden; }
+.tl-head { flex-shrink: 0; max-height: none; min-height: 0; overflow: visible; padding-block: 8px; gap: 4px; }
+.tl-head .objective-title-row h2 { flex: 1 1 0; }
+.tl-head .objective-title-row .objective-description { flex: 1 1 0; min-width: 0; display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.tl-head .objective-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.tl-head .time-stats { position: relative; border: 0; }
+.tl-head .time-stats > summary { padding: 2px 0; white-space: nowrap; cursor: pointer; }
+.tl-head .time-stats-body { position: absolute; z-index: 8; top: calc(100% + 3px); right: 0; inline-size: min(34em, calc(100vw - 32px)); max-block-size: min(50vh, 340px); overflow-y: auto; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
+.timeline-view > .tl-head, .timeline-view > .delegation-band, .timeline-view > .tl-toolbar { flex-shrink: 0; min-height: 0; overflow: visible; }
+.timeline-view > .timeline-body, .timeline-view > .tl-body { min-height: 120px; }
+.delegation-strip { flex-wrap: wrap; overflow: hidden; gap: 6px 8px; }
+.delegation-card { width: min(262px, 100%); }
+.delegation-show-all { align-self: center; }
+.timeline-legend-popover { inline-size: min(36em, calc(100vw - 16px)); display: grid; gap: 10px; padding: 12px; }
+.timeline-view-switch { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
+.timeline-view-switch .button { border: 0; border-radius: 0; min-height: 28px; }
+.timeline-view-switch .button[aria-pressed="true"] { color: var(--accent); background: var(--accent-wash); }
+.timeline-view-switch .button + .button { border-left: 1px solid var(--line); }
+.fold-button { top: 5px; bottom: auto; height: 28px; min-width: 24px; flex-direction: row; padding: 0; font-size: 15px; line-height: 1; }
+.sp:hover, .mk:hover, .flag:hover { filter: brightness(1.16); outline: 1px solid var(--line-strong); outline-offset: 2px; }
+.inspector-dock-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-dock-toggle { min-width: 28px; min-height: 28px; font-size: 16px; }
+.timeline-view > .inspector-separator { flex-shrink: 0; }
+.tl-scroll, .tl-list { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.tl-scroll:hover, .tl-scroll:focus-within, .tl-list:hover, .tl-list:focus-within { scrollbar-color: var(--line-strong) transparent; }
+.tl-scroll::-webkit-scrollbar, .tl-list::-webkit-scrollbar { width: 6px; height: 6px; }
+.tl-scroll::-webkit-scrollbar-thumb, .tl-list::-webkit-scrollbar-thumb { background: transparent; border-radius: 6px; }
+.tl-scroll:hover::-webkit-scrollbar-thumb, .tl-scroll:focus-within::-webkit-scrollbar-thumb,
+.tl-list:hover::-webkit-scrollbar-thumb, .tl-list:focus-within::-webkit-scrollbar-thumb { background: var(--line-strong); }
+.detail-panel.docked { background: var(--surface-raised); border-color: var(--detail-separator); }
+.right-dock.side > .right-stage-pane:first-child { background: var(--surface); }
+.right-dock.side > .detail-stage { background: var(--surface-raised); border-left: 2px solid var(--detail-separator); box-shadow: -4px 0 14px color-mix(in srgb, var(--ink) 16%, transparent); }
+.right-dock.side > .detail-stage .run-view,
+.right-dock.side > .detail-stage .locator,
+.right-dock.side > .detail-stage .detail-header,
+.right-dock.side > .detail-stage .detail-tabs { background: var(--surface-raised); }
+.right-dock.side > .detail-stage .locator,
+.right-dock.side > .detail-stage .detail-header { position: relative; z-index: 1; }

@@ -238,9 +238,10 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
             <Badge tone={harnessStatusTone(row.status)}>{harnessStatusText(row.status)}</Badge>
             <span className="harness-summary" title={harnessTitle(row)}>{harnessSummary(row)}</span>
             <span className="harness-row-actions">
-              <button type="button" className="button small-button" aria-expanded={isOpen}
+              <button type="button" className="icon-button harness-row-toggle" aria-expanded={isOpen}
                 aria-label={`${name} ${isOpen ? "收起详情" : "检测详情"}`}
-                onClick={() => toggle(row.adapter)}>{isOpen ? "收起" : "详情"}</button>
+                title={`${name} ${isOpen ? "收起详情" : "检测详情"}`}
+                onClick={() => toggle(row.adapter)}>{isOpen ? "▾" : "▸"}</button>
               <button type="button" className="button small-button" aria-disabled={checking || !canWrite}
                 title={writableTitle ?? (checking ? "正在重新检测…" : `按当前记录重新检测 ${name}，不会调用模型`)}
                 aria-label={`重新检测 ${name}`} onClick={() => void run({ kind: "check", adapter: row.adapter })}>重新检测</button>
@@ -416,13 +417,15 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     </div>
     <div className="list-scroll" tabIndex={0} aria-label="模型条目">
       {groups.length ? groups.map(group => {
-        const isFolded = folded[group.adapter] ?? group.unavailable;
+        const groupProfiles = group.families.flatMap(g => g.profiles);
+        const groupEnabled = groupProfiles.filter(p => p.enabled).length;
+        const isFolded = folded[group.adapter] ?? groupEnabled === 0;
         const reason = group.unavailable ? harnessUnavailableText(group) : "";
         return <section key={group.adapter} className="harness-group" aria-label={group.name}>
           <button type="button" className="group-heading harness-heading" aria-expanded={!isFolded}
             onClick={() => setFolded(previous => ({ ...previous, [group.adapter]: !isFolded }))}>
             <span>{isFolded ? "▸" : "▾"} {group.name}{group.unavailable ? "（不可用）" : ""}</span>
-            <span className="group-count">{group.families.length}</span>
+            <span className="group-count">已启用 {groupEnabled}/{groupProfiles.length}</span>
           </button>
           {group.unavailable && <p className="small muted harness-reason">原因：{reason}</p>}
           {!isFolded && <ul className="profile-list">{group.families.map(g => {

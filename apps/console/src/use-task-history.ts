@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
+import { useGlobalRefresh, waitForRead } from "./global-refresh";
 import type { Task, TaskPage, TaskQuery } from "./types";
 
 export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolean) {
@@ -13,8 +14,13 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
   current.current = { query, active, cursor: page.nextCursor };
   // Ignore superseded responses when filters change; abort on unmount/hide.
   // https://react.dev/reference/react/useEffect#fetching-data-with-effects
-  const fetchPage = useCallback(async (append: boolean) => {
-    if (!current.current.active || pending.current || (append && !current.current.cursor)) return;
+  const fetchPage = useCallback(async (append: boolean, strict = false) => {
+    if (!current.current.active || (append && !current.current.cursor)) return;
+    if (pending.current) {
+      if (!strict) return;
+      await waitForRead(() => pending.current);
+      if (!current.current.active) return;
+    }
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true; setLoading(true); setError("");
     try {
@@ -32,10 +38,12 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
       });
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) { pending.current = false; setLoading(false); }
     }
   }, [api]);
+  useGlobalRefresh(() => fetchPage(false, true), active);
   const loadedKey = useRef<string | null>(null);
   useEffect(() => {
     ++generation.current; request.current?.abort(); pending.current = false; setLoading(false);

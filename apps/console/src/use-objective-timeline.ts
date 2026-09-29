@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
+import { useGlobalRefresh, waitForRead } from "./global-refresh";
 import type { ObjectiveTimeline } from "./objective-types";
 
 /**
@@ -18,8 +19,12 @@ export function useObjectiveTimeline(api: ConsoleApi, objectiveId: string | null
   const dataRef = useRef<ObjectiveTimeline | null>(null);
   dataRef.current = data;
 
-  const read = useCallback(async () => {
-    if (!objectiveId || pending.current) return;
+  const read = useCallback(async (strict = false) => {
+    if (!objectiveId) return;
+    if (pending.current) {
+      if (!strict) return;
+      await waitForRead(() => pending.current);
+    }
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true;
     try {
@@ -56,10 +61,12 @@ export function useObjectiveTimeline(api: ConsoleApi, objectiveId: string | null
       setNewRunIds(new Set(appended));
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) pending.current = false;
     }
   }, [api, objectiveId]);
+  useGlobalRefresh(() => read(true), active && !!objectiveId);
 
   // A new selection resets; a visibility toggle keeps the last good data and
   // just re-reads once on return, the same retention the task history keeps.

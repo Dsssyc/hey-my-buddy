@@ -7,6 +7,7 @@ import type { TimelineRow } from "./objective-types";
 import { TaskDetails } from "./TaskDetails";
 import { taskTitle, titleTooltip } from "./task-state";
 import type { SectionId } from "./objective-display";
+import { useGlobalRefresh } from "./global-refresh";
 
 export type DetailTarget = {
   runId: string;
@@ -50,6 +51,12 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   const [remote, setRemote] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  useGlobalRefresh(async () => {
+    const value = await api.task(target.runId);
+    if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== target.runId || !("task" in value)) throw new Error("委派详情不完整。");
+    setRemote(value as Task);
+    setError("");
+  }, active);
   useEffect(() => {
     let current = true;
     setRemote(null); setError("");
@@ -69,8 +76,8 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   const crumbsTitle = `${crumbs.objective} › ${delegationTitle.full}`;
   return <div className="run-view">
     <div className="locator">
-      <button type="button" className="button small-button"
-        onClick={onBack}>{mode === "dock" ? "× 关闭详情" : "‹ 返回时间轴"}</button>
+      <button type="button" className="button small-button" aria-label={mode === "dock" ? "关闭详情" : "返回时间轴"}
+        title={mode === "dock" ? "关闭详情" : "返回时间轴"} onClick={onBack}>{mode === "dock" ? "×" : "‹"}</button>
       <span className="crumbs" title={crumbsTitle}>
         <span className="crumb">{crumbs.objective}</span>
         <span className="crumb-sep" aria-hidden="true">›</span>

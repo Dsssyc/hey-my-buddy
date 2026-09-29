@@ -1049,6 +1049,27 @@ def profile_views() -> list[dict]:
             for cfg in CONFIGS]
 
 
+def policy_views() -> dict:
+    """Synthetic schema-13 user policy: one family default, one per-effort override and one family note."""
+    def family(cfg: dict) -> dict:
+        return {key: cfg[key] for key in ("adapter", "provider", "model")}
+
+    def profile_id(cfg: dict) -> str:
+        return f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
+
+    default = {"mode": "prefer", "reason": "synthetic preview family default"}
+    override = {"mode": "exclude", "reason": "synthetic preview override"}
+    effective = [{"profileId": profile_id(CFG_FLASH), **default, "source": "family"},
+                 {"profileId": profile_id(CFG_CLAUDE), **override, "source": "override"}]
+    return {
+        "familyPreferences": [{**family(CFG_FLASH), **default}],
+        "preferenceOverrides": [{"profileId": profile_id(CFG_CLAUDE), **override}],
+        "preferences": sorted(effective, key=lambda entry: entry["profileId"]),
+        "familyAnnotations": [{**family(CFG_CODEX), "text": "synthetic preview family note", "revision": 1,
+                               "updatedAt": "2026-09-26T00:00:00Z"}],
+    }
+
+
 def concurrency_rows() -> list[dict]:
     return [{key: cfg[key] for key in ("adapter", "provider", "model")}
             | {"limit": 2, "active": 1 if cfg["adapter"] == "claude" else 0} for cfg in CONFIGS]
@@ -1070,7 +1091,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "profiles": profiles,
         "modelConcurrency": concurrency_rows(),
         "unavailableProfileCount": 0,
-        "preferences": [], "annotations": [], "cards": [], "evidence": [], "decisions": [],
+        **policy_views(), "cards": [], "evidence": [], "decisions": [],
         "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1, "staleCount": 0,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
@@ -1199,7 +1220,7 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
         result = {"decisions": decisions, "nextCursor": None, "total": len(decisions)}
     elif operation == "model_profiles":
         profiles = profile_views()
-        result = {"profiles": profiles, "cards": [], "annotations": [], "preferences": [],
+        result = {"profiles": profiles, "cards": [], **policy_views(),
                   "sampleCounts": {profile["profileId"]: 0 for profile in profiles},
                   "modelConcurrency": concurrency_rows(), "tableRevision": 7, "nextCursor": None}
     else:

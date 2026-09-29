@@ -627,7 +627,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The authenticated poll now fails; the detail stays readable and empty of
     // write controls, and no mutation is dispatched from either session state.
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(await screen.findByText("连接中断")).toBeTruthy();
+    expect(await screen.findByText(/连接中断 · 请检查本地服务并刷新/)).toBeTruthy();
     expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.

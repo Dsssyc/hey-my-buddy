@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Objectives } from "./Objectives";
@@ -7,6 +7,7 @@ import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 import { objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
+import { refreshVisibleReads } from "./global-refresh";
 import type { ObjectiveStopResult, ObjectiveTimeline } from "./objective-types";
 
 function snapshotFixture(): Snapshot {
@@ -135,7 +136,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await openObjective(f);
     await openSpan(f, "s-r2-e1");
     const locator = document.querySelector(".locator") as HTMLElement;
-    expect(within(locator).getByRole("button", { name: "‹ 返回时间轴" })).toBeTruthy();
+    expect(within(locator).getByRole("button", { name: "返回时间轴" })).toBeTruthy();
     // T4: the breadcrumb splits into two separately truncated crumbs.
     expect(within(locator).getAllByText("工作目标时间轴：设计、接口与实现").length).toBeGreaterThan(0);
     // T4: the span fact states only the round and time, never the title.
@@ -158,7 +159,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await f.user.click((await screen.findAllByRole("button", { name: /已折叠，展开/ }))[0]!);
     await openSpan(f, "s-r1-e");
     const span = document.querySelector('.tl-list [data-key="span:s-r1-e"]') as HTMLButtonElement;
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "‹ 返回时间轴" }));
+    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
     await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
     expect(document.activeElement).toBe(span);
     // Opening pinned the selection, so the outline survives the return.
@@ -180,7 +181,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
     (f.api.objectives as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ objectives: [], total: 0, nextCursor: null, cursor: 41, changed: false });
-    await f.user.click(screen.getByRole("button", { name: "刷新" }));
+    await act(async () => { await refreshVisibleReads(); });
     await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(2));
     expect(document.querySelector(".run-view")).toBeTruthy();
     expect(document.querySelector(".locator")).toBeTruthy();
@@ -211,7 +212,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3"));
     const crumbs = document.querySelector(".locator .crumbs") as HTMLElement;
     expect(crumbs.textContent).toContain("补充 schema 升级离线副本的验证测试");
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "‹ 返回时间轴" }));
+    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
     await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
     expect(document.querySelector(".tl-grid")).toBeTruthy();
   });
@@ -265,11 +266,11 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await openObjective(f);
     await f.user.click(document.querySelector('[data-key="span:s-r2-e1"]') as HTMLButtonElement);
     expect(document.querySelector(".run-view")).toBeNull();
-    const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
+    const inspector = document.querySelector(".inspector-dock-title") as HTMLElement;
     expect(inspector.textContent).toContain("执行片段");
     await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
     expect(document.querySelector(".run-view")).toBeNull();
-    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("整项委派");
+    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
   });
 });
 
@@ -549,6 +550,7 @@ describe("objective detail docking (0.15.1 U1)", () => {
     // detail is open above 760px; there is no stacked mode anymore.
     const dock = document.querySelector(".right-dock.side") as HTMLElement;
     expect(dock).toBeTruthy();
+    expect(dock.closest(".detail-panel")?.classList.contains("docked")).toBe(true);
     expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false);
     // The adjustable separator follows §2 and names both column widths.
     const separator = document.getElementById("timeline-detail-separator") as HTMLElement;
@@ -559,13 +561,13 @@ describe("objective detail docking (0.15.1 U1)", () => {
     await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeTruthy());
     const rail = document.querySelector(".rail-panel") as HTMLElement;
     expect(rail.querySelector(".rail-expand")).toBeTruthy();
-    expect(rail.querySelector(".rail-state")).toBeTruthy();
+    expect(rail.querySelector(".rail-state")).toBeNull();
     // Clicking another item in the timeline only changes the inspector.
     await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
     expect(f.api.task).toHaveBeenCalledTimes(1); // still r2's detail
-    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("设计工作目标时间轴视图与交互规范");
+    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("设计工作目标时间轴视图与交互规范");
     // Selection survives closing the detail, which also restores the full list.
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "× 关闭详情" }));
+    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
     expect(document.querySelector(".run-view")).toBeNull();
     expect(document.querySelector('[data-key="span:s-r1-e"]')!.className).toContain("selected");
     await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeNull());

@@ -178,7 +178,12 @@ describe("the harness status strip", () => {
 
     // A ready harness names its path, version, source and last check.
     const dsh = screen.getByText(/^找到：路径 \/usr\/local\/bin\/dsh/).closest("li")!;
-    await user.click(screen.getByRole("button", { name: "DSH 检测详情" }));
+    // The row's fold control is a symbol button: its word lives in the aria-label and the tooltip.
+    const dshToggle = screen.getByRole("button", { name: "DSH 检测详情" });
+    expect(dshToggle.textContent).toBe("▸");
+    expect(dshToggle.getAttribute("title")).toBe("DSH 检测详情");
+    await user.click(dshToggle);
+    expect(screen.getByRole("button", { name: "DSH 收起详情" }).textContent).toBe("▾");
     expect(within(dsh).getByText("/usr/local/bin/dsh")).toBeTruthy();
     expect(within(dsh).getByText("0.4.2")).toBeTruthy();
     expect(within(dsh).getByText("版本管理器（nvm 默认版本）")).toBeTruthy();

@@ -123,6 +123,9 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
   const totalReclaimable = useMemo(() =>
     plan ? plan.categories.reduce((total, category) => total + (Number.isFinite(category.reclaimableBytes) ? category.reclaimableBytes : 0), 0) : 0,
   [plan]);
+  const totalBytes = useMemo(() =>
+    plan ? plan.categories.reduce((total, category) => total + (Number.isFinite(category.bytes) ? category.bytes : 0), 0) : 0,
+  [plan]);
 
   const requestPlan = useCallback(async () => {
     if (inFlight.current) return;
@@ -198,10 +201,14 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
 
   const reclaimTotalText = byteText(totalReclaimable);
 
-  return <section className="storage-panel" aria-busy={phase.kind === "planning" || phase.kind === "applying"} aria-label="存储">
+  return <section className="panel storage-panel" aria-busy={phase.kind === "planning" || phase.kind === "applying"} aria-label="存储">
     <div className="panel-heading">
       <h2>存储</h2>
       <p className="muted">检查本机 Buddy 数据的占用与可回收空间。</p>
+    </div>
+    <div className="storage-overview" role="group" aria-label="占用概览">
+      <div><span>总占用</span><strong title={plan ? byteText(totalBytes).title : undefined}>{plan ? byteText(totalBytes).text : "尚未检查"}</strong></div>
+      <div><span>可回收</span><strong title={plan ? reclaimTotalText.title : undefined}>{plan ? reclaimTotalText.text : "尚未检查"}</strong></div>
     </div>
     {phase.kind === "idle" && !plan && <div className="actions">
       <button type="button" className="button" disabled={disabled} title={disabledTitle} onClick={() => void requestPlan()}>检查占用</button>
@@ -250,8 +257,8 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
           })}
           <tr className="storage-total">
             <th scope="row">合计</th>
-            <td title={byteText(plan.categories.reduce((total, category) => total + (Number.isFinite(category.bytes) ? category.bytes : 0), 0)).title}>
-              {byteText(plan.categories.reduce((total, category) => total + (Number.isFinite(category.bytes) ? category.bytes : 0), 0)).text}
+            <td title={byteText(totalBytes).title}>
+              {byteText(totalBytes).text}
             </td>
             <td title={reclaimTotalText.title}>{totalReclaimable > 0 ? reclaimTotalText.text : "—"}</td>
             <td></td>
