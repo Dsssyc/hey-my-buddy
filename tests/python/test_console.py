@@ -116,6 +116,20 @@ def raw_status(browser: Browser, csrf: str, *, extra_headers: str) -> str:
 
 
 class ConsoleTestCase(BoardTestCase):
+    # These inherited security cases exercise the optional-login mode. Tests of
+    # the default cookie-free mode explicitly opt out of this fixture.
+    require_login = True
+
+    def board(self, **options):
+        board = super().board(**options)
+        if self.require_login:
+            from buddy.launcher import write_private
+            settings = {"port": 0, "requireLogin": True, "revision": 0}
+            write_private(board.directory / "console-settings.json", settings)
+            board.console._settings = settings
+            board.console.require_login = True
+        return board
+
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
@@ -140,13 +154,13 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "harnesses", "csrfToken", "tableRevision", "gate", "configuration", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "tableRevision", "gate", "configuration", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
         self.assertTrue(snapshot["csrfToken"])
         self.assertIn("httponly", browser.entry_headers["set-cookie"].lower())
         self.assertIn("samesite=strict", browser.entry_headers["set-cookie"].lower())
-        self.assertIn("Max-Age=2592000", headers["set-cookie"])
+        self.assertIn("Max-Age=34560000", headers["set-cookie"])
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertIn("content-security-policy", headers)
         self.assertNotIn("access-control-allow-origin", headers)
@@ -154,7 +168,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # A second read reuses the same session without rotating it.
         status, headers, _body = browser.get("/api/console")
         self.assertEqual(status, 200)
-        self.assertIn("Max-Age=2592000", headers["set-cookie"])
+        self.assertIn("Max-Age=34560000", headers["set-cookie"])
         # The console is a GET-only read surface for the snapshot and never a writer.
         self.assertEqual(board.store.count_tasks(), 0)
 
@@ -450,7 +464,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertIn("application/json", headers["content-type"])
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertNotIn("access-control-allow-origin", headers)
-        self.assertIn("Max-Age=2592000", headers["set-cookie"])
+        self.assertIn("Max-Age=34560000", headers["set-cookie"])
         payload = json.loads(body)
         self.assertEqual(sorted(payload), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
         self.assertEqual(payload["runs"], payload["tasks"])

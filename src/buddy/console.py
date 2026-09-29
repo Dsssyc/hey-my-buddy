@@ -1,17 +1,17 @@
 """Private writable local console: a loopback browser surface over board operations.
 
-The console binds ``127.0.0.1`` on a fixed configurable port. A short-lived, single-use
-entry creates an HttpOnly browser session and redirects to a credential-free URL.
-Every read authenticates its renewable cookie; every authenticated session may
-write with a same-origin anti-CSRF header. There is no
-wildcard CORS and no generic SQL surface: every command is dispatched to the same
-named, validated Python operation that C-Two and the CLI use.
+The console binds ``127.0.0.1`` on a fixed configurable port. Local access is
+login-free by default; optional login uses a single-use ten-minute entry and
+explicitly revocable hashed sessions. Every request passes the exact loopback
+origin boundary and writes also need a bootstrap CSRF value. Each admitted client
+uses the existing named, validated operations and revision fences. There is no
+CORS, generic SQL surface or browser authority over Host workflow commands.
 
 The page is the built React/Vite bundle served from ``src/buddy/console_assets``.
 When that bundle is absent the console answers with an honest setup page and the JSON
 API keeps working, so the backend can be verified without a frontend build.
 
-Honesty boundary: this is a same-user local service. The token and session protect
+Honesty boundary: this is a same-user local service. The HTTP origin and CSRF checks protect
 against other browser origins and casual cross-site requests; they do not claim OS
 isolation from a full-shell process running as the same user.
 """
@@ -32,13 +32,14 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .errors import BoardError
-from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, SESSION_SECONDS, READ_OPERATIONS
+from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS, READ_OPERATIONS
 from .service import call_operation
 
 MAX_BODY_BYTES = 1024 * 1024
 MAX_ASSET_BYTES = 8 * 1024 * 1024
 SESSION_COOKIE = "buddy_console_session"
 CSRF_HEADER = "X-Buddy-CSRF"
+ACCESS_OPERATIONS = frozenset({"console_access_set", "console_logout", "console_session_revoke"})
 
 #: Exact parameter whitelist of the read-only task history route. It is forwarded to
 #: the same named ``task_list`` operation the CLI and C-Two use; an unknown or
@@ -257,11 +258,15 @@ class Console:
             raise BoardError("INVALID_ARGUMENT", "Console must bind numeric loopback 127.0.0.1")
         self.host = host
         self._persist_port = port is None
+        from .launcher import read_private
+        self._settings = read_private(self.store.directory / "console-settings.json") or {}
+        self.require_login = self._settings.get("requireLogin", False)
+        self.access_revision = self._settings.get("revision", 0)
+        if type(self.require_login) is not bool or type(self.access_revision) is not int or self.access_revision < 0:
+            raise BoardError("CONSOLE_SESSION_STORE", "Invalid console access settings")
         try:
             if port is None:
-                from .launcher import read_private
-                saved = read_private(self.store.directory / "console-settings.json")
-                value = os.environ.get("BUDDY_CONSOLE_PORT", saved["port"] if saved is not None else 49637)
+                value = os.environ.get("BUDDY_CONSOLE_PORT", self._settings.get("port", 49637))
                 self.port = int(value)
                 if isinstance(value, bool):
                     raise ValueError()
@@ -276,6 +281,7 @@ class Console:
         self._lock = threading.RLock()
         self._clock = clock
         self._sessions: ConsoleSessions | None = None
+        self._local_session: BrowserSession | None = None
         self._expiry_stop: threading.Event | None = None
         self.origin: str | None = None
 
@@ -285,6 +291,7 @@ class Console:
             already_running = self._server is not None
             if not already_running:
                 self._sessions = ConsoleSessions(clock=self._clock, path=self.store.directory / "console-sessions.json")
+                self._local_session = self._new_local_session()
                 try:
                     server = _ConsoleHTTPServer((self.host, self.port), self._handler())
                 except OSError as error:
@@ -293,7 +300,7 @@ class Console:
                 if self._persist_port:
                     try:
                         from .launcher import write_private
-                        write_private(self.store.directory / "console-settings.json", {"port":self.port})
+                        write_private(self.store.directory / "console-settings.json", {**self._settings, "port": self.port})
                     except Exception:
                         server.server_close()
                         self._sessions = None
@@ -309,11 +316,12 @@ class Console:
             self._expire_sessions()
             if not issue_ticket:
                 return self.status()
-            ticket = self._sessions.issue()
+            ticket = self._sessions.issue() if self.require_login else None
             return {
-                "url": f"{self.origin}/launch/{ticket}",
+                "url": f"{self.origin}/launch/{ticket}" if ticket else f"{self.origin}/",
                 "consoleId": self._sessions.console_id,
-                "expiresAt": (datetime.now(timezone.utc) + timedelta(seconds=ENTRY_SECONDS)).isoformat(),
+                "expiresAt": (datetime.fromtimestamp(self._clock(), timezone.utc) + timedelta(seconds=ENTRY_SECONDS)).isoformat() if ticket else None,
+                "requireLogin": self.require_login,
                 "readOnly": False,
                 "running": True,
                 "alreadyRunning": already_running,
@@ -332,6 +340,9 @@ class Console:
             if self._sessions is not None:
                 for session in self._sessions.sessions.values():
                     self.service.revoke_console_authority(session.cookie)
+            if self._local_session is not None:
+                self.service.revoke_console_authority(self._local_session.cookie)
+            self._local_session = None
             self._sessions = None
             self.origin = None
         # A handler waiting for the ownership lock must not deadlock shutdown.
@@ -363,11 +374,80 @@ class Console:
                 "running": self._server is not None,
                 "sessionCount": len(self._sessions.sessions) if self._sessions else 0,
                 "idleTimeoutSeconds": None,
-                "sessionLifetimeSeconds": SESSION_SECONDS,
+                "sessionLifetimeSeconds": None,
+                "requireLogin": self.require_login,
                 "baseUrl": self.origin + "/" if self.origin else None,
                 "assetsBuilt": assets_ready(self.assets_dir),
                 "assetsDir": str(self.assets_dir),
             }
+
+    # -- local access settings ----------------------------------------------
+    def _new_local_session(self) -> BrowserSession:
+        return BrowserSession(secrets.token_hex(12), secrets.token_urlsafe(32), secrets.token_urlsafe(32), self._clock())
+
+    def _authenticate(self, session: BrowserSession) -> None:
+        if self._sessions is None:
+            raise BoardError("CONSOLE_SESSION_EXPIRED", "The console is closed")
+        if not self.require_login and session is self._local_session:
+            return
+        if self.require_login and session is not self._local_session:
+            self._sessions.authenticate(session.id, session.cookie)
+            return
+        raise BoardError("CONSOLE_SESSION_EXPIRED", "Console access changed; reload or run buddy console")
+
+    def access_view(self, session: BrowserSession | None = None) -> dict:
+        return {"requireLogin": self.require_login, "revision": self.access_revision,
+                "sessions": [{"id": item.id, "lastSeen": item.last_seen, "current": item is session}
+                             for item in self._sessions.sessions.values()] if self.require_login and self._sessions else []}
+
+    def access_command(self, operation: str, params: dict, session: BrowserSession) -> tuple[dict, BrowserSession | None]:
+        """Console-local authority only; no new service operation or database schema."""
+        with self._lock:
+            self._authenticate(session)
+            if not isinstance(params, dict):
+                raise BoardError("INVALID_ARGUMENT", "params must be an object")
+            allowed = {"requireLogin", "expectedRevision"} if operation == "console_access_set" else {"sessionId"} if operation == "console_session_revoke" else set()
+            if operation not in ACCESS_OPERATIONS or set(params) != allowed:
+                raise BoardError("INVALID_ARGUMENT", "Invalid console access fields")
+            sessions = self._sessions
+            if operation == "console_access_set":
+                required, revision = params["requireLogin"], params["expectedRevision"]
+                if type(required) is not bool or type(revision) is not int or revision < 0:
+                    raise BoardError("INVALID_ARGUMENT", "requireLogin must be boolean and expectedRevision a nonnegative integer")
+                if revision != self.access_revision:
+                    raise BoardError("REVISION_CONFLICT", "Console access settings changed; refresh before saving")
+                if required == self.require_login:
+                    return self.access_view(session), session
+                from .launcher import write_private
+                previous = dict(sessions.sessions)
+                settings = {**self._settings, "port": self.port, "requireLogin": required, "revision": revision + 1}
+                try:
+                    revoked = sessions.revoke()
+                    replacement = sessions.create() if required else self._new_local_session()
+                    write_private(self.store.directory / "console-settings.json", settings)
+                except Exception:
+                    sessions.sessions = previous
+                    sessions._save()
+                    raise
+                for item in revoked:
+                    self.service.revoke_console_authority(item.cookie)
+                if self._local_session is not None:
+                    self.service.revoke_console_authority(self._local_session.cookie)
+                sessions.entries.clear()
+                self._settings = settings
+                self.require_login, self.access_revision = required, revision + 1
+                self._local_session = None if required else replacement
+                self.service.register_console_authority(replacement.cookie, replacement.id)
+                return self.access_view(replacement), replacement
+            if not self.require_login:
+                raise BoardError("CONFLICT", "Login is disabled; there is no browser login to revoke")
+            target = session.id if operation == "console_logout" else params["sessionId"]
+            if not isinstance(target, str) or re.fullmatch(r"[0-9a-f]{24}", target) is None:
+                raise BoardError("INVALID_ARGUMENT", "sessionId must identify a console login")
+            for item in sessions.revoke(target):
+                self.service.revoke_console_authority(item.cookie)
+            current = None if target == session.id else session
+            return self.access_view(current), current
 
     # -- dispatch ------------------------------------------------------------
     def command(self, operation: str, params: dict, *, session: BrowserSession | None = None) -> dict:
@@ -375,9 +455,7 @@ class Console:
         # Settings concurrency is governed by their existing revision checks.
         with self._lock:
             if session is not None:
-                if self._sessions is None:
-                    raise BoardError("CONSOLE_SESSION_EXPIRED", "The console session is closed")
-                self._sessions.authenticate(session.id, session.cookie)
+                self._authenticate(session)
             if operation in CONSOLE_OPERATIONS and operation not in READ_OPERATIONS:
                 if session is None:
                     raise BoardError("CONSOLE_SESSION_EXPIRED", "An authenticated console session is required")
@@ -404,12 +482,11 @@ class Console:
 
     def snapshot(self, session: BrowserSession) -> dict:
         with self._lock:
-            if self._sessions is None:
-                raise BoardError("CONSOLE_SESSION_EXPIRED", "The console session is closed")
-            self._sessions.authenticate(session.id, session.cookie)
+            self._authenticate(session)
             snapshot = call_operation(self.service, "console_snapshot", {})
             snapshot["csrfToken"] = session.csrf
             snapshot["consoleSession"] = session.view()
+            snapshot["consoleAccess"] = self.access_view(session)
             snapshot["capabilities"]["consoleAssets"] = assets_ready(self.assets_dir)
             return snapshot
 
@@ -442,8 +519,10 @@ class Console:
                 self.send_header("Cache-Control", cache)
                 if self.close_connection:
                     self.send_header("Connection", "close")
-                if getattr(self, "browser_session", None) is not None:
-                    self.send_header("Set-Cookie", f"{SESSION_COOKIE}={self.browser_session.cookie}; Path=/; Max-Age={SESSION_SECONDS}; HttpOnly; SameSite=Strict")
+                if getattr(self, "clear_cookie", False):
+                    self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
+                elif console.require_login and getattr(self, "browser_session", None) is not None:
+                    self.send_header("Set-Cookie", f"{SESSION_COOKIE}={self.browser_session.cookie}; Path=/; Max-Age={COOKIE_SECONDS}; HttpOnly; SameSite=Strict")
                 self._security_headers()
                 self.end_headers()
                 if self.command != "HEAD":
@@ -475,25 +554,26 @@ class Console:
             # -- trust checks ----------------------------------------------
             def _trusted_request(self) -> bool:
                 self.browser_session = None
+                self.clear_cookie = False
                 if (console.store.directory / "upgrade.json").exists():
                     self._error(503, "UPGRADE_IN_PROGRESS", "Upgrade verification is in progress; retry shortly")
                     return False
                 expected_host = f"{console.host}:{console._server.server_address[1]}" if console._server else ""
-                if self.headers.get("Host") != expected_host:
+                if self.headers.get_all("Host", []) != [expected_host]:
                     self._error(403, "FORBIDDEN", "Host is not the loopback console origin")
                     return False
                 origin = self.headers.get("Origin")
-                if origin is not None and origin != console.origin:
+                if origin is not None and (origin != console.origin or len(self.headers.get_all("Origin")) != 1):
                     self._error(403, "FORBIDDEN", "Origin is not the console origin")
                     return False
                 site = self.headers.get("Sec-Fetch-Site")
-                if site is not None and site not in ("same-origin", "none"):
+                if site is not None and (site not in ("same-origin", "none") or len(self.headers.get_all("Sec-Fetch-Site")) != 1):
                     self._error(403, "FORBIDDEN", "Cross-site request refused")
                     return False
                 return True
 
             def _write_trusted(self) -> bool:
-                """Writes require the console session and a same-origin CSRF header."""
+                """Writes require exact Origin and the admitted access mode’s CSRF value."""
                 if self.headers.get("Origin") != console.origin:
                     self._error(403, "FORBIDDEN", "A write requires the exact console Origin")
                     return False
@@ -501,7 +581,7 @@ class Console:
                     self._error(
                         403,
                         "FORBIDDEN",
-                        "A write requires the private console session cookie and the bootstrap CSRF header; "
+                        "A write requires the current bootstrap CSRF header; "
                         "open a fresh entry if this browser session is unavailable",
                     )
                     return False
@@ -518,7 +598,7 @@ class Console:
                         return None
                     try:
                         console._expire_sessions()
-                        self.browser_session = sessions.authenticate(None, self._cookie())
+                        self.browser_session = sessions.authenticate(None, self._cookie()) if console.require_login else console._local_session
                         console.service.register_console_authority(self.browser_session.cookie, self.browser_session.id)
                     except BoardError as error:
                         self._board_error(error)
@@ -547,7 +627,7 @@ class Console:
                     return self._send(STATUS_BY_CODE.get(error.code, 400), body, "text/html; charset=utf-8")
                 self.send_response(303)
                 self.send_header("Location", target)
-                self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session.cookie}; Path=/; Max-Age={SESSION_SECONDS}; HttpOnly; SameSite=Strict")
+                self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session.cookie}; Path=/; Max-Age={COOKIE_SECONDS}; HttpOnly; SameSite=Strict")
                 self.send_header("Content-Length", "0")
                 self.send_header("Cache-Control", "no-store")
                 self._security_headers()
@@ -702,7 +782,11 @@ class Console:
                 if not isinstance(operation, str) or not operation:
                     return self._error(400, "INVALID_ARGUMENT", "operation is required")
                 try:
-                    result = console.command(operation, value.get("params", {}), session=self.browser_session)
+                    if operation in ACCESS_OPERATIONS:
+                        result, self.browser_session = console.access_command(operation, value.get("params", {}), self.browser_session)
+                        self.clear_cookie = self.browser_session is None or not console.require_login
+                    else:
+                        result = console.command(operation, value.get("params", {}), session=self.browser_session)
                 except BoardError as error:
                     return self._board_error(error)
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary

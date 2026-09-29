@@ -8,7 +8,7 @@ The Python blackboard owns one current evaluation table per state directory (sou
 "$BUDDY" console '{"action":"open"}'
 ```
 
-`console` accepts `open` (default), `status` and `close`, and serves the built React/Vite bundle over private loopback HTTP. The CLI opens the browser; pass `browser:false` to obtain the link without launching it. Open returns a 60-second single-use launch URL. Its redemption establishes an HttpOnly session cookie and redirects to a credential-free session path; every authenticated session may edit settings subject to the existing revision checks and publication leases. The [console entry contract](console.md) owns tickets, session lifetime, authority, client-side wait and identity-fenced close; closing the console never stops a task.
+`console` accepts `open` (default), `status` and `close`, and serves the built React/Vite bundle over private loopback HTTP. The CLI opens the browser; pass `browser:false` to obtain the link without launching it. Open returns the fixed root URL without login by default. With “需要登录” enabled in Settings it returns a 10-minute single-use launch URL; redemption establishes an HttpOnly session cookie and redirects to the root. Sessions have no 30-day expiry and can be logged out or revoked. Both access modes retain the existing revision checks and publication leases. The [console entry contract](console.md) owns tickets, session lifetime, authority, client-side wait and identity-fenced close; closing the console never stops a task.
 
 `console-snapshot '{}'` reads the same authoritative data without a browser session. Console status reports the public instance ID, running flag and asset metadata, without an entry URL or credential. Neither makes a model call or admits a selection reader.
 

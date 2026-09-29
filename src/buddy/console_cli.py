@@ -39,9 +39,9 @@ FALLBACK_NOTICE = "buddy console: the browser was not opened; entry URL: "
 #: so this CLI refuses anything else instead of forwarding an unfenced guess.
 CONSOLE_ID_RE = re.compile(r"[0-9a-f]{24}")
 #: The one permitted entry URL: numeric loopback, an explicit valid port and exactly
-#: one 43-character URL-safe launch ticket, with no userinfo, query, fragment, alternate
+#: an optional 43-character URL-safe launch ticket, with no userinfo, query, fragment, alternate
 #: host or alternate scheme. ``webbrowser`` must never be pointed at anything else.
-LAUNCH_URL_RE = re.compile(r"http://127\.0\.0\.1:([0-9]{1,5})/launch/([A-Za-z0-9_-]{43})")
+LAUNCH_URL_RE = re.compile(r"http://127\.0\.0\.1:([0-9]{1,5})/(?:launch/([A-Za-z0-9_-]{43}))?")
 
 
 def is_console_id(value: Any) -> bool:

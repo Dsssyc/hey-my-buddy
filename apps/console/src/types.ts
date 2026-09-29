@@ -320,11 +320,17 @@ export type ConsoleSession = {
   canWrite: boolean;
   reason: null;
 };
+export type ConsoleAccess = {
+  requireLogin: boolean;
+  revision: number;
+  sessions: { id: string; lastSeen: number; current: boolean }[];
+};
 export type Snapshot = {
   harnesses?: HarnessHealth[];
   csrfToken: string;
   /** Authenticated browser session; missing or malformed fails closed. */
   consoleSession: ConsoleSession;
+  consoleAccess?: ConsoleAccess;
   tableRevision: number;
   gate: Gate;
   configuration: Configuration;

@@ -1,4 +1,4 @@
-"""Bounded renewable browser sessions, with only bearer hashes persisted."""
+"""Bounded, explicitly revocable browser sessions; only bearer hashes persist."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,9 +13,9 @@ from typing import Callable
 
 from .errors import BoardError
 
-ENTRY_SECONDS = 60
-SESSION_SECONDS = 30 * 24 * 60 * 60
-IDLE_SECONDS = SESSION_SECONDS
+ENTRY_SECONDS = 10 * 60
+# Browsers bound persistent cookies; the server never expires a login by age.
+COOKIE_SECONDS = 400 * 24 * 60 * 60
 MAX_ENTRIES = 16
 MAX_SESSIONS = 64
 READ_OPERATIONS = frozenset({
@@ -53,8 +53,7 @@ class ConsoleSessions:
                     token_hash = row["tokenHash"]
                     if len(token_hash) != 64 or any(c not in '0123456789abcdef' for c in token_hash):
                         raise ValueError("invalid hash")
-                    if self.clock() - row["lastSeen"] < SESSION_SECONDS:
-                        self.sessions[row["id"]] = BrowserSession(row["id"], "", secrets.token_urlsafe(32), row["lastSeen"], token_hash)
+                    self.sessions[row["id"]] = BrowserSession(row["id"], "", secrets.token_urlsafe(32), row["lastSeen"], token_hash)
             except (ValueError, TypeError, KeyError) as error:
                 raise BoardError("CONSOLE_SESSION_STORE", "Invalid persistent console session store") from error
 
@@ -95,8 +94,13 @@ class ConsoleSessions:
                 del self.entries[ticket]
                 return current
         if len(self.sessions) >= MAX_SESSIONS:
-            raise BoardError("CONSOLE_LIMIT", "Too many active console sessions; wait for expiry")
+            raise BoardError("CONSOLE_LIMIT", "Too many console sessions; revoke a login in Settings")
         del self.entries[ticket]
+        return self.create()
+
+    def create(self) -> BrowserSession:
+        if len(self.sessions) >= MAX_SESSIONS:
+            raise BoardError("CONSOLE_LIMIT", "Too many console sessions; revoke a login in Settings")
         token = secrets.token_urlsafe(32)
         current = BrowserSession(secrets.token_hex(12), token, secrets.token_urlsafe(32), self.clock(), hashlib.sha256(token.encode()).hexdigest())
         self.sessions[current.id] = current
@@ -110,7 +114,7 @@ class ConsoleSessions:
     def authenticate(self, session_id: str | None, cookie: str) -> BrowserSession:
         digest = hashlib.sha256(cookie.encode()).hexdigest()
         session = next((s for s in self.sessions.values() if (session_id is None or s.id == session_id) and hmac.compare_digest(s.token_hash, digest)), None)
-        if not cookie or session is None or self.clock() - session.last_seen >= SESSION_SECONDS:
+        if not cookie or session is None:
             raise BoardError("CONSOLE_SESSION_EXPIRED", "This browser session is unavailable; run buddy console again")
         session.last_seen = self.clock()
         session.cookie = cookie
@@ -120,12 +124,18 @@ class ConsoleSessions:
     def expire(self) -> list[BrowserSession]:
         now = self.clock()
         self.entries = {token: end for token, end in self.entries.items() if now < end}
-        expired = [s for s in self.sessions.values() if now - s.last_seen >= SESSION_SECONDS]
-        for session in expired:
-            del self.sessions[session.id]
-        if expired:
+        return []
+
+    def revoke(self, session_id: str | None = None) -> list[BrowserSession]:
+        previous = self.sessions
+        revoked = [s for s in previous.values() if session_id is None or s.id == session_id]
+        self.sessions = {key: s for key, s in previous.items() if s not in revoked}
+        try:
             self._save()
-        return expired
+        except Exception:
+            self.sessions = previous
+            raise
+        return revoked
 
     def path(self, session: BrowserSession) -> str:
         return "/"

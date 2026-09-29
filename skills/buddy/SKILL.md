@@ -23,10 +23,12 @@ Details: [usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.
 4. At a boundary `decide` on helpers or `continue` with input; a routing boundary takes a legal configuration with a reason, or `reroute:true`. An enabled configuration may change with a reason unless `configurationLocked`; partial work is unverified. See [recovery](../../docs/reference/workflow.md).
 5. Verify the fixed artifact yourself (changed paths, risky hunks, proportionate checks), then `integration-record` and `acknowledge` the exact sealed `artifactId` (`finalArtifactId` when delivered) and integration ID, or `notRequired` with a reason. Completion, prose and RPC replies are not acceptance. A waiting Host may finish directly; failed/cancelled goals use `verdict:"recorded"` for a conclusion. Reclaim reviewed checkouts with `workspace-cleanup-plan`/`workspace-cleanup-apply`.
 
+`buddy console` opens the fixed loopback URL without login by default; `console {"browser":false}` returns it. Settings can enable login: one-use entries last 10 minutes, sessions have no 30-day expiry and can be logged out or revoked. See [console](../../docs/reference/console.md).
+
 ## Capabilities and authority
 
 Use recorded capabilities; name unverified paths explicitly. The [harness reference](../../docs/reference/harnesses.md) owns these limits.
 
-Preferences, enablement, capacity and Router configuration are user-owned: change them only in the authenticated console, never by editing this skill to bypass routing. Routing and execution share one attempt ceiling and per-family limits; native permissions need Host attention.
+Preferences, enablement, capacity and Router configuration are user-owned: change them only in the local console, never by editing this skill to bypass routing. Routing and execution share one attempt ceiling and per-family limits; native permissions need Host attention.
 
 Model-card updates only on user request: `evaluation-prepare` (no model call), then a short maintenance grant ([maintenance](../../docs/reference/evaluation-maintenance.md)). Only an explicit user background request authorizes a Harness scheduler; never create, mute or remove one to save quota.

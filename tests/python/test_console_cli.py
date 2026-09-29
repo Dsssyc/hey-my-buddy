@@ -132,6 +132,15 @@ class ConsoleCliTestCase(unittest.TestCase):
 class LocalOptionTests(ConsoleCliTestCase):
     """Strict local parsing: wrong types, unknown fields and misplaced options."""
 
+    def test_default_fixed_loopback_url_opens_without_a_ticket(self):
+        url = "http://127.0.0.1:8123/"
+        opener = mock.Mock(return_value=True)
+        result = console_cli.run({}, call_service=FakeRpc(open_reply(url=url, expiresAt=None)), browser_open=opener)
+        self.assertEqual(result["url"], url)
+        opener.assert_called_once_with(url, new=2)
+        for invalid in (url + "other", url + "?x=1", url + "#x", url.replace("127.0.0.1", "localhost")):
+            self.assertFalse(console_cli.is_launch_url(invalid))
+
     def test_open_keeps_only_the_lifecycle_action_and_defaults_the_local_booleans(self):
         for params in ({"action": "open"}, {}):
             with self.subTest(params=params):
