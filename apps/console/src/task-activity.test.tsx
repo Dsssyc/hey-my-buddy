@@ -182,7 +182,7 @@ describe("activity rendering", () => {
     render(<TaskActivityView task={task()} />);
     const view = screen.getByRole("region", { name: "执行活动（只读）" });
     expect(view.textContent).toContain("暂无活动记录");
-    expect(view.textContent).toContain("停止未确认");
+    expect(view.textContent).not.toContain("停止未确认");
     expect(view.textContent).not.toMatch(/\d+\s*%/);
   });
 

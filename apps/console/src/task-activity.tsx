@@ -224,11 +224,11 @@ export function TaskActivityView({ task }: { task: Task }) {
                 ? "工具执行中"
                 : evidence === "native"
                   ? "已收到原生活动"
-                  : "活动未知 · 停止未确认"}
+                  : "活动未知"}
           </p>
         </>
       ) : (
-        <p className="small muted">暂无活动记录 · 停止未确认</p>
+        <p className="small muted">暂无活动记录</p>
       )}
       {termination && (
         <p className="small">
