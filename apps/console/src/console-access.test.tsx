@@ -1,10 +1,10 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import { ApiError } from "./api";
+import { ApiError, parseConsoleAccess } from "./api";
 import type { ConsoleApi } from "./api";
 import type { ConsoleAccess } from "./types";
-import { ConsoleAccessSettings, parseConsoleAccess } from "./ConsoleAccessSettings";
+import { ConsoleAccessSettings } from "./ConsoleAccessSettings";
 
 afterEach(cleanup);
 const local: ConsoleAccess = { requireLogin: false, revision: 0, sessions: [] };

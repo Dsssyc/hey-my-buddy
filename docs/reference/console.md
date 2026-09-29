@@ -24,6 +24,8 @@ Authenticated GET `/api/objectives` and `/api/objectives/<objectiveId>/timeline`
 
 `objective_stop` accepts only objectiveId, commandId and optional bounded reason with server-attached console authority. It atomically cancels the complete current unaccepted root/helper/routing scope while retaining accepted roots and its replay receipt. Cancellation acknowledgement never proves termination; show 正在停止 or 停止未确认 until recorded shutdown is confirmed. It does not close the group to future Host submissions.
 
+The HTTP handler also owns `console_access_set`, `console_logout` and `console_session_revoke` under the same write-origin and CSRF checks. These manage only local access settings and browser logins; they are not C-Two operations or Host CLI commands.
+
 ## UI and verification
 
 The console presentation retains the previously installed polish. Its header reads `Hey my buddy`; the browser title reads `Hey my buddy · 本地工作台`. The single header refresh reads the snapshot and every visible list, open timeline, delegation detail, collaboration record and configuration update record, then reports completion time or failure in its tooltip. Automatic read-only polling continues. Connection status appears in the header only while disconnected, with a recovery hint. The dark theme uses neutral grey surfaces and distinct non-green focus; the light theme keeps its existing controls and gains a raised detail surface.
