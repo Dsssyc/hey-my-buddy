@@ -217,7 +217,8 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
     if routing_record is not None:
         view["decisionId"] = routing_record["decisionId"]
         view["routing"] = {key: routing_record[key] for key in
-                           ("selectedProfile", "reason", "policyCheck", "budget", "usage")}
+                           ("routingMode", "requestedRoutingMode", "fallback", "selectedProfile", "reason",
+                            "policyCheck", "budget", "usage")}
     if kind in ("execution", "routing") and state == "finished":
         view["resultStatus"] = result_status or ("failed" if error else "ok")
     return view
@@ -241,11 +242,13 @@ ACTIVE_REQUEST = {
 def routing(decision_id: str, task_id: str, status: str, selected: dict | None, reason: str,
             constraints: dict, configuration_revision: int | None, *,
             task_outcome: str = "none", user_outcome: str = "none",
-            elapsed_ms: int = 180000, tool_calls: int = 3, bytes_read: int = 32768) -> dict:
+            elapsed_ms: int = 180000, tool_calls: int = 3, bytes_read: int = 32768,
+            mode: str = "review", requested_mode: str = "review", fallback: dict | None = None) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
     return {"status": status, "decisionId": decision_id, "taskId": task_id, "attemptId": f"att-{task_id}",
             "generation": 1, "tableRevision": 7 if decision_id else None,
             "configurationRevision": configuration_revision, "selectedProfile": selected, "reason": reason,
+            "routingMode": mode, "requestedRoutingMode": requested_mode, "fallback": fallback,
             "constraints": constraints,
             "routingPreferences": [{"match": selected}] if task_outcome == "matched" else [],
             "source": "model-selection" if decision_id else None, "preferenceOutcome": None,
@@ -254,13 +257,19 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
                                                "outcome": task_outcome},
                             "userPreference": user_outcome},
             # Illustrative fixture values only; these are not runtime defaults.
-            "budget": {"elapsedMs": 180000, "toolCalls": 12, "bytesRead": 262144},
-            "usage": {"elapsedMs": elapsed_ms, "toolCalls": tool_calls, "bytesRead": bytes_read}}
+            "budget": ({"timeoutSeconds": 60} if mode == "fast" else
+                       {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24,
+                        "bytesRead": 524288}),
+            "usage": {"elapsedMs": elapsed_ms, "toolCalls": tool_calls, "bytesRead": None if mode == "fast" else bytes_read}}
 
 
 ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed", CFG_FLASH,
                      "合成预览：选择 DeepSeek Flash；符合委派偏好，偏离用户偏好以缩短路由等待。",
-                     {}, 2, task_outcome="matched", user_outcome="alternative")
+                     {}, 2, task_outcome="matched", user_outcome="alternative",
+                     mode="fast", requested_mode="review",
+                     fallback={"from": "review", "to": "fast", "code": "REVIEW_UNAVAILABLE",
+                               "reason": "合成预览：审阅 Router 不可用"},
+                     elapsed_ms=60000, tool_calls=0, bytes_read=0)
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
                      "合成预览：候选超出路由边界，等待 Host 选择配置。", {"adapter": "claude"}, 1)
 ROUTING_A3 = routing("preview-decision-a3", "preview-run-a3-router", "cancelled", None,
@@ -1043,14 +1052,16 @@ def profile_views() -> list[dict]:
              "label": f"{cfg['model']} · {cfg['effort']} (synthetic preview)",
              "adapter": cfg["adapter"], "provider": cfg["provider"], "model": cfg["model"],
              "effort": cfg["effort"], "available": True, "enabled": True,
-             "capabilities": ["execution", "decision"] if cfg["adapter"] in ("dsh", "codex") else ["execution"],
+             "capabilities": (["execution:dsh", "routing:fast"] if cfg["adapter"] == "dsh" else
+                              ["execution:codex", "decision"] if cfg["adapter"] == "codex" else
+                              [f"execution:{cfg['adapter']}", "routing:fast"]),
              "contextWindow": 200000, "description": "synthetic preview profile",
              "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None}
             for cfg in CONFIGS]
 
 
 def policy_views() -> dict:
-    """Synthetic schema-13 user policy: one family default, one per-effort override and one family note."""
+    """Synthetic schema-14 user policy: one family default, one per-effort override and one family note."""
     def family(cfg: dict) -> dict:
         return {key: cfg[key] for key in ("adapter", "provider", "model")}
 
@@ -1087,7 +1098,11 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                            "reason": None if writable else "superseded"},
         "tableRevision": 7,
         "gate": {"phase": "open", "readers": 0, "waitingWriters": 0, "writer": None},
-        "configuration": {"revision": 1, "decisionProfileId": profiles[0]["profileId"]},
+        "configuration": {"revision": 1, "fastRouterProfileId": profiles[0]["profileId"],
+                          "reviewRouterProfileId": profiles[1]["profileId"],
+                          "defaultRoutingMode": "fast", "routingBudget": "standard",
+                          "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
+                                                  "toolCalls": 24, "bytesRead": 524288}},
         "profiles": profiles,
         "modelConcurrency": concurrency_rows(),
         "unavailableProfileCount": 0,
@@ -1117,7 +1132,9 @@ def decision_view(router: dict) -> dict:
             "decisionModel": {"requested": None, "resolved": None, "observed": None},
             "tableRevision": routing["tableRevision"] or 7, "expectedRevision": 7,
             "publishedRevision": None, "noOp": False, "reason": routing["reason"], "evidenceIds": [],
-            "policyCheck": routing["policyCheck"], "budget": routing["budget"], "usage": routing["usage"],
+            "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
+            "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
+            "budget": routing["budget"], "usage": routing["usage"],
             "createdAt": router["createdAt"], "updatedAt": router["updatedAt"],
             "pendingEvidenceRemaining": 0}
 
@@ -1178,7 +1195,9 @@ def workflow_get(params: dict) -> dict:
                      "configurationRevision": routing["configurationRevision"],
                      "selectedProfile": routing["selectedProfile"], "reason": routing["reason"],
                      "constraints": routing["constraints"], "createdAt": router["createdAt"],
-                     "policyCheck": routing["policyCheck"], "budget": routing["budget"], "usage": routing["usage"],
+                     "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
+                     "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
+                     "budget": routing["budget"], "usage": routing["usage"],
                      "ownerGeneration": 1, "current": routing["decisionId"] == entry["routing"]["decisionId"]})
         view["routingHistory"] = {"entries": entries, "nextCursor": None, "total": len(entries)}
     return view
@@ -1544,6 +1563,10 @@ def validate_fixtures() -> list[str]:
     problems: list[str] = []
     page = objective_page({})
     timeline = objective_timeline({"objectiveId": OBJ_A}, "normal")
+    configuration = console_snapshot("normal", True)["configuration"]
+    if not {"fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode", "routingBudget",
+            "routingBudgetLimits"} <= set(configuration) or "decisionProfileId" in configuration:
+        problems.append("snapshot must use the 0.20.0 dual Router configuration")
     for name, value, keys in (
             ("ObjectivePage", page, REQUIRED_KEYS["ObjectivePage"]),
             ("ObjectiveSummary", page["objectives"][0], REQUIRED_KEYS["ObjectiveSummary"]),
@@ -1610,6 +1633,8 @@ def validate_fixtures() -> list[str]:
         if router["parentRunId"] != item["runId"] or router["decisionId"] != item["decisionId"]:
             problems.append(f"{item['spanId']}: routing decision attributed to another run")
         projection = item["routing"]
+        if projection.get("routingMode") not in {"fast", "review"} or projection.get("requestedRoutingMode") not in {"fast", "review"}:
+            problems.append(f"{item['spanId']}: missing recorded routing modes")
         if any(projection[key] != decision[key] for key in projection):
             problems.append(f"{item['spanId']}: decision detail differs from span projection")
         expected_result = {"completed": "ok", "failed": "failed", "cancelled": "cancelled", "abstention": "ok"}
@@ -1621,9 +1646,13 @@ def validate_fixtures() -> list[str]:
         if set(policy) != {"hardConstraints", "taskPreference", "userPreference"} or set(
                 policy["taskPreference"]) != {"ruleIndex", "outcome"}:
             problems.append(f"{item['spanId']}: policyCheck differs from Python selection policy shape")
-        if any(not isinstance(value, int) or value < 0 or value > projection["budget"][key]
-               for key, value in projection["usage"].items()):
+        limits = {**projection["budget"], "elapsedMs": projection["budget"]["timeoutSeconds"] * 1000}
+        if any(value is not None and (type(value) is not int or value < 0 or
+               key in limits and value > limits[key]) for key, value in projection["usage"].items()):
             problems.append(f"{item['spanId']}: synthetic usage exceeds its budget")
+        if projection["routingMode"] == "fast" and (projection["usage"]["toolCalls"] != 0 or
+                                                    set(projection["budget"]) != {"timeoutSeconds"}):
+            problems.append(f"{item['spanId']}: fast routing must have zero tool calls and only a deadline")
         entries = workflow_get({"runId": item["runId"], "routingHistory": {}})["routingHistory"]["entries"]
         if not any(entry["decisionId"] == item["decisionId"] and entry["status"] == decision["status"]
                    for entry in entries):

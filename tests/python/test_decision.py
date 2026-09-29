@@ -88,7 +88,7 @@ class DecisionTestCase(BoardTestCase):
                 "expectedRevision": grant["tableRevision"],
                 "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
                 "preferenceChanges": preferences or [],
-                "configuration": {"decisionProfileId": decision_profile},
+                "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": decision_profile},
             },
         )
         if cards:
@@ -398,7 +398,7 @@ class SelectionRequestTests(DecisionTestCase):
                     request = board.store.decisions._create(
                         request_id=f"freeze-{name}", request={"kind": "select", "task": "bounded selection",
                             "constraints": constraints, "requiredCapabilities": [], "routingPreferences": [],
-                            "timeoutSeconds": 60, "budget": router.budget("quick")})
+                            "timeoutSeconds": 60, "budget": router.budget("brief")})
                 else:
                     request = board.call("selection_request", {"requestId": f"freeze-{name}",
                                          "task": "bounded selection", **constraints})
@@ -420,7 +420,7 @@ class SelectionRequestTests(DecisionTestCase):
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
-        self.assertIn("no compatible fixed decision profile", self.decision(board, request["decisionId"])["reason"])
+        self.assertIn("Router is not configured", self.decision(board, request["decisionId"])["reason"])
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
     def test_native_fixture_absence_is_an_honest_adapter_unavailable_outcome(self):
@@ -428,7 +428,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board)
         self.use_helper(path=self.directory / "missing-readonly")
         with board.store.db.write() as connection:
-            connection.execute("UPDATE harness_health SET status='missing' WHERE adapter='dsh'")
+            connection.execute("UPDATE harness_health SET status='missing'")
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
         self.assertFalse(capabilities["maintenance"])
@@ -996,6 +996,7 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "evidence",
                 "policyCheck",
                 "budget",
+                "routingMode", "requestedRoutingMode", "fallback",
                 "usage",
                 "nativeIdentity",
                 "stopEvidence",
@@ -1010,7 +1011,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["selectedProfile"]["effort"], SECOND_PROFILE["effort"])
         self.assertEqual(compact["selectedProfile"]["adapter"], "dsh")
         self.assertEqual(compact["decisionModel"]["requested"]["model"], PROFILE["model"])
-        self.assertLess(len(json.dumps(compact)), 2000, "the default read must stay small")
+        self.assertLess(len(json.dumps(compact)), 2200, "the default read includes mode and fallback facts but stays small")
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")
         self.assertEqual(audit["requested"]["task"], "fix the failing parser test")

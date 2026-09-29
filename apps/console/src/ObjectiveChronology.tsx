@@ -60,7 +60,8 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
       const helper = entry.row.kind === "helper" ? "↳ 协助 · " : "";
       const swatch = span.kind === "execution" && style
         ? <span className="swatch" style={{ "--c": `var(--cfg-${style.color})` } as CSSProperties} aria-hidden="true" />
-        : <span className={"swatch " + (span.kind === "queue" ? "queue" : span.kind === "routing" ? `routing ${outcome}` : "wait")} aria-hidden="true">
+        : <span className={"swatch " + (span.kind === "queue" ? "queue" : span.kind === "routing"
+          ? `routing ${span.routing?.routingMode === "fast" ? "fast" : "review"} ${outcome}` : "wait")} aria-hidden="true">
           {span.kind === "routing" && outcome === "failed" && <i className="routing-cross" />}
         </span>;
       const duration = durationText(entry.endMs !== null ? entry.endMs - entry.atMs : null);
@@ -82,7 +83,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
         <span className="e-meta">
           {span.kind === "execution" && <span>{configurationLabel(span.configuration)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}
-          {span.kind === "routing" ? <span>{outcomeLabel(span, outcome)}</span>
+          {span.kind === "routing" ? <span>{outcomeLabel(span, outcome)}{span.routing?.fallback ? " · ↘ 已降级" : ""}</span>
             : resultGlyph && <span>{resultGlyph} {outcomeLabel(span, outcome)}</span>}
         </span>
       </button>

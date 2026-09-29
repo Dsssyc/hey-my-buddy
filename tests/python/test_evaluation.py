@@ -253,7 +253,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["tableRevision"], 0)
-        self.assertEqual({key: snapshot["configuration"][key] for key in ("revision", "decisionProfileId")}, {"revision": 0, "decisionProfileId": None})
+        self.assertEqual({key: snapshot["configuration"][key] for key in ("revision", "reviewRouterProfileId")}, {"revision": 0, "reviewRouterProfileId": None})
         self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
         self.assertEqual(snapshot["sampleCounts"], {})
         self.assertEqual(snapshot["profiles"], [])
@@ -267,7 +267,11 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(snapshot["gate"], {"phase": "open", "readers": 0, "writer": None, "waitingWriters": 0})
         self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
-        self.assertFalse(snapshot["capabilities"]["selection"])
+        # A no-tool executor can offer selection without a configured Router;
+        # fresh settings remain empty until the user chooses each slot.
+        self.assertIsInstance(snapshot["capabilities"]["selection"], bool)
+        self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "fast")
+        self.assertIsNone(snapshot["configuration"]["fastRouterProfileId"])
         self.assertFalse(snapshot["capabilities"]["maintenance"])
         self.assertIn("runs", snapshot["tasks"])
 
@@ -322,13 +326,13 @@ class EvaluationPublishTests(EvaluationTestCase):
                              preferenceChanges=[{"profileId": "dsh:nope:nope:off", "mode": "prefer", "reason": "unknown"}])
         self.publish(board, request_id="w3", command_id="c3",
                      preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "user pin"}],
-                     configuration={"decisionProfileId": SECOND_PROFILE_ID})
+                     configuration={"reviewRouterProfileId": SECOND_PROFILE_ID})
         self.publish(board, request_id="w4", command_id="c4",
                      profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": False}],
                      familyAnnotationChanges=[{**family_key(PROFILE), "text": "other edit"}])
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["preferences"][0]["mode"], "pin")
-        self.assertEqual(snapshot["configuration"]["decisionProfileId"], SECOND_PROFILE_ID)
+        self.assertEqual(snapshot["configuration"]["reviewRouterProfileId"], SECOND_PROFILE_ID)
         self.assertEqual(snapshot["familyAnnotations"][0]["text"], "other edit")
 
     def test_configuration_carries_router_profile_and_budget_without_maintenance(self):
@@ -337,14 +341,14 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         self.seed_profiles(board)
         published = self.publish(board, request_id="w2", command_id="c2",
-                                 configuration={"decisionProfileId": PROFILE_ID})
-        self.assertEqual(self.snapshot(board)["configuration"]["decisionProfileId"], PROFILE_ID)
+                                 configuration={"reviewRouterProfileId": PROFILE_ID})
+        self.assertEqual(self.snapshot(board)["configuration"]["reviewRouterProfileId"], PROFILE_ID)
         self.assertEqual(self.snapshot(board)["configuration"]["revision"], 1)
         self.assertEqual(self.snapshot(board)["configuration"]["routingBudget"], "standard")
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
-                             configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True})
+                             configuration={"reviewRouterProfileId": PROFILE_ID, "autoMaintain": True})
         self.refused_publish(board, "CONFIGURATION_UNAVAILABLE", request_id="w4", command_id="c4",
-                             configuration={"decisionProfileId": "dsh:nope:nope:off"})
+                             configuration={"reviewRouterProfileId": "dsh:nope:nope:off"})
         self.assertEqual(self.snapshot(board)["tableRevision"], published["revision"])
 
     def test_availability_is_refreshed_by_catalog_and_new_enable_requires_it(self):
@@ -1194,7 +1198,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             board,
             request_id="w4",
             command_id="c4",
-            configuration={"decisionProfileId": PROFILE_ID},
+            configuration={"reviewRouterProfileId": PROFILE_ID},
         )
         self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
 

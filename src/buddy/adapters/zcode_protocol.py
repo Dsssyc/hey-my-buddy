@@ -510,8 +510,9 @@ def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
 class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
-    def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event):
+    def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event, *, no_tools: bool = False):
         self.process, self.deadline, self.cancelled = process, deadline, cancelled
+        self.no_tools = no_tools
         self.messages: queue.Queue = queue.Queue(maxsize=128)
         self.responses: dict = {}
         self.next_id = 1
@@ -575,10 +576,13 @@ class NativeConnection:
         if "id" in message and "method" in message:
             if message["method"] == "session/requestRuntimePreferences":
                 self.send({"id": message["id"], "result": {
-                    "nativeSearchEnhancementsEnabled": True, "memoryEnabled": False,
+                    "nativeSearchEnhancementsEnabled": not self.no_tools, "memoryEnabled": False,
                     "askUserQuestionAutoResolutionEnabled": False, "modelContextBudgetStrategy": "preflight-v1",
                 }})
                 return
+            if self.no_tools:
+                self.send({"id": message["id"], "error": {"code": -32601, "message": "No interactions are allowed in a no-tool call"}})
+                raise NativeError("no-tool-violation", "Native interaction in a no-tool call")
             if message["method"] == "interaction/requestProviderRuntimeHeaders":
                 # OAuth account providers need a native authentication host that this
                 # adapter deliberately cannot impersonate. It stays a hard error.

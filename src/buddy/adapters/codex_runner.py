@@ -260,12 +260,18 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     native_root = Path(control.get("nativeRoot") or directory)
     native_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if control.get("noToolRequest") and (type(control.get("timeoutSeconds")) is not int or
+                                         not 0 < control["timeoutSeconds"] <= 60):
+        raise CodexProtocolError("no-tool-policy-unverified", "Codex no-tool deadline must be at most 60 seconds")
     deadline = execution_deadline(control["timeoutSeconds"])
     started = time.monotonic()
     incoming = dict(os.environ)
     command = cli_command(incoming)
     environment = native_environment(incoming)
-    if control.get("readOnlyRequest"):
+    if control.get("noToolRequest"):
+        from .codex_no_tool import prepare_home
+        environment["CODEX_HOME"] = control["_noToolHome"] = str(prepare_home(native_root, environment, control["spec"]))
+    elif control.get("readOnlyRequest"):
         # Keep user/project tool integrations out of this independent native server.
         old_home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
         private_home = native_root / "codex-home"
@@ -278,8 +284,10 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         environment["CODEX_HOME"] = str(private_home)
     # Version is diagnostic only. Discovery never makes a paid model call.
     try:
+        version_timeout = (max(0.1, min(5, deadline - time.monotonic()))
+                           if control.get("noToolRequest") else 5)
         version_result = subprocess.run([*command, "--version"], cwd=control["cwd"], env=environment,
-                                        capture_output=True, timeout=5)
+                                        capture_output=True, timeout=version_timeout)
         version = version_result.stdout.decode(errors="replace").strip()[:80] if version_result.returncode == 0 else "unknown"
     except (OSError, subprocess.TimeoutExpired):
         version = "unknown"
@@ -305,8 +313,19 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     early_notifications = []
     try:
         connection = Connection(process, deadline, cancelled)
-        connection.on_notification = lambda message: early_notifications.append(message) if len(early_notifications) < 128 else None
+        def early_notification(message):
+            if control.get('noToolRequest'):
+                from .codex_no_tool import reject_tool_event
+                reject_tool_event(message)
+            if len(early_notifications) >= 128:
+                if control.get("noToolRequest"):
+                    raise CodexProtocolError("invalid-native-result", "Codex no-tool startup event stream exceeded its bound")
+                return
+            early_notifications.append(message)
+        connection.on_notification = early_notification
         def on_request(message):
+            if control.get("noToolRequest"):
+                raise CodexProtocolError("no-tool-violation", "Native no-tool turn requested a tool or interaction")
             params = message.get("params")
             method = message.get("method")
             if isinstance(params, dict) and isinstance(method, str) and len(method) <= 80:
@@ -321,7 +340,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 "message": "This Buddy Worker cannot approve interactive requests; report attention in the structured outcome"}})
         connection.on_request = on_request
         connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"},
-                                        **({'capabilities': {'experimentalApi': True}} if control.get('readOnlyRequest') else {})})
+                                        **({'capabilities': {'experimentalApi': True}} if control.get('readOnlyRequest') or control.get('noToolRequest') else {})})
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         if not isinstance(account, dict) or account.get("type") != "chatgpt":
@@ -329,6 +348,10 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         catalog = _catalog(connection, version)
         if control.get("discover"):
             result.update(status="ok", catalog=catalog)
+        elif control.get("noToolRequest"):
+            from .codex_no_tool import run_call
+            control["_earlyNoToolNotifications"] = early_notifications
+            run_call(connection, control, result, catalog)
         elif control.get("readOnlyRequest"):
             control["_earlyReadOnlyNotifications"] = early_notifications
             _read_only_call(connection, control, result, catalog)
@@ -455,6 +478,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             result.update(status="ok", sessionId=thread_id, nativeTurnId=turn_id)
     except CodexProtocolError as error:
         result.update(status="cancelled" if error.code == "user-cancel" else "error", code=error.code, error=str(error))
+        if control.get("noToolRequest") and error.code == "no-tool-violation":
+            result["usage"] = {"toolCalls": 1, "bytesRead": None}
         record = None
         thread_id = thread_id or result.get("sessionId")
         turn_id = turn_id or result.get("nativeTurnId")
@@ -488,6 +513,12 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     if result["status"] == "ok" and (not shutdown or process.returncode != 0):
         result.update(status="error", code="native-shutdown-failed", error="Codex App Server did not exit with confirmed process-group shutdown")
         record = None
+    if control.get("noToolRequest"):
+        stream_complete = result.pop("_noToolStreamComplete", False)
+        result.setdefault("usage", {})["elapsedMs"] = round((time.monotonic() - started) * 1000)
+        result["usage"].setdefault("toolCalls", None)
+        result["zeroToolVerified"] = bool(result["status"] == "ok" and stream_complete
+                                          and shutdown and process.returncode == 0 and result["usage"]["toolCalls"] == 0)
     if evidence is not None and not control.get("readOnlyRequest"):
         # Even a transport failure can leave a completed root assistant message.
         # Missing native turn completion permits reconstruction only, never resume.
@@ -517,10 +548,15 @@ def main() -> int:
         signal.signal(sig, lambda _sig, _frame: cancelled.set())
     try:
         result, code = _run(json.loads(Path(args.control).read_text()), cancelled)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, CodexProtocolError) as error:
         result, code = {"status": "error", "code": "codex-controller-failed",
                         "error": "Codex controller failed before verified native settlement",
                         "processState": {"shutdownConfirmed": False}}, 1
+        if isinstance(error, CodexProtocolError):
+            result["code"] = error.code
+            # Protocol errors escaping _run arise in the no-tool preparation
+            # before Popen; post-spawn protocol errors are settled inside _run.
+            result.update(modelStarted=False, processState={"shutdownConfirmed": True}, zeroToolVerified=False)
     sys.stdout.write(canonical_json(result) + "\n")
     return code
 

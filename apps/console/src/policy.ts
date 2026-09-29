@@ -1,6 +1,6 @@
 import type { Draft, Profile } from "./types";
 import {
-  decisionProfileChanged,
+  routerFieldChanged,
   effectivePreferences,
   familyPreferenceChanges,
   preferenceChanges,
@@ -9,11 +9,11 @@ import {
 import { concurrencyLimit, familyKey } from "./console-data";
 import { profileName, profileTitle } from "./profile-display";
 
-/**
- * Host populates each profile's `capabilities`; the only recorded decision token
- * is `decision`. Coding ability, adapter names and invented aliases never imply
- * a decision capability.
- */
+/** The two capabilities have distinct authority and cannot stand in for each other. */
+export function hasFastRoutingCapability(profile: Profile | undefined): boolean {
+  return !!profile && (profile.capabilities ?? []).some(entry => entry.trim().toLowerCase() === "routing:fast");
+}
+
 export function hasDecisionCapability(profile: Profile | undefined): boolean {
   if (!profile) return false;
   return (profile.capabilities ?? []).some(
@@ -30,6 +30,15 @@ export function decisionCandidates(profiles: Profile[]): Profile[] {
   // Deterministic, locale-independent order: harness, then the stable identity.
   return profiles
     .filter(isDecisionCandidate)
+    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
+}
+
+export function isFastRouterCandidate(profile: Profile | undefined): boolean {
+  return !!profile && profile.enabled && profile.available && hasFastRoutingCapability(profile);
+}
+
+export function fastRouterCandidates(profiles: Profile[]): Profile[] {
+  return profiles.filter(isFastRouterCandidate)
     .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
 }
 
@@ -64,8 +73,9 @@ export function executionCandidates(profiles: Profile[]): Profile[] {
  * can. The capability list is checked first because it is the one reason the
  * user cannot fix here.
  */
-export function routerRefusal(profile: Profile): string | null {
-  if (!hasDecisionCapability(profile)) return "能力列表不含 decision：该档位没有经过验证的只读路由能力";
+export function routerRefusal(profile: Profile, mode: "fast" | "review" = "review"): string | null {
+  if (mode === "fast" && !hasFastRoutingCapability(profile)) return "所属 Harness 尚不支持无工具路由调用";
+  if (mode === "review" && !hasDecisionCapability(profile)) return "当前 Harness 版本尚未验证只读路由调用";
   if (!profile.available) return "该档位当前不可用";
   if (!profile.enabled) return "该档位未启用：先打开它的开关";
   return null;
@@ -175,33 +185,17 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       });
     }
   }
-  if (decisionProfileChanged(baseline, draft)) {
-    const target = draft.configuration.decisionProfileId;
+  for (const [mode, field] of [["fast", "fastRouterProfileId"], ["review", "reviewRouterProfileId"]] as const) {
+    if (!routerFieldChanged(baseline, draft, field)) continue;
+    const target = draft.configuration[field];
     if (target) {
       const profile = profiles.get(target);
-      if (!profile) {
-        issues.push({
-          profileId: target,
-          label: target,
-          message: `配置 ${target} 已不在当前目录中，不能新设为 Router。请改用其他档位。`,
-        });
-      } else if (!profile.available) {
+      const refusal = profile ? routerRefusal(profile, mode) : "已不在当前目录中";
+      if (refusal) {
         issues.push({
           profileId: target,
           label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} ${availabilityReason(profile)}，不能新设为 Router。请改用其他档位。`,
-        });
-      } else if (!profile.enabled) {
-        issues.push({
-          profileId: target,
-          label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} 处于停用状态，不能新设为 Router。请先启用它，或选择其他档位。`,
-        });
-      } else if (!hasDecisionCapability(profile)) {
-        issues.push({
-          profileId: target,
-          label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} 没有经过验证的路由能力，不能新设为 Router。请选择能力列表含 decision 的档位。`,
+          message: `${labelOf(profile, target)} ${refusal}，不能新设为${mode === "fast" ? "快速" : "审阅"} Router。请改用其他档位。`,
         });
       }
     }
@@ -210,50 +204,27 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
 }
 
 /** The action every stale-Router warning offers. */
-const ROUTER_ACTION = "在另一个具备 decision 能力的档位菜单中选择“设为 Router”";
+const routerAction = (mode: "fast" | "review") => `在${mode === "fast" ? "支持无工具路由调用" : "当前 Harness 版本已验证只读路由调用"}的档位菜单中选择“设为${mode === "fast" ? "快速" : "审阅"} Router”`;
 
 /**
  * The Router is program-checked before every routing run. A stale one is
  * reported as needing attention, with the action that resolves it, never as a
  * reason to refuse an unrelated user patch.
  */
+export function routerAttention(source: Pick<Draft, "configuration" | "profiles">, mode: "fast" | "review"): PolicyIssue | null {
+  const id = source.configuration[mode === "fast" ? "fastRouterProfileId" : "reviewRouterProfileId"];
+  if (!id) return null;
+  const profile = source.profiles.find(p => p.profileId === id);
+  const refusal = profile ? routerRefusal(profile, mode) : "已不在目录中";
+  return refusal ? {
+    profileId: id, router: true, label: labelOf(profile, id),
+    message: `当前${mode === "fast" ? "快速" : "审阅"} Router ${labelOf(profile, id)} ${refusal}：请${routerAction(mode)}。`,
+  } : null;
+}
+
+/** Retained name for review-only callers; new UI asks for each mode explicitly. */
 export function decisionAttention(source: Pick<Draft, "configuration" | "profiles">): PolicyIssue | null {
-  const decisionId = source.configuration.decisionProfileId;
-  if (!decisionId) return null;
-  const profile = source.profiles.find((p) => p.profileId === decisionId);
-  if (!profile) {
-    return {
-      profileId: decisionId,
-      router: true,
-      label: decisionId,
-      message: `当前 Router ${decisionId} 已不在目录中：请${ROUTER_ACTION}。`,
-    };
-  }
-  if (!profile.available) {
-    return {
-      profileId: decisionId,
-      router: true,
-      label: labelOf(profile, decisionId),
-      message: `当前 Router ${labelOf(profile, decisionId)} ${availabilityReason(profile)}：请${ROUTER_ACTION}。`,
-    };
-  }
-  if (!profile.enabled) {
-    return {
-      profileId: decisionId,
-      router: true,
-      label: labelOf(profile, decisionId),
-      message: `当前 Router ${labelOf(profile, decisionId)} 已停用：请重新启用该档位，或${ROUTER_ACTION}。`,
-    };
-  }
-  if (!hasDecisionCapability(profile)) {
-    return {
-      profileId: decisionId,
-      router: true,
-      label: labelOf(profile, decisionId),
-      message: `当前 Router ${labelOf(profile, decisionId)} 未验证路由能力：请${ROUTER_ACTION}。`,
-    };
-  }
-  return null;
+  return routerAttention(source, "review");
 }
 
 /**
@@ -268,8 +239,10 @@ export function attentionIssues(
 ): PolicyIssue[] {
   const profiles = new Map(source.profiles.map((p) => [p.profileId, p]));
   const issues: PolicyIssue[] = [];
-  const decision = decisionAttention(source);
-  if (decision) issues.push(decision);
+  for (const mode of ["fast", "review"] as const) {
+    const attention = routerAttention(source, mode);
+    if (attention) issues.push(attention);
+  }
   const effective = effectivePreferences(source);
   for (const override of source.preferenceOverrides) {
     if (override.mode !== "pin") continue;

@@ -123,6 +123,17 @@ class ReadOnlyStructuredRequest:
     capture_evidence: bool = False
 
 
+@dataclass(frozen=True)
+class NoToolStructuredRequest:
+    """One tool-free native call in a Host-created empty private directory."""
+
+    cwd: str
+    prompt: str
+    output_schema: dict
+    timeout_seconds: int = 60
+    capture_evidence: bool = False
+
+
 class Adapter:
     """Base class for the built-in adapters."""
 
@@ -134,6 +145,11 @@ class Adapter:
     # Mock coverage is not native verification. Enable only after an approved probe.
     read_only_structured_verified = False
     read_only_structured_resume = False
+    no_tool_structured = False
+
+    def start_no_tool_structured(self, context: ExecutionContext,
+                                 request: NoToolStructuredRequest) -> "ProcessHandle":
+        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} has no native no-tool structured call")
 
     def start_read_only_structured(self, context: ExecutionContext,
                                    request: ReadOnlyStructuredRequest) -> "ProcessHandle":

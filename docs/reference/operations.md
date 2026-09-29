@@ -4,7 +4,7 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The daily installation on this machine is [0.18.0/contract 0.18.0/schema 13](../acceptance/installed-0.18.0.md): the skill lives in `~/.agents/skills/buddy`, which Codex reads directly, and Claude Code reads `~/.claude/skills/buddy`, a symbolic link to that same directory. The retired Codex plugin is no longer installed, so both Hosts read one copy. Runtime, state and backups stay under `~/.local/share/hey-my-buddy` (on Windows the default is `%LOCALAPPDATA%\hey-my-buddy`; `buddy.home` owns this default). The current source candidate is 0.19.0/contract 0.19.0/schema 14; it is not installed, the daily board is not migrated, no release package is published and no user configuration was changed by its preparation.
+The verified daily installation on this machine is [0.19.0/contract 0.19.0/schema 14](../acceptance/installed-0.19.0.md): the skill lives in `~/.agents/skills/buddy`, which Codex reads directly, and Claude Code reads `~/.claude/skills/buddy`, a symbolic link to that same directory. The retired Codex plugin is no longer installed, so both Hosts read one copy. Runtime, state and backups stay under `~/.local/share/hey-my-buddy` (on Windows the default is `%LOCALAPPDATA%\hey-my-buddy`; `buddy.home` owns this default). The current source candidate is 0.19.0/contract 0.20.0/schema 14; it is not installed, the daily board is not migrated, no release package is published and no user configuration was changed by its preparation. Its ADR-018 first-part routing modes add no schema change and keep their configuration in `meta` keys.
 
 ## Installation
 
@@ -12,11 +12,11 @@ The 0.19.0 source candidate installs through one fixed-version package command. 
 
 ```sh
 # After the user decides the release channel and the version is published
-uvx hey-my-buddy@0.19.0 install
+uvx hey-my-buddy@0.20.0 install
 
 # Unpublished candidate: build a wheel and install from its absolute path
 uv build --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.19.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.20.0-py3-none-any.whl hey-my-buddy install
 ```
 
 The package exposes exactly one command, `hey-my-buddy install`; any other argument returns `PACKAGE_INSTALL_USAGE`. Run the command outside the Host or agent sandbox, in a real user session; it needs no sudo and writes only inside the user's home. Installing or switching the daily service still requires the user's separate authorization.
@@ -48,8 +48,8 @@ Windows is not validated on a real machine. The code and scripts are portable �
 `install.sh` (macOS, Linux) and `install.ps1` (Windows) do one job: prepare a fixed private `uv`, then hand installation to the package entry.
 
 ```sh
-sh install.sh --version 0.19.0 [--wheel-url https://.../hey_my_buddy-0.19.0-py3-none-any.whl]
-./install.ps1 -Version 0.19.0 [-WheelUrl https://.../hey_my_buddy-0.19.0-py3-none-any.whl]
+sh install.sh --version 0.19.0 [--wheel-url https://.../hey_my_buddy-0.20.0-py3-none-any.whl]
+./install.ps1 -Version 0.19.0 [-WheelUrl https://.../hey_my_buddy-0.20.0-py3-none-any.whl]
 ```
 
 They use an existing `uv` on `PATH`; otherwise they download the pinned uv 0.12.19 release into a private directory under the hey-my-buddy data home, verify it against the pinned SHA-256 list, and run `uv tool run --from <fixed package or wheel> hey-my-buddy install`. They print their private uv destination before downloading, then print the package source and delegate the remaining write-path plan to the installer. They never change `PATH`, shell configuration or Host settings, never need sudo, and never install a global `buddy` command. Stable error codes are `BOOTSTRAP_ARGS` (invalid version or wheel URL), `BOOTSTRAP_PLATFORM`, `BOOTSTRAP_FETCH`, `BOOTSTRAP_VERIFY`, `BOOTSTRAP_WRITE`, `BOOTSTRAP_EXTRACT` and `PACKAGE_INSTALL_FAILED`; each prints one line with a repair action.
@@ -117,7 +117,7 @@ Before claiming queued native work and again before starting a harness, the serv
 
 Stable operational codes are `HARNESS_NOT_CHECKED` (no check yet; run `buddy adapters '{"refresh":true}'`), `HARNESS_HANDSHAKE_FAILED` (the candidate CLI could not be probed; repair the native installation), `HARNESS_INVALID_RESULT` (discovery returned an unusable result) and `REVISION_CONFLICT` (a manual path or check changed since the caller read it; reread and retry). Each row also carries a bounded candidate reason code and one repair line, for example `not-found`, `login-required`, `node-missing`, `interpreter-missing`, `timeout`, `output-limit`, `auth-unverified`, `version-unknown`, `scan-timeout`, `shutdown-unverified` or `launch-failed`. A handshake that passes with unrecognized version text reports `unknown` plus a warning: it is never turned into a compatibility range. The manual path is an advanced setting for when automatic detection fails; the JSON form fences the write with `expectedRevision`, and a `null` path clears it.
 
-A Router must use an enabled, healthy configuration with a verified read-only structured capability. In the 0.19.0 source this is Codex on macOS; `openai / gpt-6-sol / high` with `standard` has native evidence. Linux/Windows and other harnesses remain unverified. The daily 0.18.0 DSH Router cannot confine reads/networking; after an authorized upgrade the user chooses the Codex Router in Buddy 配置. No installer changes that configuration. See [acceptance](../acceptance/local-harness-discovery-0.19.0.md).
+The review Router must use an enabled, healthy configuration with a verified read-only structured capability. In the 0.19.0 source this is Codex on macOS; `openai / gpt-6-sol / high` with `standard` has native evidence. Linux/Windows and other harnesses remain unverified for review, and the daily 0.18.0 DSH Router cannot confine reads or networking. The fast Router instead needs an enabled, healthy configuration whose adapter implements the tool-free structured call; DSH, ZCode and Codex do so in the 0.20.0 source, but that tool-free behavior still awaits its own native probe. After an authorized upgrade the user chooses both Router slots and the default mode in Buddy 配置. No installer changes that configuration. See [acceptance](../acceptance/local-harness-discovery-0.19.0.md).
 
 ## Backup, upgrade and storage contract
 
@@ -137,7 +137,7 @@ List hey-my-buddy daemons/supervisors not associated with the current daily cont
 
 The [installed 0.18.0 runtime](../acceptance/installed-0.18.0.md) uses contract 0.18.0 and schema 13. It was switched from the idle 0.17.0 service with one verified rolling backup and an in-place schema-12 → 13 migration under the exclusive owner locks; retained table fingerprints were verified, and the recorded runtime identity and preserved configuration are installation facts, distinct from source acceptance. New Codex tasks load the updated skill; existing Hosts must resolve the new bundled launcher before dispatching work against the upgraded service.
 
-Current source contract is 0.19.0, schema 14 and C-Two 0.6.0. The 0.19.0 candidate implements [ADR-017](../decisions/017-local-installation-and-harness-discovery.md): the fixed-version package install entry, a launcher that executes the active runtime's Python directly, the sandbox refusal and inherited-environment cleaning, schema-14 harness health, and the idle whole-generation switch with one verified backup. It is not installed: the daily 0.18.0 installation above stays unchanged until the user separately authorizes the upgrade, and the daily Router is still unverified. The source verifies Codex Router on macOS; see [Codex](codex.md) for the tested profile and boundary. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
+Current source contract is 0.20.0, schema 14 and C-Two 0.6.0. The 0.19.0 candidate implements [ADR-017](../decisions/017-local-installation-and-harness-discovery.md): the fixed-version package install entry, a launcher that executes the active runtime's Python directly, the sandbox refusal and inherited-environment cleaning, schema-14 harness health, and the idle whole-generation switch with one verified backup. It is not installed: the daily 0.18.0 installation above stays unchanged until the user separately authorizes the upgrade, and the daily Router is still unverified. The source verifies Codex Router on macOS; see [Codex](codex.md) for the tested profile and boundary. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
 
 hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.6.0` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the skill directory, so replacing the skill does not disturb a running service.
 
@@ -267,3 +267,7 @@ A non-default state directory cannot reclaim runtimes from the default state's r
 Windows process ownership uses a suspended child assigned to a private Job Object before resuming its primary thread; shutdown is observed through that held Job rather than a stored PID. The implementation uses documented Win32 Job/Thread APIs and Python 3.12+ nonblocking pipe support ([Python os.set_blocking](https://docs.python.org/3.13/library/os.html#os.set_blocking)). Native Windows tests remain a separate acceptance step; unsupported process/mapped-file inspection retains storage instead of reclaiming it.
 
 In PowerShell, invoke `buddy.ps1` directly for JSON commands. It preserves argument boundaries using `ProcessStartInfo.ArgumentList` where available and explicit native quoting on legacy Windows PowerShell; `buddy.cmd` is the Command Prompt bridge. The quoting paths have a PowerShell-on-macOS round-trip smoke, with Windows shell behavior still awaiting native acceptance.
+
+## Routing configuration upgrade
+
+ADR-018 adds only `meta` values: `router_fast_profile_id`, `router_review_profile_id`, `router_default_mode` and `router_configuration_version`; `router_budget_preset` remains the review budget key. After backup and under the upgrade locks, the old `evaluation_state.decision_profile_id` is mapped to its eligible slot (verified review first, otherwise fast), the other slot stays empty and a saved `quick` becomes `brief`. This operation is idempotent, checks unrelated meta values and retained table fingerprints, and participates in the existing rollback. Fresh boards start with two empty slots and default `fast`. Startup does not migrate an existing board.

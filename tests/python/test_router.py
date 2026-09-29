@@ -139,7 +139,7 @@ class RouterPublicationTests(WorkflowTestCase):
             'configuration': {'routingBudget': 'deep'}})
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')
-        self.assertEqual(configured['decisionProfileId'], PROFILE_ID)
+        self.assertEqual(configured['reviewRouterProfileId'], PROFILE_ID)
         self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
     def test_budget_update_does_not_change_selection_request_replay(self):
@@ -148,7 +148,7 @@ class RouterPublicationTests(WorkflowTestCase):
         params = {'requestId': 'stable-budget-request', 'task': 'choose'}
         original = board.call('selection_request', params)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO meta(key,value) VALUES('router_budget_preset','deep')")
+            connection.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('router_budget_preset','deep')")
         replay = board.call('selection_request', params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['decisionId'], original['decisionId'])

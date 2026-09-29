@@ -43,7 +43,7 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
                 "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
                 "profileSettings": [{"profileId": DECISION_PROFILE, "enabled": True}],
-                "configuration": {"decisionProfileId": DECISION_PROFILE},
+                "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": DECISION_PROFILE},
             },
         )
 

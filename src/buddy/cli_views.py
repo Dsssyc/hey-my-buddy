@@ -113,7 +113,7 @@ def _nonzero(mapping: Any) -> dict:
 # -- governed goal views -----------------------------------------------------
 
 _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode")
-_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "preferenceOutcome", "decisionId")
+_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "preferenceOutcome", "decisionId", "routingMode", "requestedRoutingMode", "fallback")
 _WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
 _OUTPUT_ARTIFACT = (
     "artifactId",

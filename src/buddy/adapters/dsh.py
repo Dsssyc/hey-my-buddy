@@ -45,8 +45,13 @@ class DshAdapter(Adapter):
     name = "dsh"
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline")
     model_discovery = True
+    no_tool_structured = True
     # The native DSH permission policy does not confine reads or networking.
     # Do not advertise a read-only structured Router capability.
+
+    def start_no_tool_structured(self, context, request):
+        from .read_only import start_no_tool
+        return start_no_tool(self.name, context, request)
 
     def discover_models(self) -> dict:
         from .dsh_catalog import discover_models
@@ -220,6 +225,9 @@ class DshAdapter(Adapter):
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
+        if getattr(handle, "no_tool", False):
+            from .read_only import collect
+            return collect(handle)
         stdout_path = Path(handle.log_paths["stdout"])
         try:
             raw = stdout_path.read_text(errors="replace")

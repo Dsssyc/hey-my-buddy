@@ -1,6 +1,10 @@
 # Repository maintenance
 
-## Current Codex monitoring and continuation repair
+## Current ADR-018 routing modes
+
+The user authorized ADR-018 Part 1 only (items 1–10), from `socu/buddy-core` at `157e7e1`, on `socu/routing-modes`. Source is 0.20.0/contract 0.20.0/schema 14; routing settings use existing `meta` storage. The [routing-modes acceptance](docs/acceptance/routing-modes-0.20.0.md) owns source checks, individually approved native attempts and unverified paths. DSH fast routing passed its approved provider check; ZCode and Codex passed native offline zero-tool checks, while the final ZCode provider check was rate-limited. No Claude calls were made. Daily installation remains 0.19.0; merge, installation and user configuration changes still require separate authorization. ADR-018 Part 2 and its independent defects are outside this implementation scope.
+
+## Historical Codex monitoring and continuation repair
 
 This agenda starts from `socu/buddy-core` at `9fcea9a`. Daily installation is 0.19.0/contract 0.19.0/schema 14; the login-name environment fix in that source baseline is not installed yet. The user chose lightweight, explicitly configured Codex monitoring subagents instead of Host foreground await as the default, with foreground fallback; Claude Code background await stays unchanged. Every paid experiment needs its own approval. All test services and runtimes use private roots. No daily installation, configuration change, merge or publication is authorized by implementation or probe approval. See docs/acceptance/codex-monitor-and-continuation-0.19.0.md for this agenda's verified results and limits.
 

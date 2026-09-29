@@ -1,3 +1,5 @@
+import type { RoutingMode, RoutingFallback } from "./types";
+
 export type ObjectiveFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
 export type ObjectiveCategory = "host" | "active" | "review" | "ended";
@@ -87,6 +89,9 @@ export type TimelineSpan = {
   decisionId?: string | null;
   /** Optional projection for historic spans without routing facts. */
   routing?: {
+    routingMode?: RoutingMode;
+    requestedRoutingMode?: RoutingMode;
+    fallback?: RoutingFallback | null;
     selectedProfile?: TimelineConfiguration | null;
     reason?: string | null;
     policyCheck?: {

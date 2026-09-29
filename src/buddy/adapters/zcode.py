@@ -34,6 +34,11 @@ class ZcodeAdapter(Adapter):
     capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
+    no_tool_structured = True
+
+    def start_no_tool_structured(self, context, request):
+        from .read_only import start_no_tool
+        return start_no_tool(self.name, context, request)
 
     def available(self) -> tuple[bool, str | None]:
         from ..harness_runtime import selected
@@ -108,6 +113,9 @@ class ZcodeAdapter(Adapter):
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
+        if getattr(handle, "no_tool", False):
+            from .read_only import collect
+            return collect(handle)
         payload = _read_result(Path(handle.log_paths["stdout"]))
         exit_code = handle.process.returncode
         # The native app server owns another group. Its runner receipt plus the

@@ -104,7 +104,7 @@ CARD_FIELDS = frozenset({"profileId", "summary", "strengths", "limitations", "ri
 #: The published configuration carries only the fixed decision profile. There is no
 #: automatic-maintenance or scheduler setting: maintenance synthesis is performed by
 #: an external Harness through ``evaluation_prepare`` and the ordinary writer gate.
-CONFIGURATION_FIELDS = frozenset({"decisionProfileId", "routingBudget"})
+CONFIGURATION_FIELDS = frozenset({"fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode", "routingBudget"})
 #: The Harness-owned maintenance reads. ``evaluation.prepare`` is a bounded,
 #: deterministic fact collection with no model call and no writer lease;
 #: ``evaluation.history`` is a bounded read of the existing publication log.
@@ -338,24 +338,20 @@ class EvaluationStore:
         if not isinstance(entry, dict):
             raise BoardError("INVALID_ARGUMENT", "configuration must be an object")
         schemas.reject_unknown(entry, CONFIGURATION_FIELDS, "configuration")
-        decision_profile = entry.get("decisionProfileId")
-        if decision_profile is not None and (
-            not isinstance(decision_profile, str) or not decision_profile.strip()
-        ):
-            raise BoardError("INVALID_ARGUMENT", "configuration.decisionProfileId must be a profileId or null")
-        if decision_profile is not None:
-            decision_profile = decision_profile.strip()
-            if len(decision_profile) > 128 or not schemas.IDENTIFIER_PATTERN.match(decision_profile):
-                raise BoardError("INVALID_ARGUMENT", "configuration.decisionProfileId has an invalid format")
-        # The published configuration is the fixed decision profile only. Maintenance
-        # is not a blackboard setting any more: an external Harness prepares bounded
-        # facts and publishes cards through the ordinary writer gate.
+        from . import router
         result = {}
-        if "decisionProfileId" in entry:
-            result["decisionProfileId"] = decision_profile
+        for key in ("fastRouterProfileId", "reviewRouterProfileId"):
+            if key not in entry:
+                continue
+            profile_id = entry[key]
+            if profile_id is not None:
+                if not isinstance(profile_id, str) or not schemas.IDENTIFIER_PATTERN.fullmatch(profile_id):
+                    raise BoardError("INVALID_ARGUMENT", f"configuration.{key} must be a profileId or null")
+            result[key] = profile_id
+        if "defaultRoutingMode" in entry:
+            result["defaultRoutingMode"] = router.mode(entry["defaultRoutingMode"])
         if "routingBudget" in entry:
-            from .router import budget
-            result["routingBudget"] = budget(entry["routingBudget"])["preset"]
+            result["routingBudget"] = router.budget(entry["routingBudget"])["preset"]
         if not result:
             raise BoardError("INVALID_ARGUMENT", "configuration requires a routing model or budget")
         return result
@@ -653,13 +649,17 @@ class EvaluationStore:
             now = self._now()
             state = self._state(connection)
             table_revision = int(state["table_revision"])
+            from . import router
+            settings = router.configuration(connection)
+            routing_budget = router.configured_budget(connection)
             profiles = [
                 self._profile_view(row)
                 for row in connection.execute(
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
                     "LEFT JOIN harness_health h ON h.adapter=p.adapter "
                     "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
-                    "WHERE (p.available=1 AND h.status='ready') OR p.profile_id=? ORDER BY p.rowid LIMIT 201", (state["decision_profile_id"],)
+                    "WHERE (p.available=1 AND h.status='ready') OR p.profile_id IN (?,?) ORDER BY p.rowid LIMIT 202",
+                    (settings["fastRouterProfileId"], settings["reviewRouterProfileId"])
                 )
             ]
             profile_ids = [profile["profileId"] for profile in profiles]
@@ -701,9 +701,6 @@ class EvaluationStore:
                 for profile in profiles
             }
             model_concurrency = self.board.model_capacity_rows(connection, families)
-        from .router import configured_budget
-        with self.board.db.read() as connection:
-            routing_budget = configured_budget(connection)
         tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
             "csrfToken": "",
@@ -711,8 +708,7 @@ class EvaluationStore:
             "gate": gate,
             "configuration": {
                 "revision": int(state["configuration_revision"]),
-                "decisionProfileId": state["decision_profile_id"],
-                "routingBudget": routing_budget["preset"],
+                **settings,
                 "routingBudgetLimits": routing_budget,
             },
             "profiles": profiles,
@@ -747,10 +743,9 @@ class EvaluationStore:
         discovery is visible through ``model_catalog_refresh``.
         """
         from . import catalog
-        from .adapters.decision import DecisionAdapter
-
-        decision = DecisionAdapter()
-        adapter_available, adapter_reason = decision.available()
+        # Even model-free reads use this board's recorded harness health, not
+        # whichever native executables happen to be visible to the caller.
+        adapter_available, adapter_reason = self.board.decisions._adapter_available()
         return {
             "selection": bool(adapter_available),
             "maintenance": False,
@@ -2579,6 +2574,9 @@ class EvaluationStore:
         capabilities = json.loads(row["capabilities_json"])
         if not (native and native.read_only_structured and native.read_only_structured_verified):
             capabilities = [item for item in capabilities if item != "decision"]
+        capabilities = [item for item in capabilities if item != "routing:fast"]
+        if native and getattr(native, "no_tool_structured", False):
+            capabilities.append("routing:fast")
         view = {
             "profileId": row["profile_id"],
             "label": row["label"],

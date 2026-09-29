@@ -9,9 +9,10 @@ import sys
 import time
 import uuid
 
-from .base import AdapterOutcome, ExecutionContext, ProcessHandle, ReadOnlyStructuredRequest, open_logs
+from .base import AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle, ReadOnlyStructuredRequest, open_logs
+from ..errors import BoardError
 from .windows_process import owned_popen
-from .turn_io import private_json
+from .turn_io import private_json, canonical_json
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
 
@@ -81,6 +82,11 @@ def correction_code(raw, schema: dict) -> str | None:
     return "answer-shape" if errors else None
 
 
+def no_tool_prompt(prompt: str, schema: dict) -> str:
+    """Python supplies the answer schema for harnesses without a native JSON option."""
+    return prompt + "\n\nReturn only one JSON value matching this schema: " + canonical_json(schema)
+
+
 def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
     context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     control = {
@@ -110,6 +116,52 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     return handle
 
 
+def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructuredRequest) -> ProcessHandle:
+    """Start a separate native controller without a workflow turn or agent authority."""
+    cwd = Path(request.cwd)
+    if (context.turn is not None or context.agent_credential is not None
+            or type(request.timeout_seconds) is not int or not 0 < request.timeout_seconds <= 60
+            or not isinstance(request.prompt, str) or not request.prompt.strip()
+            or not isinstance(request.output_schema, dict)):
+        raise BoardError("INVALID_ARGUMENT", "no-tool call requires a bounded prompt, schema and no workflow authority")
+    try:
+        if not cwd.is_absolute() or not cwd.is_dir() or cwd.is_symlink() or any(cwd.iterdir()):
+            raise ValueError("not an empty private directory")
+        info = cwd.stat()
+        if info.st_mode & 0o077 or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
+            raise ValueError("directory is not owner-private")
+    except (OSError, ValueError):
+        raise BoardError("INVALID_ARGUMENT", "no-tool cwd must be an existing empty private directory") from None
+    context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    invocation = context.directory / ("no-tool-" + uuid.uuid4().hex)
+    invocation.mkdir(mode=0o700)
+    control = {
+        "directory": str(invocation), "nativeRoot": str(invocation / "native"),
+        "cwd": str(cwd.resolve()), "timeoutSeconds": request.timeout_seconds,
+        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
+        "noToolRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
+                          "captureEvidence": request.capture_evidence},
+    }
+    path = context.directory / "no-tool-control.json"
+    private_json(path, control)
+    from ..harness_runtime import controller_environment
+    environment = controller_environment(context.directory, context.environment, read_only=True)
+    if name == "dsh" and context.environment.get("DSH_HOME"):
+        environment["DSH_HOME"] = context.environment["DSH_HOME"]
+    stdout, stderr = open_logs(context.log_paths())
+    try:
+        process = owned_popen([sys.executable, "-m", f"buddy.adapters.{name}_runner", "--control", str(path)],
+                              cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
+                              stdout=stdout, stderr=stderr, start_new_session=True, close_fds=True)
+    finally:
+        os.close(stdout)
+        os.close(stderr)
+    handle = ProcessHandle(process, own_group=True, log_paths=context.log_paths())
+    handle.deadline = time.monotonic() + request.timeout_seconds
+    handle.no_tool = True
+    return handle
+
+
 def collect(handle: ProcessHandle) -> AdapterOutcome:
     payload = None
     try:
@@ -120,6 +172,12 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
         pass
     if not isinstance(payload, dict):
         payload = {"status": "error", "code": "invalid-native-result"}
+    if getattr(handle, "no_tool", False) is True and payload.get("status") == "ok" and (
+            payload.get("zeroToolVerified") is not True or
+            type((payload.get("usage") or {}).get("toolCalls")) is not int or
+            (payload.get("usage") or {}).get("toolCalls") != 0):
+        payload = {"status": "error", "code": "invalid-native-result",
+                   "processState": payload.get("processState", {})}
     stopped = (payload.get("processState", {}).get("shutdownConfirmed") is True
                and handle.shutdown_confirmed())
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"

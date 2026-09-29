@@ -7,6 +7,8 @@ import hashlib
 import json
 import math
 import os
+import queue
+import re
 import secrets
 import signal
 import socket
@@ -691,6 +693,194 @@ def execution_deadline(timeout_seconds) -> float:
     return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
+class NoToolEvidence:
+    """Fail closed on every tool event, including child and unbound tool calls."""
+
+    # Model text may be streamed in these native event families. Unknown events
+    # cannot establish zero-tool provenance on a future protocol revision.
+    MODEL_EVENTS = {"message.upserted", "message.removed", "part.started", "part.delta",
+                    "part.upserted", "part.removed", "model.streaming"}
+    SESSION_EVENTS = {"session.created", "session.resumed", "session.updated", "session.titleUpdated", "session.closed"}
+    OPERATION_EVENTS = {"turn-started", "turn-completed", "turn-failed", "session-closed"}
+    TELEMETRY_EVENTS = {"turn.started", "model.request.status", "stream.chunk", "usage.delta", "turn.terminal"}
+
+    def __init__(self, session_id: str, input_id: str):
+        self.session_id, self.input_id = session_id, input_id
+        self.turn_id = None
+        self.last_seq = -1
+        self.completed = False
+        self.settled = False
+        self.raw_answer = None
+        self.events = 0
+        self.metadata_sequences = {}
+        self.metadata_turn = None
+
+    def observe_metadata(self, method: str, params: dict) -> None:
+        """Native lifecycle projections precede canonical events; they prove no answer."""
+        operation = method == "computer-use/operation-event"
+        kinds = self.OPERATION_EVENTS if operation else self.TELEMETRY_EVENTS
+        sequence = params.get("sequenceNumber" if operation else "eventSeq")
+        if (params.get("kind") not in kinds or params.get("sessionId") != self.session_id
+                or type(sequence) is not int or sequence <= self.metadata_sequences.get(method, -1)):
+            raise NativeError("invalid-protocol", "invalid no-tool native lifecycle metadata")
+        self.metadata_sequences[method] = sequence
+        if params["kind"] == "session-closed":
+            return
+        turn = params.get("turnId")
+        if (not isinstance(turn, str) or not turn
+                or self.turn_id is not None and turn != self.turn_id
+                or self.metadata_turn is not None and turn != self.metadata_turn):
+            raise NativeError("wrong-native-turn", "no-tool lifecycle metadata differs from the admitted turn")
+        self.metadata_turn = turn
+        if params["kind"] == "turn-failed":
+            raise NativeError("native-turn-failed", "no-tool native turn failed")
+
+    def observe(self, message: dict, _ordinal: int) -> None:
+        _reject_no_tool_events(message)
+        method, params = message.get("method"), message.get("params")
+        if not isinstance(params, dict):
+            raise NativeError("invalid-protocol", "no-tool native event has no object parameters")
+        if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples', 'process/resourceSample'):
+            return
+        if method in ("computer-use/operation-event", "v4/telemetry/event"):
+            self.observe_metadata(method, params)
+            return
+        if method == "session/event":
+            kind = params.get("type")
+            # Inspect before session/turn filtering: relayed child and MCP calls
+            # are still violations even without a toolCallId.
+            if kind == "tool.updated" or isinstance(kind, str) and (kind.startswith("tool.") or kind.startswith("agent.")):
+                raise NativeError("no-tool-violation", "native tool or subagent event in a no-tool call")
+            if kind not in {"turn.started", "turn.completed", "turn.failed", *self.MODEL_EVENTS, *self.SESSION_EVENTS}:
+                raise NativeError("invalid-protocol", "unknown no-tool native event")
+            if params.get("sessionId") != self.session_id:
+                raise NativeError("invalid-protocol", "foreign session event in a no-tool call")
+            seq = params.get("seq")
+            if type(seq) is not int or seq <= self.last_seq:
+                raise NativeError("invalid-protocol", "no-tool native event order is invalid")
+            self.last_seq = seq
+            self.events += 1
+            data = params.get("payload")
+            if not isinstance(data, dict):
+                raise NativeError("invalid-protocol", "no-tool native event payload is invalid")
+            if kind in self.SESSION_EVENTS:
+                return
+            if kind == "turn.started":
+                if (self.turn_id is not None or data.get("inputId") != self.input_id
+                        or not isinstance(params.get("turnId"), str)
+                        or self.metadata_turn is not None and params.get("turnId") != self.metadata_turn):
+                    raise NativeError("wrong-native-turn", "no-tool turn identity differs")
+                self.turn_id = params["turnId"]
+            elif not self.turn_id or params.get("turnId") != self.turn_id:
+                raise NativeError("wrong-native-turn", "no-tool event differs from the admitted turn")
+            elif kind == "turn.failed":
+                raise NativeError("native-turn-failed", "no-tool native turn failed")
+            elif kind == "turn.completed":
+                if self.completed or data.get("inputId") != self.input_id or data.get("resultType") != "success":
+                    raise NativeError("native-turn-failed", "no-tool native turn did not complete successfully")
+                self.raw_answer = data.get("response")
+                if not isinstance(self.raw_answer, str) or len(self.raw_answer.encode()) > 65536:
+                    raise NativeError("invalid-native-result", "no bounded native answer")
+                self.completed = True
+        elif method == "state.updated":
+            if params.get("sessionId") not in (None, self.session_id):
+                raise NativeError("invalid-protocol", "foreign no-tool state event")
+            if params.get("reason") == "prompt_failed":
+                raise NativeError("native-turn-failed", "no-tool prompt failed")
+            if params.get("reason") == "prompt_completed":
+                if not self.completed or self.settled:
+                    raise NativeError("invalid-protocol", "no-tool settlement lacks a completed turn")
+                self.settled = True
+        else:
+            label = method if isinstance(method, str) and re.fullmatch(r'[A-Za-z0-9/._-]{1,80}', method) else 'unknown'
+            raise NativeError("invalid-protocol", "unknown no-tool native notification: " + label)
+
+
+def _reject_no_tool_events(value) -> None:
+    """Native tool parts count even before admission, without ids or in child events."""
+    if isinstance(value, dict):
+        kinds = (value.get('type', ''), value.get('kind', ''))
+        if (any(isinstance(kind, str) and kind.startswith(
+                ('tool', 'agent.', 'permission.', 'userInput.', 'subagent.', 'workflow.')) for kind in kinds)
+                or value.get('toolCallId') is not None or value.get('role') == 'tool'
+                or any(type(value.get(key)) is int and value[key] > 0 for key in ('toolCalls', 'toolCallCount'))):
+            raise NativeError('no-tool-violation', 'native tool or interaction event in a no-tool call')
+        for item in value.values():
+            if isinstance(item, (dict, list)):
+                _reject_no_tool_events(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_no_tool_events(item)
+
+
+def _no_tool_preflight(message: dict, _ordinal: int) -> None:
+    _reject_no_tool_events(message)
+    params = message.get("params") or {}
+    if message.get('method') in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples', 'process/resourceSample') and isinstance(params, dict):
+        return
+    if message.get("method") == "session/event" and isinstance(params, dict):
+        kind = params.get("type")
+        if kind in NoToolEvidence.SESSION_EVENTS:
+            return
+    if message.get('method') == 'state.updated' and isinstance(params, dict):
+        return
+    if (message.get('method') == 'computer-use/operation-event' and isinstance(params, dict)
+            and params.get('kind') == 'session-closed' and isinstance(params.get('sessionId'), str)
+            and type(params.get('sequenceNumber')) is int):
+        return
+    method = message.get('method')
+    label = method if isinstance(method, str) and re.fullmatch(r'[A-Za-z0-9/._-]{1,80}', method) else 'unknown'
+    raise NativeError("invalid-protocol", "unexpected native event before no-tool admission: " + label)
+
+
+def _no_tool_call(connection: NativeConnection, control: dict, result: dict, workspace: dict, access: dict) -> str:
+    from .read_only import correction_code, no_tool_prompt, valid_answer
+    request = control["noToolRequest"]
+    spec = control["spec"]
+    base_prompt = no_tool_prompt(request["prompt"], request["outputSchema"])
+    prompt = base_prompt
+    for attempt in range(2):
+        connection.observe = _no_tool_preflight
+        snapshot = connection.call("session/create", {
+            "workspace": workspace, "titleGenerationEnabled": False, "toolAllowlist": [],
+            "mcpServers": [], "offPeakToolEnabled": False, "dynamicWorkflowEnabled": False})
+        session = snapshot.get("session") or {}
+        session_id = session.get("sessionId")
+        if not isinstance(session_id, str) or not session_id or session.get("parentSessionId"):
+            raise NativeError("wrong-native-session", "no-tool call requires a root native session")
+        if (session.get("workspace") or {}).get("workspacePath") != control["cwd"]:
+            raise NativeError("wrong-native-workspace", "no-tool native workspace differs")
+        result["resolved"] = configure_session(connection, snapshot, spec, access)
+        result["sessionId"] = session_id
+        input_id = "buddy-no-tool-" + secrets.token_hex(16)
+        evidence = NoToolEvidence(session_id, input_id)
+        connection.observe = evidence.observe
+        connection.call("session/subscribe", {"sessionId": session_id,
+                        "deliveryKind": "web-remote-replayable", "includeSnapshot": False})
+        requests = []
+        connection.attention = requests.append
+        result["modelStarted"] = True
+        accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id, "content": prompt})
+        if accepted.get("accepted") is not True or accepted.get("sessionId") != session_id:
+            raise NativeError("native-admission-failed", "no-tool input was not admitted")
+        while not evidence.settled:
+            connection.pump()
+            if requests:
+                raise NativeError("no-tool-violation", "native interaction requested in a no-tool call")
+        closed = connection.call("session/close", {"sessionId": session_id})
+        if closed.get("closed") is not True:
+            raise NativeError("session-close-unconfirmed", "no-tool session close was not acknowledged")
+        result.update(rawAnswer=evidence.raw_answer, answerValid=valid_answer(evidence.raw_answer, request["outputSchema"]),
+                      nativeIdentity={"sessionId": session_id, "turnId": evidence.turn_id},
+                      usage={"toolCalls": 0}, correctionCount=attempt,
+                      nativeEventCount=evidence.events)
+        correction = correction_code(evidence.raw_answer, request["outputSchema"])
+        if correction is None or attempt:
+            return session_id
+        prompt = base_prompt + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema."
+    return session_id
+
+
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     deadline = execution_deadline(control["timeoutSeconds"])
     directory = Path(control["directory"])
@@ -739,15 +929,21 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
               "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
     record = None
     session_id = None
+    connection = None
     inquiry_bridge: InquiryBridge | None = None
     try:
-        connection = NativeConnection(process, deadline, cancelled)
+        connection = NativeConnection(process, deadline, cancelled, no_tools=bool(control.get("noToolRequest")))
+        if control.get("noToolRequest"):
+            connection.observe = _no_tool_preflight
         connection.call("runtime/capabilities", {})
         workspace = {"workspacePath": control["cwd"], "workspaceKey": control["cwd"]}
         if control.get("discover"):
             snapshot = connection.call("session/create", {"workspace": workspace, "titleGenerationEnabled": False, "toolAllowlist": []})
             session_id = snapshot["session"]["sessionId"]
             result = {**result, "status": "ok", "catalog": catalog(snapshot, access, version)}
+        elif control.get("noToolRequest"):
+            session_id = _no_tool_call(connection, control, result, workspace, access)
+            result.update(status="ok", zeroToolVerified=True)
         else:
             turn_input = decode_json(Path(control["inputFile"]).read_bytes())
             if not isinstance(turn_input, dict):
@@ -875,14 +1071,18 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                       "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(), "sessionId": session_id,
                       "previousSessionId": previous, "resumeMode": mode, "outcome": evidence.receipt["outcome"]}
             result.update(status="ok", sessionId=session_id)
-        closed = connection.call("session/close", {"sessionId": session_id})
-        if closed.get("closed") is not True:
-            raise NativeError("session-close-unconfirmed", "ZCode did not acknowledge closing the native session")
+        # The no-tool loop closes each session itself, including a corrected turn.
+        if not control.get("noToolRequest"):
+            closed = connection.call("session/close", {"sessionId": session_id})
+            if closed.get("closed") is not True:
+                raise NativeError("session-close-unconfirmed", "ZCode did not acknowledge closing the native session")
         if record is not None:
             evidence.close_ordinal = connection.ordinal
             record["provenance"] = evidence.provenance()
     except NativeError as error:
         result.update(status="cancelled" if error.code == "cancelled" else "error", code=error.code, error=str(error))
+        if control.get("noToolRequest") and error.code == "no-tool-violation":
+            result["usage"] = {"toolCalls": 1}
         if error.code == "native-disconnected":
             result["failureKind"] = "transport"
         # Whitelisted native failure attribution (only the exported turn.failed
@@ -912,6 +1112,31 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             handle.terminate(grace_seconds=1.0)
         shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
         result["processState"] = {"shutdownConfirmed": shutdown, "nativeExitCode": process.returncode}
+        if control.get("noToolRequest") and result["status"] == "ok" and shutdown:
+            # The native server has exited. Read through its terminal EOF so an
+            # event queued after prompt_completed cannot hide behind close/ack.
+            try:
+                while True:
+                    message = connection.messages.get(timeout=1)
+                    if message is None:
+                        break
+                    if isinstance(message, NativeError):
+                        raise message
+                    if "id" in message and "method" in message:
+                        raise NativeError("no-tool-violation", "native interaction after no-tool settlement")
+                    if "id" in message:
+                        raise NativeError("invalid-protocol", "unclaimed native response after no-tool settlement")
+                    connection.observe(message, 0)
+            except queue.Empty:
+                result.update(status="error", code="invalid-protocol", error="no-tool native stream ended without EOF")
+            except NativeError as error:
+                result.update(status="error", code=error.code, error=str(error))
+                if error.code == "no-tool-violation":
+                    result["usage"] = {"toolCalls": 1}
+            if result["status"] == "ok" and control["noToolRequest"].get("captureEvidence"):
+                result["nativeEvidence"] = {"eventCount": result.get("nativeEventCount"),
+                                            "toolAllowlist": [], "titleGenerationEnabled": False,
+                                            "streamEof": True}
         process.stdout.close()
     if cancelled.is_set():
         result.update(status="cancelled", code="cancelled", error="the owned ZCode execution was cancelled")
@@ -919,6 +1144,8 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     if result["status"] == "ok" and (not shutdown or process.returncode != 0):
         result.update(status="error", code="native-shutdown-failed", error="the native app server did not exit normally with confirmed group shutdown")
         record = None
+    if result["status"] != "ok":
+        result.pop("zeroToolVerified", None)
     if record is not None:
         private_json(Path(control["outputFile"]), record, exclusive=True)
         result["nativeTurnId"] = record["provenance"]["nativeTurnId"]

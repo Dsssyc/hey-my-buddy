@@ -12,26 +12,26 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 适合委派的工作包括范围明确的实现、测试、可复现问题调查、文档整理，以及结果可检查的文件转换。改动很小、答案已知或需求尚未明确时，由 Host 直接处理。
 
-1. Host 确定目标、模型参数和执行工作区。完整的 adapter/provider/model/effort 组合经过校验后直接派发；信息不完整时通过已配置的路由模型和有界评价表完成路由，最多八条任务级软路由偏好只影响该目标，不改变共享设置。并行写入使用独立 Git worktree，整合后的结果由明确指定的整合者负责。
+1. Host 确定目标、模型参数和执行工作区。完整的 adapter/provider/model/effort 组合经过校验后直接派发；信息不完整时通过生效模式的路由模型（快速或审阅）和有界评价表完成路由，最多八条任务级软路由偏好只影响该目标，不改变共享设置。并行写入使用独立 Git worktree，整合后的结果由明确指定的整合者负责。
 2. Worker 使用自己的工具和内部 subagent 完成工作。需要协助时，它以结构化结果结束当前回合；Host 可以批准明确的辅助任务、说明理由后拒绝、补充新的接续输入，或在路由边界给出完整配置。控制权由私有 control 凭据约束，Host 名称本身不是权限。
 3. Host 检查真实 diff、运行相关验证，把已验证的整合记录（或明确的无需整合决定）绑定到固定产物后完成验收，再通过记录在案的两步回收释放受管 checkout。执行、辅助任务完成、整合与验收是彼此独立的事实。
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。本仓库的日常安装是 0.18.0（contract 0.18.0、schema 13）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.19.0（contract 0.19.0、schema 14）；它尚未日常安装、日常黑板尚未迁移，也还没有发布任何安装包。
+hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.19.0（contract 0.19.0、schema 14）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.20.0（contract 0.20.0、schema 14）；它尚未日常安装，也尚未发布。它实现 ADR-018 第一部分的快速/审阅双模式路由，不改变 schema。
 
 在用户确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.19.0 install
+uvx hey-my-buddy@0.20.0 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待用户决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.19.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.20.0-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有任务在运行时拒绝并列出这些任务（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留唯一一份校验过的滚动备份用于回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
@@ -70,11 +70,11 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 控制台通过有效期 60 秒的一次性入口打开默认浏览器。每个通过认证的会话都可以在版本检查下编辑设置；草稿与冲突按窗口保留。使用 `console '{"browser":false}'` 可自行打开链接；使用 `console '{"wait":true}'` 可让 CLI 留在前台，Ctrl-C 只关闭对应控制台。会话有效期、安全边界与独立的安装边界见[控制台入口说明](docs/reference/console.md)。
 
-打开命令返回的 loopback 地址，顶部提供“委派记录 / Buddy 配置 / 设置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据；工作目标以概览卡与委派时间轴呈现，独立委派折叠在“未归档委派”中。Buddy 配置按 harness 归组模型家族，各思考档位保留独立评价；家族行显示已启用档位数与 Router 标记，已启用档位有勾选标记。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑只涉及你自己的家族偏好与备注、档位覆盖、启用状态、模型并发设置和 Router：自动评价、证据和目录事实始终只读。每个模型家族还有用户拥有的并发上限，在下一次认领时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“重新检测”和自动检测失败时的高级手动路径；重新检测不调用模型。“更新记录”显示已发布版本，“设置”页放浅色/深色/跟随系统主题和本地存储检查与回收面板。查看、刷新和编辑草稿都不调用模型。
+打开命令返回的 loopback 地址，顶部提供“委派记录 / Buddy 配置 / 设置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据；工作目标以概览卡与委派时间轴呈现，独立委派折叠在“未归档委派”中。Buddy 配置按 harness 归组模型家族，各思考档位保留独立评价；家族行显示已启用档位数与 Router 标记，已启用档位有勾选标记，路由状态行分别显示两个 Router 位置与默认模式。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑只涉及你自己的家族偏好与备注、档位覆盖、启用状态、模型并发设置和 Router 位置：自动评价、证据和目录事实始终只读。每个模型家族还有用户拥有的并发上限，在下一次认领时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“重新检测”和自动检测失败时的高级手动路径；重新检测不调用模型。“更新记录”显示已发布版本，“设置”页放浅色/深色/跟随系统主题和本地存储检查与回收面板。查看、刷新和编辑草稿都不调用模型。
 
 可以直接让具备 skill 的 Harness“更新黑板中的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工备注。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
 
-路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 尚未验证；配置的 Router 还必须可用且已启用。安装后由用户在 Buddy 配置中选择已启用的 Codex 配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/local-harness-discovery-0.19.0.md)。
+路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。路由分两种模式：快速路由只做一次调用、由 harness 真正关闭全部工具，输入只有任务、偏好与评价卡片；审阅路由是只读模式，另会读取冻结的仓库副本。快速路由已为 DSH、ZCode 与 Codex 实现：DSH 已通过授权实测，ZCode/Codex 已通过原生离线零工具检查；ZCode 的提供方验收被 429 限流阻断，Codex 快速路由尚未做付费实测。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 的审阅路由尚未验证；指定的 Router 还必须可用且已启用。提交时可指定 `routingMode`；审阅 Router 不可用时默认降级到快速路由，除非 Host 传入 `allowRoutingFallback:false`。请注意：快速路由会把每个任务的描述发送给快速 Router 所在的模型提供方（包括准备交给其他模型执行的任务），审阅路由还会读取冻结的仓库副本。安装后由用户在 Buddy 配置中选择配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/routing-modes-0.20.0.md)。
 
 ## 执行与恢复
 

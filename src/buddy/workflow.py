@@ -1057,6 +1057,7 @@ class WorkflowCoordinator:
         return spec
 
     def _routing_view(self, connection, run) -> dict:
+        from .router import routing_facts
         goal = json.loads(run["goal_json"])
         preferences = goal.get("routingPreferences", [])
         if not run["current_routing_id"]:
@@ -1090,6 +1091,7 @@ class WorkflowCoordinator:
             "reason": link["reason"] or decision["reason"],
             "constraints": schemas.configuration_constraints(goal), "routingPreferences": preferences,
             "source": "model-selection",
+            **routing_facts(json.loads(decision["requested_json"])),
             "preferenceOutcome": (json.loads(decision["selected_json"]).get("routingPreference")
                                   if decision["selected_json"] else None),
         }
@@ -1533,6 +1535,7 @@ class WorkflowCoordinator:
         the run, independent of the cursor. Only compact decision fields are exposed;
         no task prompt, model input/output or table payload is embedded.
         """
+        from .router import routing_facts
         run_id = run_row["run_id"]
         total = int(
             connection.execute(
@@ -1542,7 +1545,7 @@ class WorkflowCoordinator:
         query = (
             "SELECT r.rowid AS route_rowid, r.decision_id, r.owner_generation, r.state, r.reason,"
             " r.created_at, d.status AS decision_status, d.table_revision, d.reason AS decision_reason,"
-            " q.task_id AS decision_task_id, q.configuration_revision, q.selected_json"
+            " q.task_id AS decision_task_id, q.configuration_revision, q.selected_json, q.requested_json"
             " FROM workflow_routes r"
             " JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
             " JOIN decision_requests q ON q.decision_id=r.decision_id"
@@ -1578,6 +1581,7 @@ class WorkflowCoordinator:
                 "createdAt": row["created_at"],
                 "ownerGeneration": int(row["owner_generation"]),
                 "current": bool(current_id) and row["decision_id"] == current_id,
+                **routing_facts(json.loads(row["requested_json"])),
             }
             for row in rows
         ]

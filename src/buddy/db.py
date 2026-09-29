@@ -1174,6 +1174,8 @@ class Database:
                     (utc_now(), utc_now()),
                 )
                 if fresh:
+                    from .router import initialize_configuration
+                    initialize_configuration(connection)
                     os.chmod(self.path, 0o600)
                 integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
                 if integrity != "ok":

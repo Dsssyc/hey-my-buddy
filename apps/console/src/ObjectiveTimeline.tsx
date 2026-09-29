@@ -736,6 +736,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (selected) classes.push("selected");
     if (runHighlighted) classes.push("run-member");
     if (span.kind === "execution" && style?.striped) classes.push("striped");
+    if (span.kind === "routing") {
+      classes.push(span.routing?.routingMode === "fast" ? "fast" : "review");
+      if (span.routing?.fallback) classes.push("fallback");
+    }
     const colorVars = span.kind === "execution" && style
       ? { "--c": `var(--cfg-${style.color})` } as CSSProperties : undefined;
     const positionStyle: CSSProperties = { left: `${left}%`, width: `${width}%`, ...colorVars };
@@ -750,6 +754,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
         {facts.outcome === "failed" && <i className="routing-cross" aria-hidden="true" />}
+        {span.routing?.fallback && <i className="routing-fallback-mark" aria-hidden="true">↘</i>}
       </button>;
     }
     if (span.kind === "host") {
@@ -974,7 +979,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       </div>
       <div className="legend" aria-label="状态图例">
         <span className="legend-item"><span className="swatch queue" />排队</span>
-        <span className="legend-item"><span className="swatch routing" />路由</span>
+        <span className="legend-item"><span className="swatch routing fast" />快速路由</span>
+        <span className="legend-item"><span className="swatch routing review" />审阅路由（含历史记录）</span>
+        <span className="legend-item"><span className="glyph" aria-hidden="true">↘</span>已降级为快速路由</span>
         <span className="legend-item"><span className="swatch wait" />等待 Host</span>
         <span className="legend-item"><span className="glyph ok" aria-hidden="true">▸</span>执行中</span>
         <span className="legend-item"><span className="glyph bad" aria-hidden="true">✕</span>失败</span>

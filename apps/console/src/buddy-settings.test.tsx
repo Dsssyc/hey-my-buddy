@@ -44,7 +44,7 @@ function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" |
 function profiles(): Profile[] {
   return [
     profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
-      enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
+      enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
     profile({ profileId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
     profile({ profileId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
@@ -101,7 +101,7 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, decisionProfileId: mediumId, routingBudget: "standard" },
+    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: mediumId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
     preferences: [],
     familyPreferences: options.familyPreferences ?? [],
@@ -440,6 +440,19 @@ describe("effort tags and preference overrides", () => {
 });
 
 describe("the Router menu", () => {
+  it("assigns the fast slot independently through the enabled effort menu", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    await selectFamily(user, "Claude Sonnet 5");
+    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
+    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
+    await user.click(within(menu).getByRole("button", { name: "设为快速 Router" }));
+    expect(screen.getByRole("region", { name: "路由状态" }).textContent).toContain("快速 Router：Claude Sonnet 5 · medium");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published[0].configuration).toEqual({ fastRouterProfileId: mediumId });
+  });
   it("closes an effort menu when its main tab becomes hidden, without reopening on return", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -463,9 +476,15 @@ describe("the Router menu", () => {
     await selectFamily(user, "Claude Sonnet 5");
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByText("当前 Router")).toBeTruthy();
-    expect(within(menu).queryByRole("button", { name: "设为 Router" })).toBeNull();
+    expect(within(menu).getByText("当前审阅 Router")).toBeTruthy();
+    expect(within(menu).queryByRole("button", { name: "设为审阅 Router" })).toBeNull();
     expect(within(menu).getAllByRole("radio")).toHaveLength(5);
+    const mediumEvaluation = screen.getByText("medium", { selector: ".effort-evaluation summary strong" }).closest(".effort-evaluation")!;
+    const capabilityName = [...mediumEvaluation.querySelectorAll("dt")].find(item => item.textContent === "能力")!;
+    const capabilityText = capabilityName.nextElementSibling!.textContent!;
+    expect(capabilityText).toContain("支持无工具路由调用");
+    expect(capabilityText).toContain("当前 Harness 版本已验证只读路由调用");
+    expect(capabilityText).not.toMatch(/routing:fast|\bdecision\b/);
     const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     expect(styles).toMatch(/\.effort-menu \.menu-radio input\[type="radio"\] \{[^}]*width: auto/);
     expect(styles).toMatch(/\.menu-radio \{[^}]*white-space: nowrap/);
@@ -477,14 +496,13 @@ describe("the Router menu", () => {
     await selectFamily(user, "GPT-6 Sol");
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" });
-    const action = within(menu).getByRole("button", { name: "设为 Router" });
-    expect(action.getAttribute("aria-disabled")).toBe("true");
+    const action = within(menu).getByRole("button", { name: "设为审阅 Router" });
     expect((action as HTMLButtonElement).disabled).toBe(true);
-    expect(within(menu).getByText("能力列表不含 decision：该档位没有经过验证的只读路由能力")).toBeTruthy();
+    expect(within(menu).getByText("当前 Harness 版本尚未验证只读路由调用")).toBeTruthy();
     await user.click(action);
     action.focus();
     expect(document.activeElement).not.toBe(action);
-    expect(screen.queryByRole("dialog", { name: "替换 Router" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "替换审阅 Router" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeTruthy();
     expect(f.published).toHaveLength(0);
   });
@@ -496,8 +514,7 @@ describe("the Router menu", () => {
     await selectFamily(user, "Claude Sonnet 5");
     await user.click(screen.getByRole("button", { name: "high 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · high 档位设置" });
-    const action = within(menu).getByRole("button", { name: "设为 Router" });
-    expect(action.getAttribute("aria-disabled")).toBe("true");
+    const action = within(menu).getByRole("button", { name: "设为审阅 Router" });
     expect((action as HTMLButtonElement).disabled).toBe(true);
     expect(within(menu).getByText("该档位未启用：先打开它的开关")).toBeTruthy();
   });

@@ -264,11 +264,11 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.publish_user_patch(
             board, request_id="profiles-changed", command_id="profiles-changed",
             profileSettings=[{"profileId": PROFILE_ID, "enabled": False}],
-            configuration={"decisionProfileId": SECOND_PROFILE_ID},
+            configuration={"reviewRouterProfileId": SECOND_PROFILE_ID},
         )
         snapshot = board.call("console_snapshot", {})
         self.assertEqual(snapshot["tableRevision"], initial_revision + 1)
-        self.assertEqual(snapshot["configuration"]["decisionProfileId"], SECOND_PROFILE_ID)
+        self.assertEqual(snapshot["configuration"]["reviewRouterProfileId"], SECOND_PROFILE_ID)
         frozen_config = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(frozen_config["executionConfiguration"]["model"], PROFILE["model"])
         self.assertEqual(frozen_config["executionConfigurationRevision"], 1)

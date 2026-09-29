@@ -29,7 +29,7 @@ DECISION_KINDS = ("select", "maintain")
 DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "cancelled", "stale")
 TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "cancelled", "stale"})
 
-SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds", "routingPreferences"})
+SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds", "routingPreferences", "routingMode", "allowRoutingFallback"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
 LIST_FIELDS = frozenset({"kind", "limit", "before"})
 DEFAULT_LIST_LIMIT = 20
@@ -73,8 +73,8 @@ DEFAULT_TIMEOUT_SECONDS = 300
 TIMEOUT_GRACE_SECONDS = 10
 
 NEEDS_HOST_NO_PROFILE = (
-    "no compatible fixed decision profile is configured; publish an available, enabled decision-capable profile as "
-    "configuration.decisionProfileId. The service never guesses one and never selects a selector."
+    "no compatible Router is configured; select an available, enabled profile in the appropriate "
+    "fast or review Router slot. The service never guesses one and never selects a selector."
 )
 NEEDS_HOST_NO_CANDIDATE = (
     "no enabled, available, capability-matching profile is a legal candidate under the published pins and "
@@ -139,7 +139,7 @@ class DecisionCoordinator:
         with bound(records):
             return DecisionAdapter().available()
 
-    def selector_family(self, connection: sqlite3.Connection) -> tuple[str, str, str] | None:
+    def selector_family(self, connection: sqlite3.Connection, spec: dict | None = None) -> tuple[str, str, str] | None:
         """The model family the fixed decision profile will actually consume.
 
         Resolved inside the caller's claim transaction from the same configured
@@ -147,37 +147,70 @@ class DecisionCoordinator:
         own family *before* the claim commits and before the selection reader is
         granted, and freeze that exact tuple onto the routing attempt.
         """
-        profile_row, _reason = self._decision_profile(connection)
+        descriptor = decision_spec(spec or {})
+        row = self._row(connection, descriptor["decisionId"]) if descriptor else None
+        if row is not None:
+            profile_row, _reason = self._refresh_route(connection, row)
+        else:
+            profile_row, _facts, _reason = router.resolve(connection, None)
         if profile_row is None:
             return None
         return (profile_row["adapter"], profile_row["provider"], profile_row["model"])
 
     # -- request-time policy -------------------------------------------------
     def _decision_profile(self, connection: sqlite3.Connection) -> tuple[sqlite3.Row | None, str | None]:
-        profile_id = self._state(connection)["decision_profile_id"]
-        if not profile_id:
-            return None, NEEDS_HOST_NO_PROFILE
-        row = connection.execute(
-            "SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)
-        ).fetchone()
-        if row is None:
-            return None, f"the configured decision profile {profile_id} is not published: {NEEDS_HOST_NO_PROFILE}"
-        from .harness_health import read_health
-        if not row["enabled"] or not row["available"] or not read_health(connection, row['adapter'])['available']:
-            return None, (
-                f"the configured decision profile {profile_id} is not an available, enabled profile; fix the "
-                "configuration before asking for a decision"
-            )
-        from .adapters import adapter
-        try:
-            implementation = adapter(row["adapter"])
-        except BoardError:
-            return None, f"the configured decision profile {profile_id} has no installed native adapter"
-        if not (implementation.read_only_structured and implementation.read_only_structured_verified):
-            return None, f"the configured decision profile {profile_id} has no verified read-only structured capability"
-        if not row["provider"] or not row["model"] or not row["effort"]:
-            return None, f"the configured decision profile {profile_id} has no complete provider/model/effort identity"
-        return row, None
+        profile, _facts, reason = router.resolve(connection, None)
+        return profile, reason
+
+    def _refresh_route(self, connection, row):
+        """Recheck cached eligibility before quota admission, preserving frozen candidates."""
+        request = json.loads(row["requested_json"])
+        actual = request.get("routingMode", "review")
+        profile, facts, reason = router.resolve(connection, actual, request.get("allowRoutingFallback", True))
+        if actual == "review" and facts["routingMode"] == "fast":
+            self._record_fallback(connection, row, profile, facts)
+        return profile, reason
+
+    def _record_fallback(self, connection, row, profile, facts):
+        request = json.loads(row["requested_json"])
+        request.update(facts)
+        request["budget"] = dict(router.FAST_BUDGET)
+        request["timeoutSeconds"] = 60
+        document = json.loads(row["input_json"]) if row["input_json"] else None
+        if document:
+            document.update(facts, budget=request["budget"])
+            document.pop("executionWorkspace", None)
+            document.pop("evidence", None)
+            document["outputSchema"] = router.answer_schema([p["profileId"] for p in document["profiles"]], "fast")
+            if profile is not None:
+                document["profile"] = {key: profile[key] for key in schemas.CONFIGURATION_FIELDS}
+        connection.execute("UPDATE decision_requests SET requested_json=?,input_json=?,input_sha256=? WHERE decision_id=?",
+                           (canonical_json(request), canonical_json(document) if document else None,
+                            sha256_text(canonical_json(document)) if document else None, row["decision_id"]))
+        self._append_event(connection, "decision.fallback", row["decision_id"], facts)
+
+    def _fallback_after_preflight(self, connection, row, task, output, now):
+        """Retry only a proven pre-model review failure, after confirmed shutdown."""
+        request = json.loads(row["requested_json"])
+        if request.get("routingMode", "review") != "review" or not request.get("allowRoutingFallback", True):
+            return False
+        settings = router.configuration(connection)
+        profile, _code, _reason = router.profile_problem(connection, settings["fastRouterProfileId"], "fast")
+        if profile is None:
+            return False
+        facts = {"requestedRoutingMode": "review", "routingMode": "fast", "fallback": {
+            "from": "review", "to": "fast", "code": output.get("reasonCode") or "router-review-unavailable",
+            "reason": output.get("reason") or "The review harness became unavailable before model execution"}}
+        self._release_reader(connection, row, now)
+        self._record_fallback(connection, row, profile, facts)
+        connection.execute("UPDATE decision_requests SET reader_id=NULL,attempt_id=NULL,generation=NULL,updated_at=? WHERE decision_id=?", (now, row["decision_id"]))
+        connection.execute("UPDATE evaluation_decisions SET status='queued',reason=?,error=NULL WHERE decision_id=?",
+                           (facts["fallback"]["reason"], row["decision_id"]))
+        self.board._transition_task(connection, task, "queued")
+        connection.execute("UPDATE tasks SET queue_reason='awaiting-worker' WHERE task_id=?", (task["task_id"],))
+        self.board._append_event(connection, "task.requeued", task_id=task["task_id"],
+                                 payload={"reason": "review unavailable before model execution", **facts})
+        return True
 
     @staticmethod
     def _select_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False) -> list[sqlite3.Row]:
@@ -363,7 +396,7 @@ class DecisionCoordinator:
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None, hard_constraints: dict | None = None) -> tuple[dict | None, str | None]:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None, hard_constraints: dict | None = None, routing_mode: str = "review") -> tuple[dict | None, str | None]:
         if len(candidates) > MAX_DECISION_PROFILES:
             return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
         candidate_ids = {candidate["profile_id"] for candidate in candidates}
@@ -372,7 +405,7 @@ class DecisionCoordinator:
             self._card_input(row)
             for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({markers}) ORDER BY rowid", tuple(candidate_ids))
         ]
-        evidence = self._referenced_evidence(connection, cards)
+        evidence = self._referenced_evidence(connection, cards) if routing_mode == "review" else []
         table = self._table_input(
             connection, profiles=candidates, evidence_rows=evidence, include_preferences=True
         )
@@ -479,6 +512,10 @@ class DecisionCoordinator:
             "routingPreferences": routing_preferences,
             "timeoutSeconds": timeout if "timeoutSeconds" in params else None,
         }
+        if "routingMode" in params:
+            request["routingMode"] = router.mode(params["routingMode"])
+        if "allowRoutingFallback" in params:
+            request["allowRoutingFallback"] = schemas.optional_bool(params, "allowRoutingFallback", True)
         return self._create(request_id, request)
 
     def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: str | None = None) -> dict:
@@ -499,11 +536,10 @@ class DecisionCoordinator:
             decision_id = f"dec-{uuid.uuid4()}"
             now = self._now()
             state = self._state(connection)
-            request = {**request, "budget": router.configured_budget(connection)}
-            request["timeoutSeconds"] = request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
+            profile_row, facts, profile_reason = router.resolve(connection, request.get("routingMode"), request.get("allowRoutingFallback", True))
+            request = {**request, **facts, "budget": (dict(router.FAST_BUDGET) if facts["routingMode"] == "fast" else router.configured_budget(connection))}
+            request["timeoutSeconds"] = 60 if facts["routingMode"] == "fast" else request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
             request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
-            available, unavailable_reason = self._adapter_available() if needs_host_reason is None else (True, None)
-            profile_row, profile_reason = self._decision_profile(connection) if needs_host_reason is None else (None, None)
             # A writer intent means the table is about to move. The request is created
             # queued and validated when it can actually run, on the revision the
             # writer publishes: a selection that arrives while the first profile or
@@ -524,10 +560,6 @@ class DecisionCoordinator:
             if needs_host_reason is not None:
                 status = "needs-host"
                 reason = needs_host_reason
-            elif not available:
-                status = "needs-host"
-                error = f"ADAPTER_UNAVAILABLE: {unavailable_reason or 'the Router executor is unavailable'}"
-                reason = "the Router executor is not available in this build, so no model call was made"
             elif profile_row is None:
                 status = "needs-host"
                 reason = profile_reason or NEEDS_HOST_NO_PROFILE
@@ -546,13 +578,17 @@ class DecisionCoordinator:
                     connection, request_id=request_id, revision=expected_revision, profile_row=profile_row,
                     task_text=task_text, candidates=candidates,
                     routing_preferences=request.get("routingPreferences", []),
-                    hard_constraints=request.get("constraints") or {})
+                    hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"])
                 if frozen_input is None:
                     status, reason = "needs-host", problem
                 else:
                     frozen_input["budget"] = request["budget"]
-                    frozen_input["executionWorkspace"] = request.get("executionWorkspace")
-                    frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]])
+                    frozen_input.update(facts)
+                    if facts["routingMode"] == "review":
+                        frozen_input["executionWorkspace"] = request.get("executionWorkspace")
+                    else:
+                        frozen_input.pop("evidence", None)
+                    frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]], facts["routingMode"])
             create_task = status == "queued"
             task_id = None
             if create_task:
@@ -612,6 +648,7 @@ class DecisionCoordinator:
                     "tableRevision": expected_revision,
                     "reason": reason,
                     "error": error,
+                    **facts,
                 },
                 revision=expected_revision,
             )
@@ -641,7 +678,8 @@ class DecisionCoordinator:
             "requiredCapabilities": spec.get("requiredCapabilities", []),
             "constraints": schemas.configuration_constraints(spec),
             "routingPreferences": spec.get("routingPreferences", []),
-            "workflowRouting": True, "timeoutSeconds": router.configured_budget(connection)["timeoutSeconds"],
+            "workflowRouting": True,
+            **{key: spec[key] for key in ("routingMode", "allowRoutingFallback") if key in spec},
         }
         needs_host_reason = None
         if task_bytes > MAX_DECISION_TASK_BYTES:
@@ -755,7 +793,10 @@ class DecisionCoordinator:
         ).fetchone()
         if int(waiting["count"]):
             return "evaluation-writer-pending", None
-        profile_row, profile_reason = self._decision_profile(connection)
+        profile_row, profile_reason = self._refresh_route(connection, row)
+        row = self._row(connection, decision_id)
+        request = json.loads(row["requested_json"])
+        timeout = request.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS
         if profile_row is None:
             self._finish(connection, row, status="needs-host", reason=profile_reason, now=now)
             self._cancel_queued_task(connection, task, now, "the decision had no compatible decision profile")
@@ -990,6 +1031,11 @@ class DecisionCoordinator:
             and (output.get("code").startswith("router-") or output.get("code") in ANSWER_VALIDATION_CODES)
             else None
         )
+        if (status == "failed" and shutdown_confirmed and task["state"] == "failed"
+                and output and output.get("code") == "router-review-unavailable"
+                and output.get("modelStarted") is False
+                and self._fallback_after_preflight(connection, row, task, output, now)):
+            return {**summary, "status": "queued", "routingMode": "fast", "preflightFallback": True}
         if status == "cancelled" or task["state"] == "cancelling":
             self._finish(
                 connection, row, status="cancelled", output=output, now=now,
@@ -1059,6 +1105,13 @@ class DecisionCoordinator:
         still fence adoption; publication itself never starts a retry.
         """
         document = json.loads(row["input_json"]) if row["input_json"] else {}
+        if document.get("routingMode") == "fast":
+            usage = output.get("usage") or {}
+            if output.get("zeroToolVerified") is not True or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0:
+                self._finish(connection, row, status="needs-host", now=now,
+                             output={**output, "code": "router-tools-forbidden"}, error="router-tools-forbidden",
+                             reason="Fast routing requires a complete zero-tool native receipt")
+                return
         manifest = document.get("executionWorkspace")
         verification = output.get("inputVerification")
         if manifest and (not isinstance(verification, dict) or verification.get("unchanged") is not True
@@ -1069,7 +1122,7 @@ class DecisionCoordinator:
             return
         profiles = document.get("profiles") or []
         try:
-            decision = router.validate_answer(output.get("decision"), [item["profileId"] for item in profiles])
+            decision = router.validate_answer(output.get("decision"), [item["profileId"] for item in profiles], document.get("routingMode", "review"))
         except BoardError as failure:
             self._finish(connection, row, status="needs-host", now=now,
                          output={**output, "code": failure.code}, reason=failure.message,
@@ -1405,6 +1458,9 @@ class DecisionCoordinator:
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
             "budget": request.get("budget"),
+            "routingMode": request.get("routingMode", "review"),
+            "requestedRoutingMode": request.get("requestedRoutingMode", "review"),
+            "fallback": request.get("fallback"),
             "usage": (output or {}).get("usage"),
             "nativeIdentity": (output or {}).get("nativeIdentity"),
             "stopEvidence": (output or {}).get("stopEvidence"),

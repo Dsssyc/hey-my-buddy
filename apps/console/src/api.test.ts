@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi } from "./api";
+import { createApi, validRoutingConfiguration } from "./api";
+
+describe("0.20.0 routing configuration", () => {
+  const current = { revision: 4, fastRouterProfileId: "fast", reviewRouterProfileId: null,
+    defaultRoutingMode: "fast", routingBudget: "brief" };
+  it("accepts both Router slots and rejects the old public selector or budget", () => {
+    expect(validRoutingConfiguration(current)).toBe(true);
+    expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "review", reviewRouterProfileId: "review" })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, decisionProfileId: "old" })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routingBudget: "quick" })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "other" })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, fastRouterProfileId: undefined })).toBe(false);
+  });
+});
 
 describe("command receipts", () => {
   it("does not treat a malformed success response as a committed command", async () => {

@@ -86,6 +86,8 @@ SUBMIT_FIELDS = frozenset(
         "requiredCapabilities",
         "exclusiveResources",
         "routingPreferences",
+        "routingMode",
+        "allowRoutingFallback",
     }
 )
 
@@ -262,6 +264,11 @@ def normalize_spec(params: dict) -> dict:
             spec[name] = value
     if "routingPreferences" in params:
         spec["routingPreferences"] = normalize_routing_preferences(params["routingPreferences"])
+    if "routingMode" in params:
+        from .router import mode
+        spec["routingMode"] = mode(params["routingMode"])
+    if "allowRoutingFallback" in params:
+        spec["allowRoutingFallback"] = optional_bool(params, "allowRoutingFallback", True)
     argv = _argv(params, adapter)
     if argv:
         spec["argv"] = argv

@@ -236,6 +236,33 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
     return summary, expected
 
 
+def migrate_routing_configuration(state: Path, before: dict) -> tuple[dict, dict]:
+    """Materialize ADR-018 meta keys under the existing upgrade locks and backup."""
+    from . import router
+    with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None, timeout=10)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute('BEGIN IMMEDIATE')
+        try:
+            retained = [tuple(row) for row in connection.execute('SELECT key,value FROM meta ORDER BY key')
+                        if row['key'] not in router.CONFIG_META_KEYS]
+            settings = router.initialize_configuration(connection)
+            after = [tuple(row) for row in connection.execute('SELECT key,value FROM meta ORDER BY key')
+                     if row['key'] not in router.CONFIG_META_KEYS]
+            if retained != after:
+                raise BoardError('UPGRADE_MIGRATION_FAILED', 'Routing migration changed unrelated meta values')
+            connection.execute('COMMIT')
+        except BaseException:
+            connection.execute('ROLLBACK')
+            raise
+    expected = idle_snapshot(state, event_head=before.get('eventHead'))
+    changed = [name for name, value in before['fingerprints'].items()
+               if name != 'meta' and expected['fingerprints'].get(name) != value]
+    if changed or expected['schema'] != before['schema'] or set(expected['tables']) != set(before['tables']):
+        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Routing migration changed unrelated tables or schema', tables=changed)
+    expected['runtimeSettings'] = before.get('runtimeSettings', {})
+    return settings, expected
+
+
 def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
     if not journal.get('skillTarget'):
         return None
@@ -414,6 +441,9 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     migration, expected = migrate_board(state, before)
                     journal.update(phase='migrated', migration=migration, expected=expected)
                     write_journal(marker, journal)
+                routing_migration, expected = migrate_routing_configuration(state, expected)
+                journal.update(phase='migrated', routingMigration=routing_migration, expected=expected)
+                write_journal(marker, journal)
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)

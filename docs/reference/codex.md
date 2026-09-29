@@ -20,12 +20,18 @@ The controller writes attempt-private `activity.json` using the ADR-010 sidecar 
 
 The protocol implementation follows the [official Codex App Server documentation](https://learn.chatgpt.com/docs/app-server) and was checked against the installed `codex app-server generate-json-schema` output. The App Server is marked experimental by OpenAI, so a changed installed protocol must be reverified before relying on this integration.
 
-## Router permission boundary
+## Review Router permission boundary
 
 A private `CODEX_HOME` uses the native `buddy-router` permission profile: deny the root and implicit temporary directories, allow minimal system reads and the frozen input root, and deny network access. The controller checks effective `config/read` values and the `thread/start` acknowledgement before sending model input. Web search, plugins, hooks, apps, browser/computer access, multi-agent tools, shell profiles and shell snapshots are disabled. Code-mode remains enabled because GPT-6 Sol requires it; its commands remain confined by the same native filesystem/network policy. This is an operation boundary, not a claim that the shell tool is absent. Unknown or incompatible native configuration fails before model input.
 
 The controller counts both canonical command events and raw tool requests, so sandbox-denied calls are not omitted. Counts describe observable native requests; code-mode and command events can have different granularity. `bytesRead` remains null when unavailable, and no dollar limit is provided. One format correction is allowed within the original attempt and deadline. Probe evidence includes native call IDs and results; ordinary routing does not retain raw tool content in the blackboard.
 
-Use the enabled `codex / openai / gpt-6-sol / high` profile with the `standard` Router budget after installing this candidate. The verified native probe used 5 tools and about 148 seconds; `quick` (60 seconds) did not complete. The user chooses the Router in Buddy 配置; installation does not change that setting.
+Use the enabled `codex / openai / gpt-6-sol / high` profile with the `standard` review budget after installing this candidate. The verified native probe used 5 tools and about 148 seconds; the `brief` preset (60 seconds) did not complete. The user chooses the Router in Buddy 配置; installation does not change that setting.
 
 Router certification is limited to the recorded macOS Codex 0.157.0 version. A newly discovered native version may remain healthy for coding after its handshake, but does not inherit the `decision` capability before equivalent native verification. This certificate is distinct from CLI compatibility, which has no hardcoded version range.
+
+## Fast Router tool boundary
+
+Fast routing uses an empty private working directory and a private `CODEX_HOME`. It copies public native model metadata into a restricted model catalog, disables shell, apply-patch, search, MCP, apps, plugins, subagents and the other tool sources, suppresses repository/skill/memory instructions, and supplies empty native environments and dynamic tools. Each call checks its private configuration and thread acknowledgement before sending the task. It consumes typed and raw native events through shutdown, rejects every tool item (including child and late events), and permits at most one format correction within the same 60-second deadline. Missing or incompatible native metadata fails closed.
+
+The native CLI 0.157.0 offline check observed an empty tool inventory in the actual Responses request with a local fake API backend and fake credentials. The production ChatGPT account-plan path was not paid-probed for fast routing; that limitation and the separate verified review path are recorded in the [0.20.0 acceptance](../acceptance/routing-modes-0.20.0.md). No user profile is enabled or selected by this implementation.
