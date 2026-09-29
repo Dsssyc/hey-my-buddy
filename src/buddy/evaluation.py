@@ -662,6 +662,9 @@ class EvaluationStore:
                     (settings["fastRouterProfileId"], settings["reviewRouterProfileId"])
                 )
             ]
+            from .billing import for_provider
+            for profile in profiles:
+                profile["billing"] = for_provider(connection, profile["adapter"], profile["provider"])
             profile_ids = [profile["profileId"] for profile in profiles]
             marks = ",".join("?" for _ in profile_ids) or "NULL"
             cards = [self._card_view(row) for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)]

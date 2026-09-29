@@ -146,6 +146,7 @@ export function parseQuota(value: unknown): HarnessQuota | null {
     ...(provider ? { provider } : {}),
     ...(nonempty(row.reachedType) ? { reachedType: nonempty(row.reachedType)! } : {}),
     ...(typeof row.ordinaryUsageAllowed === "boolean" ? { ordinaryUsageAllowed: row.ordinaryUsageAllowed } : {}),
+    ...(row.balanceZero === true ? { balanceZero: true } : {}),
     stale: row.stale === true,
     windows,
   };

@@ -44,7 +44,20 @@ def read_health(connection, adapter):
                 'manualPath': None, 'reasonCode': 'HARNESS_NOT_CHECKED', 'remedy': 'Run buddy adapters with refresh:true'}
         return {**record, 'reviewVerification': verification_view(connection, adapter, record)}
     from .native_observations import quota_view
-    record = {**json.loads(row['record_json']), "quota": quota_view(json.loads(row["quota_json"]) if row["quota_json"] else None), 'adapter': adapter, 'status': row['status'],
+    record = json.loads(row['record_json'])
+    billing = record.get("billingByProvider") if isinstance(record.get("billingByProvider"), dict) else {}
+    if adapter == "dsh":
+        from .billing import fact
+        catalog = connection.execute("SELECT d.payload_json,c.updated_at FROM catalog_current c JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter='dsh' AND c.status='complete'").fetchone()
+        if catalog:
+            try:
+                entries = json.loads(catalog["payload_json"])["providers"]
+            except (ValueError, TypeError, KeyError):
+                entries = []
+            billing = {entry["provider"]: fact("metered" if entry.get("packageName") == "@deepseek-ai/dsh-llm-deepseek" else "unknown",
+                                                "dsh/deepseek-api-key", catalog["updated_at"])
+                       for entry in entries if entry.get("adapter") == adapter and isinstance(entry.get("provider"), str)}
+    record = {**record, "billingByProvider": billing, "quota": quota_view(json.loads(row["quota_json"]) if row["quota_json"] else None), 'adapter': adapter, 'status': row['status'],
             'available': row['status'] == 'ready', 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
     return {**record, 'reviewVerification': verification_view(connection, adapter, record)}
@@ -132,6 +145,8 @@ class HarnessHealth:
             if not force and unchanged and (old.get('expiresAt') or '') > now:
                 with self.board.db.write() as db:
                     db.execute('UPDATE harness_health SET scan_after=? WHERE adapter=? AND revision=?', (_later(SCAN_SECONDS), name, old['revision']))
+                if name == "codex":
+                    self._codex_account_read(old)
                 return self.get(name)
             with self.board.db.write() as db:
                 if self._closed or (self.board.directory / 'upgrade.json').exists():
@@ -146,7 +161,10 @@ class HarnessHealth:
             except Exception:
                 record = {'adapter': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run buddy adapters with refresh:true'}
-            record = {**record, 'locationFingerprint': signature}
+            retained = {key: old[key] for key in ("reviewVerification", "billingByProvider", "quotaCheckedAt") if key in old}
+            if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
+                retained.pop("billingByProvider", None)
+            record = {**retained, **record, 'locationFingerprint': signature}
             status = record.get('status')
             if status not in ('ready', 'missing', 'login-required', 'unhealthy'):
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery returned an invalid health status')
@@ -165,9 +183,43 @@ class HarnessHealth:
                                           'version': record.get('version'), 'reasonCode': record.get('reasonCode')})
                 head = self.board._head_of(db)
             self.board._notify(head)
+            if name == "codex" and status == "ready":
+                self._codex_account_read(self.get(name))
             if not self._closed and status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged):
                 self.catalog_refresh(name, self.get(name))
             return self.get(name)
+
+    def _codex_account_read(self, health):
+        """One on-demand account read per 180 seconds, even across forced refreshes."""
+        if health.get("status") != "ready" or not health.get("command"):
+            return
+        from .native_observations import _time
+        checked = _time(health.get("quotaCheckedAt"))
+        now = _time(utc_now())
+        if checked and now and 0 <= (now - checked).total_seconds() < SCAN_SECONDS:
+            return
+        billing = quota = None
+        try:
+            from .codex_account_probe import read
+            billing, quota = read(health["command"], self.environment())
+        except Exception:
+            pass
+        with self.board.db.write() as db:
+            row = db.execute("SELECT record_json,quota_json,revision FROM harness_health WHERE adapter='codex'").fetchone()
+            if row is None or row["revision"] != health["revision"]:
+                return
+            record = json.loads(row["record_json"])
+            record["quotaCheckedAt"] = utc_now()
+            if billing is not None:
+                record["billingByProvider"] = {"openai": billing}
+            else:
+                from .billing import fact
+                record["billingByProvider"] = {"openai": fact("unknown", "codex/account-read", record["quotaCheckedAt"])}
+            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
+            if quota is not None:
+                previous = json.loads(row["quota_json"]) if row["quota_json"] else None
+                if previous is None or (_time(quota["observedAt"]) and _time(quota["observedAt"]) > (_time(previous.get("observedAt")) or _time("1970-01-01T00:00:00Z"))):
+                    db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'", (canonical_json({**quota, "provider": "openai"}),))
 
     def kick(self):
         """One rate-limited scan borrowed from a Host call; no timer or polling loop."""

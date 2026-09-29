@@ -258,9 +258,11 @@ class DecisionCoordinator:
         clauses.append("COALESCE(f.mode,'')!='exclude'")
         clauses.append("(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')")
         values.append(MAX_DECISION_PROFILES + 1)
-        return list(connection.execute(
+        from .native_observations import exhausted
+        return [row for row in connection.execute(
             "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id "
-            "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values))
+            "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values)
+            if exhausted(connection, row) is None]
 
     def _excluded_profiles(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> tuple[list[dict], int]:
         """The user-excluded configurations inside these hard bounds, frozen now.

@@ -8,6 +8,7 @@ import queue
 import select
 import threading
 import time
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 
 from .turn_io import canonical_json
@@ -299,6 +300,18 @@ def attempt_token_usage(evidence) -> dict | None:
 _RATE_WINDOW_SLOTS = ("primary", "secondary")
 
 
+def _zero_balance(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return False
+    if isinstance(value, str) and (not value or len(value) > 32):
+        return False
+    try:
+        amount = Decimal(str(value))
+        return amount.is_finite() and amount == 0
+    except InvalidOperation:
+        return False
+
+
 def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usage_allowed=None) -> dict | None:
     """Build one quota candidate from native rate-limit buckets.
 
@@ -311,6 +324,8 @@ def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usa
         return None
     candidate = {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
                  "provider": "openai", "windows": []}
+    if len(buckets) > 1:
+        candidate["ambiguousLimits"] = True
     if isinstance(account_id, str) and account_id:
         candidate["nativeAccountId"] = account_id
     if isinstance(ordinary_usage_allowed, bool):
@@ -326,6 +341,11 @@ def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usa
             candidate["reachedType"] = reached
         if candidate.get("limitId") is None and limit_id:
             candidate["limitId"] = limit_id
+        credits = bucket.get("credits")
+        if (isinstance(credits, dict) and credits.get("hasCredits") is True
+                and credits.get("unlimited") is False
+                and _zero_balance(credits.get("balance"))):
+            candidate["balanceZero"] = True
         for slot in _RATE_WINDOW_SLOTS:
             window = bucket.get(slot)
             used = window.get("usedPercent") if isinstance(window, dict) else None

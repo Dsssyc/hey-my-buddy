@@ -145,6 +145,9 @@ def profile_problem(connection, profile_id: str | None, routing_mode: str) -> tu
         return None, "router-unavailable", f"The {routing_mode} Router is disabled or unavailable ({health.get('reasonCode') or health.get('status')})"
     if any(not row[key] for key in ("provider", "model", "effort")):
         return None, "router-incomplete", f"The {routing_mode} Router has an incomplete model identity"
+    from .native_observations import exhausted
+    if exhausted(connection, row) is not None:
+        return None, "router-quota-exhausted", f"The {routing_mode} Router has a recent native quota exhaustion observation"
     try:
         with bound([health]):
             native = adapter(row["adapter"])

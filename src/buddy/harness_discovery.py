@@ -558,6 +558,10 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
         if account.get("apiProvider") not in ("anthropic", "firstParty"):
             result["reasonCode"] = "auth-unverified"
             return result
+        from .billing import claude_status
+        from datetime import datetime, timezone
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        result["billingByProvider"] = {"anthropic": claude_status(account, observed_at)}
     result.update(status="ready", command=command,
                   reasonCode="version-unknown" if match is None else None)
     return result

@@ -72,6 +72,18 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             applied.append(name)
             if not complete:
                 continue
+            if name == 'zcode':
+                from .billing import zcode_access
+                health_row = db.execute("SELECT record_json FROM harness_health WHERE adapter='zcode'").fetchone()
+                if health_row:
+                    record = json.loads(health_row['record_json'])
+                    native_access = {p['provider']: zcode_access(p.get('accessType'), now)
+                                     for p in discovered.get('providers', [])
+                                     if isinstance(p, dict) and p.get('adapter') == 'zcode'
+                                     and any(item['adapter'] == 'zcode' and item['provider'] == p.get('provider')
+                                             for item in payload['providers'])}
+                    record['billingByProvider'] = native_access
+                    db.execute("UPDATE harness_health SET record_json=? WHERE adapter='zcode'", (canonical_json(record),))
             view = CatalogView.from_payload({**payload, 'providers': [p for p in payload['providers'] if p['adapter'] == name]})
             view.discovery_id = discovery_id
             from .harness_health import read_health
@@ -136,6 +148,9 @@ def profiles(evaluation, params):
     with evaluation.db.read() as db:
         rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
         values = [evaluation._profile_view(row) for row in rows[:limit]]
+        from .billing import for_provider
+        for value in values:
+            value['billing'] = for_provider(db, value['adapter'], value['provider'])
         ids = [value['profileId'] for value in values]
         marks = ','.join('?' for _ in ids) or 'NULL'
         cards = [evaluation._card_view(row) for row in db.execute(f'SELECT * FROM evaluation_cards WHERE profile_id IN ({marks})', ids)]

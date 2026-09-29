@@ -293,6 +293,8 @@ def normalize_quota_window(value: Any) -> dict | None:
         timestamp = _timestamp(resets)
         if timestamp is not None:
             window["resetsAt"] = timestamp
+        else:
+            window["invalidReset"] = True
     duration = value.get("windowDurationMins")
     if _is_count(duration) and duration > 0:
         window["windowDurationMins"] = duration
@@ -336,7 +338,7 @@ def normalize_quota(value: Any) -> dict | None:
     allowed = value.get("ordinaryUsageAllowed")
     ordinary: bool | None = allowed if isinstance(allowed, bool) else None
     reached = identifier(value.get("reachedType"))
-    if not windows and ordinary is None and reached is None:
+    if not windows and ordinary is None and reached is None and value.get("balanceZero") is not True:
         return None
     scope_source = value.get("scope") if isinstance(value.get("scope"), dict) else value
     scope = {
@@ -356,6 +358,10 @@ def normalize_quota(value: Any) -> dict | None:
         normalized["ordinaryUsageAllowed"] = ordinary
     if reached is not None:
         normalized["reachedType"] = reached
+    if value.get("balanceZero") is True:
+        normalized["balanceZero"] = True
+    if value.get("ambiguousLimits") is True:
+        normalized["ambiguousLimits"] = True
     return normalized
 
 

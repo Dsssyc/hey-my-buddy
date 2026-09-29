@@ -51,8 +51,51 @@ def quota_view(value, *, now=None):
     windows = []
     for window in value.get("windows", []):
         reset = _time(window.get("resetsAt"))
-        windows.append({**window, "stale": stale or bool(reset and present and reset <= present)})
+        windows.append({**window, "stale": stale or window.get("invalidReset") is True or
+                        ("resetsAt" in window and reset is None) or bool(reset and present and reset <= present)})
     return {**value, "windows": windows, "stale": stale or bool(windows and all(w["stale"] for w in windows))}
+
+
+def exhausted(connection, configuration, *, now=None):
+    """A fresh, matching native exhaustion fact for automatic routing only."""
+    if configuration is not None and not isinstance(configuration, dict):
+        configuration = dict(configuration)
+    if not configuration or not configuration.get("adapter") or not configuration.get("provider"):
+        return None
+    row = connection.execute("SELECT quota_json FROM harness_health WHERE adapter=?", (configuration["adapter"],)).fetchone()
+    from .usage import classify_quota_code
+    try:
+        raw = json.loads(row[0]) if row and row[0] else None
+    except (TypeError, ValueError):
+        return None
+    try:
+        quota = quota_view(raw, now=now)
+    except (AttributeError, KeyError, TypeError):
+        return None
+    if not quota or quota["stale"] or quota.get("provider") != configuration["provider"]:
+        return None
+    if quota.get("ambiguousLimits") is True:
+        return None
+    if any(window.get("stale") for window in quota.get("windows", [])):
+        return None
+    scope = quota.get("scope") or quota
+    limit_id = scope.get("limitId")
+    if limit_id is not None and limit_id not in ({"codex", configuration.get("model")}
+                                                 if configuration["adapter"] == "codex" else
+                                                 {configuration.get("model"), configuration["provider"]}):
+        return None
+    reason = quota.get("reachedType")
+    if reason and classify_quota_code(reason) == "quota-exceeded":
+        return {"code": "HARNESS_QUOTA_EXHAUSTED", "source": quota.get("source"),
+                "observedAt": quota.get("observedAt"), "reason": reason}
+    if quota.get("balanceZero") is True:
+        from .billing import for_provider
+        if quota.get("ordinaryUsageAllowed") is not False and for_provider(
+                connection, configuration["adapter"], configuration["provider"])["kind"] != "metered":
+            return None
+        return {"code": "HARNESS_BALANCE_ZERO", "source": quota.get("source"),
+                "observedAt": quota.get("observedAt")}
+    return None
 
 
 def warnings(connection, configuration, *, now=None):
@@ -62,6 +105,15 @@ def warnings(connection, configuration, *, now=None):
     quota = quota_view(json.loads(row[0]) if row and row[0] else None, now=now)
     if not quota or quota["stale"] or quota.get("provider") not in (None, configuration.get("provider")):
         return []
+    explicit = exhausted(connection, configuration, now=now)
+    if explicit is not None:
+        return [{**explicit, "adapter": configuration["adapter"], "provider": configuration["provider"],
+                 "message": "A recent native observation reports this selected configuration has exhausted its quota."}]
+    from .usage import classify_quota_code
+    if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
+        return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "adapter": configuration["adapter"],
+                 "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
+                 "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a temporary rate limit."}]
     if quota.get("reachedType") or quota.get("ordinaryUsageAllowed") is False:
         return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "adapter": configuration["adapter"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),

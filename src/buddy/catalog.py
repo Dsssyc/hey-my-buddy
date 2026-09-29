@@ -94,6 +94,8 @@ def canonical_payload(value: Any) -> dict:
             "displayName": _text(entry.get("displayName"), 200) or provider,
             "packageName": _text(entry.get("packageName"), 200),
             "packageVersion": _text(entry.get("packageVersion"), 64),
+            **({"accessType": entry["accessType"]} if adapter == "zcode" and
+               entry.get("accessType") in ("api-key", "zhipu-coding-plan-api-key", "zhipu-account") else {}),
             "efforts": list(dict.fromkeys(effort for model in models for effort in model["efforts"])),
             "models": models,
         })

@@ -1,0 +1,178 @@
+"""Native billing labels and quota routing using private boards and mock CLIs."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from unittest.mock import patch
+
+from buddy.billing import claude_status, codex_account, zcode_access
+from buddy.decision import DecisionCoordinator
+from buddy.harness_health import HarnessHealth
+from buddy.native_observations import exhausted, warnings
+from buddy import router
+from support import BoardTestCase
+from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+
+
+def stamp(offset=0):
+    return (datetime.now(timezone.utc) + timedelta(seconds=offset)).isoformat().replace("+00:00", "Z")
+
+
+class BillingQuotaTests(BoardTestCase):
+    seed = DecisionTestCase.seed
+
+    def setUp(self):
+        super().setUp()
+        self.catalog_fixture()
+
+    def _quota(self, board, **changes):
+        value = {"source": "native-fixture", "observedAt": stamp(), "provider": "deepseek-official",
+                 "windows": [], **changes}
+        with board.store.db.write() as db:
+            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='dsh'", (json.dumps(value),))
+
+    def _git_workdir(self):
+        path = self.workdir()
+        for args in (("init", "-q"), ("config", "user.name", "Fixture"),
+                     ("config", "user.email", "fixture@example.invalid")):
+            subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+        (path / "README.md").write_text("fixture\n")
+        subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=path, check=True, capture_output=True)
+        return path
+
+    def test_native_labels_are_conservative_and_do_not_read_credentials(self):
+        self.assertEqual(codex_account({"type": "chatgpt", "planType": "pro"}, stamp())["kind"], "subscription")
+        self.assertEqual(codex_account({"type": "chatgpt", "planType": "free"}, stamp())["kind"], "unknown")
+        self.assertEqual(codex_account({"type": "apiKey"}, stamp())["kind"], "metered")
+        self.assertEqual(codex_account({"type": "other"}, stamp())["kind"], "unknown")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty",
+                                       "authMethod": "claude.ai", "subscriptionType": "pro"}, stamp())["kind"], "subscription")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty",
+                                       "authMethod": "api_key"}, stamp())["kind"], "metered")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty"}, stamp())["kind"], "unknown")
+        self.assertEqual(zcode_access("zhipu-coding-plan-api-key", stamp())["kind"], "subscription")
+        self.assertEqual(zcode_access("api-key", stamp())["kind"], "metered")
+        self.assertEqual(zcode_access("oauth", stamp())["kind"], "unknown")
+
+    def test_catalog_access_types_project_billing_per_provider(self):
+        from copy import deepcopy
+        from support import FIXTURE_CATALOG
+        board = self.board()
+        board.call("model_catalog_refresh", {"requestId": "dsh-billing"})
+        with board.store.db.read() as db:
+            from buddy.billing import for_provider
+            self.assertEqual(for_provider(db, "dsh", "deepseek-official")["kind"], "metered")
+        native = deepcopy(FIXTURE_CATALOG)
+        provider = native["providers"][0]
+        provider.update(adapter="zcode", provider="zhipu", accessType="zhipu-coding-plan-api-key")
+        native["discoveries"] = [{"adapter": "zcode", "status": "complete"}]
+        self.catalog_fixture(native)
+        board.call("model_catalog_refresh", {"requestId": "zcode-billing"})
+        with board.store.db.read() as db:
+            from buddy.billing import for_provider
+            self.assertEqual(for_provider(db, "zcode", "zhipu")["kind"], "subscription")
+            self.assertEqual(for_provider(db, "zcode", "other")["kind"], "unknown")
+
+    def test_mock_codex_account_read_has_no_model_turn(self):
+        from buddy.codex_account_probe import read
+        path = Path(__file__).parent / "fixtures/mock_codex.py"
+        billing, quota = read([sys.executable, str(path)], {"HOME": str(self.directory), "PATH": os.environ.get("PATH", "")})
+        self.assertEqual(billing["kind"], "subscription")
+        self.assertEqual(quota["scope"]["provider"], "openai")
+        self.assertEqual(quota["windows"][0]["usedPercent"], 42.5)
+        self.assertNotIn("balanceZero", quota)  # A subscription credit balance of zero proves no exhaustion.
+
+    def test_codex_on_demand_read_is_throttled_even_for_forced_refresh(self):
+        from buddy.store import BoardStore
+        board = BoardStore(self.directory / "health")
+        board.initialize()
+        health = HarnessHealth(board)
+        health.initialize()
+        with board.db.write() as db:
+            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
+                       (json.dumps({"reviewVerification": {"verified": True}}),))
+        record = {"status": "ready", "command": ["mock-codex"], "fingerprint": {"id": 1}}
+        with patch("buddy.harness_health._snapshot", return_value={"fixture": 1}), \
+             patch("buddy.harness_health._discover", return_value=record), \
+             patch("buddy.codex_account_probe.read", return_value=(codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), None)) as probe:
+            health.refresh("codex", force=True)
+            health.refresh("codex", force=True)
+            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(health.get("codex")["billingByProvider"]["openai"]["kind"], "subscription")
+            self.assertEqual(health.get("codex")["reviewVerification"], {"verified": True})
+        health.close()
+
+    def test_only_fresh_matching_explicit_exhaustion_filters_candidates_and_router(self):
+        board = self.board()
+        self.seed(board, decision_profile=None)
+        with board.store.db.read() as db:
+            baseline = DecisionCoordinator._select_candidates(db, [], coding_only=True)
+            self.assertEqual({row["profile_id"] for row in baseline}, {PROFILE_ID, SECOND_PROFILE_ID})
+        self._quota(board, windows=[{"name": "hour", "usedPercent": 90, "resetsAt": stamp(3600)}])
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+
+        self._quota(board, reachedType="rate_limit_reached")
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+            self.assertEqual(warnings(db, {"adapter": "dsh", "provider": "deepseek-official"})[0]["code"], "HARNESS_RATE_LIMIT_REPORTED")
+        self._quota(board, reachedType="usage_limit_reached", scope={"provider": "deepseek-official", "limitId": "other-model"})
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+        self._quota(board, reachedType="usage_limit_reached", observedAt=stamp(300))
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+        self._quota(board, reachedType="usage_limit_reached", windows=[{"name": "hour", "usedPercent": 100, "resetsAt": "not-a-time"}])
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+        self._quota(board, reachedType="usage_limit_reached")
+        with board.store.db.read() as db:
+            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
+            self.assertEqual(router.profile_problem(db, PROFILE_ID, "fast")[1], "router-quota-exhausted")
+            self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "other"}), None)
+            self.assertEqual(warnings(db, {"adapter": "dsh", "provider": "deepseek-official"})[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+        self._quota(board, reachedType="usage_limit_reached", windows=[{"name": "hour", "usedPercent": 100, "resetsAt": stamp(-1)}])
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+        self._quota(board, ordinaryUsageAllowed=True)
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+
+    def test_zero_balance_requires_metered_or_native_usage_denial(self):
+        board = self.board()
+        board.call("model_catalog_refresh", {"requestId": "billing-balance-catalog"})
+        self._quota(board, balanceZero=True)
+        with board.store.db.read() as db:
+            self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "deepseek-official"})["code"], "HARNESS_BALANCE_ZERO")
+        with board.store.db.write() as db:
+            db.execute("UPDATE harness_health SET record_json=?, quota_json=? WHERE adapter='codex'",
+                       (json.dumps({"billingByProvider": {"openai": codex_account({"type": "chatgpt", "planType": "pro"}, stamp())}}),
+                        json.dumps({"source": "codex/app-server-rate-limits", "observedAt": stamp(),
+                                    "provider": "openai", "balanceZero": True, "windows": []})))
+        with board.store.db.read() as db:
+            self.assertIsNone(exhausted(db, {"adapter": "codex", "provider": "openai"}))
+        with board.store.db.write() as db:
+            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'",
+                       (json.dumps({"source": "codex/app-server-rate-limits", "observedAt": stamp(),
+                                    "provider": "openai", "balanceZero": True,
+                                    "ordinaryUsageAllowed": False, "windows": []}),))
+        with board.store.db.read() as db:
+            self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})["code"], "HARNESS_BALANCE_ZERO")
+
+    def test_pin_cannot_force_exhausted_candidate_but_host_explicit_choice_survives(self):
+        board = self.board()
+        self.seed(board, decision_profile=None, preferences=[{"profileId": PROFILE_ID, "mode": "pin"}])
+        self._quota(board, reachedType="usage_limit_reached")
+        with board.store.db.read() as db:
+            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
+        result = board.call("workflow_submit", {"requestId": "explicit-exhausted", "hostId": "host",
+            "task": "Finish the bounded change", "cwd": str(self._git_workdir()),
+            "executionWorkspace": {"kind": "existing", "access": "write"},
+            "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
+        self.assertEqual(result["executionConfiguration"]["model"], "deepseek-flash")
+        self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")

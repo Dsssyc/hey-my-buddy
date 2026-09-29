@@ -32,6 +32,7 @@ export type HarnessHealth = {
   /** Latest recorded native quota observation; null or absent means unknown. */
   quota?: HarnessQuota | null;
   reviewVerification?: ReviewVerification;
+  billingByProvider?: Record<string, BillingFact>;
 };
 
 export type ReviewVerification = {
@@ -45,6 +46,12 @@ export type ReviewVerification = {
   reasonCode?: string | null;
   failedChecks?: string[];
   checks?: Record<string, boolean>;
+};
+
+export type BillingFact = {
+  kind: "subscription" | "metered" | "unknown";
+  source: string;
+  observedAt: string;
 };
 
 /**
@@ -83,10 +90,12 @@ export type HarnessQuota = {
   stale?: boolean;
   reachedType?: string;
   ordinaryUsageAllowed?: boolean;
+  balanceZero?: boolean;
   windows: QuotaWindow[];
 };
 
 export type Profile = {
+  billing?: BillingFact;
   newlyDiscovered?: boolean;
   profileId: string;
   label: string;

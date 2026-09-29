@@ -70,7 +70,7 @@ class QuotaVisibilityTests(BoardTestCase):
             observed = read_health(db, "codex")["quota"]
             self.assertEqual(observed["windows"], [])
             warning = warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")
-            self.assertEqual(warning[0]["code"], "HARNESS_QUOTA_LIMIT_REPORTED")
+            self.assertEqual(warning[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
             self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z"), [])
 
 
