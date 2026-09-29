@@ -13,7 +13,10 @@ import contextlib
 import io
 import json
 import os
+import re
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -394,6 +397,140 @@ class HelpBoundaryTests(PrivateCliTestCase):
                 self.assertIn(field, names)
                 payload = {"action": "stop", field: value} if operation == "service_control" else {field: value}
                 self.assertIn(field, self._rejection(operation, payload))
+
+
+class HelpExtractionRegressionTests(unittest.TestCase):
+    """Item 13, second pass: the rejected extraction lost facts; these keep them.
+
+    Each assertion below names the exact fact the first attempt omitted (an input
+    bound, a configuration object's required strings, the task byte cap, a field-name
+    loop, or the two-part cwd rule). A silently skipped field would fail here rather
+    than reappear as an "accepted; bound is validated inline" placeholder.
+    """
+
+    def parameter(self, method: str, path: str):
+        parameters = cli_help.method_help(method).parameters
+        found = None
+        for part in path.split("."):
+            found = next((item for item in parameters if item.name == part), None)
+            self.assertIsNotNone(found, f"{method} does not list {part!r} (path {path})")
+            parameters = found.children
+        return found
+
+    def facts(self, method: str, path: str) -> str:
+        parameter = self.parameter(method, path)
+        return " ".join(
+            str(part)
+            for part in (parameter.kind, parameter.default, parameter.bounds, parameter.expression, parameter.required)
+            if part
+        )
+
+    def test_continue_reports_the_whole_input_document_rule(self):
+        parameter = self.parameter("continue", "input")
+        self.assertTrue(parameter.required, "input is required")
+        self.assertIn("string", parameter.kind)
+        self.assertIn("object", parameter.kind)
+        self.assertIn("nonempty", parameter.bounds or "")
+        self.assertIn("65536 UTF-8 bytes", parameter.bounds or "")
+
+    def test_continue_reports_every_required_configuration_string(self):
+        configuration = self.parameter("continue", "configuration")
+        self.assertEqual(configuration.kind, "object")
+        for field in ("adapter", "provider", "model", "effort"):
+            with self.subTest(field=field):
+                parameter = self.parameter("continue", f"configuration.{field}")
+                self.assertEqual(parameter.kind, "string")
+                self.assertTrue(parameter.required)
+                self.assertIn("256 characters", parameter.bounds or "")
+
+    def test_submit_reports_the_task_cap_and_the_named_loop_fields(self):
+        task = self.parameter("submit", "task")
+        self.assertEqual(task.kind, "string")
+        self.assertTrue(task.required)
+        self.assertIn("1048576 UTF-8 bytes", task.bounds or "")
+        for field in ("model", "provider", "effort"):
+            with self.subTest(field=field):
+                parameter = self.parameter("submit", field)
+                self.assertEqual(parameter.kind, "string")
+                self.assertIn("256 characters", parameter.bounds or "")
+                self.assertIn("256 characters", self.facts("submit", f"spec.{field}"))
+
+    def test_submit_reports_both_halves_of_the_cwd_rule(self):
+        cwd = self.parameter("submit", "cwd")
+        self.assertTrue(cwd.required)
+        self.assertIn('starts with "/"', cwd.bounds or "")
+        self.assertIn("existing directory", cwd.bounds or "")
+
+    def test_an_undecodable_condition_is_a_readable_expression_with_its_source(self):
+        plan = self.parameter("storage-apply", "planId")
+        self.assertTrue(plan.expression, "a complex condition must not be dropped")
+        self.assertTrue(plan.source, "the expression names the validator it came from")
+
+    def test_no_method_falls_back_to_the_retired_placeholder(self):
+        for method in (*PUBLIC_METHODS, "help"):
+            with self.subTest(method=method):
+                rendered = cli_help.render_method(cli_help.method_help(method))
+                self.assertNotIn("bound is validated inline", rendered)
+                self.assertNotIn("read directly", rendered)
+                self.assertNotRegex(rendered, r"\n\s*\w+\s+value\s*$")
+
+    def test_helper_spec_fields_do_not_leak_to_the_decide_top_level(self):
+        names = {parameter.name for parameter in cli_help.method_help("decide").parameters}
+        self.assertNotIn("adapter", names)
+        self.assertNotIn("task", names)
+        self.assertEqual(self.parameter("decide", "helpers.spec.adapter").kind, "string")
+
+    def test_an_unknown_method_is_always_a_structured_error_with_candidates(self):
+        for name, nearest in (("submt", "submit"), ("zzzzzz", None)):
+            with self.subTest(name=name):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), mock.patch.object(
+                    transport, "call_service", side_effect=AssertionError("unknown methods are never dispatched")
+                ), mock.patch.object(
+                    transport, "ensure_service", side_effect=AssertionError("unknown methods never start a service")
+                ), self.assertRaises(SystemExit) as caught:
+                    cli.main([name, "{}"])
+                self.assertEqual(caught.exception.code, 2)
+                payload = json.loads(output.getvalue())["error"]
+                self.assertEqual(payload["code"], "UNKNOWN_METHOD")
+                if nearest is None:
+                    self.assertEqual(payload["didYouMean"], [])
+                else:
+                    self.assertIn(nearest, payload["didYouMean"])
+
+
+class HelpSourceFreshnessTests(unittest.TestCase):
+    """The answer comes from the validators on disk, not from a frozen table."""
+
+    def test_a_changed_validator_constant_changes_the_help(self):
+        with tempfile.TemporaryDirectory(prefix="buddy-help-source-") as directory:
+            copy = Path(directory) / "buddy"
+            for path in sorted(Path(cli_help.PACKAGE_ROOT).rglob("*.py")):
+                if "__pycache__" in path.parts:
+                    continue
+                target = copy / path.relative_to(cli_help.PACKAGE_ROOT)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+            schemas = copy / "schemas.py"
+            text = schemas.read_text(encoding="utf-8")
+            text = text.replace("MAX_WORKFLOW_INPUT_BYTES = 64 * 1024", "MAX_WORKFLOW_INPUT_BYTES = 48 * 1024")
+            text = text.replace("MAX_TASK_BYTES = 1024 * 1024", "MAX_TASK_BYTES = 3 * 512 * 1024")
+            schemas.write_text(text, encoding="utf-8")
+
+            previous = cli_help.PACKAGE_ROOT
+            cli_help.PACKAGE_ROOT = copy
+            cli_help.reset_index()
+            try:
+                continuation = cli_help.render_method(cli_help.method_help("continue"))
+                submission = cli_help.render_method(cli_help.method_help("submit"))
+            finally:
+                cli_help.PACKAGE_ROOT = previous
+                cli_help.reset_index()
+
+            self.assertIn("49152 UTF-8 bytes", continuation)
+            self.assertNotIn("65536 UTF-8 bytes", continuation)
+            self.assertIn("1572864 UTF-8 bytes", submission)
+            self.assertNotIn("1048576 UTF-8 bytes", submission)
 
 
 if __name__ == "__main__":

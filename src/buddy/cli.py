@@ -658,15 +658,15 @@ def main(argv: list[str] | None = None) -> int:
     if len(argv) == 4 and argv[:2] == ['harness', 'set']:
         argv = ['harness-set', json.dumps({'adapter': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
     if argv and not argv[0].startswith("-") and argv[0] not in METHODS:
-        candidates = cli_help.nearest_methods(argv[0], METHODS)
-        if candidates:
-            _usage_error(
-                {
-                    "code": "UNKNOWN_METHOD",
-                    "message": f"Unknown method {argv[0]!r}",
-                    "didYouMean": candidates,
-                }
-            )
+        # An unknown method is always a structured CLI error with its closest
+        # candidates; it is never forwarded to a service with a guessed operation.
+        _usage_error(
+            {
+                "code": "UNKNOWN_METHOD",
+                "message": f"Unknown method {argv[0]!r}",
+                "didYouMean": cli_help.nearest_methods(argv[0], METHODS),
+            }
+        )
     parser = argparse.ArgumentParser(
         description="Buddy service: governed goals, durable execution records, independent workers and routed harness execution",
         epilog=EPILOG,
