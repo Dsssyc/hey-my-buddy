@@ -16,3 +16,11 @@ Two read-only smoke delegations from the frozen input `532ebb2` — DeepSeek Fla
 - The console polish was checked in the synthetic preview before the merge; the installed console was not re-inspected in a browser after installation.
 - Windows remains unverified on a real machine.
 - ADR-018 (fast and review routing) is a proposal and is not implemented.
+
+## Same-version reinstall, 2026-09-29
+
+The user authorized a reinstall once the final candidate passed. `socu/buddy-core` was fast-forwarded to `0413318`, which adds on top of `532ebb2`: the harness-probe login-name fix `9fcea9a` (Claude Code's keychain login needs `USER`), Codex's lightweight monitoring subagent guidance and its two Codex worker fixes (report budget and native checkpoint after a result failure, recorded in [codex-monitor-and-continuation-0.19.0.md](codex-monitor-and-continuation-0.19.0.md)), the timeline toolbar fix `ec6fe38` (run `71ffddc8`), and the console display fixes `0413318` (run `cc8fe451`). `uv run --frozen python -m buddy.checks` passed on `0413318` (1,363 Python tests, 139 Node tests); the Host had also independently rerun it on Codex's `a8a4334` with the same counts.
+
+The same `uvx --from <wheel> hey-my-buddy install` path upgraded the service with no rollback: the verified backup was taken at schema 14 (158,760,384 bytes, 3,470 files), retained data fingerprints matched with no source leaks, and the runtime switched to `6c0a69101cbebce8b0c0a3b9edd46310`. The installer reported the skill placement as `already-current` although the installed `SKILL.md` carries the new generic monitoring-model wording, and `skill.json` records `sourceCommit: null` because the wheel was built through an sdist with `uv build`; later candidate wheels should be built with `uv build --wheel` from the checkout so the source commit is retained.
+
+After reinstalling, `health` reports 0.19.0, schema 14 and integrity `ok`, and `adapters` reports all four harnesses ready, including `claude` (2.1.284) now that the probe keeps the login name. Read-only smoke delegations on DeepSeek Flash off (run `9f47019a`) and Codex GPT-6 Luna high (run `210f8648`) reported `0413318` with a clean checkout; the Host read both before recording them as accepted.
