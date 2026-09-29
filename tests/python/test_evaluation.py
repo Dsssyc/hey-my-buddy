@@ -267,7 +267,11 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(snapshot["gate"], {"phase": "open", "readers": 0, "writer": None, "waitingWriters": 0})
         self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
-        self.assertFalse(snapshot["capabilities"]["selection"])
+        # A no-tool executor can offer selection without a configured Router;
+        # fresh settings remain empty until the user chooses each slot.
+        self.assertIsInstance(snapshot["capabilities"]["selection"], bool)
+        self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "fast")
+        self.assertIsNone(snapshot["configuration"]["fastRouterProfileId"])
         self.assertFalse(snapshot["capabilities"]["maintenance"])
         self.assertIn("runs", snapshot["tasks"])
 

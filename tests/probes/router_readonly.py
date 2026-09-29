@@ -358,7 +358,7 @@ def parser():
     result.add_argument("--provider", required=True)
     result.add_argument("--model", required=True)
     result.add_argument("--effort", required=True)
-    result.add_argument("--preset", choices=("quick", "standard", "deep"), default="quick")
+    result.add_argument("--preset", choices=("brief", "standard", "deep"), default="brief")
     result.add_argument("--output-root", type=Path, required=True)
     result.add_argument("--execute", action="store_true", help="必须先取得本次原生回合批准")
     result.add_argument("--prepare-only", action="store_true")

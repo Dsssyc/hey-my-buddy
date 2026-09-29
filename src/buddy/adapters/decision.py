@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
+import tempfile
 import time
 
 from ..errors import BoardError
@@ -34,13 +36,16 @@ class DecisionAdapter(Adapter):
             if not getattr(native, "no_tool_structured", False):
                 raise BoardError("UNSUPPORTED_ADAPTER", "This native adapter has no no-tool structured capability")
             from .base import NoToolStructuredRequest
-            root = context.directory / "no-tool-input"
-            root.mkdir(mode=0o700)
-            request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60)
+            # A state root may itself live inside the Host's repository. Keep
+            # native cwd outside it so ancestor project instructions cannot leak.
+            root = Path(tempfile.mkdtemp(prefix="buddy-no-tool-"))
+            request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60,
+                                              capture_evidence=document.get("captureEvidence") is True)
             child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
             started = time.monotonic()
             handle = native.start_no_tool_structured(child_context, request)
             handle.router_input = None
+            handle.no_tool_cwd = root
             handle.router_started = started
             return handle
         if not (native.read_only_structured and native.read_only_structured_verified):
@@ -67,6 +72,11 @@ class DecisionAdapter(Adapter):
         native_result = outcome.result
         document = context.decision_input
         verification = None
+        if outcome.shutdown_confirmed and getattr(handle, 'no_tool_cwd', None):
+            try:
+                handle.no_tool_cwd.rmdir()
+            except OSError:
+                pass  # Retain unexpected native files for inspection.
         if outcome.shutdown_confirmed and handle.router_input is not None:
             verification = router_input.verify(*handle.router_input)
             # The mirror is a full copy of the frozen input. Once the native group is
@@ -74,9 +84,10 @@ class DecisionAdapter(Adapter):
             # a changed copy for inspection only.
             if verification["unchanged"]:
                 router_input.discard(handle.router_input[1])
-        usage = native_result.get("usage") or {
+        usage = {
             "elapsedMs": round((time.monotonic() - handle.router_started) * 1000),
             "toolCalls": None, "bytesRead": None,
+            **(native_result.get("usage") or {}),
         }
         result = {
             "operation": "select", "status": "ok" if outcome.status == "ok" else "error",
@@ -84,6 +95,10 @@ class DecisionAdapter(Adapter):
             "resolved": native_result.get("resolved"), "observed": native_result.get("observed"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
+            "harnessVersion": native_result.get("harnessVersion"),
+            "nativeEvidence": native_result.get("nativeEvidence"),
+            "nativeFailure": native_result.get("nativeFailure"),
+            "correctionCount": native_result.get("correctionCount"),
             "budget": document["budget"], "inputVerification": verification,
             **router.routing_facts(document),
             "zeroToolVerified": native_result.get("zeroToolVerified") if document.get("routingMode") == "fast" else None,
@@ -93,10 +108,14 @@ class DecisionAdapter(Adapter):
                              "nativeInterruptAcknowledged": native_result.get("nativeInterruptAcknowledged")},
         }
         code = native_result.get("code")
-        if code in ("deadline", "readonly-budget-exhausted"):
+        if code in ("deadline", "timeout", "readonly-budget-exhausted"):
             code = "router-budget-exhausted"
         if code == "no-tool-violation":
             code = "router-tools-forbidden"
+        if (document.get("routingMode", "review") == "review" and native_result.get("modelStarted") is False
+                and outcome.shutdown_confirmed and code == "readonly-policy-unverified"):
+            code = "router-review-unavailable"
+            result.update(reasonCode="router-review-unverified", reason="The native review permission policy could not be verified before model input")
         if document.get("routingMode") == "fast" and outcome.status == "ok":
             if native_result.get("zeroToolVerified") is not True or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0:
                 code = "router-tools-forbidden"

@@ -58,6 +58,18 @@ class RoutingPreferenceSchemaTests(unittest.TestCase):
 
 
 class DecisionCapabilityTests(unittest.TestCase):
+    def test_fast_capability_and_native_readiness_are_distinct_from_review_verification(self):
+        class Native(Adapter):
+            name = 'fixture'
+            read_only_structured = True
+            def available(self):
+                return self.ready, None
+        native = Native()
+        for implemented, ready, expected in ((False, True, False), (True, False, False), (True, True, True)):
+            native.no_tool_structured, native.ready = implemented, ready
+            with mock.patch('buddy.adapters.adapters', return_value={'fixture': native}):
+                self.assertEqual(DecisionAdapter().available()[0], expected)
+
     def test_native_verification_defaults_false_including_dsh(self):
         for native in (Adapter, DshAdapter, CodexAdapter, ClaudeAdapter, ZcodeAdapter):
             with self.subTest(native=native.name):
@@ -65,7 +77,9 @@ class DecisionCapabilityTests(unittest.TestCase):
         self.assertFalse(DshAdapter.read_only_structured)
         self.assertTrue(CodexAdapter.read_only_structured)
         self.assertTrue(ClaudeAdapter.read_only_structured)
-        self.assertFalse(DecisionAdapter().available()[0])
+        self.assertTrue(DshAdapter.no_tool_structured)
+        self.assertTrue(ZcodeAdapter.no_tool_structured)
+        self.assertFalse(ClaudeAdapter.no_tool_structured)
 
     def test_decision_dispatches_generic_request_with_frozen_input_and_no_agent_authority(self):
         class Native(Adapter):
@@ -83,7 +97,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen = Path(root) / "frozen"
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
-            budget = router.budget("quick")
+            budget = router.budget("brief")
             document = {"profile": {"adapter": "native-fixture", "provider": "fixture", "model": "model", "effort": "off"},
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([PROFILE_ID]),
                         "profiles": [{"profileId": PROFILE_ID}], "task": "bounded read"}

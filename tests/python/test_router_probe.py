@@ -33,7 +33,7 @@ class RouterProbeTests(unittest.TestCase):
                 directory.chmod(0o700)
         self.temporary.cleanup()
 
-    def args(self, adapter="codex", execute=False, preset="quick"):
+    def args(self, adapter="codex", execute=False, preset="brief"):
         return probe.parser().parse_args([
             "--adapter", adapter, "--provider", "openai" if adapter == "codex" else "anthropic",
             "--model", "mock-native-model", "--effort", "medium", "--preset", preset,
@@ -97,7 +97,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertFalse(report["probeChecksPassed"])
                 self.assertEqual(report["status"], "refused" if adapter in ("dsh", "zcode") else "prepared")
                 self.assertEqual(report["request"]["budget"],
-                                 {"preset": "quick", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
+                                 {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
                 self.assertEqual(report["inputHashesBefore"], report["inputHashesAfter"])
                 self.assertEqual(report["sentinelBefore"], report["sentinelAfter"])
                 self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)

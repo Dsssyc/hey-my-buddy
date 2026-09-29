@@ -743,10 +743,9 @@ class EvaluationStore:
         discovery is visible through ``model_catalog_refresh``.
         """
         from . import catalog
-        from .adapters.decision import DecisionAdapter
-
-        decision = DecisionAdapter()
-        adapter_available, adapter_reason = decision.available()
+        # Even model-free reads use this board's recorded harness health, not
+        # whichever native executables happen to be visible to the caller.
+        adapter_available, adapter_reason = self.board.decisions._adapter_available()
         return {
             "selection": bool(adapter_available),
             "maintenance": False,

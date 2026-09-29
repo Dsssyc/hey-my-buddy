@@ -612,6 +612,8 @@ class Worker:
                 startup_failure = startup_failure or (isinstance(error, OSError) and error.filename in record.get('command', []))
                 if retry and not holder.get('started') and startup_failure:
                     self._harness_failed(attempt, record)
+                    if review:
+                        return self._review_unavailable(claim, directory, history, 'router-unavailable')
                 if retry or holder.get('started') or not startup_failure:
                     raise
         raise AssertionError('unreachable harness retry')

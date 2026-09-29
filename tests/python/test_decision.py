@@ -428,7 +428,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board)
         self.use_helper(path=self.directory / "missing-readonly")
         with board.store.db.write() as connection:
-            connection.execute("UPDATE harness_health SET status='missing' WHERE adapter='dsh'")
+            connection.execute("UPDATE harness_health SET status='missing'")
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
         self.assertFalse(capabilities["maintenance"])

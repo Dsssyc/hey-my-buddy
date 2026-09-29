@@ -73,8 +73,8 @@ DEFAULT_TIMEOUT_SECONDS = 300
 TIMEOUT_GRACE_SECONDS = 10
 
 NEEDS_HOST_NO_PROFILE = (
-    "no compatible fixed decision profile is configured; publish an available, enabled decision-capable profile as "
-    "configuration.decisionProfileId. The service never guesses one and never selects a selector."
+    "no compatible Router is configured; select an available, enabled profile in the appropriate "
+    "fast or review Router slot. The service never guesses one and never selects a selector."
 )
 NEEDS_HOST_NO_CANDIDATE = (
     "no enabled, available, capability-matching profile is a legal candidate under the published pins and "
