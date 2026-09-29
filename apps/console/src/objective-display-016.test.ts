@@ -48,10 +48,10 @@ describe("0.16 friendly configuration names (0.3)", () => {
     expect(configurationLabel(null)).toBe("配置未记录");
   });
 
-  it("omits the effort half when it is default or empty, and maps off", () => {
+  it("omits the effort half when it is empty, and keeps every native name including off", () => {
     expect(configurationLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
     expect(configurationLabel(config("glm-5.3", null))).toBe("GLM-5.3");
-    expect(configurationNamer(null)(config("glm-5.3", "off")).text).toBe("GLM-5.3 · 非思考");
+    expect(configurationNamer(null)(config("glm-5.3", "off")).text).toBe("GLM-5.3 · off");
   });
 
   it("keeps the raw adapter/provider/model/effort identity for tooltips", () => {

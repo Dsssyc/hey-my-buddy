@@ -120,7 +120,7 @@ describe("desktop console", () => {
     // The automatic assessment stays read-only; there is no editable opinion field.
     expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
-    expect(within(detail).getByRole("switch", { name: "启用 非思考" })).toBeTruthy();
+    expect(within(detail).getByRole("switch", { name: "启用 off" })).toBeTruthy();
     expect(within(detail).getByRole("switch", { name: "启用 low" })).toBeTruthy();
     expect(within(detail).getAllByText(/由维护 Harness 依据证据发布/).length).toBeGreaterThan(0);
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();

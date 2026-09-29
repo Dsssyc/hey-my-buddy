@@ -600,7 +600,7 @@ export function rebaseDraft(
       field,
       profileId,
       message: kind === "unread"
-        ? `${subject} 尚不能与 V${snapshot.tableRevision} 核对：它不在最新快照中，保留历史也尚未按 V${snapshot.tableRevision} 重新读取。你的修改和原基于版本都保留；读取保留的历史配置后会自动核对。`
+        ? `${subject} 尚不能与 V${snapshot.tableRevision} 核对：它不在最新快照中，保留的记录也尚未按 V${snapshot.tableRevision} 重新读取。你的修改和原基于版本都保留；重新读取保留的配置后会自动核对。`
         : `${subject} 已被其他发布修改（V${snapshot.tableRevision}）${detail}；为避免覆盖，草稿仍基于原版本，请重新加载最新版本核对后再提交。`,
     });
   };

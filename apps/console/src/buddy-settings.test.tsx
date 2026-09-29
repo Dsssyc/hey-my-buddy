@@ -163,6 +163,14 @@ function fixture(options: Options = {}) {
     state: "active", tableRevision: 4, expiresAt: new Date(Date.now() + 120_000).toISOString() };
   const command = vi.fn(async (operation: string, params: Record<string, any>, _csrfToken?: string) => {
     operations.push(operation);
+    if (operation === "model_profiles") {
+      // Only a checked 显示不可用配置 asks for this page; it mirrors the board's
+      // bounded contract and just returns the current rows.
+      return { profiles: state.profiles, cards: state.cards, familyAnnotations: state.familyAnnotations,
+        preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
+        familyPreferences: state.familyPreferences, sampleCounts: state.sampleCounts,
+        modelConcurrency: state.modelConcurrency, tableRevision: state.tableRevision, nextCursor: null };
+    }
     if (operation === "evaluation_write_begin") {
       state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
       return grant;
@@ -195,7 +203,8 @@ function fixture(options: Options = {}) {
 async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setup>) {
   window.location.hash = "#buddy";
   render(<App suppliedApi={api} />);
-  await screen.findByRole("heading", { name: "模型 3" });
+  // The unavailable ZCode family is hidden by default, so two families show.
+  await screen.findByRole("heading", { name: "模型 2" });
 }
 
 function familyRow(name: string) {
@@ -226,7 +235,11 @@ describe("the model family list", () => {
     expect(familyRow("Claude Sonnet 5")).toBeTruthy();
     expect(screen.getByRole("button", { name: /^▸ Codex/ }).getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
-    expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
+    // The all-unavailable ZCode harness is hidden until the user asks for it,
+    // and the checkbox names how many configurations that hides.
+    expect(screen.queryByRole("button", { name: /^▸ ZCode/ })).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "显示不可用配置（1）" })).toBeTruthy();
+    expect(f.command).not.toHaveBeenCalled();
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
     // GPT-6 Sol has no enabled effort; the whole ZCode harness stays unusable.
     await screen.findByRole("heading", { name: "模型 1" });
@@ -235,14 +248,25 @@ describe("the model family list", () => {
     expect(familyRow("Claude Sonnet 5")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await screen.findByRole("heading", { name: "模型 3" });
+    await screen.findByRole("heading", { name: "模型 2" });
     expect(screen.getByRole("button", { name: /^▸ Codex/ })).toBeTruthy();
+    // The two filters combine: with 显示不可用配置 on, the offline family is
+    // listed, and 只看已启用 still hides it once it has no enabled effort.
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
+    await screen.findByRole("heading", { name: "模型 3" });
+    expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.queryByRole("button", { name: /^▸ ZCode/ })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await screen.findByRole("heading", { name: "模型 3" });
   });
 
   it("folds harnesses with no enabled efforts, shows enabled and total counts, and preserves the unavailable reason", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
     const claude = screen.getByRole("button", { name: /^▾ Claude Code/ });
     expect(claude.getAttribute("aria-expanded")).toBe("true");
     expect(claude.textContent).toContain("已启用 1/2");
@@ -259,6 +283,8 @@ describe("the model family list", () => {
     expect(screen.queryByRole("button", { name: /^GLM-5/ })).toBeNull();
     await user.click(zcode);
     expect(familyRow("GLM-5")).toBeTruthy();
+    // The family row itself carries the recorded reason next to 不可用.
+    expect(screen.getByText("不可用 · 本机未检测到 zcode CLI")).toBeTruthy();
   });
 
   it("counts enabled efforts and marks the Router's family", async () => {
@@ -294,8 +320,13 @@ describe("the model family list", () => {
     await screen.findByRole("heading", { name: "模型 1" });
     expect(familyRow("Claude Sonnet 5")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
-    // Provider, uppercase: case does not matter.
+    // While the unavailable filter is off, searching stays a local filter.
+    expect(f.command).not.toHaveBeenCalled();
+    // Provider, uppercase: case does not matter. The offline ZCode family is
+    // searched once 显示不可用配置 is on; its own search then also reaches the
+    // server so retained rows beyond the snapshot stay findable.
     await user.clear(search);
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
     await user.type(search, "ZHIPU");
     await screen.findByRole("heading", { name: "模型 1" });
     expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
@@ -311,7 +342,6 @@ describe("the model family list", () => {
     await user.type(search, "codex");
     await screen.findByRole("heading", { name: "模型 1" });
     expect(familyRow("GPT-6 Sol")).toBeTruthy();
-    expect(f.command).not.toHaveBeenCalled();
   });
 });
 
@@ -398,7 +428,10 @@ describe("effort tags and preference overrides", () => {
     expect(rule(".effort-tag.pref-prefer")).toMatch(/border:\s*2px solid/);
     expect(rule(".effort-tag.pref-pin")).toMatch(/border:\s*3px double/);
     expect(rule(".effort-tag.pref-exclude")).toMatch(/border:\s*2px dashed/);
-    expect(styles).toMatch(/\.effort-tag\.pref-exclude \.effort-name \{[^}]*line-through/);
+    // 排除 keeps the dashed border and the ⊘ icon as its non-colour cues; the
+    // name is no longer struck through.
+    expect(styles).not.toMatch(/\.effort-tag\.pref-exclude \.effort-name \{[^}]*line-through/);
+    expect(styles).not.toContain("text-decoration: line-through");
     expect(styles).not.toContain(".effort-tag.override::after");
     // Every mode also has its own glyph, so the tag never depends on colour.
     expect(Object.values(PREFERENCE_ICON).every(icon => icon.length > 0)).toBe(true);

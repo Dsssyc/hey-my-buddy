@@ -1,19 +1,92 @@
-import { useId, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+
+/** The explanation keeps this distance from every viewport edge. */
+const HELP_MARGIN_PX = 8;
+/** Gap between the `?` button and its explanation, matching the former CSS. */
+const HELP_GAP_PX = 6;
+/** Upper bound for the explanation's inline size; long text wraps below it. */
+const HELP_MAX_WIDTH_PX = 26 * 16;
+
+type HelpPlacement = { left: number; top: number; maxWidth: number };
 
 /**
  * A `?` hover/focus tooltip for explanations that used to be permanent text.
  * The explanation is the button's description, so a screen reader announces it
  * with the button; Escape hides it without moving focus (WCAG 1.4.13).
+ *
+ * The explanation renders through a portal with `position: fixed`, so a
+ * scrolling or `overflow: hidden` ancestor (the Buddy-config columns and
+ * window edges in particular) can never clip it. It is centred under the
+ * button, shifted left or right while near a viewport edge, flipped above when
+ * the space below is too small, and capped in width so long text wraps.
  */
 export function Help({ label, children }: { label: string; children: ReactNode }) {
   const id = useId();
+  const anchor = useRef<HTMLButtonElement>(null);
+  const tip = useRef<HTMLSpanElement>(null);
+  const [active, setActive] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  return <span className={"help" + (dismissed ? " dismissed" : "")} onMouseLeave={() => setDismissed(false)}>
-    <button type="button" className="help-button" aria-label={label} aria-describedby={id}
-      onBlur={() => setDismissed(false)}
+  const [placement, setPlacement] = useState<HelpPlacement | null>(null);
+  const open = active && !dismissed;
+
+  const place = useCallback(() => {
+    const button = anchor.current;
+    const panel = tip.current;
+    if (!button || !panel) return;
+    const rect = button.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const maxWidth = Math.max(0, Math.min(HELP_MAX_WIDTH_PX, viewportWidth - HELP_MARGIN_PX * 2));
+    const width = Math.min(panelRect.width, maxWidth);
+    const height = panelRect.height;
+    const left = Math.max(HELP_MARGIN_PX, Math.min(rect.left + rect.width / 2 - width / 2, viewportWidth - width - HELP_MARGIN_PX));
+    const below = rect.bottom + HELP_GAP_PX;
+    const top = below + height <= viewportHeight - HELP_MARGIN_PX
+      ? below
+      : Math.max(HELP_MARGIN_PX, rect.top - HELP_GAP_PX - height);
+    setPlacement(previous => previous && previous.left === left && previous.top === top && previous.maxWidth === maxWidth
+      ? previous : { left, top, maxWidth });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(place);
+    observer.observe(tip.current!);
+    return () => observer.disconnect();
+  }, [open, place, children]);
+
+  // A viewport resize or any scroll replays the placement, so the fixed
+  // explanation stays anchored to its button and inside the viewport.
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => place();
+    window.addEventListener("resize", reposition);
+    document.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, place]);
+
+  function close() {
+    setActive(false);
+    setDismissed(false);
+  }
+
+  return <span className="help"
+    onMouseEnter={() => setActive(true)} onMouseLeave={close}>
+    <button ref={anchor} type="button" className="help-button" aria-label={label} aria-describedby={id}
+      onFocus={() => setActive(true)}
+      onBlur={close}
       onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setDismissed(true); } }}>?</button>
-    <span role="tooltip" id={id} className="help-tip">{children}</span>
+    {createPortal(<span ref={tip} role="tooltip" id={id} className="help-tip"
+      style={{ left: `${placement?.left ?? 0}px`, top: `${placement?.top ?? 0}px`, maxWidth: placement ? `${placement.maxWidth}px` : undefined,
+        visibility: open && placement ? "visible" : "hidden" }}>{children}</span>, document.body)}
   </span>;
 }
 

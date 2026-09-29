@@ -4,12 +4,12 @@ import type { Profile } from "./types";
 export type NamedProfile = Pick<Profile, "label" | "model" | "effort">;
 
 /**
- * User-facing wording for a thinking effort. Only the catalog's "off" value has
- * a localized word; every other native value (max/high/low, unknown) stays as is.
+ * User-facing wording for a thinking effort. Every native value — including
+ * `off` — is shown as recorded, exactly like `low`, `high` and `max`; only
+ * surrounding whitespace is dropped.
  */
 export function effortText(effort: string | null | undefined): string {
-  const value = (effort ?? "").trim();
-  return value === "off" ? "非思考" : value;
+  return (effort ?? "").trim();
 }
 
 /**

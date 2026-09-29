@@ -437,7 +437,7 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     const section = screen.getByRole("region", { name: "评价（只读）" });
-    await user.click(within(section).getByText("非思考"));
+    await user.click(within(section).getByText("off"));
     expect(within(section).getByText("单次观察")).toBeTruthy();
     expect(within(section).queryByRole("textbox")).toBeNull();
     expect(within(section).queryByRole("checkbox")).toBeNull();
@@ -463,20 +463,20 @@ describe("direct editing and the save bar", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    const off = screen.getByRole("switch", { name: "启用 非思考" });
+    const off = screen.getByRole("switch", { name: "启用 off" });
     const high = screen.getByRole("switch", { name: "启用 high" });
     expect(off.getAttribute("aria-checked")).toBe("true");
     expect(high.getAttribute("aria-checked")).toBe("false");
     await user.click(off);
-    expect(screen.getByRole("switch", { name: "启用 非思考" }).getAttribute("aria-checked")).toBe("false");
-    const tag = screen.getByRole("group", { name: "非思考 档位" });
+    expect(screen.getByRole("switch", { name: "启用 off" }).getAttribute("aria-checked")).toBe("false");
+    const tag = screen.getByRole("group", { name: "off 档位" });
     expect(tag.textContent).toContain("未保存");
     expect(within(saveBar()!).getByText("有 1 项未保存修改")).toBeTruthy();
     // The list row follows the draft immediately.
     expect(screen.getByRole("button", { name: /^deepseek-flash，已启用 0\/2/ })).toBeTruthy();
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(screen.getByRole("group", { name: "非思考 档位" }).textContent).not.toContain("未保存");
+    expect(screen.getByRole("group", { name: "off 档位" }).textContent).not.toContain("未保存");
     // A disable publishes one enablement patch and nothing program-owned.
     expect(f.published.at(-1)!.profileSettings).toEqual([{ profileId: flashOff, enabled: false }]);
     expect(f.published.at(-1)).not.toHaveProperty("profiles");

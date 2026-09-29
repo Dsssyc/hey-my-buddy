@@ -587,7 +587,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
     await user.click(await screen.findByRole("button", { name: "更新记录" }));
     expect(await screen.findByText("V12")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "查看历史配置" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
     await waitFor(() => expect(f.operations).toContain("model_profiles"));
     expect(f.operations).toContain("selection_get");
     expect(f.operations).toContain("evaluation_history");

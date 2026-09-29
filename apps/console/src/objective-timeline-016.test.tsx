@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +9,20 @@ import { objectiveTimelineFixture } from "./objective-fixtures";
 import type { ObjectiveTimeline as ObjectiveTimelineData, TimelineRow, TimelineSpan } from "./objective-types";
 
 afterEach(() => cleanup());
+
+const styles = () => readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+/**
+ * Locate one exact rule (a selector that starts its own rule, never the tail of
+ * a longer descendant selector) so a style contract can be asserted here.
+ */
+function cssRuleAt(source: string, selector: string): { start: number; body: string } {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(?:^|[\\n}])\\s*(${escaped})\\s*\\{`).exec(source);
+  expect(match, `rule ${selector} exists`).not.toBeNull();
+  const start = match!.index + match![0].indexOf(match![1]!);
+  return { start, body: source.slice(start, source.indexOf("}", start)) };
+}
+const cssRule = (source: string, selector: string) => cssRuleAt(source, selector).body;
 
 function baseProps(timeline: ObjectiveTimelineData | null, overrides: Record<string, unknown> = {}): ObjectiveTimelineProps {
   const props: ObjectiveTimelineProps = {
@@ -148,6 +164,59 @@ describe("0.16 P2.1: the inspector dock", () => {
     expect(container.querySelector(".timeline-inspector")).toBeNull();
     await user.click(within(dock).getByRole("button", { name: "展开检查器" }));
     expect(container.querySelector(".timeline-inspector")).toBeTruthy();
+  });
+
+  it("lets the wheel scroll the drawer: the card is not a nested scroll boundary", async () => {
+    const timeline = objectiveTimelineFixture();
+    const user = userEvent.setup();
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline, { selection: { type: "run", runId: "r1" } })} />);
+    await user.click(screen.getByRole("button", { name: "展开检查器" }));
+    const body = container.querySelector(".inspector-dock-body") as HTMLElement;
+    const card = container.querySelector(".inspector-dock-body .timeline-inspector") as HTMLElement;
+    expect(body).toBeTruthy();
+    expect(card).toBeTruthy();
+    // A wheel over the card's content keeps travelling to the drawer body, the
+    // element that scrolls; nothing cancels it on the way.
+    const seen: WheelEvent[] = [];
+    body.addEventListener("wheel", event => seen.push(event as WheelEvent));
+    fireEvent.wheel(card.querySelector(".inspector-card")!, { deltaY: 120 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.defaultPrevented).toBe(false);
+    const source = styles();
+    const bodyRule = cssRule(source, ".inspector-dock-body");
+    expect(bodyRule).toMatch(/overflow-y:\s*auto/);
+    // Reaching the drawer's end never chains the wheel into the timeline.
+    expect(bodyRule).toMatch(/overscroll-behavior:\s*contain/);
+    // The card inside must not be an overflow/overscroll boundary of its own:
+    // with `contain` there the wheel dies inside the drawer (the reported bug).
+    const cardRule = cssRule(source, ".timeline-inspector");
+    expect(cardRule).toMatch(/overflow:\s*visible/);
+    expect(cardRule).toMatch(/overscroll-behavior:\s*auto/);
+    // The override sits after the shared `.inspector` rule, so it wins the tie.
+    expect(cssRuleAt(source, ".timeline-inspector").start).toBeGreaterThan(cssRuleAt(source, ".inspector").start);
+  });
+
+  it("gives 打开详情 and the × close control one identical size spec", async () => {
+    const timeline = objectiveTimelineFixture();
+    const user = userEvent.setup();
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline, { selection: { type: "run", runId: "r1" } })} />);
+    await user.click(screen.getByRole("button", { name: "展开检查器" }));
+    const head = container.querySelector(".inspector-card-head") as HTMLElement;
+    const open = within(head).getByRole("button", { name: "打开详情" });
+    const close = within(head).getByRole("button", { name: "取消固定" });
+    expect(open.classList.contains("inspector-action")).toBe(true);
+    expect(close.classList.contains("inspector-action")).toBe(true);
+    const source = styles();
+    const action = cssRule(source, ".inspector-action");
+    expect(action).toMatch(/height:\s*28px/);
+    expect(action).toMatch(/min-height:\s*28px/);
+    expect(action).toMatch(/align-items:\s*center/);
+    // One size for both: the × is square at the same 28px and carries no extra
+    // horizontal padding that would shift its glyph off centre.
+    const unpin = cssRule(source, ".inspector-unpin");
+    expect(unpin).toMatch(/width:\s*28px/);
+    expect(unpin).toMatch(/padding:\s*0/);
+    expect(cssRule(source, ".inspector-actions")).toMatch(/align-items:\s*center/);
   });
 });
 

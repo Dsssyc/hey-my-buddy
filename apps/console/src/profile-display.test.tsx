@@ -71,9 +71,9 @@ afterEach(() => {
 });
 
 describe("profile display", () => {
-  it("drops the catalog's duplicate effort tail and localizes off once", () => {
+  it("drops the catalog's duplicate effort tail and shows the native off once", () => {
     expect(profileName(flashOff)).toBe("DeepSeek-V41-Flash");
-    expect(profileTitle(flashOff)).toBe("DeepSeek-V41-Flash · 非思考");
+    expect(profileTitle(flashOff)).toBe("DeepSeek-V41-Flash · off");
   });
 
   it("keeps a custom label and appends the effort exactly once", () => {
@@ -83,10 +83,12 @@ describe("profile display", () => {
         model: "deepseek-flash",
         effort: "off",
       }),
-    ).toBe("我的稳定配置 · 非思考");
+    ).toBe("我的稳定配置 · off");
   });
 
   it("preserves native and unknown efforts instead of translating them", () => {
+    expect(effortText("off")).toBe("off");
+    expect(effortText("default")).toBe("default");
     expect(effortText("max")).toBe("max");
     expect(effortText("high")).toBe("high");
     expect(effortText("low")).toBe("low");
@@ -108,7 +110,7 @@ describe("profile display", () => {
         model: "deepseek-flash",
         effort: "off",
       }),
-    ).toBe("half-off 实验 · 非思考");
+    ).toBe("half-off 实验 · off");
     expect(
       profileTitle({
         label: "DeepSeek-V4-Pro · low",
@@ -121,7 +123,7 @@ describe("profile display", () => {
   it("falls back to the model id and never renders a dangling separator", () => {
     expect(
       profileTitle({ label: "", model: "deepseek-flash", effort: "off" }),
-    ).toBe("deepseek-flash · 非思考");
+    ).toBe("deepseek-flash · off");
     expect(
       profileTitle({ label: "  ", model: "deepseek-flash", effort: "" }),
     ).toBe("deepseek-flash");
@@ -134,7 +136,7 @@ describe("profile display", () => {
       "dsh:removed:model:off",
     );
     expect(profileTitleOr(flashOff, "unused")).toBe(
-      "DeepSeek-V41-Flash · 非思考",
+      "DeepSeek-V41-Flash · off",
     );
   });
 });
@@ -188,13 +190,13 @@ describe("decision profile selector", () => {
     expect(screen.queryByLabelText("路由模型配置")).toBeNull();
     expect((await screen.findAllByText("DeepSeek-V4-Pro · max")).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: /^DeepSeek-V41-Flash/ }));
-    await user.click(screen.getByRole("button", { name: "非思考 档位菜单" }));
+    await user.click(screen.getByRole("button", { name: "off 档位菜单" }));
     await user.click(screen.getByRole("button", { name: "设为 Router" }));
     // An existing Router asks for confirmation before being replaced.
     expect(await screen.findByRole("heading", { name: "替换 Router" })).toBeTruthy();
-    expect(screen.getByText(/将替换当前 Router DeepSeek-V4-Pro · max，改为 DeepSeek-V41-Flash · 非思考/)).toBeTruthy();
+    expect(screen.getByText(/将替换当前 Router DeepSeek-V4-Pro · max，改为 DeepSeek-V41-Flash · off/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "替换" }));
-    expect((await screen.findAllByText("DeepSeek-V41-Flash · 非思考")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("DeepSeek-V41-Flash · off")).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
@@ -213,7 +215,7 @@ describe("decision profile selector", () => {
 });
 
 describe("model list display", () => {
-  it("shows the family name once and localizes the effort tag", async () => {
+  it("shows the family name once and the native effort on its tag", async () => {
     const api = {
       snapshot: vi.fn(async () => catalogSnapshot()),
       command: vi.fn(),
@@ -229,7 +231,12 @@ describe("model list display", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /^DeepSeek-V4-Pro/ })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^DeepSeek-V41-Flash/ }));
-    expect(screen.getAllByText("非思考").length).toBeGreaterThan(0);
+    // `off` keeps its native name on the effort tag, exactly like `max`/`low`;
+    // the family list itself never repeats the effort inside the family name.
+    expect(screen.getAllByText("off").length).toBeGreaterThan(0);
+    expect(screen.queryByText("非思考")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^DeepSeek-V4-Pro/ }));
+    expect(screen.getAllByText("max").length).toBeGreaterThan(0);
     expect(screen.queryByText("DeepSeek-V41-Flash · off")).toBeNull();
   });
 });
@@ -288,7 +295,7 @@ describe("read-only routing panel (0.15.1 U4)", () => {
     };
     render(<RoutingPanel value={workflow} />);
     expect(
-      screen.getByText("dsh / deepseek-official / deepseek-flash / 非思考"),
+      screen.getByText("dsh / deepseek-official / deepseek-flash / off"),
     ).toBeTruthy();
     expect(screen.getByText("needs-host")).toBeTruthy();
     expect(

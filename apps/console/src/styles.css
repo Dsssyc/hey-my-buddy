@@ -413,7 +413,11 @@ button.tl-label:hover { background: var(--subtle); }
 }
 
 /* ---- 0.15: pinned inspector, marker popover, overview cards, dock ---- */
-.timeline-inspector { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; flex: 0 1 auto; gap: 4px; max-height: min(176px, 24%); }
+/* The drawer body (`.inspector-dock-body`) is the drawer's one scroll region.
+   The card must not be a nested overflow/overscroll boundary: with `contain`
+   there, the wheel target is the card, which cannot scroll, and the event is
+   swallowed before it can reach the body. */
+.timeline-inspector { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; flex: 0 1 auto; gap: 4px; max-height: min(176px, 24%); overflow: visible; overscroll-behavior: auto; }
 .timeline-body.as-list .timeline-inspector { display: flex; }
 .inspector-card-head strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .inspector-preview-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
@@ -422,7 +426,10 @@ button.tl-label:hover { background: var(--subtle); }
 .inspector-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .inspector-card-head strong { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
 .inspector-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.inspector-unpin { width: 22px; height: 22px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--muted); line-height: 1; }
+/* P1.6/P2.1: the card header's two controls (打开详情 and ×) share one size
+   spec, so they are the same height and line up on the same centre line. */
+.inspector-action { display: inline-flex; align-items: center; justify-content: center; height: 28px; min-height: 28px; padding: 0 10px; }
+.inspector-unpin { width: 28px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--muted); line-height: 1; }
 .inspector-unpin:hover { color: var(--danger); border-color: var(--danger-line); }
 .inspector-missing { margin: 0; padding: 3px 6px; border-radius: 3px; background: var(--warning-wash); color: var(--warning); font-size: 11px; }
 .inspector-group { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -686,12 +693,13 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .storage-skipped { list-style: disc; padding-left: 18px; font-size: 11px; color: var(--muted); margin: 4px 0; }
 .storage-actions { margin-top: 12px; }
 
-/* `?` tooltips: explanations appear on hover or focus, Escape hides them. */
-.help { position: relative; display: inline-flex; vertical-align: middle; margin-left: 4px; font-weight: 400; }
+/* `?` tooltips: explanations appear on hover or focus, Escape hides them. The
+   explanation is portalled to the body and positioned fixed (see Help), so a
+   container's overflow can never clip it and the script keeps it inside the
+   viewport; long text wraps below the capped width. */
+.help { display: inline-flex; vertical-align: middle; margin-left: 4px; font-weight: 400; }
 .help .help-button { min-width: 20px; min-height: 20px; padding: 0; font-size: 11px; background: var(--surface); }
-.help-tip { position: absolute; z-index: 25; left: 50%; top: calc(100% + 6px); transform: translateX(-50%); inline-size: max-content; max-inline-size: min(26em, 70vw); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.6; font-weight: 400; white-space: normal; box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 16%, transparent); visibility: hidden; opacity: 0; pointer-events: none; }
-.help:hover .help-tip, .help-button:focus-visible + .help-tip { visibility: visible; opacity: 1; }
-.help.dismissed .help-tip { visibility: hidden; opacity: 0; }
+.help-tip { position: fixed; z-index: 40; inline-size: max-content; max-inline-size: min(26em, calc(100vw - 16px)); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.6; font-weight: 400; white-space: normal; overflow-wrap: anywhere; box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 16%, transparent); pointer-events: none; }
 
 /* Segmented radio groups (preference, budget, theme). */
 .segment { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
@@ -762,8 +770,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .family-row-marks { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .router-mark { display: inline-flex; padding: 0 5px; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
 .family-new-mark { padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); font-size: 10px; font-weight: 600; }
-.retained-footer { display: grid; gap: 6px; padding: 10px 14px; }
-.retained-footer p { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
 
 /* The family detail: a label column and a value column. */
 .family-header h2 { font-size: 17px; }
@@ -800,7 +806,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .effort-tag.pref-pin .pref-icon { color: var(--pref-pin); }
 .effort-tag.pref-exclude { border: 2px dashed var(--pref-exclude); background: var(--pref-exclude-wash); }
 .effort-tag.pref-exclude .pref-icon { color: var(--pref-exclude); }
-.effort-tag.pref-exclude .effort-name { text-decoration: line-through; text-decoration-thickness: 1px; }
 .unsaved-dot { color: var(--warning); font-weight: 700; }
 .pref-swatch { display: inline-flex; justify-content: center; width: 16px; font-size: 11px; }
 .pref-swatch.pref-prefer { color: var(--pref-prefer); }

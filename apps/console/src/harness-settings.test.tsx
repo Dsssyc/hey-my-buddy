@@ -217,7 +217,8 @@ describe("the harness status strip", () => {
     const f = fixture({ harnesses: [] });
     window.location.hash = "#buddy";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
+    // The offline ZCode family stays hidden; the page is loaded with one family.
+    await screen.findByRole("heading", { name: "模型 1" });
     expect(screen.queryByRole("region", { name: "Harness 状态" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });

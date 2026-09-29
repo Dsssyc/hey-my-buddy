@@ -102,7 +102,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 async function openFlashCard(f: ReturnType<typeof fixture>, user: ReturnType<typeof userEvent.setup>) {
   window.location.hash = "#models";
   render(<App suppliedApi={f.api} />);
-  await screen.findByRole("heading", { name: "模型 2" });
+  await screen.findByRole("heading", { name: "模型 1" });
   await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
   await screen.findByRole("heading", { name: "deepseek-flash" });
 }
@@ -196,6 +196,9 @@ describe("model family concurrency", () => {
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
+    // The retired family is hidden until 显示不可用配置 is checked.
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^retired-model/ }));
     await screen.findByRole("heading", { name: "retired-model" });

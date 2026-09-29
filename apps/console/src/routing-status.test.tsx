@@ -83,8 +83,13 @@ describe("routing health details (R4)", () => {
     expect(status.textContent).toContain("call-failed");
     expect(status.textContent).toContain("needs-host");
     expect(status.textContent).toContain("委派未记录");
-    // The read-only note lives in the `?` tooltip; no retry or routing control appears.
-    expect(within(status).getByRole("tooltip", { hidden: true }).textContent).toContain("读取不触发模型");
+    // The read-only note lives in the `?` tooltip, a fixed layer outside the
+    // container and still wired to the button through aria-describedby.
+    const help = within(status).getByRole("button", { name: "路由健康说明", hidden: true });
+    const tip = document.getElementById(help.getAttribute("aria-describedby")!)!;
+    expect(tip.className).toContain("help-tip");
+    expect(tip.parentElement).toBe(document.body);
+    expect(tip.textContent).toContain("读取不触发模型");
     expect(screen.queryByRole("button", { name: /重试/ })).toBeNull();
   });
 

@@ -63,10 +63,10 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
     <div className="inspector-card-head">
       <strong>{card.head}</strong>
       <span className="inspector-actions">
-        <button type="button" className="button small-button"
+        <button type="button" className="button small-button inspector-action"
           aria-disabled={openDisabled || undefined} title={openTitle}
           onClick={() => { if (!openDisabled && card.openItem) onOpen(card.openItem); }}>打开详情</button>
-        <button type="button" className="inspector-unpin" aria-label="取消固定" title="取消固定"
+        <button type="button" className="inspector-unpin inspector-action" aria-label="取消固定" title="取消固定"
           onClick={onUnpin}>×</button>
       </span>
     </div>

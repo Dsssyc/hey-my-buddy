@@ -220,7 +220,7 @@ describe("delegation routing rationale", () => {
     expect(within(detail).getByText(/当时偏好有边界的测试工作/, { selector: "li" })).toBeTruthy();
     expect(within(detail).getByText(/历史工作模型/, { selector: "strong" })).toBeTruthy();
     expect(within(detail).getByText("V3")).toBeTruthy();
-    expect(within(detail).getByText("deepseek-official / deepseek-flash / 非思考")).toBeTruthy();
+    expect(within(detail).getByText("deepseek-official / deepseek-flash / off")).toBeTruthy();
     expect(within(detail).queryByText(/现在已改名的模型|当前已改为排除/)).toBeNull();
     expect(command).toHaveBeenCalledWith("selection_get", { decisionId: "decision-current", includeAudit: true }, "csrf");
     expect(command.mock.calls.every(([operation]) => ["workflow_get", "selection_get"].includes(operation))).toBe(true);

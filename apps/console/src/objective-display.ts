@@ -311,8 +311,8 @@ function profileDisplayName(profile: FriendlyProfile): string {
 
 /** effortText() behaviour without importing the profile module. */
 function effortDisplay(effort: string | null | undefined): string {
-  const value = (effort ?? "").trim();
-  return value === "off" ? "非思考" : value;
+  // Native values keep their recorded name, `off` included.
+  return (effort ?? "").trim();
 }
 
 const defaultNamer = configurationNamer(null);

@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConsoleApi, HarnessCandidate, HarnessHealth, HarnessStatus } from "./api";
 import { ApiError, errorText, snapshotHarnesses } from "./api";
 import { historyView } from "./draft";
 import type { Editor } from "./use-editor";
 import type { Snapshot } from "./types";
-import { Badge, Empty, Help } from "./ui";
+import { Badge, Empty } from "./ui";
 import { familyKey, modelFamilies } from "./console-data";
-import { MAX_HISTORY_PROFILES, useProfileHistory } from "./use-profile-history";
+import { MAX_HISTORY_PROFILES, PROFILE_PAGE_SIZE, useProfileHistory } from "./use-profile-history";
 import { SplitView } from "./SplitView";
 import { EvaluationHistory } from "./EvaluationHistory";
 import { FamilyDetail, effortTagId } from "./FamilyDetail";
@@ -324,8 +324,8 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState(""), [enabledOnly, setEnabledOnly] = useState(false);
-  /** Retained unavailable history was requested (paged through `model_profiles`). */
-  const [retainedOpen, setRetainedOpen] = useState(false);
+  /** The user asked to see unavailable configurations as well. */
+  const [showUnavailable, setShowUnavailable] = useState(false);
   /** Harness groups the user folded or unfolded, overriding the default. */
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   /** Families added by this page's own discovery, marked "新" for this session. */
@@ -334,25 +334,48 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
   const [guard, setGuard] = useState("");
   const history = useProfileHistory(api, snapshot.csrfToken, snapshot.tableRevision,
-    { query, adapter: "", enabled: retainedOpen });
+    { query, adapter: "", enabled: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const sessionWritable = editor.sessionWritable;
   const families = modelFamilies(data.profiles);
   const needle = query.trim().toLowerCase();
-  const visible = families.filter(g => (!enabledOnly || g.profiles.some(p => p.enabled))
-    && (!needle || g.profiles.some(p => familySearchText(p).includes(needle))));
+  // Two combinable filters. A family is listed when at least one configuration
+  // survives both: 只看已启用 keeps families with an enabled effort among the
+  // shown ones, and 显示不可用配置 unhides the unavailable efforts, so a family
+  // with no available configuration only appears once that box is checked.
+  const visible = families.filter(g => {
+    const shown = showUnavailable ? g.profiles : g.profiles.filter(p => p.available);
+    return shown.length > 0
+      && (!enabledOnly || shown.some(p => p.enabled))
+      && (!needle || g.profiles.some(p => familySearchText(p).includes(needle)));
+  });
   const groups = harnessGroups(visible, data.profiles);
-  // `unavailableProfileCount` is the table-wide count of every unavailable row,
-  // including one the bounded snapshot still lists (the retained Router).
-  // Subtract each unavailable row the local view already holds — listed plus
-  // paged history, deduplicated by profileId — exactly once. A backend that
-  // omits the field reports nothing rather than an invented number.
-  const unavailableTotal = snapshot.unavailableProfileCount;
+  // The checkbox counts every unavailable configuration: the table-wide count
+  // the board records — including a row the bounded snapshot still lists, such
+  // as a retained Router — never below what this view already holds. A backend
+  // that omits the field still gets the honest local count instead of an
+  // invented number.
   const loadedUnavailable = data.profiles.filter(p => !p.available).length;
-  const unlisted = typeof unavailableTotal === "number" && Number.isFinite(unavailableTotal)
-    ? Math.max(0, unavailableTotal - loadedUnavailable)
-    : 0;
+  const unavailableCount = typeof snapshot.unavailableProfileCount === "number"
+    && Number.isFinite(snapshot.unavailableProfileCount)
+    ? Math.max(snapshot.unavailableProfileCount, loadedUnavailable)
+    : loadedUnavailable;
+  // A checked box asks for every unavailable configuration, so the bounded
+  // pages continue on their own; the hook's display budget is the hard stop,
+  // and this counter keeps a server that repeats a cursor from being asked
+  // forever.
+  const autoPages = useRef(0);
+  // A new filter generation gets a fresh page budget: its first page is a new
+  // read, not a continuation of the previous chain.
+  useEffect(() => { autoPages.current = 0; }, [query, snapshot.tableRevision]);
+  useEffect(() => {
+    if (!showUnavailable) { autoPages.current = 0; return; }
+    if (history.error || history.loading || !history.hasMore) return;
+    if (autoPages.current >= Math.ceil(MAX_HISTORY_PROFILES / PROFILE_PAGE_SIZE)) return;
+    autoPages.current += 1;
+    history.loadMore();
+  }, [showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
   const routerId = data.configuration.decisionProfileId;
   const family = selected ? families.find(g => g.key === selected) : undefined;
   // A refusal recorded by 发现模型 is stale once the page can act again: it is
@@ -366,10 +389,6 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   useEffect(() => {
     if (focusRequest) document.getElementById(effortTagId(focusRequest.profileId))?.focus();
   }, [focusRequest]);
-  function openRetained() {
-    setRetainedOpen(true);
-    history.open();
-  }
   function showRouter(profileId: string) {
     const target = data.profiles.find(p => p.profileId === profileId);
     if (!target) return;
@@ -412,6 +431,17 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
       <label className="search"><span className="sr-only">搜索模型</span>
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索模型、Harness、提供方" /></label>
       <label className="check-field"><input type="checkbox" checked={enabledOnly} onChange={e => setEnabledOnly(e.target.checked)} />只看已启用</label>
+      {unavailableCount > 0 && <label className="check-field"><input type="checkbox" checked={showUnavailable}
+        onChange={e => {
+          setShowUnavailable(e.target.checked);
+          // Checking the box is the explicit request that starts the bounded
+          // `model_profiles` read; unchecking only hides what is already loaded.
+          if (e.target.checked) history.open();
+        }} />显示不可用配置（{unavailableCount}）</label>}
+      {showUnavailable && history.loading && <p className="small muted" role="status">正在读取不可用配置…</p>}
+      {showUnavailable && history.error && <p className="banner guard-banner" role="alert">{history.error}
+        <button type="button" className="button small-button" onClick={history.reload}>重试读取</button></p>}
+      {showUnavailable && history.limitReached && <p className="small muted">已读取到显示上限（{MAX_HISTORY_PROFILES} 个配置）；请用搜索查找更早的配置。</p>}
       {(shownGuard || error) && <p className="banner guard-banner" role="status">{shownGuard || error}</p>}
       {note && <p className="success-message" role="status">{note}</p>}
     </div>
@@ -431,10 +461,18 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
           {!isFolded && <ul className="profile-list">{group.families.map(g => {
             const enabled = g.profiles.filter(p => p.enabled).length;
             const hasRouter = g.profiles.some(p => p.profileId === routerId);
-            const offline = !g.profiles.some(p => p.available);
+            // With 显示不可用配置 on, every shown family says how many of its
+            // configurations are unavailable and which reasons were recorded.
+            const unavailable = g.profiles.filter(p => !p.available);
+            const reasons = [...new Set(unavailable.map(p => p.unavailableReason?.trim() ?? "").filter(Boolean))];
+            const unavailableText = reasons.join("；");
+            const unavailableShown = showUnavailable && unavailable.length > 0;
+            const unavailableMark = unavailable.length === g.profiles.length
+              ? "不可用" : `不可用 ${unavailable.length}/${g.profiles.length}`;
             const isNew = fresh.has(g.key) || g.profiles.some(profile => profile.newlyDiscovered);
             const label = [g.name, `已启用 ${enabled}/${g.profiles.length}`, hasRouter ? "Router" : "",
-              offline ? "不可用" : "", isNew ? "新" : ""].filter(Boolean).join("，");
+              unavailableShown ? (unavailableText ? `${unavailableMark}（${unavailableText}）` : unavailableMark) : "",
+              isNew ? "新" : ""].filter(Boolean).join("，");
             return <li key={g.key}>
               <button className={"profile-row family-row" + (family?.key === g.key ? " selected" : "")}
                 aria-pressed={family?.key === g.key} aria-label={label}
@@ -445,23 +483,14 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
                     {hasRouter && <span className="router-mark" title="Router 所在家族">Router</span>}
                     <span className="small muted">{enabled}/{g.profiles.length}</span>
                   </span></span>
-                {offline && <span className="small unavailable-mark">不可用</span>}
+                {unavailableShown && <span className="small unavailable-mark" title={unavailableText || undefined}>
+                  {unavailableMark}{unavailableText ? ` · ${unavailableText}` : ""}</span>}
               </button>
             </li>;
           })}</ul>}
         </section>;
       }) : <Empty title={data.profiles.length ? "没有匹配的模型" : "尚未接入模型"}>
-        {data.profiles.length ? "调整搜索或取消“只看已启用”。" : "点击“发现模型”读取本机目录。"}</Empty>}
-      <div className="retained-footer">
-        {!retainedOpen && unlisted > 0 && <p className="small muted">另有 {unlisted} 个不可用配置保留在历史中
-          <button type="button" className="button small-button" onClick={openRetained}>查看历史配置</button></p>}
-        {retainedOpen && history.loading && <p className="small muted" role="status">正在读取保留的配置历史…</p>}
-        {retainedOpen && history.error && <p className="banner guard-banner" role="alert">{history.error}
-          <button className="button small-button" onClick={history.reload}>重试读取</button></p>}
-        {retainedOpen && history.hasMore && <button className="button small-button" disabled={history.loading} onClick={history.loadMore}>加载更多历史配置</button>}
-        {retainedOpen && history.limitReached && <p className="small muted">已读取到显示上限（{MAX_HISTORY_PROFILES} 个配置）
-          <Help label="历史配置说明">请用搜索在服务端查找更早的保留配置；搜索在分页前过滤。</Help></p>}
-      </div>
+        {data.profiles.length ? "调整搜索，或改选上方的筛选（只看已启用 / 显示不可用配置）。" : "点击“发现模型”读取本机目录。"}</Empty>}
     </div>
   </section>;
   return <div className="buddy-page">

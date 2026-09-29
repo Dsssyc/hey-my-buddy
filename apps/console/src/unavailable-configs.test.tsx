@@ -133,7 +133,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
 
 async function openRetired(f: ReturnType<typeof fixture>, user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "模型 1" });
-  await user.click(screen.getByRole("button", { name: "查看历史配置" }));
+  await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
   await screen.findByRole("heading", { name: "模型 2" });
   await user.click(screen.getByRole("button", { name: /^retired-model/ }));
   await screen.findByRole("heading", { name: "retired-model" });
@@ -146,21 +146,27 @@ afterEach(() => {
 });
 
 describe("unavailable configurations", () => {
-  it("hides them by default and keeps their history readable behind 查看历史配置", async () => {
+  it("hides them by default and reveals them with the 显示不可用配置（N） filter", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
-    // The snapshot keeps retired identities only as a count, never silently dropped.
-    expect(screen.getByText(/另有 2 个不可用配置保留在历史中/)).toBeTruthy();
+    // The snapshot keeps retired identities as a count, and the unchecked filter
+    // hides their family; nothing is fetched until the user asks for them.
+    expect(screen.getByRole("checkbox", { name: "显示不可用配置（2）" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
+    expect(f.operations).not.toContain("model_profiles");
 
-    await user.click(screen.getByRole("button", { name: "查看历史配置" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
     await screen.findByRole("heading", { name: "模型 2" });
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100 }, "csrf");
-    await user.click(await screen.findByRole("button", { name: /^retired-model/ }));
+    // The retired family joins its DSH harness group, marked 不可用 with the
+    // recorded reason instead of the old history footer.
+    expect(screen.getByRole("button", { name: /^retired-model，已启用 1\/2，不可用（provider paused）/ })).toBeTruthy();
+    expect(screen.getByText("不可用 · provider paused")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^retired-model/ }));
     await screen.findByRole("heading", { name: "retired-model" });
     expect(screen.getByText("不可用", { selector: ".badge" })).toBeTruthy();
     expect(screen.getAllByText(/退役前的历史评价/).length).toBeGreaterThan(0);
@@ -168,40 +174,65 @@ describe("unavailable configurations", () => {
     expect(screen.getByText(/验证样本 9 个/)).toBeTruthy();
   });
 
-  it("counts a listed offline decision selector once without double-counting loaded rows", async () => {
+  it("counts a listed offline decision selector once and pages the rest in by itself", async () => {
     const f = fixture({ staleDecision: true, pageSize: 2 });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
-    // The listed decision selector already makes "retired-model" a visible
-    // family; only its other retired effort ("low") is still unlisted.
+    // The listed decision selector is unavailable too, so its family is hidden
+    // by default; the count is the table-wide 2, never 3.
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
     await screen.findByRole("heading", { name: "模型 2" });
-    // The snapshot lists the unavailable decision selector (retired-model · max)
-    // and `unavailableProfileCount` counts it too, so exactly the one still
-    // unloaded retained identity may be reported.
-    expect(await screen.findByText(/另有 1 个不可用配置保留在历史中/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "查看历史配置" }));
-    // The first retained page contains only rows the snapshot already lists.
-    await user.click(await screen.findByRole("button", { name: "加载更多历史配置" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "加载更多历史配置" })).toBeNull());
-    // Every unavailable row is loaded now: the "另有" note disappears.
-    expect(screen.queryByText(/另有/)).toBeNull();
+    // The snapshot's own row is shown first; the bounded second page then joins
+    // it without any manual "load more" control.
+    await waitFor(() => expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2));
+    expect(f.command).toHaveBeenCalledWith("model_profiles",
+      { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
+    await user.click(screen.getByRole("button", { name: /^retired-model/ }));
+    await screen.findByRole("heading", { name: "retired-model" });
+    expect(screen.getByRole("switch", { name: "启用 max" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "启用 low" })).toBeTruthy();
   });
 
-  it("pages the retained history through the server cursor", async () => {
+  it("reads the remaining unavailable pages through the server cursor on its own", async () => {
     const f = fixture({ pageSize: 2 });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("button", { name: "查看历史配置" }));
-    await user.click(await screen.findByRole("button", { name: "加载更多历史配置" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
+    // Both retired efforts are readable and the cursor is exhausted, so the
+    // chain of bounded reads stops there.
+    await screen.findByRole("heading", { name: "模型 2" });
+    expect(screen.getByRole("button", { name: /^retired-model，已启用 1\/2/ })).toBeTruthy();
     await waitFor(() => expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2));
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
-    // Both retired efforts are now readable, and the cursor is exhausted.
+    expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2);
+  });
+
+  it("combines 只看已启用 with 显示不可用配置", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    // 只看已启用 alone still hides the family: none of its available rows exist.
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
+    // With both boxes on, the retired family qualifies through its enabled
+    // effort (max) and appears with its reason; the filters combine.
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
     await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.queryByRole("button", { name: "加载更多历史配置" })).toBeNull();
+    expect(screen.getByRole("button", { name: /^retired-model，已启用 1\/2，不可用（provider paused）/ })).toBeTruthy();
+    expect(screen.getByText("不可用 · provider paused")).toBeTruthy();
+    // Turning the unavailable filter off hides the family again.
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
   });
 
   it("allows disabling a retired configuration but never re-enabling it", async () => {
@@ -331,13 +362,13 @@ describe("unavailable configurations", () => {
     ]);
   });
 
-  it("sends the search text to the retained-history request", async () => {
+  it("sends the search text to the unavailable-configuration request", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("button", { name: "查看历史配置" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
     await screen.findByRole("heading", { name: "模型 2" });
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100 }, "csrf");
@@ -355,7 +386,8 @@ describe("stale settings and unrelated saves", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddy";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
+    // The unavailable decision family stays hidden behind the filter.
+    await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("button", { name: "详情" }));
     expect(screen.getByText(/需要处理/)).toBeTruthy();
 
