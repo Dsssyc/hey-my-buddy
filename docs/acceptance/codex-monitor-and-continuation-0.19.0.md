@@ -42,7 +42,9 @@ Host 检查固定产物后记录 integration not required，并接受了唯一�
 
 摘要回归测试先在旧实现下失败，再在修复后通过；原始 9,797 字节消息离线 replay 成功。摘要修复的 Python 聚焦组 33 项通过，DSH Node 聚焦组 31 项通过。原生恢复回归测试先因缺少 checkpoint 失败，再通过；服务/工作流聚焦组 86 项通过。最终 Codex 控制器、协议与服务续做组 40 项通过，覆盖原生失败、格式失败、断流、错误 attempt 绑定、原生历史变化、harness 版本变化、最后助手消息传递与截断；包含真实 Python controller/mock App Server 跨进程执行到 service continue 的集成路径，不调用模型。补充的恢复拒绝链路在旧 begin_turn 实现下复现消息丢失，修复后的 6 项续做测试全部通过。
 
-首次全量检查在源码候选 `a23c5e9` 上启动；期间补入 `cbec057`，因此该次不作为最终冻结候选的全量证明。将对最终源码重新执行 `uv run --frozen python -m buddy.checks`，使用 test harness 的独立 state/runtime/temp 根。最终计数与退出状态待完成后更新；目前不以聚焦结果代替全量通过。
+首次全量检查通过 1,362 项 Python（1,133.736 秒）与 139 项 Node 测试；它在 `a23c5e9` 上启动，期间补入 `cbec057`，不作为最终冻结候选的全量证明。最终在冻结提交 `9b2d37dbab341ce96cfcdce0d9b3b125f0374043` 重新执行 `uv run --frozen python -m buddy.checks`：1,363 项 Python 测试通过（1,121.021 秒），139 项 Node 测试通过（27.556 秒），退出码 0。两次均使用独立 state/runtime/temp 根，最终根 `/private/tmp/buddy-checks-8zbv8pz3` 已由 harness 确认无持有锁、无存活进程后删除。[检查证据](evidence/codex-monitor-checks-20260929.json)包含冻结提交、计数和日志 SHA-256；收尾提交只更新验收文档与证据，不再改变运行时代码。
+
+两次完整检查的私有首次安装用例各产生一条 subprocess `ResourceWarning`，最终一条涉及 PID 84922；它发生在安装交接启动的子进程对象回收时。检查退出码均为 0，最终私有根清理确认进程已停止且没有残留；没有 SQLite 连接警告。本次未扩展修改该非阻塞警告。
 
 共享 skill 构建通过，生成物包含新的 Codex 监控指引；改动 Markdown 的本地文件链接与 `git diff --check` 通过。未改前端代码，未另跑浏览器或前端专用测试。
 
@@ -50,4 +52,8 @@ Host 检查固定产物后记录 integration not required，并接受了唯一�
 
 没有新付费 Codex Worker 原生续做探针；修复依赖原故障原始消息 replay、收据/源码诊断和协议夹具回归。没有 Windows/Linux 真机监控或恢复验证，没有实际测试一小时 wait 上限，没有验证低权限子代理交互审批路径，也没有验证 Host 关闭后的自动唤醒。没有启用/修改任何 Codex feature、默认子代理配置或用户模型偏好；低权限场景依照[官方子代理权限说明](https://learn.chatgpt.com/docs/agent-configuration/subagents#approvals-and-sandbox-controls)与现有精确启动器放行指引处理。
 
-全量检查通过后，建议将本分支合并到 `socu/buddy-core`，在空闲状态下经用户单独授权安装包含 `9fcea9a` 登录用户名修正和本次改动的同版本运行时，再重新载入已安装 skill。源码提交、已验证私有测试和日常安装是独立事实；本记录不授权合并或安装。
+全量检查已通过，建议将本分支合并到 `socu/buddy-core`，在空闲状态下经用户单独授权安装包含 `9fcea9a` 登录用户名修正和本次改动的同版本运行时，再重新载入已安装 skill。源码提交、已验证私有测试和日常安装是独立事实；本记录不授权合并或安装。
+
+## 本地安装候选
+
+`uv build --wheel` 从冻结提交 `9b2d37dbab341ce96cfcdce0d9b3b125f0374043` 构建本地 `tmp/codex-monitor/dist/hey_my_buddy-0.19.0-py3-none-any.whl`（1,608,083 字节）。内嵌 `build-info.json` 保留完整 sourceCommit；已解包核对包含 `USER` 修正、监控 skill 与恢复拒绝后的上下文传递。SHA-256 为 `82557d99ad229a22f085c6c51043f9c138e79d83a85f2e0cc4ab48574bc050e3`，同目录 `SHA256SUMS` 可用于核对。包未安装到日常服务、未发布；安装仍需用户授权，之后应重新载入已安装 skill。
