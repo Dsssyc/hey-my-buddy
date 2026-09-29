@@ -1,0 +1,495 @@
+{
+  "contractVersion": "0.20.0",
+  "schema": 14,
+  "platform": "macOS",
+  "realProviderChecks": [
+    {
+      "adapter": "dsh",
+      "attempt": 1,
+      "individuallyAuthorized": true,
+      "status": "failed",
+      "startedAt": "2026-09-29T06:49:57.413275+00:00",
+      "elapsedSeconds": 0.294,
+      "inputSha256": "ec5b9cdade0d781347bde833d71a6bcb71ab7a9c36ea653e02ffb98254914222",
+      "routingProfile": {
+        "adapter": "dsh",
+        "effort": "off",
+        "model": "deepseek-flash",
+        "provider": "deepseek-official"
+      },
+      "shutdownConfirmed": true,
+      "error": "no-tool-profile-unsafe",
+      "modelStarted": false,
+      "harnessVersion": null,
+      "correctionCount": null,
+      "zeroToolVerified": null,
+      "usage": {
+        "bytesRead": null,
+        "elapsedMs": 294,
+        "toolCalls": null
+      },
+      "nativeEvidence": null,
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": null,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": null,
+      "nativeError": null,
+      "billingVerified": false
+    },
+    {
+      "adapter": "dsh",
+      "attempt": 2,
+      "individuallyAuthorized": true,
+      "status": "failed",
+      "startedAt": "2026-09-29T06:59:12.091281+00:00",
+      "elapsedSeconds": 1.377,
+      "inputSha256": "ec5b9cdade0d781347bde833d71a6bcb71ab7a9c36ea653e02ffb98254914222",
+      "routingProfile": {
+        "adapter": "dsh",
+        "effort": "off",
+        "model": "deepseek-flash",
+        "provider": "deepseek-official"
+      },
+      "shutdownConfirmed": true,
+      "error": "native-turn-failed",
+      "modelStarted": true,
+      "harnessVersion": null,
+      "correctionCount": null,
+      "zeroToolVerified": null,
+      "usage": {
+        "bytesRead": null,
+        "elapsedMs": 1376,
+        "toolCalls": null
+      },
+      "nativeEvidence": null,
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": 1,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": null,
+      "nativeError": null,
+      "billingVerified": false
+    },
+    {
+      "adapter": "dsh",
+      "attempt": 3,
+      "individuallyAuthorized": true,
+      "status": "passed",
+      "startedAt": "2026-09-29T07:58:48.262858+00:00",
+      "elapsedSeconds": 2.28,
+      "inputSha256": "ec5b9cdade0d781347bde833d71a6bcb71ab7a9c36ea653e02ffb98254914222",
+      "routingProfile": {
+        "adapter": "dsh",
+        "effort": "off",
+        "model": "deepseek-flash",
+        "provider": "deepseek-official"
+      },
+      "shutdownConfirmed": true,
+      "error": null,
+      "modelStarted": true,
+      "harnessVersion": null,
+      "correctionCount": 0,
+      "zeroToolVerified": true,
+      "usage": {
+        "bytesRead": null,
+        "cacheReadTokens": 0,
+        "elapsedMs": 2280,
+        "inputTokens": 592,
+        "outputTokens": 104,
+        "toolCalls": 0,
+        "totalTokens": 696
+      },
+      "nativeEvidence": {
+        "chunkCount": 108,
+        "profileRunnerDisabled": true,
+        "toolSchemaCount": 0
+      },
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": 0,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": {
+        "evidence": [
+          {
+            "kind": "preference",
+            "ref": "routingPreferences[0]"
+          }
+        ],
+        "profileId": "dsh:deepseek-official:deepseek-flash:off",
+        "reason": "The task is a minimal punctuation fix, and a routing preference explicitly matches the dsh/deepseek-flash/off configuration, calling it the preferred choice for such a tiny document punctuation correction. Policy also lists this profile as matching the task preference. The codex high-effort alternative is unnecessary for this trivial task."
+      },
+      "nativeError": null,
+      "billingVerified": false
+    },
+    {
+      "adapter": "zcode",
+      "attempt": 1,
+      "individuallyAuthorized": true,
+      "status": "failed",
+      "startedAt": "2026-09-29T06:37:32.463256+00:00",
+      "elapsedSeconds": 3.368,
+      "inputSha256": "00a27fc160f20677d3020e2afc1b7623374cc609d71bd194b09e828f0f69d2f2",
+      "routingProfile": {
+        "adapter": "zcode",
+        "effort": "max",
+        "model": "GLM-5.3-Flash",
+        "provider": "zai-api"
+      },
+      "shutdownConfirmed": true,
+      "error": "invalid-protocol",
+      "modelStarted": false,
+      "harnessVersion": null,
+      "correctionCount": null,
+      "zeroToolVerified": null,
+      "usage": {
+        "bytesRead": null,
+        "elapsedMs": 3368,
+        "toolCalls": null
+      },
+      "nativeEvidence": null,
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": 0,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": null,
+      "nativeError": "unexpected native event before no-tool admission",
+      "billingVerified": false
+    },
+    {
+      "adapter": "zcode",
+      "attempt": 2,
+      "individuallyAuthorized": true,
+      "status": "failed",
+      "startedAt": "2026-09-29T06:59:10.923756+00:00",
+      "elapsedSeconds": 3.836,
+      "inputSha256": "0943d1acd03540893f323d1b8591d05904a4d3a134ab58f5ef1b9e88c26bb059",
+      "routingProfile": {
+        "adapter": "zcode",
+        "effort": "max",
+        "model": "GLM-5.3-Flash",
+        "provider": "zai-api"
+      },
+      "shutdownConfirmed": true,
+      "error": "invalid-protocol",
+      "modelStarted": true,
+      "harnessVersion": "0.16.9",
+      "correctionCount": null,
+      "zeroToolVerified": null,
+      "usage": {
+        "bytesRead": null,
+        "elapsedMs": 3836,
+        "toolCalls": null
+      },
+      "nativeEvidence": null,
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": 0,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": null,
+      "nativeError": "unknown no-tool native notification",
+      "billingVerified": false
+    },
+    {
+      "adapter": "zcode",
+      "attempt": 3,
+      "individuallyAuthorized": true,
+      "status": "failed",
+      "startedAt": "2026-09-29T07:58:49.445219+00:00",
+      "elapsedSeconds": 3.582,
+      "inputSha256": "0943d1acd03540893f323d1b8591d05904a4d3a134ab58f5ef1b9e88c26bb059",
+      "routingProfile": {
+        "adapter": "zcode",
+        "effort": "max",
+        "model": "GLM-5.3-Flash",
+        "provider": "zai-api"
+      },
+      "shutdownConfirmed": true,
+      "error": "invalid-protocol",
+      "modelStarted": true,
+      "harnessVersion": "0.16.9",
+      "correctionCount": null,
+      "zeroToolVerified": null,
+      "usage": {
+        "bytesRead": null,
+        "elapsedMs": 3582,
+        "toolCalls": null
+      },
+      "nativeEvidence": null,
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": 0,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": null,
+      "nativeError": "unknown no-tool native notification: computer-use/operation-event",
+      "billingVerified": false
+    },
+    {
+      "adapter": "zcode",
+      "attempt": 4,
+      "individuallyAuthorized": true,
+      "status": "failed",
+      "startedAt": "2026-09-29T08:24:21.822652+00:00",
+      "elapsedSeconds": 5.727,
+      "inputSha256": "0943d1acd03540893f323d1b8591d05904a4d3a134ab58f5ef1b9e88c26bb059",
+      "routingProfile": {
+        "adapter": "zcode",
+        "effort": "max",
+        "model": "GLM-5.3-Flash",
+        "provider": "zai-api"
+      },
+      "shutdownConfirmed": true,
+      "error": "native-turn-failed",
+      "modelStarted": true,
+      "harnessVersion": "0.16.9",
+      "correctionCount": null,
+      "zeroToolVerified": null,
+      "usage": {
+        "bytesRead": null,
+        "elapsedMs": 5727,
+        "toolCalls": null
+      },
+      "nativeEvidence": null,
+      "stopEvidence": {
+        "native": {
+          "nativeExitCode": 0,
+          "shutdownConfirmed": true
+        },
+        "nativeInterruptAcknowledged": null,
+        "nativeInterruptRequested": null,
+        "shutdownConfirmed": true
+      },
+      "decision": null,
+      "nativeError": "no-tool native turn failed",
+      "billingVerified": false,
+      "providerFailure": {
+        "statusCode": 429,
+        "reason": "rate_limited",
+        "code": "model_rate_limited",
+        "providerCode": "1310",
+        "retryable": false
+      },
+      "failureEvidence": [
+        {
+          "event": "model.request.failed",
+          "nativeClassifications": [
+            {
+              "path": "context.reason",
+              "value": "rate_limited"
+            },
+            {
+              "path": "context.retryable",
+              "value": false
+            },
+            {
+              "path": "context.statusCode",
+              "value": 429
+            }
+          ]
+        },
+        {
+          "event": "model.network.failed",
+          "nativeClassifications": [
+            {
+              "path": "context.reason",
+              "value": "rate_limited"
+            },
+            {
+              "path": "context.retryable",
+              "value": false
+            },
+            {
+              "path": "context.statusCode",
+              "value": 429
+            }
+          ]
+        },
+        {
+          "event": "turn.failed",
+          "nativeClassifications": [
+            {
+              "path": "error.name",
+              "value": "Error"
+            },
+            {
+              "path": "error.code",
+              "value": "UNKNOWN_ERROR"
+            },
+            {
+              "path": "error.type",
+              "value": "unknown_error"
+            },
+            {
+              "path": "error.cause.name",
+              "value": "AiSdkModelAdapterError"
+            },
+            {
+              "path": "error.cause.code",
+              "value": "model_rate_limited"
+            },
+            {
+              "path": "error.cause.context.responseBodySummary.type",
+              "value": "error"
+            },
+            {
+              "path": "error.cause.context.responseBodySummary.error.code",
+              "value": "PROVIDER_BUSINESS_ERROR"
+            },
+            {
+              "path": "error.cause.context.responseBodySummary.error.responseBodySummary.error.code",
+              "value": "1310"
+            },
+            {
+              "path": "error.cause.context.responseBodySummary.error.responseBodySummary.error.type",
+              "value": "rate_limit_error"
+            },
+            {
+              "path": "error.cause.context.responseBodySummary.error.name",
+              "value": "ProviderBusinessError"
+            },
+            {
+              "path": "error.cause.context.reason",
+              "value": "rate_limited"
+            },
+            {
+              "path": "error.cause.context.retryable",
+              "value": false
+            },
+            {
+              "path": "error.cause.context.statusCode",
+              "value": 429
+            },
+            {
+              "path": "error.cause.cause.name",
+              "value": "ProviderBusinessError"
+            },
+            {
+              "path": "error.cause.cause.code",
+              "value": "PROVIDER_BUSINESS_ERROR"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "offlineNativeChecks": {
+    "dsh": {
+      "networkDenied": "EPERM",
+      "otherPortDenied": "EPERM",
+      "status": "ok",
+      "zeroToolVerified": true,
+      "correctionCount": 0,
+      "processState": {
+        "shutdownConfirmed": true,
+        "nativeExitCode": 0
+      },
+      "nativeEvidence": {
+        "chunkCount": 5,
+        "toolSchemaCount": 0,
+        "profileRunnerDisabled": true
+      }
+    },
+    "zcode": {
+      "version": "0.16.9",
+      "networkDenied": "EPERM",
+      "otherPortDenied": "EPERM",
+      "production": {
+        "exitCode": 0,
+        "status": "ok",
+        "code": null,
+        "answerValid": true,
+        "zeroToolVerified": true,
+        "usage": {
+          "toolCalls": 0
+        },
+        "correctionCount": 0,
+        "nativeEventCount": 8,
+        "shutdownConfirmed": true,
+        "nativeExitCode": 0,
+        "streamEof": true
+      },
+      "replay": {
+        "completed": true,
+        "settled": true,
+        "answerMatches": true,
+        "eventCount": 8,
+        "metadataKinds": {
+          "computer-use/operation-event": 12,
+          "v4/telemetry/event": 12
+        }
+      },
+      "providerRequests": [
+        {
+          "path": "/chat/completions",
+          "fakeBearer": true,
+          "model": "GLM-5.3-Flash",
+          "toolCount": 0,
+          "toolNames": []
+        },
+        {
+          "path": "/chat/completions",
+          "fakeBearer": true,
+          "model": "GLM-5.3-Flash",
+          "toolCount": 0,
+          "toolNames": []
+        }
+      ]
+    },
+    "codex": {
+      "version": "codex-cli 0.157.0",
+      "result": "completed",
+      "elapsedSeconds": 8.527,
+      "wireTools": {
+        "topLevelToolsPresent": false,
+        "additionalTools": [
+          []
+        ]
+      },
+      "observeReplayErrors": [],
+      "httpRequestCount": 8,
+      "jsonRequestCount": 1,
+      "allRequestsUseFakeBearer": true,
+      "proxyRequests": [],
+      "limitation": "Fake API backend; production ChatGPT account-plan fast call was not probed."
+    }
+  },
+  "automatedChecks": {
+    "command": "uv run --frozen python -m buddy.checks",
+    "exitCode": 0,
+    "pythonTests": 1404,
+    "nodeTests": 142,
+    "consoleTests": 548,
+    "consoleBuildPassed": true,
+    "checksLogSha256": "0d79f57ce4accadd8c71958f3a5671187f9d559a6089370ad0663e837cfac5fc"
+  }
+}
