@@ -70,6 +70,22 @@ def forbidden_environment(environment: dict, *, ignore: frozenset[str] = frozens
 
 
 class ServiceEnvironmentBuilderTests(unittest.TestCase):
+    def test_upgrade_uses_its_selected_runtime_even_from_a_development_worker(self):
+        with tempfile.TemporaryDirectory(prefix="buddy-upgrade-env-") as directory:
+            with mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1", "BUDDY_WORKER_ID": "inherited",
+                                              "BUDDY_RUNTIME": "/old"}, clear=True):
+                environment = upgrade._environment(Path(directory), Path(directory) / "selected")
+            self.assertNotIn("BUDDY_DEV_SOURCE", environment)
+            self.assertNotIn("BUDDY_WORKER_ID", environment)
+            self.assertEqual(environment["BUDDY_RUNTIME"], str(Path(directory) / "selected"))
+
+    def test_worker_cannot_start_a_fresh_supervisor_with_host_authority(self):
+        from buddy.errors import BoardError
+        with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-worker"}, clear=True):
+            with self.assertRaises(BoardError) as caught:
+                cli._worker_command("worker-start", {})
+        self.assertEqual(caught.exception.code, "FORBIDDEN")
+
     def test_the_builder_is_an_allowlist_not_the_host_session(self):
         with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, **SERVICE_KEPT_VARIABLES}, clear=True):
             environment = launcher.service_environment()
@@ -214,7 +230,9 @@ class ExplicitWorkerEnvironmentTests(unittest.TestCase):
             target = {"python": "/stable/venv/bin/python", "pythonPath": None, "identity": "runtime:fixed",
                       "stable": True, "installed": False,
                       "runtime": {"runtimeDir": "/stable/runtime", "environment": "/stable/venv"}}
-            with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, "PATH": "/usr/bin:/bin"}, clear=True), \
+            with mock.patch.dict(os.environ, {**{key: value for key, value in HOST_SESSION_VARIABLES.items()
+                                                         if key not in {"BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE"}},
+                                             "PATH": "/usr/bin:/bin"}, clear=True), \
                     mock.patch.object(cli.runtime, "launch_target", return_value=target), \
                     mock.patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123

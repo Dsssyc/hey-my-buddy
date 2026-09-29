@@ -71,6 +71,8 @@ def _environment(state: Path, target: Path) -> dict:
     # A service started by the upgrade coordinator inherits only the explicit
     # service allowlist; the journal carries forward the operator's launch settings.
     env = service_environment()
+    for key in ('BUDDY_DEV_SOURCE', 'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID'):
+        env.pop(key, None)
     marker = state / 'upgrade.json'
     if marker.exists():
         preserved = json.loads(marker.read_text()).get('environment', {})

@@ -38,12 +38,23 @@ def project_version(source: Path) -> str:
 
 
 def source_commit(source: Path) -> str | None:
+    # A source archive owns its original identity, even when extracted inside a
+    # different Git checkout or rebuilt after that enclosing checkout advances.
+    metadata = source / "src/buddy/build-info.json"
+    if metadata.is_file():
+        value = json.loads(metadata.read_text()).get("sourceCommit")
+        if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value)):
+            raise BoardError("BUILD_IDENTITY_INVALID", "Source commit metadata is invalid")
+        return value
     try:
+        top = subprocess.check_output(["git", "-C", str(source), "rev-parse", "--show-toplevel"], text=True,
+                                      stderr=subprocess.DEVNULL).strip()
+        if Path(top).resolve() != source.resolve():
+            return None
         return subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True,
                                        stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
-        metadata = source / "src/buddy/build-info.json"
-        return json.loads(metadata.read_text()).get("sourceCommit") if metadata.exists() else None
+        return None
 
 
 def _rewrite(text: str, local: callable) -> str:

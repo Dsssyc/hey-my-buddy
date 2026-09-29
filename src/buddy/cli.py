@@ -233,6 +233,8 @@ def _abandoned(abandoned, commands: list[str]) -> dict:
 
 
 def _worker_command(action: str, params: dict) -> dict:
+    if _agent_credential() is not None:
+        raise BoardError("FORBIDDEN", "An attempt credential cannot manage service workers")
     if action == "worker-start":
         from .upgrade import file_lock
         state = get_state_dir(params.get("stateDir"))
