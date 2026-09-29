@@ -53,8 +53,6 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 [ADR-018: routing modes and Host workflow](decisions/018-routing-modes-and-host-workflow.md) (accepted, first part implemented in source) splits the Router into a tool-free fast mode that any harness able to disable tools can serve and the existing read-only review mode that needs a verified harness sandbox (review budgets renamed 简要/标准/深入 with `brief`/`standard`/`deep` identifiers, two Router slots persisted in `meta` with a default mode, per-submission mode and automatic fallback to fast routing), and its second part addresses the Claude Code Host trial with a slimmer SKILL.md, file/stdin parameters, per-method help, objective reuse, direct Host closure of integrated work, Host notes and cleanup for failed or cancelled goals, sealed partial artifacts after interruptions, replaceable Host-chosen configurations, Host follow-up paths in integration records and cumulative patches. Only the first part is implemented in this change; the accepted second part is outside its implementation scope.
 
-[ADR-019：Worker 独立账户与用量可见性](decisions/019-worker-accounts-and-usage.md) 是排在 ADR-018 第二批之后的提议，尚未实现；它定义独立账户、计费方式和只用于显示的用量快照。
-
 ## Accepted design direction, implemented in source
 
 [ADR-017: local installation, on-demand service and harness discovery](decisions/017-local-installation-and-harness-discovery.md) (accepted, implemented in the 0.19.0 source) keeps every Worker on the local machine, starts the single service on demand from any Host but never from inside a Host sandbox, installs and updates through one versioned command that refuses while work is running, and makes the service find and handshake harness executables itself without running shell configuration files or storing environment values.
@@ -84,6 +82,8 @@ Detailed commands belong in their owning reference, routed from this page and fr
 [ADR-005: shared assessments, table-level exclusion and the console stack](decisions/005-shared-assessments-and-table-exclusion.md) records the policy accepted on 2026-09-22: one shared, bounded current assessment table per user/blackboard with cross-project reuse by default, table-level reader/writer exclusion, single-writer revision/generation fencing, independent control paths, and a React frontend built with Vite. Its original acceptance text records the design-time state; implemented commands and limits are maintained in [evaluation.md](reference/evaluation.md) and [cli.md](reference/cli.md).
 
 ## Design proposals
+
+[ADR-019 proposal: Worker accounts and usage visibility](decisions/019-worker-accounts-and-usage.md) is the user-approved direction for a later goal after ADR-018 Part 2: each harness keeps the shared local login read-only by default or uses a Worker-private account whose credentials the harness itself stores in a service-created private directory (BYOK and OAuth through the harness's own mechanisms, with a bounded OS-credential-store exception), metered or unknown-billing configurations stay out of automatic routing unless the user enables them, and bounded per-account usage snapshots are displayed but never used for routing. It is not implemented; its native facts come from static local checks only.
 
 [Backlog](design/backlog.md) lists user-reported issues that are recorded but not yet in an implementation batch, with the cause when known and a suggested fix.
 
