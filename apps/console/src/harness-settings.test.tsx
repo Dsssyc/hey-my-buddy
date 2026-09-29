@@ -198,7 +198,7 @@ describe("the harness status strip", () => {
     expect(within(zcode).getByText("/Applications/ZCode.app/Contents/MacOS/zcode")).toBeTruthy();
     expect(within(zcode).getByText("/opt/homebrew/bin/zcode")).toBeTruthy();
     expect(within(zcode).getByText("未找到（未找到可执行文件）")).toBeTruthy();
-    expect(within(zcode).getByText("修复办法：安装 ZCode CLI，或填写可执行文件的绝对路径。")).toBeTruthy();
+    expect(within(zcode).getByText("安装 ZCode CLI，或填写可执行文件的绝对路径。")).toBeTruthy();
     expect(within(zcode).getByLabelText("ZCode 手动路径")).toBeTruthy();
   });
 
@@ -272,7 +272,7 @@ describe("the advanced manual path", () => {
     await user.click(screen.getByRole("button", { name: "ZCode 检测详情" }));
     await user.type(screen.getByLabelText("ZCode 手动路径"), "zcode");
     await user.click(screen.getByRole("button", { name: "保存并检测" }));
-    expect(await screen.findByText("请输入可执行文件的绝对路径（以 / 开头，或 Windows 盘符路径）。")).toBeTruthy();
+    expect(await screen.findByText("请输入可执行文件的绝对路径。")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -314,7 +314,7 @@ describe("the advanced manual path", () => {
     await user.click(screen.getByRole("button", { name: "ZCode 检测详情" }));
     await user.type(screen.getByLabelText("ZCode 手动路径"), "/opt/tools/zcode");
     await user.click(screen.getByRole("button", { name: "保存并检测" }));
-    await screen.findByText("记录已更新，此操作未提交。请刷新并核对最新版本后再操作。");
+    await screen.findByText("记录已更新；请刷新核对后重试。");
     await user.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByText("已保存手动路径：/opt/tools/zcode；ZCode 已找到。");
     expect(f.calls).toEqual([

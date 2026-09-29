@@ -199,7 +199,7 @@ describe("decision profile selector", () => {
     expect((await screen.findAllByText("DeepSeek-V41-Flash · off")).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(published!.configuration.reviewRouterProfileId).toBe(flashOffId);
     expect(published!.configuration).not.toHaveProperty("autoMaintain");
     // Only the decision selector changed, so nothing else is sent: no full table,
@@ -299,7 +299,7 @@ describe("read-only routing panel (0.15.1 U4)", () => {
     ).toBeTruthy();
     expect(screen.getByText("needs-host")).toBeTruthy();
     expect(
-      screen.getByText(/路由需要 Host 补充配置：控制台不再提供补齐或重试表单/),
+      screen.getByText(/路由需要 Host 补充配置/),
     ).toBeTruthy();
     expect(screen.queryByLabelText("填入已启用配置")).toBeNull();
     expect(screen.queryByRole("button", { name: "使用此配置接续" })).toBeNull();

@@ -19,14 +19,13 @@ function normalizeDisplay(text: string): string {
 
 export const TASK_TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
   title: "Host 标题",
-  task: "取自任务首行",
+  task: "任务首行",
   none: "未命名委派",
 };
 export const UNTITLED_DELEGATION = "未命名委派";
 /** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
 const TASK_LINE_CHARS = 40;
 /** Suffix pointing readers to the detail view for the full task text. */
-const FULL_TASK_POINTER = "（完整任务见详情）";
 
 export type TaskTitle = {
   /** The bounded text lists, headings and breadcrumbs display. */
@@ -62,7 +61,7 @@ export function taskTitle(task: Task): TaskTitle {
  * is the only place the full first line appears outside details.
  */
 export function titleTooltip(title: TaskTitle): string {
-  return title.source === "task" ? title.fullText + FULL_TASK_POINTER : title.fullText;
+  return title.fullText;
 }
 
 export function needsReview(task: Task): boolean {
@@ -106,7 +105,7 @@ export function resultText(value: unknown): string {
   const task = record(value);
   const attempt = record(task?.selectedAttempt);
   const receipt = record(attempt?.result);
-  if (!receipt) return "尚无持久交付结果。执行结束和验收会分别记录。";
+  if (!receipt) return "交付结果未记录";
   const output = record(receipt.result);
   for (const text of [output?.finalText, output?.stdout, receipt.error]) {
     if (typeof text === "string" && text.trim()) return text;

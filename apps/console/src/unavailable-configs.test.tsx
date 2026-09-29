@@ -246,7 +246,7 @@ describe("unavailable configurations", () => {
     expect(maxSwitch).toHaveProperty("disabled", false);
     await user.click(maxSwitch);
     expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText(/有 1 项未保存修改/)).toBeTruthy();
+    expect(screen.getByText(/1 项未保存/)).toBeTruthy();
     // "low" is disabled and unavailable: it cannot be switched on at all.
     const lowSwitch = screen.getByRole("switch", { name: "启用 low" });
     expect(lowSwitch).toHaveProperty("disabled", true);
@@ -263,7 +263,7 @@ describe("unavailable configurations", () => {
     await user.click(screen.getByRole("switch", { name: "启用 max" }));
     await user.type(screen.getByLabelText("家族备注"), "，仍可用于历史对照");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.operations.slice(0, 3)).toEqual(["model_profiles", "evaluation_write_begin", "user_policy_publish"]);
     expect(f.published[0]).toEqual({
       commandId: expect.any(String),
@@ -286,7 +286,7 @@ describe("unavailable configurations", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
-    await screen.findByText(/固定选择指向.*请启用该档位，或把它的偏好改回/);
+    await screen.findByText(/固定选择指向.*请启用或改回/);
     // The existing pin stays a reachable, selectable value on its own tag menu;
     // only its reason changes.
     await user.click(screen.getByRole("button", { name: "max 档位菜单" }));
@@ -302,7 +302,7 @@ describe("unavailable configurations", () => {
     expect(lowPin).toHaveProperty("disabled", true);
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0].preferenceChanges).toEqual([
       { profileId: retiredMax, mode: "pin", reason: "仍然适用" },
     ]);
@@ -322,18 +322,18 @@ describe("unavailable configurations", () => {
     // unresolved instead of being dropped or rebased from the V2 cache.
     const banner = document.querySelector(".conflict-banner")!;
     expect(banner).toBeTruthy();
-    expect(banner.textContent).toContain("尚不能与 V3 核对");
+    expect(banner.textContent).toContain("尚待读取最新版本");
     expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("false");
     // No save of the disable under V3 while the conflict is unresolved.
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // The revision-bound history reload supplies the fresh V3 row; the pending
     // rebase resolves on its own and the same edit publishes at V3.
     await waitFor(() => expect(document.querySelector(".conflict-banner")).toBeNull());
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0]).toMatchObject({
       expectedRevision: 3,
       profileSettings: [{ profileId: retiredMax, enabled: false }],
@@ -356,7 +356,7 @@ describe("unavailable configurations", () => {
       { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
     await waitFor(() => expect(f.operations.filter(op => op === "model_profiles").length).toBeGreaterThan(1));
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0].preferenceChanges).toEqual([
       { profileId: retiredMax, mode: null, reason: "" },
     ]);
@@ -394,7 +394,7 @@ describe("stale settings and unrelated saves", () => {
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "只改这条意见");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     // The stale selector stays untouched and does not block the unrelated patch.
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
@@ -409,12 +409,12 @@ describe("stale settings and unrelated saves", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
-    await screen.findByText(/固定选择指向.*请启用该档位，或把它的偏好改回/);
+    await screen.findByText(/固定选择指向.*请启用或改回/);
     await user.click(screen.getByRole("button", { name: "返回模型列表" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "，补充说明");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
     expect(f.published[0].familyAnnotationChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },

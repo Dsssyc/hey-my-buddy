@@ -47,7 +47,7 @@ export const OVERRIDE_LABEL: Record<OverrideMode, string> = {
 };
 
 /** Help text for the preference modes, shared by the family field and the tag menu. */
-export const PREFERENCE_HELP = "优先：同等条件下先考虑。固定：只要有任何生效的固定，候选就只限于生效为固定的档位。排除：不作为候选。偏好影响后续选择，不改变运行中的任务。";
+export const PREFERENCE_HELP = "优先先考虑；固定限定候选；排除不参与选择。";
 
 export type HarnessGroup = {
   adapter: string;

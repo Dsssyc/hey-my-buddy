@@ -222,7 +222,7 @@ export const TITLE_SOURCE_LABEL: Record<string, string> = {
 /** `titleSource: task` labels cap at roughly this many characters on one line. */
 export const TASK_TITLE_CHARS = 40;
 /** Annotation shown wherever a task-first-line title is displayed. */
-export const TASK_SOURCE_NOTE = "取自任务首行";
+export const TASK_SOURCE_NOTE = "任务首行";
 
 export type TitleLine = {
   /** The text lists, labels and cards show; single line. */
@@ -250,7 +250,7 @@ export function displayTitle(titleSource: string, title: string): TitleLine {
 
 /** The shared one-line-title tooltip: the complete text, plus the detail pointer for a task source. */
 export function titleLineTooltip(line: TitleLine): string {
-  return line.fromTask ? line.fullText + "（完整任务见详情）" : line.fullText;
+  return line.fromTask ? line.fullText : line.fullText;
 }
 
 /* ---- configuration identity, naming and colour assignment ---- */

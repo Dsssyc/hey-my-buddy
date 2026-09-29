@@ -260,7 +260,7 @@ describe("console interactions", () => {
     expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
     expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "更新记录" }));
-    await screen.findByText("还没有已发布的评价版本。");
+    await screen.findByText("暂无已发布评价");
     expect(command.mock.calls.map(([operation]) => operation)).toEqual(["evaluation_history"]);
   });
 });

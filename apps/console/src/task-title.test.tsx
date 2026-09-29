@@ -68,7 +68,7 @@ describe("delegation title rule in components (0.16 T1)", () => {
     const first = render(<TaskDetails {...f.props} task={noTitle} />);
     expect(first.getByRole("heading", { name: /普通执行任务/ })).toBeTruthy();
     expect(first.container.querySelector("h2")!.textContent).toContain("普通执行任务");
-    expect(first.container.textContent).toContain("取自任务首行");
+    expect(first.container.textContent).toContain("任务首行");
     expect(first.container.querySelector("h2")!.textContent).not.toContain("只有结果没有标题");
     first.unmount();
     const second = render(<TaskDetails {...f.props} task={unnamed} />);
@@ -93,10 +93,4 @@ describe("delegation title rule in components (0.16 T1)", () => {
     expect(heading.textContent).not.toContain("历史记录刷新后的最新结论");
   });
 
-  it("shows the one read-only hint exactly once per detail", () => {
-    const f = fixture(workflowValue(governed));
-    const { container } = render(<TaskDetails {...f.props} task={governed} />);
-    const occurrences = container.textContent!.split("只读 · 操作由 Host 在 CLI 完成").length - 1;
-    expect(occurrences).toBe(1);
-  });
 });

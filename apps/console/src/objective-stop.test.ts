@@ -33,7 +33,7 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
     const status = stopStatus(entry({ phase: "unknown" }), read());
     expect(status?.label).toBe("停止未确认");
     expect(status?.detail).toContain("结果未知");
-    expect(status?.detail).toContain("重试同一停止请求");
+    expect(status?.detail).toContain("重试同一请求");
   });
 
   it("a definite refusal reports itself without touching the stop scope", () => {
@@ -45,7 +45,7 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
   it("shows 正在停止 while an affected run is still executing", () => {
     const status = stopStatus(entry(), read()); // r4 runs unconfirmed in the fixture
     expect(status?.label).toBe("正在停止");
-    expect(status?.detail).toMatch(/\d+ 项执行或根委派未确认停止/);
+    expect(status?.detail).toMatch(/\d+ 项停止未确认/);
   });
 
   it("regression: a cancelled root with a helper still executing stays 正在停止", () => {
@@ -95,7 +95,7 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
       filtered: true, scopeComplete: false };
     const status = stopStatus(entry(), missing);
     expect(status?.label).toBe("停止未确认");
-    expect(status?.detail).toContain("2 项缺少确认的停止证据");
+    expect(status?.detail).toContain("2 项停止未确认");
   });
 
   it("settles on 已停止 only from a complete read with every root cancelled and confirmed", () => {
@@ -106,7 +106,7 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
     const status = stopStatus(entry(), timeline);
     expect(status?.label).toBe("已停止");
     // runIds mixes roots and helpers; the copy names the root count only.
-    expect(status?.detail).toBe("这 2 个委派及其协助任务均已确认停止。");
+    expect(status?.detail).toBe("2 个委派及协助任务已停止");
   });
 
   it("the stopped copy counts roots only, even when helpers share the reply scope", () => {
@@ -128,7 +128,7 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
     } };
     const status = stopStatus(withHelper, timeline);
     expect(status?.label).toBe("已停止");
-    expect(status?.detail).toBe("这 2 个委派及其协助任务均已确认停止。");
+    expect(status?.detail).toBe("2 个委派及协助任务已停止");
   });
 
   it("a malformed reply is an unknown outcome, never a confirmed stop", () => {

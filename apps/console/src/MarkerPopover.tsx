@@ -102,6 +102,5 @@ export function MarkerPopover({ cluster, anchor, rowsById, selectedEventKey, onS
         </div>;
       })}
     </div>
-    <p className="marker-popover-hint">单击选中 · Enter 或双击打开详情 · Esc 关闭</p>
   </Popover>;
 }

@@ -131,13 +131,13 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
   return <>
     <header className="detail-header"><div className="row-between"><h2>更新记录</h2>
       <button className="button small-button" onClick={onBack}>返回 Buddy 配置</button></div>
-      <p className="small muted">只读取已发布版本的元数据；查看记录不会调用模型，也不会修改评价表。</p></header>
+      </header>
     <div className="detail-body">
       <div className="row-between"><h3>已发布版本{page ? ` · ${page.total}` : ""}</h3></div>
       {error && <p role="alert" className="error-message">{error}
         <button className="button small-button" disabled={busy} onClick={() => setRetry(n => n + 1)}>重试读取</button></p>}
       {busy && <p role="status" className="small muted">正在读取更新记录…</p>}
-      {!busy && !error && page?.revisions.length === 0 && <p className="muted">还没有已发布的评价版本。</p>}
+      {!busy && !error && page?.revisions.length === 0 && <p className="muted">暂无已发布评价</p>}
       <ul className="history-list" aria-busy={busy}>{page?.revisions.map(item => <li className="history-item" key={item.revision}>
         <span className="history-version">V{item.revision}</span>
         <span className="small muted">{kindText[item.kind] || item.kind}{item.actor ? ` · ${item.actor}` : ""} · {formatDate(item.createdAt)}</span>

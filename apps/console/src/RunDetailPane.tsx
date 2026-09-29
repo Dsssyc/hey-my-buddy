@@ -96,11 +96,11 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
         ? <div className="detail-placeholder">
           <h2>读取委派失败</h2>
           <p role="alert">{error}</p>
-          <p className="small muted">定位条保留了时间轴给出的事实；可重试读取或返回时间轴。</p>
+          <p className="small muted">可重试读取或返回时间轴。</p>
           <div className="actions">
             <button type="button" className="button small-button" onClick={() => setAttempt(value => value + 1)}>重试读取</button>
           </div>
         </div>
-        : <div className="detail-placeholder"><h2>正在读取委派…</h2><p>{target.locator ? `来自时间轴：${target.locator}` : "从时间轴打开的委派详情。"}</p></div>}
+        : <div className="detail-placeholder"><h2>正在读取委派…</h2><p>{target.locator ? `来自时间轴：${target.locator}` : ""}</p></div>}
   </div>;
 }

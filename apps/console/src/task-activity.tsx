@@ -219,17 +219,16 @@ export function TaskActivityView({ task }: { task: Task }) {
           </dl>
           <p className="small muted">
             {evidence === "heartbeat"
-              ? "只有监管进程的上报，尚未收到原生活动；续租成功不代表模型已推进。"
+              ? "仅有监管心跳 · 进展未知"
               : evidence === "tool"
-                ? "工具正在执行；这不表示任务接近完成。"
+                ? "工具执行中"
                 : evidence === "native"
-                  ? "已收到原生活动；未知的部分保持未知。"
-                  : "活动内容未知；未知不代表停机。"}
-            活动只是有界观察，不提供完成百分比，也不能单独证明进程已停止。
+                  ? "已收到原生活动"
+                  : "活动未知 · 停止未确认"}
           </p>
         </>
       ) : (
-        <p className="small muted">尚无活动记录。未知不代表停机；停止与否以真实停止证据为准。</p>
+        <p className="small muted">暂无活动记录 · 停止未确认</p>
       )}
       {termination && (
         <p className="small">

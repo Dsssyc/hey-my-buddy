@@ -111,7 +111,7 @@ function StopDialog({ summary, onConfirm, onCancel }: {
   const title = displayTitle(summary.titleSource, summary.title).text;
   const scope = summary.kind === "standalone"
     ? `将停止这条历史独立委派及其协助任务。`
-    : `将停止「${title}」中尚未验收的 ${unaccepted} 个委派及其协助任务；已验收的 ${summary.counts.accepted} 个保留。停止需要等到确认，期间显示“正在停止”。`;
+    : `将停止「${title}」中尚未验收的 ${unaccepted} 个委派及其协助任务；已验收的 ${summary.counts.accepted} 个保留。`;
   return <div className="dialog-backdrop" ref={backdrop}>
     <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-objective-title" aria-describedby="stop-objective-body">
       <h2 id="stop-objective-title">停止工作目标</h2>
@@ -141,9 +141,9 @@ export function Objectives({ snapshot, api, refresh, active = true, authority, w
     <div className="history-switch-bar">
       <div className="segmented" aria-label="记录视图">
         <button type="button" aria-pressed={view === "objectives"} onClick={() => setView("objectives")}
-          title="按工作目标归档浏览受治理的委派树">工作目标</button>
+          >工作目标</button>
         <button type="button" aria-pressed={view === "records"} onClick={() => setView("records")}
-          title="命令与外部记录在这里">全部执行记录</button>
+          >全部执行记录</button>
       </div>
     </div>
     <div className="history-view" hidden={view !== "objectives"}>
@@ -362,7 +362,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   // The same honest status line also appears in a docked detail's overview.
   const stopStatusNode = stopState
     ? <p className={`stop-status stop-${stopState.phase} detail-stop-status`} role="status" title={stopState.detail}>
-      停止状态：{stopState.label}。{stopState.detail}
+      {stopState.label}：{stopState.detail}
     </p>
     : null;
 
@@ -439,7 +439,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
       </div>
       : <div className="detail-placeholder">
         <h2>选择一个工作目标</h2>
-        <p>从左侧选择一个工作目标。</p>
+
       </div>}
   </aside>;
   return <>

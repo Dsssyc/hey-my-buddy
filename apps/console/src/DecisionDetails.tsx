@@ -98,7 +98,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
         <dt>读取字节</dt><dd>{recorded(audit.usage?.bytesRead)}</dd>
       </dl>
       <h3>引用证据</h3>
-      {evidence == null ? <p className="small muted">未记录</p> : evidence.length ? <ul className="reason-list">{evidence.map((entry, index) => <li key={index}>{entry.kind} · {entry.ref}</li>)}</ul> : <p className="small muted">没有引用证据。</p>}
+      {evidence == null ? <p className="small muted">未记录</p> : evidence.length ? <ul className="reason-list">{evidence.map((entry, index) => <li key={index}>{entry.kind} · {entry.ref}</li>)}</ul> : <p className="small muted">无引用证据</p>}
       <details className="detail-section"><summary>原生身份、停止证据与输入核验</summary>
         <dl className="facts"><dt>原生身份</dt><dd><pre className="result-text">{recorded(audit.nativeIdentity)}</pre></dd>
           <dt>停止证据</dt><dd><pre className="result-text">{recorded(audit.stopEvidence)}</pre></dd>
@@ -114,13 +114,12 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
         {selectedPreference && <ul className="reason-list">{preferenceItem(selectedPreference)}</ul>}
         {otherPreferences.length > 0 && <details><summary>其他候选偏好（{otherPreferences.length} 条）</summary>
           <ul className="reason-list">{otherPreferences.map(preferenceItem)}</ul></details>}
-      </> : <p className="small muted">候选快照中没有用户偏好。</p> : <p className="small muted">本次没有保存模型输入快照，无法展示当时的偏好。</p>}
-      <p className="small muted">仅展示这次决定保存的候选范围，不用当前 Buddy 配置补写历史。</p>
+      </> : <p className="small muted">候选快照无用户偏好</p> : <p className="small muted">输入快照未记录</p>}
     </>}
     {audit.kind === "maintain" && audit.proposal != null && <details className="detail-section"><summary>查看整理建议</summary>
-      <p className="small muted">{audit.publishedRevision != null ? "已按记录的版本发布。" : "建议尚未发布。控制台只读：评价由获授权的维护 Harness 依据证据发布。"}</p>
+      <p className="small muted">{audit.publishedRevision != null ? "已发布" : "未发布"}</p>
       <pre className="result-text">{JSON.stringify(audit.proposal, null, 2)}</pre></details>}
-    {audit.noOp && <p className="small muted">本次无需发布新的评价版本。</p>}
+    {audit.noOp && <p className="small muted">无新版本</p>}
     {table && <details className="detail-section"><summary>候选、评价与证据（{profiles.length} 个配置）</summary>
       <pre className="result-text">{JSON.stringify({ profiles, cards: table.cards, preferences: table.preferences, evidence: table.evidence }, null, 2)}</pre></details>}
     <details className="detail-section"><summary>记录标识与原始快照</summary>

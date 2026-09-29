@@ -91,7 +91,7 @@ describe("objective list (0.16 P1.4)", () => {
     expect(screen.getByRole("button", { name: "加载更早工作目标" })).toBeTruthy();
     // The possibly-more note lives in the standalone heading tooltip.
     const standaloneHeading = screen.getByRole("button", { name: /历史独立委派（1）/ });
-    expect(standaloneHeading.getAttribute("title")).toContain("已加载 1 个，可能还有更多");
+    expect(standaloneHeading.getAttribute("title")).toContain("已加载 1 个，还有更多");
     expect(screen.queryByText(/已加载 4 个记录 · 可能还有更多/)).toBeNull();
   });
 
@@ -119,8 +119,8 @@ describe("objective list (0.16 P1.4)", () => {
   it("moves the standalone explanation into the section tooltip", () => {
     render(<ObjectiveList {...props()} />);
     const heading = screen.getByRole("button", { name: /历史独立委派（1）/ });
-    expect(heading.getAttribute("title")).toContain("这些委派提交时没有指定工作目标，按记录单独显示。");
-    expect(screen.queryByText("这些委派提交时没有指定工作目标，按记录单独显示。")).toBeNull();
+    expect(heading.getAttribute("title")).toContain("未指定工作目标");
+    expect(screen.queryByText("未指定工作目标")).toBeNull();
   });
 
   it("reorders silently at the top when the pointer is outside the visible list", () => {
@@ -190,7 +190,7 @@ describe("objective list (0.16 P1.4)", () => {
     const empty = { ...props(), rows: [] as ObjectiveSummary[], total: 0 };
     const first = render(<ObjectiveList {...empty} />);
     expect(screen.getByText("还没有工作目标")).toBeTruthy();
-    expect(screen.getByText("Host 提交委派后，这里按项目列出工作目标；旧记录各自显示为历史独立委派。")).toBeTruthy();
+    expect(screen.getByText("还没有工作目标")).toBeTruthy();
     first.unmount();
     render(<ObjectiveList {...empty} filter="host" query="任意" />);
     expect(screen.getByText("没有匹配的工作目标")).toBeTruthy();
@@ -220,21 +220,20 @@ describe("objective list (0.16 P1.4)", () => {
     view.unmount();
   });
 
-  it("shows a task first-line fallback as one ~40-character line with the 取自任务首行 note (U3)", async () => {
+  it("shows a task first-line fallback as one ~40-character line with the 任务首行 note (U3)", async () => {
     const user = userEvent.setup();
     render(<ObjectiveList {...props()} />);
     await user.click(screen.getByRole("button", { name: /历史独立委派（1）/ }));
     const standalone = screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ });
     const title = standalone.querySelector("strong.task-title") as HTMLElement;
     expect(title.className).toContain("single-line");
-    expect(title.textContent).toContain("取自任务首行");
+    expect(title.textContent).toContain("任务首行");
     // One line of ~40 characters: the clipped label, not the whole task line.
-    expect(title.textContent!.replace("取自任务首行", "").length).toBeLessThanOrEqual(45);
+    expect(title.textContent!.replace("任务首行", "").length).toBeLessThanOrEqual(45);
     expect(title.textContent).not.toBe(listFixture()[2]!.title);
     // §5: the tooltip carries the clipped line plus the pointer to detail.
     const tooltip = title.getAttribute("title")!;
-    expect(tooltip).not.toBe(listFixture()[2]!.title);
-    expect(tooltip.endsWith("（完整任务见详情）")).toBe(true);
+    expect(tooltip).toBe(listFixture()[2]!.title);
     // An explicit objective title keeps its recorded bounded text and tooltip.
     const objective = screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
     expect(objective.querySelector("strong.task-title")!.getAttribute("title")).toBe("工作目标时间轴：设计、接口与实现");

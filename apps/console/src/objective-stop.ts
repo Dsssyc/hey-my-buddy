@@ -58,15 +58,15 @@ export function stopStatus(entry: ObjectiveStopEntry | undefined, timeline: Obje
     return {
       phase: "unknown",
       label: "停止未确认",
-      detail: "停止请求的回复丢失，结果未知：请求可能已生效。可重试同一停止请求，不会重复取消；也可稍后按刷新的记录核对。导航不受影响。",
+      detail: "停止结果未知，可能已生效；可重试同一请求或刷新核对。",
     };
   }
   if (entry.phase === "stopping") {
-    return { phase: "stopping", label: "正在停止", detail: "停止请求已发出，等待回复与停止证据。" };
+    return { phase: "stopping", label: "正在停止", detail: "停止中 · 等待证据" };
   }
   const runIds = entry.result?.runIds ?? [];
   if (!timeline) {
-    return { phase: "unconfirmed-stop", label: "停止未确认", detail: "缺少可核对的完整时间轴读取。" };
+    return { phase: "unconfirmed-stop", label: "停止未确认", detail: "时间轴读取不完整" };
   }
   const complete = timeline.scopeComplete && !timeline.filtered && !timeline.truncated.rows;
   const rowsById = new Map(timeline.rows.map(row => [row.runId, row]));
@@ -99,20 +99,20 @@ export function stopStatus(entry: ObjectiveStopEntry | undefined, timeline: Obje
     if (root && root.state !== "cancelled" && root.status !== "cancelled") pending += 1;
   }
   if (pending > 0) {
-    return { phase: "in-progress", label: "正在停止", detail: `取消请求已记录，仍有 ${pending} 项执行或根委派未确认停止；确认前不算已停止。` };
+    return { phase: "in-progress", label: "正在停止", detail: `仍有 ${pending} 项停止未确认` };
   }
   if (uncertain > 0) {
-    return { phase: "unconfirmed-stop", label: "停止未确认", detail: `取消范围内 ${uncertain} 项缺少确认的停止证据或不在当前读取范围。` };
+    return { phase: "unconfirmed-stop", label: "停止未确认", detail: `${uncertain} 项停止未确认或超出读取范围` };
   }
   if (!complete) {
     return {
       phase: "unconfirmed-stop",
       label: "停止未确认",
-      detail: "当前时间轴读取不完整（筛选或截断），不能凭局部记录断定整组已停止。",
+      detail: "时间轴读取不完整 · 停止未确认",
     };
   }
   // runIds mixes roots and helpers; only the root count names 委派.
-  return { phase: "stopped", label: "已停止", detail: `这 ${affectedRoots.size} 个委派及其协助任务均已确认停止。` };
+  return { phase: "stopped", label: "已停止", detail: `${affectedRoots.size} 个委派及协助任务已停止` };
 }
 
 export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvailable: boolean, authority: AuthorityLatch | undefined, refresh: () => Promise<unknown>) {
@@ -161,7 +161,7 @@ export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
         // was denied; the earlier unknown attempt stays unknown.
         patch(objectiveId, {
           phase: "unknown",
-          error: `${errorText(reason)} 此前那次停止请求的结果仍未知，保留原请求身份，可再次重试。`,
+          error: `${errorText(reason)} 停止结果未知；可重试同一请求。`,
         });
       } else {
         patch(summary.objectiveId, { phase: "refused", error: errorText(reason) });

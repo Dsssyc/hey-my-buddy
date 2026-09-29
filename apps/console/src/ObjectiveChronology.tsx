@@ -20,13 +20,13 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
   selectedKey: string | null;
   openedKey: string | null;
 }) {
-  if (!entries.length) return <p className="tl-state">没有可按时间列出的记录；缺少可用的时间信息。</p>;
+  if (!entries.length) return <p className="tl-state">记录缺少可用时间，无法排序。</p>;
   return <div className="tl-list" aria-label="按时间排序的记录">
     {entries.map((entry, index) => {
       if (entry.kind === "gap") {
         const idle = durationText(entry.endMs - entry.startMs);
         return <div key={`gap-${entry.startMs}-${index}`} className="tl-gap">
-          空闲 {idle}（{clockTime(entry.startMs)}–{clockTime(entry.endMs)}，没有任何片段或事件）
+          空闲 {idle}（{clockTime(entry.startMs)}–{clockTime(entry.endMs)}）
         </div>;
       }
       if (entry.kind === "event") {

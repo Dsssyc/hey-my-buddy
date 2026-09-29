@@ -90,7 +90,7 @@ export function tokenUsageView(usage: TokenUsage | null | undefined): TokenUsage
     return {
       recorded: false, inputText: "未知", cachedText: "未知", outputText: "未知",
       text: "未记录（未知）",
-      title: "服务没有记录这次执行的用量；未知不等于 0。",
+      title: "用量未记录",
     };
   }
   const input = usage.inputTokens === null ? "未知" : formatCount(usage.inputTokens);
@@ -188,8 +188,8 @@ export function quotaView(quota: HarnessQuota | null | undefined): QuotaView | n
   const limitReported = !quota.stale && Boolean(quota.reachedType || quota.ordinaryUsageAllowed === false);
   const alert = limitReported || windows.some(window => window.nearLimit);
   const note = quota.stale
-    ? "这是最近一次记录的额度观测，可能已经过期；不代表当前或实时的账户额度。"
-    : "这是最近一次记录的额度观测；不代表实时账户额度。";
+    ? "额度观测已过期"
+    : "最近额度观测 · 非实时";
   return {
     stale: quota.stale === true,
     limitReported,

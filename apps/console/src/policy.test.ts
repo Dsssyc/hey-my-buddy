@@ -175,7 +175,7 @@ describe("blocking new changes", () => {
     const issues = blockingIssues(baseline, draft);
     expect(issues).toHaveLength(1);
     expect(issues[0].profileId).toBe(retired.profileId);
-    expect(issues[0].message).toContain("不能新启用");
+    expect(issues[0].message).toContain("无法启用");
   });
 
   it("allows disabling an unavailable configuration and editing its family note", () => {
@@ -199,7 +199,7 @@ describe("blocking new changes", () => {
   it("blocks a new pin for an unavailable configuration but allows prefer or exclude", () => {
     const baseline = makeDraft(snapshot([worker, retired]));
     const pinned = setPreference(baseline, retired.profileId, "pin");
-    expect(blockingIssues(baseline, pinned)[0].message).toContain("不能设为固定选择");
+    expect(blockingIssues(baseline, pinned)[0].message).toContain("无法固定");
     expect(blockingIssues(baseline, setPreference(baseline, retired.profileId, "prefer"))).toEqual([]);
     expect(blockingIssues(baseline, setPreference(baseline, retired.profileId, "exclude"))).toEqual([]);
   });
@@ -228,7 +228,7 @@ describe("blocking new changes", () => {
     // The same edit from prefer into pin is a transition and stays blocked.
     const soft = setPreference(baseline, retired.profileId, "prefer", "旧依据");
     expect(blockingIssues(soft, setPreference(soft, retired.profileId, "pin", "旧依据"))[0].message)
-      .toContain("不能设为固定选择");
+      .toContain("无法固定");
   });
 
   it("blocks a new family pin only when no effort it pins can be selected", () => {
@@ -240,7 +240,7 @@ describe("blocking new changes", () => {
     const overridden = setPreference(baseline, worker.profileId, "none");
     const issues = blockingIssues(overridden, setFamilyPreference(overridden, worker, "pin"));
     expect(issues).toHaveLength(1);
-    expect(issues[0].message).toContain("不能把整个家族设为固定");
+    expect(issues[0].message).toContain("请先启用档位再固定");
     expect(issues[0].family).toBe(JSON.stringify(["dsh", "deepseek-official", "deepseek-flash"]));
     // A reason-only edit of an existing family pin never needs current legality.
     const pinned = setFamilyPreference(overridden, worker, "pin", "旧");
@@ -253,7 +253,7 @@ describe("blocking new changes", () => {
       ...baseline,
       configuration: { ...baseline.configuration, reviewRouterProfileId: profileId},
     });
-    expect(blockingIssues(baseline, select(retired.profileId))[0].message).toContain("不能新设为审阅 Router");
+    expect(blockingIssues(baseline, select(retired.profileId))[0].message).toContain("无法担任审阅 Router");
     expect(blockingIssues(baseline, select(disabled.profileId))[0].message).toContain("未启用");
     expect(blockingIssues(baseline, select(coder.profileId))[0].message).toContain("当前 Harness 版本尚未验证只读路由调用");
     expect(blockingIssues(baseline, select(worker.profileId))).toEqual([]);
@@ -307,7 +307,7 @@ describe("stale settings needing attention", () => {
     const issues = attentionIssues(stale);
     expect(issues).toHaveLength(1);
     expect(issues[0].family).toBe(JSON.stringify(["dsh", "deepseek-official", "deepseek-flash"]));
-    expect(issues[0].message).toContain("固定的档位都不可用或未启用");
+    expect(issues[0].message).toContain("固定档位不可用");
   });
 
   it("is silent when every recorded setting is still legal", () => {

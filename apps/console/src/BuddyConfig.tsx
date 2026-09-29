@@ -35,10 +35,10 @@ const HARNESS_STATUS_TONE: Record<HarnessStatus, "neutral" | "green" | "amber" |
 /** What the user can do when no remedy was recorded for that state. */
 const HARNESS_STATUS_REMEDY: Record<HarnessStatus, string> = {
   ready: "",
-  unknown: "点击“重新检测”读取当前状态。",
-  missing: "安装对应的 CLI，或在下方填写可执行文件的绝对路径后保存。",
-  "login-required": "先在该 harness 中完成登录，再点击“重新检测”。",
-  unhealthy: "检查该 CLI 能否独立运行；也可以填写其他位置的手动路径。",
+  unknown: "点击“重新检测”查看状态。",
+  missing: "安装 CLI，或填写手动路径。",
+  "login-required": "在 Harness 中登录后重新检测。",
+  unhealthy: "检查 CLI，或更换手动路径。",
 };
 /** Stable discovery reason codes in short Chinese; an unknown code stays as recorded. */
 const HARNESS_REASON_LABEL: Record<string, string> = {
@@ -225,13 +225,13 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
         <span>上次检测：{lastChecked ? dayClock(lastChecked) : "未记录"}</span>
         {quotaAlerts.length > 0 && <>
           <span aria-hidden="true" className="routing-sep">｜</span>
-          <span className="quota-alert-line" title={`基于最近一次记录的额度观测，不是实时账户额度：${quotaAlertText}`}>
+          <span className="quota-alert-line" title={`最近额度观测：${quotaAlertText}`}>
             额度提醒：{quotaAlertText}
           </span>
         </>}
       </span>
       <button type="button" className="button small-button" aria-disabled={busy !== "" || !canWrite}
-        title={writableTitle ?? (busy === "*" ? "正在重新检测…" : "按当前记录重新检测全部 harness，不会调用模型")}
+        title={writableTitle ?? (busy === "*" ? "正在重新检测…" : "重新检测全部 Harness")}
         onClick={() => void run({ kind: "check" })}>重新检测全部</button>
     </div>
     {error && <p className="banner guard-banner" role="alert">{error}
@@ -262,7 +262,7 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
                 title={`${name} ${isOpen ? "收起详情" : "检测详情"}`}
                 onClick={() => toggle(row.adapter)}>{isOpen ? "▾" : "▸"}</button>
               <button type="button" className="button small-button" aria-disabled={checking || !canWrite}
-                title={writableTitle ?? (checking ? "正在重新检测…" : `按当前记录重新检测 ${name}，不会调用模型`)}
+                title={writableTitle ?? (checking ? "正在重新检测…" : `重新检测 ${name}`)}
                 aria-label={`重新检测 ${name}`} onClick={() => void run({ kind: "check", adapter: row.adapter })}>重新检测</button>
             </span>
           </div>
@@ -295,13 +295,13 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
               </dd></div>
             </dl>
             <HarnessReview row={row} snapshot={snapshot} api={api} canWrite={canWrite} onRefresh={reloadSnapshot} />
-            {remedy && <p className="small harness-remedy">修复办法：{remedy}</p>}
+            {remedy && <p className="small harness-remedy">{remedy}</p>}
             {candidates.length > 0 && <div className="harness-candidates">
               <h4>已尝试的位置（{candidates.length}）</h4>
               <ul>
                 {candidates.map((candidate, index) => <li key={`${candidate.path ?? "unknown"}:${index}`}>
                   <code className="mono harness-path" title={candidate.path}>{candidate.path?.trim() || "未记录路径"}</code>
-                  {candidate.source?.trim() && <span className="muted">来源：{candidate.source.trim()}</span>}
+                  {candidate.source?.trim() && <span className="muted">{candidate.source.trim()}</span>}
                   {harnessCandidateText(candidate) && <span className="muted">{harnessCandidateText(candidate)}</span>}
                 </li>)}
               </ul>
@@ -326,7 +326,7 @@ function HarnessManualPath({ row, name, disabled, busy, title, onSave }: {
   function submit() {
     const path = value.trim();
     if (!absoluteHarnessPath(path)) {
-      setLocalError("请输入可执行文件的绝对路径（以 / 开头，或 Windows 盘符路径）。");
+      setLocalError("请输入可执行文件的绝对路径。");
       return;
     }
     setLocalError("");
@@ -334,7 +334,7 @@ function HarnessManualPath({ row, name, disabled, busy, title, onSave }: {
   }
   return <form className="harness-manual" onSubmit={event => { event.preventDefault(); submit(); }}>
     <h4>高级：手动指定路径</h4>
-    <p className="small muted">自动检测失败时可用。保存后按该路径重新检测；恢复自动检测会清除这条手动设置。</p>
+    <p className="small muted">保存后立即检测；恢复自动检测将清除手动路径。</p>
     <label className="harness-manual-field"><span>可执行文件绝对路径</span>
       <input value={value} onChange={event => setValue(event.target.value)} placeholder="/usr/local/bin/codex"
         aria-label={`${name} 手动路径`} disabled={disabled} /></label>
@@ -462,7 +462,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     <div className="panel-toolbar"><h2>模型 <span className="muted">{visible.length}</span></h2>
       <div className="actions"><button className="button small-button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(true)}>更新记录</button>
         <button className="button small-button" aria-disabled={busy || !mutationsAvailable}
-          title={!sessionWritable ? LOGIN_EXPIRED_ACTION_REFUSAL : !mutationsAvailable ? "连接中断或缺少写入资格" : "由程序发布目录事实，不影响用户设置"}
+          title={!sessionWritable ? LOGIN_EXPIRED_ACTION_REFUSAL : !mutationsAvailable ? "连接中断或缺少写入资格" : undefined}
           onClick={() => void discover()}>发现模型</button></div></div>
     <div className="list-filters">
       <label className="search"><span className="sr-only">搜索模型</span>
@@ -478,7 +478,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
       {showUnavailable && history.loading && <p className="small muted" role="status">正在读取不可用配置…</p>}
       {showUnavailable && history.error && <p className="banner guard-banner" role="alert">{history.error}
         <button type="button" className="button small-button" onClick={history.reload}>重试读取</button></p>}
-      {showUnavailable && history.limitReached && <p className="small muted">已读取到显示上限（{MAX_HISTORY_PROFILES} 个配置）；请用搜索查找更早的配置。</p>}
+      {showUnavailable && history.limitReached && <p className="small muted">已达显示上限（{MAX_HISTORY_PROFILES}）；请搜索更早配置。</p>}
       {(shownGuard || error) && <p className="banner guard-banner" role="status">{shownGuard || error}</p>}
       {note && <p className="success-message" role="status">{note}</p>}
     </div>
@@ -494,7 +494,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
             <span>{isFolded ? "▸" : "▾"} {group.name}{group.unavailable ? "（不可用）" : ""}</span>
             <span className="group-count">已启用 {groupEnabled}/{groupProfiles.length}</span>
           </button>
-          {group.unavailable && <p className="small muted harness-reason">原因：{reason}</p>}
+          {group.unavailable && <p className="small muted harness-reason">{reason}</p>}
           {!isFolded && <ul className="profile-list">{group.families.map(g => {
             const enabled = g.profiles.filter(p => p.enabled).length;
             const hasRouter = g.profiles.some(p => routerIds.has(p.profileId));
@@ -527,7 +527,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
           })}</ul>}
         </section>;
       }) : <Empty title={data.profiles.length ? "没有匹配的模型" : "尚未接入模型"}>
-        {data.profiles.length ? "调整搜索，或改选上方的筛选（只看已启用 / 显示不可用配置）。" : "点击“发现模型”读取本机目录。"}</Empty>}
+        {data.profiles.length ? "试试其他搜索或筛选。" : "点击“发现模型”查找本机模型。"}</Empty>}
     </div>
   </section>;
   return <div className="buddy-page">
@@ -542,7 +542,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
         <div className="model-detail-content" hidden={historyOpen}>
           {family ? <FamilyDetail key={family.key} family={family} data={data} recorded={recorded} editor={editor}
             isNew={fresh.has(family.key)} onCloseList={() => setSelected(null)} />
-            : <div className="detail-placeholder"><h2>选择模型家族</h2><p>从左侧选择一个模型家族，查看档位、偏好与评价。</p></div>}
+            : <div className="detail-placeholder"><h2>选择模型家族</h2></div>}
         </div>
       </aside>
     } />

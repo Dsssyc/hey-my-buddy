@@ -81,8 +81,8 @@ describe("ADR-018 Host workflow in the delegation detail", () => {
   it("shows the Host conclusion of a failed goal as an independent record, not an acceptance", async () => {
     render(<WorkflowPanel {...fixture().props} />);
     const block = await screen.findByRole("region", { name: "Host 结论" });
-    expect(within(block).getByText("Host 结论（不改变执行结果）")).toBeTruthy();
-    expect(within(block).getByText(/^失败（执行结果本身未改变/)).toBeTruthy();
+    expect(within(block).getByText("Host 结论")).toBeTruthy();
+    expect(within(block).getByText(/^失败 · 不计入验收/)).toBeTruthy();
     expect(within(block).getByText("额度耗尽前已把改动提取为部分成果")).toBeTruthy();
     expect(within(block).getByText("attempt-2")).toBeTruthy();
     expect(within(block).getByText("art-partial")).toBeTruthy();
@@ -108,12 +108,12 @@ describe("ADR-018 Host workflow in the delegation detail", () => {
     const list = screen.getByText("固定产物引用").closest("section")!;
     expect(within(list).getByText(/部分成果（未验证、非最终）/)).toBeTruthy();
     expect(within(list).getByText(/部分、未验证、非最终/)).toBeTruthy();
-    expect(within(list).getByText(/累计补丁（自目标最初输入提交）/)).toBeTruthy();
+    expect(within(list).getByText(/累计补丁/)).toBeTruthy();
     expect(within(list).getByText("base input-commit")).toBeTruthy();
     expect(within(list).getByText("output out-commit")).toBeTruthy();
     expect(within(list).getByText("SHA-256 " + "b".repeat(64))).toBeTruthy();
     expect(within(list).getByText(/src\/a\.py/)).toBeTruthy();
-    expect(within(list).getByText(/Host 补充改动（与成果路径分开记录）/)).toBeTruthy();
+    expect(within(list).getByText(/Host 补充改动/)).toBeTruthy();
     expect(within(list).getByText(/docs\/reference\/console\.md/)).toBeTruthy();
     // A partial output is never presented as the final artifact.
     expect(within(list).queryByText("最终产物与整合证据")).toBeNull();
@@ -132,7 +132,6 @@ describe("ADR-018 Host workflow in the delegation detail", () => {
     expect(within(usage).getByText("第 1 回合")).toBeTruthy();
     expect(within(usage).getByText("未记录（未知）")).toBeTruthy();
     expect(within(usage).queryByText(/35,000/)).toBeNull();
-    expect(within(usage).getByText(/不是会话累计；输入数已含缓存输入，缓存不重复相加/)).toBeTruthy();
   });
 
   it("states whether an explicit configuration is a user lock or a Host choice", async () => {

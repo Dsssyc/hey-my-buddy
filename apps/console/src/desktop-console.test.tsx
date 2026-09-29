@@ -125,7 +125,7 @@ describe("desktop console", () => {
     expect(within(detail).getAllByText(/由维护 Harness 依据证据发布/).length).toBeGreaterThan(0);
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
-    expect(within(detail).getAllByText(/暂无评价证据/).length).toBeGreaterThan(0);
+    expect(within(detail).getAllByText(/评价证据未记录/).length).toBeGreaterThan(0);
     expect(f.command).not.toHaveBeenCalled();
   });
 

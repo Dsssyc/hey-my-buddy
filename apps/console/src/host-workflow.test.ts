@@ -88,7 +88,7 @@ describe("recorded harness quota (ADR-018 §23)", () => {
     expect(view.windows[0]).toMatchObject({ name: "5h", usedText: "93%", nearLimit: true, atLimit: false });
     expect(view.windows[1]).toMatchObject({ name: "weekly", usedText: "41%", nearLimit: false });
     expect(QUOTA_NEAR_LIMIT_PERCENT).toBe(90);
-    expect(view.note).toContain("不代表实时账户额度");
+    expect(view.note).toContain("非实时");
   });
 
   it("keeps an unknown window unknown and never turns it into 0% or a near-limit warning", () => {
@@ -100,14 +100,14 @@ describe("recorded harness quota (ADR-018 §23)", () => {
     expect(view.windows[0].nearLimit).toBe(false);
     expect(view.alert).toBe(false);
     expect(view.stale).toBe(true);
-    expect(view.note).toContain("可能已经过期");
+    expect(view.note).toContain("已过期");
   });
 
   it("marks a stale near-limit observation as the last observation, not as a live warning", () => {
     const view = quotaView(parseQuota({ ...quota, stale: true }))!;
     expect(view.alert).toBe(false);
     expect(view.stale).toBe(true);
-    expect(view.note).toContain("最近一次");
+    expect(view.note).toContain("已过期");
   });
 
   it("keeps a native limit warning without inventing a utilization window", () => {

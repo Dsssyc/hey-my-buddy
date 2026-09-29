@@ -50,11 +50,11 @@ export const LOGIN_EXPIRED_BANNER =
 
 /** Copy for a mutation control an unauthenticated page cannot use. */
 export const LOGIN_EXPIRED_ACTION_REFUSAL =
-  "登录已失效，这项操作不会提交。草稿与浏览状态保留在本页；重新登录后即可恢复。";
+  "登录已失效，操作未提交；请重新登录。";
 
 /** Copy for the save path; the draft stays local and is never discarded. */
 export const LOGIN_EXPIRED_SAVE_REFUSAL =
-  "登录已失效，保存已暂停。草稿仍保留在本页；重新登录后再保存即可。";
+  "登录已失效；请重新登录后保存，草稿已保留。";
 
 /**
  * Copy when a save reply was lost: the result is unknown — it may have
@@ -62,7 +62,7 @@ export const LOGIN_EXPIRED_SAVE_REFUSAL =
  * inspection/replay. Never described as failure or rollback.
  */
 export const UNRESOLVED_SAVE_NOTE =
-  "保存结果未确认：可能已经生效。草稿和提交标识都保留。";
+  "保存结果未知，可能已生效；请核对后重试。";
 
 /**
  * Copy for a page whose writes are paused because the authenticated poll failed
@@ -70,4 +70,4 @@ export const UNRESOLVED_SAVE_NOTE =
  * about login validity, so it never borrows the login-expired wording.
  */
 export const CONNECTION_WRITE_PAUSED =
-  "与本地黑板的连接已中断：任务与协作操作暂时不能提交；已输入的内容和草稿仍保留在本页。";
+  "连接中断，无法提交；请刷新重试，草稿已保留。";

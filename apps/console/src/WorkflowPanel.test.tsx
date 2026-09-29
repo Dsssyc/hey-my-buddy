@@ -67,7 +67,6 @@ describe("governed workflow console (0.15.1 read-only)", () => {
     Object.assign(f.workflow, { counts: { turns: 3, openRequests: 1 }, continuationCount: 3 });
     render(<WorkflowPanel {...f.props} />);
     expect(await screen.findByText("共 3 个回合")).toBeTruthy();
-    expect(screen.getByText(/接续次数来自持久轮次记录，不是模型调用次数/)).toBeTruthy();
     expect(screen.queryByText(/模型调用次数：/)).toBeNull();
   });
 
@@ -129,9 +128,6 @@ describe("governed workflow console (0.15.1 read-only)", () => {
     for (const name of REMOVED_CONTROLS) {
       if (screen.queryByRole("button", { name })) throw new Error(`removed button "${name}" is still rendered`);
     }
-    // The single read-only hint lives in the detail header (TaskDetails), not
-    // repeated inside the workflow panel.
-    expect(screen.queryByText(/只读 · 操作由 Host 在 CLI 完成/)).toBeNull();
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
   });
 

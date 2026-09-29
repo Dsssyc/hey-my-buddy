@@ -51,7 +51,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
     return () => { current = false; };
   }, [api, csrfToken, value.runId, currentId, value.routing?.status, active, historyOpen, before, retry]);
   return <>
-    {initialDecisionId === null && <p className="small muted" role="status">这次路由的决策 ID 未记录，无法定位这次决定。可查看当前配置或此前的路由记录。</p>}
+    {initialDecisionId === null && <p className="small muted" role="status">决策 ID 未记录；可查看当前配置或路由历史。</p>}
     <section aria-label="当前执行配置"><h3>当前执行配置</h3>
       <p className="read-text">{value.executionConfiguration ? configurationText(value.executionConfiguration) : "尚未确定执行配置。"}</p>
       <dl className="facts"><dt>配置版本</dt><dd>{value.executionConfigurationRevision == null ? "未记录" : `V${value.executionConfigurationRevision}`}</dd>
@@ -61,7 +61,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
           <dt>实际模式</dt><dd>{value.routing.source === "single-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd>
           <dt>模式降级</dt><dd>{fallbackDescription(value.routing.fallback)}</dd></>}</dl>
       {!currentId && <p className="read-text">{value.routing?.status === "explicit"
-        ? "Host 指定，未调用智能路由。" : value.routing?.reason || value.activeRequest?.summary || "本次没有可读取的路由决策记录。"}</p>}
+        ? "Host 指定" : value.routing?.reason || value.activeRequest?.summary || "路由决策未记录"}</p>}
       {currentId && value.routing?.reason && ["needs-host", "fenced", "failed"].includes(value.routing.status) &&
         <p className="error-message" role="status">本次路由未能用于执行：{value.routing.reason}</p>}
       {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">提交时硬约束：{configurationText(value.routing?.constraints)}</p>}
@@ -76,7 +76,6 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
     </section>}
     <details className="detail-section" open={historyOpen} onToggle={event => setHistoryOpen(event.currentTarget.open)}>
       <summary>此前的路由决定</summary>
-      <p className="small muted">只读取本次委派的路由记录，保留失败、取消与重新选择的历史。</p>
       {error && <p className="error-message" role="alert">{error}</p>}
       {busy && <p role="status" className="small muted">正在读取路由历史…</p>}
       {!busy && page?.entries.length === 0 && <p className="muted">没有智能路由历史。</p>}
@@ -100,10 +99,10 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
         <strong>第 {turn.turnIndex} 回合</strong><p className="small wrap">{configurationText(turn.executionConfiguration)}</p>
         {turn.routing ? <p className="small">执行配置 V{turn.routing.executionConfigurationRevision} · {turn.routing.decisionId
           ? <button className="routing-link" onClick={() => inspect(turn.routing!.decisionId)}>查看此回合的决定</button>
-          : "Host 指定，未调用智能路由。"}</p> : <p className="small muted">未记录此回合与路由的对应关系。</p>}
+          : "Host 指定"}</p> : <p className="small muted">回合路由未记录</p>}
         <details><summary>回合标识</summary><p className="mono wrap">{turn.turnId} · {turn.attemptId}</p></details>
       </li>)}</ul>
-      {!!value.truncated?.turns && <p className="small muted">这里只展示最近回合，另有 {value.truncated.turns} 个回合；完整绑定可通过 get 的 includeAudit 选项读取。</p>}
+      {!!value.truncated?.turns && <p className="small muted">已截断 · 另有 {value.truncated.turns} 回合</p>}
     </details>}
   </>;
 }

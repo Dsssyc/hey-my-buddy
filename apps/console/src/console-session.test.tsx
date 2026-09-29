@@ -210,7 +210,7 @@ describe("console session descriptor validation", () => {
       expect(failure, label).toBeInstanceOf(ApiError);
       expect((failure as ApiError).code, label).toBe("INVALID_RESPONSE");
       // The refusal copy names the version/entry recovery, never a credential.
-      expect((failure as ApiError).message, label).toContain("不会授予写权限");
+      expect((failure as ApiError).message, label).toContain("会话信息无法识别");
       expect((failure as ApiError).message, label).not.toContain("csrf");
     }
   });
@@ -249,7 +249,7 @@ describe("console session descriptor validation", () => {
   it("maps the 401 CONSOLE_SESSION_EXPIRED refusal to login-expired copy (0.16)", () => {
     const expired = errorText(new ApiError("CONSOLE_SESSION_EXPIRED", "server raw text"));
     expect(expired).toContain("登录已失效");
-    expect(expired).toContain("本页会自动恢复");
+    expect(expired).toContain("请运行 buddy console 重新登录");
     expect(expired).not.toContain("server raw text");
     expect(expired).not.toContain("新窗口");
     // The retired single-writer code no longer exists anywhere in the client.
@@ -275,7 +275,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const opinion = await screen.findByLabelText("家族备注");
     await user.clear(opinion);
     await user.type(opinion, "未保存的本地草稿");
-    expect(screen.getByText(/有 1 项未保存修改/)).toBeTruthy();
+    expect(screen.getByText(/1 项未保存/)).toBeTruthy();
 
     // The cookie expires: the next authenticated poll reports a session that
     // can no longer write. This is the security bottom line, not a handoff.
@@ -357,7 +357,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.type(await screen.findByLabelText("家族备注"), "结果不明");
     await user.click(screen.getByRole("button", { name: "保存" }));
     // The lost publish reply is staged for a deliberate retry with the same id.
-    expect(await screen.findByText(/保存结果未确认/)).toBeTruthy();
+    expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "重试同一保存" }).length).toBeGreaterThan(0);
     expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
     const commandId = f.published[0].commandId;
@@ -367,7 +367,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     f.expireSession();
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     expect(screen.queryByText(bannerNotice)).toBeNull();
-    expect(await screen.findByText(/保存结果未确认：可能已经生效/)).toBeTruthy();
+    expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     const retained = screen.getByLabelText("家族备注") as HTMLTextAreaElement;
     expect(retained.value).toBe("原人工意见结果不明");
     expect(retained.disabled).toBe(false);
@@ -389,14 +389,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "提交结果不明");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText(/保存结果未确认/)).toBeTruthy();
+    expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     const commandId = f.published[0].commandId;
 
     // The retry reaches the board before any poll reports the invalid login.
     // The refusal proves only that this request was denied: the earlier same-ID
     // attempt may still have committed.
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
-    expect((await screen.findAllByText(/保存结果未确认：可能已经生效/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/保存结果未知/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(2);
     expect(f.published[1].commandId).toBe(commandId);
     expect(screen.getAllByRole("button", { name: "重试同一保存" }).length).toBeGreaterThan(0);
@@ -423,7 +423,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
     // No earlier attempt exists, so this is not an unknown result and the
     // retained draft is not frozen behind a confirmation state.
-    expect(screen.queryByText(/保存结果未确认：可能已经生效/)).toBeNull();
+    expect(screen.queryByText(/保存结果未知/)).toBeNull();
     expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
     await new Promise(resolve => setTimeout(resolve, 900));
     expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);

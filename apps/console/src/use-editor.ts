@@ -321,14 +321,14 @@ export function useEditor(
           dropGrantMirror();
           if (hasUnknownIntent()) {
             setUncertain(true);
-            setNotice("保存租约已过期；此前未确认的提交仍保留在本页，可重试同一保存核对结果。");
+            setNotice("保存资格已过期，结果未知；请重试同一保存。");
           } else {
             setUncertain(false);
-            setNotice("保存租约已过期；再次保存会重新申请，不会重复发布。");
+            setNotice("保存资格已过期；请重试保存。");
           }
         } else if (uncertainResponse(failure)) {
           setUncertain(true);
-          setError("尚未确认编辑资格状态；再次保存会复用同一编辑资格。");
+          setError("编辑资格未知；请重试保存。");
         } else {
           // A refused renewal says nothing about the lease: release it, and keep
           // the identity when even the release cannot be confirmed.
@@ -338,7 +338,7 @@ export function useEditor(
           setUncertain(!released);
           setError(released
             ? errorText(failure)
-            : `${errorText(failure)} 未能确认释放结果，下次保存前会重试。`);
+            : `${errorText(failure)} 释放结果未知；请重试保存。`);
         }
       }
     }, LEASE_KEEPALIVE_MS);
@@ -379,11 +379,11 @@ export function useEditor(
   function update(change: (draft: Draft) => Draft) {
     setBlocked("");
     if (busy) {
-      setBlocked("正在保存或读取目录。请等待结束后再修改；草稿不会丢失。");
+      setBlocked("正在保存或读取目录；请稍后修改。");
       return;
     }
     if (confirming) {
-      setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再继续修改。");
+      setBlocked("保存结果未知；请核对或重试同一保存。");
       return;
     }
     if (!mayWrite()) {
@@ -467,7 +467,7 @@ export function useEditor(
         // request ID and recovery state instead of pretending it never happened.
         beginAmbiguous.current = true;
         setUncertain(true);
-        setError("尚未确认编辑资格请求的结果；再次保存会复用同一请求 ID，不会重复占用编辑资格。");
+        setError("编辑资格未知；请重试保存。");
         return null;
       }
       forgetBegin();
@@ -564,8 +564,8 @@ export function useEditor(
       // result; no release is claimed either way.
       dropGrantMirror();
       setNotice(hasUnknownIntent()
-        ? "登录已失效：不会发送保存或租约操作；此前提交结果未确认的记录仍保留在本页，重新登录后可核对。"
-        : "登录已失效：未发送保存租约操作；未完成的短租约到期后自动失效。");
+        ? "登录已失效；请重新登录后核对保存结果。"
+        : "登录已失效；请重新登录后保存。");
       return false;
     }
     if (!(await flushUnresolvedAbort())) return false;
@@ -588,7 +588,7 @@ export function useEditor(
     if (!(await flushUnresolvedAbort())) {
       if (!alive.current) return null;
       setUncertain(true);
-      setError("尚未确认上一次编辑资格的释放结果；请稍后重试保存。");
+      setError("编辑资格释放未确认；请稍后重试。");
       return null;
     }
     const existing = grantRef.current;
@@ -603,7 +603,7 @@ export function useEditor(
       if (!released) {
         setGrant(null);
         setUncertain(true);
-        setError("尚未确认编辑资格的释放结果；请稍后重试保存。");
+        setError("编辑资格释放未确认；请稍后重试。");
         return null;
       }
       setGrant(null);
@@ -651,8 +651,8 @@ export function useEditor(
     cancelRequested.current = false;
     setWaiting(true);
     setNotice(owner.queuePosition && owner.queuePosition > 1
-      ? `正在等待其他保存完成（前面还有 ${owner.queuePosition - 1} 位）…`
-      : "正在等待其他保存完成…");
+      ? `等待保存 · 前面 ${owner.queuePosition - 1} 位`
+      : "等待保存…");
     const deadline = Date.now() + QUEUE_LIMIT_MS;
     let current = owner;
     try {
@@ -670,10 +670,10 @@ export function useEditor(
           setGrant(null);
           if (released) {
             setUncertain(false);
-            setError("等待其他保存超时，已释放排队中的保存资格。草稿保持不变，可以再次保存。");
+            setError("等待超时；请重试保存，草稿已保留。");
           } else {
             setUncertain(true);
-            setError("等待其他保存超时，且未能确认释放结果；草稿保持不变，可以再次保存。");
+            setError("等待超时，释放未确认；请重试保存。");
           }
           return null;
         }
@@ -705,7 +705,7 @@ export function useEditor(
             // Keep the identity for a retry and stop renewing: recovery is bounded
             // instead of holding a writer this page can no longer confirm.
             setUncertain(true);
-            setError("尚未确认编辑资格状态；再次保存会复用同一编辑资格。");
+            setError("编辑资格未知；请重试保存。");
             return null;
           }
           const released = await release(current);
@@ -716,7 +716,7 @@ export function useEditor(
             setError(errorText(failure));
           } else {
             setUncertain(true);
-            setError(`${errorText(failure)} 未能确认释放结果，下次保存前会重试。`);
+            setError(`${errorText(failure)} 释放结果未知；请重试保存。`);
           }
           return null;
         }
@@ -743,12 +743,12 @@ export function useEditor(
     if (released) {
       setGrant(null);
       setUncertain(false);
-      setNotice("已取消等待，编辑资格已释放；草稿保持不变。");
+      setNotice("已取消等待；草稿已保留。");
     } else {
       // Never claim a release the board did not confirm.
       setGrant(null);
       setUncertain(true);
-      setError("未能确认编辑资格已释放；该资格会自动过期，草稿保持不变。");
+      setError("编辑资格释放未知；请稍后重试，草稿已保留。");
     }
     return null;
   }
@@ -783,7 +783,7 @@ export function useEditor(
       dropGrantMirror();
       setUncertain(false);
       setConfirming(false);
-      setNotice("已发布新版本。正在执行的任务继续使用原配置。");
+      setNotice("已发布新版本");
       closeDraft();
       await refresh();
     } catch (failure) {
@@ -825,7 +825,7 @@ export function useEditor(
         saveAmbiguous.current = true;
         setUncertain(true);
         setConfirming(true);
-        setError("保存结果未确认：可能已经生效。草稿和提交标识都保留；重试同一保存会复用同一请求，不会重复发布。");
+        setError("保存结果未知，可能已生效；请重试同一保存。");
         return;
       }
       forgetPublication();
@@ -844,7 +844,7 @@ export function useEditor(
       if (!released) setUncertain(true);
       if (isRevisionConflict(failure)) {
         await refresh();
-        setError("设置已在别处更新，你的草稿仍保留。请选择重新加载最新版本，或放弃修改。");
+        setError("设置已更新；请重新加载核对或放弃草稿。");
         return;
       }
       setError(errorText(failure));
@@ -855,7 +855,7 @@ export function useEditor(
     const current = draftRef.current;
     const base = baseline;
     if (!current || !base || busy) {
-      if (busy) setBlocked("正在读取模型目录或保存中，请稍后再试；草稿不会丢失。");
+      if (busy) setBlocked("正在读取目录或保存；请稍后重试。");
       return;
     }
     if (!mayWrite()) {
@@ -877,7 +877,7 @@ export function useEditor(
       return;
     }
     if (!mutationsAvailable) {
-      setBlocked(unavailableReason || "当前无法提交保存；草稿会保留在本页。");
+      setBlocked(unavailableReason || "暂无法保存；请稍后重试，草稿已保留。");
       return;
     }
     setBlocked("");
@@ -889,7 +889,7 @@ export function useEditor(
     // live draft instead of a possibly older render memo.
     const blocked = blockingIssues(base, current);
     if (blocked.length) {
-      setError(`有 ${blocked.length} 项修改当前不能提交：${blocked.map((issue) => issue.message).join(" ")}`);
+      setError(`${blocked.length} 项无法保存：${blocked.map((issue) => issue.message).join(" ")}`);
       return;
     }
     setSaving(true);
@@ -902,11 +902,10 @@ export function useEditor(
       }
       if (!draftDiffers(base, current)) {
         // Publishing an empty patch would advance the revision for nothing.
-        setNotice("没有需要保存的用户修改。");
         return;
       }
       if (snapshot.tableRevision !== current.tableRevision) {
-        setError(`设置已在别处更新，你的草稿仍保留。请选择重新加载最新版本，或放弃修改。`);
+        setError(`设置已更新；请重新加载核对或放弃草稿。`);
         return;
       }
       const owner = await acquire(current);
@@ -925,11 +924,11 @@ export function useEditor(
 
   async function discard() {
     if (busy) {
-      setBlocked(waiting ? "正在等待其他保存完成，请先取消等待。" : "正在保存，请等待结果；草稿不会被静默丢弃。");
+      setBlocked(waiting ? "正在排队；请先取消等待。" : "正在保存；请等待结果。");
       return;
     }
     if (confirming) {
-      setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再决定是否放弃草稿。");
+      setBlocked("保存结果未知；请核对或重试同一保存。");
       return;
     }
     setSaving(true);
@@ -939,10 +938,10 @@ export function useEditor(
       const released = await releaseIntents();
       if (!alive.current) return;
       closeDraft(!released);
-      if (released) setNotice("已放弃未发布的修改。");
+      if (released) setNotice("草稿已放弃");
       else {
         setUncertain(true);
-        setError("草稿已放弃；编辑资格的释放结果尚未确认，会自动过期。");
+        setError("草稿已放弃；编辑资格释放未知。");
       }
       await refresh();
     } finally {
@@ -953,7 +952,7 @@ export function useEditor(
   /** Deliberate reload: the draft is replaced by the latest published revision. */
   async function reloadLatest() {
     if (busy || confirming) {
-      setBlocked("保存结果尚未确认，或保存仍在进行；暂不能重新加载。");
+      setBlocked("保存未确认；请核对后重新加载。");
       return;
     }
     setSaving(true);
@@ -966,7 +965,7 @@ export function useEditor(
         if (!alive.current) return;
         if (!released) {
           setUncertain(true);
-          setError("尚未确认编辑资格已释放，暂不能重新加载最新版本；请稍后重试。");
+          setError("编辑资格释放未知；请稍后重新加载。");
           return;
         }
       }
@@ -986,7 +985,7 @@ export function useEditor(
       }
       pendingRebase.current = null;
       setRebaseConflicts([]);
-      setNotice(`已加载评价表 V${next.tableRevision}。请核对后重新保存。`);
+      setNotice(`已加载 V${next.tableRevision}；请核对后保存。`);
     } finally {
       if (alive.current) setSaving(false);
     }

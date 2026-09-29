@@ -96,7 +96,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
         {choices.projects.map(p => <option key={p.id} value={p.id}>{p.label} — {p.path || p.id}</option>)}</select></label>
         <label><span className="sr-only">委派方筛选</span><select value={hostId} onChange={e => setHostId(e.target.value)}><option value="">全部委派方</option>{choices.hosts.map(id => <option key={id}>{id}</option>)}</select></label></div>
       <label className="check-field"><input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)} />显示协助任务与内部执行</label>
-      <p className="small muted">已加载 {history.runs.length} / {history.total} 条 · 项目选项来自已加载记录</p>
+      <p className="small muted">已加载 {history.runs.length} / {history.total} 条</p>
     </div>
     {newRecords.length > 0 && <button className="new-records" onClick={() => { history.reset(); if (scroll.current) scroll.current.scrollTop = 0; }}>有 {newRecords.length} 条新记录 · 回到最新</button>}
     {history.error && <div className="list-error" role="alert">{history.error}<button className="button small-button" onClick={() => void history.retry()}>重试读取</button></div>}
@@ -124,14 +124,14 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
         </li>;
         })}</ul>}
       </section>)}
-      {!visible.length && !history.loading && !history.error && <Empty title="没有匹配的委派">调整筛选或搜索项目名称；内部计算默认收起。</Empty>}
+      {!visible.length && !history.loading && !history.error && <Empty title="没有匹配的委派">试试其他筛选或关键词。</Empty>}
       {history.loading && <p className="loading-row" role="status">正在读取委派记录…</p>}
       {history.nextCursor && <button className="load-more" disabled={history.loading} onClick={loadMore}>加载更早记录</button>}
     </div>
   </section>;
   const detail = <aside className="panel detail-panel" aria-label="任务详情">
     {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onTaskUpdate={updateSelected} /> :
-      <div className="detail-placeholder"><h2>{selected ? "正在读取委派…" : "选择一项委派"}</h2><p>{detailError || "按项目查看目标、委派方与执行结果。协助任务保留在所属目标的详情中。"}</p></div>}
+      <div className="detail-placeholder"><h2>{selected ? "正在读取委派…" : "选择一项委派"}</h2>{detailError && <p>{detailError}</p>}</div>}
   </aside>;
   return <SplitView selected={!!selected} list={list} detail={detail} />;
 }

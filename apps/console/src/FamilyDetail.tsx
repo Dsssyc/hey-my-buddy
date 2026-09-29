@@ -42,7 +42,7 @@ import type { RoutingMode } from "./types";
 import { Popover, popoverButtonProps } from "./Popover";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-export const EMPTY_EVIDENCE = "暂无评价证据。你可以让已配置 hey-my-buddy skill 的 Harness 执行一次模型评价更新，或在该 Harness 中设置定时更新任务。";
+export const EMPTY_EVIDENCE = "评价证据未记录";
 const PREFERENCE_MODES: PreferenceMode[] = ["prefer", "pin", "exclude"];
 const capabilityLabel = (value: string) => value === "routing:fast" ? "支持无工具路由调用"
   : value === "decision" ? "当前 Harness 版本已验证只读路由调用" : value;
@@ -123,8 +123,8 @@ function EffortTag({
     {menuOpen && <Popover id={menuId} anchor={menuButton.current} label={`${profileTitle(profile)} 档位设置`}
       onClose={() => setMenuOpen(false)} className="effort-menu" width="min(20em, calc(100vw - 16px))">
       <fieldset className="menu-group" disabled={!editor.editing}>
-        <legend>档位偏好 <Help label="档位偏好说明">{`档位覆盖优先于家族偏好。“无偏好”表示这个档位明确不带偏好，即使家族有默认值；“跟随家族”删除覆盖。${PREFERENCE_HELP}`}</Help></legend>
-        <p className="small muted">当前设置：{override ? "档位覆盖" : "跟随家族"}</p>
+        <legend>档位偏好 <Help label="档位偏好说明">{`档位可覆盖家族偏好；“无偏好”清除效果，“跟随家族”删除覆盖。${PREFERENCE_HELP}`}</Help></legend>
+
         <label className="menu-radio"><input type="radio" name={`override-${profile.profileId}`} checked={overrideValue === ""}
           onChange={() => setOverride("")} />跟随家族（{familyPreference ? PREFERENCE_LABEL[familyPreference.mode] : "无"}）</label>
         {(["none", ...PREFERENCE_MODES] as OverrideMode[]).map(mode => {
@@ -279,7 +279,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
       {!!attention.length && <p className="banner attention-banner" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
       <div className="family-fields">
         <div className="family-field">
-          <span className="family-label">档位 <Help label="档位说明">点开关即启用或停用该档位；标签颜色、图标和描边表示生效偏好（▲ 优先、◆ 固定、⊘ 排除）。是否为档位覆盖及其理由、Router 设置都在标签菜单 ▾ 中。</Help></span>
+          <span className="family-label">档位 <Help label="档位说明">▲ 优先、◆ 固定、⊘ 排除；覆盖理由和 Router 设置见 ▾。</Help></span>
           <div className="effort-tags" role="group" aria-label="档位">
             {efforts.map(profile => <EffortTag key={profile.profileId} profile={profile} editor={editor}
               recordedEnabled={recorded.profiles.find(p => p.profileId === profile.profileId)?.enabled}
@@ -291,7 +291,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
           </div>
         </div>
         <div className="family-field">
-          <span className="family-label">偏好 <Help label="家族偏好说明">{`家族偏好作用于该家族所有没有覆盖的档位；单个档位可在标签菜单中覆盖。${PREFERENCE_HELP}`}</Help></span>
+          <span className="family-label">偏好 <Help label="家族偏好说明">{`家族偏好适用于未覆盖的档位。${PREFERENCE_HELP}`}</Help></span>
           <div className="family-value">
             <div className="segmented" role="radiogroup" aria-label="家族偏好">
               {(["", ...PREFERENCE_MODES] as (PreferenceMode | "")[]).map(mode => {
@@ -311,12 +311,12 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
           </div>
         </div>
         <div className="family-field">
-          <span className="family-label">并发 <Help label="并发上限说明">并发上限由同一模型的所有思考档位与路由、执行共用，范围 1–32；保存后立即对后续任务生效。调低上限不会中断正在运行的任务，只会等占用回落后再放行新任务。计数不包含 Harness 内部子代理、重试或其他应用的 API 请求。</Help></span>
+          <span className="family-label">并发 <Help label="并发上限说明">同一模型的路由与执行共用 1–32 个并发位；只影响后续任务。</Help></span>
           <ConcurrencyField editor={editor} family={family} draftLimit={draftLimit} occupancy={occupancy}
             unsaved={!Object.is(draftLimit, recordedLimit)} />
         </div>
         <div className="family-field">
-          <span className="family-label">备注 <Help label="家族备注说明">备注属于整个模型家族，单独存储，不覆盖评价、证据或样本计数；留空表示清除。</Help></span>
+          <span className="family-label">备注 <Help label="家族备注说明">家族备注；留空清除。</Help></span>
           <div className="family-value">
             <textarea rows={3} value={note} maxLength={4000} aria-label="家族备注" readOnly={!editor.editing}
               placeholder="记录使用感受与适用条件"
@@ -325,7 +325,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
           </div>
         </div>
         <section className="family-field" aria-label="评价（只读）">
-          <span className="family-label">评价 <Help label="评价说明">评价、证据与样本计数由获授权的维护 Harness 依据证据按档位发布，控制台只读，不会被偏好或备注覆盖。</Help></span>
+          <span className="family-label">评价 <Help label="评价说明">评价由维护 Harness 发布。</Help></span>
           <div className="family-value evaluation-list">
             <p className="small">{assessed}/{efforts.length} 个档位有评价 · 验证样本 {samples} 个{latest ? ` · 最近更新 ${formatDate(latest)}` : ""}</p>
             {efforts.map((profile, index) => {
@@ -336,19 +336,18 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
                   <span className="muted"> · {card.summary ? card.summary.split("\n")[0] : "暂无评价"} · 样本 {recordedSampleCount(data, profile.profileId)}</span></summary>
                 <div className="effort-evaluation-body">
                   {card.summary && <p className="read-text">{card.summary}</p>}
-                  <p className="small muted">{cardOriginText(card)} · 更新于 {formatDate(card.updatedAt)}</p>
+                  <p className="small muted">{cardOriginText(card)} · {formatDate(card.updatedAt)}</p>
                   <div className="reading-grid"><Reading title="适用工作" values={card.strengths} /><Reading title="适用限制" values={card.limitations} /><Reading title="未解决问题" values={card.risks} /></div>
                   <h4>证据</h4>
                   {evidence.length ? <ul className="evidence-list">{evidence.map(e => <li className="evidence-item" key={e.evidenceId}>
                     <p>{e.summary}</p><span className="small muted">{e.source} · {formatDate(e.createdAt)}{e.project ? " · " + e.project : ""}</span>
                     {!!e.conditions.length && <p className="small">条件：{e.conditions.join("；")}</p>}
-                    {card.evidenceIds.includes(e.evidenceId) && <p className="small muted">已用于当前评价</p>}
                   </li>)}</ul> : <p className="small muted evidence-empty">{EMPTY_EVIDENCE}</p>}
                   <dl className="facts"><dt>配置 ID</dt><dd>{profile.profileId}</dd>
                     <dt>上下文</dt><dd>{profile.contextWindow ? profile.contextWindow.toLocaleString() + " tokens" : "未知"}</dd>
                     <dt>能力</dt><dd>{profile.capabilities.length ? profile.capabilities.map(capabilityLabel).join("、") : "未记录"}</dd>
                     <dt>目录来源</dt><dd>{profile.source || "未记录"}</dd>
-                    <dt>可用性</dt><dd>{profile.unavailableReason || (profile.available ? "目录声明可用，实际调用仍需验证" : "当前不在目录中")}</dd></dl>
+                    <dt>可用性</dt><dd>{profile.unavailableReason || (profile.available ? "未验证" : "目录中不可用")}</dd></dl>
                 </div>
               </details>;
             })}
@@ -359,7 +358,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
     {routerConfirm && <ConfirmDialog title={`替换${routerConfirm.mode === "fast" ? "快速" : "审阅"} Router`} confirmLabel="替换"
       onCancel={() => closeConfirm(routerConfirm.profile)}
       onConfirm={() => { setRouter(routerConfirm.profile, routerConfirm.mode); closeConfirm(routerConfirm.profile); }}>
-      将替换当前 Router {currentRouter ? profileTitle(currentRouter) : currentRouterId}，改为 {profileTitle(routerConfirm.profile)}。保存后用于后续路由，正在运行的任务不受影响。
+      将替换当前 Router {currentRouter ? profileTitle(currentRouter) : currentRouterId}，改为 {profileTitle(routerConfirm.profile)}。
     </ConfirmDialog>}
   </>;
 }

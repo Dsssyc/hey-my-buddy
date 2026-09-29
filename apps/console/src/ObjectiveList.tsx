@@ -230,7 +230,7 @@ export function ObjectiveList(props: ObjectiveListProps) {
         headingNoun={show === "standalone" ? "历史独立委派" : "工作目标"} />
       {show === "objectives" && standalone.length > 0 && <section className="project-group standalone-group">
         <button className="group-heading" aria-expanded={standaloneOpen}
-          title={`这些委派提交时没有指定工作目标，按记录单独显示。${nextCursor ? `\n已加载 ${standalone.length} 个，可能还有更多` : `\n已加载 ${standalone.length} 个`}`}
+          title={`未指定工作目标 · 已加载 ${standalone.length} 个${nextCursor ? "，还有更多" : ""}`}
           onClick={() => setStandaloneOpen(current => !current)}>
           <span>{standaloneOpen ? "▾" : "▸"} 历史独立委派（{standalone.length}）</span>
         </button>
@@ -241,9 +241,9 @@ export function ObjectiveList(props: ObjectiveListProps) {
         ? (standalone.length
           ? <Empty title="已加载的记录中暂无工作目标" action={nextCursor
               ? <div className="actions"><button type="button" className="button small-button" onClick={loadMore}>加载更早工作目标</button></div>
-              : undefined}>更早的记录可能包含工作目标。</Empty>
-          : <Empty title="还没有工作目标">Host 提交委派后，这里按项目列出工作目标；旧记录各自显示为历史独立委派。</Empty>)
-        : <Empty title="没有匹配的工作目标">调整筛选或搜索项目名称。</Empty>)}
+              : undefined} />
+          : <Empty title="还没有工作目标" />)
+        : <Empty title="没有匹配的工作目标">试试其他筛选或关键词。</Empty>)}
       {show === "standalone" && !standalone.length && !loading && !error && <Empty title="没有历史独立委派">已加载的记录都归属于工作目标。</Empty>}
       {loading && <p className="loading-row" role="status">正在读取工作目标…</p>}
       {nextCursor && <button className="load-more" disabled={loading} onClick={loadMore}>加载更早工作目标</button>}

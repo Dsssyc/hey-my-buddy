@@ -204,7 +204,6 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
   return <section className="panel storage-panel" aria-busy={phase.kind === "planning" || phase.kind === "applying"} aria-label="存储">
     <div className="panel-heading">
       <h2>存储</h2>
-      <p className="muted">检查本机 Buddy 数据的占用与可回收空间。</p>
     </div>
     <div className="storage-overview" role="group" aria-label="占用概览">
       <div><span>总占用</span><strong title={plan ? byteText(totalBytes).title : undefined}>{plan ? byteText(totalBytes).text : "尚未检查"}</strong></div>
@@ -219,16 +218,16 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
     {plan && <div className="storage-result">
       <div className="storage-result-head">
         <span>{phase.kind === "applied"
-          ? "已过期，重新检查查看最新占用"
+          ? "已过期 · 请重新检查"
           : expired
-            ? "计划已过期，重新检查查看最新占用"
+            ? "计划已过期 · 请重新检查"
             : `检查于 ${clockTime(plan.createdAt)} · ${expiryText(plan, now)}内可清理`}</span>
         <button type="button" className="button small-button"
           disabled={disabled || phase.kind === "planning" || phase.kind === "applying" || phase.kind === "unknown" || phase.kind === "incomplete"}
           title={disabledTitle
             ?? (phase.kind === "applying" ? "正在清理…"
               : phase.kind === "unknown" || phase.kind === "incomplete"
-                ? "结果尚未确认：换新计划会丢弃未完成的清理，请先重试同一请求" : undefined)}
+                ? "清理结果未知；请先重试同一请求" : undefined)}
           onClick={() => void requestPlan()}>重新检查</button>
       </div>
       <table className="storage-table">
@@ -242,7 +241,7 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
             return <tr key={category.id}>
               <th scope="row">{CATEGORY_LABEL[category.id] ?? category.id}</th>
               <td title={bytes.title}>{bytes.text}</td>
-              <td title={protectedHere ? "看板、记录和当前备份不会被清理" : reclaim?.title ?? "没有可回收数据"}>
+              <td title={protectedHere ? "看板、记录及当前备份受保护" : reclaim?.title ?? "没有可回收数据"}>
                 {reclaim ? reclaim.text : "—"}
               </td>
               <td>
@@ -267,12 +266,11 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
       </table>
       {orderedCategories.filter(category => category.reasons.length > 0 && reasonsOpen.has(category.id)).map(category =>
         <div key={category.id} className="storage-reasons">
-          <p className="small muted">{CATEGORY_LABEL[category.id] ?? category.id}的保留原因：</p>
           <ul>{category.reasons.map((code, index) => <li key={index}>{reasonText(code)}</li>)}</ul>
         </div>)}
       {plan.orphanProcesses.length > 0 && <div className="storage-orphans">
         <h3>游离进程（{plan.orphanProcesses.length}）</h3>
-        <p className="small muted">仅列出 · 停止需要你另行授权，清理不会停止它们。</p>
+        <p className="small muted">清理不会停止这些进程。</p>
         <ul>
           {plan.orphanProcesses.map(process => <li key={process.pid}>
             <span>{process.kind === "daemon" ? "服务" : process.kind === "supervisor" ? "执行进程" : process.kind || "未记录类型"}</span>
@@ -295,7 +293,7 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
           </ul>}
         </>}
         {result.skipped.length > 0 && <>
-          <p>跳过 {result.skipped.length} 项（数据已变化或条件不再满足）</p>
+          <p>跳过 {result.skipped.length} 项 · 数据已变化</p>
           <button type="button" className="inspector-link" aria-expanded={showSkipped}
             onClick={() => setShowSkipped(current => !current)}>{showSkipped ? "收起逐项原因" : "查看逐项原因"}</button>
           {showSkipped && <ul className="storage-skipped">
@@ -308,12 +306,12 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
       <div className="actions storage-actions">
         {(phase.kind === "unknown" || phase.kind === "incomplete") && <>
           <span role="status">{phase.kind === "unknown"
-            ? "清理结果未确认：可能已经执行。"
-            : "清理尚未完成：删除已经开始，尚未全部完成。"}</span>
+            ? "清理结果未知，可能已执行"
+            : "清理未完成 · 已开始删除"}</span>
           {/* The durable receipt stays replayable after plan expiry; only a
               connection failure or a definitive reply ends the retry. */}
           <button type="button" className="button small-button" disabled={disabled}
-            title={disabledTitle ?? "重试同一请求会继续或核对这次清理，不会开始新的清理"}
+            title={disabledTitle ?? "重试同一请求可继续或核对清理"}
             onClick={() => void applyPlan(plan.planId, applyCommandId)}>重试同一请求</button>
         </>}
         {phase.kind !== "unknown" && phase.kind !== "incomplete" && phase.kind !== "applied"
@@ -398,8 +396,8 @@ function StorageConfirmDialog({ plan, total, expired, onCancel, onConfirm }: {
           <li>合计：{byteText(total).text}</li>
           <li>计划检查时间：{clockTime(plan.createdAt)}</li>
         </ul>
-        <p>执行前会逐项复核，已变化的项目会跳过；看板、记录和当前备份不会删除。</p>
-        {expired && <p className="error-message" role="alert">计划已过期，请关闭后重新检查</p>}
+        <p>将逐项复核并跳过变化项目；看板、记录和当前备份不会删除。</p>
+        {expired && <p className="error-message" role="alert">计划已过期；请关闭并重新检查</p>}
       </div>
       <div className="actions">
         <button ref={cancelRef} type="button" className="button" onClick={onCancel}>取消</button>

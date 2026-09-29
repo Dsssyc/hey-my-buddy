@@ -126,9 +126,7 @@ describe("model family concurrency", () => {
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(concurrencyInput()).toHaveProperty("value", "2");
     expect(screen.getByText(/当前占用 1/)).toBeTruthy();
-    expect(screen.getByText(/并发上限由同一模型的所有思考档位与路由、执行共用/)).toBeTruthy();
-    expect(screen.getByText(/保存后立即对后续任务生效/)).toBeTruthy();
-    expect(screen.getByText(/调低上限不会中断正在运行的任务/)).toBeTruthy();
+    expect(screen.getByText(/同一模型的路由与执行共用/)).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -141,9 +139,9 @@ describe("model family concurrency", () => {
     await user.type(input, "6");
     await screen.findByText("未保存");
     // The single family setting is the only unsaved change.
-    await screen.findByText(/有 1 项未保存修改/);
+    await screen.findByText(/1 项未保存/);
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published).toHaveLength(1);
     expect(f.published[0].modelConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
@@ -187,7 +185,7 @@ describe("model family concurrency", () => {
     await user.clear(input);
     await user.type(input, "4");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0].modelConcurrency[0].limit).toBe(4);
   });
 
@@ -209,7 +207,7 @@ describe("model family concurrency", () => {
     await user.type(input, "4");
     await screen.findByText("未保存");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0].modelConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "retired-model", limit: 4 },
     ]);
@@ -227,17 +225,17 @@ describe("model family concurrency", () => {
     const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
     expect(banner).toBeTruthy();
     expect(banner.textContent).toContain("并发上限");
-    expect(banner.textContent).toContain("已被其他发布修改");
+    expect(banner.textContent).toContain("已在 V");
     expect(banner.textContent).toContain("dsh/deepseek-official/deepseek-flash");
     expect(concurrencyInput()).toHaveProperty("value", "6");
     // Saving the stale draft under V3 is refused without an explicit resolution.
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // Deliberate reload adopts the other writer's published limit.
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
-    await screen.findByText("已加载评价表 V3。请核对后重新保存。");
+    await screen.findByText("已加载 V3；请核对后保存。");
     expect(concurrencyInput()).toHaveProperty("value", "4");
   });
 });

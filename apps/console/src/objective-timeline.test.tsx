@@ -121,22 +121,11 @@ describe("objective timeline rendering", () => {
     expect(body.textContent).toMatch(/其间至少有一项在运行的时间：\S+/);
     // The fixture has overlapping executions, so the cumulative sum exceeds
     // the union and gets its own plain sentence.
-    expect(body.textContent).toMatch(/各回合运行时间相加：.+（有回合同时运行，所以更长）/);
-    expect(body.textContent).toContain("有 1 个回合没确认何时结束，没有计入");
-    expect(body.textContent).toContain("还有 1 个回合在运行");
-    expect(body.textContent).toMatch(/记录来源：项目 hey-my-buddy/);
+    expect(body.textContent).toMatch(/回合累计：.+/);
+    expect(body.textContent).toContain("结束未确认 1 回合 · 未计入");
+    expect(body.textContent).toContain("运行中 1 回合");
     expect(body.textContent).toContain("来源 Host codex-desktop");
     expect(body.textContent).toContain("当前 Host codex-desktop");
-    // T2: exactly one hierarchy entry — a "?" button in the vitals line; the
-    // breadcrumb-like text and the duplicate legend are gone.
-    expect(document.body.textContent).not.toContain("工作目标 › 委派 › 协助任务 › 回合");
-    const help = within(head).getByRole("button", { name: "层级说明" });
-    expect(help.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(help);
-    const popover = await screen.findByRole("dialog", { name: "层级说明" });
-    expect(popover.textContent).toContain("工作目标是一项议程；委派是交给 Worker、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。");
-    fireEvent.click(help);
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "层级说明" })).toBeNull());
   });
 
   it("labels a standalone root honestly and keeps its note distinct", () => {
@@ -222,19 +211,14 @@ describe("objective timeline rendering", () => {
     });
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const label = container.querySelector('[data-key="row:r-task"]') as HTMLButtonElement;
-    // ~40 characters on one line with the 取自任务首行 note, never the full text.
+    // ~40 characters on one line, never the full text.
     expect(label.querySelector(".lbl-name")!.textContent!.length).toBeLessThanOrEqual(41);
     expect(label.querySelector(".lbl-name")!.textContent).not.toBe(LONG_TASK_LINE);
-    expect(label.textContent).toContain("取自任务首行");
-    expect(label.getAttribute("title")).not.toBe(LONG_TASK_LINE);
-    // Host-revised 0.16: the tooltip carries the COMPLETE first line plus the
-    // pointer to detail, while the label stays at ~40 characters.
-    expect(label.getAttribute("title")).toBe(`${LONG_TASK_LINE}（完整任务见详情）`);
-    expect(label.getAttribute("title")!.length).toBeGreaterThan(50);
-    // T3: the card title is the clipped line itself, with the note in the meta row.
+    // The tooltip carries the complete first line while the label stays short.
+    expect(label.getAttribute("title")).toBe(LONG_TASK_LINE);
+    // The card title is the clipped line itself.
     const single = container.querySelector(".delegation-card.single") as HTMLElement;
     expect(single.textContent).not.toContain("做什么");
-    expect(single.textContent).toContain("取自任务首行");
     expect(single.textContent).not.toContain(LONG_TASK_LINE);
   });
 
@@ -342,7 +326,7 @@ describe("objective timeline rendering", () => {
     expect(first.textContent).not.toContain("做什么");
     expect(first.textContent).not.toContain("目标摘要");
     const executing = cards.find(card => card.textContent!.includes("时间轴界面带截图的视觉与交互审查"))!;
-    expect(executing.textContent).toContain("结果：暂无");
+    expect(executing.textContent).toContain("结果未知");
     expect(within(executing).queryByText("Worker 自述")).toBeNull();
     expect(cards.at(-1)!.textContent).toContain("修正折叠区间展开后的键盘焦点顺序");
   });
@@ -540,10 +524,10 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
     openInspector();
     const kept = document.querySelector(".inspector-card") as HTMLElement;
-    expect(kept.textContent).toContain("该记录不在当前读取范围内（可能已截断或被筛选）");
+    expect(kept.textContent).toContain("记录在当前范围外");
     const open = within(kept).getByRole("button", { name: "打开详情" });
     expect(open.getAttribute("aria-disabled")).toBe("true");
-    expect(open.getAttribute("title")).toContain("不在当前读取范围内");
+    expect(open.getAttribute("title")).toContain("记录在当前范围外");
     // Cached related-event opens are navigation from stale data: all disabled.
     const relatedOpens = within(kept).getAllByRole("button", { name: /打开 Host 事件/ });
     expect(relatedOpens.length).toBeGreaterThan(0);
@@ -561,15 +545,14 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const dock = container.querySelector(".inspector-dock")!;
     expect(dock.className).toContain("collapsed");
-    expect(dock.textContent).toContain("检查器 · 单击时间轴元素查看详情");
+    expect(dock.textContent).toContain("检查器");
     fireEvent.mouseEnter(item("span:s-r1-e")!);
     expect(dock.textContent).not.toContain(title);
     openInspector();
-    expect(container.querySelector(".timeline-inspector")!.textContent).toContain("单击选中 · Enter 或双击打开详情");
     expect(container.querySelector(".inspector-preview")).toBeNull();
     const empty = objectiveTimelineFixture({ rows: [], spans: [], events: [], totals: { rows: 0, spans: 0, events: 0, allRows: 0 } });
     const second = render(<ObjectiveTimeline {...baseProps(empty)} />);
-    expect(second.container.querySelector(".inspector-dock")!.textContent).toContain("检查器 · 单击时间轴元素查看详情");
+    expect(second.container.querySelector(".inspector-dock")!.textContent).toContain("检查器");
   });
 
   it("Enter and double-click open details; selection follows the opened item", async () => {
@@ -783,7 +766,6 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const gaps = [...list.querySelectorAll(".tl-gap")];
     expect(gaps.length).toBe(2);
     expect(gaps[0]!.textContent).toMatch(/^空闲 \d+ (小时|分钟|分)/);
-    expect(gaps[0]!.textContent).toContain("没有任何片段或事件");
     const entries = [...list.querySelectorAll(".tl-entry")];
     expect(entries.length).toBe(timeline.spans.length + timeline.events.length);
     const helperEntry = entries.find(node => node.textContent!.includes("补充 schema 升级离线副本的验证测试"))!;

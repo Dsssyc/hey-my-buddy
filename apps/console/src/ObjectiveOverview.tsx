@@ -2,17 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData } from "./objective-types";
 import { Badge } from "./ui";
-import { Popover } from "./Popover";
 import { excerpt } from "./task-state";
 import {
   TASK_SOURCE_NOTE, categoryTone, clockTime, displayTitle, durationText,
   objectiveProgressText, relativeTime, rowStateInfo, titleLineTooltip,
 } from "./objective-display";
 import { objectiveMetrics, rootRollups, type RunRollup } from "./objective-metrics";
-
-/** The single hierarchy explanation (0.16 T2): one sentence, no list, no heading. */
-export const HIERARCHY_HELP_TEXT =
-  "工作目标是一项议程；委派是交给 Worker、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。";
 
 /**
  * The detail overview's two rows (0.16 T4): 目标摘要 and the Worker's own
@@ -30,7 +25,7 @@ export function DelegationDetailRows({ taskSummary, resultSummary }: {
     </span>
     <span className="card-row">
       <span className="card-row-label">结果</span>
-      <span className="card-row-text" title={resultSummary ?? undefined}>{resultSummary ? `结果：${resultSummary}` : "结果：暂无"}</span>
+      <span className="card-row-text" title={resultSummary ?? undefined}>{resultSummary ? `结果：${resultSummary}` : "结果未知"}</span>
       {resultSummary && <span className="worker-note">Worker 自述</span>}
     </span>
   </div>;
@@ -68,7 +63,7 @@ function DelegationCard({ rollup, index, total, selected, tabbable, onSelect, on
       </span>
     </span>
     <span className="delegation-card-result">
-      <span className="delegation-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果：暂无"}</span>
+      <span className="delegation-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
       {summary && <span className="worker-note">Worker 自述</span>}
     </span>
     {meta.length > 0 && <span className="delegation-card-meta">{meta.join(" · ")}</span>}
@@ -99,7 +94,7 @@ function SingleDelegationCard({ rollup, onOpen }: {
       </span>
     </div>
     <div className="delegation-card-result">
-      <span className="delegation-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果：暂无"}</span>
+      <span className="delegation-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
       {summary && <span className="worker-note">Worker 自述</span>}
     </div>
     {meta.length > 0 && <div className="delegation-card-meta">{meta.join(" · ")}</div>}
@@ -179,11 +174,11 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
 
 /**
  * The overview header (0.16 P2.1): title/description, the one status line
- * (status badge · acceptance progress · latest activity · the single hierarchy
- * “?” entry) and the always-collapsed 时间统计 disclosure. Durations stay plain
+ * (status badge · acceptance progress · latest activity) and the
+ * always-collapsed 时间统计 disclosure. Durations stay plain
  * sentences with their honest caveats.
  */
-export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToList, headerActions, compact, hidden }: {
+export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToList, headerActions, compact }: {
   summary: ObjectiveSummary | null;
   timeline: ObjectiveTimelineData | null;
   loading: boolean;
@@ -193,22 +188,15 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
   headerActions?: ReactNode;
   /** Compact form at viewport heights of 800px or less (P2.1). */
   compact?: boolean;
-  /** The timeline view's hidden state: transient popovers close (objectives.md). */
-  hidden?: boolean;
 }) {
   const shown = timeline?.objective ?? summary;
-  const [helpOpen, setHelpOpen] = useState(false);
-  const helpButton = useRef<HTMLButtonElement>(null);
   const metrics = useMemo(() => (timeline ? objectiveMetrics(timeline) : null), [timeline]);
-  // A transient popover closes when its view hides or switches away.
-  useEffect(() => { if (hidden) setHelpOpen(false); }, [hidden]);
 
   if (!shown) return null;
   const title = displayTitle(shown.titleSource, shown.title);
   const titleAttr = titleLineTooltip(title);
   const cumulative = metrics && metrics.sumMs !== null && metrics.unionMs !== null && metrics.sumMs !== metrics.unionMs
     ? metrics.sumMs : null;
-  const helpId = "hierarchy-help-popover";
 
   return <header className={"detail-header tl-head" + (compact ? " compact" : "")}>
     <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 工作目标列表</button>
@@ -223,15 +211,6 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
     <div className="objective-vitals">
       <Badge tone={categoryTone(shown.state)}>{objectiveProgressText(shown)}</Badge>
       <span title={shown.lastActivityAt}>最近活动 {clockTime(shown.lastActivityAt)}（{relativeTime(shown.lastActivityAt, Date.now())}）</span>
-      <span className="hierarchy-help-entry">
-        <button ref={helpButton} type="button" id="hierarchy-help-button" className="icon-button help-button"
-          aria-label="层级说明" title="层级说明" aria-expanded={helpOpen} aria-controls={helpId}
-          onClick={() => setHelpOpen(current => !current)}>?</button>
-        {helpOpen && <Popover anchor={helpButton.current} label="层级说明" width="min(38em, calc(100vw - 16px))"
-          onClose={() => setHelpOpen(false)}>
-          <p className="hierarchy-help-text">{HIERARCHY_HELP_TEXT}</p>
-        </Popover>}
-      </span>
     <details className="time-stats">
       <summary>时间统计</summary>
       <div className="time-stats-body">
@@ -240,14 +219,14 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
           : <>
             <p className="time-stat">从开始到最近一次活动：{metrics?.totalSpanMs !== null && metrics?.totalSpanMs !== undefined ? durationText(metrics.totalSpanMs) ?? "未记录" : "未记录"}</p>
             <p className="time-stat">其间至少有一项在运行的时间：{metrics?.unionMs != null ? durationText(metrics.unionMs) ?? "未记录" : "未记录"}</p>
-            {cumulative !== null && <p className="time-stat">各回合运行时间相加：{durationText(cumulative)}（有回合同时运行，所以更长）</p>}
-            {metrics!.runningCount > 0 && <p className="small muted">还有 {metrics!.runningCount} 个回合在运行，时间算到 {clockTime(timeline.observedAt)}。</p>}
-            {metrics!.unknownEndCount > 0 && <p className="small muted">有 {metrics!.unknownEndCount} 个回合没确认何时结束，没有计入。</p>}
+            {cumulative !== null && <p className="time-stat">回合累计：{durationText(cumulative)}</p>}
+            {metrics!.runningCount > 0 && <p className="small muted">运行中 {metrics!.runningCount} 回合 · 截至 {clockTime(timeline.observedAt)}</p>}
+            {metrics!.unknownEndCount > 0 && <p className="small muted">结束未确认 {metrics!.unknownEndCount} 回合 · 未计入</p>}
             {metrics!.limitations.length > 0 && <p className="small metric-warn" tabIndex={0}
-              title={metrics!.limitations.map(entry => entry.label).join("；")}>只统计了已读取到的记录：{metrics!.limitations.map(entry => entry.label).join("；")}</p>}
-            {stale && <p className="small muted">按 {timeline.observedAt} 的数据。</p>}
+              title={metrics!.limitations.map(entry => entry.label).join("；")}>统计范围不完整：{metrics!.limitations.map(entry => entry.label).join("；")}</p>}
+            {stale && <p className="small muted">数据截至 {timeline.observedAt}</p>}
           </>}
-        <p className="small muted record-source">记录来源：项目 {shown.project.label}{shown.project.path ? `（${shown.project.path}）` : ""} · 来源 Host {shown.sourceHostId || "未记录"} · 当前 Host {shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</p>
+        <p className="small muted record-source">来源 Host {shown.sourceHostId || "未记录"} · 当前 Host {shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</p>
       </div>
     </details>
     </div>

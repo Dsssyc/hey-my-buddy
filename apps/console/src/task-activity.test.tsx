@@ -151,7 +151,7 @@ describe("activity rendering", () => {
     const view = screen.getByRole("region", { name: "执行活动（只读）" });
     expect(view.textContent).toContain(phaseLabels["waiting-model"]);
     expect(view.textContent).toContain("仅监管心跳");
-    expect(view.textContent).toContain("尚未收到原生活动");
+    expect(view.textContent).toContain("进展未知");
     expect(view.textContent).not.toMatch(/\d+\s*%/);
   });
 
@@ -169,20 +169,20 @@ describe("activity rendering", () => {
     expect(view.textContent).toContain("收到工具活动");
     expect(view.textContent).toContain("apply_patch");
     expect(view.textContent).toContain("模型回合 2 · 工具调用 5");
-    expect(view.textContent).toContain("不表示任务接近完成");
+    expect(view.textContent).toContain("工具执行中");
     expect(view.textContent).not.toMatch(/\d+\s*%/);
   });
 
   it("shows an explicit unknown state instead of manufacturing activity", () => {
     const explicit = render(<TaskActivityView task={task({ activity: { phase: "unknown" } })} />);
     expect(explicit.container.textContent).toContain("进展未知");
-    expect(explicit.container.textContent).toContain("活动内容未知");
+    expect(explicit.container.textContent).toContain("活动未知");
     expect(explicit.container.textContent).not.toContain("尚无活动记录");
     cleanup();
     render(<TaskActivityView task={task()} />);
     const view = screen.getByRole("region", { name: "执行活动（只读）" });
-    expect(view.textContent).toContain("尚无活动记录");
-    expect(view.textContent).toContain("未知不代表停机");
+    expect(view.textContent).toContain("暂无活动记录");
+    expect(view.textContent).toContain("停止未确认");
     expect(view.textContent).not.toMatch(/\d+\s*%/);
   });
 

@@ -132,7 +132,7 @@ async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setu
 const note = () => screen.getByLabelText("家族备注") as HTMLTextAreaElement;
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });
-const PUBLISHED = "已发布新版本。正在执行的任务继续使用原配置。";
+const PUBLISHED = "已发布新版本";
 
 afterEach(() => {
   cleanup();
@@ -149,7 +149,7 @@ describe("direct editing and the save bar", () => {
     expect(saveBar()).toBeNull();
     await user.clear(note());
     await user.type(note(), "本地草稿，未发布");
-    expect(within(saveBar()!).getByText("有 1 项未保存修改")).toBeTruthy();
+    expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(save());
     await waitFor(() => expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]));
@@ -182,13 +182,13 @@ describe("direct editing and the save bar", () => {
     await user.type(note(), "，补充");
     await user.click(screen.getByRole("switch", { name: "启用 high" }));
     await user.click(screen.getByRole("radio", { name: /优先/ }));
-    expect(within(saveBar()!).getByText("有 3 项未保存修改")).toBeTruthy();
+    expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
     // The records page shows neither the save bar nor any draft state.
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     expect(saveBar()).toBeNull();
     // The navigation still says a draft is waiting on the Buddy page.
     await user.click(screen.getByRole("link", { name: /^Buddy 配置\s*有未保存的修改$/ }));
-    expect(within(saveBar()!).getByText("有 3 项未保存修改")).toBeTruthy();
+    expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
   });
 
   it("discards from the save bar and returns to the published values", async () => {
@@ -197,7 +197,7 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "未保存的补充");
     await user.click(within(saveBar()!).getByRole("button", { name: "放弃" }));
-    await screen.findByText("已放弃未发布的修改。");
+    await screen.findByText("草稿已放弃");
     expect(saveBar()).toBeNull();
     expect(note().value).toBe("原备注");
     expect(f.command).not.toHaveBeenCalled();
@@ -209,7 +209,7 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "补充");
     await user.click(save());
-    await screen.findByText(/尚未确认编辑资格请求的结果/);
+    await screen.findByText(/编辑资格未知/);
     await user.click(save());
     await waitFor(() => expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(2));
     const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
@@ -228,7 +228,7 @@ describe("direct editing and the save bar", () => {
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
     await waitFor(() => expect(f.operations).toContain("evaluation_write_abort"), { timeout: 4000 });
-    await screen.findByText("已取消等待，编辑资格已释放；草稿保持不变。");
+    await screen.findByText("已取消等待；草稿已保留。");
     expect(note().value).toBe("原备注排队中的草稿");
     expect(saveBar()).toBeTruthy();
     expect(f.operations).not.toContain("user_policy_publish");
@@ -251,7 +251,7 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "补充");
     await user.click(save());
-    await screen.findByText(/尚未确认编辑资格状态/, {}, { timeout: 4000 });
+    await screen.findByText(/编辑资格未知/, {}, { timeout: 4000 });
     await user.click(save());
     await waitFor(() => expect(f.operations.filter(op => op === "evaluation_write_abort")).toHaveLength(1));
     const begins = f.operations.reduce<number[]>((all, op, index) => op === "evaluation_write_begin" ? [...all, index] : all, []);
@@ -266,13 +266,13 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "结果不明");
     await user.click(save());
-    await screen.findByText(/保存结果未确认/);
+    await screen.findByText(/保存结果未知/);
     // The draft and its staged payload survive an edit freeze until confirmed;
     // the field stays read-only rather than disabled, so it is still copyable.
     expect(note().value).toBe("原备注结果不明");
     expect(note().readOnly).toBe(true);
     expect(note().disabled).toBe(false);
-    expect(within(saveBar()!).getByText("有 1 项未保存修改")).toBeTruthy();
+    expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await screen.findByText(PUBLISHED);
     expect(f.published).toHaveLength(2);
@@ -286,10 +286,10 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "保留原请求");
     await user.click(save());
-    await screen.findByText(/保存结果未确认/);
+    await screen.findByText(/保存结果未知/);
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await waitFor(() => expect(f.published).toHaveLength(2));
-    await screen.findByText(/保存结果未确认/);
+    await screen.findByText(/保存结果未知/);
     expect(f.aborted).toHaveLength(0);
     await waitFor(() => expect(screen.getAllByRole("button", { name: "重试同一保存" })[0]!.getAttribute("aria-disabled")).not.toBe("true"));
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
@@ -308,12 +308,12 @@ describe("direct editing and the save bar", () => {
     await user.click(save());
     const banner = (await screen.findAllByRole("alert")).find(node => node.className.includes("conflict-banner"))!;
     expect(banner).toBeTruthy();
-    expect(within(banner).getByText(/设置已在别处更新/)).toBeTruthy();
+    expect(within(banner).getByText(/设置已更新/)).toBeTruthy();
     expect(note().value).toBe("基于 V2 的草稿");
     expect(f.operations).toContain("evaluation_write_abort");
     // Deliberate reload adopts the latest publication.
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
-    await screen.findByText("已加载评价表 V3。请核对后重新保存。");
+    await screen.findByText("已加载 V3；请核对后保存。");
     expect(note().value).toBe("他人发布的备注 V3");
     await user.type(note(), "（复核）");
     await user.click(save());
@@ -330,7 +330,7 @@ describe("direct editing and the save bar", () => {
     expect(save().getAttribute("aria-disabled")).toBe("true");
     await user.click(save());
     expect(f.command).not.toHaveBeenCalled();
-    expect((await screen.findAllByText(/没有评价表写入资格/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/无写入资格/)).length).toBeGreaterThan(0);
     expect(note().value).toBe("原备注离线草稿");
   });
 
@@ -345,7 +345,7 @@ describe("direct editing and the save bar", () => {
     expect(document.activeElement).toBe(button);
     await user.keyboard("{Enter}");
     expect(f.command).not.toHaveBeenCalled();
-    expect((await screen.findAllByText(/没有评价表写入资格/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/无写入资格/)).length).toBeGreaterThan(0);
   });
 
   it("refreshes program directory facts on discovery without uploading a draft", async () => {
@@ -375,16 +375,16 @@ describe("direct editing and the save bar", () => {
     // changes, so the draft keeps B and its own expectedRevision.
     const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
     expect(banner).toBeTruthy();
-    expect(banner.textContent).toContain("已被其他发布修改");
+    expect(banner.textContent).toContain("已在 V");
     expect(note().value).toBe("原备注，我的草稿");
     expect(f.published).toHaveLength(0);
     // Saving B under V3 is refused without an explicit conflict resolution.
     await user.click(save());
-    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
-    await screen.findByText("已加载评价表 V3。请核对后重新保存。");
+    await screen.findByText("已加载 V3；请核对后保存。");
     expect(note().value).toBe("他人发现期间发布");
   });
 
@@ -402,12 +402,12 @@ describe("direct editing and the save bar", () => {
     expect(note().value).toBe("原备注，未保存");
     expect(f.published).toHaveLength(0);
     await user.click(save());
-    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // Discard is the deliberate resolution; nothing was published implicitly.
     await user.click(within(banner).getByRole("button", { name: "放弃修改" }));
-    await screen.findByText("已放弃未发布的修改。");
+    await screen.findByText("草稿已放弃");
     expect(f.operations).not.toContain("user_policy_publish");
     expect(note().value).toBe("他人 V3");
   });
@@ -455,7 +455,7 @@ describe("direct editing and the save bar", () => {
     await user.click(within(section).getByText("high"));
     const high = within(section).getByText("high").closest("details")!;
     expect(high.open).toBe(true);
-    const empty = within(high).getByText("暂无评价证据。你可以让已配置 hey-my-buddy skill 的 Harness 执行一次模型评价更新，或在该 Harness 中设置定时更新任务。");
+    const empty = within(high).getByText("评价证据未记录");
     expect(empty.className).toContain("muted");
   });
 
@@ -471,7 +471,7 @@ describe("direct editing and the save bar", () => {
     expect(screen.getByRole("switch", { name: "启用 off" }).getAttribute("aria-checked")).toBe("false");
     const tag = screen.getByRole("group", { name: "off 档位" });
     expect(tag.textContent).toContain("未保存");
-    expect(within(saveBar()!).getByText("有 1 项未保存修改")).toBeTruthy();
+    expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     // The list row follows the draft immediately.
     expect(screen.getByRole("button", { name: /^deepseek-flash，已启用 0\/2/ })).toBeTruthy();
     await user.click(save());
@@ -569,10 +569,10 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "未确认的编辑资格");
     await user.click(save());
-    await screen.findByText(/尚未确认编辑资格请求的结果/);
+    await screen.findByText(/编辑资格未知/);
     expect(f.operations).toEqual(["evaluation_write_begin"]);
     await user.click(within(saveBar()!).getByRole("button", { name: "放弃" }));
-    await screen.findByText("已放弃未发布的修改。");
+    await screen.findByText("草稿已放弃");
     const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
     expect(begins).toHaveLength(2);
     // The retry reuses the request ID, so the board resolves the same intent.
@@ -588,14 +588,14 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "补充");
     await user.click(save());
-    await screen.findByText(/尚未确认编辑资格请求的结果/);
+    await screen.findByText(/编辑资格未知/);
     // Reverting the text leaves nothing unsaved, but the unknown begin keeps
     // the save bar so the user can resolve it deliberately.
     await user.clear(note());
     await user.type(note(), "原备注");
-    expect(within(saveBar()!).getByText("没有未保存的修改，上一次保存请求仍待核对")).toBeTruthy();
+    expect(within(saveBar()!).getByText("保存结果待核对")).toBeTruthy();
     await user.click(within(saveBar()!).getByRole("button", { name: "放弃" }));
-    await screen.findByText(/编辑资格的释放结果尚未确认/);
+    await screen.findByText(/编辑资格释放未知/);
     expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_begin"]);
     // The request identity survives, so the next save resolves it.
     await user.type(note(), "再次编辑");
@@ -616,8 +616,8 @@ describe("direct editing and the save bar", () => {
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
-    await screen.findByText(/未能确认编辑资格已释放/);
-    expect(screen.queryByText("已取消等待，编辑资格已释放；草稿保持不变。")).toBeNull();
+    await screen.findByText(/编辑资格释放未知/);
+    expect(screen.queryByText("已取消等待；草稿已保留。")).toBeNull();
     expect(note().value).toBe("原备注排队后取消");
     // The next save retries the retained abort with its original command ID.
     await user.click(save());
@@ -637,8 +637,8 @@ describe("direct editing and the save bar", () => {
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
-    await screen.findByText(/未能确认编辑资格已释放/);
-    expect(screen.queryByText("已取消等待，编辑资格已释放；草稿保持不变。")).toBeNull();
+    await screen.findByText(/编辑资格释放未知/);
+    expect(screen.queryByText("已取消等待；草稿已保留。")).toBeNull();
     expect(f.aborted[0]).toMatchObject({ writerId: "writer", generation: 1 });
   });
 
@@ -651,7 +651,7 @@ describe("direct editing and the save bar", () => {
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
-    await screen.findByText(/未能确认编辑资格已释放/);
+    await screen.findByText(/编辑资格释放未知/);
     const realNow = Date.now();
     const now = vi.spyOn(Date, "now").mockReturnValue(realNow + 130000);
     try {
@@ -675,7 +675,7 @@ describe("direct editing and the save bar", () => {
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
-    await screen.findByText("已取消等待，编辑资格已释放；草稿保持不变。");
+    await screen.findByText("已取消等待；草稿已保留。");
     // A confirmed cancellation clears the uncertain state: typing stays possible.
     expect(note().disabled).toBe(false);
     await user.type(note(), "后继续编辑");
@@ -690,7 +690,7 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "首次冲突");
     await user.click(save());
-    await screen.findByText(/记录已更新，此操作未提交/);
+    await screen.findByText(/记录已更新/);
     expect(note().disabled).toBe(false);
     await user.type(note(), "后重试");
     await user.click(save());
@@ -708,10 +708,10 @@ describe("direct editing and the save bar", () => {
       await act(async () => {
         fireEvent.click(save());
       });
-      for (let i = 0; i < 50 && !screen.queryByText(/保存结果未确认/); i++) {
+      for (let i = 0; i < 50 && !screen.queryByText(/保存结果未知/); i++) {
         await act(async () => { await Promise.resolve(); });
       }
-      expect(screen.getAllByText(/保存结果未确认/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/保存结果未知/).length).toBeGreaterThan(0);
       const renews = () => f.operations.filter(op => op === "evaluation_write_renew").length;
       const seen = renews();
       await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
@@ -727,7 +727,7 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "补充");
     await user.click(save());
-    await screen.findByText(/尚未确认编辑资格请求的结果/);
+    await screen.findByText(/编辑资格未知/);
     await new Promise(resolve => setTimeout(resolve, 900));
     expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(1);
     expect(f.operations).not.toContain("evaluation_write_renew");

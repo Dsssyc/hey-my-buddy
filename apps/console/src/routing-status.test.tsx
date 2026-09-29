@@ -47,7 +47,7 @@ afterEach(() => cleanup());
 describe("routing health details (R4)", () => {
   it("says the summary is unavailable when the snapshot carries no routingHealth", () => {
     renderBar(snapshot(undefined));
-    expect(health().textContent).toContain("路由摘要暂不可用");
+    expect(health().textContent).toContain("路由摘要未知");
     // Missing data is never rendered as a zero-failure claim.
     expect(health().textContent).not.toContain("失败 0 次");
     expect(bar().textContent).toContain("状态：未知");
@@ -55,7 +55,7 @@ describe("routing health details (R4)", () => {
 
   it("reports an empty window as no recorded samples rather than zero failures", () => {
     renderBar(snapshot({ ...healthy, sampleCount: 0, lastSuccessAt: null }));
-    expect(health().textContent).toContain("窗口内暂无已记录样本（窗口上限 20 次）");
+    expect(health().textContent).toContain("最近 20 次内暂无样本");
     expect(health().textContent).not.toContain("失败 0 次");
     expect(bar().textContent).toContain("状态：暂无样本");
   });
@@ -77,7 +77,6 @@ describe("routing health details (R4)", () => {
     expect(status.textContent).toContain("弃权 3 次");
     expect(status.textContent).toContain("取消 1 次");
     expect(status.textContent).toContain("过期 2 次");
-    expect(status.textContent).toContain("不计为失败");
     expect(status.textContent).not.toContain("无成功记录");
     expect(status.textContent).toMatch(/最后一次成功：09-25 \d{2}:\d{2} · dec-41/);
     expect(status.querySelectorAll(".routing-failures li").length).toBe(3);
@@ -90,7 +89,7 @@ describe("routing health details (R4)", () => {
     const tip = document.getElementById(help.getAttribute("aria-describedby")!)!;
     expect(tip.className).toContain("help-tip");
     expect(tip.parentElement).toBe(document.body);
-    expect(tip.textContent).toContain("读取不触发模型");
+    expect(tip.textContent).toContain("弃权、取消和过期不计为失败");
     expect(screen.queryByRole("button", { name: /重试/ })).toBeNull();
   });
 
@@ -102,7 +101,7 @@ describe("routing health details (R4)", () => {
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
     }));
     expect(health().textContent).toContain("最近 12 次中失败 2 次");
-    expect(health().textContent).toContain("弃权 1 次 · 取消 1 次 · 过期 1 次，不计为失败");
+    expect(health().textContent).toContain("弃权 1 次 · 取消 1 次 · 过期 1 次");
     expect(within(health()).getByText("预算耗尽 3 次 · 边界检查拒绝 2 次 · 输入已变化 1 次")).toBeTruthy();
   });
 
@@ -132,10 +131,14 @@ describe("the one-line routing status", () => {
     await userEvent.setup().click(screen.getByRole("radio", { name: "简要" }));
     expect(changes[0].configuration.defaultRoutingMode).toBe("fast");
     expect(changes[1].configuration.routingBudget).toBe("brief");
-    expect(screen.getByLabelText("审阅预算上限").textContent).toContain("标准 300 秒 / 24 次工具调用");
-    expect(screen.getByLabelText("审阅预算上限").textContent).not.toContain("字节");
-    expect(screen.getByText(/把任务描述发送给快速 Router 所在的模型提供方/).textContent).toContain("读取冻结的仓库副本");
-    expect(screen.getByText(/唯一合法候选由程序直接选定/)).toBeTruthy();
+    const budgetHelp = screen.getByRole("button", { name: "路由预算说明", hidden: true });
+    const budgetTip = document.getElementById(budgetHelp.getAttribute("aria-describedby")!)!;
+    expect(budgetTip.textContent).toContain("标准 300 秒 / 24 次工具调用");
+    expect(budgetTip.textContent).not.toContain("字节");
+    const flowHelp = screen.getByRole("button", { name: "路由数据流向", hidden: true });
+    const flowTip = document.getElementById(flowHelp.getAttribute("aria-describedby")!)!;
+    expect(flowTip.textContent).toContain("任务描述发给快速 Router");
+    expect(flowTip.textContent).toContain("冻结的仓库副本");
   });
   it("shows Router, budget and health in one line and no warning when nothing needs handling", () => {
     renderBar(snapshot(healthy));
@@ -165,18 +168,18 @@ describe("the one-line routing status", () => {
     const warning = bar().querySelector(".routing-warning")!.textContent;
     expect(warning).toContain("当前审阅 Router Test · high 当前 Harness 版本尚未验证只读路由调用");
     await user.click(screen.getByRole("button", { name: "详情" }));
-    expect(screen.getByText(/审阅 Router 需要当前 Harness 版本已验证只读路由调用/)).toBeTruthy();
+    expect(screen.getByText(/审阅 Router 需已验证只读调用/)).toBeTruthy();
   });
 
   it("warns when no Router is set and when routing keeps failing", () => {
     const view = renderBar(snapshot(healthy, { configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: null , defaultRoutingMode: "review" as const, routingBudget: "standard"} }));
     expect(bar().textContent).toContain("快速 Router：尚未指定，请选择");
     expect(bar().textContent).toContain("审阅 Router：尚未指定，请选择");
-    expect(bar().querySelector(".routing-warning")!.textContent).toContain("尚未指定快速 Router");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("未指定快速 Router");
     view.unmount();
     renderBar(snapshot({ ...healthy, failureCount: 3, consecutiveFailures: 3 }));
     expect(bar().textContent).toContain("状态：连续失败 3 次");
-    expect(bar().querySelector(".routing-warning")!.textContent).toContain("请在“详情”中查看失败明细");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("请查看详情");
   });
 
   it("gathers the Router, the budget and health under 详情 and jumps to the Router's family", async () => {

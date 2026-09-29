@@ -40,7 +40,7 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} strictRefresh={() => state.refresh(undefined, true)} connectionError={state.error} updatedAt={state.updatedAt} /> :
     <main className="startup"><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" />
       <h1>{state.error ? "暂时无法连接黑板" : "正在连接本地黑板"}</h1>
-      <p role={state.error ? "alert" : "status"}>{state.error || "读取持久记录，不调用模型。"}</p>
+      <p role={state.error ? "alert" : "status"}>{state.error || "正在连接…"}</p>
       {state.error && <button className="button primary" onClick={() => void state.refresh()}>重新连接</button>}
     </main>;
 }
@@ -61,8 +61,8 @@ function SaveBar({ editor, mutationsAvailable, describedBy }: {
     : editor.confirming ? "重试同一保存" : "保存";
   return <div className="save-bar" role="region" aria-label="未保存的修改">
     <span className="save-bar-state" role="status">{editor.dirty
-      ? `有 ${editor.changeCount} 项未保存修改`
-      : "没有未保存的修改，上一次保存请求仍待核对"}</span>
+      ? `${editor.changeCount} 项未保存`
+      : "保存结果待核对"}</span>
     <div className="actions">
       {editor.waiting && <button type="button" className="button small-button" onClick={editor.cancelSave}>取消等待</button>}
       <button type="button" className="button small-button" aria-disabled={editor.busy || editor.confirming || undefined}
@@ -90,11 +90,11 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
   const writesAvailable = !connectionError && sessionWritable;
   const mutationsAvailable = writesAvailable && snapshot.capabilities.evaluationWriteGate !== false;
   const unavailableReason = connectionError
-    ? "与本地黑板的连接已中断：保存已停用，草稿仍保留在本页。"
+    ? "连接中断；请刷新重试，草稿已保留。"
     : !sessionWritable
-      ? "登录已失效：在终端运行 buddy console 重新登录后，本页会自动恢复。草稿保留在本页。"
+      ? "登录已失效；请运行 buddy console 重新登录，草稿已保留。"
       : snapshot.capabilities.evaluationWriteGate === false
-        ? "当前会话没有评价表写入资格：保存已停用。"
+        ? "无写入资格；保存不可用。"
         : "";
   const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason, authority);
   function select(key: Tab) {
@@ -112,8 +112,8 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
     || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
   // P1.2: the internal table revision lives only in the connection tooltip.
   const connectionTitle = connectionError
-    ? `与本地黑板的连接已中断：${connectionError} 请检查本地服务，或点击刷新重试。`
-    : `评价表版本 V${snapshot.tableRevision} · 关闭页面不影响后台任务`;
+    ? `连接中断：${connectionError} 请检查服务或刷新重试。`
+    : `评价表 V${snapshot.tableRevision}`;
   async function refreshAll() {
     if (refreshing) return;
     setRefreshing(true);
@@ -127,7 +127,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
     finally { setRefreshing(false); }
   }
   const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
-  const automaticRead = updatedAt === null ? "自动读取尚未完成" : `每 3 秒自动读取 · 数据截至 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(updatedAt)}`;
+  const automaticRead = updatedAt === null ? "数据未更新" : `数据截至 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(updatedAt)}`;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddy";
   return <div className="app-shell">
@@ -147,14 +147,14 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
       <div className="header-status">
         {connectionError && <span className="connection" title={connectionTitle}>连接中断 · 请检查本地服务并刷新</span>}
         {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
-        <button className="icon-button" aria-label="刷新工作台" title={`${automaticRead} · ${refreshNote || "点击刷新可见数据"} · 只读，不调用模型`} disabled={refreshing} onClick={() => void refreshAll()}><span className={refreshing ? "refresh-spinning" : undefined}><Icon name="refresh" /></span></button>
+        <button className="icon-button" aria-label="刷新工作台" title={refreshNote || automaticRead} disabled={refreshing} onClick={() => void refreshAll()}><span className={refreshing ? "refresh-spinning" : undefined}><Icon name="refresh" /></span></button>
       </div>
     </header>
     <main id="main" className="main-content" tabIndex={-1}>
       <h1 className="sr-only">{tabs[tab]}</h1>
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
       {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
-        <span title={conflictTitle}>设置已在别处更新，你的草稿仍保留。</span>
+        <span title={conflictTitle}>设置已更新；请核对草稿。</span>
         {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
           {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
         </ul>}

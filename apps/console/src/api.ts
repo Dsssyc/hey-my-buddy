@@ -14,17 +14,17 @@ export class ApiError extends Error {
 }
 
 const messages: Record<string, string> = {
-  REVISION_CONFLICT: "记录已更新，此操作未提交。请刷新并核对最新版本后再操作。",
-  CONFLICT: "此操作与现有记录冲突，未覆盖已有内容。",
-  FORBIDDEN: "当前页面没有这项操作的权限，请从 hey-my-buddy 重新打开控制台。",
-  WRITER_EXPIRED: "编辑权限已过期。你的草稿仍在，请重新取得权限。",
-  WRITER_NOT_ACTIVE: "编辑权限已失效。草稿仍然保留，需要重新取得权限。",
-  STALE_GENERATION: "操作资格已失效，未提交任何变更。请刷新并核对当前负责人。",
-  SHUTDOWN_UNCONFIRMED: "尚未确认前一次执行已停止，暂时不能重试。",
-  STORAGE_INCOMPLETE: "清理尚未完成：删除已经开始，重试同一请求会继续完成它。",
-  PLAN_EXPIRED: "计划已过期。请重新检查占用。",
-  CONSOLE_SESSION_EXPIRED: "登录已失效：在终端运行 buddy console 重新登录后，本页会自动恢复。",
-  CONSOLE_ENTRY_EXPIRED: "控制台入口票据已过期或已被使用，请重新打开入口取得新链接。",
+  REVISION_CONFLICT: "记录已更新；请刷新核对后重试。",
+  CONFLICT: "记录冲突；请刷新核对后重试。",
+  FORBIDDEN: "无操作权限；请重新打开控制台。",
+  WRITER_EXPIRED: "编辑权限已过期；请重新取得权限，草稿已保留。",
+  WRITER_NOT_ACTIVE: "编辑权限已失效；请重新取得权限，草稿已保留。",
+  STALE_GENERATION: "操作资格已失效；请刷新核对负责人。",
+  SHUTDOWN_UNCONFIRMED: "停止未确认；请稍后核对再重试。",
+  STORAGE_INCOMPLETE: "清理未完成；请重试同一请求。",
+  PLAN_EXPIRED: "计划已过期；请重新检查。",
+  CONSOLE_SESSION_EXPIRED: "登录已失效；请运行 buddy console 重新登录。",
+  CONSOLE_ENTRY_EXPIRED: "入口已过期；请重新打开控制台。",
 };
 
 /**
@@ -56,7 +56,7 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",
-      "控制台会话信息缺失或无法识别；为安全起见不会授予写权限，请检查服务版本或重新登录。",
+      "会话信息无法识别；请检查服务版本或重新登录。",
     );
   }
   return session as ConsoleSession;
@@ -265,7 +265,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      throw new ApiError("NETWORK", "无法连接本地黑板。已有任务仍由后台管理。");
+      throw new ApiError("NETWORK", "无法连接本地黑板；请刷新重试。");
     }
     let data: unknown;
     try {
@@ -305,7 +305,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       ) {
         throw new ApiError(
           "INVALID_RESPONSE",
-          "控制台数据不完整，请检查服务版本。",
+          "控制台数据不完整；请检查服务版本。",
         );
       }
       // A valid session descriptor is required; a missing or malformed one is
@@ -327,7 +327,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
       if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-        throw new ApiError("INVALID_RESPONSE", "操作响应不完整，提交结果尚未确认。");
+        throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
       }
       return data.result;
     },
@@ -342,7 +342,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const data = await request(`/tasks?${query}`, { signal }) as TaskPage;
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
-        throw new ApiError("INVALID_RESPONSE", "委派历史响应不完整，请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "委派历史不完整；请检查服务版本。");
       }
       return data;
     },
@@ -356,7 +356,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.objectives.every(validObjectiveSummary)) {
-        throw new ApiError("INVALID_RESPONSE", "工作目标列表响应不完整，请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "工作目标列表不完整；请检查服务版本。");
       }
       return data;
     },
@@ -384,7 +384,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
         || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
         || typeof data.filtered !== "boolean") {
-        throw new ApiError("INVALID_RESPONSE", "工作目标时间轴响应不完整，请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "工作目标时间轴不完整；请检查服务版本。");
       }
       return data;
     },
@@ -407,7 +407,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
       const mismatch = !validStorageApplyResult(result) || result.planId !== planId || result.complete !== true;
       if (mismatch) {
-        throw new ApiError("INVALID_RESPONSE", "清理尚未完成：回复不完整或与本计划不符，结果未知；可重试同一请求。");
+        throw new ApiError("INVALID_RESPONSE", "清理结果未知；请重试同一请求。");
       }
       return result;
     },
@@ -426,7 +426,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const rows = commandHarnesses(reply);
       if (!rows.length) {
-        throw new ApiError("INVALID_RESPONSE", "重新检测的回复不完整，请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "重新检测结果不完整；请检查服务版本。");
       }
       return rows;
     },
@@ -448,7 +448,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
       if (!row || row.adapter.toLowerCase() !== adapter.trim().toLowerCase()) {
-        throw new ApiError("INVALID_RESPONSE", "手动路径保存结果不完整，请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "路径保存结果未知；请检查服务版本。");
       }
       return row;
     },
@@ -463,7 +463,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       body: JSON.stringify({ operation, params }),
     }) as { ok: boolean; result: T };
     if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-      throw new ApiError("INVALID_RESPONSE", "操作响应不完整，提交结果尚未确认。");
+      throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
     }
     return data.result;
   }

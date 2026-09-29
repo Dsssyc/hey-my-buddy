@@ -151,7 +151,7 @@ export function Empty({
   action,
 }: {
   title: string;
-  children: ReactNode;
+  children?: ReactNode;
   action?: ReactNode;
 }) {
   return (
@@ -160,7 +160,7 @@ export function Empty({
         ＋
       </div>
       <h2>{title}</h2>
-      <p>{children}</p>
+      {children != null && children !== "" && <p>{children}</p>}
       {action}
     </div>
   );

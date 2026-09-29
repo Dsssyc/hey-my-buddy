@@ -26,15 +26,15 @@ export type MetricLimitation = {
 };
 
 export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
-  scope: "读取范围不完整（筛选或截断）",
+  scope: "读取范围不完整",
   rows: "委派行已截断",
   spans: "执行片段已截断",
   events: "Host 事件已截断",
-  "missing-time": "有片段缺少可用时间",
-  reversed: "有片段时间颠倒",
-  "clock-skew": "有片段存在时钟偏差（clockSkew）",
-  "unconfirmed-end": "有片段结束未确认，未计入执行时长",
-  running: "有片段仍在进行，计至读取时刻",
+  "missing-time": "片段缺少时间",
+  reversed: "片段时间异常",
+  "clock-skew": "片段存在时钟偏差",
+  "unconfirmed-end": "结束未确认 · 未计入",
+  running: "运行中 · 计至读取时刻",
 };
 
 /** Scope-level limitation keys: the read itself cannot prove absence. */

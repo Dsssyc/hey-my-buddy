@@ -27,7 +27,7 @@ export function RoutingPanel({ value }: { value: Workflow }) {
       {value.routing.decisionId && <><dt>决策 ID</dt><dd className="mono wrap">{value.routing.decisionId}</dd></>}
     </dl>}
     {needsHost && <p className="small muted" role="status">
-      路由需要 Host 补充配置：控制台不再提供补齐或重试表单，请由 Host 通过既有 CLI 流程处理后刷新查看。
+      路由需要 Host 补充配置；处理后请刷新。
     </p>}
   </section>;
 }

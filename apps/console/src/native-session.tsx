@@ -120,6 +120,6 @@ export function NativeSessionView({ task, turnSessionId }: { task: Task; turnSes
       <dt>会话 ID</dt><dd className="mono wrap">{sessionId || "未记录"}</dd>
       <dt>存储、可见性与恢复信息</dt><dd>未记录（未知）</dd>
     </dl>}
-    <p className="small muted">信息来自执行收据。原生会话保存在私有库时，可通过本任务的活动、工具摘要与固定产物查看执行情况。</p>
+
   </section>;
 }

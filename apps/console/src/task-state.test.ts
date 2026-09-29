@@ -36,7 +36,7 @@ describe("delegation title rule (0.16 T1)", () => {
     expect(title.text.endsWith("…")).toBe(true);
     // Host-revised 0.16: the shared tooltip keeps the COMPLETE first line.
     expect(title.fullText).toBe(long);
-    expect(titleTooltip(title)).toBe(long + "（完整任务见详情）");
+    expect(titleTooltip(title)).toBe(long);
     const explicit = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1, title: "完整显式标题" } }));
     expect(titleTooltip(explicit)).toBe("完整显式标题");
   });

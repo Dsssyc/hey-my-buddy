@@ -109,7 +109,7 @@ describe("harness quota observations", () => {
     expect(within(facts).getByText("接近上限")).toBeTruthy();
     expect(within(facts).getByText("使用率 41%")).toBeTruthy();
     expect(within(facts).getByText(/重置 \d{2}-\d{2} \d{2}:\d{2}/)).toBeTruthy();
-    expect(within(facts).getByText(/不代表实时账户额度/)).toBeTruthy();
+    expect(within(facts).getByText(/非实时/)).toBeTruthy();
   });
 
   it("never shows a stale unknown observation as 0% or as available", async () => {
@@ -119,7 +119,7 @@ describe("harness quota observations", () => {
     expect(within(zcode).getByText("使用率未知")).toBeTruthy();
     expect(within(zcode).queryByText(/使用率 0%/)).toBeNull();
     expect(within(zcode).getByText(/最近一次观测，可能已过期 · 来源 zcode-native/)).toBeTruthy();
-    expect(within(zcode).getByText(/可能已经过期；不代表当前或实时的账户额度/)).toBeTruthy();
+    expect(within(zcode).getAllByText(/已过期/).length).toBeGreaterThan(0);
     // The stale observation raises no near-limit reminder of its own: the only
     // reminder is DSH's row badge plus the status line naming DSH.
     expect(within(zcode).queryByText(/接近上限/)).toBeNull();

@@ -102,7 +102,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     // Structurally protected categories show — with their own tooltip.
     expect(within(rows[3]!).getByText("—")).toBeTruthy();
     expect(within(rows[4]!).getByText("—")).toBeTruthy();
-    expect(rows[4]!.querySelector('[title="看板、记录和当前备份不会被清理"]')).toBeTruthy();
+    expect(rows[4]!.querySelector('[title="看板、记录及当前备份受保护"]')).toBeTruthy();
   });
 
   it("keeps unknown category and reason codes visible instead of dropping them", async () => {
@@ -127,7 +127,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     const orphans = screen.getByRole("heading", { name: /游离进程（2）/ }).closest<HTMLElement>(".storage-orphans")!;
-    expect(orphans.textContent).toContain("仅列出 · 停止需要你另行授权，清理不会停止它们。");
+    expect(orphans.textContent).toContain("清理不会停止这些进程。");
     expect(orphans.textContent).toContain("服务");
     expect(orphans.textContent).toContain("执行进程");
     expect(orphans.textContent).toContain("pid 4321");
@@ -165,7 +165,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
     expect(await screen.findByText(/已回收 2\.5 GB（2 项）/)).toBeTruthy();
-    expect(screen.getByText("跳过 1 项（数据已变化或条件不再满足）")).toBeTruthy();
+    expect(screen.getByText("跳过 1 项 · 数据已变化")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看逐项原因" }));
     expect(screen.getByText(/\/private\/runtimes\/old：数据已变化/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看已删项目" }));
@@ -174,7 +174,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(applies).toHaveLength(1);
     expect(applies[0]!.params).toEqual({ planId: "plan-1", commandId: expect.any(String), confirm: true });
     // The applied plan is marked expired and the panel never re-checks itself.
-    expect(screen.getByText("已过期，重新检查查看最新占用")).toBeTruthy();
+    expect(screen.getByText("已过期 · 请重新检查")).toBeTruthy();
   });
 
   it("shows an unknown apply result with 重试同一请求 reusing the command identity", async () => {
@@ -184,7 +184,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await checkUsage(user);
     await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
-    expect(await screen.findByText("清理结果未确认：可能已经执行。")).toBeTruthy();
+    expect(await screen.findByText("清理结果未知，可能已执行")).toBeTruthy();
     const firstCommandId = (first.calls.find(call => call.operation === "storage_apply")!.params as { commandId: string }).commandId;
     // A retry replays the same command and the same plan.
     first.command.mockImplementation(async (operation: string) => {
@@ -220,7 +220,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     refused = true;
     await user.click(screen.getByRole("button", { name: "重新检查" }));
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("此操作与现有记录冲突");
+    expect(alert.textContent).toContain("记录冲突");
     expect(screen.getByText("ZCode 私有主目录")).toBeTruthy();
   });
 
@@ -241,13 +241,13 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
     // Neither a failure nor a claim that nothing ran.
-    expect(await screen.findByText("清理尚未完成：删除已经开始，尚未全部完成。")).toBeTruthy();
+    expect(await screen.findByText("清理未完成 · 已开始删除")).toBeTruthy();
     const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
     expect(retry.disabled).toBe(false);
     // A fresh plan would discard the unresolved operation, so re-checking is refused.
     const recheck = screen.getByRole("button", { name: "重新检查" }) as HTMLButtonElement;
     expect(recheck.disabled).toBe(true);
-    expect(recheck.getAttribute("title")).toContain("换新计划会丢弃未完成的清理");
+    expect(recheck.getAttribute("title")).toContain("请先重试同一请求");
     expect(f.calls.filter(call => call.operation === "storage_plan")).toHaveLength(1);
     // The retry replays the same planId/commandId and then completes.
     f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());
@@ -268,14 +268,14 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await checkUsage(user);
     await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
-    expect(await screen.findByText("清理结果未确认：可能已经执行。")).toBeTruthy();
+    expect(await screen.findByText("清理结果未知，可能已执行")).toBeTruthy();
     const firstCommandId = (f.calls.find(call => call.operation === "storage_apply")!.params as { commandId: string }).commandId;
     await new Promise(resolve => setTimeout(resolve, 400));
     // The plan's window has passed, but the recovery retry stays enabled —
     // the durable receipt replays regardless of plan expiry.
     const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
     expect(retry.disabled).toBe(false);
-    expect(retry.getAttribute("title")).toContain("不会开始新的清理");
+    expect(retry.getAttribute("title")).toContain("重试同一请求可继续或核对清理");
     const recheck = screen.getByRole("button", { name: "重新检查" }) as HTMLButtonElement;
     expect(recheck.disabled).toBe(true);
     f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());
@@ -291,7 +291,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const user = userEvent.setup();
     render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    expect(screen.getByText("计划已过期，重新检查查看最新占用")).toBeTruthy();
+    expect(screen.getByText("计划已过期 · 请重新检查")).toBeTruthy();
     const clean = screen.getByRole("button", { name: /清理可回收数据/ }) as HTMLButtonElement;
     expect(clean.disabled).toBe(true);
     expect(clean.getAttribute("title")).toContain("计划已过期");

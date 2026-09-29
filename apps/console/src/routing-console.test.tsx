@@ -137,7 +137,7 @@ describe("routing configuration", () => {
     await user.click(await screen.findByRole("button", { name: "详情" }));
     const budget = screen.getByRole("radiogroup", { name: "审阅预算" });
     expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
-    expect(screen.getAllByText(/快速路由固定 60 秒，不调用工具/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/快速路由固定 60 秒/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
@@ -284,7 +284,7 @@ describe("delegation routing rationale", () => {
     value.routing = { status: "explicit", decisionId: null };
     const command = vi.fn();
     render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
-    expect(screen.getByText(/Host 指定.*未调用智能路由/)).toBeTruthy();
+    expect(screen.getAllByText(/Host 指定/)[0]).toBeTruthy();
     expect(screen.queryByRole("region", { name: "决策依据详情" })).toBeNull();
     expect(command).not.toHaveBeenCalled();
   });
@@ -364,7 +364,7 @@ describe("delegation routing rationale", () => {
     const turns = screen.getByText("执行回合与配置对应").closest("details")!;
     await user.click(within(turns).getByText("执行回合与配置对应"));
     const oldTurn = within(turns).getByText("第 1 回合").closest("li")!;
-    expect(within(oldTurn).getByText("未记录此回合与路由的对应关系。")).toBeTruthy();
+    expect(within(oldTurn).getByText("回合路由未记录")).toBeTruthy();
     expect(within(oldTurn).queryByRole("button")).toBeNull();
     await user.click(within(turns).getByRole("button", { name: "查看此回合的决定" }));
     await screen.findByText("bound-decision 的持久选择依据");

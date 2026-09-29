@@ -85,7 +85,7 @@ describe("native session evidence from the attempt receipt", () => {
     expect(view.textContent).toContain("私有原生根");
     // No fabricated launcher: a private store cannot be opened from this page.
     expect(screen.queryByRole("link")).toBeNull();
-    expect(view.textContent).toContain("可通过本任务的活动、工具摘要与固定产物查看执行情况");
+    expect(view.textContent).toContain("原生会话");
   });
 
   it("renders the Codex native session as harness-owned with unverified visibility", () => {

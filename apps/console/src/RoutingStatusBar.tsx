@@ -7,7 +7,7 @@ import { profileTitle } from "./profile-display";
 import { isDecisionCandidate, isFastRouterCandidate, routerAttention } from "./policy";
 
 export const BUDGET_LABEL: Record<RoutingBudget, string> = { brief: "简要", standard: "标准", deep: "深入" };
-const BUDGET_HELP = "审阅路由的预算档位。快速路由固定 60 秒，不调用工具。保存后用于后续路由。";
+const BUDGET_HELP = "审阅预算用于后续路由；快速路由固定 60 秒。";
 const MODE_LABEL: Record<RoutingMode, string> = { fast: "快速", review: "审阅" };
 
 /**
@@ -21,7 +21,7 @@ export function healthSummary(health: RoutingHealth | undefined): { text: string
   if (health.consecutiveFailures > 0) {
     return {
       text: `连续失败 ${health.consecutiveFailures} 次`,
-      warning: `路由最近连续失败 ${health.consecutiveFailures} 次：请在“详情”中查看失败明细；持续失败时更换 Router。`,
+      warning: `路由连续失败 ${health.consecutiveFailures} 次；请查看详情，必要时更换 Router。`,
     };
   }
   return { text: "正常", warning: "" };
@@ -39,22 +39,21 @@ export function RoutingHealthDetails({ health }: { health: RoutingHealth | undef
     health.inputChangedCount == null ? null : `输入已变化 ${health.inputChangedCount} 次`,
   ].filter((entry) => entry !== null) : [];
   return <div className="routing-status" aria-label="路由健康">
-    <h3>路由健康 <Help label="路由健康说明">只读统计，读取不触发模型；弃权、取消和过期结果不计为失败；最近的失败记录最多列出 5 条。</Help></h3>
+    <h3>路由健康 <Help label="路由健康说明">弃权、取消和过期不计为失败；显示最近 5 条失败。</Help></h3>
     {!health
-      ? <p className="muted">路由摘要暂不可用。</p>
+      ? <p className="muted">路由摘要未知</p>
       : health.sampleCount === 0
-        ? <p className="muted">窗口内暂无已记录样本（窗口上限 {health.windowSize} 次），没有可报告的成功或失败。</p>
+        ? <p className="muted">最近 {health.windowSize} 次内暂无样本</p>
         : <>
           <p className="small">
             最近 {health.sampleCount} 次中失败 {health.failureCount} 次（窗口上限 {health.windowSize} 次）
             {health.consecutiveFailures > 0 ? ` · 连续失败 ${health.consecutiveFailures} 次` : ""}
           </p>
-          <p className="small muted">
+          {(health.abstentionCount > 0 || health.cancelledCount > 0 || health.staleCount > 0) && <p className="small muted">
             {health.abstentionCount > 0 ? `弃权 ${health.abstentionCount} 次` : ""}
             {health.cancelledCount > 0 ? `${health.abstentionCount > 0 ? " · " : ""}取消 ${health.cancelledCount} 次` : ""}
-            {health.staleCount > 0 ? ` · 过期 ${health.staleCount} 次` : ""}
-            {(health.abstentionCount > 0 || health.cancelledCount > 0 || health.staleCount > 0) ? "，不计为失败" : "无弃权、取消或过期结果"}
-          </p>
+            {health.staleCount > 0 ? `${health.abstentionCount > 0 || health.cancelledCount > 0 ? " · " : ""}过期 ${health.staleCount} 次` : ""}
+          </p>}
           {routingOutcomes.length > 0 && <p className="small muted">{routingOutcomes.join(" · ")}</p>}
           <p className="small">
             最后一次成功：{health.lastSuccessAt ? `${dayClock(health.lastSuccessAt)}${health.lastSuccessDecisionId ? ` · ${health.lastSuccessDecisionId}` : ""}` : "无成功记录"}
@@ -94,7 +93,7 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
   const budgetDirty = !!editor.draft && (snapshot.configuration.routingBudget ?? "standard") !== budget;
   const health = healthSummary(snapshot.routingHealth);
   const warnings = (["fast", "review"] as RoutingMode[]).map(mode => !routerIds[mode]
-    ? `尚未指定${MODE_LABEL[mode]} Router：请在档位菜单中选择。`
+    ? `未指定${MODE_LABEL[mode]} Router；请在档位菜单中选择。`
     : routerAttention(data, mode)?.message).filter(Boolean);
   const warning = warnings.join(" ") || health.warning;
   function setBudget(value: RoutingBudget) {
@@ -120,7 +119,7 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
     </div>
     <div id="routing-details" className="routing-details" hidden={!open}>
       <div className="routing-detail-block">
-        <h3>Router 位置 <Help label="Router 说明">快速 Router 需要所属 Harness 支持无工具路由调用；审阅 Router 需要当前 Harness 版本已验证只读路由调用。两者都需要已启用且可用，在对应档位的菜单中设置。</Help></h3>
+        <h3>Router 位置 <Help label="Router 说明">快速 Router 需支持无工具调用；审阅 Router 需已验证只读调用。请在已启用档位的菜单中设置。</Help></h3>
         {(["fast", "review"] as RoutingMode[]).map(mode => <p className="router-line" key={mode}>
           <span>{MODE_LABEL[mode]} Router：</span><strong>{name(mode)}</strong>
           {routerIds[mode] && <Badge tone={candidate(mode) ? "green" : "amber"}>{candidate(mode) ? "可担任" : "需要处理"}</Badge>}
@@ -128,16 +127,15 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
         </p>)}
       </div>
       <div className="routing-detail-block">
-        <h3>默认模式</h3>
+        <h3>默认模式 <Help label="路由数据流向">需要 Router 判断时，快速模式会将任务描述发给快速 Router 的模型提供方，包括交给其他模型的任务；审阅模式还会读取冻结的仓库副本。单一候选由程序选择。</Help></h3>
         <div className="segmented" role="radiogroup" aria-label="默认路由模式">
           {(["fast", "review"] as RoutingMode[]).map(mode => <label key={mode} className={"segment" + (defaultMode === mode ? " checked" : "")}>
             <input type="radio" name="default-routing-mode" checked={defaultMode === mode} disabled={!editor.editing} onChange={() => setMode(mode)} />{MODE_LABEL[mode]}
           </label>)}
         </div>
-        <p className="small muted">快速路由固定 60 秒，不调用工具。需要 Router 选择时，快速模式会把任务描述发送给快速 Router 所在的模型提供方，包括准备交给其他模型执行的任务；审阅模式还会读取冻结的仓库副本。唯一合法候选由程序直接选定，不调用 Router。</p>
       </div>
       <div className="routing-detail-block">
-        <h3>审阅预算 <Help label="路由预算说明">{BUDGET_HELP}</Help></h3>
+        <h3>审阅预算 <Help label="路由预算说明">{BUDGET_HELP}{snapshot.configuration.routingBudgetLimits && ` 当前记录：${BUDGET_LABEL[snapshot.configuration.routingBudgetLimits.preset]} ${snapshot.configuration.routingBudgetLimits.timeoutSeconds} 秒 / ${snapshot.configuration.routingBudgetLimits.toolCalls} 次工具调用。`}</Help></h3>
         <div className="segmented" role="radiogroup" aria-label="审阅预算">
           {(Object.keys(BUDGET_LABEL) as RoutingBudget[]).map(value => <label key={value}
             className={"segment" + (budget === value ? " checked" : "")}>
@@ -146,9 +144,6 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
             {BUDGET_LABEL[value]}
           </label>)}
         </div>
-        {snapshot.configuration.routingBudgetLimits && <p className="small muted" aria-label="审阅预算上限">
-          当前记录：{BUDGET_LABEL[snapshot.configuration.routingBudgetLimits.preset]} {snapshot.configuration.routingBudgetLimits.timeoutSeconds} 秒 / {snapshot.configuration.routingBudgetLimits.toolCalls} 次工具调用
-        </p>}
       </div>
       <RoutingHealthDetails health={snapshot.routingHealth} />
     </div>

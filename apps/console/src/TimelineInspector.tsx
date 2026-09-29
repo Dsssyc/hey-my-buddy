@@ -4,7 +4,7 @@ import type { TimelineItem } from "./objective-display";
 import { buildInspectorCard, type CardField, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
 import type { FriendlyProfile } from "./objective-display";
 
-const MISSING_TITLE = "该记录不在当前读取范围内（可能已截断或被筛选），不能从这张卡片打开";
+const MISSING_TITLE = "记录在当前范围外，无法打开";
 
 export type TimelineInspectorProps = {
   selection: InspectorSelection | null;
@@ -70,7 +70,7 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
           onClick={onUnpin}>×</button>
       </span>
     </div>
-    {missing && <p className="inspector-missing">该记录不在当前读取范围内（可能已截断或被筛选）。</p>}
+    {missing && <p className="inspector-missing">记录在当前范围外</p>}
     <dl className="inspector-fields">
       {card.fields.map(field => <FieldView key={field.label} field={field} onSelectItem={onSelectItem} onSelectRun={onSelectRun} />)}
     </dl>
@@ -83,7 +83,7 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
             aria-disabled={missing || undefined} title={missing ? MISSING_TITLE : undefined}
             onClick={() => { if (!missing) onOpen(item); }}>打开</button>
         </span>)}
-        {truncatedEvents && <span className="trunc-chip">Host 事件已截断，此列表可能不完整</span>}
+        {truncatedEvents && <span className="trunc-chip">Host 事件已截断</span>}
       </span>
     </div>}
   </div>;
@@ -120,7 +120,7 @@ export function TimelineInspector(props: TimelineInspectorProps) {
         missing={missing} key={key} />
       : selection && !resolved
         ? <div className="inspector-card" aria-live="polite"><div className="inspector-card-head"><strong>选中的记录</strong></div>
-          <p className="inspector-missing">该记录不在当前读取范围内（可能已截断或被筛选）。</p></div>
-        : <span className="hint">单击选中 · Enter 或双击打开详情</span>}
+          <p className="inspector-missing">记录在当前范围外</p></div>
+        : null}
   </div>;
 }

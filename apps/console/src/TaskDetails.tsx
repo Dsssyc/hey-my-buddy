@@ -12,9 +12,6 @@ import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
 import { tokenUsageView } from "./host-workflow";
 
-/** The one read-only hint every detail shows exactly once (0.16 T4/P1.3). */
-export const DETAIL_READ_ONLY_NOTE = "只读 · 操作由 Host 在 CLI 完成";
-
 /**
  * One delegation's detail (0.15.1 U4): read-only browsing of the recorded
  * facts. The task_cancel/task_retry/task_acknowledge controls and their record
@@ -74,22 +71,20 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
         {task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={taskExecutor(task)} onClick={() => setRoutingRequest(n => n + 1)}>
           <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>
-      <p className="small muted detail-readonly-hint">{DETAIL_READ_ONLY_NOTE}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
         selectTask={selectTask} active={active} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
         initialSection={initialSection} routingDecisionId={routingDecisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} /> : <div className="detail-body">
       {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
-      <p className="small muted" title={usage.title}>本次执行用量：{usage.text}</p>
+      <p className="small muted" title={usage.title}>用量：{usage.text}</p>
       {recordInfo}
       <details className="detail-section"><summary>原始任务</summary><p className="read-text">{task.task}</p></details>
       <TaskActivityView task={task} />
       <section className="detail-section"><h3>交付结果</h3><pre className="result-text">{detail ? resultText(detail) : "正在读取结果…"}</pre></section>
       {task.spec?.adapter === "decision" && <section className="detail-section">
-        <p className="small muted">此计算记录无需业务验收。</p>
         {decision?.decisionId ? <DecisionDetails decisionId={decision.decisionId} api={api} csrfToken={snapshot.csrfToken} active={active} refreshKey={task.status} />
-          : <p className="small muted">未记录关联的决策 ID。</p>}
+          : <p className="small muted">决策 ID 未记录</p>}
       </section>}
     </div>}
   </>;

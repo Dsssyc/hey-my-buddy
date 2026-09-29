@@ -135,7 +135,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       profileId: member?.profileId ?? `${entry.adapter}/${entry.provider}/${entry.model}`,
       family: familyKey(entry),
       label: subject,
-      message: `${subject} 的并发上限必须是 1–32 的整数，请改正这项修改后再保存。`,
+      message: `${subject} 并发上限须为 1–32 的整数；请修改。`,
     });
   }
   for (const setting of profileSettings(baseline, draft)) {
@@ -145,7 +145,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       issues.push({
         profileId: setting.profileId,
         label: labelOf(profile, setting.profileId),
-        message: `${labelOf(profile, setting.profileId)} ${availabilityReason(profile)}，不能新启用。请先撤销这项修改。`,
+        message: `${labelOf(profile, setting.profileId)} ${availabilityReason(profile)}；无法启用，请撤销修改。`,
       });
     }
   }
@@ -166,7 +166,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
         profileId: members[0]?.profileId ?? key,
         family: key,
         label: subject,
-        message: `${subject} 没有可用且已启用的档位，不能把整个家族设为固定。请先启用一个档位，或保留原设置。`,
+        message: `${subject} 没有可用档位；请先启用档位再固定。`,
       });
     }
   }
@@ -181,7 +181,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       issues.push({
         profileId: change.profileId,
         label: labelOf(profile, change.profileId),
-        message: `${labelOf(profile, change.profileId)} ${refusal}，不能设为固定选择。请改用其他可用且已启用的档位，或保留原设置。`,
+        message: `${labelOf(profile, change.profileId)} ${refusal}；无法固定，请选择可用档位。`,
       });
     }
   }
@@ -195,7 +195,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
         issues.push({
           profileId: target,
           label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} ${refusal}，不能新设为${mode === "fast" ? "快速" : "审阅"} Router。请改用其他档位。`,
+          message: `${labelOf(profile, target)} ${refusal}；无法担任${mode === "fast" ? "快速" : "审阅"} Router，请换档位。`,
         });
       }
     }
@@ -252,7 +252,7 @@ export function attentionIssues(
       issues.push({
         profileId: override.profileId,
         label: labelOf(profile, override.profileId),
-        message: `固定选择指向 ${labelOf(profile, override.profileId)}，但它${refusal}：请启用该档位，或把它的偏好改回“跟随家族”。`,
+        message: `固定选择指向 ${labelOf(profile, override.profileId)}：${refusal}；请启用或改回“跟随家族”。`,
       });
     }
   }
@@ -267,7 +267,7 @@ export function attentionIssues(
       profileId: pinned[0].profileId,
       family: key,
       label: subject,
-      message: `家族 ${subject} 设为固定，但它固定的档位都不可用或未启用：请启用一个档位，或更改家族偏好。`,
+      message: `家族 ${subject} 的固定档位不可用；请启用档位或更改家族偏好。`,
     });
   }
   return issues;

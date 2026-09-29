@@ -278,7 +278,7 @@ describe("the model family list", () => {
     expect(familyRow("GPT-6 Sol")).toBeTruthy();
     const zcode = screen.getByRole("button", { name: /^▸ ZCode（不可用）/ });
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.getByText("原因：本机未检测到 zcode CLI")).toBeTruthy();
+    expect(screen.getByText("本机未检测到 zcode CLI")).toBeTruthy();
     // A folded harness hides its families but never drops its explanation.
     expect(screen.queryByRole("button", { name: /^GLM-5/ })).toBeNull();
     await user.click(zcode);
@@ -364,7 +364,6 @@ describe("effort tags and preference overrides", () => {
 
     await user.click(within(tag).getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByText("当前设置：跟随家族")).toBeTruthy();
     expect(within(menu).getByRole("radio", { name: "跟随家族（优先）" })).toHaveProperty("checked", true);
     await user.click(within(menu).getByRole("radio", { name: "无偏好" }));
 
@@ -373,9 +372,9 @@ describe("effort tags and preference overrides", () => {
     expect(overridden.className).not.toContain("pref-");
     expect(overridden.querySelector(".pref-icon")).toBeNull();
     expect(overridden.textContent).toContain("偏好：无偏好（档位覆盖）");
-    expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("有 1 项未保存修改")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("1 项未保存")).toBeTruthy();
     await user.click(saveButton());
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: "none", reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
     expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
@@ -402,7 +401,6 @@ describe("effort tags and preference overrides", () => {
 
     await user.click(within(tag).getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByText("当前设置：档位覆盖")).toBeTruthy();
     expect(within(menu).getByLabelText("覆盖理由")).toHaveProperty("value", "成本过高");
     expect(within(menu).getByRole("radio", { name: "排除" })).toHaveProperty("checked", true);
     await user.click(within(menu).getByRole("radio", { name: "跟随家族（优先）" }));
@@ -412,7 +410,7 @@ describe("effort tags and preference overrides", () => {
     expect(following.className).not.toContain("override");
     expect(following.textContent).toContain("偏好：优先（来自家族）");
     await user.click(saveButton());
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
   });
@@ -450,7 +448,7 @@ describe("the Router menu", () => {
     await user.click(within(menu).getByRole("button", { name: "设为快速 Router" }));
     expect(screen.getByRole("region", { name: "路由状态" }).textContent).toContain("快速 Router：Claude Sonnet 5 · medium");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    await screen.findByText("已发布新版本");
     expect(f.published[0].configuration).toEqual({ fastRouterProfileId: mediumId });
   });
   it("closes an effort menu when its main tab becomes hidden, without reopening on return", async () => {

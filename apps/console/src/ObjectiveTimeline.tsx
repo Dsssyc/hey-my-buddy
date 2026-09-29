@@ -817,7 +817,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                   {canFold && eligibleGaps.map(gap => gap.collapsed
                     ? <button key={gap.id} type="button" className="fold-button" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }}
                       aria-label={`空闲 ${durationShort(gap.endMs - gap.startMs)}，${clockTime(gap.startMs)} 至 ${clockTime(gap.endMs)}，已折叠，展开`}
-                      title={`空闲 ${durationShort(gap.endMs - gap.startMs)} · ${clockTime(gap.startMs)}–${clockTime(gap.endMs)} 没有任何片段或事件`}
+                      title={`空闲 ${durationShort(gap.endMs - gap.startMs)} · ${clockTime(gap.startMs)}–${clockTime(gap.endMs)}`}
                       onClick={() => props.onToggleGap(gap.id)}>
                       <span aria-hidden="true">›</span>
                     </button>
@@ -927,8 +927,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       <span className="lbl-name">{title.text}</span>
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
-                    <span className="lbl-sub" title={namer(row.configuration).title}>{title.fromTask ? "取自任务首行 · " : ""}{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.configuration).text}</span>
-                    {unplaced > 0 && <span className="trunc-chip" title="这些片段的时间缺失或颠倒，未在时间轴上放置">⚠ {unplaced} 段时间缺失</span>}
+                    <span className="lbl-sub" title={namer(row.configuration).title}>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.configuration).text}</span>
+                    {unplaced > 0 && <span className="trunc-chip" title="片段时间缺失或异常，未定位">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">
                     {waitLine && <span className="accept-wait-line" style={{ left: `${waitLine.from}%`, width: `${Math.max(waitLine.to - waitLine.from, 0)}%` }}
@@ -960,7 +960,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   return <div className="timeline-view" ref={rootRef} hidden={hidden}>
     <ObjectiveOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
-      compact={compactViewport || narrowViewport} hidden={hidden}
+      compact={compactViewport || narrowViewport}
       onBackToList={props.onBackToList} headerActions={props.headerActions} />
     {timeline && <DelegationStrip timeline={timeline} selectedRunId={selectedRunId}
       collapsed={cardsActuallyCollapsed}
@@ -1016,7 +1016,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       </div>
     </div>
     {timeline && truncation.length > 0 && <div className="banner trunc-banner" role="status">
-      时间轴读取有边界：{truncation.join("；")}。可调整筛选或打开单个委派查看其完整记录。
+      时间轴记录不完整：{truncation.join("；")}。可调整筛选或打开委派详情。
     </div>}
     {body}
     {!drawerActuallyCollapsed && <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
@@ -1027,7 +1027,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         <span className="inspector-dock-title">{selectedCard
           ? [selectedCard.head, selectedCard.fields.find(field => field.label === "委派")?.value,
             selectedCard.fields.find(field => field.label === "时间")?.value].filter(Boolean).join(" · ")
-          : selection ? "选中记录 · 当前读取范围外" : "检查器 · 单击时间轴元素查看详情"}</span>
+          : selection ? "选中记录 · 当前读取范围外" : "检查器"}</span>
         <button type="button" className="icon-button inspector-dock-toggle"
           aria-label={drawerActuallyCollapsed ? "展开检查器" : "收起检查器"}
           title={drawerActuallyCollapsed ? "展开检查器" : "收起检查器"}

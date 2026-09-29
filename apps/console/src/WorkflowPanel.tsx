@@ -85,7 +85,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   }
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
-    {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button><span className="small muted">由 Host 处理</span></div>}
+    {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button></div>}
     <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
       items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
     <div className="detail-body">
@@ -102,9 +102,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {stopStatusNode}
         {quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
         {conclusion && <section className={"detail-section host-conclusion" + (conclusion.failed ? " failed" : conclusion.cancelled ? " cancelled" : "")} aria-label="Host 结论">
-          <h3>Host 结论（不改变执行结果）</h3>
+          <h3>Host 结论</h3>
           <dl className="facts">
-            <dt>目标结果</dt><dd>{conclusion.statusLabel}（执行结果本身未改变，不计入已验收）</dd>
+            <dt>目标结果</dt><dd>{conclusion.statusLabel} · 不计入验收</dd>
             <dt>记录 Host</dt><dd>{conclusion.actor}{conclusion.ownerGeneration === null ? "" : ` · 第 ${conclusion.ownerGeneration} 代`}</dd>
             <dt>记录时间</dt><dd>{formatDate(conclusion.createdAt)}</dd>
             <dt>目标版本</dt><dd>{conclusion.runRevision === null ? "未记录" : `V${conclusion.runRevision}`}</dd>
@@ -136,10 +136,10 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>执行停止</dt><dd>{value.shutdown?.selfConfirmed ? "本任务已确认停止" : "本任务尚未确认停止"}{value.shutdown && !value.shutdown.descendantsConfirmed ? `；目标范围内共 ${value.shutdown.unconfirmedCount} 项执行尚未核实` : ""}</dd>
               <dt>验收记录</dt><dd>{value.task.acceptanceVerdict === "accepted" ? "已验收" : value.task.acceptanceVerdict === "rejected" ? "验收问题" : "未验收"}</dd>
             </dl>
-            <p className="small muted">接续次数来自持久轮次记录，不是模型调用次数；控制台不根据轮询或接续次数推算模型调用。</p>
-            <p className="task-description">{excerpt(value.currentTurn?.summary || "本轮尚未提交结构化结果。", 360)}</p>
+
+            <p className="task-description">{excerpt(value.currentTurn?.summary || "暂无回合摘要", 360)}</p>
             {(value.currentTurn?.summary?.length || 0) > 360 && <details><summary>展开回合摘要</summary><p className="task-description">{value.currentTurn?.summary}</p></details>}
-            {value.currentTurn?.summaryTruncated && <p className="small muted">当前摘要已截断。完整记录可通过 get 的 includeAudit 选项读取。</p>}
+            {value.currentTurn?.summaryTruncated && <p className="small muted">摘要已截断</p>}
             {!!value.currentTurn?.remaining?.length && <ul>{value.currentTurn.remaining.map((item, i) => <li key={i}>{item}</li>)}</ul>}
             <details><summary>展开完整任务</summary><p className="read-text">{task.task}</p></details>
             <TaskActivityView task={task} />
@@ -159,7 +159,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       </ul></section>}
       {value.activeRequest && <section className="detail-section">
         <h3>{value.activeRequest.kind === "assistance" ? "协助请求" : "需要决定"}</h3>
-        {(value.counts?.openRequests || 0) > 1 && <p className="small muted">共有 {value.counts?.openRequests} 项待决定；Host 处理当前请求后会显示下一项。</p>}
+        {(value.counts?.openRequests || 0) > 1 && <p className="small muted">另有 {(value.counts?.openRequests ?? 0) - 1} 项待决定</p>}
         <p>{value.activeRequest.summary}</p>
         {value.activeRequest.preparationError && <p role="alert"><code>{value.activeRequest.preparationError.code}</code> · {value.activeRequest.preparationError.message}</p>}
         <dl className="facts"><dt>已尝试</dt><dd>{value.activeRequest.attempted}</dd><dt>需要完成</dt><dd>{value.activeRequest.neededWork.join("\n")}</dd><dt>验收条件</dt><dd>{value.activeRequest.acceptance}</dd><dt>请求状态</dt><dd>{value.activeRequest.state === "open" ? "等待 Host 决定" : value.activeRequest.state}</dd></dl>
@@ -183,7 +183,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               {a.diffPath && <code>{a.diffPath}</code>}
               {record && <code>{integrationLabel(record)}</code>}
               {patch && <div className="cumulative-patch">
-                <span className="small muted">累计补丁（自目标最初输入提交）{patch.complete ? "" : " · 引用不完整"}</span>
+                <span className="small muted">累计补丁{patch.complete ? "" : " · 引用不完整"}</span>
                 <code>base {patch.baseCommit}</code>
                 <code>output {patch.outputCommit}</code>
                 <code>{patch.path}</code>
@@ -191,12 +191,12 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
                 {patch.changedPaths.length > 0 && <code className="wrap">{patch.changedPaths.join("、")}</code>}
               </div>}
               {artifactHostPaths.length > 0 && <div className="host-paths">
-                <span className="small muted">Host 补充改动（与成果路径分开记录）</span>
+                <span className="small muted">Host 补充改动</span>
                 <code className="wrap">{artifactHostPaths.join("、")}</code>
               </div>}
             </details></li>;
         })}
-      </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。部分成果标明“未验证、非最终”，不能被当作已验收交付。</p></section> : <p className="muted">尚无固定产物。</p>}
+      </ul></section> : <p className="muted">暂无固定产物</p>}
       {artifact && <section className="detail-section" aria-label="最终产物与整合证据">
         <h3>最终产物与整合证据</h3>
         <dl className="facts">
@@ -219,7 +219,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           }</dd></>}
           <dt>记录来源</dt><dd>{`${integration.actor} · ${formatDate(integration.createdAt)}`}</dd>
         </dl> : <p className="banner guard-banner" role="status">
-          尚未记录最终产物的整合证明。整合与验收由 Host 通过既有 CLI 流程（integration-record 与验收记录）完成，此页只展示结果。
+          整合证明未记录；请由 Host 完成整合与验收。
         </p>}
       </section>}
       </div>
@@ -228,7 +228,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>回合会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
       <section className="detail-section" aria-label="每次执行的用量">
         <h4>每次执行的用量</h4>
-        {usageTurns.length === 0 ? <p className="small muted">尚无执行记录。</p> : <ul className="token-usage-list">
+        {usageTurns.length === 0 ? <p className="small muted">暂无执行记录</p> : <ul className="token-usage-list">
           {usageTurns.map(turn => {
             const usage = tokenUsageView(turn.tokenUsage);
             const config = turn.executionConfiguration;
@@ -240,7 +240,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
             </li>;
           })}
         </ul>}
-        <p className="small muted">每次执行分别记录，不是会话累计；输入数已含缓存输入，缓存不重复相加；没有记录的执行显示未知，不估算为 0。额度失败或被中断时，已封存的部分成果仍会列在“产物与验收”。</p>
+
       </section>
       <NativeSessionView task={task} turnSessionId={value.currentTurn?.sessionId} />
       <details className="detail-section"><summary>原始目标</summary><p className="read-text">{task.task}</p></details>

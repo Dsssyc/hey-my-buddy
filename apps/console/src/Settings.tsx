@@ -25,7 +25,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
     <section className="panel settings-panel" aria-labelledby="display-settings">
       <div className="panel-heading">
         <h2 id="display-settings">显示</h2>
-        <p className="muted">选择控制台的颜色主题。</p>
+
       </div>
       <div className="segmented theme-choice" role="radiogroup" aria-label="主题">
         {THEME_CHOICES.map(([value, label]) => <label key={value} className={"segment" + (theme === value ? " checked" : "")}>
