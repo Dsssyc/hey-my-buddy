@@ -39,6 +39,7 @@ METHODS = [
     "capabilities",
     "adapters",
     "harness-set",
+    "harness-verify",
     "runtime",
     "backup",
     "upgrade",

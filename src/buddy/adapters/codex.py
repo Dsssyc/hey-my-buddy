@@ -34,12 +34,9 @@ class CodexAdapter(Adapter):
         return start_no_tool(self.name, context, request)
     @property
     def read_only_structured_verified(self):
-        # Compatibility is handshake-based; native permission certification is
-        # separately bound to the platform/version actually exercised by probes.
         from ..harness_runtime import selected
-        record = selected('codex')
-        return bool(sys.platform == 'darwin' and record and record.get('status') == 'ready'
-                    and record.get('version') == '0.157.0')
+        from ..harness_review import verified
+        return verified(self.name, selected(self.name))
 
     def start_read_only_structured(self, context, request):
         from .read_only import start

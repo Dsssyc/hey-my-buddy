@@ -1184,6 +1184,8 @@ class BoardStore:
             task = self._task_row(connection, params)
             self.workflow.guard_task_control(connection, task, params, operation="task_retry")
             spec = json.loads(task["spec_json"])
+            if spec.get("reviewCheck"):
+                raise BoardError("UNSUPPORTED", "A review verification is not retried; explicitly call harness-verify with a new requestId")
             if spec.get("decision"):
                 # A paid decision call is never replayed implicitly. A decision result
                 # is retained and inspected; a new request is an explicit Host choice.
@@ -2407,6 +2409,9 @@ class BoardStore:
                 error=error_text,
                 now=now,
             )
+            from .harness_review import complete as complete_review
+            complete_review(self, connection, task_row, attempt_row, result=result, status=status,
+                            shutdown_confirmed=shutdown_confirmed, now=now)
             if decision is not None:
                 response["decision"] = decision
                 if decision.get("preflightFallback"):

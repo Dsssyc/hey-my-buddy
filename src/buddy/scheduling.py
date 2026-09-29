@@ -69,6 +69,8 @@ def model_family(spec: dict) -> tuple[str, str, str] | None:
     """
     if not isinstance(spec, dict):
         return None
+    if spec.get('adapter') == 'review-check':
+        return model_family((spec.get('reviewCheck') or {}).get('configuration'))
     adapter = spec.get("adapter")
     if adapter not in schemas.CODING_ADAPTERS:
         return None

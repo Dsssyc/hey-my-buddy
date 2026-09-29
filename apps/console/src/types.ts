@@ -31,6 +31,20 @@ export type HarnessHealth = {
   expiresAt?: string | null;
   /** Latest recorded native quota observation; null or absent means unknown. */
   quota?: HarnessQuota | null;
+  reviewVerification?: ReviewVerification;
+};
+
+export type ReviewVerification = {
+  adapter: string;
+  version: string | null;
+  platform: string;
+  status: "verified" | "new-version" | "unverified" | "queued" | "running" | "stopping" | "unconfirmed" | "failed";
+  implemented: boolean;
+  verified: boolean;
+  runId?: string;
+  reasonCode?: string | null;
+  failedChecks?: string[];
+  checks?: Record<string, boolean>;
 };
 
 /**

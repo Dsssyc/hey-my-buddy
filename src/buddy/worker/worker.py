@@ -569,6 +569,8 @@ class Worker:
         from ..harness_runtime import bound, RECORD_FILE
 
         name = spec['adapter']
+        if name == 'review-check':
+            name = (spec.get('reviewCheck') or {}).get('adapter')
         review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
             name = (claim.get('decisionInput') or {}).get('profile', {}).get('adapter')

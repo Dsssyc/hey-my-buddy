@@ -2574,6 +2574,8 @@ class EvaluationStore:
         capabilities = json.loads(row["capabilities_json"])
         if not (native and native.read_only_structured and native.read_only_structured_verified):
             capabilities = [item for item in capabilities if item != "decision"]
+        elif 'decision' not in capabilities:
+            capabilities.append('decision')
         capabilities = [item for item in capabilities if item != "routing:fast"]
         if native and getattr(native, "no_tool_structured", False):
             capabilities.append("routing:fast")

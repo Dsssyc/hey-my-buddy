@@ -35,6 +35,9 @@ class BuddyControl:
     def harness_set(self, request_json: str) -> str:
         ...
 
+    def harness_verify(self, request_json: str) -> str:
+        ...
+
     def harness_prepare(self, request_json: str) -> str:
         ...
 

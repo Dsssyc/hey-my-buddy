@@ -913,3 +913,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .right-dock.side > .detail-stage .detail-tabs { background: var(--surface-raised); }
 .right-dock.side > .detail-stage .locator,
 .right-dock.side > .detail-stage .detail-header { position: relative; z-index: 1; }
+.harness-review { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-block: .5rem; }
+.harness-review > p { flex-basis: 100%; margin: 0; }
+.harness-review select { max-width: 100%; }

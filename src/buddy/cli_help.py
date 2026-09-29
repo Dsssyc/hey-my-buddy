@@ -43,6 +43,7 @@ SUMMARIES: dict[str, str] = {
     "capabilities": "Adapter report with availability, capabilities, named operations and the honest limitations map.",
     "adapters": "Adapter report; the same operation as capabilities.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
+    "harness-verify": "Prepare or explicitly start one native review verification for an enabled configuration.",
     "runtime": "Installed-runtime identity, description and source-leak report.",
     "backup": "Service-owned verified rolling backup.",
     "upgrade": "Coordinated skill, launcher and runtime upgrade; requires separate installation authorization.",

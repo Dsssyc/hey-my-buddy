@@ -36,6 +36,7 @@ CONTROL_OPERATIONS = (
     "health",
     "capabilities",
     "harness_set",
+    "harness_verify",
     "harness_prepare",
     "service_control",
     "console",
@@ -579,6 +580,12 @@ class BoardService(_BaseResource):
             self.store._notify(head)
             return response
         return self._guard('harness.prepare', request_json, handler)
+
+    def harness_verify(self, request_json: str) -> str:
+        from .harness_review import request
+        def handler(params):
+            return request(self.store, params)
+        return self._guard('harness.verify', request_json, handler)
 
     def _touch_harnesses(self, params, *, explicit=False):
         if not self.automatic_discovery:

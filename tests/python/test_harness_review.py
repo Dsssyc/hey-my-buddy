@@ -64,6 +64,61 @@ class HarnessReviewTests(BoardTestCase):
         with self.assertRaises(BoardError):
             review.request(self.store, self.params)
 
+    def test_service_preview_and_cli_help_do_not_start_native_work(self):
+        from buddy.cli_help import render
+        with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
+            plan = self.harness.call('harness_verify', {'adapter': 'codex', 'profileId': self.profile})
+            help_text, _ = render('harness-verify', ['harness-verify'])
+        self.assertFalse(plan['started'])
+        self.assertIn('execute', help_text)
+        self.assertIn('profileId', help_text)
+
+    def _settle(self, *, failed_check=None, change_version=False, confirmed=True):
+        admitted = self.harness.call('harness_verify', self.params)
+        self.harness.call('worker_register', {'workerId': 'verifier', 'adapter': 'dsh', 'capabilities': [review.ADAPTER]})
+        claim = self.harness.call('worker_claim', {'workerId': 'verifier', 'taskId': admitted['runId'],
+            'claimRequestId': 'claim-review', 'nonce': 'private-review-nonce-1234'})['claim']
+        self.assertEqual(claim['attempt']['modelFamily'], {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'})
+        if change_version:
+            with self.store.db.write() as db:
+                db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (json.dumps({**self.health, 'version': 'next'}),))
+        checks = {check: check != failed_check for check in review.CHECKS}
+        self.harness.call('worker_result', {'workerId': 'verifier', 'attemptId': claim['attempt']['attemptId'],
+            'generation': claim['attempt']['generation'], 'nonce': 'private-review-nonce-1234', 'commandId': 'settle-review',
+            'status': 'ok', 'shutdownConfirmed': confirmed, 'result': {'checks': checks, 'version': self.health['version'],
+            'platform': review.sys.platform}})
+        return self.harness.service.harnesses.get('codex')['reviewVerification']
+
+    def test_complete_receipt_enables_current_version_without_a_catalog_refresh(self):
+        verification = self._settle()
+        self.assertTrue(verification['verified'])
+        from buddy.adapters.codex import CodexAdapter
+        from buddy.harness_runtime import bound
+        with bound(self.harness.service.harnesses.all()):
+            self.assertTrue(CodexAdapter().read_only_structured_verified)
+            snapshot = self.harness.call('console_snapshot', {})
+        profile = next(p for p in snapshot['profiles'] if p['profileId'] == self.profile)
+        self.assertIn('decision', profile['capabilities'])
+
+    def test_missing_boundary_evidence_or_unconfirmed_stop_never_certifies(self):
+        verification = self._settle(failed_check='boundaryDenials')
+        self.assertFalse(verification['verified'])
+        self.assertIn('boundaryDenials', verification['failedChecks'])
+
+    def test_version_change_during_the_probe_never_certifies_the_new_version(self):
+        verification = self._settle(change_version=True)
+        self.assertFalse(verification['verified'])
+        self.assertEqual(verification['version'], 'next')
+
+    def test_cancelled_queued_probe_can_be_replaced_but_never_implicitly_retried(self):
+        admitted = self.harness.call('harness_verify', self.params)
+        self.harness.call('task_cancel', {'runId': admitted['runId']})
+        new = self.harness.call('harness_verify', {**self.params, 'requestId': 'review-2'})
+        self.assertNotEqual(new['runId'], admitted['runId'])
+        with self.assertRaises(BoardError) as caught:
+            self.harness.call('task_retry', {'runId': admitted['runId']})
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED')
+
 
 if __name__ == "__main__":
     import unittest

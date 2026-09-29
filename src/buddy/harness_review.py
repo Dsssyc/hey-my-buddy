@@ -40,10 +40,16 @@ def verification_view(connection, adapter, health, *, platform=None):
     if record is None:
         prior = any(item["adapter"] == adapter and item["platform"] == platform for item in certificates())
         if connection:
-            prior = prior or connection.execute("SELECT 1 FROM meta WHERE key LIKE ? LIMIT 1", (PREFIX + "%",)).fetchone() is not None
+            prior = prior or any(json.loads(row[0]).get("adapter") == adapter and json.loads(row[0]).get("platform") == platform
+                for row in connection.execute("SELECT value FROM meta WHERE key LIKE ?", (PREFIX + "%",)))
         record = {"adapter": adapter, "version": version, "platform": platform,
                   "status": "new-version" if prior and version else "unverified",
                   "reasonCode": "HARNESS_REVIEW_VERSION_UNVERIFIED" if prior and version else "HARNESS_REVIEW_UNVERIFIED"}
+    if connection and record.get("status") in ("queued", "running") and record.get("runId"):
+        task = connection.execute("SELECT state FROM tasks WHERE task_id=?", (record["runId"],)).fetchone()
+        if task:
+            record = {**record, "status": {"queued": "queued", "running": "running", "cancelling": "stopping",
+                       "reconciliation-needed": "unconfirmed"}.get(task[0], "failed")}
     return {**record, "implemented": adapter == "codex", "verified": bool(
         health.get("status") == "ready" and record.get("status") == "verified"
         and record.get("adapter") == adapter and record.get("version") == version
@@ -100,7 +106,12 @@ def request(board, params):
         key = _key(name, health["version"], sys.platform)
         current = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         if current and json.loads(current[0]).get("status") in ("queued", "running"):
-            raise BoardError("HARNESS_REVIEW_BUSY", "A review verification is already pending; inspect its run before starting another")
+            previous_run = json.loads(current[0]).get("runId")
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (previous_run,)).fetchone()
+            attempt = board._selected_attempt(connection, task) if task else None
+            if task and (task["state"] in ("queued", "running", "cancelling", "reconciliation-needed")
+                         or attempt is not None and not attempt["shutdown_confirmed"]):
+                raise BoardError("HARNESS_REVIEW_BUSY", "A review verification is pending or its stop is unconfirmed; inspect its run")
         task_id, now = str(uuid.uuid4()), board.now()
         intent = {**plan, "expectedRevision": expected,
                   "harness": {key: health.get(key) for key in ("adapter", "version", "command", "locationFingerprint")}}

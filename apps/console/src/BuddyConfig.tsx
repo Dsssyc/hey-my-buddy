@@ -15,6 +15,7 @@ import { familySearchText, harnessGroups, harnessName, harnessUnavailableText } 
 import { dayClock } from "./objective-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { quotaView } from "./host-workflow";
+import { HarnessReview } from "./HarnessReview";
 
 /** Status wording and the non-colour badge tone; an unknown future state stays visible as recorded. */
 const HARNESS_STATUS_LABEL: Record<HarnessStatus, string> = {
@@ -293,6 +294,7 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
                   </>}
               </dd></div>
             </dl>
+            <HarnessReview row={row} snapshot={snapshot} api={api} canWrite={canWrite} onRefresh={reloadSnapshot} />
             {remedy && <p className="small harness-remedy">修复办法：{remedy}</p>}
             {candidates.length > 0 && <div className="harness-candidates">
               <h4>已尝试的位置（{candidates.length}）</h4>
