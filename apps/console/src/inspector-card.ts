@@ -10,6 +10,7 @@
 
 import type { ObjectiveTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
 import type { SpanOutcome, TimelineItem } from "./objective-display";
+import { fallbackDescription, recordedRoutingMode } from "./routing-display";
 import {
   clockTime, configurationLabel, configurationRawLabel, displayTitle, durationText, outcomeLabel,
   rowLabelItem, rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
@@ -196,6 +197,9 @@ export function buildInspectorCard(
       const amount = (value: number | null | undefined, unit: string) =>
         value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
       fields.push({ label: "类型", value: "路由" }, delegationField(row));
+      fields.push({ label: "请求模式", value: recordedRoutingMode(routing?.requestedRoutingMode) },
+        { label: "实际模式", value: recordedRoutingMode(routing?.routingMode) },
+        { label: "模式降级", value: fallbackDescription(routing?.fallback) });
       fields.push({ label: "已选配置", value: routing?.selectedProfile ? configurationLabel(routing.selectedProfile, profiles) : UNRECORDED });
       fields.push({ label: "理由", value: reason });
       fields.push({ label: "偏好结果", value: routing?.policyCheck

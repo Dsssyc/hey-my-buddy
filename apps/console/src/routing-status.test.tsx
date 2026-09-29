@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoutingStatusBar } from "./RoutingStatusBar";
 import type { Editor } from "./use-editor";
 import type { ConsoleView, Profile, RoutingHealth, Snapshot } from "./types";
+import { makeDraft } from "./draft";
 
 const editor = {
   editing: false, configurationDirty: false, sessionWritable: true, mode: false, draft: null,
@@ -13,14 +14,14 @@ const editor = {
 const router: Profile = {
   profileId: "codex:openai:test:high", label: "Test", adapter: "codex",
   provider: "openai", model: "test", effort: "high", available: true, enabled: true,
-  capabilities: ["execution:codex", "decision"], contextWindow: null, description: "", source: "catalog",
+  capabilities: ["execution:codex", "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog",
 };
 
 function snapshot(routingHealth: RoutingHealth | undefined, extra: Partial<Snapshot> = {}): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "s", canWrite: false, reason: null }, tableRevision: 1,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, decisionProfileId: router.profileId },
+    configuration: { revision: 1, fastRouterProfileId: router.profileId, reviewRouterProfileId: router.profileId, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [router], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [],
     familyAnnotations: [], evidence: [], decisions: [],
     sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 }, capabilities: {},
@@ -117,11 +118,31 @@ describe("routing health details (R4)", () => {
 });
 
 describe("the one-line routing status", () => {
+  it("edits the default mode and review budget while showing read-only limits and data flow", async () => {
+    const state = snapshot(healthy, { configuration: {
+      revision: 1, fastRouterProfileId: router.profileId, reviewRouterProfileId: router.profileId,
+      defaultRoutingMode: "review", routingBudget: "standard",
+      routingBudgetLimits: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 },
+    } });
+    const changes: ReturnType<typeof makeDraft>[] = [];
+    const writable = { ...editor, editing: true, update: vi.fn(fn => changes.push(fn(makeDraft(state)))) } as unknown as Editor;
+    render(<RoutingStatusBar data={state as ConsoleView} snapshot={state} editor={writable} onShowRouter={vi.fn()} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "详情" }));
+    await userEvent.setup().click(screen.getByRole("radio", { name: "快速" }));
+    await userEvent.setup().click(screen.getByRole("radio", { name: "简要" }));
+    expect(changes[0].configuration.defaultRoutingMode).toBe("fast");
+    expect(changes[1].configuration.routingBudget).toBe("brief");
+    expect(screen.getByLabelText("审阅预算上限").textContent).toContain("标准 300 秒 / 24 次工具调用");
+    expect(screen.getByLabelText("审阅预算上限").textContent).not.toContain("字节");
+    expect(screen.getByText(/把每个任务的描述发送给快速 Router 所在的模型提供方/).textContent).toContain("读取冻结的仓库副本");
+  });
   it("shows Router, budget and health in one line and no warning when nothing needs handling", () => {
     renderBar(snapshot(healthy));
     expect(bar().className).not.toContain("warning");
-    expect(bar().textContent).toContain("Router：Test · high");
-    expect(bar().textContent).toContain("预算：标准");
+    expect(bar().textContent).toContain("快速 Router：Test · high");
+    expect(bar().textContent).toContain("审阅 Router：Test · high");
+    expect(bar().textContent).toContain("默认模式：审阅");
+    expect(bar().textContent).toContain("审阅预算：标准");
     expect(bar().textContent).toContain("状态：正常");
     expect(bar().querySelector(".routing-warning")).toBeNull();
   });
@@ -132,7 +153,8 @@ describe("the one-line routing status", () => {
     renderBar(snapshot(healthy, { profiles: [unverified, alternative] }));
     expect(bar().className).toContain("warning");
     expect(bar().querySelector(".routing-warning")!.textContent)
-      .toContain("当前 Router Test · high 未验证路由能力：请在另一个具备 decision 能力的档位菜单中选择“设为 Router”");
+      .toContain("当前审阅 Router Test · high 当前 Harness 版本尚未验证只读路由调用");
+    expect(bar().querySelector(".routing-warning")!.textContent).not.toMatch(/routing:fast|decision/);
   });
 
   it("explains the Host boundary when no verified Router is available", async () => {
@@ -140,16 +162,16 @@ describe("the one-line routing status", () => {
     const unverified = { ...router, capabilities: ["execution:codex"] };
     renderBar(snapshot(healthy, { profiles: [unverified] }));
     const warning = bar().querySelector(".routing-warning")!.textContent;
-    expect(warning).toContain("暂无已验证的 Router，默认路由会停在 Host 边界；委派时请指定配置");
-    expect(warning).not.toContain("设为 Router");
+    expect(warning).toContain("当前审阅 Router Test · high 当前 Harness 版本尚未验证只读路由调用");
     await user.click(screen.getByRole("button", { name: "详情" }));
-    expect(screen.getByText(/目录中没有同时满足已启用、当前可用且具备已验证 decision 能力的档位/)).toBeTruthy();
+    expect(screen.getByText(/审阅 Router 需要当前 Harness 版本已验证只读路由调用/)).toBeTruthy();
   });
 
   it("warns when no Router is set and when routing keeps failing", () => {
-    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, decisionProfileId: null } }));
-    expect(bar().textContent).toContain("Router：尚未指定");
-    expect(bar().querySelector(".routing-warning")!.textContent).toContain("尚未指定 Router");
+    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: null , defaultRoutingMode: "review" as const, routingBudget: "standard"} }));
+    expect(bar().textContent).toContain("快速 Router：尚未指定，请选择");
+    expect(bar().textContent).toContain("审阅 Router：尚未指定，请选择");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("尚未指定快速 Router");
     view.unmount();
     renderBar(snapshot({ ...healthy, failureCount: 3, consecutiveFailures: 3 }));
     expect(bar().textContent).toContain("状态：连续失败 3 次");
@@ -166,13 +188,13 @@ describe("the one-line routing status", () => {
     expect(details.getAttribute("aria-expanded")).toBe("true");
     const panel = document.getElementById("routing-details")!;
     expect(panel.hidden).toBe(false);
-    expect(within(panel).getByText("可担任")).toBeTruthy();
-    const budget = within(panel).getByRole("radiogroup", { name: /路由预算/ });
-    expect(within(budget).getAllByRole("radio").map(radio => radio.parentElement!.textContent)).toEqual(["快速", "标准", "深入"]);
+    expect(within(panel).getAllByText("可担任")).toHaveLength(2);
+    const budget = within(panel).getByRole("radiogroup", { name: "审阅预算" });
+    expect(within(budget).getAllByRole("radio").map(radio => radio.parentElement!.textContent)).toEqual(["简要", "标准", "深入"]);
     expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
     // A read-only editor keeps the choice visible but disabled.
     expect(within(budget).getByRole("radio", { name: "深入" })).toHaveProperty("disabled", true);
-    await user.click(within(panel).getByRole("button", { name: "查看所在家族" }));
+    await user.click(within(panel).getAllByRole("button", { name: "查看所在家族" })[0]);
     expect(onShowRouter).toHaveBeenCalledWith(router.profileId);
   });
 });

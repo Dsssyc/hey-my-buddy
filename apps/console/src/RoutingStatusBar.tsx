@@ -1,13 +1,14 @@
 import { useState } from "react";
-import type { ConsoleView, RoutingBudget, RoutingHealth, Snapshot } from "./types";
+import type { ConsoleView, RoutingBudget, RoutingHealth, RoutingMode, Snapshot } from "./types";
 import type { Editor } from "./use-editor";
 import { Badge, Help } from "./ui";
 import { dayClock } from "./objective-display";
 import { profileTitle } from "./profile-display";
-import { decisionAttention, decisionCandidates, isDecisionCandidate } from "./policy";
+import { isDecisionCandidate, isFastRouterCandidate, routerAttention } from "./policy";
 
-export const BUDGET_LABEL: Record<RoutingBudget, string> = { quick: "快速", standard: "标准", deep: "深入" };
-const BUDGET_HELP = "上限待实测：快速 60 秒 / 8 次工具调用；标准 300 秒 / 24 次工具调用；深入 600 秒 / 64 次工具调用。保存后用于后续路由。";
+export const BUDGET_LABEL: Record<RoutingBudget, string> = { brief: "简要", standard: "标准", deep: "深入" };
+const BUDGET_HELP = "审阅路由的预算档位。快速路由固定 60 秒，不调用工具。保存后用于后续路由。";
+const MODE_LABEL: Record<RoutingMode, string> = { fast: "快速", review: "审阅" };
 
 /**
  * Health in one word for the status row, plus the warning when the recorded
@@ -81,31 +82,36 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
   onShowRouter: (profileId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const routerId = data.configuration.decisionProfileId;
-  const router = routerId ? data.profiles.find(p => p.profileId === routerId) : undefined;
-  const routerName = router ? profileTitle(router) : routerId || "尚未指定";
+  const routerIds = { fast: data.configuration.fastRouterProfileId, review: data.configuration.reviewRouterProfileId };
+  const routers = Object.fromEntries((["fast", "review"] as RoutingMode[]).map(mode =>
+    [mode, routerIds[mode] ? data.profiles.find(p => p.profileId === routerIds[mode]) : undefined])) as Record<RoutingMode, typeof data.profiles[number] | undefined>;
+  const name = (mode: RoutingMode) => routers[mode] ? profileTitle(routers[mode]!) : routerIds[mode] || "尚未指定，请选择";
+  const candidate = (mode: RoutingMode) => mode === "fast" ? isFastRouterCandidate(routers[mode]) : isDecisionCandidate(routers[mode]);
+  const defaultMode = data.configuration.defaultRoutingMode;
   const budget = data.configuration.routingBudget ?? "standard";
-  const routerDirty = !!editor.draft && snapshot.configuration.decisionProfileId !== routerId;
+  const routerDirty = (mode: RoutingMode) => !!editor.draft && snapshot.configuration[mode === "fast" ? "fastRouterProfileId" : "reviewRouterProfileId"] !== routerIds[mode];
+  const modeDirty = !!editor.draft && snapshot.configuration.defaultRoutingMode !== defaultMode;
   const budgetDirty = !!editor.draft && (snapshot.configuration.routingBudget ?? "standard") !== budget;
-  const attention = decisionAttention(data);
   const health = healthSummary(snapshot.routingHealth);
-  const candidates = decisionCandidates(data.profiles).length;
-  const noVerifiedRouter = candidates === 0;
-  const warning = noVerifiedRouter
-    ? "暂无已验证的 Router，默认路由会停在 Host 边界；委派时请指定配置。"
-    : !routerId
-      ? "尚未指定 Router：请在具备 decision 能力的档位菜单中选择“设为 Router”。"
-      : attention?.message || health.warning;
+  const warnings = (["fast", "review"] as RoutingMode[]).map(mode => !routerIds[mode]
+    ? `尚未指定${MODE_LABEL[mode]} Router：请在档位菜单中选择。`
+    : routerAttention(data, mode)?.message).filter(Boolean);
+  const warning = warnings.join(" ") || health.warning;
   function setBudget(value: RoutingBudget) {
     editor.update(d => ({ ...d, configuration: { ...d.configuration, routingBudget: value } }));
+  }
+  function setMode(value: RoutingMode) {
+    editor.update(d => ({ ...d, configuration: { ...d.configuration, defaultRoutingMode: value } }));
   }
   return <section className={"routing-status-bar" + (warning ? " warning" : "")} aria-label="路由状态">
     <div className="routing-status-line">
       {warning && <p className="routing-warning"><span aria-hidden="true">⚠ </span>{warning}</p>}
       <span className="routing-status-facts">
-        <span>Router：<strong>{routerName}</strong>{routerDirty && <span className="unsaved-mark">未保存</span>}</span>
+        {(["fast", "review"] as RoutingMode[]).map(mode => <span key={mode}>{MODE_LABEL[mode]} Router：<strong>{name(mode)}</strong>{routerDirty(mode) && <span className="unsaved-mark">未保存</span>}</span>)}
         <span aria-hidden="true" className="routing-sep">｜</span>
-        <span>预算：{BUDGET_LABEL[budget]}{budgetDirty && <span className="unsaved-mark">未保存</span>}</span>
+        <span>默认模式：<strong>{MODE_LABEL[defaultMode]}</strong>{modeDirty && <span className="unsaved-mark">未保存</span>}</span>
+        <span aria-hidden="true" className="routing-sep">｜</span>
+        <span>审阅预算：{BUDGET_LABEL[budget]}{budgetDirty && <span className="unsaved-mark">未保存</span>}</span>
         <span aria-hidden="true" className="routing-sep">｜</span>
         <span>状态：{health.text}</span>
       </span>
@@ -114,17 +120,25 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
     </div>
     <div id="routing-details" className="routing-details" hidden={!open}>
       <div className="routing-detail-block">
-        <h3>当前 Router <Help label="Router 说明">Router 是某个档位上的角色：在具备 decision 能力的档位标签菜单中选择“设为 Router”。只有已启用、可用且能力列表含 decision 的档位才能担任；当前 {candidates} 个候选。它不会递归选择自己，也不承担评价整理。</Help></h3>
-        {routerId ? <p className="router-line">
-          <strong>{routerName}</strong>
-          <Badge tone={isDecisionCandidate(router) ? "green" : "amber"}>{isDecisionCandidate(router) ? "可担任" : "需要处理"}</Badge>
-          {router && <button type="button" className="button small-button" onClick={() => onShowRouter(router.profileId)}>查看所在家族</button>}
-        </p> : <p className="muted">尚未指定</p>}
-        {noVerifiedRouter && <p className="small muted">目录中没有同时满足已启用、当前可用且具备已验证 decision 能力的档位。默认路由因此会停在 Host 边界；委派时请指定配置。</p>}
+        <h3>Router 位置 <Help label="Router 说明">快速 Router 需要所属 Harness 支持无工具路由调用；审阅 Router 需要当前 Harness 版本已验证只读路由调用。两者都需要已启用且可用，在对应档位的菜单中设置。</Help></h3>
+        {(["fast", "review"] as RoutingMode[]).map(mode => <p className="router-line" key={mode}>
+          <span>{MODE_LABEL[mode]} Router：</span><strong>{name(mode)}</strong>
+          {routerIds[mode] && <Badge tone={candidate(mode) ? "green" : "amber"}>{candidate(mode) ? "可担任" : "需要处理"}</Badge>}
+          {routers[mode] && <button type="button" className="button small-button" onClick={() => onShowRouter(routers[mode]!.profileId)}>查看所在家族</button>}
+        </p>)}
       </div>
       <div className="routing-detail-block">
-        <h3>路由预算 <Help label="路由预算说明">{BUDGET_HELP}</Help></h3>
-        <div className="segmented" role="radiogroup" aria-label="路由预算">
+        <h3>默认模式</h3>
+        <div className="segmented" role="radiogroup" aria-label="默认路由模式">
+          {(["fast", "review"] as RoutingMode[]).map(mode => <label key={mode} className={"segment" + (defaultMode === mode ? " checked" : "")}>
+            <input type="radio" name="default-routing-mode" checked={defaultMode === mode} disabled={!editor.editing} onChange={() => setMode(mode)} />{MODE_LABEL[mode]}
+          </label>)}
+        </div>
+        <p className="small muted">快速路由固定 60 秒，不调用工具。快速路由会把每个任务的描述发送给快速 Router 所在的模型提供方，包括准备交给其他模型执行的任务；审阅路由还会读取冻结的仓库副本。</p>
+      </div>
+      <div className="routing-detail-block">
+        <h3>审阅预算 <Help label="路由预算说明">{BUDGET_HELP}</Help></h3>
+        <div className="segmented" role="radiogroup" aria-label="审阅预算">
           {(Object.keys(BUDGET_LABEL) as RoutingBudget[]).map(value => <label key={value}
             className={"segment" + (budget === value ? " checked" : "")}>
             <input type="radio" name="routing-budget" value={value} checked={budget === value}
@@ -132,6 +146,9 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
             {BUDGET_LABEL[value]}
           </label>)}
         </div>
+        {snapshot.configuration.routingBudgetLimits && <p className="small muted" aria-label="审阅预算上限">
+          当前记录：{BUDGET_LABEL[snapshot.configuration.routingBudgetLimits.preset]} {snapshot.configuration.routingBudgetLimits.timeoutSeconds} 秒 / {snapshot.configuration.routingBudgetLimits.toolCalls} 次工具调用
+        </p>}
       </div>
       <RoutingHealthDetails health={snapshot.routingHealth} />
     </div>

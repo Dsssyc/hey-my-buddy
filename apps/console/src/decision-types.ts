@@ -1,4 +1,4 @@
-import type { Decision, Profile, Preference, Evidence, Card } from "./types";
+import type { Decision, Profile, Preference, Evidence, Card, RoutingBudget } from "./types";
 import type { ExecutionConfiguration } from "./workflow-types";
 
 export type DecisionModel = Partial<ExecutionConfiguration> & { reasoningEffort?: string };
@@ -9,7 +9,7 @@ export type DecisionAudit = Decision & {
     userPreference?: string | null;
     [key: string]: unknown;
   } | null;
-  budget?: { preset?: string; timeoutSeconds?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
+  budget?: { preset?: RoutingBudget | "quick"; timeoutSeconds?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
   usage?: { elapsedMs?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
   nativeIdentity?: unknown;
   stopEvidence?: unknown;

@@ -376,7 +376,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     autoPages.current += 1;
     history.loadMore();
   }, [showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
-  const routerId = data.configuration.decisionProfileId;
+  const routerIds = new Set([data.configuration.fastRouterProfileId, data.configuration.reviewRouterProfileId]);
   const family = selected ? families.find(g => g.key === selected) : undefined;
   // A refusal recorded by 发现模型 is stale once the page can act again: it is
   // shown only while the action would still be refused, never as a lingering
@@ -460,7 +460,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
           {group.unavailable && <p className="small muted harness-reason">原因：{reason}</p>}
           {!isFolded && <ul className="profile-list">{group.families.map(g => {
             const enabled = g.profiles.filter(p => p.enabled).length;
-            const hasRouter = g.profiles.some(p => p.profileId === routerId);
+            const hasRouter = g.profiles.some(p => routerIds.has(p.profileId));
             // With 显示不可用配置 on, every shown family says how many of its
             // configurations are unavailable and which reasons were recorded.
             const unavailable = g.profiles.filter(p => !p.available);

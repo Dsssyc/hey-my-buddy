@@ -34,7 +34,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, decisionProfileId: flashOff },
+    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: flashOff , defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),

@@ -1,4 +1,4 @@
-import type { ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { Configuration, ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
@@ -60,6 +60,18 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
     );
   }
   return session as ConsoleSession;
+}
+
+/** Contract 0.20.0 / schema 14: settings use two Router slots and one default mode. */
+export function validRoutingConfiguration(value: unknown): value is Configuration {
+  const config = value as Partial<Configuration> | null;
+  return !!config && typeof config === "object" && !Array.isArray(config)
+    && !("decisionProfileId" in config)
+    && Number.isInteger(config.revision)
+    && (config.fastRouterProfileId === null || typeof config.fastRouterProfileId === "string")
+    && (config.reviewRouterProfileId === null || typeof config.reviewRouterProfileId === "string")
+    && (config.defaultRoutingMode === "fast" || config.defaultRoutingMode === "review")
+    && (config.routingBudget === "brief" || config.routingBudget === "standard" || config.routingBudget === "deep");
 }
 
 export function errorText(error: unknown): string {
@@ -261,6 +273,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       if (
         !data ||
         !Number.isInteger(data.tableRevision) ||
+        !validRoutingConfiguration(data.configuration) ||
         !data.gate ||
         !Array.isArray(data.profiles) ||
         !Array.isArray(data.cards) ||

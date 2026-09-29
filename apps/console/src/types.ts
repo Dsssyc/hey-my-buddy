@@ -113,6 +113,9 @@ export type Decision = {
   createdAt: string;
   error?: string | null;
   updatedAt?: string;
+  routingMode?: RoutingMode;
+  requestedRoutingMode?: RoutingMode;
+  fallback?: RoutingFallback | null;
 };
 export type Delegation = {
   kind: "goal" | "helper" | "decision" | "execution";
@@ -238,11 +241,17 @@ export type ModelConcurrencySetting = ModelFamily & { limit: number };
  * publishes it.
  */
 export type ModelConcurrencyEntry = ModelConcurrencySetting & { active: number };
-export type RoutingBudget = "quick" | "standard" | "deep";
+export type RoutingMode = "fast" | "review";
+export type RoutingFallback = { from: "review"; to: "fast"; code: string; reason: string };
+export type RoutingBudget = "brief" | "standard" | "deep";
+export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
 export type Configuration = {
   revision: number;
-  decisionProfileId: string | null;
-  routingBudget?: RoutingBudget;
+  fastRouterProfileId: string | null;
+  reviewRouterProfileId: string | null;
+  defaultRoutingMode: RoutingMode;
+  routingBudget: RoutingBudget;
+  routingBudgetLimits?: RoutingBudgetLimits;
 };
 export type RoutingHealth = {
   windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;

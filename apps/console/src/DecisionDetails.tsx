@@ -6,6 +6,7 @@ import type { Preference } from "./types";
 import { decisionStatus } from "./decision-types";
 import { effortText, profileTitle } from "./profile-display";
 import { Badge, formatDate } from "./ui";
+import { fallbackDescription, recordedRoutingMode } from "./routing-display";
 
 export function configurationText(value: DecisionModel | null | undefined): string {
   return value ? [value.adapter, value.provider, value.model, effortText(value.effort ?? value.reasoningEffort)].filter(Boolean).join(" / ") || "未记录" : "未记录";
@@ -74,6 +75,9 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <dl className="facts">
       {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}
       <dt>路由模型</dt><dd>{configurationText(model)}</dd>
+      {audit.kind !== "maintain" && <><dt>请求模式</dt><dd>{recordedRoutingMode(audit.requestedRoutingMode)}</dd>
+        <dt>实际模式</dt><dd>{recordedRoutingMode(audit.routingMode)}</dd>
+        <dt>模式降级</dt><dd>{fallbackDescription(audit.fallback)}</dd></>}
       <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
       <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>
@@ -83,9 +87,9 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       <dl className="facts">
         <dt>程序任务偏好结果</dt><dd>{outcomeText(audit.policyCheck?.taskPreference?.outcome)}{audit.policyCheck?.taskPreference?.ruleIndex != null ? `（规则 ${audit.policyCheck.taskPreference.ruleIndex}）` : ""}</dd>
         <dt>程序用户偏好结果</dt><dd>{outcomeText(audit.policyCheck?.userPreference)}</dd>
-        <dt>预算配置</dt><dd>{audit.budget?.preset ? ({ quick: "快速", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
+        <dt>预算配置</dt><dd>{audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
         <dt>耗时 / 上限</dt><dd>{recorded(audit.usage?.elapsedMs)} 毫秒 / {recorded(audit.budget?.timeoutSeconds)} 秒</dd>
-        <dt>工具调用 / 上限</dt><dd>{recorded(audit.usage?.toolCalls)} / {recorded(audit.budget?.toolCalls)}</dd>
+        <dt>{audit.routingMode === "fast" ? "工具调用" : "工具调用 / 上限"}</dt><dd>{recorded(audit.usage?.toolCalls)}{audit.routingMode !== "fast" && ` / ${recorded(audit.budget?.toolCalls)}`}</dd>
         <dt>读取字节</dt><dd>{recorded(audit.usage?.bytesRead)}</dd>
       </dl>
       <h3>引用证据</h3>

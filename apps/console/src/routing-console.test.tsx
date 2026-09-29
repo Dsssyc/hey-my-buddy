@@ -20,7 +20,7 @@ function snapshot(records: Task[] = []): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
-    configuration: { revision: 9, decisionProfileId: worker.profileId },
+    configuration: { revision: 9, fastRouterProfileId: null, reviewRouterProfileId: worker.profileId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
     familyPreferences: [], preferenceOverrides: [],
@@ -95,9 +95,9 @@ describe("routing configuration", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command)} />);
     await user.click(await screen.findByRole("button", { name: "详情" }));
-    const budget = screen.getByRole("radiogroup", { name: "路由预算" });
+    const budget = screen.getByRole("radiogroup", { name: "审阅预算" });
     expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
-    expect(screen.getByText(/上限待实测：快速 60 秒/)).toBeTruthy();
+    expect(screen.getAllByText(/快速路由固定 60 秒，不调用工具/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
@@ -109,6 +109,19 @@ describe("routing configuration", () => {
 });
 
 describe("recorded decision details", () => {
+  it("shows requested and actual mode with the recorded downgrade reason", async () => {
+    const audit = decision("fallback", { routingMode: "fast", requestedRoutingMode: "review",
+      fallback: { from: "review", to: "fast", code: "REVIEW_UNAVAILABLE", reason: "审阅配置失效" } });
+    const command = vi.fn(async () => ({ decision: audit }));
+    render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
+    const detail = await screen.findByRole("region", { name: "决策依据详情" });
+    expect(within(detail).getByText("请求模式").nextElementSibling!.textContent).toBe("审阅");
+    expect(within(detail).getByText("实际模式").nextElementSibling!.textContent).toBe("快速");
+    expect(within(detail).getByText("模式降级").nextElementSibling!.textContent).toContain("审阅配置失效");
+    expect(within(detail).getByText("预算配置").nextElementSibling!.textContent).toContain("固定 60 秒，无工具");
+    expect(within(detail).getByText("工具调用")).toBeTruthy();
+    expect(within(detail).queryByText("工具调用 / 上限")).toBeNull();
+  });
   it("shows saved evidence, program preferences and unknown native usage without current facts", async () => {
     const audit = {
       ...decision("new-fields"),
@@ -124,7 +137,7 @@ describe("recorded decision details", () => {
     expect(within(detail).getByText("file · src/frozen.ts")).toBeTruthy();
     expect(within(detail).getByText("选择其他配置（规则 2）")).toBeTruthy();
     expect(within(detail).getByText("符合")).toBeTruthy();
-    expect(within(detail).getByText("快速")).toBeTruthy();
+    expect(within(detail).getByText("简要（历史记录）")).toBeTruthy();
     expect(within(detail).getByText("1234 毫秒 / 60 秒")).toBeTruthy();
     expect(within(detail).getByText("0 / 8")).toBeTruthy();
     expect(within(detail).getByText("读取字节").nextElementSibling!.textContent).toBe("未记录");

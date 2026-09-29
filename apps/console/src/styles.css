@@ -271,10 +271,14 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; background: var(--c, var(--line-strong)); flex-shrink: 0; }
 .swatch.striped { background-image: repeating-linear-gradient(135deg, var(--on-cfg) 0 1.5px, transparent 1.5px 5px); }
 .swatch.queue { background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--line-strong); height: 7px; }
-.swatch.routing, .sp.routing {
+.swatch.routing.review, .sp.routing.review {
   background-color: var(--subtle);
   background-image: radial-gradient(circle, var(--muted) .7px, transparent .9px);
   background-size: 4px 4px;
+}
+.swatch.routing.fast, .sp.routing.fast {
+  background-color: var(--subtle);
+  background-image: repeating-linear-gradient(90deg, var(--muted) 0 1px, transparent 1px 5px);
 }
 .swatch.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); }
 .glyph { font-weight: 700; }
@@ -327,7 +331,8 @@ button.tl-label:hover { background: var(--subtle); }
 .sp { height: 22px; min-width: 4px; padding: 0 6px; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; text-align: left; white-space: nowrap; overflow: visible; }
 .sp-text { display: block; overflow: hidden; text-overflow: ellipsis; position: relative; }
 .sp.queue { height: 8px; padding: 0; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--line-strong); }
-.sp.routing { height: 22px; padding: 0; border: 1px solid var(--line-strong); color: var(--ink); }
+/* A short routing hit area can overlap the next execution bar at fit zoom. */
+.sp.routing { height: 22px; padding: 0; border: 1px solid var(--line-strong); color: var(--ink); z-index: 1; }
 .sp.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); color: var(--warning); }
 .sp.wait.open { border-right: 0; border-radius: 3px 0 0 3px; }
 .sp.wait.cancelled { border-color: var(--muted); color: var(--muted); }
@@ -341,13 +346,19 @@ button.tl-label:hover { background: var(--subtle); }
 .sp.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
 .sp.failed.selected { box-shadow: 0 0 0 1.5px var(--danger), 0 0 0 3px var(--surface), 0 0 0 5px var(--focus); }
 /* State changes keep the routing texture shared with the legend. */
-.sp.routing.running, .sp.routing.failed, .sp.routing.cancelled, .sp.routing.unknown {
+.sp.routing.review.running, .sp.routing.review.failed, .sp.routing.review.cancelled, .sp.routing.review.unknown {
   background-color: var(--subtle);
   background-image: radial-gradient(circle, var(--muted) .7px, transparent .9px);
   background-size: 4px 4px;
 }
+.sp.routing.fast.running, .sp.routing.fast.failed, .sp.routing.fast.cancelled, .sp.routing.fast.unknown {
+  background-color: var(--subtle);
+  background-image: repeating-linear-gradient(90deg, var(--muted) 0 1px, transparent 1px 5px);
+}
 .sp.routing.running { border-style: double; border-width: 3px; }
 .sp.routing.failed { min-width: 14px; border-color: var(--danger); }
+.sp.routing.fallback { min-width: 24px; }
+.sp.routing.fallback.failed .routing-cross { right: 12px; }
 .sp.routing.cancelled { border: 1.5px dashed var(--muted); }
 .sp.routing.unknown { border: 1.5px dotted var(--line-strong); }
 .swatch.routing { position: relative; border: 1px solid var(--line-strong); }
@@ -361,6 +372,7 @@ button.tl-label:hover { background: var(--subtle); }
   background: var(--danger); transform: translate(-50%, -50%) rotate(45deg);
 }
 .routing-cross::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.routing-fallback-mark { position: absolute; top: -8px; right: -5px; min-width: 13px; height: 13px; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--surface); color: var(--ink); font-size: 11px; font-style: normal; line-height: 11px; text-align: center; pointer-events: none; z-index: 2; }
 .end-mark { position: absolute; top: -7px; right: -7px; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid currentColor; background: var(--surface); font-size: 9px; font-weight: 700; line-height: 12px; text-align: center; font-style: normal; z-index: 1; }
 .end-mark.bad { color: var(--danger); } .end-mark.muted { color: var(--muted); } .end-mark.warn { color: var(--warning); }
 .pulse { position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--c); animation: tl-pulse 1.6s ease-in-out infinite; }

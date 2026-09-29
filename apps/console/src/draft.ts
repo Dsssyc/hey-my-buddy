@@ -320,7 +320,7 @@ export type UserPolicyPublication = {
   familyPreferenceChanges?: FamilyPreferenceChangePatch[];
   preferenceChanges?: PreferenceChangePatch[];
   familyAnnotationChanges?: FamilyAnnotationChangePatch[];
-  configuration?: Partial<Pick<Configuration, "decisionProfileId" | "routingBudget">>;
+  configuration?: Partial<Pick<Configuration, "fastRouterProfileId" | "reviewRouterProfileId" | "defaultRoutingMode" | "routingBudget">>;
   /** Per-family limit patches; the board refuses any `active` occupancy here. */
   modelConcurrency?: ModelConcurrencySetting[];
 };
@@ -412,8 +412,10 @@ export function familyAnnotationChanges(
   return changed.sort(byFamily);
 }
 
-export function decisionProfileChanged(baseline: Draft, draft: Draft): boolean {
-  return baseline.configuration.decisionProfileId !== draft.configuration.decisionProfileId;
+export const ROUTER_FIELDS = ["fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode"] as const;
+
+export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
+  return baseline.configuration[field] !== draft.configuration[field];
 }
 
 export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
@@ -421,7 +423,7 @@ export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
 }
 
 export function configurationChanged(baseline: Draft, draft: Draft): boolean {
-  return decisionProfileChanged(baseline, draft) || routingBudgetChanged(baseline, draft);
+  return ROUTER_FIELDS.some(field => routerFieldChanged(baseline, draft, field)) || routingBudgetChanged(baseline, draft);
 }
 
 /**
@@ -454,7 +456,8 @@ export function publication(
     ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
-          ...(decisionProfileChanged(baseline, draft) ? { decisionProfileId: draft.configuration.decisionProfileId } : {}),
+          ...Object.fromEntries(ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field))
+            .map(field => [field, draft.configuration[field]])),
           ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration.routingBudget ?? "standard" } : {}),
         } }
       : {}),
@@ -483,7 +486,9 @@ function fingerprint(draft: UserEditable): string {
       .map((a) => ({ key: familyKey(a), text: a.text }))
       .sort((a, b) => a.key.localeCompare(b.key)),
     configuration: {
-      decisionProfileId: draft.configuration.decisionProfileId,
+      fastRouterProfileId: draft.configuration.fastRouterProfileId,
+      reviewRouterProfileId: draft.configuration.reviewRouterProfileId,
+      defaultRoutingMode: draft.configuration.defaultRoutingMode,
       routingBudget: draft.configuration.routingBudget ?? "standard",
     },
     modelConcurrency: [...draft.modelConcurrency]
@@ -512,7 +517,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
     + preferenceChanges(baseline, draft).length
     + familyAnnotationChanges(baseline, draft).length
     + concurrency
-    + (decisionProfileChanged(baseline, draft) ? 1 : 0)
+    + ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field)).length
     + (routingBudgetChanged(baseline, draft) ? 1 : 0);
 }
 
@@ -525,7 +530,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "familyPreference" | "preference" | "familyAnnotation" | "configuration" | "routingBudget" | "modelConcurrency";
+  field: "enabled" | "familyPreference" | "preference" | "familyAnnotation" | "configuration" | "defaultRoutingMode" | "routingBudget" | "modelConcurrency";
   /** The profile id, or the `adapter/provider/model` of a family-level field. */
   profileId: string;
   message: string;
@@ -543,6 +548,7 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   preference: "档位偏好",
   familyAnnotation: "家族备注",
   configuration: "Router",
+  defaultRoutingMode: "默认路由模式",
   routingBudget: "路由预算",
   modelConcurrency: "并发上限",
 };
@@ -551,6 +557,7 @@ const familyText = (family: ModelFamily) => `${family.adapter}/${family.provider
 
 function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
   if (field === "configuration") return `Router${profileId ? ` ${profileId}` : "（空）"}`;
+  if (field === "defaultRoutingMode") return "默认路由模式";
   if (field === "routingBudget") return "路由预算";
   if (field === "familyPreference" || field === "familyAnnotation" || field === "modelConcurrency") {
     return `模型家族 ${profileId} 的${FIELD_NAMES[field]}`;
@@ -692,14 +699,16 @@ export function rebaseDraft(
     else fail("changed", "familyAnnotation", familyText(change));
   }
 
-  // The Router is a single global field.
-  let decisionProfileId = nextBaseline.configuration.decisionProfileId;
-  if (decisionProfileChanged(baseline, draft)) {
-    const old = baseline.configuration.decisionProfileId;
-    const wanted = draft.configuration.decisionProfileId;
-    const fresh = nextBaseline.configuration.decisionProfileId;
-    if (fresh === old || fresh === wanted) decisionProfileId = wanted;
-    else fail("changed", "configuration", wanted ?? "");
+  const mergedRouting = { ...nextBaseline.configuration };
+  for (const field of ROUTER_FIELDS) {
+    if (!routerFieldChanged(baseline, draft, field)) continue;
+    const old = baseline.configuration[field];
+    const wanted = draft.configuration[field];
+    const fresh = nextBaseline.configuration[field];
+    if (fresh === old || fresh === wanted) {
+      // Each field is independently fenced by the configuration revision.
+      Object.assign(mergedRouting, { [field]: wanted });
+    } else fail("changed", field === "defaultRoutingMode" ? "defaultRoutingMode" : "configuration", String(wanted ?? ""));
   }
 
   let routingBudget = nextBaseline.configuration.routingBudget ?? "standard";
@@ -765,7 +774,7 @@ export function rebaseDraft(
       familyPreferences,
       preferenceOverrides,
       familyAnnotations,
-      configuration: { ...nextBaseline.configuration, decisionProfileId, routingBudget },
+      configuration: { ...mergedRouting, routingBudget },
       modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
         mergedConcurrency.get(familyKey(entry)) ?? entry),
     },
