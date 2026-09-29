@@ -9,7 +9,8 @@ from buddy.db import SCHEMA_VERSION
 from buddy.decision import MAX_DECISION_TASK_BYTES
 from buddy.errors import BoardError
 from buddy.worker.worker import Worker
-from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID
+from test_decision import (DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
+                             SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID)
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
 
@@ -113,10 +114,13 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_partial_constraints_are_hard_filters_and_invalid_selection_needs_host(self):
         board = self.board()
-        self.seed(board)
+        # Two effort-high profiles keep the Router path; the constraint is still a
+        # hard filter, and a third enabled profile would also be constrained away.
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         submitted = self.routed(board, effort="high")
         claim = self.router_claim(board, submitted)
-        self.assertEqual([profile["profileId"] for profile in claim["claim"]["decisionInput"]["profiles"]], [SECOND_PROFILE_ID])
+        self.assertEqual(sorted(profile["profileId"] for profile in claim["claim"]["decisionInput"]["profiles"]),
+                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
         self.select(board, claim, profile_id=PROFILE_ID)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertTrue(view["awaitingHost"])
@@ -247,7 +251,7 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_helper_routes_with_hard_filters_and_parent_owns_its_stop(self):
         board = self.board()
-        self.seed(board)
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         parent = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
@@ -255,7 +259,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         helper_id = approved["children"][0]["taskId"]
         helper = board.call("workflow_get", {"runId": helper_id})
         routing = self.router_claim(board, helper)
-        self.assertEqual([profile["profileId"] for profile in routing["claim"]["decisionInput"]["profiles"]], [SECOND_PROFILE_ID])
+        self.assertEqual(sorted(profile["profileId"] for profile in routing["claim"]["decisionInput"]["profiles"]),
+                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
         cancelled = board.call("workflow_cancel", {"runId": parent["runId"], **self.control(parent)})
         self.assertIn(helper["routing"]["taskId"], cancelled["shutdown"]["unconfirmedRunIds"])
         self.select(board, routing, profile_id=SECOND_PROFILE_ID)
@@ -292,7 +297,9 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_pending_writer_gate_fences_changed_router_instead_of_refreshing_frozen_input(self):
         board = self.board()
-        self.seed(board)
+        # Two effort-high candidates keep this a queued Router decision the writer
+        # gate can fence; a sole candidate would complete before any claim.
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         revision = board.call("console_snapshot", {})["tableRevision"]
         grant = board.console_call("evaluation_write_begin", {"requestId": "changing", "expectedRevision": revision, "kind": "human"})
         submitted = self.routed(board, effort="high")
@@ -437,9 +444,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(self.catalog_validation.call_count, 2)
 
     def test_real_decision_worker_selects_once_and_persists_owned_shutdown_evidence(self):
-        DecisionTestCase.use_helper(self)
+        DecisionTestCase.use_helper(self, profile_id=SECOND_PROFILE_ID)
         board = self.board(max_concurrent=1)
-        self.seed(board)
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         submitted = self.routed(board, effort="high")
         worker = Worker("routing-worker", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
@@ -452,7 +459,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertTrue(decision_task["shutdownConfirmed"])
         decision_id = selected["routing"]["decisionId"]
         audit = board.call("selection_get", {"decisionId": decision_id, "includeAudit": True})["decision"]
-        self.assertEqual([profile["profileId"] for profile in audit["input"]["profiles"]], [SECOND_PROFILE_ID])
+        self.assertEqual(sorted(profile["profileId"] for profile in audit["input"]["profiles"]),
+                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
         self.assertEqual(audit["requestedProfile"]["model"], PROFILE["model"])
         control_path = self.directory / "attempts" / decision_task["taskId"] / selected["routing"]["attemptId"] / "mock-readonly.json"
         self.assertEqual(json.loads(control_path.read_text())["document"], audit["input"])

@@ -6,7 +6,7 @@ import type { Preference } from "./types";
 import { decisionStatus } from "./decision-types";
 import { effortText, profileTitle } from "./profile-display";
 import { Badge, formatDate } from "./ui";
-import { fallbackDescription, recordedRoutingMode } from "./routing-display";
+import { fallbackDescription, recordedRoutingMode, routingBasisSummary } from "./routing-display";
 
 export function configurationText(value: DecisionModel | null | undefined): string {
   return value ? [value.adapter, value.provider, value.model, effortText(value.effort ?? value.reasoningEffort)].filter(Boolean).join(" / ") || "未记录" : "未记录";
@@ -45,8 +45,13 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     const profile = profiles.find(p => p.profileId === id);
     return profile ? `${profile.adapter} · ${profileTitle(profile)}` : id;
   };
-  const constraints = audit.requested?.constraints || {};
-  const preferences = table?.preferences || [];
+  const constraints = audit.constraints ?? audit.requested?.constraints ?? {};
+  const requiredCapabilities = audit.requiredCapabilities ?? audit.requested?.requiredCapabilities ?? [];
+  const basisLine = routingBasisSummary(audit.routingBasis);
+  const programPreferences = audit.routerCalled === false
+    ? (audit.output as { programSelection?: { preferences?: Preference[] } } | null)?.programSelection?.preferences
+    : undefined;
+  const preferences = table?.preferences ?? programPreferences ?? [];
   const selectedPreference = preferences.find(p => p.profileId === audit.profileId);
   const otherPreferences = preferences.filter(p => p !== selectedPreference);
   const preferenceItem = (p: Preference) => <li key={p.profileId}>
@@ -76,7 +81,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}
       <dt>路由模型</dt><dd>{configurationText(model)}</dd>
       {audit.kind !== "maintain" && <><dt>请求模式</dt><dd>{recordedRoutingMode(audit.requestedRoutingMode)}</dd>
-        <dt>实际模式</dt><dd>{recordedRoutingMode(audit.routingMode)}</dd>
+        <dt>实际模式</dt><dd>{audit.routerCalled === false ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
         <dt>模式降级</dt><dd>{fallbackDescription(audit.fallback)}</dd></>}
       <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
       <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
@@ -87,7 +92,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       <dl className="facts">
         <dt>程序任务偏好结果</dt><dd>{outcomeText(audit.policyCheck?.taskPreference?.outcome)}{audit.policyCheck?.taskPreference?.ruleIndex != null ? `（规则 ${audit.policyCheck.taskPreference.ruleIndex}）` : ""}</dd>
         <dt>程序用户偏好结果</dt><dd>{outcomeText(audit.policyCheck?.userPreference)}</dd>
-        <dt>预算配置</dt><dd>{audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
+        <dt>预算配置</dt><dd>{audit.routerCalled === false ? "未调用 Router" : audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
         <dt>耗时 / 上限</dt><dd>{recorded(audit.usage?.elapsedMs)} 毫秒 / {recorded(audit.budget?.timeoutSeconds)} 秒</dd>
         <dt>{audit.routingMode === "fast" ? "工具调用" : "工具调用 / 上限"}</dt><dd>{recorded(audit.usage?.toolCalls)}{audit.routingMode !== "fast" && ` / ${recorded(audit.budget?.toolCalls)}`}</dd>
         <dt>读取字节</dt><dd>{recorded(audit.usage?.bytesRead)}</dd>
@@ -101,8 +106,11 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       </details>
       <h3>当时的约束与偏好</h3>
       <p className="small muted">{Object.keys(constraints).length ? `硬约束：${configurationText(constraints)}` : "未记录指定配置的硬约束。"}</p>
-      {!!audit.requested?.requiredCapabilities?.length && <p className="small wrap">所需能力：{audit.requested.requiredCapabilities.join("、")}</p>}
-      {table ? preferences.length ? <>
+      {!!requiredCapabilities.length && <p className="small wrap">所需能力：{requiredCapabilities.join("、")}</p>}
+      {audit.routerCalled === false &&
+        <p className="small muted">本次由程序直接选定：唯一合法候选，未调用 Router。</p>}
+      {basisLine && <p className="small muted wrap">路由依据：{basisLine}（冻结记录，不随当前配置变化）</p>}
+      {table || programPreferences ? preferences.length ? <>
         {selectedPreference && <ul className="reason-list">{preferenceItem(selectedPreference)}</ul>}
         {otherPreferences.length > 0 && <details><summary>其他候选偏好（{otherPreferences.length} 条）</summary>
           <ul className="reason-list">{otherPreferences.map(preferenceItem)}</ul></details>}
@@ -119,7 +127,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       <dl className="facts"><dt>决策 ID</dt><dd>{audit.decisionId}</dd><dt>计算任务</dt><dd>{audit.runId || "未启动计算任务"}</dd>
         <dt>输入 SHA-256</dt><dd>{audit.inputSha256 || "未记录"}</dd></dl>
       <details><summary>发送给路由模型的快照</summary><pre className="result-text">{JSON.stringify(audit.input ?? null, null, 2)}</pre></details>
-      <details><summary>持久模型回执</summary><pre className="result-text">{JSON.stringify(audit.output ?? null, null, 2)}</pre></details>
+      <details><summary>{audit.routerCalled === false ? "程序选择记录" : "持久模型回执"}</summary><pre className="result-text">{JSON.stringify(audit.output ?? null, null, 2)}</pre></details>
     </details>
   </section>;
 }

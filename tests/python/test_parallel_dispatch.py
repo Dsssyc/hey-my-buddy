@@ -123,7 +123,7 @@ class CapacityTestCase(BoardTestCase):
         mock_readonly.install(self, **mode)
 
     def seed_evaluation(self, board, *, model_limit: int | None = None) -> dict:
-        """Enable one discovered profile through a registered console session."""
+        """Enable two candidates so capacity tests exercise actual Router work."""
         refreshed = board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
         grant = board.console_call(
             "evaluation_write_begin", {"requestId": "seed", "expectedRevision": refreshed["tableRevision"], "kind": "human"}
@@ -134,7 +134,8 @@ class CapacityTestCase(BoardTestCase):
             "generation": grant["generation"],
             "writerToken": grant["writerToken"],
             "expectedRevision": grant["tableRevision"],
-            "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+            "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
+                                {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
             "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": PROFILE_ID},
         }
         if model_limit is not None:
@@ -961,7 +962,10 @@ class DaemonPoolTests(CapacityTestCase):
                 "commandId": "pool-seed-1", "writerId": grant["writerId"],
                 "generation": grant["generation"], "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
-                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+                # Keep this a real Router attempt competing for the free pool
+                # slot; a sole legal candidate is now resolved synchronously.
+                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
+                                    {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
                 "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": PROFILE_ID},
                 "modelConcurrency": [{**PROFILE_FAMILY, "limit": 2}],
             }, csrf=csrf)

@@ -134,7 +134,7 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
             <input type="radio" name="default-routing-mode" checked={defaultMode === mode} disabled={!editor.editing} onChange={() => setMode(mode)} />{MODE_LABEL[mode]}
           </label>)}
         </div>
-        <p className="small muted">快速路由固定 60 秒，不调用工具。快速路由会把每个任务的描述发送给快速 Router 所在的模型提供方，包括准备交给其他模型执行的任务；审阅路由还会读取冻结的仓库副本。</p>
+        <p className="small muted">快速路由固定 60 秒，不调用工具。需要 Router 选择时，快速模式会把任务描述发送给快速 Router 所在的模型提供方，包括准备交给其他模型执行的任务；审阅模式还会读取冻结的仓库副本。唯一合法候选由程序直接选定，不调用 Router。</p>
       </div>
       <div className="routing-detail-block">
         <h3>审阅预算 <Help label="路由预算说明">{BUDGET_HELP}</Help></h3>

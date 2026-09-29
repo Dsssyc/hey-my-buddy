@@ -80,6 +80,12 @@ NEEDS_HOST_NO_CANDIDATE = (
     "no enabled, available, capability-matching profile is a legal candidate under the published pins and "
     "excludes, so there is nothing honest to recommend"
 )
+#: The recorded reason when the frozen candidate set holds exactly one legal
+#: candidate: the program selects it directly and no Router call is created.
+SOLE_CANDIDATE_REASON = "唯一合法候选，未调用 Router"
+#: Retain the complete supported catalog's exclusions. An oversized legacy table
+#: still reports its exact total alongside the bounded entries.
+MAX_FROZEN_EXCLUSIONS = MAX_DECISION_PROFILES
 
 def decision_spec(spec: dict) -> dict | None:
     """The decision descriptor of a task specification, when this is a decision task."""
@@ -213,19 +219,20 @@ class DecisionCoordinator:
         return True
 
     @staticmethod
-    def _select_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False) -> list[sqlite3.Row]:
-        """Legal candidates: enabled, available, capability-matching, pinned and not excluded.
+    def _candidate_bounds(*, required_capabilities, constraints, coding_only: bool = True) -> tuple[list[str], list[Any]]:
+        """The hard-bound SQL clauses shared by the candidate and exclusion scans.
 
-        Pin/exclude is enforced here in Python and never delegated to the model;
-        ``prefer`` stays a soft ordering hint that only enters the bounded input.
+        Every bound here is program-enforced Python filtering: enabled and
+        available profiles, a ready harness, required capabilities, fixed
+        configuration fields and complete coding tuples. Preference policy is
+        deliberately absent — the two scans apply it in opposite directions.
         """
         clauses = [
-            "p.enabled=1", "p.available=1", "COALESCE(f.mode,'')!='exclude'",
+            "p.enabled=1", "p.available=1",
             "EXISTS(SELECT 1 FROM harness_health h WHERE h.adapter=p.adapter AND h.status='ready')",
-            "(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')",
         ]
-        values = []
-        for capability in sorted(set(required_capabilities)):
+        values: list[Any] = []
+        for capability in sorted(set(required_capabilities or [])):
             clauses.append("EXISTS(SELECT 1 FROM json_each(p.capabilities_json) WHERE value=?)")
             values.append(capability)
         if coding_only:
@@ -237,10 +244,71 @@ class DecisionCoordinator:
                 raise BoardError("INVALID_ARGUMENT", "Unknown configuration constraint")
             clauses.append(f"p.{key}=?")
             values.append(value)
+        return clauses, values
+
+    @staticmethod
+    def _select_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False) -> list[sqlite3.Row]:
+        """Legal candidates: enabled, available, capability-matching, pinned and not excluded.
+
+        Pin/exclude is enforced here in Python and never delegated to the model;
+        ``prefer`` stays a soft ordering hint that only enters the bounded input.
+        """
+        clauses, values = DecisionCoordinator._candidate_bounds(
+            required_capabilities=required_capabilities, constraints=constraints, coding_only=coding_only)
+        clauses.append("COALESCE(f.mode,'')!='exclude'")
+        clauses.append("(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')")
         values.append(MAX_DECISION_PROFILES + 1)
         return list(connection.execute(
             "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id "
             "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values))
+
+    def _excluded_profiles(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> tuple[list[dict], int]:
+        """The user-excluded configurations inside these hard bounds, frozen now.
+
+        These are the exclusions that narrowed this request's candidate set: each
+        profile passes every hard bound (enabled, available, healthy, complete
+        coding tuple, required capabilities, fixed fields) and only the user's
+        effective ``exclude`` preference removes it. Pins are not considered,
+        because a pin narrows the set without excluding anything.
+        """
+        clauses, values = self._candidate_bounds(
+            required_capabilities=required_capabilities, constraints=constraints)
+        clauses.append("COALESCE(f.mode,'')='exclude'")
+        from_sql = (" FROM evaluation_profiles p"
+                    " LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id"
+                    " WHERE " + " AND ".join(clauses))
+        total = int(connection.execute("SELECT COUNT(*) AS count" + from_sql, values).fetchone()["count"])
+        rows = connection.execute(
+            "SELECT p.profile_id, p.adapter, p.provider, p.model, p.effort,"
+            " f.reason AS preference_reason, f.source AS preference_source" + from_sql +
+            " ORDER BY p.rowid LIMIT ?",
+            [*values, MAX_FROZEN_EXCLUSIONS],
+        ).fetchall()
+        entries = [
+            {
+                "profileId": row["profile_id"],
+                "adapter": row["adapter"],
+                "provider": row["provider"],
+                "model": row["model"],
+                "effort": row["effort"],
+                "reason": row["preference_reason"],
+                "source": row["preference_source"],
+            }
+            for row in rows
+        ]
+        return entries, total
+
+    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None) -> dict:
+        """Submission-time routing facts: the frozen candidate count and exclusions.
+
+        The basis is recorded once with the request and never recomputed, so a
+        later preference change cannot rewrite why an earlier route had few or
+        no candidates. The submission's hard constraints stay in the request
+        itself; this object carries what the constraints alone cannot show.
+        """
+        excluded, excluded_count = self._excluded_profiles(
+            connection, required_capabilities=required_capabilities, constraints=constraints)
+        return {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedProfiles": excluded}
 
     # -- bounded model input -------------------------------------------------
     def _profile_input(self, row: sqlite3.Row) -> dict:
@@ -536,20 +604,16 @@ class DecisionCoordinator:
             decision_id = f"dec-{uuid.uuid4()}"
             now = self._now()
             state = self._state(connection)
-            profile_row, facts, profile_reason = router.resolve(connection, request.get("routingMode"), request.get("allowRoutingFallback", True))
-            request = {**request, **facts, "budget": (dict(router.FAST_BUDGET) if facts["routingMode"] == "fast" else router.configured_budget(connection))}
-            request["timeoutSeconds"] = 60 if facts["routingMode"] == "fast" else request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
-            request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
-            # A writer intent means the table is about to move. The request is created
-            # queued and validated when it can actually run, on the revision the
-            # writer publishes: a selection that arrives while the first profile or
-            # the first evidence is being published must not be judged against the
-            # old table.
-            writer_pending = bool(
-                connection.execute(
-                    "SELECT COUNT(*) AS count FROM evaluation_writers WHERE state IN ('waiting','active')"
-                ).fetchone()["count"]
-            )
+            # The legal candidate set is frozen before any Router resolution: a
+            # sole legal candidate is selected by the program with no Router
+            # call, so that path cannot depend on Router availability.
+            candidates = self._select_candidates(
+                connection, request.get("requiredCapabilities", []),
+                constraints=request.get("constraints"), coding_only=True)
+            request["routingBasis"] = self._freeze_routing_basis(
+                connection, candidates=candidates,
+                required_capabilities=request.get("requiredCapabilities", []),
+                constraints=request.get("constraints"))
             status = "queued"
             # New decisions are always selection requests; there is no internal
             # maintenance request path left on the blackboard.
@@ -557,23 +621,33 @@ class DecisionCoordinator:
             error: str | None = None
             task_text = request.get("task") or ""
             expected_revision = int(state["table_revision"])
-            if needs_host_reason is not None:
-                status = "needs-host"
-                reason = needs_host_reason
-            elif profile_row is None:
-                status = "needs-host"
-                reason = profile_reason or NEEDS_HOST_NO_PROFILE
-            elif (
-                not self._select_candidates(connection, request["requiredCapabilities"],
-                                                constraints=request.get("constraints"),
-                                                coding_only=True)
-            ):
-                status = "needs-host"
-                reason = NEEDS_HOST_NO_CANDIDATE
+            sole_candidate: sqlite3.Row | None = None
+            if len(candidates) == 1:
+                # One frozen legal candidate leaves the Router nothing to compare,
+                # so the program selects it directly: no Router task is created and
+                # no Router configuration or model-input byte budget is needed.
+                sole_candidate = candidates[0]
+                requested_mode = request.get("routingMode") or router.configuration(connection)["defaultRoutingMode"]
+                facts = {"requestedRoutingMode": requested_mode, "routingMode": requested_mode,
+                         "fallback": None, "routerCalled": False}
+                request.update(facts)
+                status, reason = "completed", SOLE_CANDIDATE_REASON
+            else:
+                profile_row, facts, profile_reason = router.resolve(connection, request.get("routingMode"), request.get("allowRoutingFallback", True))
+                request = {**request, **facts, "budget": (dict(router.FAST_BUDGET) if facts["routingMode"] == "fast" else router.configured_budget(connection))}
+                request["timeoutSeconds"] = 60 if facts["routingMode"] == "fast" else request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
+                request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
+                if needs_host_reason is not None:
+                    status = "needs-host"
+                    reason = needs_host_reason
+                elif profile_row is None:
+                    status = "needs-host"
+                    reason = profile_reason or NEEDS_HOST_NO_PROFILE
+                elif not candidates:
+                    status = "needs-host"
+                    reason = NEEDS_HOST_NO_CANDIDATE
             frozen_input = None
             if status == "queued":
-                candidates = self._select_candidates(connection, request.get("requiredCapabilities", []),
-                                                     constraints=request.get("constraints"), coding_only=True)
                 frozen_input, problem = self._select_input(
                     connection, request_id=request_id, revision=expected_revision, profile_row=profile_row,
                     task_text=task_text, candidates=candidates,
@@ -652,6 +726,12 @@ class DecisionCoordinator:
                 },
                 revision=expected_revision,
             )
+            if sole_candidate is not None:
+                # The terminal transition and its atomic event happen inside this
+                # same creation transaction; no worker, reader or attempt exists.
+                self._adopt_sole_candidate(
+                    connection, self._row(connection, decision_id),
+                    candidate=sole_candidate, request=request, now=now)
             row = self._row(connection, decision_id)
             head = self.board._head_of(connection)
         if owns_transaction:
@@ -1277,6 +1357,58 @@ class DecisionCoordinator:
             payload={"reason": reason, "actor": "service", "phase": "queued"},
         )
 
+    def _adopt_sole_candidate(self, connection: sqlite3.Connection, row: sqlite3.Row, *, candidate: sqlite3.Row, request: dict, now: str) -> None:
+        """Select the single frozen legal candidate without any Router evidence.
+
+        The program owns this choice outright: no Router attempt, model call,
+        usage counter or stop evidence is recorded, because none happened. The
+        hard constraints, required capabilities and the preference check are
+        still derived from the frozen request and stored exactly as a Router
+        answer's would be.
+        """
+        profile_id = candidate["profile_id"]
+        profiles = [self._profile_input(candidate)]
+        preferences = user_policy.effective_preferences(connection, [profile_id])
+        routing_preferences = request.get("routingPreferences") or []
+        facts = selection_policy.policy_facts(
+            profiles=profiles,
+            routing_preferences=routing_preferences,
+            prefer_profile_ids=[entry["profileId"] for entry in preferences if entry["mode"] == "prefer"],
+            hard_constraints=request.get("constraints") or {})
+        policy_check = selection_policy.expected_policy_check(facts, routing_preferences, profile_id)
+        outcome = policy_check["taskPreference"]["outcome"]
+        rule_index = policy_check["taskPreference"]["ruleIndex"]
+        if outcome == "matched":
+            preference_reason = routing_preferences[rule_index]["reason"]
+        elif outcome == "fallback":
+            preference_reason = "No task preference matched a legal candidate"
+        else:
+            preference_reason = "No task preference applies to this request"
+        selected = dict(profiles[0])
+        if routing_preferences:
+            selected["routingPreference"] = {"status": outcome, "ruleIndex": rule_index, "reason": preference_reason}
+        self._finish(
+            connection,
+            row,
+            status="completed",
+            now=now,
+            reason=SOLE_CANDIDATE_REASON,
+            profile_id=profile_id,
+            evidence_ids=[],
+            selected=selected,
+            output={
+                "programSelection": {
+                    "code": "single-candidate",
+                    "profileId": profile_id,
+                    "candidateCount": 1,
+                    "reason": SOLE_CANDIDATE_REASON,
+                    "preferences": preferences,
+                    "policyFacts": facts,
+                },
+                "policyCheck": policy_check,
+            },
+        )
+
     # -- views ---------------------------------------------------------------
     def health_summary(self) -> dict:
         """Bounded, model-free health over settled selection events, not task prose.
@@ -1458,6 +1590,12 @@ class DecisionCoordinator:
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
             "budget": request.get("budget"),
+            "routingBasis": request.get("routingBasis"),
+            "constraints": request.get("constraints", {}),
+            "requiredCapabilities": request.get("requiredCapabilities", []),
+            # False only for a recorded program selection; a record predating that
+            # path stays null rather than claiming a Router ran.
+            "routerCalled": request.get("routerCalled"),
             "routingMode": request.get("routingMode", "review"),
             "requestedRoutingMode": request.get("requestedRoutingMode", "review"),
             "fallback": request.get("fallback"),

@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from buddy.console import Console
 from buddy.console_sessions import ENTRY_SECONDS
-from test_console import Browser, ConsoleTestCase, http_call
+from test_console import Browser, ConsoleTestCase, PROFILE_ID, http_call
 
 
 class ConsoleAccessTests(ConsoleTestCase):
@@ -128,8 +128,34 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertEqual(json.loads((board.directory / "console-sessions.json").read_text())["sessions"], [])
 
     def test_two_cookie_free_writers_keep_publication_revision_fences(self):
-        from test_console_sessions import ConsoleSessionTests
-        ConsoleSessionTests.test_independent_sessions_keep_authority_and_stale_revision_is_refused(self)
+        board = self.board()
+        board.call("model_catalog_refresh", {"requestId": "two-windows-catalog"})
+        _, first = self.open_console(board)
+        second = Browser(first.origin + "/")
+        before = [first.bootstrap(), second.bootstrap()]
+        self.assertIsNone(first.cookie)
+        self.assertIsNone(second.cookie)
+        for index, browser in enumerate((first, second)):
+            revision = before[index]["tableRevision"]
+            csrf = before[index]["csrfToken"]
+            status, _, body = browser.command("evaluation_write_begin", {
+                "requestId": f"window-{index}", "kind": "human", "expectedRevision": revision,
+            }, csrf=csrf)
+            self.assertEqual(status, 200, body)
+            grant = json.loads(body)["result"]
+            status, _, body = browser.command("user_policy_publish", {
+                **{key: grant[key] for key in ("writerId", "generation", "writerToken")},
+                "commandId": f"window-publish-{index}", "expectedRevision": revision,
+                "profileSettings": [{"profileId": PROFILE_ID, "enabled": index == 0}],
+            }, csrf=csrf)
+            if index == 0:
+                self.assertEqual(status, 200, body)
+            else:
+                self.assertEqual(status, 409, body)
+                self.assertEqual(json.loads(body)["error"]["code"], "REVISION_CONFLICT")
+        current = first.bootstrap()
+        self.assertGreater(current["tableRevision"], before[0]["tableRevision"])
+        self.assertTrue(next(p for p in current["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
 
     def test_access_setting_write_failure_preserves_authority_and_revision(self):
         board = self.board()

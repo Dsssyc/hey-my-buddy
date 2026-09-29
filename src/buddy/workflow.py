@@ -1072,7 +1072,7 @@ class WorkflowCoordinator:
         return spec
 
     def _routing_view(self, connection, run) -> dict:
-        from .router import routing_facts
+        from .router import routing_facts, selection_source
         goal = json.loads(run["goal_json"])
         preferences = goal.get("routingPreferences", [])
         if not run["current_routing_id"]:
@@ -1098,15 +1098,18 @@ class WorkflowCoordinator:
         status = decision["status"] if link["state"] == "pending" else {
             "resolved": "completed", "needs-host": "needs-host", "fenced": "fenced",
         }[link["state"]]
+        requested = json.loads(decision["requested_json"])
         return {
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
             "selectedProfile": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
             "tableRevision": decision["table_revision"], "configurationRevision": decision["configuration_revision"],
             "reason": link["reason"] or decision["reason"],
-            "constraints": schemas.configuration_constraints(goal), "routingPreferences": preferences,
-            "source": "model-selection",
-            **routing_facts(json.loads(decision["requested_json"])),
+            "constraints": requested.get("constraints", schemas.configuration_constraints(goal)),
+            "requiredCapabilities": requested.get("requiredCapabilities", []), "routingPreferences": preferences,
+            "source": selection_source(requested),
+            **routing_facts(requested),
+            "routingBasis": requested.get("routingBasis"),
             "preferenceOutcome": (json.loads(decision["selected_json"]).get("routingPreference")
                                   if decision["selected_json"] else None),
         }
@@ -1140,6 +1143,7 @@ class WorkflowCoordinator:
 
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
         """Adopt a frozen recommendation with its result, under owner/lineage fencing."""
+        from .router import selection_source
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (decision_id,)).fetchone()
         if link is None or link["state"] != "pending":
             return
@@ -1172,7 +1176,7 @@ class WorkflowCoordinator:
                                          payload={"decisionId": decision_id, "configuration": configuration,
                                                   "profileId": decision["profile_id"], "tableRevision": decision["table_revision"],
                                                   "configurationRevision": decision["configuration_revision"],
-                                                  "source": "model-selection",
+                                                  "source": selection_source(json.loads(decision["requested_json"])),
                                                   "preferenceOutcome": selected.get("routingPreference")})
                 return
         self._routing_attention(connection, run, now,
@@ -1557,7 +1561,7 @@ class WorkflowCoordinator:
         the run, independent of the cursor. Only compact decision fields are exposed;
         no task prompt, model input/output or table payload is embedded.
         """
-        from .router import routing_facts
+        from .router import routing_facts, selection_source
         run_id = run_row["run_id"]
         total = int(
             connection.execute(
@@ -1581,32 +1585,34 @@ class WorkflowCoordinator:
         parameters.append(limit)
         rows = connection.execute(query, parameters).fetchall()
         current_id = run_row["current_routing_id"]
-        entries = [
-            {
-                "decisionId": row["decision_id"],
-                # The same effective mapping the current routing view uses: a decision
-                # still in flight reports its own status; a settled route reports what
-                # it actually became.
-                "status": (
-                    row["decision_status"]
-                    if row["state"] == "pending"
-                    else {"resolved": "completed", "needs-host": "needs-host", "fenced": "fenced"}[row["state"]]
-                ),
-                "taskId": row["decision_task_id"],
-                "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
-                "source": "model-selection",
-                "preferenceOutcome": (json.loads(row["selected_json"]).get("routingPreference")
-                                      if row["selected_json"] else None),
-                "tableRevision": int(row["table_revision"]),
-                "configurationRevision": int(row["configuration_revision"]),
-                "reason": row["reason"] or row["decision_reason"],
-                "createdAt": row["created_at"],
-                "ownerGeneration": int(row["owner_generation"]),
-                "current": bool(current_id) and row["decision_id"] == current_id,
-                **routing_facts(json.loads(row["requested_json"])),
-            }
-            for row in rows
-        ]
+        entries = []
+        for row in rows:
+            requested = json.loads(row["requested_json"])
+            entries.append(
+                {
+                    "decisionId": row["decision_id"],
+                    # The same effective mapping the current routing view uses: a decision
+                    # still in flight reports its own status; a settled route reports what
+                    # it actually became.
+                    "status": (
+                        row["decision_status"]
+                        if row["state"] == "pending"
+                        else {"resolved": "completed", "needs-host": "needs-host", "fenced": "fenced"}[row["state"]]
+                    ),
+                    "taskId": row["decision_task_id"],
+                    "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
+                    "source": selection_source(requested),
+                    "preferenceOutcome": (json.loads(row["selected_json"]).get("routingPreference")
+                                          if row["selected_json"] else None),
+                    "tableRevision": int(row["table_revision"]),
+                    "configurationRevision": int(row["configuration_revision"]),
+                    "reason": row["reason"] or row["decision_reason"],
+                    "createdAt": row["created_at"],
+                    "ownerGeneration": int(row["owner_generation"]),
+                    "current": bool(current_id) and row["decision_id"] == current_id,
+                    **routing_facts(requested),
+                }
+            )
         next_cursor = None
         if len(rows) == limit:
             last_rowid = int(rows[-1]["route_rowid"])

@@ -8,6 +8,25 @@ export type ExecutionConfiguration = {
   effort: string;
 };
 
+/** A user-excluded configuration frozen with one routing request. */
+export type ExcludedProfile = ExecutionConfiguration & {
+  profileId: string;
+  reason?: string | null;
+  source?: string | null;
+};
+
+/**
+ * Submission-time routing facts frozen with the decision record: the candidate
+ * count after hard filtering and the user exclusions that narrowed it. They are
+ * never recomputed from current preferences, so a historical route keeps the
+ * basis it actually had.
+ */
+export type RoutingBasis = {
+  candidateCount?: number;
+  excludedCount?: number;
+  excludedProfiles?: ExcludedProfile[];
+};
+
 export type RoutingRecord = {
   status: string;
   routingMode?: RoutingMode;
@@ -20,6 +39,10 @@ export type RoutingRecord = {
   selectedProfile?: ExecutionConfiguration | null;
   reason?: string | null;
   constraints?: Partial<ExecutionConfiguration>;
+  requiredCapabilities?: string[];
+  /** `model-selection` for a Router choice, `single-candidate` for the program's direct selection. */
+  source?: string | null;
+  routingBasis?: RoutingBasis | null;
 };
 export type RoutingHistory = {
   entries: (RoutingRecord & { decisionId: string; createdAt: string; ownerGeneration: number; current: boolean })[];

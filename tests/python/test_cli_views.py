@@ -220,6 +220,28 @@ class ProjectionUnitTests(unittest.TestCase):
         self.assertEqual(brief["counts"], view["counts"])
         self.assertEqual(brief["children"], [{"taskId": "c", "role": "helper", "state": "running"}])
 
+    def test_routing_brief_keeps_the_frozen_basis_and_constraints(self):
+        routing = {
+            "status": "completed", "source": "single-candidate", "reason": "唯一合法候选，未调用 Router",
+            "decisionId": "dec-1", "constraints": {"adapter": "dsh"},
+            "requiredCapabilities": ["execution:dsh"],
+            "routingBasis": {"candidateCount": 1, "excludedCount": 1, "excludedProfiles": [
+                {"profileId": "dsh:p:m:off", "adapter": "dsh", "provider": "p", "model": "m",
+                 "effort": "off", "reason": "user excluded", "source": "override"}]},
+        }
+        brief = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,
+                                          "state": "executing", "status": "queued", "routing": routing})
+        self.assertEqual(brief["routing"]["constraints"], {"adapter": "dsh"})
+        self.assertEqual(brief["routing"]["requiredCapabilities"], ["execution:dsh"])
+        self.assertEqual(brief["routing"]["routingBasis"], routing["routingBasis"])
+        # A route recorded before the frozen basis stays unchanged and compact.
+        legacy = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,
+                                           "state": "executing", "status": "queued",
+                                           "routing": {"status": "completed", "source": "model-selection",
+                                                       "reason": "chosen", "constraints": {}}})
+        self.assertNotIn("routingBasis", legacy["routing"])
+        self.assertNotIn("constraints", legacy["routing"])
+
     def test_unknown_receipt_fields_are_not_dropped(self):
         receipt = cli_views.governed_receipt({"governed": True, "runId": "r", "revision": 1, "newField": {"x": 1}})
         self.assertEqual(receipt["newField"], {"x": 1})

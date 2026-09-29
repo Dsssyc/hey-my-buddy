@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID
+from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
 from buddy.errors import BoardError
@@ -245,7 +245,9 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
 
     def test_resolved_reroute_history_keeps_its_frozen_selection_after_profiles_change(self):
         board = self.board()
-        self.seed(board)
+        # Three enabled profiles keep the reroute on the Router path after one is
+        # disabled; a sole remaining candidate would complete without a Router.
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         submitted = self.routed(board, request_id="route-freeze")
         selector_task_id = board.call("workflow_get", {"runId": submitted["runId"]})["routing"]["taskId"]
         self.select(board, self.router_claim(board, submitted))
