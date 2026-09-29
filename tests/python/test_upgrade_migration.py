@@ -1,4 +1,4 @@
-"""Upgrade of an idle schema-13 board: verified backup, in-place migration, rollback."""
+"""Upgrade of an idle schema-14 board: verified backup, in-place migration, rollback."""
 import gzip
 import sqlite3
 from contextlib import closing
@@ -34,6 +34,7 @@ class UpgradeMigrationTests(BoardTestCase):
                                    (f"sonnet-{effort}", f"{effort} note"))
             connection.commit()
             migrations.migrate_12_to_13(connection)
+            migrations.migrate_13_to_14(connection)
 
     def schema(self) -> int:
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
@@ -44,19 +45,19 @@ class UpgradeMigrationTests(BoardTestCase):
         manifest = backup.verify(current)
         return current, {**manifest["databaseSnapshot"], "schema": manifest["schema"]}
 
-    def test_backup_records_schema_13_and_proves_it_migrates_without_touching_the_source(self):
+    def test_backup_records_schema_14_and_proves_it_migrates_without_touching_the_source(self):
         current, before = self.backed_up()
-        self.assertEqual(before["schema"], 13)
-        self.assertEqual(upgrade.idle_snapshot(self.state)["schema"], 13)
-        self.assertEqual(self.schema(), 13)
+        self.assertEqual(before["schema"], 14)
+        self.assertEqual(upgrade.idle_snapshot(self.state)["schema"], 14)
+        self.assertEqual(self.schema(), 14)
         with gzip.open(current / "board.sqlite3.gz", "rb") as stream:
             self.assertIn(b"family_annotations", stream.read())
 
     def test_migration_moves_only_declared_tables_and_the_board_opens_as_current(self):
         _current, before = self.backed_up()
         summary, expected = upgrade.migrate_board(self.state, before)
-        self.assertEqual(summary["harnessHealth"], 0)
-        self.assertEqual(expected["schema"], 14)
+        self.assertEqual(summary["hostConclusions"], 0)
+        self.assertEqual(expected["schema"], 15)
         for name, value in before["fingerprints"].items():
             if name not in migrations.MIGRATED_TABLES:
                 self.assertEqual(expected["fingerprints"][name], value, name)
@@ -69,35 +70,35 @@ class UpgradeMigrationTests(BoardTestCase):
 
     def test_a_migration_that_changes_other_tables_is_refused(self):
         _current, before = self.backed_up()
-        original = migrations.migrate_13_to_14
+        original = migrations.migrate_14_to_15
 
         def collateral(connection):
             summary = original(connection)
             connection.execute("UPDATE evaluation_profiles SET label='rewritten'")
             return summary
 
-        with mock.patch("buddy.migrations.migrate_13_to_14", collateral):
+        with mock.patch("buddy.migrations.migrate_14_to_15", collateral):
             with self.assertRaises(BoardError) as caught:
                 upgrade.migrate_board(self.state, before)
         self.assertEqual(caught.exception.code, "UPGRADE_MIGRATION_FAILED")
         self.assertIn("evaluation_profiles", caught.exception.details["tables"])
 
-    def test_restore_returns_a_migrated_board_to_its_schema_13_backup(self):
+    def test_restore_returns_a_migrated_board_to_its_schema_14_backup(self):
         current, before = self.backed_up()
         upgrade.migrate_board(self.state, before)
-        self.assertEqual(self.schema(), 14)
+        self.assertEqual(self.schema(), 15)
         upgrade.restore(self.state, current)
         restored = upgrade.idle_snapshot(self.state, event_head=before["eventHead"])
-        self.assertEqual(restored["schema"], 13)
+        self.assertEqual(restored["schema"], 14)
         self.assertEqual(restored["fingerprints"], before["fingerprints"])
 
     def test_verification_expects_the_schema_of_the_runtime_being_verified(self):
         _current, before = self.backed_up()
         target = self.directory / "runtime-previous"
-        health = {"runtimeContentId": target.name, "runtimeStable": True, "schemaVersion": 14}
+        health = {"runtimeContentId": target.name, "runtimeStable": True, "schemaVersion": 15}
         with self.assertRaises(BoardError) as caught:
             upgrade.verify_started(self.state, target, health, before)
         self.assertEqual(caught.exception.code, "UPGRADE_VERIFY_FAILED")
         with mock.patch("buddy.upgrade.command", return_value={"leaks": []}):
-            evidence = upgrade.verify_started(self.state, target, {**health, "schemaVersion": 13}, before)
-        self.assertEqual(evidence["schemaVersion"], 13)
+            evidence = upgrade.verify_started(self.state, target, {**health, "schemaVersion": 14}, before)
+        self.assertEqual(evidence["schemaVersion"], 14)

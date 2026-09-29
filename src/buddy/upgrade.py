@@ -222,14 +222,19 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
         with closing(sqlite3.connect(board.as_uri() + '?mode=ro', uri=True)) as connection:
             return sorted(row for row in connection.execute('SELECT key, value FROM meta') if row[0] != 'schema_version')
     meta_before = meta_rows()
+    with closing(sqlite3.connect(board)) as connection:
+        retained_names, retained_before = migrations.retained_columns(connection)
     try:
         with closing(sqlite3.connect(board, isolation_level=None, timeout=10)) as connection:
-            summary = migrations.migrate_13_to_14(connection)
+            summary = migrations.migrate_14_to_15(connection)
     except (sqlite3.Error, ValueError) as error:
         raise BoardError('UPGRADE_MIGRATION_FAILED', f'Board migration failed: {error}') from None
     expected = idle_snapshot(state, event_head=before.get('eventHead'))
     changed = [name for name, value in before['fingerprints'].items()
                if name not in migrations.MIGRATED_TABLES and expected['fingerprints'].get(name) != value]
+    with closing(sqlite3.connect(board)) as connection:
+        retained_after = migrations.retained_columns(connection, retained_names)[1]
+    changed.extend(name for name in retained_before if retained_before[name] != retained_after[name])
     if changed or meta_rows() != meta_before or expected.get('schema') != SCHEMA_VERSION:
         raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration changed data outside its declared tables', tables=changed)
     expected['runtimeSettings'] = before.get('runtimeSettings', {})

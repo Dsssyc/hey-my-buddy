@@ -9,12 +9,13 @@ from __future__ import annotations
 from collections import defaultdict
 import sqlite3
 
-from .db import HARNESS_SCHEMA
+from .db import HARNESS_SCHEMA, HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX
 
 #: Tables this migration may rewrite; every other table must keep its fingerprint.
 MIGRATED_TABLES_13 = frozenset({"evaluation_preferences", "evaluation_annotations",
                              "family_preferences", "family_annotations", "meta"})
-MIGRATED_TABLES = frozenset({"harness_health", "meta"})
+MIGRATED_TABLES_14 = frozenset({"harness_health", "meta"})
+MIGRATED_TABLES = frozenset({"meta", "workflow_runs", "attempts", "harness_health", "workflow_host_conclusions"})
 
 _STATEMENTS = (
     """CREATE TABLE family_preferences (
@@ -143,7 +144,7 @@ def migrate_13_to_14(connection: sqlite3.Connection) -> dict:
     try:
         if connection.execute("SELECT 1 FROM sqlite_master WHERE name='harness_health'").fetchone():
             raise ValueError("unexpected harness_health table in schema 13")
-        connection.execute(HARNESS_SCHEMA)
+        connection.execute(HARNESS_SCHEMA.replace("    scan_after TEXT,\n    quota_json TEXT", "    scan_after TEXT"))
         connection.execute("UPDATE meta SET value='14' WHERE key='schema_version'")
         if connection.execute("PRAGMA foreign_key_check").fetchall():
             raise ValueError("foreign key check failed after migration")
@@ -154,3 +155,47 @@ def migrate_13_to_14(connection: sqlite3.Connection) -> dict:
         connection.execute("ROLLBACK")
         raise
     return {"fromSchema": 13, "toSchema": 14, "harnessHealth": 0}
+
+
+def retained_columns(connection, columns=None):
+    """Fingerprint the original columns in each extended table, including empty rows."""
+    import hashlib
+    import json
+    if columns is None:
+        columns = {table: [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')]
+                   for table in ("workflow_runs", "attempts", "harness_health")}
+    fingerprints = {}
+    for table, names in columns.items():
+        projection = ','.join('"' + name + '"' for name in names)
+        digest = hashlib.sha256()
+        for row in connection.execute(f'SELECT {projection} FROM "{table}" ORDER BY 1'):
+            digest.update(json.dumps(tuple(row), ensure_ascii=False, separators=(',', ':')).encode())
+            digest.update(b'\n')
+        fingerprints[table] = digest.hexdigest()
+    return columns, fingerprints
+
+
+def migrate_14_to_15(connection: sqlite3.Connection) -> dict:
+    """Add Host conclusions and native observations without relabelling history."""
+    if schema_version(connection) != 14:
+        raise ValueError("migration expects schema 14")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        columns, before = retained_columns(connection)
+        connection.execute("ALTER TABLE workflow_runs ADD COLUMN configuration_locked INTEGER NOT NULL DEFAULT 0 CHECK (configuration_locked IN (0,1))")
+        connection.execute("ALTER TABLE attempts ADD COLUMN token_usage_json TEXT")
+        connection.execute("ALTER TABLE harness_health ADD COLUMN quota_json TEXT")
+        connection.execute(HOST_CONCLUSION_TABLE)
+        connection.execute(HOST_CONCLUSION_INDEX)
+        if retained_columns(connection, columns)[1] != before:
+            raise ValueError("migration changed retained columns")
+        connection.execute("UPDATE meta SET value='15' WHERE key='schema_version'")
+        if connection.execute("PRAGMA foreign_key_check").fetchall():
+            raise ValueError("foreign key check failed after migration")
+        if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
+            raise ValueError("integrity check failed after migration")
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
+    return {"fromSchema": 14, "toSchema": 15, "hostConclusions": 0}
