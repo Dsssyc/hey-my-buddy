@@ -115,3 +115,21 @@ class CodexContinuationTests(WorkflowTestCase):
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
         self.assertIsNone(document["previousSessionId"])
         self.assertNotIn("lastAssistantMessage", document["context"])
+
+    def test_refused_resume_does_not_erase_the_last_message_before_reconstruction(self):
+        board, failed = self.failed_run()
+        self.continue_run(board, failed)
+        second = self.claim(board, claim_request_id="c2")
+        previous_message = second["claim"]["turn"]["input"]["context"]["lastAssistantMessage"]
+
+        def refusal(result):
+            result.pop("turn")
+            result.update(code="native-resume-unavailable", modelStarted=False)
+
+        self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
+        failed = board.call("workflow_get", {"runId": failed["runId"]})
+        self.continue_run(board, failed, command_id="continue-2")
+        third = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
+        self.assertEqual(third["resumeMode"], "reconstructed-new-session")
+        self.assertNotIn("nativeResume", third["context"])
+        self.assertEqual(third["context"]["lastAssistantMessage"], previous_message)

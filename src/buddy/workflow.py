@@ -4738,6 +4738,12 @@ class WorkflowCoordinator:
                     resume_mode = "native-session"
         turn_id = str(uuid.uuid4())
         context = self._turn_context(connection, run_row, task, spec, continuation, previous, turn_index)
+        if previous is not None:
+            # A refused native resume can fail before producing any new message.
+            # Keep the last already-recorded assistant evidence through that hop.
+            carried = json.loads(previous["input_json"]).get("context", {}).get("lastAssistantMessage")
+            if isinstance(carried, dict):
+                context["lastAssistantMessage"] = carried
         if native is not None:
             checkpoint = native[1]
             if resume_mode == "native-session":
