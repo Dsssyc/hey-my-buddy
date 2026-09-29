@@ -5,7 +5,7 @@ an unavailable adapter reports an honest capability error instead of failing lat
 """
 from __future__ import annotations
 
-from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle
+from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
 from .command import CommandAdapter
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
@@ -66,6 +66,7 @@ def capability_report() -> dict:
                 "verified": instance.read_only_structured_verified,
                 "sameAttemptContinuation": instance.read_only_structured_resume,
             },
+            "noToolStructured": {"implemented": instance.no_tool_structured},
         }
     report["external"] = {
         "adapter": "external",
@@ -116,6 +117,7 @@ __all__ = [
     "DshAdapter",
     "ZcodeAdapter",
     "ExecutionContext",
+    "NoToolStructuredRequest",
     "EXTERNAL_CAPABILITIES",
     "ProcessHandle",
     "adapter",
