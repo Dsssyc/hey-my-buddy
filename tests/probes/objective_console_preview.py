@@ -32,10 +32,28 @@ Usage::
     python tests/probes/objective_console_preview.py --assets ABS_PATH --scenario truncated
     python tests/probes/objective_console_preview.py --assets ABS_PATH --smoke
     python tests/probes/objective_console_preview.py --check
+    python tests/probes/objective_console_preview.py --emit-fixtures DIR
 
 Scenarios: ``normal`` (complete, writable-seeming), ``readonly`` (superseded
 session), ``truncated`` (explicit row/span/event truncation), ``error``
 (timeline reads fail with a 503 envelope while the list stays readable).
+
+``--emit-fixtures DIR`` writes the deterministic fixture tree a frontend
+regression test consumes: the exact JSON bodies of every scenario plus
+``manifest.json``, which lists each file with its endpoint, its exact request
+parameters, its HTTP status and the parser outcome (``accepted``, or
+``rejected`` with the expected ``ApiError`` code). ``incompatible/`` holds
+deliberately wrong shapes a strict parser must refuse; each documents its
+``mutation``. The mode needs no ``--assets`` and writes nothing else.
+
+ADR-018 (schema 15) fields carried by the fixture data: governed
+``workflow_get`` views add ``configurationLocked`` and ``hostConclusion``;
+artifacts add ``partial``/``verified``/``final`` flags, ``kind`` may be
+``partial-output`` and an artifact may carry ``cumulativePatch``; integration
+verification adds ``hostPaths``; task views, attempts and turns carry a
+per-attempt ``tokenUsage`` (``null`` when unknown, never a zero); and the
+console snapshot adds four harness rows with retained ``quota`` observations.
+Absent or unknown values stay explicitly null.
 
 The asset directory is Host-supplied; the repository's current bundle lives at
 ``src/buddy/console_assets``. The new objective UI ships later.
@@ -95,6 +113,36 @@ CFG_CODEX = {"adapter": "codex", "provider": "openai", "model": "gpt-5-codex", "
 CFG_GLM = {"adapter": "zcode", "provider": "zai", "model": "glm-5", "effort": "high"}
 CFG_CLAUDE = {"adapter": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
 CONFIGS = (CFG_FLASH, CFG_CODEX, CFG_GLM, CFG_CLAUDE)
+
+#: The one 503 message both the server's error scenario and the emitted
+#: ``error/`` fixtures use, so the frontend test asserts the same string.
+ERROR_SCENARIO_MESSAGE = "synthetic preview: simulated read failure (--scenario error)"
+#: The synthetic harness quota failure the schema-15 fixtures model.
+QUOTA_ERROR = "synthetic preview: harness quota exhausted before completion"
+#: The ADR-018 Host conclusion: the Host's own recorded target outcome of a
+#: failed or cancelled goal, never a worker success claim. ``configurationLocked``
+#: is separate: a Host submission may be re-chosen, a user-locked one may not.
+HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", "evidence",
+                        "artifactId", "integrationId", "actor", "createdAt", "ownerGeneration",
+                        "runRevision"}
+TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source", "scope"}
+
+#: ``--emit-fixtures`` tree: the scenario order and the exact file set beneath
+#: each scenario directory (manifest entries are sorted by scenario, then path).
+EMIT_SOURCE = "tests/probes/objective_console_preview.py"
+EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
+EMIT_LAYOUT = {
+    "normal": ("console.json", "objectives.json", "timeline-obj-a.json", "timeline-standalone.json",
+               "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
+               "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
+               "workflow-preview-run-b2.json"),
+    "readonly": ("console.json", "objectives.json", "timeline-obj-a.json", "workflow-preview-run-a1.json"),
+    "truncated": ("console.json", "objectives.json", "timeline-obj-a.json", "workflow-preview-run-a1.json"),
+    "error": ("console.json", "objectives.json", "timeline-obj-a.json", "workflow-preview-run-a1.json"),
+    "incompatible": ("harness-quota-malformed.json", "snapshot-legacy-single-router.json",
+                     "snapshot-missing-session.json", "snapshot-missing-tasks.json",
+                     "workflow-missing-revision.json"),
+}
 
 MARKER_LABELS = {"dispatch": "派发", "decide": "决定", "continue": "续接", "integrate": "整合",
                  "accept": "验收", "reject": "验收问题", "cancel": "取消", "takeover": "接管"}
@@ -165,6 +213,11 @@ class PreviewError(Exception):
         self.message = message
 
 
+def error_envelope(code: str, message: str) -> dict:
+    """The one error body the server sends and the emitted error fixtures reuse."""
+    return {"ok": False, "error": {"code": code, "message": message}}
+
+
 def instant(hour: int, minute: int, second: int = 0) -> str:
     return (FIXTURE_DAY + timedelta(hours=hour, minutes=minute, seconds=second)
             ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -187,16 +240,48 @@ def digest(tag: str) -> str:
 # --------------------------------------------------------------------------- #
 def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, started: str,
             finished: str | None, configuration: dict, *, error: str | None = None,
-            result: str | None = None, disposition: str = "completed") -> dict:
+            result: str | None = None, disposition: str = "completed",
+            usage: dict | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
     # exactly what store.task_result unpacks; the adapter payload nests under `result`.
+    # `usage` is the ADR-018 per-attempt token usage: null when the record is
+    # unknown, never a synthetic zero.
     receipt = None if result is None else {"status": "failed" if error else "ok",
                                            "result": {"finalText": result}, "shutdownConfirmed": confirmed}
     return {"attemptId": attempt_id, "turnId": f"turn-{attempt_id}", "turnIndex": turn_index,
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
             "startedAt": started, "finishedAt": finished, "configuration": configuration,
-            "error": error, "result": receipt, "disposition": disposition,
+            "error": error, "result": receipt, "disposition": disposition, "usage": usage,
             "uncertain": state == "uncertain" or (state == "finished" and not confirmed)}
+
+
+def usage(source: str, input_tokens: int | None, cached_input_tokens: int | None,
+          output_tokens: int | None) -> dict:
+    """One ADR-018 per-attempt token usage record (never session-cumulative).
+
+    ``inputTokens`` always includes the cached tokens; ``cachedInputTokens`` is
+    a subset and must not be added again.
+    """
+    return {"inputTokens": input_tokens, "cachedInputTokens": cached_input_tokens,
+            "outputTokens": output_tokens, "source": source, "scope": "attempt"}
+
+
+def patch_for(run_id: str, output_commit: str, paths: list[str]) -> dict:
+    """A synthetic cumulative patch from the run workspace input to an output."""
+    return {"baseCommit": digest(f"{run_id}-input")[:40], "outputCommit": output_commit,
+            "path": f"/synthetic-preview/patches/{run_id}.patch", "sha256": digest(f"{run_id}-patch"),
+            "changedPaths": list(paths)}
+
+
+def host_conclusion(conclusion_id: str, *, attempt_id: str | None, execution_status: str, note: str,
+                    evidence: list[str], artifact_id: str | None, integration_id: str | None,
+                    actor: str, created_at: str, owner_generation: int = 1,
+                    run_revision: int = 3) -> dict:
+    """An ADR-018 Host conclusion: the recorded target outcome of a failed goal."""
+    return {"conclusionId": conclusion_id, "attemptId": attempt_id, "executionStatus": execution_status,
+            "note": note, "evidence": list(evidence), "artifactId": artifact_id,
+            "integrationId": integration_id, "actor": actor, "createdAt": created_at,
+            "ownerGeneration": owner_generation, "runRevision": run_revision}
 
 
 def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, attempt_id: str | None = None,
@@ -288,7 +373,8 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         active_request: dict | None = None, spans: list[dict] | None = None,
         markers: list[dict] | None = None, attempts: list[dict] | None = None,
         shutdown_confirmed: bool = True, governed: bool = True, adapter: str | None = None,
-        continuation_count: int = 0, timeout_seconds: int = 0, revision: int = 3) -> dict:
+        continuation_count: int = 0, timeout_seconds: int = 0, revision: int = 3,
+        configuration_locked: bool = False, conclusion: dict | None = None) -> dict:
     return {
         "runId": run_id, "parentRunId": parent, "group": group, "project": project, "title": title,
         "titleSource": title_source, "task": task_text, "createdAt": created, "updatedAt": updated,
@@ -299,20 +385,29 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
         "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed, "governed": governed,
         "adapter": adapter, "continuationCount": continuation_count, "timeoutSeconds": timeout_seconds,
-        "revision": revision,
+        "revision": revision, "configurationLocked": configuration_locked,
+        "hostConclusion": conclusion,
         "kind": "decision" if not governed else ("helper" if parent is not None else "goal"),
     }
 
 
 def artifact(artifact_id: str, attempt_id: str, commit: str, diff_path: str,
-             paths: list[str]) -> dict:
-    return {"artifactId": artifact_id, "kind": "output", "attemptId": attempt_id,
+             paths: list[str], *, kind: str = "output", partial: bool = False,
+             verified: bool = True, final: bool = True,
+             cumulative_patch: dict | None = None) -> dict:
+    # ADR-018: a sealed partial output is `partial-output` with
+    # partial/verified/final = true/false/false and is never the final artifact.
+    view = {"artifactId": artifact_id, "kind": kind, "attemptId": attempt_id,
             "turnId": f"turn-{attempt_id}", "manifestSha256": digest(f"{artifact_id}-manifest"),
             "outputCommit": commit, "diffPath": diff_path, "diffSha256": digest(f"{artifact_id}-diff"),
-            "changedPaths": paths}
+            "changedPaths": paths, "partial": partial, "verified": verified, "final": final}
+    if cumulative_patch is not None:
+        view["cumulativePatch"] = cumulative_patch
+    return view
 
 
-def integration(integration_id: str, artifact_id: str, attempt_id: str, host: str) -> dict:
+def integration(integration_id: str, artifact_id: str, attempt_id: str, host: str, *,
+                host_paths: list[str] | None = None) -> dict:
     return {"integrationId": integration_id, "artifactId": artifact_id, "attemptId": attempt_id,
             "state": "verified", "strategy": "cherry-pick",
             "target": {"kind": "git", "path": PROJECTS["alpha"]["path"],
@@ -322,13 +417,14 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
             "beforeCommit": digest("before")[:40], "afterCommit": digest("after")[:40],
             "beforeTree": digest("before-tree")[:40], "afterTree": digest("after-tree")[:40],
             "verification": {"verified": True, "notRequired": False,
-                             "summary": "synthetic preview verification: fixture-only, no real repository"},
+                             "summary": "synthetic preview verification: fixture-only, no real repository",
+                             "hostPaths": list(host_paths or [])},
             "notRequired": False, "reason": "synthetic preview integration record", "actor": host,
             "createdAt": None}
 
 
 def build_runs() -> dict[str, dict]:
-    """The nine governed delegations and four internal routing rows."""
+    """The ten governed delegations and four internal routing rows."""
     runs = [
         run("preview-run-a1", project="alpha", group=OBJ_A,
             title=long_title("工作目标时间轴：预览服务器合成夹具与只读接口验证 —— 这是一个刻意加长的委派标题，"
@@ -358,9 +454,11 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[
                 attempt("att-a1-1", 1, "finished", True, instant(6, 5), instant(6, 40), CFG_FLASH,
-                        result="合成预览：第一轮完成并确认停止。"),
+                        result="合成预览：第一轮完成并确认停止。",
+                        usage=usage("dsh-native", 12000, 9000, 1500)),
                 attempt("att-a1-2", 2, "finished", True, instant(6, 46), instant(7, 0), CFG_CODEX,
-                        result="合成预览：第二轮完成并确认停止。"),
+                        result="合成预览：第二轮完成并确认停止。",
+                        usage=usage("codex-native", 20000, 15000, 800)),
             ],
             markers=[
                 marker(instant(6, 0), "dispatch", actor=HOST_A),
@@ -371,8 +469,12 @@ def build_runs() -> dict[str, dict]:
                 marker(instant(7, 5), "accept", actor=HOST_A, artifact_id="art-a1", summary="accepted"),
             ],
             artifacts=[artifact("art-a1", "att-a1-2", digest("a1-output")[:40], "/synthetic-preview/diffs/a1.diff",
-                                ["tests/probes/objective_console_preview.py"])],
-            integrations=[integration("int-a1", "art-a1", "att-a1-2", HOST_A)],
+                                ["tests/probes/objective_console_preview.py"],
+                                cumulative_patch=patch_for("preview-run-a1", digest("a1-output")[:40],
+                                                           ["tests/probes/objective_console_preview.py"]))],
+            integrations=[integration("int-a1", "art-a1", "att-a1-2", HOST_A,
+                                      host_paths=["docs/reference/console.md"])],
+            configuration_locked=True,
             routing=ROUTING_A1),
         run("preview-run-a1-h1", project="alpha", group=OBJ_A, parent="preview-run-a1",
             title="补充 schema 升级离线副本的验证测试", title_source="title",
@@ -396,9 +498,11 @@ def build_runs() -> dict[str, dict]:
             attempts=[
                 attempt("att-h1-1", 1, "finished", True, instant(6, 24), instant(6, 36), CFG_GLM,
                         error="synthetic preview failure: test command timed out",
-                        result="synthetic preview failure: test command timed out"),
+                        result="synthetic preview failure: test command timed out",
+                        usage=None),
                 attempt("att-h1-2", 2, "finished", True, instant(6, 38), instant(6, 55), CFG_GLM,
-                        result="合成预览：重试后通过。"),
+                        result="合成预览：重试后通过。",
+                        usage=usage("zcode-native", 8000, 2000, 1200)),
             ],
             markers=[marker(instant(6, 20), "dispatch", actor=HOST_A)],
             artifacts=[artifact("art-a1h", "att-h1-2", digest("a1h-output")[:40],
@@ -417,7 +521,8 @@ def build_runs() -> dict[str, dict]:
                      generation=1, disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-h2-1", 1, "finished", False, instant(6, 57), instant(7, 2), CFG_CLAUDE,
-                              result="合成预览：结果已收到，但停止未确认。")],
+                              result="合成预览：结果已收到，但停止未确认。",
+                              usage=None)],
             markers=[marker(instant(6, 56), "dispatch", actor=HOST_A)]),
         run("preview-run-a2", project="alpha", group=OBJ_A,
             title="核对 Host 等待片段与决定标记的渲染", title_source="title",
@@ -453,9 +558,11 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[
                 attempt("att-a2-1", 1, "finished", True, instant(8, 36), instant(8, 55), CFG_GLM,
-                        result="合成预览：第一轮结束，交给 Host 决定。"),
+                        result="合成预览：第一轮结束，交给 Host 决定。",
+                        usage=usage("zcode-native", 6000, 4000, 900)),
                 attempt("att-a2-2", 2, "finished", True, instant(9, 2), instant(9, 20), CFG_CLAUDE,
-                        result="合成预览：第二轮结束，需要 Host 协助。"),
+                        result="合成预览：第二轮结束，需要 Host 协助。",
+                        usage=usage("claude-native", 9500, 7000, 1100)),
             ],
             markers=[
                 marker(instant(8, 30), "dispatch", actor=HOST_A),
@@ -477,7 +584,8 @@ def build_runs() -> dict[str, dict]:
                      attempt_id="att-a3-1", configuration=CFG_CLAUDE, confirmed=False, generation=1,
                      disposition="completed", turn_index=1),
             ],
-            attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE)],
+            attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE,
+                              usage=None)],
             markers=[marker(instant(9, 35), "dispatch", actor=HOST_A)]),
         run("preview-run-b1", project="beta", group=OBJ_B, hosts=(HOST_B, HOST_B2),
             title=long_title("DSH 插件在 Windows 路径下的沙箱回归排查与修复记录，包含长标题截断检查："),
@@ -500,9 +608,11 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[
                 attempt("att-b1-1", 1, "finished", True, instant(3, 4), instant(3, 30), CFG_GLM,
-                        result="合成预览：第一轮探测完成。"),
+                        result="合成预览：第一轮探测完成。",
+                        usage=usage("zcode-native", None, None, 4200)),
                 attempt("att-b1-2", 2, "finished", True, instant(5, 2), instant(5, 30), CFG_GLM,
-                        result="合成预览：修复完成，等待验收。"),
+                        result="合成预览：修复完成，等待验收。",
+                        usage=usage("zcode-native", 15000, 11000, 2200)),
             ],
             markers=[
                 marker(instant(3, 0), "dispatch", actor=HOST_B),
@@ -513,7 +623,8 @@ def build_runs() -> dict[str, dict]:
             ],
             artifacts=[artifact("art-b1", "att-b1-2", digest("b1-output")[:40], "/synthetic-preview/diffs/b1.diff",
                                 ["harnesses/dsh/plugins/sandbox.js"])],
-            integrations=[integration("int-b1", "art-b1", "att-b1-2", HOST_B2)]),
+            integrations=[integration("int-b1", "art-b1", "att-b1-2", HOST_B2, host_paths=[])],
+            configuration_locked=True),
         run("preview-run-b1-h1", project="beta", group=OBJ_B, parent="preview-run-b1",
             hosts=(HOST_B, HOST_B),
             title="整理 macOS 与 Windows 沙箱规则差异清单", title_source="title",
@@ -531,9 +642,51 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[attempt("att-b1h-1", 1, "finished", True, instant(3, 11), instant(3, 25), CFG_GLM,
                               error="synthetic preview cancellation: Host cancelled the helper",
-                              result="synthetic preview cancellation: Host cancelled the helper")],
+                              result="synthetic preview cancellation: Host cancelled the helper",
+                              usage=usage("zcode-native", 2500, 1500, 300))],
+            artifacts=[artifact("art-b1h-partial", "att-b1h-1", digest("b1h-partial-output")[:40],
+                                "/synthetic-preview/diffs/b1h.partial.diff",
+                                ["harnesses/dsh/plugins/sandbox-rules.md"],
+                                kind="partial-output", partial=True, verified=False, final=False,
+                                cumulative_patch=patch_for("preview-run-b1-h1",
+                                                           digest("b1h-partial-output")[:40],
+                                                           ["harnesses/dsh/plugins/sandbox-rules.md"]))],
+            conclusion=host_conclusion("preview-conclusion-b1-h1", attempt_id="att-b1h-1",
+                                       execution_status="cancelled",
+                                       note="synthetic preview cancellation: Host cancelled the helper",
+                                       evidence=["att-b1h-1", "art-b1h-partial"],
+                                       artifact_id="art-b1h-partial", integration_id=None,
+                                       actor=HOST_B, created_at=instant(3, 25), run_revision=3),
             markers=[marker(instant(3, 10), "dispatch", actor=HOST_B),
                      marker(instant(3, 25), "cancel", actor=HOST_B, summary="cancelled")]),
+        run("preview-run-b2", project="beta", group=OBJ_B, hosts=(HOST_B, HOST_B),
+            title="封存配额耗尽时的部分输出", title_source="title",
+            task_text="排查执行器在配额耗尽后仍未封存部分输出的路径，并补齐封存记录。",
+            created=instant(6, 5), updated=instant(6, 26), state="failed", status="failed",
+            category="ended", configuration=CFG_GLM, result=True,
+            result_summary="合成预览：执行器配额耗尽，仅保留封存的部分输出",
+            spans=[
+                span("queue:att-b2-1", "queue", instant(6, 5), instant(6, 7), "claimed",
+                     attempt_id="att-b2-1"),
+                span("execution:att-b2-1", "execution", instant(6, 7), instant(6, 26), "finished",
+                     attempt_id="att-b2-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     disposition="completed", turn_index=1, error=QUOTA_ERROR, result_status="failed"),
+            ],
+            attempts=[attempt("att-b2-1", 1, "finished", True, instant(6, 7), instant(6, 26), CFG_GLM,
+                              error=QUOTA_ERROR, result=QUOTA_ERROR,
+                              usage=usage("zcode-native", None, None, 4200))],
+            markers=[marker(instant(6, 5), "dispatch", actor=HOST_B)],
+            artifacts=[artifact("art-b2-partial", "att-b2-1", digest("b2-partial-output")[:40],
+                                "/synthetic-preview/diffs/b2.partial.diff",
+                                ["harnesses/dsh/plugins/quota.js"],
+                                kind="partial-output", partial=True, verified=False, final=False,
+                                cumulative_patch=patch_for("preview-run-b2", digest("b2-partial-output")[:40],
+                                                           ["harnesses/dsh/plugins/quota.js"]))],
+            conclusion=host_conclusion("preview-conclusion-b2", attempt_id="att-b2-1",
+                                       execution_status="failed", note=QUOTA_ERROR,
+                                       evidence=["art-b2-partial", QUOTA_ERROR],
+                                       artifact_id="art-b2-partial", integration_id=None,
+                                       actor=HOST_B, created_at=instant(6, 26), run_revision=3)),
         run(STANDALONE, project="beta", hosts=(HOST_B, HOST_B2),
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
@@ -548,7 +701,8 @@ def build_runs() -> dict[str, dict]:
                      disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-c1-1", 1, "finished", True, instant(5, 4), instant(5, 20), CFG_FLASH,
-                              result="合成预览：CRLF 标题回退修复完成。")],
+                              result="合成预览：CRLF 标题回退修复完成。",
+                              usage=usage("dsh-native", 5000, 1000, 700))],
             markers=[marker(instant(5, 0), "dispatch", actor=HOST_B),
                      marker(instant(5, 30), "takeover", actor=HOST_B2, summary="takeover"),
                      marker(instant(5, 35), "accept", actor=HOST_B2, artifact_id="art-c1", summary="accepted")],
@@ -568,7 +722,7 @@ def build_runs() -> dict[str, dict]:
                      disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-c1h-1", 1, "finished", True, instant(5, 8), instant(5, 18), CFG_GLM,
-                              result="合成预览：交付被记录为验收问题。")],
+                              result="合成预览：交付被记录为验收问题。", usage=None)],
             markers=[marker(instant(5, 6), "dispatch", actor=HOST_B),
                      marker(instant(5, 25), "reject", actor=HOST_B, artifact_id="art-c1h", summary="rejected")],
             artifacts=[artifact("art-c1h", "att-c1h-1", digest("c1h-output")[:40],
@@ -684,6 +838,7 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "exitCode": 0 if item["state"] == "finished" else None, "signal": None, "error": item["error"],
         "startedAt": item["startedAt"], "finishedAt": item["finishedAt"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"], "revision": 1,
+        "tokenUsage": item["usage"],
         **({"result": item["result"]} if item["result"] is not None else {}),
     }
 
@@ -712,6 +867,9 @@ def task_view(entry: dict) -> dict:
         "resultAvailable": receipt is not None, "shutdownConfirmed": entry["shutdownConfirmed"],
         "activity": None, "delegation": entry["delegation"], "artifacts": entry["artifacts"],
         "artifactCount": len(entry["artifacts"]), "inquiries": {},
+        # ADR-018: the selected attempt's per-attempt usage, also inside
+        # `selectedAttempt`; null when no usage was recorded (never 0).
+        "tokenUsage": selected["usage"] if selected is not None else None,
     }
     if entry["governed"]:
         view["workflow"] = workflow_extension(entry)
@@ -776,6 +934,9 @@ def turn_views(entry: dict) -> list[dict]:
                         else None),
             "summary": ((item["result"] or {}).get("result") or {}).get("finalText", ""),
             "summaryTruncated": False, "remaining": [],
+            # Each turn keeps its own per-attempt usage record; never a
+            # session-cumulative number.
+            "tokenUsage": item["usage"],
         })
     return views
 
@@ -797,6 +958,10 @@ def workflow_view(entry: dict) -> dict:
         "state": entry["state"], "status": entry["status"], "queueReason": None,
         "awaitingHost": entry["state"] == "awaiting-host", "waitReason": wait_reason(entry),
         "continuationCount": entry["continuationCount"],
+        # ADR-018: whether the Host may still re-choose the configuration, and
+        # the Host's own recorded conclusion for a failed or cancelled goal.
+        "configurationLocked": entry["configurationLocked"],
+        "hostConclusion": entry["hostConclusion"],
         "goal": {"task": entry["task"], "taskTruncated": False,
                  "adapter": entry["adapter"] or (entry["configuration"] or {}).get("adapter", "dsh"),
                  "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-goal")},
@@ -814,7 +979,9 @@ def workflow_view(entry: dict) -> dict:
                       "access": "write", "inputCommit": digest(f"{entry['runId']}-input")[:40],
                       "manifestSha256": digest(f"{entry['runId']}-workspace")},
         "createdAt": entry["createdAt"], "updatedAt": entry["updatedAt"],
-        "finalArtifactId": entry["artifacts"][-1]["artifactId"] if entry["artifacts"] else None,
+        # A sealed partial output is never the run's final artifact.
+        "finalArtifactId": next((item["artifactId"] for item in reversed(entry["artifacts"])
+                                 if item["final"]), None),
         "finalAttemptId": entry["attempts"][-1]["attemptId"] if entry["attempts"] else None,
         "task": task_view(entry),
     }
@@ -1086,6 +1253,40 @@ def concurrency_rows() -> list[dict]:
             | {"limit": 2, "active": 1 if cfg["adapter"] == "claude" else 0} for cfg in CONFIGS]
 
 
+def harness_rows() -> list[dict]:
+    """The four ADR-018 console harness rows, in adapter order, with quota.
+
+    Retained quota observations are display-only: an absent observation is
+    ``null``, a stale one keeps its old ``observedAt``, and an unknown window is
+    ``usedPercent: null`` — never 0.
+    """
+    return [
+        {"adapter": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
+         "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
+         "source": "synthetic-preview", "checkedAt": instant(9, 55),
+         "quota": {"observedAt": instant(9, 50), "source": "dsh-native",
+                   "provider": "deepseek-official", "stale": False,
+                   "windows": [{"name": "5h", "usedPercent": 93, "resetsAt": instant(14, 30)},
+                               {"name": "weekly", "usedPercent": 41, "resetsAt": instant(77, 0)}]}},
+        {"adapter": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+         "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
+         "source": "synthetic-preview", "checkedAt": instant(9, 55),
+         "quota": {"observedAt": instant(2, 30), "source": "zcode-native", "provider": "zai",
+                   "stale": True,
+                   "windows": [{"name": "5h", "usedPercent": None, "resetsAt": None},
+                               {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
+        {"adapter": "codex", "status": "missing", "available": False, "revision": 0, "manualPath": None,
+         "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
+        {"adapter": "claude", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+         "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
+         "source": "synthetic-preview", "checkedAt": instant(9, 55),
+         "quota": {"observedAt": instant(9, 40), "source": "claude-native", "provider": "anthropic",
+                   "stale": False,
+                   "windows": [{"name": "5h", "usedPercent": 18, "resetsAt": instant(14, 30)},
+                               {"name": "weekly", "usedPercent": 67, "resetsAt": instant(77, 0)}]}},
+    ]
+
+
 def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     profiles = profile_views()
     entries = sorted(FIXTURES["runs"].values(),
@@ -1105,6 +1306,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                                                   "toolCalls": 24, "bytesRead": 524288}},
         "profiles": profiles,
         "modelConcurrency": concurrency_rows(),
+        "harnesses": harness_rows(),
         "unavailableProfileCount": 0,
         **policy_views(), "cards": [], "evidence": [], "decisions": [],
         "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
@@ -1247,7 +1449,7 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
     if scenario == "error":
         # Validate first, then simulate the read failure: a missing or unknown
         # identifier still answers 400/404 instead of being masked by the 503.
-        raise PreviewError("SERVICE_UNAVAILABLE", "synthetic preview: simulated read failure (--scenario error)")
+        raise PreviewError("SERVICE_UNAVAILABLE", ERROR_SCENARIO_MESSAGE)
     return result
 
 
@@ -1312,7 +1514,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def _error(self, status: int, code: str, message: str) -> None:
         self.close_connection = True
-        self._json(status, {"ok": False, "error": {"code": code, "message": message}})
+        self._json(status, error_envelope(code, message))
 
     def _preview_error(self, error: PreviewError) -> None:
         self._error(STATUS_BY_CODE.get(error.code, 400), error.code, error.message)
@@ -1369,8 +1571,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 if self.server.scenario == "error":
                     # A known group read fails; an unknown group or a bad parameter
                     # above still answers 404/400 instead of being masked by the 503.
-                    return self._error(503, "SERVICE_UNAVAILABLE",
-                                       "synthetic preview: simulated read failure (--scenario error)")
+                    return self._error(503, "SERVICE_UNAVAILABLE", ERROR_SCENARIO_MESSAGE)
                 return self._json(200, objective_timeline(params, self.server.scenario))
             if path.startswith("/api/tasks/"):
                 run_id = path[len("/api/tasks/"):]
@@ -1558,6 +1759,29 @@ def idle_gaps(group: str) -> list[tuple[datetime, datetime]]:
             for index in range(len(merged) - 1) if merged[index + 1][0] > merged[index][1]]
 
 
+def token_usage_problems(label: str, value: Any) -> list[str]:
+    """ADR-018 per-attempt usage: ``null``, or a complete object scoped to one attempt."""
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return [f"{label}: tokenUsage must be null or an object"]
+    problems: list[str] = []
+    if set(value) != TOKEN_USAGE_KEYS:
+        problems.append(f"{label}: tokenUsage keys are {sorted(value)}")
+    if value.get("scope") != "attempt":
+        problems.append(f'{label}: tokenUsage.scope must be "attempt"')
+    if not isinstance(value.get("source"), str) or not value.get("source"):
+        problems.append(f"{label}: tokenUsage.source must be a nonempty string")
+    for key in ("inputTokens", "cachedInputTokens", "outputTokens"):
+        item = value.get(key, "absent")
+        if item is not None and (type(item) is not int or item < 0):
+            problems.append(f"{label}: tokenUsage.{key} must be a nonnegative integer or null")
+    if isinstance(value.get("inputTokens"), int) and isinstance(value.get("cachedInputTokens"), int) \
+            and value["cachedInputTokens"] > value["inputTokens"]:
+        problems.append(f"{label}: cachedInputTokens must stay a subset of inputTokens")
+    return problems
+
+
 def validate_fixtures() -> list[str]:
     """Shape drift, determinism and the idle-gap invariants of the fixtures."""
     problems: list[str] = []
@@ -1673,7 +1897,332 @@ def validate_fixtures() -> list[str]:
     if any(not isinstance(health.get(key), int) or health[key] < 0 for key in
            ("budgetExhaustedCount", "boundsRejectedCount", "inputChangedCount")):
         problems.append("routing health must expose nonnegative synthetic budget/bounds/input statistics")
+
+    # -- ADR-018 schema-15 fixture data ------------------------------------- #
+    conclusions, locked, partials, patched, host_paths_seen = 0, 0, 0, False, False
+    usage_sources: set[str] = set()
+    unknown_usage = False
+    for entry in FIXTURES["runs"].values():
+        if not entry["governed"]:
+            continue
+        view = workflow_get({"runId": entry["runId"]})
+        if not isinstance(view.get("configurationLocked"), bool):
+            problems.append(f"{entry['runId']}: configurationLocked must be a boolean")
+        if "hostConclusion" not in view:
+            problems.append(f"{entry['runId']}: governed view must carry hostConclusion")
+        if view.get("configurationLocked"):
+            locked += 1
+        conclusion = view.get("hostConclusion")
+        if conclusion is not None:
+            conclusions += 1
+            if not isinstance(conclusion, dict) or set(conclusion) != HOST_CONCLUSION_KEYS:
+                problems.append(f"{entry['runId']}: hostConclusion keys drifted")
+            elif conclusion["executionStatus"] not in ("failed", "cancelled"):
+                problems.append(f"{entry['runId']}: hostConclusion must record a failed/cancelled outcome")
+            elif not isinstance(conclusion["evidence"], list) or not 1 <= len(conclusion["evidence"]) <= 8 \
+                    or not all(isinstance(item, str) and 0 < len(item) <= 200
+                               for item in conclusion["evidence"]):
+                problems.append(f"{entry['runId']}: hostConclusion.evidence must be a bounded short-string list")
+            elif type(conclusion["ownerGeneration"]) is not int or type(conclusion["runRevision"]) is not int:
+                problems.append(f"{entry['runId']}: hostConclusion must carry ownerGeneration and runRevision")
+        turns = view["turns"]
+        if len(turns) != len(entry["attempts"]):
+            problems.append(f"{entry['runId']}: every attempt must keep its own turn entry")
+        for item, recorded in zip(turns, reversed(entry["attempts"])):
+            if item.get("tokenUsage") != recorded["usage"]:
+                problems.append(f"{entry['runId']}: turn {item['turnId']} usage differs from its attempt")
+            problems += token_usage_problems(f"{entry['runId']} turn {item['turnId']}",
+                                             item.get("tokenUsage"))
+            value = item.get("tokenUsage")
+            if isinstance(value, dict) and isinstance(value.get("source"), str):
+                usage_sources.add(value["source"])
+            if recorded["state"] == "finished" and recorded["usage"] is None:
+                unknown_usage = True
+        if turns:
+            problems += token_usage_problems(f"{entry['runId']} currentTurn",
+                                             view["currentTurn"].get("tokenUsage"))
+        problems += token_usage_problems(f"{entry['runId']} task", view["task"].get("tokenUsage"))
+        selected = view["task"].get("selectedAttempt") or {}
+        if turns and selected.get("tokenUsage") != view["currentTurn"].get("tokenUsage"):
+            problems.append(f"{entry['runId']}: selectedAttempt usage differs from currentTurn")
+        for item in view["artifacts"]:
+            if item["kind"] == "partial-output":
+                partials += 1
+                if (item["partial"], item["verified"], item["final"]) != (True, False, False):
+                    problems.append(f"{entry['runId']}: {item['artifactId']} must be unverified and non-final")
+                if view["finalArtifactId"] == item["artifactId"]:
+                    problems.append(f"{entry['runId']}: a partial output must never be the final artifact")
+            patch = item.get("cumulativePatch")
+            if patch is None:
+                continue
+            if not isinstance(patch, dict) or set(patch) != {"baseCommit", "outputCommit", "path", "sha256",
+                                                             "changedPaths"}:
+                problems.append(f"{entry['runId']}: {item['artifactId']} cumulativePatch shape drifted")
+            elif patch["baseCommit"] != view["workspace"]["inputCommit"]:
+                problems.append(f"{entry['runId']}: {item['artifactId']} patch base is not the workspace input")
+            elif patch["changedPaths"] != item["changedPaths"] or not patch["path"] or not patch["sha256"]:
+                problems.append(f"{entry['runId']}: {item['artifactId']} patch disagrees with the artifact")
+            elif item["final"]:
+                patched = True
+        for item in view["integrations"]:
+            paths = item["verification"].get("hostPaths")
+            if not isinstance(paths, list) or not all(isinstance(path, str) and path for path in paths):
+                problems.append(f"{entry['runId']}: integration verification.hostPaths must be a string list")
+            elif paths:
+                host_paths_seen = True
+    for label, covered in (("a Host conclusion", conclusions), ("a locked configuration", locked),
+                           ("a sealed partial output", partials), ("a patched final artifact", patched),
+                           ("a non-empty verification.hostPaths", host_paths_seen),
+                           ("a finished attempt with unknown usage", unknown_usage)):
+        if not covered:
+            problems.append(f"the fixtures must cover {label}")
+    if not {"dsh-native", "codex-native", "zcode-native"} <= usage_sources:
+        problems.append(f"token usage sources are {sorted(usage_sources)}")
+    for run_id, expected in (("preview-run-b1-h1", "cancelled"), ("preview-run-b2", "failed")):
+        conclusion = workflow_get({"runId": run_id})["hostConclusion"]
+        if not conclusion or conclusion["executionStatus"] != expected:
+            problems.append(f"{run_id}: missing the {expected} Host conclusion")
+    quota_failed = workflow_get({"runId": "preview-run-b2"})
+    attempt_record = quota_failed["task"].get("selectedAttempt") or {}
+    if quota_failed["status"] != "failed" or QUOTA_ERROR not in (attempt_record.get("error") or ""):
+        problems.append("preview-run-b2 must stay failed and record the synthetic quota exhaustion")
+    if not any(item["kind"] == "partial-output" for item in quota_failed["artifacts"]):
+        problems.append("preview-run-b2 must carry its sealed partial output")
+    multi_turn = workflow_get({"runId": "preview-run-a1"})
+    if len({json.dumps(turn["tokenUsage"], sort_keys=True) for turn in multi_turn["turns"]}) != len(
+            multi_turn["turns"]):
+        problems.append("each turn must keep its own usage, never one session-cumulative number")
+
+    # -- console snapshot harness rows -------------------------------------- #
+    harnesses = console_snapshot("normal", False).get("harnesses")
+    if not isinstance(harnesses, list) or [row.get("adapter") for row in harnesses] != ["dsh", "zcode",
+                                                                                        "codex", "claude"]:
+        problems.append("harnesses must list dsh, zcode, codex and claude in that order")
+        harnesses = []
+    near_limit = stale_unknown = False
+    for row in harnesses:
+        if (row.get("available") is True) != (row.get("status") == "ready"):
+            problems.append(f"harness {row.get('adapter')}: available must mirror status")
+        if row.get("manualPath", "absent") is not None:
+            problems.append(f"harness {row.get('adapter')}: manualPath must be null")
+        if type(row.get("revision")) is not int or row["revision"] < 0:
+            problems.append(f"harness {row.get('adapter')}: revision must be a nonnegative integer")
+        quota = row.get("quota")
+        if quota is None:
+            continue
+        if not isinstance(quota, dict) or not isinstance(quota.get("observedAt"), str) \
+                or not isinstance(quota.get("source"), str) or not isinstance(quota.get("windows"), list):
+            problems.append(f"harness {row.get('adapter')}: malformed quota observation")
+            continue
+        if quota.get("stale") is True and any(window.get("usedPercent") is None
+                                              for window in quota["windows"]):
+            stale_unknown = True
+        for window in quota["windows"]:
+            used = window.get("usedPercent")
+            if used is None:
+                continue
+            if type(used) is not int or not 0 <= used <= 100:
+                problems.append(f"harness {row.get('adapter')}: window usage must be 0..100 or null")
+            elif used >= 90:
+                near_limit = True
+    if not near_limit:
+        problems.append("one harness quota window must sit at or over the near-limit threshold")
+    if not stale_unknown:
+        problems.append("one harness quota observation must be stale with an unknown window")
+    if not any(row.get("quota") is None for row in harnesses):
+        problems.append("one harness row must carry quota: null")
+
+    # -- the emitted fixture tree -------------------------------------------- #
+    plan = emit_fixture_files()
+    payloads = fixture_payloads()
+    if payloads != fixture_payloads():
+        problems.append("the emitted fixture tree is not byte-identical across builds")
+    for scenario in EMIT_SCENARIOS + ("incompatible",):
+        written = tuple(item["path"].split("/", 1)[1] for item in plan if item["scenario"] == scenario)
+        if written != EMIT_LAYOUT[scenario]:
+            problems.append(f"emitted {scenario} files are {written}")
+    manifest = json.loads(payloads["manifest.json"])
+    if set(manifest) != {"fixtureVersion", "source", "scenarios", "files"} \
+            or manifest["fixtureVersion"] != 1 or manifest["source"] != EMIT_SOURCE \
+            or manifest["scenarios"] != list(EMIT_SCENARIOS) or len(manifest["files"]) != len(plan):
+        problems.append("manifest.json header differs from the documented shape")
+    rejected = {item["path"]: "INVALID_RESPONSE" for item in plan if item["scenario"] == "incompatible"
+                and item["manifest"]["expected"] == "rejected"}
+    rejected["readonly/console.json"] = "INVALID_RESPONSE"
+    rejected["error/timeline-obj-a.json"] = "SERVICE_UNAVAILABLE"
+    rejected["error/workflow-preview-run-a1.json"] = "SERVICE_UNAVAILABLE"
+    for entry in manifest["files"]:
+        code = rejected.get(entry["path"])
+        if code is not None:
+            if entry["expected"] != "rejected" or entry.get("expectedCode") != code:
+                problems.append(f"{entry['path']}: must be rejected with {code}")
+        elif entry["expected"] != "accepted" or "expectedCode" in entry:
+            problems.append(f"{entry['path']}: must be an accepted fixture")
+        if (entry["httpStatus"] == 503) != (entry.get("expectedCode") == "SERVICE_UNAVAILABLE"):
+            problems.append(f"{entry['path']}: HTTP status and expected ApiError code disagree")
+        if entry["scenario"] == "incompatible" and not entry.get("mutation"):
+            problems.append(f"{entry['path']}: an incompatible fixture must document its mutation")
+        request = entry.get("request")
+        if not isinstance(request, dict):
+            problems.append(f"{entry['path']}: every manifest entry must name its request")
+        elif entry["kind"] == "objective-timeline":
+            want = ({"objectiveId": STANDALONE_GROUP}
+                    if entry["path"].endswith("timeline-standalone.json") else {"objectiveId": OBJ_A})
+            if request != want:
+                problems.append(f"{entry['path']}: request must be {want}")
+        elif entry["kind"] == "workflow-get":
+            if set(request) != {"runId"} or not isinstance(request.get("runId"), str):
+                problems.append(f"{entry['path']}: a workflow-get request must name exactly one runId")
+            elif entry["scenario"] == "incompatible":
+                if request["runId"] != "preview-run-a1":
+                    problems.append(f"{entry['path']}: the mutated workflow view is preview-run-a1")
+            elif f"workflow-{request['runId']}.json" != entry["path"].split("/", 1)[1]:
+                problems.append(f"{entry['path']}: request runId differs from the file name")
+        elif request != {}:
+            problems.append(f"{entry['path']}: {entry['kind']} takes no request parameters")
+    if not json.loads(payloads["truncated/timeline-obj-a.json"])["truncated"]["rows"]:
+        problems.append("the emitted truncated timeline must report its truncation flags")
+    if payloads["normal/console.json"] != encode_json(console_snapshot("normal", assets_ready=False)):
+        problems.append("emitted console.json must be the exact console_snapshot body")
+    if payloads["normal/workflow-preview-run-a1.json"] != encode_json(workflow_get({"runId": "preview-run-a1"})):
+        problems.append("an emitted workflow payload must be the exact workflow_get result")
     return problems
+
+
+# --------------------------------------------------------------------------- #
+# Emitted fixture tree (--emit-fixtures)                                        #
+# --------------------------------------------------------------------------- #
+def clone(value: Any) -> Any:
+    """A JSON round-trip copy, so an incompatible mutation never touches the source fixture."""
+    return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def encode_json(value: Any) -> bytes:
+    """The one emitted byte shape: UTF-8, sorted keys, two-space indent, trailing newline."""
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def emit_fixture_files() -> list[dict]:
+    """Every emitted file in manifest order: scenario, path, payload and manifest row."""
+    files: list[dict] = []
+
+    def add(scenario: str, name: str, kind: str, endpoint: str, status: int, expected: str,
+            value: Any, *, request: dict, expected_code: str | None = None,
+            mutation: str | None = None, note: str | None = None) -> None:
+        row: dict[str, Any] = {"scenario": scenario, "path": f"{scenario}/{name}", "kind": kind,
+                               "endpoint": endpoint, "request": request, "httpStatus": status,
+                               "expected": expected}
+        if expected_code is not None:
+            row["expectedCode"] = expected_code
+        if mutation is not None:
+            row["mutation"] = mutation
+        if note is not None:
+            row["note"] = note
+        files.append({"scenario": scenario, "path": row["path"], "value": value, "manifest": row})
+
+    failure = error_envelope("SERVICE_UNAVAILABLE", ERROR_SCENARIO_MESSAGE)
+    timeline_endpoint = "GET /api/objectives/<objectiveId>/timeline"
+    workflow_endpoint = "POST /api/command workflow_get"
+    workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-b1", "preview-run-b1-h1",
+                            "preview-run-b2"),
+                 "readonly": ("preview-run-a1",), "truncated": ("preview-run-a1",),
+                 "error": ("preview-run-a1",)}
+    for scenario in EMIT_SCENARIOS:
+        if scenario == "readonly":
+            # 0.18 removed read-only console sessions, so the superseded-session
+            # snapshot shape is deliberately no longer valid for the parser.
+            add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "rejected",
+                console_snapshot(scenario, assets_ready=False), request={},
+                expected_code="INVALID_RESPONSE")
+        else:
+            add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
+                console_snapshot(scenario, assets_ready=False), request={})
+        add(scenario, "objectives.json", "objectives-page", "GET /api/objectives", 200, "accepted",
+            objective_page({}), request={})
+        if scenario == "error":
+            add(scenario, "timeline-obj-a.json", "objective-timeline", timeline_endpoint, 503, "rejected",
+                failure, request={"objectiveId": OBJ_A}, expected_code="SERVICE_UNAVAILABLE")
+        else:
+            add(scenario, "timeline-obj-a.json", "objective-timeline", timeline_endpoint, 200, "accepted",
+                objective_timeline({"objectiveId": OBJ_A}, scenario), request={"objectiveId": OBJ_A})
+        if scenario == "normal":
+            add(scenario, "timeline-standalone.json", "objective-timeline", timeline_endpoint, 200,
+                "accepted", objective_timeline({"objectiveId": STANDALONE_GROUP}, scenario),
+                request={"objectiveId": STANDALONE_GROUP})
+        for run_id in workflows[scenario]:
+            name = f"workflow-{run_id}.json"
+            if scenario == "error":
+                add(scenario, name, "workflow-get", workflow_endpoint, 503, "rejected", failure,
+                    request={"runId": run_id}, expected_code="SERVICE_UNAVAILABLE")
+            else:
+                add(scenario, name, "workflow-get", workflow_endpoint, 200, "accepted",
+                    workflow_get({"runId": run_id}), request={"runId": run_id})
+
+    # Deliberately wrong shapes for the strict frontend parser. The readonly
+    # snapshot is the real fixture for the retired superseded-session shape; the
+    # malformed quota stays readable because a bad optional observation must be
+    # dropped as unknown rather than blanking the page or reading as 0%.
+    normal = console_snapshot("normal", assets_ready=False)
+    legacy = clone(normal)
+    for key in ("fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode"):
+        legacy["configuration"].pop(key, None)
+    legacy["configuration"]["decisionProfileId"] = profile_views()[0]["profileId"]
+    add("incompatible", "snapshot-legacy-single-router.json", "console-snapshot", "GET /api/console", 200,
+        "rejected", legacy, request={}, expected_code="INVALID_RESPONSE",
+        mutation="configuration reverted to the retired schema-13 single-Router shape: decisionProfileId "
+                 "added while fastRouterProfileId, reviewRouterProfileId and defaultRoutingMode were removed")
+    missing_session = clone(normal)
+    missing_session.pop("consoleSession", None)
+    add("incompatible", "snapshot-missing-session.json", "console-snapshot", "GET /api/console", 200,
+        "rejected", missing_session, request={}, expected_code="INVALID_RESPONSE",
+        mutation="consoleSession removed, so the snapshot cannot describe the console session")
+    missing_tasks = clone(normal)
+    missing_tasks["tasks"].pop("runs", None)
+    add("incompatible", "snapshot-missing-tasks.json", "console-snapshot", "GET /api/console", 200,
+        "rejected", missing_tasks, request={}, expected_code="INVALID_RESPONSE",
+        mutation="tasks.runs removed, leaving the task list page without its rows")
+    missing_revision = clone(workflow_get({"runId": "preview-run-a1"}))
+    missing_revision.pop("revision", None)
+    add("incompatible", "workflow-missing-revision.json", "workflow-get", workflow_endpoint, 200,
+        "rejected", missing_revision, request={"runId": "preview-run-a1"}, expected_code="INVALID_RESPONSE",
+        mutation="revision removed from the governed workflow view, so owner-generation fencing is unprovable")
+    malformed_quota = clone(normal)
+    malformed_quota["harnesses"][0]["quota"]["windows"] = "near-limit"
+    add("incompatible", "harness-quota-malformed.json", "console-snapshot", "GET /api/console", 200,
+        "accepted", malformed_quota, request={},
+        mutation="harnesses[0].quota.windows replaced by the string \"near-limit\" while every other "
+                 "harness field stays valid",
+        note="malformed quota must be dropped as unknown, never displayed as 0")
+
+    order = {scenario: index for index, scenario in enumerate(EMIT_SCENARIOS + ("incompatible",))}
+    files.sort(key=lambda item: (order[item["scenario"]], item["path"]))
+    return files
+
+
+def fixture_payloads() -> dict[str, bytes]:
+    """The complete emitted tree as relative path -> exact bytes, ``manifest.json`` included."""
+    files = emit_fixture_files()
+    payloads = {item["path"]: encode_json(item["value"]) for item in files}
+    payloads["manifest.json"] = encode_json({"fixtureVersion": 1, "source": EMIT_SOURCE,
+                                             "scenarios": list(EMIT_SCENARIOS),
+                                             "files": [item["manifest"] for item in files]})
+    return payloads
+
+
+def emit_fixtures(directory: Path) -> int:
+    """Write the deterministic fixture tree; nonzero only on an OS error."""
+    root = Path(directory)
+    payloads = fixture_payloads()
+    try:
+        for name, body in payloads.items():
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+    except OSError as error:
+        print(f"cannot write the fixture tree under {root}: {error}", file=sys.stderr)
+        return 1
+    print(f"emitted {len(payloads)} fixture files under {root}")
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1841,8 +2390,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scenario", choices=SCENARIOS, default="normal")
     parser.add_argument("--port", type=int, default=0, help="0 binds an ephemeral loopback port (default)")
     parser.add_argument("--verbose", action="store_true", help="enable access logging (off by default)")
-    parser.add_argument("--check", action="store_true", help="run the fixture self-checks and exit")
-    parser.add_argument("--smoke", action="store_true", help="start, read back with urllib, and exit")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--check", action="store_true", help="run the fixture self-checks and exit")
+    modes.add_argument("--smoke", action="store_true", help="start, read back with urllib, and exit")
+    modes.add_argument("--emit-fixtures", metavar="DIR",
+                       help="write the deterministic fixture tree under DIR and exit (no --assets needed)")
     args = parser.parse_args(argv)
 
     if args.check:
@@ -1853,8 +2405,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         biggest = max((gap[1] - gap[0] for gap in idle_gaps(OBJ_B)), default=timedelta())
         print(f"CHECK OK  shapes stable · idle gap {biggest} · fixtures deterministic · "
-              f"{len(FIXTURES['runs'])} runs / {len(FIXTURES['groups'])} groups")
+              f"{len(FIXTURES['runs'])} runs / {len(FIXTURES['groups'])} groups · "
+              f"{len(harness_rows())} harnesses")
         return 0
+
+    if args.emit_fixtures is not None:
+        if not args.emit_fixtures.strip():
+            print("--emit-fixtures requires a nonempty DIR", file=sys.stderr)
+            return 2
+        return emit_fixtures(Path(args.emit_fixtures))
 
     assets = prepare_assets(args.assets)
     if args.smoke:

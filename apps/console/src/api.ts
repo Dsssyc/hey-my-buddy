@@ -187,6 +187,7 @@ function validTimelineRows(rows: unknown): boolean {
 
 export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
 import type { HarnessHealth } from "./types";
+import { parseQuota } from "./host-workflow";
 
 /** The supported harnesses, in the Buddy 配置 page's fixed display order. */
 export const HARNESS_ADAPTERS = ["dsh", "zcode", "codex", "claude"] as const;
@@ -210,7 +211,12 @@ function harnessRow(value: unknown): HarnessHealth | null {
   if (row.candidates != null && (!Array.isArray(row.candidates) || row.candidates.some(candidate =>
     !candidate || typeof candidate !== "object" || ["path", "source", "reasonCode", "status"].some(key =>
       (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")))) return null;
-  return { ...row, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null };
+  // ADR-018 §23: a malformed quota observation is dropped as unknown instead of
+  // blanking the page or being presented as a recorded 0%. An observation that
+  // was not recorded adds no key at all.
+  const { quota: rawQuota, ...rest } = row;
+  const quota = parseQuota(rawQuota);
+  return { ...rest, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null, ...(quota ? { quota } : {}) };
 }
 
 /** Known harnesses first in their fixed order; anything else keeps its own order. */
