@@ -49,9 +49,9 @@ Daily [installation is 0.19.0/schema 14](acceptance/installed-0.19.0.md): the sh
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
-## Proposed design direction
+## Accepted design direction, not yet implemented
 
-[ADR-018: routing modes and Host workflow](decisions/018-routing-modes-and-host-workflow.md) (proposed, not implemented) splits the Router into a tool-free fast mode that any harness able to disable tools can serve and the existing read-only review mode that needs a verified harness sandbox (budgets renamed 简要/标准/深入, two Router slots with a default mode, per-submission mode, automatic fallback to fast routing), and addresses the Claude Code Host trial with a slimmer SKILL.md, file/stdin parameters, per-method help, objective reuse, direct Host closure of integrated work, Host notes and cleanup for failed or cancelled goals, sealed partial artifacts after interruptions, replaceable Host-chosen configurations, Host follow-up paths in integration records and cumulative patches.
+[ADR-018: routing modes and Host workflow](decisions/018-routing-modes-and-host-workflow.md) (accepted, not implemented) splits the Router into a tool-free fast mode that any harness able to disable tools can serve and the existing read-only review mode that needs a verified harness sandbox (budgets renamed 简要/标准/深入, two Router slots with a default mode, per-submission mode, automatic fallback to fast routing), and addresses the Claude Code Host trial with a slimmer SKILL.md, file/stdin parameters, per-method help, objective reuse, direct Host closure of integrated work, Host notes and cleanup for failed or cancelled goals, sealed partial artifacts after interruptions, replaceable Host-chosen configurations, Host follow-up paths in integration records and cumulative patches.
 
 ## Accepted design direction, implemented in source
 
