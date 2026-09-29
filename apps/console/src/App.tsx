@@ -182,7 +182,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
           authority={authority} writesAvailable={writesAvailable} /> :
           key === "buddy" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
-              access={snapshot.consoleAccess} refresh={refresh}
+              access={snapshot.consoleAccess} refresh={refresh} writesAvailable={writesAvailable}
               theme={theme.choice} onTheme={theme.setChoice} />}
       </section>)}
       {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}

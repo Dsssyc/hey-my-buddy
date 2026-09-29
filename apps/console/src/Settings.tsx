@@ -11,10 +11,11 @@ const THEME_CHOICES: [ThemeChoice, string][] = [["light", "浅色"], ["dark", "�
  * local storage check and reclaim panel (moved here unchanged from the old
  * routing page). Language will join them later.
  */
-export function Settings({ api, csrfToken, connectionError = "", access, refresh = async () => {}, theme, onTheme }: {
+export function Settings({ api, csrfToken, connectionError = "", writesAvailable = true, access, refresh = async () => {}, theme, onTheme }: {
   api: ConsoleApi;
   csrfToken: string;
   connectionError?: string;
+  writesAvailable?: boolean;
   access?: ConsoleAccess;
   refresh?: () => Promise<unknown>;
   theme: ThemeChoice;
@@ -33,7 +34,7 @@ export function Settings({ api, csrfToken, connectionError = "", access, refresh
         </label>)}
       </div>
     </section>
-    <ConsoleAccessSettings api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError} />
+    <ConsoleAccessSettings api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
     <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} />
   </div>;
 }

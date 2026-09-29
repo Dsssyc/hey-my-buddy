@@ -7,7 +7,7 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
   const access = value as ConsoleAccess | null;
   if (!access || typeof access.requireLogin !== "boolean" || !Number.isSafeInteger(access.revision)
     || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
-    || access.sessions.some(session => !session || !/^[a-f0-9]{24}$/.test(session.id)
+    || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
       || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
     throw new ApiError("INVALID_RESPONSE", "控制台访问设置无法识别，请刷新后重试。");
   }
