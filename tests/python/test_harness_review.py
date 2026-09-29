@@ -105,6 +105,14 @@ class HarnessReviewTests(BoardTestCase):
         self.assertFalse(verification['verified'])
         self.assertIn('boundaryDenials', verification['failedChecks'])
 
+    def test_unconfirmed_stop_is_unavailable_and_blocks_another_call(self):
+        verification = self._settle(confirmed=False)
+        self.assertFalse(verification['verified'])
+        self.assertEqual(verification['reasonCode'], 'HARNESS_REVIEW_SHUTDOWN_UNCONFIRMED')
+        with self.assertRaises(BoardError) as caught:
+            self.harness.call('harness_verify', {**self.params, 'requestId': 'review-2'})
+        self.assertEqual(caught.exception.code, 'HARNESS_REVIEW_BUSY')
+
     def test_version_change_during_the_probe_never_certifies_the_new_version(self):
         verification = self._settle(change_version=True)
         self.assertFalse(verification['verified'])

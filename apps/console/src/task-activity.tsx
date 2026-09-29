@@ -143,7 +143,7 @@ function cancellationDetails(task: Task): { label: string; hostId: string | null
   const reason = cancellation?.reason;
   const safeReason = typeof reason === "string" && reason.trim() && reason.length <= 4000
     ? reason.trim() : null;
-  if (typeof actor === "string" && actor.startsWith("host:") && actor.length <= 133) {
+  if (typeof actor === "string" && actor.startsWith("host:") && actor.length <= 261) {
     const hostId = actor.slice(5);
     if (hostId && !/[\x00-\x1f\x7f]/.test(hostId)) return { label: "Host 取消", hostId, reason: safeReason };
   }

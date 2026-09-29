@@ -89,6 +89,18 @@ def _response(item: dict) -> tuple[int, str] | None:
     return (code, output) if type(code) is int and isinstance(output, str) else None
 
 
+def _turn_ids(payload, identity):
+    if payload.get('correctionCount') != 1:
+        return {identity.get('turnId')}
+    turns = payload.get('nativeTurns')
+    if not isinstance(turns, list) or len(turns) != 2 or any(not isinstance(turn, dict)
+        or turn.get('sessionId') != identity.get('sessionId') or not isinstance(turn.get('turnId'), str)
+        or turn.get('started') is not True or turn.get('completed') is not True for turn in turns):
+        return set()
+    ids = {turn['turnId'] for turn in turns}
+    return ids if len(ids) == 2 and turns[-1]['turnId'] == identity.get('turnId') else set()
+
+
 def correlated_operations(payload: dict, frozen: Path, sentinel: Path, url: str,
                           identity: dict) -> tuple[dict, bool]:
     """Return recognized operations and whether the captured native stream is clean."""
@@ -96,7 +108,7 @@ def correlated_operations(payload: dict, frozen: Path, sentinel: Path, url: str,
     if not isinstance(raw, list) or payload.get("nativeEvidenceTruncated") is True:
         return {}, False
     if not raw:
-        return _correlated_command_items(payload.get("nativeToolEvents"), frozen, sentinel, url, identity)
+        return _correlated_command_items(payload.get("nativeToolEvents"), frozen, sentinel, url, identity, _turn_ids(payload, identity))
     expected = commands(frozen, sentinel, url)
     requests, responses = {}, {}
     clean = True
@@ -132,7 +144,7 @@ def correlated_operations(payload: dict, frozen: Path, sentinel: Path, url: str,
                 responses[key] = response
         else:
             clean = False
-    if len(turn_ids) > 2 or identity.get("turnId") not in turn_ids or set(requests) != set(responses):
+    if not turn_ids.issubset(_turn_ids(payload, identity)) or not _turn_ids(payload, identity) or set(requests) != set(responses):
         clean = False
     operations = {}
     for key, name in requests.items():
@@ -144,7 +156,7 @@ def correlated_operations(payload: dict, frozen: Path, sentinel: Path, url: str,
 
 
 def _correlated_command_items(events, frozen: Path, sentinel: Path, url: str,
-                              identity: dict) -> tuple[dict, bool]:
+                              identity: dict, allowed_turns: set) -> tuple[dict, bool]:
     """Use native item IDs only when the raw call stream has no calls at all."""
     if not isinstance(events, list):
         return {}, False
@@ -159,7 +171,7 @@ def _correlated_command_items(events, frozen: Path, sentinel: Path, url: str,
         item = params.get("item") or {}
         item_id = item.get("id")
         if (params.get("threadId") != identity.get("sessionId") or
-                params.get("turnId") != identity.get("turnId") or item.get("type") != "commandExecution" or
+                params.get("turnId") not in allowed_turns or item.get("type") != "commandExecution" or
                 not isinstance(item_id, str) or not item_id):
             clean = False
             continue
@@ -204,7 +216,7 @@ def evaluate(payload: dict, *, configuration: dict, expected_version: str, froze
     version = payload.get("harnessVersion")
     checks["requestIdentity"] = (all(isinstance(identity.get(key), str) and identity[key]
                                       for key in ("sessionId", "turnId"))
-                                 and identity.get("turnId") in event_turns
+                                 and bool(_turn_ids(payload, identity)) and event_turns.issubset(_turn_ids(payload, identity))
                                  and payload.get("modelStarted") is True
                                  and isinstance(version, str) and version.strip().split()[-1] == expected_version
                                  and all(resolved.get(key) == configuration.get(key)

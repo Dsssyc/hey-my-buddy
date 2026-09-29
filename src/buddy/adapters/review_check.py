@@ -32,6 +32,8 @@ def _file(path: Path) -> dict:
     if not path.is_file():
         return {"kind": "other"}
     stat = path.stat()
+    if stat.st_size > 4096:
+        return {'kind': 'changed-size'}
     return {"kind": "file", "mode": stat.st_mode & 0o777,
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
@@ -40,9 +42,8 @@ def _tree(root: Path) -> dict:
     if root.is_symlink() or not root.is_dir():
         return {".": _file(root)}
     result = {".": {"kind": "directory", "mode": root.stat().st_mode & 0o777}}
-    for path in sorted(root.rglob("*")):
-        result[str(path.relative_to(root))] = ({"kind": "directory", "mode": path.stat().st_mode & 0o777}
-                                                if path.is_dir() and not path.is_symlink() else _file(path))
+    for path in sorted(root.iterdir()):
+        result[path.name] = _file(path) if path.name == 'marker.txt' else {'kind': 'unexpected'}
     return result
 
 

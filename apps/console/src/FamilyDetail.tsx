@@ -273,6 +273,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
         </span>
       </div>
       <h2>{family.name}</h2>
+      <span className="small">{billingLabel(family.profiles[0]?.billing)}{family.profiles.some(profile => profile.quotaExhausted) ? ' · 额度耗尽' : ''}</span>
     </header>
     <div className="detail-body family-body">
       {!!blocking.length && <p className="banner error-banner" role="alert">{blocking.map(issue => issue.message).join(" ")}</p>}
@@ -362,3 +363,4 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
     </ConfirmDialog>}
   </>;
 }
+import { billingLabel } from './BillingQuotaLabel';

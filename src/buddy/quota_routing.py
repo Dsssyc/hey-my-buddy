@@ -24,7 +24,7 @@ def evidence(quota, *, now=None):
     exhausted_windows = [w for w in windows if type(w.get('usedPercent')) in (int, float) and w['usedPercent'] >= 100]
     reached = quota.get('reachedType')
     classification = classify_quota_code(reached) if isinstance(reached, str) else 'unknown'
-    blocked = classification == 'quota-exceeded' or quota.get('balanceZero') is True or bool(exhausted_windows)
+    blocked = classification == 'quota-exceeded' or quota.get('balanceZero') is True
     blocked = blocked or quota.get('ordinaryUsageAllowed') is False and classification != 'rate-limited'
     available = quota.get('ordinaryUsageAllowed') is True or quota.get('balanceZero') is False
     available = available or bool(windows and all(type(w.get('usedPercent')) in (int, float) and 0 <= w['usedPercent'] < 100

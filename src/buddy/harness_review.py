@@ -104,9 +104,14 @@ def request(board, params):
                 "maxNativeTurns": 2, "formatCorrectionOnly": True, "modelCall": True}
         if not execute:
             return {"plan": plan, "started": False}
+        pending = connection.execute("SELECT task_id FROM tasks t WHERE adapter=? AND json_extract(spec_json,'$.reviewCheck.adapter')=?"
+            " AND (state IN ('queued','running','cancelling','reconciliation-needed') OR EXISTS(SELECT 1 FROM attempts a"
+            " WHERE a.task_id=t.task_id AND (a.execution_state IN ('starting','executing','finalizing','uncertain') OR a.shutdown_confirmed=0 AND a.result_json IS NOT NULL))) LIMIT 1", (ADAPTER, name)).fetchone()
+        if pending:
+            raise BoardError('HARNESS_REVIEW_BUSY', 'A verification for this harness is pending or its stop is unconfirmed; inspect its run')
         key = _key(name, health["version"], sys.platform)
         current = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-        if current and json.loads(current[0]).get("status") in ("queued", "running"):
+        if current:
             previous_run = json.loads(current[0]).get("runId")
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (previous_run,)).fetchone()
             attempt = board._selected_attempt(connection, task) if task else None
@@ -144,15 +149,22 @@ def complete(board, connection, task, attempt, *, result, status, shutdown_confi
     from .harness_health import read_health
     health = read_health(connection, intent["adapter"])
     checks = result.get("checks") if isinstance(result, dict) else None
+    binding = health.get('status') == 'ready' and all(health.get(k) == intent['harness'].get(k) for k in ('version', 'command', 'locationFingerprint'))
     passed = bool(status == "ok" and shutdown_confirmed and isinstance(checks, dict)
                   and all(checks.get(check) is True for check in CHECKS)
                   and result.get("version") == intent["version"] and result.get("platform") == intent["platform"]
-                  and all(health.get(k) == intent["harness"].get(k) for k in ("version", "command", "locationFingerprint")))
+                  and binding)
     record = {"adapter": intent["adapter"], "version": intent["version"], "platform": intent["platform"],
               "status": "verified" if passed else "failed", "checkedAt": now, "source": "native-probe",
               "runId": task["task_id"], "attemptId": attempt["attempt_id"],
               "checks": {check: bool(isinstance(checks, dict) and checks.get(check) is True) for check in CHECKS},
-              "reasonCode": None if passed else "HARNESS_REVIEW_CHECK_FAILED"}
+              "reasonCode": None if passed else 'HARNESS_REVIEW_BINDING_CHANGED' if not binding else
+                  'HARNESS_REVIEW_SHUTDOWN_UNCONFIRMED' if not shutdown_confirmed else "HARNESS_REVIEW_CHECK_FAILED"}
+    from .usage import identifier
+    if not passed and isinstance(result, dict) and identifier(result.get('reasonCode')):
+        record['nativeReasonCode'] = result['reasonCode']
+    if isinstance(result, dict) and isinstance(result.get('evidenceSha256'), str) and schemas.SHA256_PATTERN.fullmatch(result['evidenceSha256']):
+        record['evidenceSha256'] = result['evidenceSha256']
     if isinstance(result, dict):
         record["failedChecks"] = [check for check in CHECKS if record["checks"][check] is not True]
     connection.execute("UPDATE meta SET value=? WHERE key=?", (canonical_json(record), key))

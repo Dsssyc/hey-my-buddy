@@ -4,7 +4,6 @@
 
 ## 控制台
 
-- **取消原因一律显示为"用户取消"。** 2026-09-30 A 批中 Codex Host（`codex-console-routing-fixes`）为自行完成余下工作取消了 ZCode GLM-5.3 的委派（run `b6ad0a8f`），控制台却显示"终止原因：用户取消"，用户以为是自己的操作。原因：终止代码 `user-cancel` 只表示收到取消命令，与发起者无关，而 `apps/console/src/task-activity.tsx:128` 一律译为"用户取消"；实际发起者与理由记录在 `workflow.cancelled` 事件的 `actor` 与 `reason` 中。建议：Host 发起时显示"Host 取消"，并给出 Host 标识与理由；控制台整目标停止时显示"在控制台停止"；查不到发起者时显示"取消（发起者未知）"；CLI 的 get 与 result 视图同样给出发起者与理由。随 B 批与[控制台文案精简](console-copy-audit.md)一起处理。（2026-09-30）
 
 ## 服务与凭据
 

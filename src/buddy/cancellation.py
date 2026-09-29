@@ -6,7 +6,7 @@ import json
 import re
 
 
-_ACTOR = re.compile(r"(?:host|console):[^\x00-\x1f\x7f]{1,128}\Z")
+_ACTOR = re.compile(r"(?:host:[^\x00-\x1f\x7f]{1,256}|console:[^\x00-\x1f\x7f]{1,128})\Z")
 
 
 def for_run(connection, run_id: str) -> dict | None:
@@ -35,7 +35,7 @@ def for_run(connection, run_id: str) -> dict | None:
         value = value.strip()
         return value[:limit] if value else None
 
-    actor = bounded("actor", 256)
+    actor = bounded("actor", 261) if isinstance(payload.get('actor'), str) and len(payload['actor']) <= 261 else None
     if actor != "service-stop" and (actor is None or _ACTOR.fullmatch(actor) is None):
         actor = None
     return {"actor": actor, "reason": bounded("reason", 4000)}

@@ -76,7 +76,7 @@ Availability alone never makes a Router eligible: health, enablement and the cap
 
 The execution details display native `tokenUsage` per attempt: input tokens (including cached input), cached input and output tokens. Missing counters stay unknown; native cumulative session records are not charged to every continuation. These are native observations, not billing estimates or served-model attestations.
 
-Harness health retains its last native quota observation independently of location/handshake refresh. Quota includes its source, observation time, provider scope, windows, usage percentages and reset times. An observation older than one hour, from the future, or a window past its reset is stale; unknown percentages are never zero. A fresh matching-provider window at 90% or more produces a submission receipt reminder and a console warning. An explicit native quota-limit report also warns when its utilization or reset is unknown; a limit-only report never fabricates a percentage. This is advisory evidence: it never changes enablement, preferences, selected configuration or retry policy.
+Harness health retains its last native quota observation independently of location/handshake refresh. Quota includes its source, observation time, provider scope, windows, usage percentages and reset times. An observation older than one hour, from the future, or a window past its reset is stale; unknown percentages are never zero. A fresh matching-provider window at 90% or more produces a submission receipt reminder and a console warning. An explicit native quota-limit report also warns when its utilization or reset is unknown; a limit-only report never fabricates a percentage. Utilization reminders never change user enablement or preferences. Native-confirmed exhaustion filters automatic candidates until reset or a newer available observation; explicit Host selections remain unchanged with a reminder.
 
 ## Edit and publish
 
@@ -123,3 +123,7 @@ The native routing call has a separate [Router contract](decision.md). In fast m
 ## Frontend build
 
 Source lives in `apps/console/` (React 19, Vite 8, TypeScript); a relative-base build produces `src/buddy/console_assets/`. These checked-in assets are included in plugin staging and the stable runtime. End users do not need npm. The frontend source and `apps/console/README.md` are available only in a full repository checkout and are excluded from the plugin. Contributors use a supported Node 24 LTS release, read that source README, and run `npm ci`, `npm run typecheck`, `npm test` and `npm run build` from `apps/console/`. Test the built console through a private, source-backed state directory; Vite alone does not supply the authoritative API.
+
+## Native eligibility facts (0.23.0)
+
+Profile reads include bounded native `billing` and derived `quotaExhausted`; neither is user-editable. Billing never changes enablement, preference or routing eligibility. Native exhaustion temporarily filters candidates without changing user policy, and only reset or newer available native evidence restores them. Review capability is projected dynamically from the current harness/version/platform certificate; a successful explicit verification makes it visible immediately without requiring catalog refresh. See [harnesses](harnesses.md) for records, checks and native verification boundaries.

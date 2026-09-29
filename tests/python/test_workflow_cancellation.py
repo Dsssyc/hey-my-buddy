@@ -201,6 +201,22 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"],
                          {"actor": None, "reason": "Host stopped this goal"})
 
+    def test_new_cancellation_after_continuation_has_its_own_actor(self):
+        board = self.board()
+        submitted = self.submit(board)
+        cancelled = self.cancel(board, submitted)
+        continued = self.continue_run(board, cancelled, input='Resume this cancelled goal')
+        self.assertIsNone(continued['cancellation'])
+        second = board.store.workflow.cancel({'runId': continued['runId'], 'reason': 'second stop'},
+                                            console_authority={'sessionId': 'second-browser'})
+        self.assertEqual(second['cancellation'], {'actor': 'console:second-browser', 'reason': 'second stop'})
+
+    def test_long_valid_host_id_is_not_truncated_or_mislabelled(self):
+        board = self.board()
+        submitted = self.submit(board, host_id='h' * 256, owner='private-fixture')
+        cancelled = self.cancel(board, submitted)
+        self.assertEqual(cancelled['cancellation']['actor'], 'host:' + 'h' * 256)
+
     def test_cancellation_traverses_completed_intermediary(self):
         board, root, parent, child = self.parent_and_child(kind="worktree")
         grandchild = self.grandchild(board, child, root)

@@ -889,6 +889,8 @@ def task_view(entry: dict) -> dict:
         view.update({"result": receipt["result"],
                      "resultMeta": {key: value for key, value in receipt.items() if key != "result"},
                      "attemptId": selected["attemptId"], "resultDelivered": True})
+    if entry['state'] == 'cancelled' or entry['status'] == 'cancelled':
+        view['cancellation'] = {'actor': 'host:' + HOST_B, 'reason': 'Host 接手剩余工作'} if entry['runId'] == 'preview-run-b1-h1' else None
     return view
 
 
@@ -1220,10 +1222,12 @@ def profile_views() -> list[dict]:
              "adapter": cfg["adapter"], "provider": cfg["provider"], "model": cfg["model"],
              "effort": cfg["effort"], "available": True, "enabled": True,
              "capabilities": (["execution:dsh", "routing:fast"] if cfg["adapter"] == "dsh" else
-                              ["execution:codex", "decision"] if cfg["adapter"] == "codex" else
+                              ["execution:codex", "routing:fast"] if cfg["adapter"] == "codex" else
                               [f"execution:{cfg['adapter']}", "routing:fast"]),
              "contextWindow": 200000, "description": "synthetic preview profile",
-             "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None}
+             "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None,
+             "billing": {'kind': 'subscription' if cfg['adapter'] in ('codex','claude') else 'metered',
+                         'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}, 'quotaExhausted': False}
             for cfg in CONFIGS]
 
 
@@ -1275,7 +1279,10 @@ def harness_rows() -> list[dict]:
                    "stale": True,
                    "windows": [{"name": "5h", "usedPercent": None, "resetsAt": None},
                                {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
-        {"adapter": "codex", "status": "missing", "available": False, "revision": 0, "manualPath": None,
+        {"adapter": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+         'executable': '/synthetic-preview/codex', 'version': '0.159.0',
+         'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
+         'reviewVerification': {'adapter': 'codex', 'version': '0.159.0', 'platform': 'darwin', 'status': 'new-version', 'implemented': True, 'verified': False},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
         {"adapter": "claude", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",

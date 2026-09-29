@@ -213,6 +213,8 @@ class HarnessHealth:
         except Exception:
             pass
         with self.board.db.write() as db:
+            if self._closed or (self.board.directory / 'upgrade.json').exists():
+                return
             row = db.execute("SELECT record_json,quota_json,revision FROM harness_health WHERE adapter='codex'").fetchone()
             if row is None or row["revision"] != health["revision"]:
                 return

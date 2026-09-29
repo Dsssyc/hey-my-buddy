@@ -173,8 +173,8 @@ class PreviewFixtureTest(unittest.TestCase):
             self.assertTrue(isinstance(quota["source"], str) and quota["source"],
                             "a recorded observation names its source")
             self.assertTrue(quota["windows"], "a recorded observation carries its windows")
-            self.assertIn("实时", quota["note"], "the note must not claim live account quota")
-            self.assertIn("不代表", quota["note"], "the note must state what the observation is not")
+            self.assertIn('已过期' if quota['stale'] else '非实时', quota['note'],
+                          'the short status must retain freshness without implying live quota')
 
         # Workflow facts straight from the frontend parser's report.
         workflows = {path: outcome["facts"] for path, outcome in outcomes.items()

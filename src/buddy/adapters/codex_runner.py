@@ -171,6 +171,7 @@ def _read_only_call(connection, control, result, catalog):
     if request.get('captureEvidence'):
         result['nativeToolEvents'] = []
         result['nativeRawToolEvents'] = []
+        result['nativeTurns'] = []
     thread = response.get("thread") or {}
     thread_id = thread.get("id")
     if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
@@ -242,6 +243,8 @@ def _read_only_call(connection, control, result, catalog):
         item = evidence.final_item
         if not evidence.started or evidence.completed.get("status") != "completed" or not isinstance(item, dict):
             raise CodexProtocolError("native-turn-failed", "No completed native structured answer")
+        if request.get('captureEvidence'):
+            result['nativeTurns'].append({'sessionId': thread_id, 'turnId': turn_id, 'started': True, 'completed': True})
         raw = item.get("text")
         if not valid_answer(raw, request["outputSchema"]):
             # Raw output survives for the caller's semantic boundary classification.

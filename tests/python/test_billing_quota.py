@@ -116,6 +116,9 @@ class BillingQuotaTests(BoardTestCase):
         self._quota(board, windows=[{"name": "hour", "usedPercent": 90, "resetsAt": stamp(3600)}])
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+        self._quota(board, windows=[{'name': 'hour', 'usedPercent': 100, 'resetsAt': stamp(3600)}])
+        with board.store.db.read() as db:
+            self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
 
         self._quota(board, reachedType="rate_limit_reached")
         with board.store.db.read() as db:

@@ -69,6 +69,16 @@ class ReviewProbeTests(unittest.TestCase):
     def test_complete_native_trace_passes_all_nine_checks(self):
         self.assertTrue(all(self.assess().values()))
 
+    def test_same_attempt_format_correction_retains_the_first_turn_tool_proof(self):
+        self.payload['correctionCount'] = 1
+        self.payload['nativeTurns'] = [
+            {'sessionId': 'session', 'turnId': 'turn', 'started': True, 'completed': True},
+            {'sessionId': 'session', 'turnId': 'corrected', 'started': True, 'completed': True}]
+        self.payload['nativeIdentity']['turnId'] = 'corrected'
+        self.assertTrue(all(self.assess().values()))
+        self.payload['nativeTurns'][1]['completed'] = False
+        self.assertFalse(self.assess()['requestIdentity'])
+
     def test_answer_cannot_forge_denial_or_internal_read(self):
         self.events[3]["params"]["item"]["output"] = json.dumps({"exit_code": 0, "output": "success"})
         self.assertFalse(self.assess()["boundaryDenials"])

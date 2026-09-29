@@ -16,6 +16,7 @@ import { dayClock } from "./objective-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { quotaView } from "./host-workflow";
 import { HarnessReview } from "./HarnessReview";
+import { billingLabel } from './BillingQuotaLabel';
 
 /** Status wording and the non-colour badge tone; an unknown future state stays visible as recorded. */
 const HARNESS_STATUS_LABEL: Record<HarnessStatus, string> = {
@@ -251,6 +252,7 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
         return <li key={row.adapter} className={"harness-status-row harness-" + row.status}>
           <div className="harness-status-rowline">
             <span className="harness-name">{name}</span>
+            {row.adapter === 'codex' && row.reviewVerification?.status === 'new-version' && <span className="small muted">新版本待验证</span>}
             <Badge tone={harnessStatusTone(row.status)}>{harnessStatusText(row.status)}</Badge>
             {quota?.alert && <Badge tone={quota.stale ? "neutral" : "amber"}>
               {quota.limitReported ? "原生记录报告额度限制" : quota.windows.some(window => window.atLimit) ? "额度已到上限" : "额度接近上限"}
@@ -273,6 +275,7 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
                 ? <code className="mono harness-path" title={row.command?.join(" ") || harnessPath(row)}>{harnessPath(row)}</code>
                 : <span className="muted">未记录</span>}</dd></div>
               <div><dt>版本</dt><dd>{row.version?.trim() || <span className="muted">未记录</span>}</dd></div>
+              <div><dt>计费</dt><dd>{Object.entries(row.billingByProvider ?? {}).map(([provider, fact]) => `${provider}：${billingLabel(fact)}`).join(' · ') || '未知'}</dd></div>
               <div><dt>来源</dt><dd>{harnessSource(row)}</dd></div>
               <div><dt>上次检测</dt><dd>{row.checkedAt ? dayClock(row.checkedAt) : "未记录"}</dd></div>
               {row.manualPath && <div><dt>手动路径</dt><dd><code className="mono harness-path">{row.manualPath}</code></dd></div>}

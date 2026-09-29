@@ -9,9 +9,9 @@ Delegate when a Worker reduces verification effort or cost. Host keeps acceptanc
 
 ## Start here
 
-Use the absolute launcher path (`~/.agents/skills/buddy/scripts/buddy`; `scripts/buddy.cmd` on Windows) with one JSON object: positional, `--params-file PATH` or `-` for UTF-8 stdin (mutually exclusive). `buddy help` lists methods; `buddy help METHOD` gives validated parameters, defaults and bounds. Neither starts a service or model. Results are brief unless `"output":"full"`.
+Use the absolute launcher (`~/.agents/skills/buddy/scripts/buddy`; `scripts/buddy.cmd` on Windows) with one JSON object: positional, `--params-file PATH` or `-` for UTF-8 stdin (mutually exclusive). `buddy help` lists methods; `buddy help METHOD` gives validated parameters, defaults and bounds. Neither starts service or model. Brief unless `"output":"full"`.
 
-Read `health` first for routing slots, mode and capacity; report failures with decision code and `routingMode`/`fallback`. A sole legal candidate needs no Router; otherwise fast sends the task to its provider, and review also reads a frozen repository copy.
+Review needs a version certificate. Read `health` first for routing slots, mode and capacity; report failures with decision code and `routingMode`/`fallback`. A sole legal candidate needs no Router; otherwise fast sends the task to its provider, and review also reads a frozen repository copy.
 
 Details: [usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [operations](../../docs/reference/operations.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude.md).
 
