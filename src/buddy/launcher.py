@@ -2,6 +2,8 @@
 
 This module must load before C-Two contracts. Selection never strips an agent's
 credential, and an explicit development-source or runtime pin remains explicit.
+Service processes are started from the explicit allowlist below, never from the
+whole Host session.
 """
 from __future__ import annotations
 import json
@@ -17,6 +19,48 @@ HOST_INTERNAL_KEYS = frozenset({
     'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY', 'BUDDY_PYTHON',
     'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID',
     'BUDDY_SUPERVISOR_START_ID', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_HARNESS_RECORD_FILE',
+})
+
+#: The environment a long-lived Buddy service process may inherit. The daemon, an
+#: upgrade-started daemon and every worker supervisor are built from this explicit
+#: allowlist instead of the Host session: Claude Code ``CLAUDE_CODE_*`` session
+#: variables and tokens, Codex session identity, Host identity, provider routing
+#: overrides and attempt credentials never reach a service. Native harness
+#: authentication stays with each harness's own native configuration directory.
+SERVICE_ENVIRONMENT_KEYS = frozenset({
+    # Process basics every child, native harness and interpreter needs.
+    'HOME', 'PATH', 'USER', 'LOGNAME', 'USERNAME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+    'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+    'SystemDrive', 'SystemRoot', 'SYSTEMROOT', 'windir', 'COMSPEC', 'PATHEXT',
+    'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS',
+    'TMPDIR', 'TMP', 'TEMP',
+    'LANG', 'LANGUAGE', 'TERM', 'COLORTERM',
+    'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES', 'LC_COLLATE', 'LC_NUMERIC', 'LC_TIME',
+    'LC_MONETARY', 'LC_PAPER', 'LC_NAME', 'LC_ADDRESS', 'LC_TELEPHONE',
+    'LC_MEASUREMENT', 'LC_IDENTIFICATION',
+    'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+    'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+    # Native harness account configuration. Model authentication stays native.
+    'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'ZCODE_DATA_BASE_DIR', 'DSH_HOME',
+    # This program's private roots, interpreter selection and launch settings.
+    'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
+    'BUDDY_PYTHON', 'BUDDY_WORKER_ID', 'BUDDY_WORKER_STATE',
+    'BUDDY_MAX_CONCURRENT', 'BUDDY_WAIT_CAPACITY', 'BUDDY_CONSOLE_PORT', 'BUDDY_LEASE_SECONDS',
+    'BUDDY_MODEL_CATALOG_FILE', 'BUDDY_CLAUDE_SETTINGS_POLICY', 'BUDDY_DEBUG',
+    'BUDDY_AGENT_SKILLS_DIR', 'BUDDY_CLAUDE_SKILLS_DIR', 'UV_BIN',
+})
+
+#: Extra variables only an explicit ``BUDDY_DEV_SOURCE=1`` session may pass into a
+#: service. They select the checkout, its private test CLIs and its harness
+#: fixtures for development and tests; a normal installation never reads them.
+#: Test fixtures are named individually rather than passed through a ``BUDDY_*``
+#: prefix rule.
+DEVELOPMENT_ENVIRONMENT_KEYS = frozenset({
+    'BUDDY_DEV_SOURCE', 'BUDDY_CLAUDE_CLI', 'BUDDY_CODEX_CLI', 'BUDDY_ZCODE_CLI',
+    'BUDDY_NODE', 'BUDDY_RUNNER_PATH',
+    'BUDDY_CLAUDE_FIXTURE_CASE', 'BUDDY_CLAUDE_FIXTURE_STATE', 'BUDDY_CLAUDE_FIXTURE_AUTH_STATUS',
+    'BUDDY_CODEX_FIXTURE_CASE', 'BUDDY_CODEX_FIXTURE_STATE', 'BUDDY_ZCODE_TEST_CASE',
 })
 HOST_ENDPOINT_KEYS = frozenset({
     'ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL',
@@ -172,9 +216,27 @@ def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | Non
     return target
 
 
+def service_environment(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a service process environment from the explicit allowlist only.
+
+    The caller adds the private state/runtime selections, interpreter paths and
+    ``PYTHONPATH`` it needs; nothing else from the Host session is copied. The
+    development list is read only under an explicit ``BUDDY_DEV_SOURCE=1``.
+    """
+    allowed = SERVICE_ENVIRONMENT_KEYS
+    if os.environ.get('BUDDY_DEV_SOURCE') == '1':
+        allowed = allowed | DEVELOPMENT_ENVIRONMENT_KEYS
+    environment = {key: value for key, value in os.environ.items() if key in allowed}
+    if overrides:
+        environment.update(overrides)
+    return environment
+
+
 def runtime_environment(target: Path) -> dict[str, str]:
-    # Preserve scoped Worker credentials. Dropping them would turn a Worker into
-    # a service-token Host when the selected CLI builds its request.
+    # This is the CLI invocation path, not a service start: preserve scoped Worker
+    # credentials. Dropping them would turn a Worker into a service-token Host when
+    # the selected CLI builds its request. The service allowlist above applies only
+    # where a daemon or worker supervisor is created.
     env = {k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','VIRTUAL_ENV','UV_PROJECT_ENVIRONMENT'}}
     env.update(BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name,
                BUDDY_PYTHON=str(_runtime_python(target)))

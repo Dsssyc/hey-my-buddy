@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import cli_views, runtime, transport
 from .errors import BoardError
+from .launcher import service_environment
 from .transport import METHOD_MAP, call_service, get_state_dir
 from .worker.worker import RETIRE_REQUEST_NAME
 
@@ -265,26 +266,20 @@ def _worker_command_unlocked(action: str, params: dict) -> dict:
     # Explicit workers have the same lifetime as daemon-started workers: select
     # their runtime before spawning instead of inheriting this replaceable CLI.
     target = runtime.launch_target(log_path=state_dir / "runtime-install.log")
-    environment = {
-        **os.environ,
+    # The supervisor is a service process: build its environment from the explicit
+    # allowlist instead of the CLI's Host session, then select the runtime.
+    environment = service_environment({
         "BUDDY_STATE_DIR": str(state_dir),
         "BUDDY_WORKER_ID": worker_id,
         "BUDDY_RUNTIME_IDENTITY": target["identity"],
-    }
-    environment.pop("BUDDY_SUPERVISOR_START_ID", None)
+    })
     if target["pythonPath"]:
-        environment["PYTHONPATH"] = target["pythonPath"] + (
-            os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
-        )
-    else:
-        environment.pop("PYTHONPATH", None)
+        environment["PYTHONPATH"] = target["pythonPath"]
     if target["stable"]:
         environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
         environment["BUDDY_PYTHON"] = target["python"]
-        # The explicit interpreter selects its own venv. Do not leave the CLI's
-        # uv project override active for tools that run in a delegated workspace.
-        environment.pop("VIRTUAL_ENV", None)
-        environment.pop("UV_PROJECT_ENVIRONMENT", None)
+        # The explicit interpreter selects its own venv; PATH makes it the first
+        # interpreter for tools that run in a delegated workspace.
         environment["PATH"] = str(Path(target["python"]).parent) + os.pathsep + environment.get("PATH", os.defpath)
     (directory).mkdir(mode=0o700, parents=True, exist_ok=True)
     # A deliberate start is authoritative for this exact id: prior cooperative

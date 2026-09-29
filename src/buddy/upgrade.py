@@ -67,11 +67,10 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
 
 
 def _environment(state: Path, target: Path) -> dict:
-    from .launcher import is_model_endpoint
-    excluded = {
-        'PYTHONPATH', 'VIRTUAL_ENV', 'UV_PROJECT_ENVIRONMENT', 'BUDDY_DEV_SOURCE', 'BUDDY_RUNTIME',
-        'BUDDY_RUNTIME_IDENTITY', 'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID', 'BUDDY_AGENT_CREDENTIAL', 'BUDDY_AGENT_CREDENTIAL_FILE'}
-    env = {key: value for key, value in os.environ.items() if key not in excluded and not is_model_endpoint(key)}
+    from .launcher import service_environment
+    # A service started by the upgrade coordinator inherits only the explicit
+    # service allowlist; the journal carries forward the operator's launch settings.
+    env = service_environment()
     marker = state / 'upgrade.json'
     if marker.exists():
         preserved = json.loads(marker.read_text()).get('environment', {})

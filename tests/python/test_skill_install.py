@@ -38,6 +38,63 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue(skill_install._matches(source, target, marker))
             self.assertEqual((previous / 'scripts/buddy').read_text(), 'damaged')
 
+    def _upgrade_pair(self, root: Path) -> tuple[Path, Path]:
+        """An assembled source and an identical copy at the agent skills home."""
+        source, target = root / 'source/buddy', root / 'agents/buddy'
+        skill_package.assemble(ROOT, source)
+        target.parent.mkdir()
+        shutil.copytree(source, target)
+        return source, target
+
+    def _upgrade_state(self, root: Path) -> Path:
+        state = root / 'state'
+        state.mkdir()
+        (state / 'active-runtime.json').write_text('{}')
+        (state / 'control.json').write_text('{}')
+        return state
+
+    def _upgrade_environment(self, root: Path, state: Path) -> dict:
+        return {'BUDDY_STATE_DIR': str(state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'agents'),
+                'BUDDY_CLAUDE_SKILLS_DIR': str(root / 'claude'), 'CODEX_HOME': str(root / 'codex')}
+
+    def test_same_marker_with_changed_content_reports_an_update(self):
+        with tempfile.TemporaryDirectory(prefix='buddy-skill-content-') as temporary:
+            root = Path(temporary)
+            source, target = self._upgrade_pair(root)
+            state = self._upgrade_state(root)
+            # The version, contract and sourceCommit all stay the same; only the
+            # bytes change, which is exactly the rebuild this defect covered.
+            (target / 'SKILL.md').write_text((target / 'SKILL.md').read_text() + '\n<!-- rebuilt -->\n')
+            with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
+                 mock.patch('buddy.skill_install.packaged_skill', return_value=source), \
+                 mock.patch('buddy.skill_install._check_claude_link'), \
+                 mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+                 mock.patch('buddy.skill_install.write_runtime_hint'), \
+                 mock.patch('buddy.upgrade.upgrade', return_value={'upgraded': True}) as upgrade:
+                result = skill_install.install({})
+            upgrade.assert_called_once()
+            self.assertEqual(result['skill']['placement'], 'updated')
+            self.assertEqual(result['service']['action'], 'upgrade')
+
+    def test_same_marker_with_identical_content_stays_already_current(self):
+        with tempfile.TemporaryDirectory(prefix='buddy-skill-current-') as temporary:
+            root = Path(temporary)
+            source, target = self._upgrade_pair(root)
+            state = self._upgrade_state(root)
+            with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
+                 mock.patch('buddy.skill_install.packaged_skill', return_value=source), \
+                 mock.patch('buddy.launcher.selected_runtime', return_value=None), \
+                 mock.patch('buddy.skill_install._check_claude_link'), \
+                 mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+                 mock.patch('buddy.skill_install.write_runtime_hint'), \
+                 mock.patch('buddy.upgrade.upgrade', return_value={'upgraded': True}) as upgrade:
+                result = skill_install.install({})
+            # The service may still switch generations, but the skill itself is
+            # reported by its actual content, not by the version marker alone.
+            upgrade.assert_called_once()
+            self.assertEqual(result['skill']['placement'], 'already-current')
+            self.assertTrue(skill_install._matches(source, target, skill_install._marker(source)))
+
     def test_intact_install_does_not_restart_or_materialize(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
