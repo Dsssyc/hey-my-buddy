@@ -47,6 +47,24 @@ def sha256(text: str) -> str:
 
 @unittest.skipUnless(shutil.which("node") and PLUGIN.is_file(), "Node.js and the usage plugin are required")
 class DshUsagePluginTests(unittest.TestCase):
+    def test_replayed_native_events_do_not_double_count_usage(self):
+        self.mount([*FIXTURE["events"], *FIXTURE["events"]])
+        native = self.read()["nativeUsage"]["tokenUsage"]
+        self.assertEqual(native["records"], FIXTURE["expected"]["records"])
+        self.assertEqual(native["inputTokens"], FIXTURE["expected"]["inputTokens"])
+
+    def test_escaped_assistant_text_cannot_overflow_the_usage_sidecar(self):
+        import copy
+        events = copy.deepcopy(FIXTURE["events"])
+        for event in events:
+            if event["type"] == "assistant/message":
+                event["data"]["message"]["content"] = [{"type": "text", "text": '"\\' * 40000}]
+        self.mount(events)
+        message = self.read()["nativeUsage"]["lastAssistantMessage"]
+        self.assertTrue(message["truncated"])
+        self.assertLessEqual(len(json.dumps(message["text"]).encode()), usage.MAX_ASSISTANT_MESSAGE_BYTES)
+        self.assertEqual(message["sourceBytes"], 80000)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-usage-plugin-")
         self.addCleanup(self.temporary.cleanup)

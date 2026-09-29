@@ -1,8 +1,8 @@
 """Explicit board migrations; runtime startup never converts a database.
 
-Upgrade migrates an idle, backed-up schema-13 board to 14 under exclusive owner
-locks and verifies every retained table fingerprint. The historical 12-to-13
-step remains only for the separately invoked offline board preparation helper.
+Upgrade migrates an idle, backed-up schema-14 board to 15 under exclusive owner
+locks and verifies retained columns and unrelated table fingerprints. Earlier
+steps remain only for the separately invoked offline board preparation helper.
 """
 from __future__ import annotations
 

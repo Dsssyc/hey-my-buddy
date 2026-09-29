@@ -46,6 +46,8 @@ export type TokenUsage = {
   outputTokens: number | null;
   source: string;
   scope: "attempt";
+  completeness?: "complete" | "partial" | "unknown";
+  coverage?: "native-root-session" | "native-root-thread" | "native-attempt";
 };
 
 /**
@@ -58,12 +60,15 @@ export type QuotaWindow = {
   name: string;
   usedPercent: number | null;
   resetsAt: string | null;
+  stale?: boolean;
 };
 export type HarnessQuota = {
   observedAt: string;
   source: string;
   provider?: string;
   stale?: boolean;
+  reachedType?: string;
+  ordinaryUsageAllowed?: boolean;
   windows: QuotaWindow[];
 };
 
@@ -168,7 +173,10 @@ export type TaskQuery = {
   query?: string; projectId?: string; hostId?: string;
   filter?: "all" | "active" | "host" | "review";
 };
+export type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
+
 export type Task = {
+  quotaFailure?: QuotaFailure | null;
   runId: string;
   task: string;
   status: string;

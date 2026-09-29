@@ -1251,7 +1251,7 @@ class _Extractor:
                     continue
                 side = part.left if _is_none(part.comparators[0]) else (part.comparators[0] if _is_none(part.left) else None)
                 if isinstance(side, ast.Name) and side.id in tracked:
-                    facts.raw.setdefault(tracked[side.id].field, (_clip(_expression_text(statement.test)), source, True))
+                    facts.raw.setdefault(tracked[side.id].field, ("rejected when " + _clip(_expression_text(statement.test)), source, False))
         for part, negated in parts:
             if (
                 not negated
@@ -1273,7 +1273,7 @@ class _Extractor:
             for field in sorted(_subject_fields(part, tracked) - decoded):
                 local = _local_name(part, tracked, field)
                 required = local in no_default and local not in optional and not conditional
-                facts.raw.setdefault(field, (expression, source, required))
+                facts.raw.setdefault(field, ("rejected when " + expression, source, required))
 
     def _part_facts(self, part, module, tracked, facts, source, negated, conditional, optional, no_default, standalone: bool = True) -> set[str]:
         """The facts one rejection-condition part implies for accepted input."""
@@ -1283,8 +1283,9 @@ class _Extractor:
                 required = local in no_default and local not in optional and not conditional
                 for name in _expand_fields(field, tracked):
                     if bounds == "required":
-                        facts.required_paths.add(name)
-                        self._add_inline(facts, name, kind, None, source, conditional, True)
+                        if standalone:
+                            facts.required_paths.add(name)
+                        self._add_inline(facts, name, kind, None, source, conditional or not standalone, standalone)
                     else:
                         self._add_inline(facts, name, kind, bounds, source, conditional, required)
                     decoded.add(name)
@@ -1976,7 +1977,7 @@ def _render_parameter(parameter: Parameter, depth: int, width: int = 24) -> list
         facts.append(parameter.bounds)
     if parameter.expression:
         origin = f" [{parameter.source}]" if parameter.source else ""
-        facts.append(f"must satisfy {parameter.expression}{origin}")
+        facts.append(f"{parameter.expression}{origin}")
     if parameter.conditional:
         facts.append("conditional")
     if not facts:

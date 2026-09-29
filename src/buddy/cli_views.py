@@ -123,6 +123,10 @@ _OUTPUT_ARTIFACT = (
     "outputCommit",
     "diffPath",
     "diffSha256",
+    "cumulativePatch",
+    "partial",
+    "verified",
+    "final",
     "changedPaths",
     "action",
 )
@@ -142,7 +146,7 @@ def _integration_brief(row: Any) -> dict:
     if isinstance(verification, dict) and verification:
         # The verification record can be large; its outcome fields are enough to act on.
         brief["verification"] = _pick(
-            verification, ("state", "status", "verified", "ok", "method", "reason", "errors", "mismatches")
+            verification, ("state", "status", "verified", "ok", "method", "reason", "errors", "mismatches", "hostPaths")
         ) or {"recorded": True}
     return brief
 
@@ -197,6 +201,10 @@ def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "ownerGeneration",
                 "continuationCount",
                 "executionConfiguration",
+                "configurationLocked",
+                "hostConclusion",
+                "quotaWarnings",
+                "quotaFailure",
                 "objectiveId",
                 "title",
             ),
@@ -216,6 +224,7 @@ def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
         current = _pick(turn, _TURN_BRIEF)
         if turn_summary:
             current.update(_pick(turn, ("summary", "summaryTruncated", "remaining")))
+        current["tokenUsage"] = turn.get("tokenUsage")
         brief["currentTurn"] = current
     if view.get("activeRequest") is not None:
         brief["activeRequest"] = _request_brief(view["activeRequest"])
@@ -409,6 +418,9 @@ def task_brief(view: dict) -> dict:
         )
     if "workflowShutdown" in view:
         brief["workflowShutdown"] = _shutdown(view["workflowShutdown"])
+    brief["tokenUsage"] = view.get("tokenUsage")
+    if view.get("quotaFailure") is not None:
+        brief["quotaFailure"] = view["quotaFailure"]
     activity = view.get("activity")
     if isinstance(activity, dict) and activity:
         brief["activity"] = activity

@@ -246,7 +246,7 @@ class LastAssistantMessageTests(unittest.TestCase):
         text = "x" * (usage.MAX_ASSISTANT_MESSAGE_BYTES + 500)
         normalized = usage.normalize_last_assistant_message(self.message(text), source="fixture")
         self.assertTrue(normalized["truncated"])
-        self.assertEqual(len(normalized["text"].encode()), usage.MAX_ASSISTANT_MESSAGE_BYTES)
+        self.assertEqual(len(json.dumps(normalized["text"]).encode()), usage.MAX_ASSISTANT_MESSAGE_BYTES)
         self.assertEqual(normalized["sourceBytes"], len(text.encode()))
         self.assertEqual(normalized["sha256"], hashlib.sha256(text.encode()).hexdigest())
 

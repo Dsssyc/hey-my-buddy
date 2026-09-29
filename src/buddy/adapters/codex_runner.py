@@ -266,10 +266,14 @@ def _observe_quota(connection, evidence) -> dict | None:
     """
     from ..usage import normalize_quota
     candidate = evidence.quota_candidate
+    previous_deadline = connection.deadline
+    connection.deadline = min(previous_deadline, time.monotonic() + 2)
     try:
         response = connection.call("account/rateLimits/read", {})
     except CodexProtocolError:
         return candidate
+    finally:
+        connection.deadline = previous_deadline
     fresh = quota_candidate_from_response(response, observed_at=utc_now())
     return fresh if fresh is not None and normalize_quota(fresh) is not None else candidate
 
@@ -559,7 +563,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         result["usage"].setdefault("toolCalls", None)
         result["zeroToolVerified"] = bool(result["status"] == "ok" and stream_complete
                                           and shutdown and process.returncode == 0 and result["usage"]["toolCalls"] == 0)
-    if evidence is not None and not control.get("readOnlyRequest"):
+    if evidence is not None and not control.get("readOnlyRequest") and not control.get("noToolRequest"):
+        result["tokenUsage"] = attempt_token_usage(evidence)
         # Even a transport failure can leave a completed root assistant message.
         # Missing native turn completion permits reconstruction only, never resume.
         result.setdefault("nativeCheckpoint", native_checkpoint(evidence, turn_input))

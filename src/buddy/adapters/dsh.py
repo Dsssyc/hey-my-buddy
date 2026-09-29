@@ -427,9 +427,10 @@ def _native_usage(context: ExecutionContext) -> dict:
         "reasoningOutputTokens", "cacheReadTokens", "cacheWriteTokens", "completeness")}
     candidate["source"] = native.get("source") or observed.get("source")
     candidate["nativeRecords"] = native.get("records")
+    candidate["coverage"] = "native-root-session"
     failure = observed.get("failure")
     failure_code = failure.get("code") if isinstance(failure, dict) else None
-    quota_failure = usage.normalize_quota_failure({"nativeCode": failure_code, "source": "dsh/session-turn-end"})
+    quota_failure = usage.normalize_quota_failure({"nativeCode": failure_code, "source": "dsh/session-turn-end", "observedAt": document.get("updatedAt") if document else None})
     if quota_failure is not None and quota_failure["code"] == "unknown":
         quota_failure = None
     return {

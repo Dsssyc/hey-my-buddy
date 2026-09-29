@@ -286,7 +286,8 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertTrue(message["truncated"])
         self.assertEqual(message["sourceBytes"], recorded["longTextBytes"])
         self.assertEqual(message["sha256"], recorded["longTextSha256"])
-        self.assertEqual(len(message["text"].encode()), usage.MAX_ASSISTANT_MESSAGE_BYTES)
+        self.assertLessEqual(len(message["text"].encode()), usage.MAX_ASSISTANT_MESSAGE_BYTES)
+        self.assertEqual(len(json.dumps(message["text"], ensure_ascii=False).encode()), usage.MAX_ASSISTANT_MESSAGE_BYTES)
 
 
 class ZcodeNativeRecordTests(unittest.TestCase):

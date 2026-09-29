@@ -284,13 +284,14 @@ def attempt_token_usage(evidence) -> dict | None:
     return {
         "source": "codex/app-server-thread-token-usage",
         "scope": "attempt",
+        "coverage": "native-root-thread",
         "inputBasis": "includes-cached",
         "inputTokens": delta["inputTokens"],
         "cachedInputTokens": delta["cachedInputTokens"],
         "outputTokens": delta["outputTokens"],
         "reasoningOutputTokens": delta["reasoningOutputTokens"],
         "nativeRecords": evidence.usage_events,
-        "completeness": "partial" if evidence.usage_anomaly else "complete",
+        "completeness": "complete" if not evidence.usage_anomaly and isinstance(evidence.completed, dict) and evidence.completed.get("status") == "completed" else "partial",
     }
 
 

@@ -67,7 +67,7 @@ The Python service owns authoritative SQLite state. Workers own child handles an
 
 ## Verification
 
-Use uv from the repository root. The normal complete check is `uv run --frozen python -m buddy.checks`. Run focused affected tests for a bounded change; do not run paid models or broad suites for wording-only edits.
+Use uv from the repository root. Prepare console development dependencies with `npm --prefix apps/console ci` using the supported Node version in `apps/console/package.json`; the preview regression uses the real frontend parsers. The normal complete check is `uv run --frozen python -m buddy.checks`. Run focused affected tests for a bounded change; do not run paid models or broad suites for wording-only edits.
 
 Tests always use private state/runtime roots. When invoked inside a hey-my-buddy process, clear inherited runtime, Worker and agent credentials for each test subprocess: `BUDDY_STATE_DIR`, `BUDDY_RUNTIME_ROOT`, `BUDDY_RUNTIME`, `BUDDY_RUNTIME_IDENTITY`, `BUDDY_WORKER_STATE`, `BUDDY_WORKER_ID`, `BUDDY_AGENT_CREDENTIAL`, `BUDDY_AGENT_CREDENTIAL_FILE`, `VIRTUAL_ENV`, `UV_PROJECT_ENVIRONMENT`. `BUDDY_DEV_SOURCE=1` alone cannot override a pinned runtime. Use the test harness's private directories; never the daily board.
 

@@ -47,7 +47,7 @@ export function formatCount(value: number): string {
 export function parseTokenUsage(value: unknown): TokenUsage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  if (row.scope !== "attempt") return null;
+  if (row.scope !== "attempt" || row.inputBasis !== undefined && row.inputBasis !== "includes-cached") return null;
   const source = nonempty(row.source);
   if (!source) return null;
   const numbers: Record<"inputTokens" | "cachedInputTokens" | "outputTokens", number | null> = {
@@ -57,7 +57,7 @@ export function parseTokenUsage(value: unknown): TokenUsage | null {
     const raw = row[key];
     if (raw === null || raw === undefined) continue;
     const parsed = countOrNull(raw);
-    if (parsed === null) return null;
+    if (parsed === null || !Number.isSafeInteger(parsed)) return null;
     numbers[key] = parsed;
   }
   if (numbers.cachedInputTokens !== null && numbers.inputTokens !== null
@@ -66,7 +66,9 @@ export function parseTokenUsage(value: unknown): TokenUsage | null {
     // usage this console may present as fact.
     return null;
   }
-  return { ...numbers, source, scope: "attempt" };
+  const completeness = row.completeness === "complete" || row.completeness === "partial" || row.completeness === "unknown" ? row.completeness : undefined;
+  const coverage = row.coverage === "native-root-session" || row.coverage === "native-root-thread" || row.coverage === "native-attempt" ? row.coverage : undefined;
+  return { ...numbers, source, scope: "attempt", ...(completeness ? { completeness } : {}), ...(coverage ? { coverage } : {}) };
 }
 
 export type TokenUsageView = {
@@ -102,8 +104,8 @@ export function tokenUsageView(usage: TokenUsage | null | undefined): TokenUsage
     inputText,
     cachedText: cached,
     outputText,
-    text: recorded ? `${inputText} · ${outputText}` : "未记录（未知）",
-    title: `来源 ${usage.source} · 范围 单次执行（不是会话累计；输入已含缓存，不重复相加）`,
+    text: recorded ? `${inputText} · ${outputText}${usage.completeness === "partial" ? " · 部分记录" : ""}` : "未记录（未知）",
+    title: `来源 ${usage.source} · 范围 单次执行${usage.coverage === "native-root-session" || usage.coverage === "native-root-thread" ? "的原生主会话" : ""}（输入已含缓存）${usage.completeness === "partial" ? " · 仅包含已报告的部分用量" : ""}`,
   };
 }
 
@@ -128,20 +130,22 @@ export function parseQuota(value: unknown): HarnessQuota | null {
     let usedPercent: number | null = null;
     if (entry.usedPercent !== null && entry.usedPercent !== undefined) {
       usedPercent = countOrNull(entry.usedPercent);
-      if (usedPercent === null) return null;
+      if (usedPercent === null || usedPercent > 100) return null;
     }
     let resetsAt: string | null = null;
     if (entry.resetsAt !== null && entry.resetsAt !== undefined) {
       resetsAt = nonempty(entry.resetsAt);
       if (resetsAt === null) return null;
     }
-    windows.push({ name, usedPercent, resetsAt });
+    windows.push({ name, usedPercent, resetsAt, ...(entry.stale === true ? { stale: true } : {}) });
   }
   const provider = nonempty(row.provider);
   return {
     observedAt,
     source,
     ...(provider ? { provider } : {}),
+    ...(nonempty(row.reachedType) ? { reachedType: nonempty(row.reachedType)! } : {}),
+    ...(typeof row.ordinaryUsageAllowed === "boolean" ? { ordinaryUsageAllowed: row.ordinaryUsageAllowed } : {}),
     stale: row.stale === true,
     windows,
   };
@@ -157,6 +161,7 @@ export type QuotaWindowView = QuotaWindow & {
 
 export type QuotaView = {
   stale: boolean;
+  limitReported: boolean;
   /** True when some recorded window is at or above the near-limit threshold. */
   alert: boolean;
   source: string;
@@ -171,26 +176,28 @@ export type QuotaView = {
 export function quotaView(quota: HarnessQuota | null | undefined): QuotaView | null {
   if (!quota) return null;
   const windows = quota.windows.map(window => {
-    const nearLimit = window.usedPercent !== null && window.usedPercent >= QUOTA_NEAR_LIMIT_PERCENT;
+    const nearLimit = !quota.stale && !window.stale && window.usedPercent !== null && window.usedPercent >= QUOTA_NEAR_LIMIT_PERCENT;
     return {
       ...window,
       usedText: window.usedPercent === null ? "未知" : `${formatPercent(window.usedPercent)}%`,
       nearLimit,
-      atLimit: window.usedPercent !== null && window.usedPercent >= 100,
+      atLimit: !quota.stale && !window.stale && window.usedPercent !== null && window.usedPercent >= 100,
     };
   });
-  const alert = windows.some(window => window.nearLimit);
+  const limitReported = !quota.stale && Boolean(quota.reachedType || quota.ordinaryUsageAllowed === false);
+  const alert = limitReported || windows.some(window => window.nearLimit);
   const note = quota.stale
     ? "这是最近一次记录的额度观测，可能已经过期；不代表当前或实时的账户额度。"
     : "这是最近一次记录的额度观测；不代表实时账户额度。";
   return {
     stale: quota.stale === true,
+    limitReported,
     alert,
     source: quota.source,
     ...(quota.provider ? { provider: quota.provider } : {}),
     observedAt: quota.observedAt,
     windows,
-    note,
+    note: limitReported ? `${note} 原生记录报告额度限制，当前重置状态可能未知。` : note,
   };
 }
 
@@ -334,6 +341,6 @@ export function integrationHostPaths(value: IntegrationRecord | null | undefined
  */
 export function configurationLockText(locked: boolean | null | undefined): string | null {
   if (locked === true) return "用户要求锁定，续做时不能更换";
-  if (locked === false) return "Host 指定，续做时可由 Host 附理由更换";
+  if (locked === false) return "续做时可由 Host 附理由更换配置";
   return null;
 }

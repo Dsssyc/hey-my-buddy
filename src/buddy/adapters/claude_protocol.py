@@ -609,7 +609,7 @@ class TurnEvidence:
         """One canonical-bound raw usage document; never a partial cache total."""
         read, write = counters["read"], counters["write"]
         cached = read + write if read is not None and write is not None else None
-        document = {"source": source, "scope": "attempt", "inputBasis": "excludes-cached",
+        document = {"source": source, "scope": "attempt", "coverage": "native-attempt" if completeness == "complete" else "native-root-session", "inputBasis": "excludes-cached",
                     "outputTokens": counters["output"], "nativeRecords": records,
                     "completeness": completeness if cached is not None else "partial"}
         if cached is None:

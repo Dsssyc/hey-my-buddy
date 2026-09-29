@@ -179,7 +179,7 @@ class DocumentationTests(unittest.TestCase):
     def test_readmes_keep_first_install_parity(self):
         for name in ("README.md", "README.zh-CN.md"):
             text = (ROOT / name).read_text()
-            self.assertIn("uvx hey-my-buddy@0.20.0 install", text, name)
+            self.assertIn("uvx hey-my-buddy@0.21.0 install", text, name)
             self.assertIn("~/.agents/skills/buddy", text, name)
             self.assertIn("docs/reference/operations.md#installation", text, name)
             self.assertNotIn("codex plugin add", text, name)

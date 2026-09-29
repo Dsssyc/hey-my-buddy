@@ -8,6 +8,15 @@ import { finalArtifact } from "./integration";
 import type { IntegrationRecord, Workflow } from "./workflow-types";
 
 describe("per-execution token usage (ADR-018 §22)", () => {
+  it("keeps partial native coverage visible and refuses fractional token counts", () => {
+    const raw = { inputTokens: 100, cachedInputTokens: 60, outputTokens: 8, scope: "attempt",
+      source: "codex/app-server-thread-token-usage", coverage: "native-root-thread", completeness: "partial" };
+    const view = tokenUsageView(parseTokenUsage(raw));
+    expect(view.text).toContain("部分记录");
+    expect(view.title).toContain("原生主会话");
+    expect(parseTokenUsage({ ...raw, inputTokens: 100.5 })).toBeNull();
+    expect(parseTokenUsage({ ...raw, inputBasis: "excludes-cached" })).toBeNull();
+  });
   it("keeps the cached input inside the input total instead of adding it again", () => {
     const usage = parseTokenUsage({
       inputTokens: 12000, cachedInputTokens: 9000, outputTokens: 1500,
@@ -96,9 +105,30 @@ describe("recorded harness quota (ADR-018 §23)", () => {
 
   it("marks a stale near-limit observation as the last observation, not as a live warning", () => {
     const view = quotaView(parseQuota({ ...quota, stale: true }))!;
-    expect(view.alert).toBe(true);
+    expect(view.alert).toBe(false);
     expect(view.stale).toBe(true);
     expect(view.note).toContain("最近一次");
+  });
+
+  it("keeps a native limit warning without inventing a utilization window", () => {
+    const recorded = { ...quota, windows: [], reachedType: "usageLimitExceeded" };
+    const view = quotaView(parseQuota(recorded))!;
+    expect(view.alert).toBe(true);
+    expect(view.limitReported).toBe(true);
+    expect(view.windows).toEqual([]);
+    expect(view.note).toContain("重置状态可能未知");
+    expect(quotaView(parseQuota({ ...recorded, stale: true }))!.alert).toBe(false);
+    expect(quotaView(parseQuota({ ...quota, windows: [], ordinaryUsageAllowed: false }))!.alert).toBe(true);
+  });
+
+  it("does not alert for an expired window beside a fresh lower window", () => {
+    const view = quotaView(parseQuota({ ...quota, stale: false, windows: [
+      { name: "expired", usedPercent: 99, resetsAt: "2026-09-28T00:00:00Z", stale: true },
+      { name: "fresh", usedPercent: 25, resetsAt: null, stale: false },
+    ] }))!;
+    expect(view.alert).toBe(false);
+    expect(view.windows[0].usedText).toBe("99%");
+    expect(view.windows[0].nearLimit).toBe(false);
   });
 
   it("treats a missing or malformed observation as no observation", () => {

@@ -390,6 +390,7 @@ class BoardStore:
             "leaseSeconds": row["lease_seconds"],
             "logPaths": json.loads(row["log_paths"]),
             "resultAvailable": row["result_json"] is not None,
+            "tokenUsage": json.loads(row["token_usage_json"]) if row["token_usage_json"] else None,
             "shutdownConfirmed": bool(row["shutdown_confirmed"]),
             "cancelRequested": row["cancel_requested_at"] is not None,
             "cancelRequestedAt": row["cancel_requested_at"],
@@ -494,7 +495,11 @@ class BoardStore:
     def _decorate(self, connection: sqlite3.Connection, task: sqlite3.Row, *, delegation_result: dict | None = None) -> dict:
         view = self._task_view(task)
         attempt = self._selected_attempt(connection, task)
+        view["tokenUsage"] = json.loads(attempt["token_usage_json"]) if attempt is not None and attempt["token_usage_json"] else None
         if attempt is not None:
+            from .native_observations import failure_view
+            recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
+            view["quotaFailure"] = failure_view(recorded.get("result"), adapter=attempt["adapter"])
             view["selectedAttempt"] = self._attempt_view(attempt)
             view["resultAvailable"] = attempt["result_json"] is not None
             view["shutdownConfirmed"] = bool(attempt["shutdown_confirmed"])
@@ -2342,6 +2347,8 @@ class BoardStore:
                     attempt["attempt_id"],
                 ),
             )
+            from .native_observations import persist
+            persist(connection, attempt, result)
             self._transition_task(connection, task, task_state)
             connection.execute(
                 "UPDATE tasks SET active_attempt_id=NULL, queue_reason=NULL WHERE task_id=?",

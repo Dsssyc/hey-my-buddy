@@ -10,6 +10,13 @@ const input = JSON.parse(readFileSync(flag('--turn-input-file'), 'utf8'));
 const cwd = flag('--cwd');
 if (input.context.turnIndex === 1) {
   writeFileSync(join(cwd, 'tracked.txt'), 'partial work preserved after quota failure\n');
+  const usagePath = flag('--usage-file');
+  if (usagePath) writeFileSync(usagePath, JSON.stringify({version: 1, taskId: input.taskId,
+    attemptId: input.attemptId, generation: input.generation, updatedAt: new Date().toISOString(),
+    nativeUsage: {source: 'dsh/session-assistant-usage', tokenUsage: {inputBasis: 'excludes-cached',
+      inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, records: 1, completeness: 'partial'},
+      failure: {code: 'QUOTA'}, lastAssistantMessage: {text: 'The first change is saved; verification remains.'}}
+  }), {mode: 0o600});
   process.stdout.write(JSON.stringify({status: 'error', code: 'quota-rejected', modelStarted: true,
     error: 'offline native quota fixture', processState: {shutdownConfirmed: true},
     quotaFailure: {rateLimitType: 'five-hour', resetsAt: null},

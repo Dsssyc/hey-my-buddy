@@ -248,7 +248,7 @@ describe('usage observer', () => {
     assert.equal(both.cachedInputTokens, 5, 'cache read plus cache write when total is unavailable');
 
     const readOnly = tokenUsageFor({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 });
-    assert.equal(readOnly.cachedInputTokens, 3, 'the only complete cache field');
+    assert.equal(readOnly.cachedInputTokens, undefined, 'missing cache write is unknown, never zero');
 
     const negative = tokenUsageFor({ inputTokens: 10, outputTokens: 5, totalTokens: 12, cacheReadTokens: 1, cacheWriteTokens: 1 });
     assert.equal(negative.cachedInputTokens, 2, 'a negative derivation falls through to the cache fields');
@@ -352,26 +352,26 @@ describe('usage observer', () => {
   });
 
   test('lastAssistantMessage bounds the head to 65536 UTF-8 bytes without splitting a character', () => {
-    const exact = 'a'.repeat(65_536);
+    const exact = 'a'.repeat(65_534);
     const retainedExact = retainedFor(exact);
     assert.equal(retainedExact.text, exact);
     assert.equal(retainedExact.truncated, false);
-    assert.equal(retainedExact.sourceBytes, 65_536);
+    assert.equal(retainedExact.sourceBytes, 65_534);
     assert.equal(retainedExact.sha256, sha256Hex(exact));
 
     const split = `${'a'.repeat(65_535)}😀`;
     const retainedSplit = retainedFor(split);
     assert.equal(retainedSplit.truncated, true);
-    assert.equal(retainedSplit.text, 'a'.repeat(65_535), 'the partial four-byte character is held back');
-    assert.equal(Buffer.byteLength(retainedSplit.text, 'utf8'), 65_535);
+    assert.equal(retainedSplit.text, 'a'.repeat(65_534), 'the partial four-byte character is held back');
+    assert.equal(Buffer.byteLength(retainedSplit.text, 'utf8'), 65_534);
     assert.equal(retainedSplit.sourceBytes, 65_539);
     assert.equal(retainedSplit.sha256, sha256Hex(split));
 
     const dense = `${'a'.repeat(65_000)}${'😀'.repeat(200)}`;
     const retainedDense = retainedFor(dense);
     assert.equal(retainedDense.truncated, true);
-    assert.equal(retainedDense.text, `${'a'.repeat(65_000)}${'😀'.repeat(134)}`);
-    assert.equal(Buffer.byteLength(retainedDense.text, 'utf8'), 65_536);
+    assert.equal(retainedDense.text, `${'a'.repeat(65_000)}${'😀'.repeat(133)}`);
+    assert.equal(Buffer.byteLength(retainedDense.text, 'utf8'), 65_532);
     assert.equal(retainedDense.sourceBytes, 65_800);
     assert.equal(retainedDense.sha256, sha256Hex(dense));
     assert.equal(retainedDense.text.includes('\ufffd'), false, 'no replacement character');

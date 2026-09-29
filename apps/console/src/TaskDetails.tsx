@@ -62,10 +62,12 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const titleNote = title.source === "task" ? TASK_TITLE_SOURCE_LABEL.task : "";
   // One execution's own recorded usage; unknown stays unknown (ADR-018 §22).
   const usage = tokenUsageView(task.tokenUsage ?? task.selectedAttempt?.tokenUsage);
+  const quotaFailureLabel = task.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : task.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
   return <>
     <header className="detail-header">
       <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回委派列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
+      {!task.workflow && quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
       <h2 className="detail-title" title={titleTooltip(title)}>
         {excerpt(title.text, 100)}{titleNote && <span className="title-source-note">{titleNote}</span>}
       </h2>

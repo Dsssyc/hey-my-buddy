@@ -68,6 +68,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   const conclusion = hostConclusionView(value?.hostConclusion);
   const lockText = configurationLockText(value?.configurationLocked);
   const hostPaths = integrationHostPaths(integration);
+  const quotaFailureLabel = value?.task?.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : value?.task?.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
   // Each execution carries its own usage; a turn without a recorded value is
   // shown as unknown. Session-cumulative totals are never derived here.
   const usageTurns = (value?.turns?.length ? value.turns : value?.currentTurn ? [value.currentTurn] : [])
@@ -99,6 +100,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           taskSummary={overviewRow ? overviewRow.taskSummary : (task.task.replace(/\s+/g, " ").trim().slice(0, 120) || null)}
           resultSummary={overviewRow ? overviewRow.summary : (value.currentTurn?.summary || task.workflow?.resultSummary || null)} />
         {stopStatusNode}
+        {quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
         {conclusion && <section className={"detail-section host-conclusion" + (conclusion.failed ? " failed" : conclusion.cancelled ? " cancelled" : "")} aria-label="Host 结论">
           <h3>Host 结论（不改变执行结果）</h3>
           <dl className="facts">

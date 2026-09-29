@@ -87,9 +87,15 @@ function assistantText(message) {
  */
 function boundText(text) {
   const bytes = Buffer.from(text, 'utf8');
-  if (bytes.length <= MAX_ASSISTANT_TEXT_BYTES) return { text, truncated: false };
-  const head = bytes.subarray(0, MAX_ASSISTANT_TEXT_BYTES);
-  return { text: new TextDecoder('utf-8').decode(head, { stream: true }), truncated: true };
+  let lower = 0, upper = Math.min(bytes.length, MAX_ASSISTANT_TEXT_BYTES);
+  const prefix = (size) => new TextDecoder('utf-8').decode(bytes.subarray(0, size), { stream: true });
+  while (lower < upper) {
+    const middle = Math.ceil((lower + upper) / 2);
+    if (Buffer.byteLength(JSON.stringify(prefix(middle)), 'utf8') <= MAX_ASSISTANT_TEXT_BYTES) lower = middle;
+    else upper = middle - 1;
+  }
+  const head = prefix(lower);
+  return { text: head, truncated: Buffer.byteLength(head, 'utf8') < bytes.length };
 }
 
 /** Root lineage: no fork parent, no subagent origin, no positive delegation depth. */
@@ -154,6 +160,7 @@ export function apply(ctx, config) {
   };
   const missed = new Set();
   let records = 0;
+  const seenRecords = new Set();
   let missingUsage = false;
   let turnEndSeen = false;
   let turnEndCompleted = false;
@@ -198,8 +205,6 @@ export function apply(ctx, config) {
     if (completeField('cacheReadTokens') && completeField('cacheWriteTokens')) {
       return sums.cacheReadTokens + sums.cacheWriteTokens;
     }
-    if (completeField('cacheReadTokens')) return sums.cacheReadTokens;
-    if (completeField('cacheWriteTokens')) return sums.cacheWriteTokens;
     return undefined;
   };
 
@@ -257,6 +262,11 @@ export function apply(ctx, config) {
       }
       if (current !== sessionId) return;
       if (event?.type === 'assistant/message') {
+        const identity = typeof event.data?.message?.id === 'string' ? `message:${event.data.message.id}`
+          : Number.isSafeInteger(event.seq) ? `sequence:${event.seq}` : undefined;
+        if (identity === undefined) { missingUsage = true; return; }
+        if (seenRecords.has(identity)) return;
+        seenRecords.add(identity);
         const usage = event.data?.usage;
         let usable = false;
         if (usage !== null && typeof usage === 'object' && !Array.isArray(usage)) usable = accumulate(usage);

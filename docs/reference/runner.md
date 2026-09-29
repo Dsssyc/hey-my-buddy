@@ -177,3 +177,7 @@ Governed runs additionally return `turn` (the validated record or `null`), `turn
 | `plugins/workspace-bridge.mjs` | Host-side plugin installed into a DSH profile; serves `ping`/`resolve`/`attach` on the private workspace socket |
 
 The workspace bridge checks root lineage and canonical cwd equality before it creates or attaches a session, and it verifies membership afterwards. It never activates an agent. Install, recovery and the stale-socket rule are owned by [operations.md#workspace-bridge](operations.md#workspace-bridge).
+
+## Native usage sidecar
+
+The owning Worker supplies `--usage-file <path>` for a private attempt-bound usage sidecar. The bundled `plugins/usage.mjs` binds the native root session to the admitted prompt and cwd, deduplicates assistant records, and records token counters, structured quota facts and the last assistant text. It excludes reasoning and tool output from the text. The adapter accepts only a bounded regular file with matching task, attempt and generation; a missing, foreign or malformed sidecar yields unknown observations. This sidecar complements the durable execution result and never proves completion or successful artifact verification. The shared normalized fields and bounds are defined in [workers](workers.md#interrupted-outputs-and-native-observations).

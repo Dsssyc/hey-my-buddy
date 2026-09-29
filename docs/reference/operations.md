@@ -4,26 +4,26 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The verified daily installation on this machine is [0.19.0/contract 0.19.0/schema 14](../acceptance/installed-0.19.0.md): the skill lives in `~/.agents/skills/buddy`, which Codex reads directly, and Claude Code reads `~/.claude/skills/buddy`, a symbolic link to that same directory. The retired Codex plugin is no longer installed, so both Hosts read one copy. Runtime, state and backups stay under `~/.local/share/hey-my-buddy` (on Windows the default is `%LOCALAPPDATA%\hey-my-buddy`; `buddy.home` owns this default). The current source candidate is 0.19.0/contract 0.20.0/schema 14; it is not installed, the daily board is not migrated, no release package is published and no user configuration was changed by its preparation. Its ADR-018 first-part routing modes add no schema change and keep their configuration in `meta` keys.
+The recorded daily installation is [0.20.0/contract 0.20.0/schema 14](../acceptance/installed-0.20.0.md). The current source candidate is 0.21.0/contract 0.21.0/schema 15; source preparation does not install it, migrate the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `buddy.home`.
 
 ## Installation
 
-The 0.19.0 source candidate installs through one fixed-version package command. The command below assumes that the package name is available and that the version has been published; neither has been decided yet, so treat it as a post-publication command and do not claim that it works today or that anything can be installed from PyPI now. Until the release channel is decided, build the wheel from the frozen source and install from its absolute path:
+The source candidate installs through one fixed-version package command. The command below assumes that the package name is available and that the version has been published; neither has been decided yet, so treat it as a post-publication command and do not claim that it works today or that anything can be installed from PyPI now. Until the release channel is decided, build the wheel from the frozen source and install from its absolute path:
 
 ```sh
 # After the user decides the release channel and the version is published
-uvx hey-my-buddy@0.20.0 install
+uvx hey-my-buddy@0.21.0 install
 
 # Unpublished candidate: build a wheel and install from its absolute path
-uv build --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.20.0-py3-none-any.whl hey-my-buddy install
+uv build --wheel --out-dir dist
+uvx --from /absolute/path/hey_my_buddy-0.21.0-py3-none-any.whl hey-my-buddy install
 ```
 
 The package exposes exactly one command, `hey-my-buddy install`; any other argument returns `PACKAGE_INSTALL_USAGE`. Run the command outside the Host or agent sandbox, in a real user session; it needs no sudo and writes only inside the user's home. Installing or switching the daily service still requires the user's separate authorization.
 
 `buddy install` first prints its `install-plan` and contract on stderr, with the same paths in the final result. It checks for queued/running/cancelling work and unresolved shutdown before replacing the skill, launcher, runtime or service; `UPGRADE_NOT_IDLE` lists that work and cancels nothing. Interrupted journals are recovered before beginning a new installation.
 
-After target/link validation, the package materializes a content-addressed runtime and prepares the skill. On upgrade it fences admission, rechecks idle state, cooperatively detaches the old owner, takes and verifies `backups/current/` under exclusive locks, and migrates schema 13 to 14 while checking all retained table fingerprints. The new stable service must verify before the skill, launcher and active pointer are published. A failure restores the previous generation; an unprovable rollback keeps the journal with `UPGRADE_RECOVERY_REQUIRED`. On first install, the next service command performs the cold start.
+After target/link validation, the package materializes a content-addressed runtime and prepares the skill. On upgrade it fences admission, rechecks idle state, cooperatively detaches the old owner, takes and verifies `backups/current/` under exclusive locks, and migrates schema 14 to 15 while checking retained columns and unrelated table fingerprints. The new stable service must verify before the skill, launcher and active pointer are published. A failure restores the previous generation; an unprovable rollback keeps the journal with `UPGRADE_RECOVERY_REQUIRED`. On first install, the next service command performs the cold start.
 
 The canonical skill is `~/.agents/skills/buddy`; Claude Code uses a symbolic link at `~/.claude/skills/buddy`, with no copy fallback. Foreign targets or conflicting links return `SKILL_TARGET_CONFLICT`. A denied link (for example Windows without Developer Mode) returns `CLAUDE_LINK_FAILED` or a coordinated rollback error; correct link permissions and rerun the fixed package. Installation reports `skill`, `claude`, `service`, `writePaths`, diagnostic guidance and any detected legacy plugin cache.
 
@@ -48,8 +48,8 @@ Windows is not validated on a real machine. The code and scripts are portable â€
 `install.sh` (macOS, Linux) and `install.ps1` (Windows) do one job: prepare a fixed private `uv`, then hand installation to the package entry.
 
 ```sh
-sh install.sh --version 0.19.0 [--wheel-url https://.../hey_my_buddy-0.20.0-py3-none-any.whl]
-./install.ps1 -Version 0.19.0 [-WheelUrl https://.../hey_my_buddy-0.20.0-py3-none-any.whl]
+sh install.sh --version 0.19.0 [--wheel-url https://.../hey_my_buddy-0.21.0-py3-none-any.whl]
+./install.ps1 -Version 0.19.0 [-WheelUrl https://.../hey_my_buddy-0.21.0-py3-none-any.whl]
 ```
 
 They use an existing `uv` on `PATH`; otherwise they download the pinned uv 0.12.19 release into a private directory under the hey-my-buddy data home, verify it against the pinned SHA-256 list, and run `uv tool run --from <fixed package or wheel> hey-my-buddy install`. They print their private uv destination before downloading, then print the package source and delegate the remaining write-path plan to the installer. They never change `PATH`, shell configuration or Host settings, never need sudo, and never install a global `buddy` command. Stable error codes are `BOOTSTRAP_ARGS` (invalid version or wheel URL), `BOOTSTRAP_PLATFORM`, `BOOTSTRAP_FETCH`, `BOOTSTRAP_VERIFY`, `BOOTSTRAP_WRITE`, `BOOTSTRAP_EXTRACT` and `PACKAGE_INSTALL_FAILED`; each prints one line with a repair action.
@@ -95,6 +95,10 @@ uv run --frozen python packaging/build-skill.py --destination /path/to/dist/budd
 A cold start must write the private state directory and open local IPC. If the Host sandbox refuses either, the launcher returns `LAUNCH_ACCESS_DENIED` instead of starting a service that inherits the sandbox limits. Allow that exact absolute launcher command outside the sandbox once, then retry. In Codex, a user rule in `~/.codex/rules/*.rules` can carry `prefix_rule(pattern=["/absolute/path/to/.agents/skills/buddy/scripts/buddy"], decision="allow")`; restart Codex or start a new session, and remember that stricter organization rules win ([Codex rules](https://learn.chatgpt.com/docs/agent-configuration/rules)). In Claude Code, the command-specific `sandbox.excludedCommands` setting can include `"/absolute/path/to/.claude/skills/buddy/scripts/buddy *"`, while `permissions.allow` with a matching `Bash(...)` rule is a separate permission layer ([Claude sandboxing](https://code.claude.com/docs/en/sandboxing), [settings](https://code.claude.com/docs/en/settings)). Have the user or Host owner apply these settings; [skills/buddy/SKILL.md](../../skills/buddy/SKILL.md) only points here. Do not disable the sandbox globally, and do not change Host settings for the user. A service that is already running keeps its own permissions; attaching to it does not re-sandbox it.
 
 On a Host entry the launcher clears leftover service-internal identity variables (`BUDDY_RUNTIME`, `BUDDY_RUNTIME_IDENTITY`, `BUDDY_PYTHON`, `BUDDY_WORKER_STATE`, `BUDDY_WORKER_ID`, `BUDDY_SUPERVISOR_START_ID`, `BUDDY_TASK_ID`, `BUDDY_ATTEMPT_ID`, `BUDDY_HARNESS_RECORD_FILE`) and third-party model endpoint overrides (Anthropic, OpenAI, Azure OpenAI, Gemini/Google GenAI, ZAI, ZCode, DeepSeek and OpenRouter base URLs or endpoint keys), so a cold-started service does not inherit the Host session's private endpoints. An attempt credential keeps Worker scope and its identity variables, because dropping them would turn a Worker into a service-token Host. User development variables such as `BUDDY_STATE_DIR`, `BUDDY_RUNTIME_ROOT` and `BUDDY_DEV_SOURCE` still apply.
+
+Daemon cold starts, upgrade starts and worker supervisors inherit an explicit environment allowlist in `launcher.service_environment`. It retains system/home/path/temp/locale/proxy values, native account directories and named runtime settings; only explicit development mode adds named fixture/CLI overrides. Host session identities, `CLAUDE_CODE_*` tokens, provider endpoint/key overrides and attempt credentials are absent from service processes. Worker credentials remain attached to CLI calls so a Worker cannot become a Host; a scoped Worker cannot start or stop supervisors. Upgrade removes development/worker identity and selects its own stable interpreter.
+
+Candidate builds use `uv build --wheel`. An sdist also embeds `src/buddy/build-info.json`; its original `sourceCommit` takes precedence even when extracted inside another Git checkout. A same-version installation compares actual skill content and reports `updated` when bytes changed, rather than claiming `already-current` from version markers alone.
 
 ## Harness discovery and health
 

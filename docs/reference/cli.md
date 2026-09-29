@@ -106,6 +106,16 @@ For nested attention, submit `decide` against the root run and its active proxy 
 
 At most eight helpers are authorized by one decision, and their specs use the same fields as `submit` plus `role` (`helper` or `integrator`). At most one helper per approval may be the named integrator. A helper inherits the parent's task-local `routingPreferences` only with an explicit `inheritRoutingPreferences: true`, and may not set both. Continuation input is bounded to 64 KiB. The turn input is bounded to 256 KiB and the structured outcome to 64 KiB, with at most 32 entries per outcome array. DSH continuations report `reconstructed-new-session`. ZCode reports `native-session` for a proven previous session bound to the same goal, checkout and configuration; without a proven previous session or with a changed configuration, it reports `reconstructed-new-session`. Codex reports `native-session` only for a proven binding whose last stored native turn still completes, and otherwise reconstructs explicitly. A missing or mismatched binding on a native-session request is rejected. Use the exact same command ID and payload to resolve an uncertain response. Re-read and reconsider after a revision/owner-generation conflict.
 
+### Host workflow fields
+
+`submit` adds top-level `objectiveOf` (run identifier, up to 128 characters) and `configurationLocked` (boolean, default false). Only one of `objective`, `objectiveId` and `objectiveOf` may be supplied. The referenced run must have an objective with the same original Host and project; `NOT_FOUND` and `OBJECTIVE_REQUIRED` distinguish unknown and ungrouped runs. Display metadata stays out of execution and routing input.
+
+`continue` may change an explicit configuration after failure by supplying the complete `configuration` and nonempty `reason`; `configurationLocked:true` fences incompatible changes. It preserves the run and allocated checkout. `get` reports the lock, partial artifacts and current Host conclusion. `integration-record` adds `hostPaths` (up to 256 relative paths), distinct from `adjustedPaths`; verified paths must occur in the target commit interval and be outside the whole artifact's paths.
+
+At an `awaiting-host` boundary, `acknowledge` with `verdict:accepted` and the exact current sealed `artifactId` can finish the goal after verified integration and confirmed lineage shutdown. Failed/cancelled goals accept `verdict:recorded`, required `commandId`, `expectedRevision` and `note`, optional evidence references and current-attempt artifact/integration IDs. This records a Host conclusion without relabelling execution. A current conclusion can authorize checkout cleanup subject to the same stop, identity, dependency and unsealed-change checks. The [workflow contract](workflow.md) owns these transitions.
+
+Output artifacts may include `cumulativePatch` with its original goal input commit, output commit, path and hash; `partial-output` is explicitly partial, unverified and non-final. Brief projections retain these distinctions, `hostConclusion`, `configurationLocked` and quota reminders. Execution and turn views carry `tokenUsage`; null or null counters mean unknown. Input tokens include cached input, so cache must not be added again.
+
 ## Work objectives
 
 | Command | Parameters | Behavior |

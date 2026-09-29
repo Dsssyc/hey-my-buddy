@@ -6,7 +6,7 @@
 
 ## 已核对的持久化边界
 
-`src/buddy/db.py` 的当前 schema 为 14。`workflow_runs` 保存委派目标及当前执行配置；`tasks.accepted_at`、`acceptance_note`、`acceptance_verdict` 表示现行验收。`workflow.acknowledge` 只接受 delivered/accepted，检出清理同时要求 accepted、最终成果与整合记录。失败或取消目标需要一条独立的 Host 结论，且该结论必须绑定被审查的执行代次，防止续做后旧结论继续授权清理。
+实施预检时，`src/buddy/db.py` 的基线 schema 为 14。`workflow_runs` 保存委派目标及当前执行配置；`tasks.accepted_at`、`acceptance_note`、`acceptance_verdict` 表示现行验收。`workflow.acknowledge` 只接受 delivered/accepted，检出清理同时要求 accepted、最终成果与整合记录。失败或取消目标需要一条独立的 Host 结论，且该结论必须绑定被审查的执行代次，防止续做后旧结论继续授权清理。
 
 `attempts.result_json` 已保存各 adapter 的原始结构化结果。第 22 条新增跨 harness 的原生用量投影，需明确所属 attempt、原生来源与未知字段；该投影不能随当前选中 attempt 的改变而覆盖过去的执行。`harness_health.record_json` 当前由健康刷新整体替换，第 23 条的额度观察需要自己的持久化位置与观察时间，不能随一次路径发现或握手被清空。
 
@@ -44,7 +44,7 @@
 
 迁移由显式 upgrade 或离线 board preparation 路径执行；普通启动只接受当前 schema。沿用空闲检查、独占锁、已验证的单份滚动备份、单事务迁移和失败恢复。迁移允许变更的表限定为 `meta`、`workflow_runs`、`workflow_host_conclusions`、`attempts`、`harness_health`；其余表逐表校验指纹，扩展表同时核对全部旧列的内容未变。
 
-迁移测试覆盖全新 schema 15 与 14 → 15 形状一致、旧目标解锁后的显式授权边界、原始请求与回执不变、未知用量与额度、外键和完整性、事务中断回滚、备份恢复、启动拒绝直接迁移。此提案尚未执行这些测试。
+迁移测试覆盖全新 schema 15 与 14 → 15 形状一致、旧目标解锁后的显式授权边界、原始请求与回执不变、未知用量与额度、外键和完整性、事务中断回滚、备份恢复、启动拒绝直接迁移。本页保留批准时的设计边界；实际测试结果与未验证项由本次验收记录维护。
 
 实现后的逐项验证包括：第 11 条约 4 KB 的 skill 与参考链接；第 12 条三种输入方式等价；第 13 条帮助与实际校验同源及拼写候选；第 14 条 objectiveOf 的归属、Host 权限与幂等；第 15、16 条直接收尾、结论和清理的权限／停止／旧计划拒绝；第 17、18 条模拟 harness 额度失败、部分成果、同检出换配置续做的跨进程集成；第 19 条 hostPaths 核验；第 20 条多轮累计补丁可独立应用；第 21 条服务环境白名单与 Worker 身份保留；第 22、23 条 DSH/Codex 原生记录夹具和 CLI/控制台投影；四个独立缺陷各自回归。测试均使用私有 state/runtime 根，不进行付费复跑。
 

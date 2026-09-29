@@ -225,7 +225,7 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
         {quotaAlerts.length > 0 && <>
           <span aria-hidden="true" className="routing-sep">｜</span>
           <span className="quota-alert-line" title={`基于最近一次记录的额度观测，不是实时账户额度：${quotaAlertText}`}>
-            额度接近上限：{quotaAlertText}{quotaAlerts.every(item => item.quota!.stale) ? "（最近一次观测）" : ""}
+            额度提醒：{quotaAlertText}
           </span>
         </>}
       </span>
@@ -252,7 +252,7 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
             <span className="harness-name">{name}</span>
             <Badge tone={harnessStatusTone(row.status)}>{harnessStatusText(row.status)}</Badge>
             {quota?.alert && <Badge tone={quota.stale ? "neutral" : "amber"}>
-              {quota.windows.some(window => window.atLimit) ? "额度已到上限" : "额度接近上限"}{quota.stale ? "（最近一次观测）" : ""}
+              {quota.limitReported ? "原生记录报告额度限制" : quota.windows.some(window => window.atLimit) ? "额度已到上限" : "额度接近上限"}
             </Badge>}
             <span className="harness-summary" title={harnessTitle(row)}>{harnessSummary(row)}</span>
             <span className="harness-row-actions">

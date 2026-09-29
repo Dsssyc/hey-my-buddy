@@ -87,7 +87,7 @@ _QUOTA_NATIVE_CODES = frozenset({
     "workspace_member_credits_depleted",
 })
 #: Native codes that mean "transiently rate limited" rather than exhausted quota.
-_RATE_NATIVE_CODES = frozenset({"RATE_LIMIT", "rate_limit_reached", "ratelimitexceeded"})
+_RATE_NATIVE_CODES = frozenset({"RATE_LIMIT", "rate_limit_reached", "ratelimitexceeded", "model_rate_limited"})
 
 
 def _is_count(value: Any) -> bool:
@@ -102,6 +102,10 @@ def _bounded_string(value: Any, *, maximum: int) -> str | None:
     if not isinstance(value, str) or not value.strip() or "\0" in value:
         return None
     value = value.strip()
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        return None
     return value if len(value) <= maximum else None
 
 
@@ -176,6 +180,8 @@ def normalize_token_usage(value: Any) -> dict | None:
     """
     if not isinstance(value, dict):
         return None
+    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
+        return None
     scope = value.get("scope")
     if scope is not None and scope != ATTEMPT_SCOPE:
         return None
@@ -192,14 +198,23 @@ def normalize_token_usage(value: Any) -> dict | None:
     if cached is None:
         read = value.get("cacheReadTokens")
         write = value.get("cacheWriteTokens")
-        parts = [part for part in (read, write) if part is not None]
-        cached = sum(parts) if parts else None
+        total = value.get("totalTokens")
+        if _is_count(total) and input_tokens is not None and output_tokens is not None and total >= input_tokens + output_tokens:
+            cached = total - input_tokens - output_tokens
+        elif read is not None and write is not None:
+            cached = read + write
+    if cached is not None and not _is_count(cached):
+        return None
     basis = value.get("inputBasis")
     if basis is not None and basis not in INPUT_BASES:
         return None
     if basis is None:
         basis = INPUT_BASIS_EXCLUDES_CACHED if "cacheReadTokens" in value or "cacheWriteTokens" in value \
             else INPUT_BASIS_INCLUDES_CACHED
+    if basis == INPUT_BASIS_EXCLUDES_CACHED and cached is None:
+        input_tokens = None
+    if input_tokens is None and output_tokens is None:
+        return None
     if basis == INPUT_BASIS_EXCLUDES_CACHED and cached is not None and input_tokens is not None:
         unified = input_tokens + cached
         if unified > MAX_COUNT:
@@ -214,6 +229,8 @@ def normalize_token_usage(value: Any) -> dict | None:
         completeness = "unknown"
     if completeness not in COMPLETENESS_VALUES:
         return None
+    if completeness == "complete" and any(count is None for count in (input_tokens, cached, output_tokens)):
+        completeness = "partial"
     records = value.get("nativeRecords")
     if records is None:
         records = 1
@@ -230,6 +247,9 @@ def normalize_token_usage(value: Any) -> dict | None:
         "completeness": completeness,
         "nativeRecords": records,
     }
+    coverage = value.get("coverage")
+    if coverage in ("native-root-session", "native-root-thread", "native-attempt"):
+        normalized["coverage"] = coverage
     reasoning = value.get("reasoningOutputTokens")
     if reasoning is not None:
         normalized["reasoningOutputTokens"] = reasoning
@@ -275,6 +295,8 @@ def normalize_quota(value: Any) -> dict | None:
     """
     if not isinstance(value, dict):
         return None
+    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
+        return None
     observed_at = _timestamp(value.get("observedAt"))
     if observed_at is None:
         return None
@@ -293,11 +315,12 @@ def normalize_quota(value: Any) -> dict | None:
     reached = _bounded_string(value.get("reachedType"), maximum=MAX_WINDOW_NAME)
     if not windows and ordinary is None and reached is None:
         return None
+    scope_source = value.get("scope") if isinstance(value.get("scope"), dict) else value
     scope = {
-        "provider": _bounded_string(value.get("provider"), maximum=MAX_WINDOW_NAME),
-        "nativeAccountId": _bounded_string(value.get("nativeAccountId"), maximum=MAX_WINDOW_NAME),
-        "limitId": _bounded_string(value.get("limitId"), maximum=MAX_WINDOW_NAME),
-        "planType": _bounded_string(value.get("planType"), maximum=MAX_WINDOW_NAME),
+        "provider": _bounded_string(scope_source.get("provider"), maximum=MAX_WINDOW_NAME),
+        "nativeAccountId": _bounded_string(scope_source.get("nativeAccountId"), maximum=MAX_WINDOW_NAME),
+        "limitId": _bounded_string(scope_source.get("limitId"), maximum=MAX_WINDOW_NAME),
+        "planType": _bounded_string(scope_source.get("planType"), maximum=MAX_WINDOW_NAME),
     }
     normalized = {
         "version": QUOTA_VERSION,
@@ -321,10 +344,10 @@ def classify_quota_code(native_code: str) -> str:
         return "rate-limited"
     # Camel-case harness codes (``usageLimitExceeded``) fold onto the same words
     # as snake_case ones (``usage_limit_reached``); the native code is unchanged.
-    folded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", native_code).replace("-", "_").replace(" ", "_").lower()
-    if "quota" in folded or "usage_limit" in folded or "budget" in folded:
+    folded = re.sub(r"[_-]", "", native_code).lower()
+    if folded in {re.sub(r"[_-]", "", code).lower() for code in _QUOTA_NATIVE_CODES}:
         return "quota-exceeded"
-    if "rate_limit" in folded:
+    if folded in {re.sub(r"[_-]", "", code).lower() for code in _RATE_NATIVE_CODES}:
         return "rate-limited"
     return "unknown"
 
@@ -336,6 +359,8 @@ def normalize_quota_failure(value: Any) -> dict | None:
     harness's own machine code and is never translated away.
     """
     if not isinstance(value, dict):
+        return None
+    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
         return None
     native_code = _bounded_string(value.get("nativeCode"), maximum=MAX_SOURCE)
     if native_code is None:
@@ -363,10 +388,15 @@ def normalize_last_assistant_message(value: Any, *, source: str | None = None) -
     """
     if not isinstance(value, dict):
         return None
+    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
+        return None
     raw_text = value.get("text")
     if not isinstance(raw_text, str) or not raw_text.strip() or "\0" in raw_text:
         return None
-    full = raw_text.encode()
+    try:
+        full = raw_text.encode()
+    except UnicodeError:
+        return None
     digest = value.get("sha256")
     declared_bytes = value.get("sourceBytes")
     declared_truncated = value.get("truncated")
@@ -385,6 +415,16 @@ def normalize_last_assistant_message(value: Any, *, source: str | None = None) -
             return None
         source_bytes, sha256, truncated = declared_bytes, digest, declared_truncated
     text, kept = _truncate_utf8(raw_text, MAX_ASSISTANT_MESSAGE_BYTES)
+    if len(json.dumps(text, ensure_ascii=False).encode()) > MAX_ASSISTANT_MESSAGE_BYTES:
+        lower, upper = 0, len(text)
+        while lower < upper:
+            middle = (lower + upper + 1) // 2
+            if len(json.dumps(text[:middle], ensure_ascii=False).encode()) <= MAX_ASSISTANT_MESSAGE_BYTES:
+                lower = middle
+            else:
+                upper = middle - 1
+        text = text[:lower]
+        truncated = True
     if kept < len(full):
         truncated = True
     label = _bounded_string(value.get("source"), maximum=MAX_SOURCE) if source is None \
@@ -436,7 +476,7 @@ def read_sidecar(path: str | Path, *, task_id: str, attempt_id: str, generation:
         return None
     if value.get("taskId") != task_id or value.get("attemptId") != attempt_id:
         return None
-    if not _is_count(generation) or generation < 1 or value.get("generation") != generation:
+    if not _is_count(generation) or generation < 1 or type(value.get("generation")) is not int or value.get("generation") != generation:
         return None
     return value
 

@@ -6,6 +6,22 @@ from test_workflow import CONFIGURATION, WorkflowTestCase
 
 
 class HostAdmissionTests(WorkflowTestCase):
+    def test_override_cannot_enable_a_disabled_configuration(self):
+        from support import enable_fixture_configuration
+        board = self.board()
+        submitted = self.submit(board)
+        replacement = {**CONFIGURATION, "effort": "high"}
+        enable_fixture_configuration(board.store, replacement)
+        with board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE effort='high'")
+        with self.assertRaises(BoardError) as caught:
+            board.call("workflow_continue", {"runId": submitted["runId"], "commandId": "disabled-override",
+                "expectedRevision": submitted["revision"], "input": "Continue", "configuration": replacement,
+                "reason": "Try disabled profile", **self.control(submitted)})
+        self.assertEqual(caught.exception.code, "CONFIGURATION_UNAVAILABLE")
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT enabled FROM evaluation_profiles WHERE effort='high'").fetchone()[0], 0)
+
     def test_objective_of_is_atomic_scoped_and_idempotent(self):
         board = self.board()
         first = self.submit(board, kind="worktree", objective={"title": "Host agenda"})
@@ -55,6 +71,67 @@ class HostAdmissionTests(WorkflowTestCase):
 
 
 class HostCompletionTests(WorkflowTestCase):
+    def test_host_rereview_retains_the_rejected_verdict_without_an_empty_turn(self):
+        board = self.board()
+        parent = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": parent["runId"]})
+        rejected = board.call("workflow_acknowledge", {"runId": parent["runId"], "commandId": "first-review",
+            "artifactId": delivered["finalArtifactId"], "verdict": "rejected", "note": "Host found a required adjustment",
+            **self.control(parent)})
+        integrated = self.record_integration(board, rejected)
+        accepted = board.call("workflow_acknowledge", {"runId": parent["runId"], "commandId": "review-after-host-adjustment",
+            "expectedRevision": integrated["revision"], "artifactId": delivered["finalArtifactId"], "verdict": "accepted",
+            "note": "Host reviewed the adjusted integration", **self.control(parent)})
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["counts"]["turns"], 1)
+        with board.store.db.read() as db:
+            archived = db.execute("SELECT payload_json FROM events WHERE kind='task.review_archived'").fetchone()
+            self.assertEqual(json.loads(archived[0])["verdict"], "rejected")
+
+    def test_continue_clears_the_current_final_binding_but_retains_the_old_artifact(self):
+        board = self.board()
+        parent = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": parent["runId"]})
+        continued = self.continue_run(board, delivered)
+        self.assertIsNone(continued["finalArtifactId"])
+        self.assertIsNone(continued["finalAttemptId"])
+        self.assertIn(delivered["finalArtifactId"], [item["artifactId"] for item in continued["artifacts"]])
+
+    def test_direct_helper_completion_settles_the_owned_graph_without_a_worker_round(self):
+        board = self.board()
+        parent = self.submit(board, kind="worktree")
+        self.register(board)
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        parent = board.call("workflow_get", {"runId": parent["runId"]})
+        approved = self.decide(board, parent, parent["activeRequest"]["requestId"], autoContinue=False,
+            helpers=[{"requestId": "host-finish-helper", "task": "Produce a checked change", "cwd": str(self.workdir()),
+                      "executionWorkspace": {"kind": "worktree", "access": "write"}}])
+        child_id = approved["children"][0]["taskId"]
+        self.finish_turn(board, self.claim(board, claim_request_id="helper-claim", run_id=child_id), disposition="attention")
+        parent = board.call("workflow_get", {"runId": parent["runId"]})
+        child = board.call("workflow_get", {"runId": child_id})
+        artifact = next(item for item in child["artifacts"] if item["kind"] == "output")
+        integrated = board.store.workflow.integration_record({"runId": parent["runId"], "targetRunId": child_id,
+            "commandId": "helper-integration", "expectedRevision": parent["revision"], "artifactId": artifact["artifactId"],
+            "notRequired": True, "reason": "Fixture evidence checked without a separate target", **self.control(parent)})
+        board.call("workflow_acknowledge", {"runId": parent["runId"], "targetRunId": child_id,
+            "commandId": "helper-host-completion", "artifactId": artifact["artifactId"], "integrationId": integrated["integrationId"],
+            "verdict": "accepted", "note": "Host completed the current sealed helper turn", **self.control(parent)})
+        parent = board.call("workflow_get", {"runId": parent["runId"]})
+        self.assertEqual(parent["children"][0]["state"], "succeeded")
+        self.assertEqual(parent["state"], "awaiting-host")
+        self.assertEqual(parent["counts"]["turns"], 1)
+        artifact = next(item for item in parent["artifacts"] if item["kind"] == "output")
+        self.record_integration(board, parent, artifact_id=artifact["artifactId"])
+        finished = board.call("workflow_acknowledge", {"runId": parent["runId"], "commandId": "parent-host-completion",
+            "artifactId": artifact["artifactId"], "verdict": "accepted", "note": "Host checked the whole goal", **self.control(parent)})
+        self.assertEqual(finished["state"], "accepted")
+        self.assertEqual(finished["counts"]["turns"], 1)
+
     def test_host_can_integrate_and_finish_an_attention_turn_without_another_execution(self):
         board = self.board()
         submitted = self.submit(board)

@@ -40,7 +40,8 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(settings['reviewRouterProfileId'], PROFILE_ID)
         self.assertEqual(settings['fastRouterProfileId'], SECOND_PROFILE_ID)
         self.assertEqual(settings['routingBudget'], 'brief')
-        self.assertEqual(board.store.db.meta('schema_version'), '14')
+        from buddy.db import SCHEMA_VERSION
+        self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
     def test_legacy_mapping_is_idempotent_and_retains_review_when_verified(self):
         board = self.board()
@@ -173,7 +174,8 @@ class RoutingModesTests(BoardTestCase):
         settings, after = migrate_routing_configuration(board.directory, before)
         self.assertEqual(settings['reviewRouterProfileId'], PROFILE_ID)
         self.assertEqual(settings['routingBudget'], 'brief')
-        self.assertEqual(after['schema'], 14)
+        from buddy.db import SCHEMA_VERSION
+        self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(board.store.db.meta('unrelated-test-setting'), 'keep')
         self.assertEqual(set(before['tables']), set(after['tables']))
         self.assertEqual({k: v for k, v in before['fingerprints'].items() if k != 'meta'},

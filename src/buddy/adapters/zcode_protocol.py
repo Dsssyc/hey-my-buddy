@@ -647,7 +647,7 @@ class ZcodeAttemptUsage:
         if params.get("sessionId") != self.session_id:
             return
         native_turn = params.get("turnId")
-        if isinstance(native_turn, str) and native_turn != turn_id:
+        if native_turn != turn_id:
             return
         event_id = params.get("eventId")
         if isinstance(event_id, str) and 0 < len(event_id) <= 128:
@@ -680,7 +680,7 @@ class ZcodeAttemptUsage:
         for counters in self.delta_records.values():
             for name, value in counters.items():
                 totals[name] += value
-        return {"source": "zcode/v4-telemetry-usage-delta", "scope": "attempt",
+        return {"source": "zcode/v4-telemetry-usage-delta", "scope": "attempt", "coverage": "native-root-session",
                 "inputBasis": "includes-cached",
                 "inputTokens": totals["inputTokens"], "outputTokens": totals["outputTokens"],
                 "cachedInputTokens": totals["cacheReadTokens"] + totals["cacheWriteTokens"],
@@ -749,7 +749,7 @@ class ZcodeAttemptUsage:
         if self.message_counters is None:
             return None
         totals = self.message_counters
-        return {"source": "zcode/session-messages-root-assistant-tokens", "scope": "attempt",
+        return {"source": "zcode/session-messages-root-assistant-tokens", "scope": "attempt", "coverage": "native-root-session",
                 "inputBasis": "includes-cached",
                 "inputTokens": totals["input"], "outputTokens": totals["output"],
                 "cachedInputTokens": totals["read"] + totals["write"],
