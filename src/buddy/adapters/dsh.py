@@ -172,6 +172,8 @@ class DshAdapter(Adapter):
                     "--turn-output-file",
                     str(context.turn_output_file()),
                     f"--activity-file={activity_sidecar_path(context)}",
+                    "--usage-file",
+                    str(native_usage_sidecar_path(context)),
                 ]
             )
         return args
@@ -240,18 +242,25 @@ class DshAdapter(Adapter):
         inquiry = getattr(handle, "inquiry", {})
         if payload is None:
             preflight = _preflight_failed(exit_code, stdout_path) and handle.shutdown_confirmed()
+            stopped = handle.shutdown_confirmed()
             return AdapterOutcome(
                 status="cancelled" if handle.cancel_requested else "failed",
                 result={"status": "invalid-result", "error": "the dsh runner produced no parseable result",
-                        **({'modelStarted': False, 'code': 'adapter-unavailable'} if preflight else {})},
+                        **({'modelStarted': False, 'code': 'adapter-unavailable'} if preflight else {}),
+                        # A stopped observer may still have recorded this attempt's
+                        # native usage before the runner lost its own result.
+                        **(_native_usage(context) if stopped else {})},
                 error="the dsh runner produced no parseable result",
                 exit_code=exit_code,
                 signal=_signal_name(handle.process),
-                shutdown_confirmed=handle.shutdown_confirmed(),
+                shutdown_confirmed=stopped,
             )
         payload = {**payload, "inquiryBridge": {k: inquiry.get(k) for k in ("socketPath", "resultsPath", "errorPath")}}
         native_activity = payload.get("nativeActivity") if isinstance(payload.get("nativeActivity"), dict) else {}
         payload["nativeActivity"] = {**native_activity, "sidecarWritten": activity_sidecar_path(context).is_file()}
+        native_usage = payload.get("nativeUsage") if isinstance(payload.get("nativeUsage"), dict) else {}
+        payload["nativeUsage"] = {**native_usage, "sidecarWritten": native_usage_sidecar_path(context).is_file()}
+        payload.update(_native_usage(context))
         shutdown_confirmed = (bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
             exit_code, stdout_path
         )) and handle.shutdown_confirmed()
@@ -386,6 +395,51 @@ def _native_session(payload: dict, turn_record: dict | None = None) -> dict:
 def activity_sidecar_path(context: ExecutionContext) -> Path:
     """The attempt-private ``activity.json`` the DSH observer writes for the Worker."""
     return context.directory / "activity.json"
+
+
+def native_usage_sidecar_path(context: ExecutionContext) -> Path:
+    """The attempt-private ``native-usage.json`` the DSH usage observer writes."""
+    return context.directory / "native-usage.json"
+
+
+def _native_usage(context: ExecutionContext) -> dict:
+    """This attempt's native usage, quota and retained root assistant text.
+
+    The observer's document is attempt-bound; a foreign, malformed or missing
+    sidecar contributes nothing at all. DSH reports its input count excluding
+    cache read/write tokens, which ``buddy.usage`` unifies exactly once; a
+    provider that exposes no quota window stays unknown instead of guessed.
+    """
+    from .. import usage
+    if context.turn_input is None:
+        # Only a governed turn mounts the observer; an ungoverned run has no
+        # attempt-bound native record and reports unknown usage.
+        return {"tokenUsage": None, "quota": None, "quotaFailure": None, "lastAssistantMessage": None}
+    document = usage.read_sidecar(native_usage_sidecar_path(context), task_id=context.task_id,
+                                  attempt_id=context.attempt_id, generation=context.generation)
+    observed = document.get("nativeUsage") if isinstance(document, dict) else None
+    observed = observed if isinstance(observed, dict) else {}
+    native = observed.get("tokenUsage") if isinstance(observed.get("tokenUsage"), dict) else {}
+    # The observer reports native counters; the canonical unification (DSH input
+    # excludes cache, so cache is added exactly once) lives in ``buddy.usage``.
+    candidate = {key: native.get(key) for key in (
+        "inputBasis", "inputTokens", "cachedInputTokens", "outputTokens",
+        "reasoningOutputTokens", "cacheReadTokens", "cacheWriteTokens", "completeness")}
+    candidate["source"] = native.get("source") or observed.get("source")
+    candidate["nativeRecords"] = native.get("records")
+    candidate["coverage"] = "native-root-session"
+    failure = observed.get("failure")
+    failure_code = failure.get("code") if isinstance(failure, dict) else None
+    quota_failure = usage.normalize_quota_failure({"nativeCode": failure_code, "source": "dsh/session-turn-end", "observedAt": document.get("updatedAt") if document else None})
+    if quota_failure is not None and quota_failure["code"] == "unknown":
+        quota_failure = None
+    return {
+        "tokenUsage": usage.normalize_token_usage(candidate),
+        "quota": usage.normalize_quota(observed.get("quota")),
+        "quotaFailure": quota_failure,
+        "lastAssistantMessage": usage.normalize_last_assistant_message(
+            observed.get("lastAssistantMessage"), source="dsh/session-root-assistant-message"),
+    }
 
 
 def _preflight_failed(exit_code: int | None, stdout_path: Path) -> bool:

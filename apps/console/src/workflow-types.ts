@@ -1,4 +1,4 @@
-import type { Shutdown, Task } from "./types";
+import type { Shutdown, Task, TokenUsage } from "./types";
 import type { RoutingMode, RoutingFallback } from "./types";
 
 export type ExecutionConfiguration = {
@@ -30,6 +30,42 @@ export type TurnRouting = {
   turnId: string; turnIndex: number; attemptId: string;
   executionConfiguration?: ExecutionConfiguration | null;
   routing?: { decisionId: string | null; executionConfigurationRevision: number } | null;
+  /** Native usage of this one execution; null or absent means unknown. */
+  tokenUsage?: TokenUsage | null;
+};
+
+/**
+ * The independent Host conclusion of a failed or cancelled goal (ADR-018 §16).
+ * It records what the Host did with the remains; it never changes the goal's
+ * execution outcome into a success or an acceptance.
+ */
+export type HostConclusion = {
+  conclusionId: string;
+  /** The reviewed execution generation; null when the goal never started. */
+  attemptId: string | null;
+  /** The recorded target outcome this conclusion explains: failed or cancelled. */
+  executionStatus: string;
+  note: string;
+  evidence: string[];
+  artifactId: string | null;
+  integrationId: string | null;
+  actor: string;
+  createdAt: string;
+  ownerGeneration: number;
+  runRevision: number;
+};
+
+/**
+ * The patch from the goal's recorded `inputCommit` to one output (ADR-018 §20).
+ * It is generated from the goal's own fixed input, so the Host can integrate
+ * without stacking every turn's incremental patch.
+ */
+export type CumulativePatch = {
+  baseCommit: string;
+  outputCommit: string;
+  path: string;
+  sha256: string;
+  changedPaths: string[];
 };
 
 export type WorkflowRequest = {
@@ -87,6 +123,10 @@ export type Workflow = {
   awaitingHost: boolean;
   waitReason: string;
   continuationCount: number;
+  /** ADR-018 §18: true only when the user required this configuration as a hard constraint. */
+  configurationLocked?: boolean | null;
+  /** ADR-018 §16: the independent Host conclusion of a failed or cancelled goal. */
+  hostConclusion?: HostConclusion | null;
   executionConfiguration?: ExecutionConfiguration | null;
   executionConfigurationRevision?: number;
   routing?: RoutingRecord | null;
@@ -110,6 +150,8 @@ export type Workflow = {
     summary?: string;
     summaryTruncated?: boolean;
     remaining?: string[];
+    /** Native usage of this execution; null or absent means unknown. */
+    tokenUsage?: TokenUsage | null;
   };
   activeRequest: WorkflowRequest | null;
   counts?: { openRequests?: number; turns?: number };
@@ -129,6 +171,12 @@ export type Workflow = {
     commit?: string;
     outputCommit?: string;
     diffPath?: string;
+    /** ADR-018 §17: a sealed but unverified intermediate delivery. */
+    partial?: boolean;
+    verified?: boolean;
+    final?: boolean;
+    /** ADR-018 §20: the patch from the goal's own input commit to this output. */
+    cumulativePatch?: CumulativePatch | null;
   }[];
   /** Host-recorded integration evidence, newest first. */
   integrations: IntegrationRecord[];

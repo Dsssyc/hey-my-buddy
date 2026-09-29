@@ -70,6 +70,8 @@ const INQUIRY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/inquiry-bridge.mjs
 const TURN_PLUGIN_PATH = fileURLToPath(new URL('../plugins/turn-result.mjs', import.meta.url));
 /** Bounded activity observer; mounted for governed turns when a sidecar path is supplied. */
 const ACTIVITY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/activity.mjs', import.meta.url));
+/** Native usage/quota observer; mounted for governed turns when a sidecar path is supplied. */
+const USAGE_PLUGIN_PATH = fileURLToPath(new URL('../plugins/usage.mjs', import.meta.url));
 /** Prefix of the private bridge failure report written next to the socket. */
 const INQUIRY_ERROR_SUFFIX = '.error.json';
 /**
@@ -137,6 +139,11 @@ const USAGE = [
   '                          bounded metadata-only projection of this turn\'s',
   '                          native events, written throttled and atomically for',
   '                          the owning Worker to forward; requires a governed turn',
+  '  --usage-file <path>     private absolute native-usage.json sidecar path: the',
+  '                          bounded native token-usage and quota observation of',
+  '                          this governed turn plus the last native root',
+  '                          assistant text, written atomically for the owning',
+  '                          adapter to normalize; requires a governed turn',
   '  -h, --help              print this help and exit',
   '',
   'Install the workspace bridge in the owning host profile with',
@@ -325,6 +332,7 @@ try {
       'turn-input-file': { type: 'string' },
       'turn-output-file': { type: 'string' },
       'activity-file': { type: 'string' },
+      'usage-file': { type: 'string' },
     },
     allowPositionals: false,
   }));
@@ -430,6 +438,19 @@ if (activityRawFile !== undefined) {
   if (!isFile(ACTIVITY_PLUGIN_PATH)) fail(`activity observer plugin is missing: ${ACTIVITY_PLUGIN_PATH}`);
 }
 const activityFile = activityRawFile === undefined ? undefined : resolve(activityRawFile);
+// The native-usage sidecar is attempt-bound too: it carries this turn's frozen
+// usage/quota observation and the retained root assistant text, so it is only
+// meaningful with a governed turn and an absolute private path.
+const usageRawFile = values['usage-file'] === undefined ? undefined : values['usage-file'].trim();
+if (usageRawFile !== undefined) {
+  if (usageRawFile === '') fail('--usage-file must not be blank');
+  if (!isAbsolute(usageRawFile) || usageRawFile.includes('\0')) {
+    fail('--usage-file must be an absolute path without NUL');
+  }
+  if (turnConfig === undefined) fail('--usage-file requires a governed turn (--turn-input-file)');
+  if (!isFile(USAGE_PLUGIN_PATH)) fail(`native usage observer plugin is missing: ${USAGE_PLUGIN_PATH}`);
+}
+const usageFile = usageRawFile === undefined ? undefined : resolve(usageRawFile);
 if (!/^\d+$/.test(values.timeout)) {
   fail(`--timeout must be an integer: 0 disables the deadline, or ${MIN_TIMEOUT_SECONDS}-${MAX_TIMEOUT_SECONDS} seconds`);
 }
@@ -740,6 +761,20 @@ try {
       }],
     });
   }
+  if (usageFile !== undefined && turnConfig !== undefined) {
+    // One bounded native observation for this exact attempt: token usage, the
+    // harness quota when the provider exposes one, and the retained root
+    // assistant text. The owning adapter validates the attempt binding.
+    patchRows.push({
+      insert: [{
+        id: 'deepseek-delegate-usage', name: USAGE_PLUGIN_PATH,
+        config: {
+          usagePath: usageFile, taskId: turnConfig.input.taskId, attemptId: turnConfig.input.attemptId,
+          generation: turnConfig.input.generation, promptSha256, cwd,
+        },
+      }],
+    });
+  }
   writeFileSync(patchFile, JSON.stringify(patchRows), { mode: 0o600 });
 } catch {
   if (tempDir !== undefined) rmSync(tempDir, { recursive: true, force: true });
@@ -931,6 +966,11 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
       ? { enabled: false, reason: 'no --activity-file was supplied for this run' }
       : { enabled: true, sidecar: 'activity.json',
           note: 'the bounded metadata-only projection this run wrote for its owning Worker; the sidecar path stays private and only the Worker reads it' },
+    nativeUsage: usageFile === undefined
+      ? { enabled: false, reason: 'no --usage-file was supplied for this run' }
+      : { enabled: true, sidecar: 'native-usage.json',
+          source: 'dsh/session-assistant-usage',
+          note: 'the bounded native token-usage observation, the provider quota when the harness exposes one, and the retained root assistant text; the adapter validates the attempt binding and normalizes the counters' },
     workspace,
     nativeStorage: {
       // Truthful session-storage facts. Git isolation and native storage are

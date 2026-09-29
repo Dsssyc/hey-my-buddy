@@ -1,6 +1,7 @@
 """Release transport checks; no install command or daily state is touched."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -42,6 +43,8 @@ class DistributionTests(unittest.TestCase):
             result = subprocess.run(command, cwd=ROOT, env=env,
                                     capture_output=True, text=True, timeout=180)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
             wheel = next((root / "dist").glob("*.whl"))
             sdist = next((root / "dist").glob("*.tar.gz"))
             with zipfile.ZipFile(wheel) as archive:
@@ -67,14 +70,29 @@ class DistributionTests(unittest.TestCase):
                 self.assertIn("hey-my-buddy = buddy.package_install:main", archive.read(entry).decode())
                 self.assertFalse(any(line.startswith("buddy =") for line in archive.read(entry).decode().splitlines()))
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in wheel_files))
+                # A wheel built directly from the checkout carries its source commit.
+                self.assertEqual(json.loads(archive.read("buddy/_distribution/skill.json"))["sourceCommit"], head)
             with tarfile.open(sdist) as archive:
                 names = archive.getnames()
                 for suffix in ("packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
                                "skills/buddy/SKILL.md", "docs/reference/architecture.md",
                                "src/buddy/runtime.py", "src/buddy/console_assets/index.html",
-                               "harnesses/dsh/scripts/run.mjs"):
+                               "harnesses/dsh/scripts/run.mjs", "src/buddy/build-info.json"):
                     self.assertTrue(any(name.endswith("/" + suffix) for name in names), suffix)
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in names))
+                # The sdist carries the source commit for a later Git-less wheel build.
+                metadata = next(name for name in names if name.endswith("/src/buddy/build-info.json"))
+                self.assertEqual(json.loads(archive.extractfile(metadata).read())["sourceCommit"], head)
+                archive.extractall(root / "sdist", filter="data")
+            # A wheel built from the extracted sdist, with no Git checkout present,
+            # must keep the original sourceCommit in its embedded skill marker.
+            layout = next((root / "sdist").iterdir())
+            from_sdist = subprocess.run(["uv", "build", "--wheel", "--out-dir", str(root / "from-sdist")],
+                                        cwd=layout, env=env, capture_output=True, text=True, timeout=180)
+            self.assertEqual(from_sdist.returncode, 0, from_sdist.stdout + from_sdist.stderr)
+            with zipfile.ZipFile(next((root / "from-sdist").glob("*.whl"))) as archive:
+                marker = json.loads(archive.read("buddy/_distribution/skill.json"))
+            self.assertEqual(marker["sourceCommit"], head)
 
 
 if __name__ == "__main__":

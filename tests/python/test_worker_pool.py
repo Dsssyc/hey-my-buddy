@@ -33,7 +33,7 @@ class WorkerPoolSizingTests(BoardTestCase):
         try:
             handle.request_stop()  # the previous daemon's owner has not exited yet
             with mock.patch("buddy.daemon.subprocess.Popen", return_value=process) as spawn, mock.patch(
-                "buddy.daemon.runtime.launch_target", return_value={"python": sys.executable, "pythonPath": None}
+                "buddy.daemon.runtime.launch_target", return_value={"python": sys.executable, "pythonPath": None, "stable": False}
             ):
                 pool.start()
                 spawn.assert_not_called()  # never duplicate a live owner

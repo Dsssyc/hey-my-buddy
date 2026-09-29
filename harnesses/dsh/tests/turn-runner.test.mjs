@@ -70,6 +70,45 @@ test('raw harness probe omits governed fields and the terminal plugin', (t) => {
   assert.equal(existsSync(s.outputFile), false);
 });
 
+test('a governed turn mounts the attempt-bound native usage observer', (t) => {
+  const s = scenario(t);
+  const usageFile = join(s.dir, 'attempt-usage', 'native-usage.json');
+  const activityFile = join(s.dir, 'attempt-usage', 'activity.json');
+  const result = runCli([...s.args, '--usage-file', usageFile, '--activity-file', activityFile], { env: s.env() });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = parsePayload(result);
+  assert.equal(payload.nativeUsage.enabled, true);
+  assert.equal(payload.nativeUsage.sidecar, 'native-usage.json');
+  assert.equal(payload.nativeUsage.source, 'dsh/session-assistant-usage');
+  assert.match(payload.nativeUsage.note, /adapter validates the attempt binding/);
+  const patch = readArtifactJson(s.artifacts, 'patch.json');
+  const rows = patch.flatMap((item) => item.insert || []);
+  const usage = rows.find((item) => item.id === 'deepseek-delegate-usage');
+  assert.equal(usage.name.endsWith('plugins/usage.mjs'), true, usage.name);
+  assert.deepEqual(usage.config, {
+    usagePath: usageFile, taskId: 'task-one', attemptId: 'attempt-one', generation: 1,
+    promptSha256: sha256(readArtifactJson(s.artifacts, 'argv.json').at(-1)), cwd: realpathSync(s.cwd),
+  });
+  const activity = rows.find((item) => item.id === 'deepseek-delegate-activity');
+  assert.equal(activity.config.activityPath, activityFile);
+});
+
+test('the native usage sidecar requires a governed turn and a private absolute path', (t) => {
+  const s = scenario(t);
+  const cases = [
+    { args: [...s.base, '--usage-file', join(s.dir, 'native-usage.json')], error: /requires a governed turn/ },
+    { args: [...s.args, '--usage-file', 'relative.json'], error: /absolute/ },
+    { args: [...s.args, '--usage-file', ''], error: /must not be blank/ },
+  ];
+  for (const { args, error } of cases) {
+    const result = runCli(args, { env: s.env() });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, error);
+    assert.equal(result.stdout, '');
+  }
+  assert.equal(existsSync(join(s.artifacts, 'pid.txt')), false, 'no invalid invocation started DSH');
+});
+
 test('paired flags, schema, privacy, absolute paths and existing targets fail before spawning', (t) => {
   const s = scenario(t);
   const cases = [

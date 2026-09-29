@@ -851,6 +851,18 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
             return _finish_output(repository, output, directory)
 
 
+def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
+    """Freeze a whole-goal patch using immutable Git objects, independent of checkout edits."""
+    with _errors():
+        repository, _changed = _artifact_binding(manifest, manifest, artifact)
+        base = _commit(repository, original_commit)
+        data = _diff(repository, base, artifact["commit"])
+        path = Path(artifact["diffPath"]).with_name("cumulative-" + base + ".patch")
+        _write_once(path, data)
+        return {"baseCommit": base, "outputCommit": artifact["commit"], "path": str(path),
+                "sha256": _sha(data), "changedPaths": sorted(_tree_changes(repository, base, artifact["commit"]))}
+
+
 # -- scope failure evidence and Host-directed recovery ------------------------
 def _record_scope_evidence(directory, evidence, task_id, attempt_id):
     """Keep one bounded failure-site record per observed workspace fingerprint."""
@@ -1333,7 +1345,7 @@ def _artifact_binding(original_input, final_input, artifact):
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
                        path: str, ref: str, strategy: str, before_commit: str,
                        repository_id: str | None = None, checkout_id: str | None = None,
-                       adjusted_paths=None, reason: str | None = None) -> dict:
+                       adjusted_paths=None, host_paths=None, reason: str | None = None) -> dict:
     """Verify that one immutable artifact is actually present in a real target.
 
     The target checkout identity, the resolved ``ref`` commit and both before and
@@ -1356,6 +1368,10 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             raise BoardError("INVALID_WORKSPACE", "Adjusted paths must be artifact output paths", paths=unknown_adjustments[:32])
         if adjustments and not (isinstance(reason, str) and reason.strip()):
             raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit reason")
+        host_paths = sorted({_relative(value) for value in (host_paths or [])})
+        overlap = sorted(set(host_paths) & set(changed))
+        if overlap:
+            raise BoardError("INVALID_WORKSPACE", "Host paths must be separate from artifact output paths", paths=overlap[:32])
         identity = inspect(path)
         if repository_id is not None and identity["repositoryId"] != repository_id:
             raise BoardError("WORKSPACE_CHANGED", "The integration target repository changed",
@@ -1368,6 +1384,10 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         after = _commit(root, ref)
         before_tree = _line(root, "rev-parse", before + "^{tree}")
         after_tree = _line(root, "rev-parse", after + "^{tree}")
+        target_changes = _tree_changes(root, before_tree, after_tree)
+        missing_host = sorted(set(host_paths) - set(target_changes))
+        if missing_host:
+            raise BoardError("INVALID_WORKSPACE", "Host paths must be actual changes in the target commit interval", paths=missing_host[:32])
         source = artifact.get("commit")
         artifact_ancestor = False
         if isinstance(source, str) and source:
@@ -1412,6 +1432,7 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             "differingPaths": differing[:OUTPUT_ENTRY_LIMIT],
             "missingPaths": missing[:OUTPUT_ENTRY_LIMIT],
             "adjustments": adjustments[:OUTPUT_ENTRY_LIMIT],
+            "hostPaths": host_paths,
             "unrecordedPaths": unrecorded[:OUTPUT_ENTRY_LIMIT],
             "reason": reason,
         }
@@ -1585,7 +1606,10 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         result["locked"] = record.get("locked")
     result["refs"] = _allocation_refs(repository, allocation["workspaceId"], manifest, retained)
     if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
-        result["reasons"].append("no-sealed-output")
+        try:
+            verify(manifest, require_unchanged=True)
+        except BoardError:
+            result["reasons"].append("unsealed-changes")
         return
     snapshot = sealed["snapshot"]
     result["sealedObservation"] = snapshot.get("observationSha256")

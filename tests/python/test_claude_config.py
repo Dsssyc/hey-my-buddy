@@ -29,7 +29,30 @@ def flag_value(args: list[str], flag: str) -> str | None:
     return None
 
 
+#: Inherited Worker/runtime pins and third-party provider endpoints a focused run
+#: must not depend on. ``buddy.checks`` sanitizes its children with its own list;
+#: this file states the same boundary itself so `python -m unittest
+#: tests.python.test_claude_config` is self-sufficient.
+FOCUSED_CLEARED_VARIABLES = (
+    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
+    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
+    "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_HARNESS_RECORD_FILE",
+    "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    *THIRD_PARTY_OVERRIDE_VARIABLES,
+)
+
+
 class ClaudeConfigTests(unittest.TestCase):
+    def setUp(self):
+        # The override cases below need the explicit development switch, and this
+        # focused file must supply it rather than rely on buddy.checks having set it.
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in FOCUSED_CLEARED_VARIABLES}
+        environment["BUDDY_DEV_SOURCE"] = "1"
+        patcher = mock.patch.dict(os.environ, environment, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_cli_override_and_missing_cli(self):
         with tempfile.TemporaryDirectory(prefix="buddy-claude-config-") as temp:
             cli = Path(temp) / "claude"

@@ -281,23 +281,30 @@ def _governed_result_view(full: dict, run_id: str) -> dict | None:
         return None
     turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
     outcome = turn.get("outcome") if isinstance(turn, dict) and isinstance(turn.get("outcome"), dict) else {}
-    seal = result.get("workspaceSeal") if isinstance(result.get("workspaceSeal"), dict) else None
+    partial = result.get("partialWorkspaceSeal")
+    seal = partial if isinstance(partial, dict) else result.get("workspaceSeal")
+    seal = seal if isinstance(seal, dict) else None
     artifacts = []
     if seal is not None:
         artifacts.append(
             {
-                "kind": "workspace-seal",
+                "kind": "partial-output" if partial else "workspace-seal",
+                **({"partial": True, "verified": False, "final": False} if partial else {}),
                 "snapshotSha256": seal.get("snapshotSha256"),
                 "manifestSha256": seal.get("manifestSha256"),
                 "commit": seal.get("commit"),
                 "diffPath": seal.get("diffPath"),
+                "cumulativePatch": ({**seal["cumulativePatch"], "changedPaths": (seal["cumulativePatch"].get("changedPaths") or [])[:32], "changedPathsTruncated": len(seal["cumulativePatch"].get("changedPaths") or []) > 32} if isinstance(seal.get("cumulativePatch"), dict) else None),
             }
         )
+    from .native_observations import failure_view
     final_text = result.get("finalText")
     remaining = outcome.get("remaining")
     disposition = outcome.get("disposition")
     return {
         "status": result.get("status"),
+        "tokenUsage": full.get("tokenUsage"),
+        "quotaFailure": failure_view(result, adapter=full.get("adapter")),
         "turn": None
         if turn is None
         else {
@@ -313,7 +320,7 @@ def _governed_result_view(full: dict, run_id: str) -> dict | None:
         "finalText": _head_text(final_text, 2000),
         "finalTextTruncated": isinstance(final_text, str) and len(final_text) > 2000,
         "logPaths": result.get("logPaths"),
-        "processState": {"shutdownConfirmed": bool((result.get("processState") or {}).get("shutdownConfirmed"))},
+        "processState": {"shutdownConfirmed": bool(full.get("shutdownConfirmed", (result.get("processState") or {}).get("shutdownConfirmed")))},
         "resultCommand": _result_command(run_id),
         "note": "Compact governed result; the full payload, manifests and sealed output stay durable.",
     }
@@ -441,7 +448,7 @@ def _host_boundary(
             "request": request_view,
             "nextCommands": commands,
             "note": (
-                "The original goal needs Host input and remains unfinished. A routing boundary may have no "
+                "The original goal needs Host input. Inspect its sealed artifacts with get: an integrated current turn may be acknowledged directly, while partial work stays unverified. A routing boundary may have no "
                 "coding turn or result yet. Use the current owner's saved controlFile with an applicable "
                 "decision or continuation, then await the same runId."
             ),

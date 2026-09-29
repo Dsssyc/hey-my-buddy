@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .db import DB_FILE, SCHEMA, SCHEMA_VERSION, SECRET_KEY
 from .errors import BoardError
-from .migrations import MIGRATED_TABLES_13, migrate_12_to_13, migrate_13_to_14
+from .migrations import MIGRATED_TABLES_13, migrate_12_to_13, migrate_13_to_14, migrate_14_to_15
 from .objectives import record_activity
 
 SOURCE_SCHEMA_VERSION = 11
@@ -174,7 +174,8 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
             connection.execute("ROLLBACK")
             raise
         migration = migrate_12_to_13(connection)
-        migration = {**migration, "healthMigration": migrate_13_to_14(connection), "toSchema": SCHEMA_VERSION}
+        migration = {**migration, "healthMigration": migrate_13_to_14(connection),
+                     "hostWorkflowMigration": migrate_14_to_15(connection), "toSchema": SCHEMA_VERSION}
         connection.execute("PRAGMA foreign_keys=ON")
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()

@@ -180,6 +180,8 @@ class WorkflowTestCase(BoardTestCase):
 
     def continue_run(self, board, view, *, command_id="continue-1", input="keep going", helper_policy="keep", **extra):
         if extra.get("configuration") is not None:
+            from support import enable_fixture_configuration
+            enable_fixture_configuration(board.store, extra["configuration"])
             extra.setdefault("reason", "Use the explicit fixture configuration for this continuation")
         params = {
             "runId": view["runId"],

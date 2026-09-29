@@ -14,6 +14,7 @@ import { RoutingStatusBar } from "./RoutingStatusBar";
 import { familySearchText, harnessGroups, harnessName, harnessUnavailableText } from "./buddy-display";
 import { dayClock } from "./objective-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
+import { quotaView } from "./host-workflow";
 
 /** Status wording and the non-colour badge tone; an unknown future state stays visible as recorded. */
 const HARNESS_STATUS_LABEL: Record<HarnessStatus, string> = {
@@ -151,6 +152,11 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
   const readyCount = rows.filter(row => row.status === "ready").length;
   const attention = rows.some(row => row.status !== "ready");
   const lastChecked = rows.map(row => row.checkedAt ?? "").filter(Boolean).sort().at(-1) ?? "";
+  // ADR-018 §23: the recorded near-limit reminder is visible without expanding a
+  // row; it is always named as the latest observation, never as live quota.
+  const quotaAlerts = rows.map(row => ({ row, quota: quotaView(row.quota) }))
+    .filter(item => item.quota?.alert);
+  const quotaAlertText = quotaAlerts.map(item => harnessName(item.row.adapter)).join("、");
   const writableTitle = !sessionWritable
     ? LOGIN_EXPIRED_ACTION_REFUSAL
     : !mutationsAvailable ? "连接中断或缺少写入资格" : undefined;
@@ -216,6 +222,12 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
         <span>可用 {readyCount}/{rows.length}</span>
         <span aria-hidden="true" className="routing-sep">｜</span>
         <span>上次检测：{lastChecked ? dayClock(lastChecked) : "未记录"}</span>
+        {quotaAlerts.length > 0 && <>
+          <span aria-hidden="true" className="routing-sep">｜</span>
+          <span className="quota-alert-line" title={`基于最近一次记录的额度观测，不是实时账户额度：${quotaAlertText}`}>
+            额度提醒：{quotaAlertText}
+          </span>
+        </>}
       </span>
       <button type="button" className="button small-button" aria-disabled={busy !== "" || !canWrite}
         title={writableTitle ?? (busy === "*" ? "正在重新检测…" : "按当前记录重新检测全部 harness，不会调用模型")}
@@ -232,10 +244,16 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
         const candidates = row.candidates ?? [];
         const reason = harnessReasonText(row.reasonCode);
         const remedy = harnessRemedy(row);
+        // ADR-018 §23: the latest recorded observation only; a stale or unknown
+        // window never reads as available or as 0%.
+        const quota = quotaView(row.quota);
         return <li key={row.adapter} className={"harness-status-row harness-" + row.status}>
           <div className="harness-status-rowline">
             <span className="harness-name">{name}</span>
             <Badge tone={harnessStatusTone(row.status)}>{harnessStatusText(row.status)}</Badge>
+            {quota?.alert && <Badge tone={quota.stale ? "neutral" : "amber"}>
+              {quota.limitReported ? "原生记录报告额度限制" : quota.windows.some(window => window.atLimit) ? "额度已到上限" : "额度接近上限"}
+            </Badge>}
             <span className="harness-summary" title={harnessTitle(row)}>{harnessSummary(row)}</span>
             <span className="harness-row-actions">
               <button type="button" className="icon-button harness-row-toggle" aria-expanded={isOpen}
@@ -257,6 +275,23 @@ function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sessionWrit
               <div><dt>来源</dt><dd>{harnessSource(row)}</dd></div>
               <div><dt>上次检测</dt><dd>{row.checkedAt ? dayClock(row.checkedAt) : "未记录"}</dd></div>
               {row.manualPath && <div><dt>手动路径</dt><dd><code className="mono harness-path">{row.manualPath}</code></dd></div>}
+              <div><dt>额度观测</dt><dd>
+                {!quota
+                  ? <span className="muted">未记录观测（未知）</span>
+                  : <>
+                    <span>{quota.stale ? "最近一次观测，可能已过期" : "最近一次观测"} · 来源 {quota.source}
+                      {quota.provider ? ` · ${quota.provider}` : ""} · {dayClock(quota.observedAt)}</span>
+                    <ul className="quota-windows" aria-label={`${name} 额度窗口`}>
+                      {quota.windows.map(window => <li key={window.name} className={window.nearLimit ? "quota-near" : undefined}>
+                        <span className="quota-name">{window.name}</span>
+                        <span className="quota-used">{window.usedPercent === null ? "使用率未知" : `使用率 ${window.usedText}`}</span>
+                        {window.nearLimit && <span className="quota-flag">{window.atLimit ? "已到上限" : "接近上限"}</span>}
+                        <span className="muted">重置 {window.resetsAt ? dayClock(window.resetsAt) : "未记录"}</span>
+                      </li>)}
+                    </ul>
+                    <span className="small muted">{quota.note}</span>
+                  </>}
+              </dd></div>
             </dl>
             {remedy && <p className="small harness-remedy">修复办法：{remedy}</p>}
             {candidates.length > 0 && <div className="harness-candidates">

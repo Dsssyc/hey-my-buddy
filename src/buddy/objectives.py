@@ -80,6 +80,13 @@ def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest.get("repositoryId") or spec["cwd"]
     identifier = presentation.get("objectiveId")
+    if presentation.get("objectiveOf") is not None:
+        source = connection.execute("SELECT objective_id FROM workflow_runs WHERE run_id=?", (presentation["objectiveOf"],)).fetchone()
+        if source is None:
+            raise BoardError("NOT_FOUND", "objectiveOf names an unknown run")
+        if source["objective_id"] is None:
+            raise BoardError("OBJECTIVE_REQUIRED", "objectiveOf must name a run belonging to a work objective")
+        identifier = source["objective_id"]
     if identifier is not None:
         row = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (identifier,)).fetchone()
         if row is None:
@@ -577,6 +584,7 @@ def _run_spans(connection, row) -> list[dict]:
             configuration=configuration, shutdown_confirmed=confirmed, uncertain=uncertain,
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
+            tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,
             error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
         ))
         queued_from = attempt["finished_at"] or attempt["created_at"]
@@ -644,7 +652,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     spans = []
     for attempt in connection.execute(
         "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at,"
-        " json_extract(result_json,'$.status') AS result_status, result_json, error"
+        " json_extract(result_json,'$.status') AS result_status, result_json, error, token_usage_json"
         " FROM attempts WHERE task_id=? ORDER BY generation", (decision_task_id,)
     ).fetchall():
         state, confirmed, uncertain = _attempt_state(attempt)
@@ -661,6 +669,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
             state, attempt_id=attempt["attempt_id"], shutdown_confirmed=confirmed, uncertain=uncertain,
             decisionTaskId=decision_task_id, resultStatus=attempt["result_status"],
             routing=span_routing,
+            tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,
             disposition=("abstention" if abstention and attempt["result_status"] != "cancelled"
                          else "routing-failed" if record and record["status"] in ("failed", "needs-host") and output.get("code")
                          else None),

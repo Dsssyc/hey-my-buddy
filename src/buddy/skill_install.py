@@ -223,12 +223,14 @@ def install(params: dict) -> dict:
                     os.environ["BUDDY_RUNTIME"] = old_pin
         if (state / "control.json").exists():
             from .upgrade import upgrade
-            current = _marker(target) if target.is_dir() else None
+            current = _marker(target) if target.is_dir() and not target.is_symlink() else None
+            # Placement follows the actual content comparison above, not a marker
+            # match: a same-version rebuild with changed files is an update.
+            placement = "already-current" if intact else ("updated" if current else "installed")
             result = upgrade({}, skill_source=source, skill_target=target)
             if result.get("error"):
                 error = result["error"]
                 raise BoardError(error["code"], error["message"], **{**error.get('details', {}), **{k: v for k, v in result.items() if k != "error"}})
-            placement = "already-current" if current and all(current.get(k) == marker.get(k) for k in ("version", "sourceCommit")) else "updated"
             claude = {"path": str(claude_skills_home() / SKILL), "status": _claude_status(target)}
             service = {"action": "upgrade", "result": result}
         else:

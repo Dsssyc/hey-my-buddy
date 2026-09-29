@@ -122,18 +122,21 @@ class SupervisorHandle:
         else:
             self.retire_request.unlink(missing_ok=True)
         target = runtime.launch_target()
-        environment = {
-            **os.environ,
+        from .launcher import service_environment
+        start_id = uuid.uuid4().hex
+        # A supervisor is a service process too: it inherits the explicit allowlist
+        # plus its own slot identity, never the daemon's whole environment.
+        environment = service_environment({
             "BUDDY_STATE_DIR": str(state_dir),
             "BUDDY_WORKER_ID": self.worker_id,
-        }
-        start_id = uuid.uuid4().hex
+        })
         self.start_stop_request = self.directory / f"stop-{start_id}.request"
         environment["BUDDY_SUPERVISOR_START_ID"] = start_id
         if target["pythonPath"]:
             environment["PYTHONPATH"] = target["pythonPath"]
-        else:
-            environment.pop("PYTHONPATH", None)
+        if target["stable"]:
+            environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
+            environment["BUDDY_PYTHON"] = target["python"]
         log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             self.process = subprocess.Popen(

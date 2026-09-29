@@ -28,6 +28,76 @@ def write_state(value):
     state_path().write_text(json.dumps(value))
 
 
+#: Two native requests inside one turn. The second one repeats the exact same
+#: thread totals, so a replayed notification must not be counted twice.
+USAGE_REQUESTS = (
+    {"inputTokens": 44150, "cachedInputTokens": 43776, "cacheWriteInputTokens": 0,
+     "outputTokens": 119, "reasoningOutputTokens": 32, "totalTokens": 44269},
+    {"inputTokens": 45210, "cachedInputTokens": 44736, "cacheWriteInputTokens": 0,
+     "outputTokens": 96, "reasoningOutputTokens": 6, "totalTokens": 45306},
+)
+#: A resumed thread already carries its earlier turns in the native total.
+PRIOR_THREAD_TOKENS = 250000
+
+RATE_LIMITS_READ = {
+    "ordinaryUsageAllowed": True,
+    "rateLimits": {
+        "limitId": "codex", "limitName": None, "normalModelSlug": None,
+        "primary": {"usedPercent": 42.5, "windowDurationMins": 300, "resetsAt": 1791050000},
+        "secondary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
+        "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+        "individualLimit": None, "spendControlReached": False, "planType": "pro",
+        "rateLimitReachedType": None,
+    },
+    "accountId": "account-fixture-0001",
+    "rateLimitUpsell": None,
+}
+RATE_LIMITS_NOTIFICATION = {
+    "limitId": "codex", "limitName": None, "normalModelSlug": None,
+    "primary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
+    "secondary": None,
+    "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+    "individualLimit": None, "spendControlReached": False, "planType": "pro",
+    "rateLimitReachedType": None,
+}
+
+
+def cumulative(turn_index: int, requests: list) -> dict:
+    """One native ``total`` breakdown: prior thread usage plus these requests.
+
+    A resumed thread's totals already contain its earlier turns; only the delta
+    from this turn's baseline is this attempt's usage.
+    """
+    prior = {
+        "inputTokens": PRIOR_THREAD_TOKENS * turn_index,
+        "cachedInputTokens": (PRIOR_THREAD_TOKENS - 1000) * turn_index,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 1000 * turn_index,
+        "reasoningOutputTokens": 0,
+        "totalTokens": PRIOR_THREAD_TOKENS * turn_index,
+    }
+    return {key: prior[key] + sum(request[key] for request in requests) for key in prior}
+
+
+def send_usage(case: str, thread_id: str, turn_id: str, turn_index: int) -> None:
+    """Emit this fixture's native usage and quota notifications, in native order."""
+    if case not in ("usage", "usage-read", "quota-failure"):
+        return
+    observed = []
+    for request in USAGE_REQUESTS:
+        observed.append(request)
+        send({"method": "thread/tokenUsage/updated", "params": {
+            "threadId": thread_id, "turnId": turn_id,
+            "tokenUsage": {"last": request, "total": cumulative(turn_index, observed),
+                           "modelContextWindow": 828400}}})
+    send({"method": "account/rateLimits/updated", "params": {"rateLimits": RATE_LIMITS_NOTIFICATION}})
+    # The native stream may repeat the final snapshot; a replay is not new usage.
+    send({"method": "thread/tokenUsage/updated", "params": {
+        "threadId": thread_id, "turnId": turn_id,
+        "tokenUsage": {"last": USAGE_REQUESTS[-1], "total": cumulative(turn_index, observed),
+                       "modelContextWindow": 828400}}})
+
+
 def outcome(case):
     request = None
     disposition = "completed"
@@ -63,6 +133,13 @@ def main():
         elif method == "account/read":
             send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
                                                             "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
+        elif method == "account/rateLimits/read":
+            if case in ("usage", "quota-failure"):
+                # The rolling notifications already carried the quota; a failed
+                # read must not fail the turn and must not erase what was seen.
+                send({"id": ident, "error": {"code": -32603, "message": "usage read unavailable"}})
+            else:
+                send({"id": ident, "result": RATE_LIMITS_READ})
         elif method == "model/list":
             send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",
                 "displayName": "Fixture", "description": "fixture", "hidden": False, "isDefault": True,
@@ -98,9 +175,11 @@ def main():
         elif method == "turn/start":
             thread_id = params["threadId"]
             state = read_state()
-            turn_id = f"native-turn-{len(state['threads'][thread_id]['turns']) + 1}"
+            turn_index = len(state['threads'][thread_id]['turns'])
+            turn_id = f"native-turn-{turn_index + 1}"
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
+            send_usage(case, thread_id, turn_id, turn_index)
             if case == "hang":
                 time.sleep(60)
                 continue
@@ -127,8 +206,11 @@ def main():
                                                             "item": item, "completedAtMs": 1}})
             if case == "disconnect-after-message":
                 return
-            status = "failed" if case in ("failed", "approval-failed") else "completed"
+            status = "failed" if case in ("failed", "approval-failed", "quota-failure") else "completed"
             turn = {"id": turn_id, "status": status, "items": [] if case == "no-final" else [item]}
+            if case == "quota-failure":
+                turn["error"] = {"message": "provider wording that must never be retained",
+                                 "codexErrorInfo": "usageLimitExceeded"}
             send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
             state["threads"][thread_id]["turns"].append(turn)
             write_state(state)

@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from ..errors import BoardError
+from .. import usage
 from . import turn_io
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
@@ -144,6 +145,16 @@ class ClaudeAdapter(Adapter):
         shutdown = bool(payload and payload.get("processState", {}).get("shutdownConfirmed") is True and handle.shutdown_confirmed())
         if payload is None:
             payload = {"status": "invalid-result", "error": "the Claude controller produced no complete JSON result"}
+        # ADR-018 items 22/23 and the retained root assistant text. The canonical
+        # shapes come from ``buddy.usage``; the raw observations never estimated
+        # anything, and a missing value stays null. ``quotaFailure`` keeps the
+        # bounded Claude-native ``rateLimitType``/``resetsAt`` shape this adapter
+        # has always published (pinned by its existing tests); the canonical quota
+        # windows and reached state are published through ``quota`` instead.
+        payload["tokenUsage"] = usage.normalize_token_usage(payload.get("tokenUsage"))
+        payload["quota"] = usage.normalize_quota(payload.get("quota"))
+        payload["lastAssistantMessage"] = usage.normalize_last_assistant_message(
+            payload.get("lastAssistantMessage"), source="claude/stream-json-root-assistant-message")
         status = "failed"
         if shutdown and payload.get("status") == "cancelled":
             status = "cancelled"

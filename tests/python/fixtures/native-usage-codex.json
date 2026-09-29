@@ -1,0 +1,136 @@
+{
+  "comment": "Desensitized minimal Codex App Server v2 native records. Copied field-for-field from the installed 0.157.0 app-server JSON Schema, from verified local account metadata reads, and from a real rollout token_count event, with every identifier, path and account value replaced. Field names and units are unchanged.",
+  "source": "codex/app-server-v2",
+  "appServerVersion": "0.157.0",
+  "threadId": "thread-fixture-0001",
+  "turnId": "turn-fixture-0001",
+  "tokenUsageNotifications": [
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "thread-fixture-0001",
+        "turnId": "turn-fixture-0001",
+        "tokenUsage": {
+          "last": {"inputTokens": 44150, "cachedInputTokens": 43776, "cacheWriteInputTokens": 0,
+                   "outputTokens": 119, "reasoningOutputTokens": 32, "totalTokens": 44269},
+          "total": {"inputTokens": 44150, "cachedInputTokens": 43776, "cacheWriteInputTokens": 0,
+                    "outputTokens": 119, "reasoningOutputTokens": 32, "totalTokens": 44269},
+          "modelContextWindow": 828400
+        }
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "thread-fixture-0001",
+        "turnId": "turn-fixture-0001",
+        "tokenUsage": {
+          "last": {"inputTokens": 45210, "cachedInputTokens": 44736, "cacheWriteInputTokens": 0,
+                   "outputTokens": 96, "reasoningOutputTokens": 6, "totalTokens": 45306},
+          "total": {"inputTokens": 89360, "cachedInputTokens": 88512, "cacheWriteInputTokens": 0,
+                    "outputTokens": 215, "reasoningOutputTokens": 38, "totalTokens": 89575},
+          "modelContextWindow": 828400
+        }
+      }
+    }
+  ],
+  "resumedThread": {
+    "comment": "A resumed thread's first notification carries the whole thread in total; the baseline is total - last, never the cumulative total.",
+    "priorThreadTotalTokens": 250000,
+    "notifications": [
+      {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+          "threadId": "thread-fixture-0001",
+          "turnId": "turn-fixture-0002",
+          "tokenUsage": {
+            "last": {"inputTokens": 12000, "cachedInputTokens": 11000, "cacheWriteInputTokens": 0,
+                     "outputTokens": 40, "reasoningOutputTokens": 4, "totalTokens": 12040},
+            "total": {"inputTokens": 262000, "cachedInputTokens": 11000, "cacheWriteInputTokens": 0,
+                      "outputTokens": 40, "reasoningOutputTokens": 4, "totalTokens": 262040},
+            "modelContextWindow": 828400
+          }
+        }
+      }
+    ],
+    "expected": {"inputTokens": 12000, "cachedInputTokens": 11000, "outputTokens": 40, "reasoningOutputTokens": 4}
+  },
+  "expected": {
+    "inputTokens": 89360,
+    "cachedInputTokens": 88512,
+    "outputTokens": 215,
+    "reasoningOutputTokens": 38,
+    "unifiedInputTokens": 89360,
+    "records": 2,
+    "completeness": "complete"
+  },
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
+    "secondary": null,
+    "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "pro",
+    "rateLimitReachedType": null
+  },
+  "rateLimitsRead": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {"usedPercent": 42.5, "windowDurationMins": 300, "resetsAt": 1791050000},
+      "secondary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
+      "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+      "individualLimit": null,
+      "spendControlReached": false,
+      "planType": "pro",
+      "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "limitId": "codex",
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {"usedPercent": 42.5, "windowDurationMins": 300, "resetsAt": 1791050000},
+        "secondary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
+        "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+        "individualLimit": null,
+        "spendControlReached": false,
+        "planType": "pro",
+        "rateLimitReachedType": null
+      }
+    },
+    "rateLimitResetCredits": {"availableCount": 0, "credits": []},
+    "accountId": "account-fixture-0001",
+    "rateLimitUpsell": null
+  },
+  "sparseRateLimitsUpdate": {
+    "comment": "A rolling update may omit fields; a sparse update that proves no window must not clear an earlier observation.",
+    "rateLimits": {
+      "limitId": "codex",
+      "primary": null,
+      "secondary": null,
+      "credits": {"hasCredits": true, "unlimited": false, "balance": "5"},
+      "planType": null,
+      "rateLimitReachedType": null
+    }
+  },
+  "quotaFailureTurn": {
+    "error": {"message": "provider wording that must never be retained", "codexErrorInfo": "usageLimitExceeded"}
+  },
+  "rolloutTokenCount": {
+    "comment": "The same native fact as the rollout record's token_count event, kept as cross-check evidence.",
+    "type": "token_count",
+    "info": {
+      "total_token_usage": {"input_tokens": 89360, "cached_input_tokens": 88512, "cache_write_input_tokens": 0,
+                            "output_tokens": 215, "reasoning_output_tokens": 38, "total_tokens": 89575},
+      "last_token_usage": {"input_tokens": 44150, "cached_input_tokens": 43776, "cache_write_input_tokens": 0,
+                           "output_tokens": 119, "reasoning_output_tokens": 32, "total_tokens": 44269},
+      "model_context_window": 828400
+    }
+  }
+}

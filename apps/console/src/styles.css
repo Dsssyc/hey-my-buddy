@@ -160,6 +160,25 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .workflow-children .button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .artifact-list li { border-bottom: 1px solid var(--line); }
 .artifact-list code { display: block; font-size: 11px; overflow-wrap: anywhere; padding: 3px 0; }
+.artifact-list .artifact-partial { border-left: 3px solid var(--warning); padding-left: 10px; }
+.artifact-flags { color: var(--muted); }
+.cumulative-patch, .host-paths { margin: 6px 0 2px; padding: 6px 8px; background: var(--subtle); border-radius: 5px; }
+.cumulative-patch .small, .host-paths .small { display: block; margin-bottom: 4px; }
+.cumulative-patch code.wrap, .host-paths code.wrap { white-space: pre-wrap; }
+.host-conclusion { border-left: 3px solid var(--line); padding-left: 12px; }
+.host-conclusion.failed { border-left-color: var(--danger); }
+.host-conclusion.cancelled { border-left-color: var(--warning); }
+.conclusion-evidence { margin: 6px 0 0; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
+.token-usage-list { display: grid; gap: 6px; margin: 8px 0; padding: 0; list-style: none; }
+.token-usage-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 6px 8px; background: var(--subtle); border-radius: 5px; font-size: 12px; }
+.token-usage-list .turn-label { font-weight: 600; }
+.token-usage-list .turn-usage { font-variant-numeric: tabular-nums; }
+.quota-windows { display: grid; gap: 3px; margin: 4px 0; padding: 0; list-style: none; font-size: 12px; }
+.quota-windows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.quota-windows .quota-name { min-width: 44px; font-weight: 600; }
+.quota-windows .quota-used { font-variant-numeric: tabular-nums; }
+.quota-windows .quota-flag { color: var(--warning); }
+.quota-alert-line { color: var(--warning); }
 .profile-avatar { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent); border-radius: 5px; }
 .evidence-item { padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
 .evidence-item > span { display: block; margin-top: 6px; }

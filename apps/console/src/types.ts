@@ -29,6 +29,47 @@ export type HarnessHealth = {
   remedy?: string;
   checkedAt?: string | null;
   expiresAt?: string | null;
+  /** Latest recorded native quota observation; null or absent means unknown. */
+  quota?: HarnessQuota | null;
+};
+
+/**
+ * One execution's native token usage (ADR-018 §22). `scope` is `attempt`: the
+ * numbers belong to this single execution, never to a session cumulative
+ * total. `inputTokens` already includes the cached input, so
+ * `cachedInputTokens` is a subset that must never be added again; a null field
+ * is unknown and is never rendered as 0.
+ */
+export type TokenUsage = {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  source: string;
+  scope: "attempt";
+  completeness?: "complete" | "partial" | "unknown";
+  coverage?: "native-root-session" | "native-root-thread" | "native-attempt";
+};
+
+/**
+ * One recorded native quota observation (ADR-018 §23). This is the latest
+ * observation the harness reported, never a live account reading: `stale`
+ * means it may already be out of date, an unknown `usedPercent` stays unknown
+ * and is never shown as 0 or "available".
+ */
+export type QuotaWindow = {
+  name: string;
+  usedPercent: number | null;
+  resetsAt: string | null;
+  stale?: boolean;
+};
+export type HarnessQuota = {
+  observedAt: string;
+  source: string;
+  provider?: string;
+  stale?: boolean;
+  reachedType?: string;
+  ordinaryUsageAllowed?: boolean;
+  windows: QuotaWindow[];
 };
 
 export type Profile = {
@@ -132,7 +173,10 @@ export type TaskQuery = {
   query?: string; projectId?: string; hostId?: string;
   filter?: "all" | "active" | "host" | "review";
 };
+export type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
+
 export type Task = {
+  quotaFailure?: QuotaFailure | null;
   runId: string;
   task: string;
   status: string;
@@ -151,6 +195,8 @@ export type Task = {
   terminationReason?: string | null;
   /** Selected attempt receipt; its `result.terminationReason` is the durable cause. */
   selectedAttempt?: AttemptReceipt | null;
+  /** Native usage of the selected execution; null or absent means unknown. */
+  tokenUsage?: TokenUsage | null;
   workflow?: {
     state: string;
     awaitingHost: boolean;
@@ -180,6 +226,8 @@ export type AttemptReceipt = {
   result?: Record<string, unknown> | null;
   error?: string | null;
   terminationReason?: string | null;
+  /** Native usage of exactly this execution; null or absent means unknown. */
+  tokenUsage?: TokenUsage | null;
 };
 /** Phases the frozen ADR-010 activity projection allows; nothing else claims progress. */
 export type ActivityPhase =

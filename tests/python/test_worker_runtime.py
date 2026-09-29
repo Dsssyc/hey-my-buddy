@@ -26,7 +26,8 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
                       "runtime": {"runtimeDir": "/stable/runtime", "environment": "/stable/runtime/venv"}}
             inherited = {"PATH": "/plugin/venv/bin:/usr/bin", "PYTHONPATH": "/plugin/python",
                          "BUDDY_PYTHON": "/plugin/venv/bin/python", "VIRTUAL_ENV": "/plugin/venv",
-                         "UV_PROJECT_ENVIRONMENT": "/plugin/venv", "BUDDY_RUNTIME": "/old/runtime"}
+                         "UV_PROJECT_ENVIRONMENT": "/plugin/venv", "BUDDY_RUNTIME": "/old/runtime",
+                         "CLAUDECODE": "1", "CLAUDE_CODE_OAUTH_TOKEN": "session-token"}
             with patch.dict(os.environ, inherited, clear=True), patch.object(runtime, "launch_target", return_value=target) as select, patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
                 result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": directory})
@@ -36,7 +37,8 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
             self.assertNotIn("PYTHONPATH", options["env"])
             self.assertEqual(options["env"]["BUDDY_RUNTIME"], "/stable/runtime")
             self.assertEqual(options["env"]["BUDDY_PYTHON"], target["python"])
-            for key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+            for key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "CLAUDECODE", "CLAUDE_CODE_OAUTH_TOKEN",
+                        "BUDDY_AGENT_CREDENTIAL"):
                 self.assertNotIn(key, options["env"])
             self.assertEqual(options["env"]["PATH"].split(os.pathsep)[0], "/stable/runtime/venv/bin")
             self.assertEqual(options["env"]["BUDDY_RUNTIME_IDENTITY"], target["identity"])
@@ -53,11 +55,15 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
                 cli._worker_command("worker-start", {"workerId": "dev-extra", "stateDir": directory})
             args, options = spawn.call_args
             self.assertEqual(args[0][0], sys.executable)
-            self.assertEqual(options["env"]["PYTHONPATH"], str(runtime.project_root() / "src") + os.pathsep + "/dev/extra")
+            # The checkout's own source path is set explicitly; a Host session's
+            # extra PYTHONPATH and uv environment overrides never reach a service.
+            self.assertEqual(options["env"]["PYTHONPATH"], str(runtime.project_root() / "src"))
             self.assertTrue(options["env"]["BUDDY_RUNTIME_IDENTITY"].startswith("source:"))
             self.assertNotIn("BUDDY_RUNTIME", options["env"])
-            for key in ("BUDDY_PYTHON", "PATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+            for key in ("BUDDY_PYTHON", "PATH"):
                 self.assertEqual(options["env"][key], inherited[key])
+            for key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+                self.assertNotIn(key, options["env"])
             self.assertFalse(runtime_root.exists(), "development start must not materialize a runtime")
 
     def test_worker_stop_does_not_select_runtime_or_spawn(self):

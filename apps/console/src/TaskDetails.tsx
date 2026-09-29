@@ -10,6 +10,7 @@ import { excerpt, resultText, taskStatus, taskTitle, titleTooltip, TASK_TITLE_SO
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
+import { tokenUsageView } from "./host-workflow";
 
 /** The one read-only hint every detail shows exactly once (0.16 T4/P1.3). */
 export const DETAIL_READ_ONLY_NOTE = "只读 · 操作由 Host 在 CLI 完成";
@@ -59,10 +60,14 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   // Worker resultSummary never appears here.
   const title = taskTitle(task);
   const titleNote = title.source === "task" ? TASK_TITLE_SOURCE_LABEL.task : "";
+  // One execution's own recorded usage; unknown stays unknown (ADR-018 §22).
+  const usage = tokenUsageView(task.tokenUsage ?? task.selectedAttempt?.tokenUsage);
+  const quotaFailureLabel = task.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : task.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
   return <>
     <header className="detail-header">
       <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回委派列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
+      {!task.workflow && quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
       <h2 className="detail-title" title={titleTooltip(title)}>
         {excerpt(title.text, 100)}{titleNote && <span className="title-source-note">{titleNote}</span>}
       </h2>
@@ -76,6 +81,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
         initialSection={initialSection} routingDecisionId={routingDecisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} /> : <div className="detail-body">
       {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
+      <p className="small muted" title={usage.title}>本次执行用量：{usage.text}</p>
       {recordInfo}
       <details className="detail-section"><summary>原始任务</summary><p className="read-text">{task.task}</p></details>
       <TaskActivityView task={task} />

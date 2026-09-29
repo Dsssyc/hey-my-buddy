@@ -370,8 +370,10 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
         # explicit BUDDY_DEV_SOURCE=1 development/test run executes from the checkout,
         # and that reports stable=false.
         target = runtime.launch_target(log_path=directory / "runtime-install.log")
-        from .launcher import launch_defaults, write_active_runtime
-        env = {**launch_defaults(directory), **os.environ}
+        from .launcher import launch_defaults, service_environment, write_active_runtime
+        # The daemon is a service process: it is built from the explicit allowlist,
+        # not from the Host session that happened to start it.
+        env = {**launch_defaults(directory), **service_environment()}
         env.update(BUDDY_STATE_DIR=str(directory), C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="")
         env["BUDDY_RUNTIME_IDENTITY"] = target["identity"]
         if target["pythonPath"]:

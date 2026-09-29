@@ -18,23 +18,23 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 ## Install
 
-hey-my-buddy is one shared Agent Skill, `buddy`, that carries its own CLI, plus one local service per state directory. The verified daily installation is 0.20.0 (contract 0.20.0, schema 14): the skill is placed in `~/.agents/skills/buddy`, Claude Code reaches the same directory through the `~/.claude/skills/buddy` link, and the retired Codex plugin is no longer used. Source and daily installation are separate facts. The current source candidate is 0.20.0 (contract 0.20.0, schema 14); it has not been installed or published. It adds the fast/review routing modes of ADR-018's first part without a schema change.
+hey-my-buddy is one shared Agent Skill, `buddy`, that carries its own CLI, plus one local service per state directory. The verified daily installation is 0.20.0 (contract 0.20.0, schema 14): the skill is placed in `~/.agents/skills/buddy`, Claude Code reaches the same directory through the `~/.claude/skills/buddy` link, and the retired Codex plugin is no longer used. Source and daily installation are separate facts. The current source candidate is 0.21.0 (contract 0.21.0, schema 15). It implements ADR-018 Host workflows: file/stdin packets, method help, objective reuse, direct Host completion, failure conclusions and cleanup, partial output, configuration changes on continuation, cumulative patches and native usage/quota observations. The [Host-workflow acceptance](docs/acceptance/host-workflow-0.21.0.md) records the checks and remaining limits. It is not installed or published; schema 14 → 15 migrates only through an explicit idle upgrade.
 
 Once the user decides the release channel and the exact version, the install entry is one fixed-version package command:
 
 ```sh
 # After the release channel and version are decided; not available today
-uvx hey-my-buddy@0.20.0 install
+uvx hey-my-buddy@0.21.0 install
 ```
 
 The package name's availability and whether it is published on PyPI are still the user's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:
 
 ```sh
-uv build --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.20.0-py3-none-any.whl hey-my-buddy install
+uv build --wheel --out-dir dist
+uvx --from /absolute/path/hey_my_buddy-0.21.0-py3-none-any.whl hey-my-buddy install
 ```
 
-On a machine without `uv`, the release's `install.sh` (macOS, Linux) or `install.ps1` (Windows) prepares a fixed private `uv` and then calls the same entry; they never change `PATH`, shell or Host settings and never install a global `buddy` command. An install prints the paths it will write, materializes the versioned runtime, refuses while work is running (`UPGRADE_NOT_IDLE`, listing the running tasks), then switches the whole generation — skill, launcher, runtime and service — with one verified rolling backup and rollback. Rerunning the same complete version repairs what is missing without restarting the service, and damaged content is repaired by rerunning the same fixed-version command. Installing or upgrading the daily service needs the user's separate authorization. The code and scripts are portable to Windows, but no real Windows machine has been validated yet.
+On a machine without `uv`, the release's `install.sh` (macOS, Linux) or `install.ps1` (Windows) prepares a fixed private `uv` and then calls the same entry; they never change `PATH`, shell or Host settings and never install a global `buddy` command. An install prints the paths it will write, materializes the versioned runtime, refuses while work is running (`UPGRADE_NOT_IDLE`, listing the running tasks), then switches the whole generation — skill, launcher, runtime and service — with one verified rolling backup and rollback. Rerunning the same complete version repairs what is missing without restarting the service, and damaged content is repaired by rerunning the same fixed-version command; changed content at the same version reports `updated`. Source archives retain their original commit when later built into wheels. Installing or upgrading the daily service needs the user's separate authorization. The code and scripts are portable to Windows, but no real Windows machine has been validated yet.
 
 ### Hand this prompt to the installing agent
 
@@ -101,3 +101,5 @@ Start with the [documentation index](docs/README.md) for commands, architecture,
 ## License
 
 [MIT](LICENSE).
+
+Repository verification uses uv and a supported Node version (see `apps/console/package.json`). Prepare the console test dependencies with `npm --prefix apps/console ci`, then run `uv run --frozen python -m buddy.checks`; the complete check includes synthetic preview data consumed by the actual frontend parsers.

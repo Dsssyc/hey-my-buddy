@@ -1,0 +1,178 @@
+{
+  "comment": "Desensitized minimal ZCode native app-server records. Field names, units and nullability are copied from the installed 0.16.9 bundle (/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs): the v4/telemetry/event usage.delta schema (version/eventId/eventSeq/sessionId/turnId plus inputTokens, outputTokens, totalTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens), the session/messages request {sessionId, afterMessageId?, limit?} with its {messages:[{info,parts}]} projection, and the assistant message tokens object {total?,input,output,reasoning,cache:{read,write}} built from the model usage (input already includes cached input; the native GV rule is total = input + output). Every session id, turn id, message id, model id and text is replaced; no credential, prompt, tool output or reasoning text is retained.",
+  "source": "zcode/native-app-server",
+  "harnessVersion": "0.16.9",
+  "sessionId": "sess-fixture-0001",
+  "turnId": "turn-fixture-0001",
+  "usageDeltas": [
+    {
+      "version": 1,
+      "eventId": "evt-fixture-0001",
+      "eventSeq": 4,
+      "occurredAt": "2026-09-26T12:00:00Z",
+      "sessionId": "sess-fixture-0001",
+      "turnId": "turn-fixture-0001",
+      "sourceCommandId": "buddy-fixture-input",
+      "kind": "usage.delta",
+      "requestId": "req-fixture-0001",
+      "providerId": "fixture-api",
+      "modelId": "fixture-model",
+      "inputTokens": 12000,
+      "outputTokens": 200,
+      "totalTokens": 12200,
+      "reasoningTokens": 20,
+      "cacheReadTokens": 3000,
+      "cacheWriteTokens": 100
+    },
+    {
+      "version": 1,
+      "eventId": "evt-fixture-0001",
+      "eventSeq": 4,
+      "occurredAt": "2026-09-26T12:00:00Z",
+      "sessionId": "sess-fixture-0001",
+      "turnId": "turn-fixture-0001",
+      "kind": "usage.delta",
+      "requestId": "req-fixture-0001",
+      "providerId": "fixture-api",
+      "modelId": "fixture-model",
+      "inputTokens": 12000,
+      "outputTokens": 200,
+      "totalTokens": 12200,
+      "reasoningTokens": 20,
+      "cacheReadTokens": 3000,
+      "cacheWriteTokens": 100
+    },
+    {
+      "version": 1,
+      "eventId": "evt-fixture-0002",
+      "eventSeq": 5,
+      "occurredAt": "2026-09-26T12:00:01Z",
+      "sessionId": "sess-fixture-0001",
+      "turnId": "turn-fixture-0001",
+      "kind": "usage.delta",
+      "requestId": "req-fixture-0002",
+      "providerId": "fixture-api",
+      "modelId": "fixture-model",
+      "inputTokens": 5000,
+      "outputTokens": 200,
+      "totalTokens": 5200,
+      "reasoningTokens": 10,
+      "cacheReadTokens": 1000,
+      "cacheWriteTokens": 0
+    },
+    {
+      "version": 1,
+      "eventId": "evt-fixture-foreign",
+      "eventSeq": 6,
+      "occurredAt": "2026-09-26T12:00:02Z",
+      "sessionId": "sess-foreign-0001",
+      "turnId": "turn-fixture-0001",
+      "kind": "usage.delta",
+      "inputTokens": 9999,
+      "outputTokens": 9999,
+      "totalTokens": 19998,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0
+    },
+    {
+      "version": 1,
+      "eventId": "evt-fixture-other-turn",
+      "eventSeq": 7,
+      "occurredAt": "2026-09-26T12:00:03Z",
+      "sessionId": "sess-fixture-0001",
+      "turnId": "turn-other-0001",
+      "kind": "usage.delta",
+      "inputTokens": 8888,
+      "outputTokens": 8888,
+      "totalTokens": 17776,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0
+    }
+  ],
+  "expectedDelta": {
+    "source": "zcode/v4-telemetry-usage-delta",
+    "inputTokens": 17000,
+    "outputTokens": 400,
+    "cachedInputTokens": 4100,
+    "reasoningOutputTokens": 30,
+    "records": 2,
+    "completeness": "partial"
+  },
+  "baselineMessages": {
+    "messages": [
+      {
+        "info": {"messageId": "old-user-0001", "sessionId": "sess-fixture-0001", "role": "user",
+                 "time": {"created": 1790265000000}},
+        "parts": [{"type": "text", "text": "previous fixture prompt", "partId": "old-part-0001",
+                   "messageId": "old-user-0001", "sessionId": "sess-fixture-0001"}]
+      },
+      {
+        "info": {"messageId": "old-assistant-0001", "sessionId": "sess-fixture-0001", "role": "assistant",
+                 "parentMessageId": "old-user-0001", "time": {"created": 1790265001000, "completed": 1790265002000},
+                 "tokens": {"total": 11100, "input": 11000, "output": 100, "reasoning": 0,
+                            "cache": {"read": 0, "write": 0}}},
+        "parts": [{"type": "text", "text": "previous fixture answer", "partId": "old-part-0002",
+                   "messageId": "old-assistant-0001", "sessionId": "sess-fixture-0001"}]
+      }
+    ]
+  },
+  "finalMessages": {
+    "messages": [
+      {
+        "info": {"messageId": "new-user-0001", "sessionId": "sess-fixture-0001", "role": "user",
+                 "time": {"created": 1790265900000}},
+        "parts": [{"type": "text", "text": "fixture prompt", "partId": "new-part-0001",
+                   "messageId": "new-user-0001", "sessionId": "sess-fixture-0001"}]
+      },
+      {
+        "info": {"messageId": "new-assistant-0001", "sessionId": "sess-fixture-0001", "role": "assistant",
+                 "parentMessageId": "new-user-0001", "time": {"created": 1790265901000, "completed": 1790265902000},
+                 "tokens": {"total": 12200, "input": 12000, "output": 200, "reasoning": 20,
+                            "cache": {"read": 3000, "write": 100}}},
+        "parts": [
+          {"type": "text", "text": "Working on the fixture.", "partId": "new-part-0002",
+           "messageId": "new-assistant-0001", "sessionId": "sess-fixture-0001"},
+          {"type": "reasoning", "text": "fixture reasoning that is never assistant output",
+           "partId": "new-part-0003", "messageId": "new-assistant-0001", "sessionId": "sess-fixture-0001"}
+        ]
+      },
+      {
+        "info": {"messageId": "new-assistant-0002", "sessionId": "sess-fixture-0001", "role": "assistant",
+                 "parentMessageId": "new-user-0001", "time": {"created": 1790265903000, "completed": 1790265904000},
+                 "tokens": {"total": 5200, "input": 5000, "output": 200, "reasoning": 10,
+                            "cache": {"read": 1000, "write": 0}}},
+        "parts": [
+          {"type": "text", "text": "Fixture final answer: bounded work done.", "partId": "new-part-0004",
+           "messageId": "new-assistant-0002", "sessionId": "sess-fixture-0001"},
+          {"type": "tool", "tool": "bash", "partId": "new-part-0005",
+           "messageId": "new-assistant-0002", "sessionId": "sess-fixture-0001"}
+        ]
+      }
+    ]
+  },
+  "expectedMessages": {
+    "source": "zcode/session-messages-root-assistant-tokens",
+    "inputTokens": 17000,
+    "outputTokens": 400,
+    "cachedInputTokens": 4100,
+    "reasoningOutputTokens": 30,
+    "records": 2,
+    "completeness": "complete",
+    "lastAssistantText": "Fixture final answer: bounded work done."
+  },
+  "quotaFailureTurn": {
+    "comment": "The exported turn.failed shape: error.type plus error.code and the strict attribution object. The raw message is deliberately secret-shaped so a test can prove the controller never surfaces provider text.",
+    "error": {"type": "AiSdkModelAdapterError", "code": "model_rate_limited",
+              "message": "stream failed for https://models.example.com/v1 key sk-fixture-never-public",
+              "retryable": false,
+              "attribution": {"source": "provider", "reason": "rate_limited", "errorPhase": "stream",
+                              "exceptionKind": "provider_business", "providerId": "fixture-api",
+                              "modelId": "fixture-model", "providerKind": "anthropic", "transport": "sse",
+                              "statusCode": 429, "providerErrorCode": "1308", "retryable": false}},
+    "turnPhase": "stream",
+    "expectedCode": "model_rate_limited",
+    "expectedClass": "rate-limited"
+  }
+}

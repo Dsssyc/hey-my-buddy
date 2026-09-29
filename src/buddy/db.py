@@ -18,9 +18,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 #: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 13
+PREVIOUS_SCHEMA_VERSION = 14
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     revision            INTEGER NOT NULL DEFAULT 1,
+    token_usage_json    TEXT,
     UNIQUE(task_id, generation)
 );
 CREATE INDEX IF NOT EXISTS attempts_task_idx ON attempts(task_id, generation);
@@ -679,7 +680,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     final_attempt_id        TEXT,
     revision                INTEGER NOT NULL DEFAULT 1,
     created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL
+    updated_at              TEXT NOT NULL,
+    configuration_locked    INTEGER NOT NULL DEFAULT 0 CHECK (configuration_locked IN (0,1))
 );
 """,
     """
@@ -1042,12 +1044,32 @@ CREATE TABLE IF NOT EXISTS harness_health (
     record_json TEXT NOT NULL DEFAULT '{}',
     checked_at TEXT,
     expires_at TEXT,
-    scan_after TEXT
+    scan_after TEXT,
+    quota_json TEXT
 );
 """
 
 #: The only supported schema; used to create a fresh state directory.
-SCHEMA = CORE_SCHEMA + "\n" + EVALUATION_SCHEMA + "\n" + WORKFLOW_SCHEMA + "\n" + HARNESS_SCHEMA
+HOST_CONCLUSION_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
+    conclusion_id    TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    attempt_id       TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    run_revision     INTEGER NOT NULL,
+    owner_generation INTEGER NOT NULL,
+    execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled')),
+    note             TEXT NOT NULL,
+    evidence_json    TEXT NOT NULL DEFAULT '[]',
+    artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
+    integration_id   TEXT REFERENCES workflow_integrations(integration_id) ON DELETE RESTRICT,
+    actor            TEXT NOT NULL,
+    command_id       TEXT NOT NULL UNIQUE,
+    created_at       TEXT NOT NULL
+);
+"""
+HOST_CONCLUSION_INDEX = "CREATE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id, run_revision)"
+SCHEMA = "\n".join((CORE_SCHEMA, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
+                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";"))
 
 
 def utc_now() -> str:

@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .. import usage
 from ..errors import BoardError
 from . import turn_io
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
@@ -121,6 +122,13 @@ class CodexAdapter(Adapter):
         checkpoint = validated_checkpoint(payload, context.turn_input) if shutdown else None
         if checkpoint is None:
             payload.pop("nativeCheckpoint", None)
+        # Native usage, quota and the retained root assistant text are attempt
+        # observations. The canonical shapes come from ``buddy.usage``; a value
+        # that cannot be proven stays unknown instead of being estimated.
+        payload["tokenUsage"] = usage.normalize_token_usage(payload.get("tokenUsage"))
+        payload["quota"] = usage.normalize_quota(payload.get("quota"))
+        payload["quotaFailure"] = usage.normalize_quota_failure(payload.get("quotaFailure"))
+        payload["lastAssistantMessage"] = _last_assistant_message(checkpoint)
         session_id = payload.get("sessionId")
         payload["nativeSession"] = {
             "adapter": "codex",
@@ -222,6 +230,18 @@ class CodexAdapter(Adapter):
         finally:
             if stopped:
                 shutil.rmtree(directory)
+
+
+def _last_assistant_message(checkpoint: dict | None) -> dict | None:
+    """The bounded native root assistant text of a stopped attempt, or None."""
+    message = checkpoint.get("lastAssistantMessage") if isinstance(checkpoint, dict) else None
+    if not isinstance(message, dict):
+        return None
+    return usage.normalize_last_assistant_message(
+        {"text": message.get("text"), "itemId": message.get("itemId"), "phase": message.get("phase"),
+         "sourceBytes": message.get("sourceBytes"), "sha256": message.get("sha256"),
+         "truncated": message.get("truncated")},
+        source="codex/app-server-root-assistant-message")
 
 
 def _read_native_turn(context: ExecutionContext, shutdown: bool, exit_code: int | None):

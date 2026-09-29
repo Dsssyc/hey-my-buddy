@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
@@ -15,6 +15,10 @@ import { finalArtifact, finalIntegration, recordedIntegrations } from "./integra
 import { formatDate } from "./ui";
 import { NativeSessionView } from "./native-session";
 import { DelegationDetailRows } from "./ObjectiveOverview";
+import {
+  artifactKindLabel, artifactStateView, configurationLockText, cumulativePatchView,
+  hostConclusionView, integrationHostPaths, tokenUsageView,
+} from "./host-workflow";
 
 const integrationLabel = (record: IntegrationRecord) =>
   record.state === "not-required" ? "整合：Host 记录无需整合" : "整合：已验证";
@@ -61,6 +65,18 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   useEffect(() => { if (value) onTaskUpdate?.({ ...task, ...value.task }); }, [value, onTaskUpdate]);
   const artifact = finalArtifact(value);
   const integration = finalIntegration(value, artifact);
+  const conclusion = hostConclusionView(value?.hostConclusion);
+  const lockText = configurationLockText(value?.configurationLocked);
+  const hostPaths = integrationHostPaths(integration);
+  const quotaFailureLabel = value?.task?.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : value?.task?.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
+  // Each execution carries its own usage; a turn without a recorded value is
+  // shown as unknown. Session-cumulative totals are never derived here.
+  const usageTurns = (value?.turns?.length ? value.turns : value?.currentTurn ? [value.currentTurn] : [])
+    .map(turn => ({
+      turnId: turn.turnId, turnIndex: turn.turnIndex, attemptId: turn.attemptId,
+      tokenUsage: turn.tokenUsage,
+      executionConfiguration: "executionConfiguration" in turn ? turn.executionConfiguration ?? null : null,
+    }));
   // `recordedIntegrations` is newest first, so the first record per artifact is
   // the newest one — the same record acceptance binds.
   const integrationsByArtifact = new Map<string, IntegrationRecord>();
@@ -84,6 +100,22 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           taskSummary={overviewRow ? overviewRow.taskSummary : (task.task.replace(/\s+/g, " ").trim().slice(0, 120) || null)}
           resultSummary={overviewRow ? overviewRow.summary : (value.currentTurn?.summary || task.workflow?.resultSummary || null)} />
         {stopStatusNode}
+        {quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
+        {conclusion && <section className={"detail-section host-conclusion" + (conclusion.failed ? " failed" : conclusion.cancelled ? " cancelled" : "")} aria-label="Host 结论">
+          <h3>Host 结论（不改变执行结果）</h3>
+          <dl className="facts">
+            <dt>目标结果</dt><dd>{conclusion.statusLabel}（执行结果本身未改变，不计入已验收）</dd>
+            <dt>记录 Host</dt><dd>{conclusion.actor}{conclusion.ownerGeneration === null ? "" : ` · 第 ${conclusion.ownerGeneration} 代`}</dd>
+            <dt>记录时间</dt><dd>{formatDate(conclusion.createdAt)}</dd>
+            <dt>目标版本</dt><dd>{conclusion.runRevision === null ? "未记录" : `V${conclusion.runRevision}`}</dd>
+            {conclusion.references.map(reference => <Fragment key={reference.label}>
+              <dt>{reference.label}</dt><dd className="mono wrap">{reference.value}</dd></Fragment>)}
+          </dl>
+          <p className="task-description">{conclusion.note}</p>
+          {conclusion.evidence.length > 0 && <details><summary>结论依据（{conclusion.evidence.length}）</summary>
+            <ul className="conclusion-evidence">{conclusion.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul>
+          </details>}
+        </section>}
         <details className="record-facts">
           <summary>记录细节（目标与回合）</summary>
           <div className="record-facts-body">
@@ -94,6 +126,11 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>接续次数</dt><dd>{value.continuationCount}</dd>
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
               <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
+              {value.executionConfiguration && <Fragment>
+                <dt>执行配置</dt><dd>{
+                  `${value.executionConfiguration.adapter} · ${value.executionConfiguration.model} / ${value.executionConfiguration.effort}`
+                  + (lockText ? `｜${lockText}` : "｜配置来源未记录")
+                }</dd></Fragment>}
               <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
               <dt>等待原因</dt><dd className="wrap">{value.waitReason}</dd>
               <dt>执行停止</dt><dd>{value.shutdown?.selfConfirmed ? "本任务已确认停止" : "本任务尚未确认停止"}{value.shutdown && !value.shutdown.descendantsConfirmed ? `；目标范围内共 ${value.shutdown.unconfirmedCount} 项执行尚未核实` : ""}</dd>
@@ -132,8 +169,34 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       </div>
       <div id={tabsId + "-artifacts"} role="tabpanel" aria-labelledby={tabsId + "-artifacts-tab"} hidden={selectedSection !== "artifacts"}>
       {value.artifacts.length > 0 ? <section className="detail-section"><h3>固定产物引用</h3><ul className="artifact-list">
-        {value.artifacts.map(a => <li key={a.artifactId}><details><summary>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : "关联任务"} · {(a.outputCommit || a.commit || a.artifactId).slice(0, 12)}</summary><code>{a.artifactId}</code>{(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}{integrationsByArtifact.get(a.artifactId) && <code>{integrationLabel(integrationsByArtifact.get(a.artifactId)!)}</code>}</details></li>)}
-      </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。</p></section> : <p className="muted">尚无固定产物。</p>}
+        {value.artifacts.map(a => {
+          const state = artifactStateView(a);
+          const patch = cumulativePatchView(a.cumulativePatch);
+          const record = integrationsByArtifact.get(a.artifactId);
+          const artifactHostPaths = integrationHostPaths(record);
+          return <li key={a.artifactId} className={state.partial ? "artifact-partial" : undefined}>
+            <details><summary>{artifactKindLabel(a.kind)} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : "关联任务"} · {(a.outputCommit || a.commit || a.artifactId).slice(0, 12)}</summary>
+              <code>{a.artifactId}</code>
+              {state.partial && <code className="artifact-flags">{state.text}</code>}
+              {(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}
+              <code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>
+              {a.diffPath && <code>{a.diffPath}</code>}
+              {record && <code>{integrationLabel(record)}</code>}
+              {patch && <div className="cumulative-patch">
+                <span className="small muted">累计补丁（自目标最初输入提交）{patch.complete ? "" : " · 引用不完整"}</span>
+                <code>base {patch.baseCommit}</code>
+                <code>output {patch.outputCommit}</code>
+                <code>{patch.path}</code>
+                <code>SHA-256 {patch.sha256}</code>
+                {patch.changedPaths.length > 0 && <code className="wrap">{patch.changedPaths.join("、")}</code>}
+              </div>}
+              {artifactHostPaths.length > 0 && <div className="host-paths">
+                <span className="small muted">Host 补充改动（与成果路径分开记录）</span>
+                <code className="wrap">{artifactHostPaths.join("、")}</code>
+              </div>}
+            </details></li>;
+        })}
+      </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。部分成果标明“未验证、非最终”，不能被当作已验收交付。</p></section> : <p className="muted">尚无固定产物。</p>}
       {artifact && <section className="detail-section" aria-label="最终产物与整合证据">
         <h3>最终产物与整合证据</h3>
         <dl className="facts">
@@ -151,6 +214,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           {integration.reason && <><dt>记录原因</dt><dd className="wrap">{integration.reason}</dd></>}
           {typeof integration.verification?.summary === "string" && integration.verification.summary.trim()
             && <><dt>验证摘要</dt><dd className="wrap">{integration.verification.summary.trim()}</dd></>}
+          {hostPaths.length > 0 && <><dt>Host 补充改动</dt><dd className="wrap">{
+            `与成果路径分开记录（${hostPaths.length} 项）：${hostPaths.join("、")}`
+          }</dd></>}
           <dt>记录来源</dt><dd>{`${integration.actor} · ${formatDate(integration.createdAt)}`}</dd>
         </dl> : <p className="banner guard-banner" role="status">
           尚未记录最终产物的整合证明。整合与验收由 Host 通过既有 CLI 流程（integration-record 与验收记录）完成，此页只展示结果。
@@ -160,6 +226,22 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       <div id={tabsId + "-execution"} role="tabpanel" aria-labelledby={tabsId + "-execution-tab"} hidden={selectedSection !== "execution"}>
       {recordInfo}
       <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>回合会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
+      <section className="detail-section" aria-label="每次执行的用量">
+        <h4>每次执行的用量</h4>
+        {usageTurns.length === 0 ? <p className="small muted">尚无执行记录。</p> : <ul className="token-usage-list">
+          {usageTurns.map(turn => {
+            const usage = tokenUsageView(turn.tokenUsage);
+            const config = turn.executionConfiguration;
+            return <li key={turn.turnId}>
+              <span className="turn-label">第 {turn.turnIndex} 回合</span>
+              <span className="small muted">{config ? `${config.adapter} · ${config.model} / ${config.effort}` : "配置未记录"}</span>
+              <span className="turn-usage" title={usage.title}>{usage.text}</span>
+              <span className="small muted">来源 {turn.tokenUsage?.source || "未记录"}</span>
+            </li>;
+          })}
+        </ul>}
+        <p className="small muted">每次执行分别记录，不是会话累计；输入数已含缓存输入，缓存不重复相加；没有记录的执行显示未知，不估算为 0。额度失败或被中断时，已封存的部分成果仍会列在“产物与验收”。</p>
+      </section>
       <NativeSessionView task={task} turnSessionId={value.currentTurn?.sessionId} />
       <details className="detail-section"><summary>原始目标</summary><p className="read-text">{task.task}</p></details>
       </div>

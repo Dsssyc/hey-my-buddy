@@ -1,6 +1,6 @@
 # Local harness discovery
 
-The ADR-017 source implementation stores one service-owned `harness_health` record for each of DSH, ZCode, Codex and Claude Code in schema 14. The separately installed daily version remains [0.18.0/schema 13](../acceptance/installed-0.18.0.md). Harness readiness and a verified read-only Router capability are separate: successful discovery never enables `read_only_structured_verified`.
+The source implementation stores one service-owned `harness_health` record for each of DSH, ZCode, Codex and Claude Code. Schema 15 adds a separate retained `quota_json` observation; the separately installed daily version remains [0.20.0/schema 14](../acceptance/installed-0.20.0.md). Harness readiness and a verified read-only Router capability are separate: successful discovery never enables `read_only_structured_verified`.
 
 ## Discovery and environment
 
@@ -24,6 +24,12 @@ The Worker obtains its selected command through the named `harness_prepare` oper
 
 `buddy harness set codex /absolute/path/to/codex` sets a user-selected path and detects it; `buddy harness set codex --auto` clears the setting. The JSON form is `buddy harness-set '{"adapter":"codex","path":"/absolute/path/to/codex","expectedRevision":3}'`; a null path restores automatic discovery, and a stale revision is `REVISION_CONFLICT`. An attempt-scoped model credential cannot change this setting. The authenticated Buddy 配置 page offers the same detection and advanced path controls, including failed detection and login guidance.
 
-Only the new package's guarded `upgrade` migrates an idle schema-13 board to 14, after verified backup and under exclusive owner locks. Migration adds an empty health table and changes the schema marker; all other data fingerprints must remain identical. Startup neither migrates nor populates health records, preserving cutover verification. The upgrade fence also blocks health/catalog publication and manual refresh. Source implementation, private verification, paid Router probes, actual installation and Windows native validation must be reported separately.
+The package's guarded `upgrade` migrates an idle supported board after verified backup and under exclusive owner locks. The current schema 14 → 15 step adds the retained quota column and the Host-workflow storage described in [architecture](architecture.md); old quota is unknown and all original columns retain their content fingerprints. Startup neither migrates nor populates health records, preserving cutover verification. The upgrade fence also blocks health/catalog publication and manual refresh. Source implementation, private verification, paid Router probes, actual installation and Windows native validation must be reported separately.
 
 A saved manual path is an explicit override at the first candidate tier, as ordered by ADR-017; the console exposes it as an advanced recovery control. It stays selected while healthy until the user restores automatic detection. Codex Router certification is separately limited to macOS 0.157.0; an unknown native version can be available for coding without being verified for routing.
+
+## Native quota observations
+
+`quota` is independent of readiness, discovery and enablement. Successful worker-result receipt import retains the newest native observation by `observedAt`; health refresh cannot clear it and a delayed older result cannot replace it. Known provider scope restricts submission reminders to matching configurations. An observation older than one hour, from the future, or without a valid time is stale; a window expires at its recorded reset. Stale records remain readable, with stale flags.
+
+Codex uses native account rate-limit payloads and bounded optional metadata reads; Claude uses native rate-limit events; DSH records structured native quota errors and any reported windows. ZCode records recognized structured native failures but has no proven utilization-window surface, so percentages and resets stay unknown. A native quota failure may yield a limit-only observation, never an invented 100%. Neither collection nor reminders launch extra models, enable profiles or retry failed work. Fixtures verify parsing and persistence; fresh paid account behavior requires separate authorization.

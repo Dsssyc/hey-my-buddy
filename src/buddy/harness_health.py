@@ -41,7 +41,8 @@ def read_health(connection, adapter):
     if row is None:
         return {'adapter': adapter, 'status': 'unknown', 'available': False, 'revision': 0,
                 'manualPath': None, 'reasonCode': 'HARNESS_NOT_CHECKED', 'remedy': 'Run buddy adapters with refresh:true'}
-    return {**json.loads(row['record_json']), 'adapter': adapter, 'status': row['status'],
+    from .native_observations import quota_view
+    return {**json.loads(row['record_json']), "quota": quota_view(json.loads(row["quota_json"]) if row["quota_json"] else None), 'adapter': adapter, 'status': row['status'],
             'available': row['status'] == 'ready', 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
 
