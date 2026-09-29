@@ -225,6 +225,8 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .success-message { color: var(--accent); font-size: 12px; margin: 8px 0; }
 .inline-message { font-size: 12px; margin-top: 12px; }
 .load-more, .new-records { display: block; width: 100%; border: 0; padding: 12px; font-size: 12px; color: var(--accent); background: var(--accent-wash); flex-shrink: 0; }
+.objective-update { margin-right: auto; border: 0; border-radius: 3px; padding: 3px 6px; font-size: 11px; color: var(--accent); background: var(--accent-wash); white-space: nowrap; }
+.objective-update:hover { background: var(--subtle); }
 .loading-row { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 .small { font-size: 11px; } .muted { color: var(--muted); } .wrap { overflow-wrap: anywhere; }
 .truncate { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -13,10 +13,8 @@ function byActivity(left: ObjectiveSummary, right: ObjectiveSummary): number {
 
 /**
  * Keyset-paged work-objective list. Polls the first page on the console's
- * three-second cadence and merges in place, but never reorders silently: when
- * the newest read would change the display order (or add unseen groups), the
- * caller gets a `reorder` notice and applies it only on demand, so a reader's
- * selection never jumps.
+ * three-second cadence and merges in place. A changed order waits for the
+ * visible list to decide whether the reader is idle or explicitly applies it.
  */
 export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active: boolean) {
   const [page, setPage] = useState<PageState>({ rows: [], total: 0, nextCursor: null });
@@ -32,19 +30,8 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   const current = useRef({ query, active, cursor: page.nextCursor });
   current.current = { query, active, cursor: page.nextCursor };
 
-  // Applying the notice also rebuilds paging from a fresh first-page read, so
-  // the stale keyset cursor never serves outdated pages afterwards.
-  const applyReorder = useCallback(() => {
-    setPage(previous => {
-      const known = new Set(previous.rows.map(row => row.objectiveId));
-      const merged = previous.rows.map(row => latestRef.current.get(row.objectiveId) ?? row);
-      for (const [id, summary] of latestRef.current) if (!known.has(id)) merged.push(summary);
-      merged.sort(byActivity);
-      return { rows: merged, total: previous.total, nextCursor: previous.nextCursor };
-    });
-    setReorder(null);
-    setRevision(value => value + 1);
-  }, []);
+  const pendingNew = useRef<Map<string, ObjectiveSummary>>(new Map());
+  const needsFirst = useRef(false);
 
   const fetchPage = useCallback(async (mode: "first" | "more" | "poll", strict = false) => {
     if (!current.current.active) return;
@@ -78,6 +65,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
         // render in place while only a real order change — new activity moving
         // a group, or an unseen group appearing — defers behind the notice.
         if (!previous.rows.length) {
+          pendingNew.current.clear();
           setLatest(fresh);
           setPage({ rows: [...next.objectives].sort(byActivity), total: next.total, nextCursor: next.nextCursor });
           return;
@@ -102,6 +90,8 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
           .filter(row => !complete || returned.has(row.objectiveId))
           .map(row => fresh.get(row.objectiveId) ?? row);
         const merged = [...retained, ...next.objectives.filter(row => !known.has(row.objectiveId))];
+        if (complete) pendingNew.current.clear();
+        for (const row of next.objectives) if (!known.has(row.objectiveId)) pendingNew.current.set(row.objectiveId, row);
         const sorted = [...merged].sort(byActivity);
         const orderChanged = hasNew || sorted.some((row, index) => merged[index]!.objectiveId !== row.objectiveId);
         const changedCount = merged.filter(row => {
@@ -121,6 +111,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
             ...next.objectives.filter(row => !known.has(row.objectiveId)).map(row => fresh.get(row.objectiveId) ?? row)]
           : [...next.objectives].sort(byActivity);
         setPage({ rows, total: next.total, nextCursor: next.nextCursor });
+        if (mode === "first") { pendingNew.current.clear(); needsFirst.current = false; }
         setLatest(mode === "first" ? new Map(next.objectives.map(row => [row.objectiveId, row])) : fresh);
         // Loading an unchanged older page never discards a pending reorder
         // notice; a paged read that reports `changed` still offers one because
@@ -135,6 +126,23 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
       if (version === generation.current) { pending.current = false; if (mode !== "poll") setLoading(false); }
     }
   }, [api]);
+  // Keep the committed rows on screen while the new first page replaces the
+  // stale keyset cursor. A failed read leaves a retryable first-page refresh.
+  const applyReorder = useCallback(() => {
+    if (!reorder || !current.current.active) return;
+    ++generation.current;
+    request.current?.abort();
+    pending.current = false;
+    needsFirst.current = true;
+    setPage(previous => {
+      const known = new Set(previous.rows.map(row => row.objectiveId));
+      const merged = previous.rows.map(row => latestRef.current.get(row.objectiveId) ?? row);
+      for (const [id, summary] of pendingNew.current) if (!known.has(id)) merged.push(summary);
+      return { rows: merged.sort(byActivity), total: previous.total, nextCursor: null };
+    });
+    setReorder(null);
+    void fetchPage("first");
+  }, [reorder, fetchPage]);
   useGlobalRefresh(() => fetchPage("poll", true), active);
 
   const loadedKey = useRef<string | null>(null);
@@ -142,11 +150,16 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
     ++generation.current; request.current?.abort(); pending.current = false; setLoading(false);
     const cleanup = () => { ++generation.current; request.current?.abort(); pending.current = false; };
     if (!active) return cleanup;
-    if (loadedKey.current === key + revision && pageRef.current.rows.length) return cleanup;
+    const sameScope = loadedKey.current === key + revision;
+    if (sameScope && pageRef.current.rows.length && !needsFirst.current) return cleanup;
     loadedKey.current = key + revision;
-    setPage({ rows: [], total: 0, nextCursor: null });
-    setLatest(new Map());
-    setReorder(null);
+    if (!sameScope || !needsFirst.current) {
+      setPage({ rows: [], total: 0, nextCursor: null });
+      pendingNew.current.clear();
+      needsFirst.current = false;
+      setLatest(new Map());
+      setReorder(null);
+    }
     setLoading(true);
     const timer = setTimeout(() => void fetchPage("first"), 180);
     return () => { clearTimeout(timer); cleanup(); };
@@ -164,7 +177,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   return {
     rows, total: page.total, nextCursor: page.nextCursor, loading, error, reorder,
     more: () => void fetchPage("more"),
-    retry: () => void fetchPage(pageRef.current.rows.length > 0 ? "poll" : "first"),
+    retry: () => void fetchPage(needsFirst.current || pageRef.current.rows.length === 0 ? "first" : "poll"),
     reset: () => setRevision(value => value + 1),
     applyReorder,
   };

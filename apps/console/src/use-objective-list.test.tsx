@@ -236,11 +236,18 @@ describe("work-objective list hook", () => {
     await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "more-exists")));
     expect(f.result.current.reorder).toEqual({ count: 1 });
     act(() => { f.result.current.applyReorder(); });
-    // The stale keyset cursor is discarded by a fresh first-page read.
-    await startRead();
-    expect(f.requests[2]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[2]!.resolve(page([summary("busy", 7), summary("quiet", 3)])));
+    // The existing rows stay mounted while the stale keyset cursor is retired.
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet"]);
+    expect(f.result.current.nextCursor).toBeNull();
+    expect(f.result.current.loading).toBe(true);
+    expect(f.requests[2]!.query).not.toHaveProperty("before");
+    await act(async () => f.requests[2]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "fresh-cursor")));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet"]);
+    expect(f.result.current.nextCursor).toBe("fresh-cursor");
+    act(() => { void f.result.current.more(); });
+    expect(f.requests[3]!.query).toMatchObject({ before: "fresh-cursor" });
+    await act(async () => f.requests[3]!.resolve(page([summary("older", 1)])));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet", "older"]);
   });
 
   it("stops polling while hidden and resumes without dropping loaded rows", async () => {
@@ -255,5 +262,23 @@ describe("work-objective list hook", () => {
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["kept"]);
     expect(f.requests[1]!.query).not.toHaveProperty("before");
     f.unmount();
+  });
+
+  it("resumes a first-page refresh after the page hides during a reorder", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "old-cursor")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "old-cursor")));
+    act(() => f.result.current.applyReorder());
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet"]);
+    f.rerender({ query, active: false });
+    expect(f.requests[2]!.signal?.aborted).toBe(true);
+    f.rerender({ query, active: true });
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet"]);
+    await startRead();
+    expect(f.requests[3]!.query).not.toHaveProperty("before");
+    await act(async () => f.requests[3]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "new-cursor")));
+    expect(f.result.current.nextCursor).toBe("new-cursor");
   });
 });

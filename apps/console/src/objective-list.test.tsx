@@ -123,19 +123,59 @@ describe("objective list (0.16 P1.4)", () => {
     expect(screen.queryByText("这些委派提交时没有指定工作目标，按记录单独显示。")).toBeNull();
   });
 
-  it("selects an objective, and a pending reorder keeps the selection while offering the notice", async () => {
-    const user = userEvent.setup();
+  it("reorders silently at the top when the pointer is outside the visible list", () => {
     const p = props();
-    const first = render(<ObjectiveList {...p} />);
+    const view = render(<ObjectiveList {...p} />);
+    view.rerender(<ObjectiveList {...p} reorder={{ count: 1 }} />);
+    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+    expect(view.container.querySelector(".new-records")).toBeNull();
+  });
+
+  it("defers while hovered and applies the heading marker without losing selection", async () => {
+    const user = userEvent.setup();
+    const p = { ...props(), selected: "obj-2" };
+    const view = render(<ObjectiveList {...p} />);
     await user.click(screen.getByRole("button", { name: /0.13 控制台入口候选版收尾与文档/ }));
     expect(p.onSelect).toHaveBeenCalledWith("obj-2");
-    first.unmount();
-    const reordered = { ...p, selected: "obj-2", reorder: { count: 1 }, rows: [...rows].reverse() };
-    render(<ObjectiveList {...reordered} />);
-    const notice = screen.getByRole("button", { name: "有 1 个工作目标有新活动 · 按最近活动重新排序" });
-    await user.click(notice);
-    expect(reordered.onApplyReorder).toHaveBeenCalled();
+    fireEvent.pointerEnter(screen.getByRole("region", { name: "工作目标列表" }));
+    view.rerender(<ObjectiveList {...p} reorder={{ count: 1 }} />);
+    expect(p.onApplyReorder).not.toHaveBeenCalled();
+    const marker = screen.getByRole("button", { name: "有更新" });
+    expect(marker.closest(".panel-toolbar")).not.toBeNull();
+    await user.click(marker);
+    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: /0.13 控制台入口候选版收尾与文档/ }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("waits below the top, then applies when scrolling back to the top", () => {
+    const p = props();
+    const view = render(<ObjectiveList {...p} />);
+    const scroll = screen.getByLabelText("工作目标条目");
+    scroll.scrollTop = 80;
+    view.rerender(<ObjectiveList {...p} reorder={{ count: null }} />);
+    expect(p.onApplyReorder).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "有更新" })).toBeTruthy();
+    scroll.scrollTop = 0;
+    fireEvent.scroll(scroll);
+    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies on pointer leave at the top, but never from a hidden list", () => {
+    const p = props();
+    const view = render(<ObjectiveList {...p} />);
+    const region = screen.getByRole("region", { name: "工作目标列表" });
+    fireEvent.pointerEnter(region);
+    view.rerender(<ObjectiveList {...p} reorder={{ count: 2 }} />);
+    expect(p.onApplyReorder).not.toHaveBeenCalled();
+    fireEvent.pointerLeave(region);
+    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+    p.onApplyReorder.mockClear();
+    view.rerender(<ObjectiveList {...p} reorder={null} />);
+    view.rerender(<ObjectiveList {...p} reorder={{ count: 2 }} visible={false} />);
+    expect(screen.queryByRole("button", { name: "有更新" })).toBeNull();
+    expect(p.onApplyReorder).not.toHaveBeenCalled();
+    view.rerender(<ObjectiveList {...p} reorder={{ count: 2 }} visible />);
+    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
   });
 
   it("pages older objectives through the load-more affordance", async () => {

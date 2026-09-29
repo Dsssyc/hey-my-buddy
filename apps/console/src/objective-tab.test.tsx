@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Objectives } from "./Objectives";
@@ -68,5 +68,25 @@ describe("委派记录 tab views", () => {
     const checkbox = screen.getByLabelText("显示协助任务与内部执行") as HTMLInputElement;
     expect(checkbox.closest("[hidden]")).not.toBeNull();
     expect(checkbox.checked).toBe(true);
+  });
+
+  it("keeps the selected detail mounted while an idle reorder refreshes the list", async () => {
+    const f = harness();
+    const selectedRow = await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+    fireEvent.click(selectedRow);
+    await waitFor(() => expect(f.api.objectiveTimeline).toHaveBeenCalled());
+    const objective = f.timeline.objective;
+    const newer = { ...objective, objectiveId: "new-objective", title: "刚有活动的目标", lastActivitySeq: objective.lastActivitySeq + 1 };
+    vi.mocked(f.api.objectives).mockResolvedValueOnce({ objectives: [newer, objective], total: 2,
+      nextCursor: null, cursor: 42, changed: true });
+    let finishRefresh!: (value: Awaited<ReturnType<ConsoleApi["objectives"]>>) => void;
+    vi.mocked(f.api.objectives).mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
+    await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(3), { timeout: 4500 });
+    expect(screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("heading", { name: "选择一个工作目标" })).toBeNull();
+    expect(screen.getByRole("complementary", { name: "工作目标详情" })).toBeTruthy();
+    finishRefresh({ objectives: [newer, objective], total: 2, nextCursor: null, cursor: 42, changed: false });
+    await waitFor(() => expect(screen.getByRole("button", { name: /刚有活动的目标/ })).toBeTruthy());
+    expect(screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }).getAttribute("aria-pressed")).toBe("true");
   });
 });
