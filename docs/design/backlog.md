@@ -28,9 +28,13 @@
   - 低风险任务适度探索样本少但能胜任的配置，并在路由记录中标明。
   - Host 的任务偏好只表达任务需要（如"需要强推理""需要快"），不写厂商或 harness 名称。
 
-## 委派默认值
+## Worker 会话不出现在用户的 harness 界面
 
-- **DSH 会话分组默认开启，`dsh web` 没开时委派直接失败。** DSH 委派默认 `workspace: true`，靠 `dsh web` profile 中的 workspace bridge 把会话挂到 DSH 侧边栏；web profile 没运行时，路由分到 DSH、又没写 `workspace: false` 的委派会显式失败（exit 2），不会退回为不分组。分组只方便在 DSH 界面查看，不应让任务因为 web UI 没开而失败。建议把默认改为不分组，需要侧边栏分组的用户再显式开启，并同步 workers.md、operations.md 与 skill。（2026-09-30）
+- **Codex 与 DSH 的 Worker 会话会出现在用户自己的应用里。** 用户于 2026-09-30 确认：Codex 的历史中能看到 Worker 的线程，DSH 的侧边栏分组已被 Worker 会话"污染得不能看"；Claude Code 没有这个问题。ZCode 的 Worker 会话已按工作目标私有存储，不在 ZCode 应用中列出。原因：DSH 委派默认 `workspace: true`，通过 `dsh web` 中的 workspace bridge 把会话写入用户自己的会话库并挂到侧边栏分组（web profile 没运行时还会让委派直接失败，exit 2）；Codex 只有审阅与快速路由使用私有 CODEX_HOME，普通执行用的是用户自己的 `~/.codex`。用户同意按以下方式修改，计划放在 B 批第二阶段（依赖第 11 条的私有区）：
+  - DSH 默认不分组，使用 attempt 私有的会话目录；侧边栏分组改为用户显式开启的选项。同步 workers.md、operations.md 与 skill。
+  - Codex 普通执行也改用按工作目标划分的私有 CODEX_HOME，放在第 11 条的私有区，登录凭据的链接同样只放在私有区；续做的原生会话恢复使用同一私有目录。
+  - 清理 DSH 中已有的 Worker 会话与分组：服务依据记录的 workspace 会话标识，只清理 Buddy 创建的会话与分组。用户很少直接使用 DSH，表示不需要逐项确认；清理后报告数量，并且绝不触碰其他会话。
+  - Codex 历史中已有的 Worker 线程：先列出 Buddy 创建的线程，经用户确认后通过 Codex 原生的归档或删除接口处理。
 
 ## 服务与凭据
 
