@@ -291,3 +291,9 @@ In PowerShell, invoke `buddy.ps1` directly for JSON commands. It preserves argum
 ## Routing configuration upgrade
 
 ADR-018 adds only `meta` values: `router_fast_profile_id`, `router_review_profile_id`, `router_default_mode` and `router_configuration_version`; `router_budget_preset` remains the review budget key. After backup and under the upgrade locks, the old `evaluation_state.decision_profile_id` is mapped to its eligible slot (verified review first, otherwise fast), the other slot stays empty and a saved `quick` becomes `brief`. This operation is idempotent, checks unrelated meta values and retained table fingerprints, and participates in the existing rollback. Fresh boards start with two empty slots and default `fast`. Startup does not migrate an existing board.
+
+## Routing diagnostics and quota recovery (0.25.0)
+
+A review-check result advertises `logPaths.reviewEvidence`, the retained ordinary `review-evidence.json` under its attempt. It contains sanitized native policy controls, correlated event summaries and nine check bases; it is part of the backup evidence whitelist. The private native/controller traces are recycled only after confirmed stop and successful evidence publication. A failed diagnostic publication retains the private trace and refuses certification.
+
+For native exhaustion with no reset time, use `buddy quota-redetect '{"requestId":"quota-check-1","adapter":"dsh","provider":"deepseek-official"}'` to allow one later selected call to retry now. Reuse the requestId after a lost reply; a fresh request intentionally opens a new chance after consumption. The command performs no native query or model call and does not assert that the balance recovered. Otherwise one chance opens after an hour; only its selected configuration consumes it. Known reset times, explicit Host choices and newer available/unknown observation rules retain their existing behavior.

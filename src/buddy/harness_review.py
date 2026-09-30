@@ -165,6 +165,9 @@ def complete(board, connection, task, attempt, *, result, status, shutdown_confi
         record['nativeReasonCode'] = result['reasonCode']
     if isinstance(result, dict) and isinstance(result.get('evidenceSha256'), str) and schemas.SHA256_PATTERN.fullmatch(result['evidenceSha256']):
         record['evidenceSha256'] = result['evidenceSha256']
+        from .review_evidence import FILE
+        if result.get('evidenceFile') == FILE:
+            record['evidenceFile'] = FILE
     if isinstance(result, dict):
         record["failedChecks"] = [check for check in CHECKS if record["checks"][check] is not True]
     connection.execute("UPDATE meta SET value=? WHERE key=?", (canonical_json(record), key))

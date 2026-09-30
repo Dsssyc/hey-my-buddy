@@ -31,6 +31,8 @@ export type HarnessHealth = {
   expiresAt?: string | null;
   /** Latest recorded native quota observation; null or absent means unknown. */
   quota?: HarnessQuota | null;
+  /** Persisted exhaustion records with their recovery state; absent means none recorded. */
+  quotaRouting?: QuotaRoutingRecord[];
   reviewVerification?: ReviewVerification;
   billingByProvider?: Record<string, BillingFact>;
 };
@@ -94,10 +96,31 @@ export type HarnessQuota = {
   balanceZero?: boolean;
   windows: QuotaWindow[];
 };
+/** The single-use routing retry window of one no-reset exhaustion record (ADR-019). */
+export type QuotaRetryWindow = {
+  eligibleAt: string;
+  open: boolean;
+  pendingManual: boolean;
+  manualAt: string | null;
+  consumedAt: string | null;
+  consumedBy: string | null;
+};
+/** One persisted native exhaustion record with its recovery state (ADR-019). */
+export type QuotaRoutingRecord = {
+  provider: string;
+  limitId: string | null;
+  code: string;
+  source: string;
+  observedAt: string;
+  resetsAt: string | null;
+  blocked: boolean;
+  retry: QuotaRetryWindow | null;
+};
 
 export type Profile = {
   billing?: BillingFact;
   quotaExhausted?: boolean;
+  quotaRetry?: QuotaRetryWindow;
   newlyDiscovered?: boolean;
   profileId: string;
   label: string;

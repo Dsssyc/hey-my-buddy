@@ -40,6 +40,7 @@ METHODS = [
     "adapters",
     "harness-set",
     "harness-verify",
+    "quota-redetect",
     "runtime",
     "backup",
     "backup-preflight",

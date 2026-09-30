@@ -198,11 +198,47 @@ function validTimelineRows(rows: unknown): boolean {
 /* ---- harness health wire shapes (ADR-017 §15) ---- */
 
 export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
-import type { HarnessHealth } from "./types";
+import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./types";
 import { parseQuota } from "./host-workflow";
 
 /** The supported harnesses, in the Buddy 配置 page's fixed display order. */
 export const HARNESS_ADAPTERS = ["dsh", "zcode", "codex", "claude"] as const;
+
+/** Strict parse of one retry window (ADR-019): every fact is named or the value is null. */
+function parseQuotaRetry(value: unknown): QuotaRetryWindow | null {
+  const facts = value as QuotaRetryWindow | null;
+  if (!facts || typeof facts !== "object") return null;
+  if (typeof facts.eligibleAt !== "string" || typeof facts.open !== "boolean") return null;
+  if (typeof facts.pendingManual !== "boolean") return null;
+  for (const key of ["manualAt", "consumedAt", "consumedBy"] as const) {
+    if (!(facts[key] === null || typeof facts[key] === "string")) return null;
+  }
+  return facts;
+}
+
+/**
+ * Strict parse of the harness's persisted exhaustion records (ADR-019). A
+ * malformed list or entry is dropped as unknown instead of being presented as
+ * recovery state; the records never claim a live balance.
+ */
+function parseQuotaRouting(value: unknown): QuotaRoutingRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const records = value.map(entry => {
+    const record = entry as QuotaRoutingRecord | null;
+    if (!record || typeof record !== "object") return null;
+    if (typeof record.provider !== "string" || !record.provider.trim()) return null;
+    for (const key of ["code", "source", "observedAt"] as const) {
+      if (typeof record[key] !== "string") return null;
+    }
+    if (!(record.limitId === null || typeof record.limitId === "string")) return null;
+    if (!(record.resetsAt === null || typeof record.resetsAt === "string")) return null;
+    if (typeof record.blocked !== "boolean") return null;
+    if (!("retry" in record) || record.retry === null) return { ...record, retry: null };
+    const retry = parseQuotaRetry(record.retry);
+    return retry ? { ...record, retry } : null;
+  });
+  return records.every(record => record !== null) ? records as QuotaRoutingRecord[] : undefined;
+}
 
 /**
  * Strict parse of one harness row. A malformed row is dropped as unknown rather
@@ -226,9 +262,11 @@ function harnessRow(value: unknown): HarnessHealth | null {
   // ADR-018 §23: a malformed quota observation is dropped as unknown instead of
   // blanking the page or being presented as a recorded 0%. An observation that
   // was not recorded adds no key at all.
-  const { quota: rawQuota, ...rest } = row;
+  const { quota: rawQuota, quotaRouting: rawRouting, ...rest } = row;
   const quota = parseQuota(rawQuota);
-  return { ...rest, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null, ...(quota ? { quota } : {}) };
+  const quotaRouting = parseQuotaRouting(rawRouting);
+  return { ...rest, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null,
+    ...(quota ? { quota } : {}), ...(quotaRouting ? { quotaRouting } : {}) };
 }
 
 /** Known harnesses first in their fixed order; anything else keeps its own order. */

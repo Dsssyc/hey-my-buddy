@@ -41,6 +41,9 @@ class BuddyControl:
     def harness_prepare(self, request_json: str) -> str:
         ...
 
+    def quota_redetect(self, request_json: str) -> str:
+        ...
+
     def service_control(self, request_json: str) -> str:
         ...
 

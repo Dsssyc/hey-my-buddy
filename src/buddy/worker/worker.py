@@ -803,6 +803,11 @@ class Worker:
         )
         report["elapsedSeconds"] = round(time.monotonic() - started, 1)
         report["logPaths"] = context.log_paths()
+        if spec["adapter"] == "review-check":
+            # The native controller logs were private and may already be removed.
+            # Advertise only the retained diagnostic produced by this adapter.
+            from ..review_evidence import FILE
+            report["logPaths"] = {"reviewEvidence": str(directory / FILE)} if outcome.result.get("evidenceFile") == FILE else {}
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
 

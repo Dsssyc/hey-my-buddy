@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import time
@@ -13,6 +14,8 @@ from buddy.adapters.base import AdapterOutcome, ExecutionContext
 from buddy.adapters.codex_config import read_only_config
 from buddy.adapters.review_check import ReviewCheckAdapter, _file, _tree
 from buddy.review_probe import commands, evaluate
+from buddy.review_evidence import FILE, diagnostic
+from buddy.db import canonical_json
 
 
 class ReviewProbeTests(unittest.TestCase):
@@ -131,6 +134,50 @@ class ReviewProbeTests(unittest.TestCase):
         items[3]["params"]["item"]["id"] = "different"
         self.assertFalse(self.assess()["boundaryDenials"])
 
+    def native_01590_events(self):
+        # Observed 0.159.0 wire shape, using only disposable synthetic contents.
+        for event in self.events:
+            item = event["params"]["item"]
+            if item["type"] == "function_call":
+                item["type"] = "custom_tool_call"
+                item["name"] = "exec"
+                item["input"] = json.loads(item.pop("arguments"))["code"].replace(',max_output_tokens:2000', '')
+            else:
+                item["type"] = "custom_tool_call_output"
+                item["output"] = [
+                    {"type": "input_text", "text": "Script completed\nWall time 0.123 seconds\nOutput:\n"},
+                    {"type": "input_text", "text": item["output"]}]
+
+    def test_native_01590_default_metadata_and_code_mode_blocks_are_assessed(self):
+        self.native_01590_events()
+        config = self.payload["nativeConfigPolicy"]
+        config["features"]["native_default_metadata"] = False
+        config["shell_environment_policy"]["set"] = {}
+        config["permissions"]["buddy-router"]["network"]["allowed_domains"] = []
+        self.assertTrue(all(self.assess().values()))
+        document = self.diagnostic()
+        self.assertTrue(document["events"][1]["responseShape"]["scriptMetadataMatched"])
+        self.assertEqual(document["events"][1]["responseShape"]["contentBlockCount"], 2)
+        self.assertEqual(document["policyReadback"]["otherFeatureEntries"], 1)
+        config["features"]["apps"] = True
+        self.assertFalse(self.assess()["nativePolicy"])
+        config["features"]["apps"] = False
+        config["permissions"]["buddy-router"]["network"]["enabled"] = True
+        self.assertFalse(self.assess()["nativePolicy"])
+        config["permissions"]["buddy-router"]["network"]["enabled"] = False
+        config["permissions"]["buddy-router"]["filesystem"]["/unexpected"] = "read"
+        self.assertFalse(self.assess()["nativePolicy"])
+
+    def test_native_01590_blocks_do_not_accept_prose_or_more_calls(self):
+        self.native_01590_events()
+        self.events[1]["params"]["item"]["output"][0]["text"] = "The model says permission denied"
+        self.assertFalse(self.assess()["boundaryDenials"])
+        self.events[1]["params"]["item"]["output"][0]["text"] = "Script completed\nWall time 0.123 seconds\nOutput:\n"
+        self.events[0]["params"]["item"]["input"] += ' text("Operation not permitted");'
+        self.assertFalse(self.assess()["internalRead"])
+        self.events[0]["params"]["item"]["input"] = self.events[2]["params"]["item"]["input"].replace('text(r)', 'text(other)')
+        self.assertFalse(self.assess()["forbiddenTools"])
+
     def test_policy_identity_and_budget_have_independent_evidence(self):
         self.payload["nativePolicy"]["sandbox"]["networkAccess"] = True
         self.assertFalse(self.assess()["nativePolicy"])
@@ -203,8 +250,17 @@ class ReviewProbeTests(unittest.TestCase):
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(set(outcome.result), {"version", "platform", "checks", "reasonCode",
-            "failedChecks", "modelStarted", "nativeIdentity", "usage", "evidenceSha256"})
+            "failedChecks", "modelStarted", "nativeIdentity", "usage", "evidenceSha256", "evidenceFile"})
         self.assertNotIn("private account text", json.dumps(outcome.to_report()))
+        evidence_path = context.directory / FILE
+        self.assertTrue(evidence_path.is_file())
+        self.assertEqual(evidence_path.stat().st_mode & 0o777, 0o600)
+        raw = evidence_path.read_bytes()
+        evidence = json.loads(raw)
+        self.assertNotIn("private account text", raw.decode())
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), outcome.result["evidenceSha256"])
+        self.assertEqual(evidence["checks"]["requestIdentity"]["basis"]["nativeCallSucceeded"], False)
+        self.assertEqual(set(evidence["checks"]), set(outcome.result["checks"]))
         self.assertFalse(private_root.exists())
         server.shutdown.assert_called_once()
         thread.join.assert_called_once()
@@ -225,3 +281,73 @@ class ReviewProbeTests(unittest.TestCase):
             outcome = ReviewCheckAdapter().collect(handle, context)
         self.assertFalse(outcome.shutdown_confirmed)
         self.assertTrue(self.root.exists())
+        self.assertTrue((context.directory / FILE).is_file())
+
+    def diagnostic(self):
+        basis = {}
+        checks, reasons = evaluate(self.payload, configuration=self.configuration, expected_version="0.157.0",
+            frozen=self.frozen, sentinel=self.sentinel, url=self.url, host_status=200, marker="randommarker",
+            input_before=_tree(self.frozen), input_after=_tree(self.frozen), sentinel_before=_file(self.sentinel),
+            sentinel_after=_file(self.sentinel), controller_elapsed_ms=1000, native_stopped=True, owned_stopped=True, basis=basis)
+        return diagnostic(self.payload, plan={"version": "0.157.0", "platform": "darwin", "configuration": self.configuration},
+            checks=checks, reasons=reasons, basis=basis, frozen=self.frozen, sentinel=self.sentinel,
+            url=self.url, marker="randommarker", usage={"toolCalls": 5})
+
+    def test_retained_projection_has_correlated_operations_and_each_check_basis(self):
+        document = self.diagnostic()
+        self.assertTrue(all(check["passed"] and all(check["basis"].values()) for check in document["checks"].values()))
+        events = document["events"]
+        self.assertEqual({event["operation"] for event in events if event["operation"]}, set(commands(self.frozen, self.sentinel, self.url)))
+        self.assertEqual(events[0]["call"], events[1]["call"])
+        self.assertEqual(events[0]["turn"], events[1]["turn"])
+        self.assertTrue(events[3]["denialMatched"])
+        self.assertTrue(events[1]["markerMatches"])
+
+    def test_projection_omits_credentials_paths_prose_and_unrecognized_values(self):
+        secret = "NEVER-RETAIN-THIS-CREDENTIAL"
+        self.payload.update(error=secret, rawAnswer=secret, account={"email": secret})
+        self.payload["nativeConfigPolicy"]["secrets"] = {secret: secret}
+        self.payload["nativeConfigPolicy"]["features"]["apps"] = secret
+        self.payload["nativeConfigPolicy"]["permissions"]["buddy-router"]["filesystem"][secret] = secret
+        self.payload["nativePolicy"]["model"] = secret
+        self.events[3]["params"]["item"]["output"] = json.dumps({"exit_code": 1, "output": "Permission denied " + secret})
+        self.events.append({"method": secret, "params": {"threadId": secret, "turnId": secret, "item": {
+            "type": secret, "name": secret, "call_id": secret, "input": secret, "output": secret}}})
+        raw = canonical_json(self.diagnostic())
+        for omitted in (secret, str(self.root), "randommarker", "secret-sentinel", "PROBE-MODIFIED", self.url):
+            self.assertNotIn(omitted, raw)
+        self.assertIn('"otherFilesystemEntries":1', raw)
+        self.assertIn('"redacted":true', raw)
+
+    def test_malformed_and_bounded_events_still_leave_a_diagnostic(self):
+        self.payload["nativeRawToolEvents"] = [None, {"params": "private prose"}] + self.events * 100
+        self.payload["nativeEvidenceTruncated"] = True
+        document = self.diagnostic()
+        self.assertEqual(len(document["events"]), 128)
+        self.assertTrue(document["truncated"])
+        self.assertFalse(document["checks"]["forbiddenTools"]["passed"])
+
+    def test_retention_refuses_link_without_losing_private_diagnostics(self):
+        context = ExecutionContext("task", "attempt", 1, {"reviewCheck": {
+            "version": "0.157.0", "platform": "darwin", "configuration": self.configuration}}, self.root / "attempt", {}, {})
+        context.directory.mkdir()
+        outside = self.root / "external-evidence.txt"
+        outside.write_text("unchanged")
+        (context.directory / FILE).symlink_to(outside)
+        private = self.root / "private"
+        private.mkdir()
+        handle = Mock()
+        handle.shutdown_confirmed.return_value = True
+        handle.process.returncode = 0
+        handle.review_fixture = (private, self.frozen, self.sentinel, "randommarker",
+                                 _tree(self.frozen), _file(self.sentinel), self.url, 200)
+        handle.review_endpoint = (Mock(), Mock())
+        handle.review_started = time.monotonic()
+        with patch("buddy.adapters.review_check.collect_read_only", return_value=AdapterOutcome(
+                status="ok", result=self.payload, shutdown_confirmed=True)):
+            outcome = ReviewCheckAdapter().collect(handle, context)
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.error, "PROBE_EVIDENCE_RETENTION_FAILED")
+        self.assertIsNone(outcome.result["evidenceFile"])
+        self.assertTrue(private.is_dir())
+        self.assertEqual(outside.read_text(), "unchanged")
