@@ -18,7 +18,7 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.24.0（contract 0.24.0、schema 15）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.25.0（contract 0.25.0、schema 15）；[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未日常安装或发布；schema 14 → 15 仅通过显式空闲升级迁移。
+hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.25.0（contract 0.25.0、schema 15）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.25.0（contract 0.25.0、schema 15）；[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未日常安装或发布；schema 14 → 15 仅通过显式空闲升级迁移。
 
 在用户确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
@@ -90,7 +90,7 @@ Codex Host 为每个运行中的委派派生一个只做监控的原生子代理
 
 ## 当前状态与限制
 
-日常安装是 [0.24.0/contract 0.24.0/schema 15](docs/acceptance/installed-0.24.0.md)。它在 ADR-018 两部分之上加入：本机控制台可选登录（默认关闭）、唯一合法候选由程序直接选定、精简后的控制台文案、如实显示取消的发起者、计费方式标注以及额度确认耗尽时暂时移出自动路由、按 harness 版本记录的审阅验证，以及 ADR-019 第 11 条：attempt 目录只保存证据，harness 私有内容与临时凭据放在备份之外的私有区，只读的 `backup-preflight` 能在升级前说明能否安装。[0.24.0 安装记录](docs/acceptance/installed-0.24.0.md)区分已验证的行为与仍需用户批准的检查。
+日常安装是 [0.25.0/contract 0.25.0/schema 15](docs/acceptance/installed-0.25.0.md)。它在 ADR-018 两部分与 ADR-019 只放证据的 attempt 目录之上加入：Buddy 配置的 `模型` / `Router` / `Harness` 分区；保留脱敏的审阅诊断，并修正了 Codex 检查器（仍待原生认证）；没有重置时间的额度耗尽可以一次重试，并提供 `quota-redetect`；Worker 会话私有化（DSH 只有 `workspace:true` 才分组，Codex 使用按工作目标划分的私有主目录），并提供 `worker-sessions` 查看历史；旧运行时清理遇到异常目录会跳过而不是中止。[0.25.0 安装记录](docs/acceptance/installed-0.25.0.md)区分已验证的行为与仍需用户批准的检查。
 
 日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持 API-key 提供方、活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
