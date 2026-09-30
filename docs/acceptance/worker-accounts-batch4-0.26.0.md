@@ -35,3 +35,5 @@ CLI 和已认证 Harness 分区实现账户查看、source CAS、登录、状态
 最终组合树检查已通过（2026-10-01）：按 npm --prefix apps/console ci → uv run --frozen python -m buddy.checks 的顺序，Python 1,816 项（1 skipped），DSH Node 165 项，检查命令退出 0；前端 54 文件／630 项全部通过，npm ci 审计零漏洞，tsc/Vite 构建退出 0（保留既有大 chunk 提示）。私有 build-skill 输出 version=0.26.0，包含五个账户模块，排除 tests；没有运行安装。所有测试与服务替身使用私有根，最终安装测试计划也只列私有路径。
 
 最终日志 SHA-256：644db3ccf38dcb53dc3966b3596dab521d0f6d957fe8bebd1746c465c2df16c0；Console 资产 index.html SHA-256：6b452f25fc9bf1c0272e2a9366ba9a7c376b9e3afd8a7bc89348589a7c6767df。本记录不保存秘密、授权 URL、设备码或原始账户响应。源码联通重试已取得单次授权并通过，独立 API-key 模型执行仍只有模拟覆盖。建议 Host 将当前实施分支合入 socu/buddy-core；合并、安装和用户配置变更等待用户下一步指令。
+
+Buddy 固定成果已完成 verified integration-record（int-4410fb4a-ece3-433a-9140-5c3996ffde18，绑定 fecab39）及 accepted acknowledge，委派现为 accepted/completed，无新增 Worker 回合。Host 调整的 10 个 artifact 路径与 47 个独立 Host 路径均在记录中明确列出。日常服务的验收后自动清理已 applied：移除本次受管 checkout，保留 3 个 artifact、6 个固定 Git 引用和 2 个输出补丁，self/descendant 停止均确认。合成预览已关闭，临时服务端口释放；用户完成的 N2b 真实私有登录已在额外授权后登出并清理。此后仅更新本验收段，不改动已通过检查的代码与资产。
