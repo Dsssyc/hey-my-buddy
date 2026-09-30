@@ -112,6 +112,16 @@ class UpgradeTests(BoardTestCase):
         old = state / 'attempts' / task_id / 'attempt/sessions'
         old.mkdir(parents=True)
         (old / 'session.jsonl').write_text('retained session')
+        # Native grouped history lives outside Buddy's old-layout migration.
+        native_group = self.directory / 'native-dsh-group.json'
+        native_group.write_text('{"sessionIds":["worker-session","user-session"]}')
+        relocation_started = []
+        original_apply = upgrade.private_migration.apply
+        def verified_relocation(*args):
+            backup.verify(state / 'backups/current')
+            relocation_started.append(True)
+            self.assertEqual(native_group.read_text(), '{"sessionIds":["worker-session","user-session"]}')
+            return original_apply(*args)
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
@@ -128,6 +138,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch('buddy.upgrade.probe', return_value=health), \
              mock.patch('buddy.upgrade.detach'), \
              mock.patch('buddy.upgrade.start', side_effect=[BoardError('INJECTED','target failed'), health]), \
+             mock.patch('buddy.upgrade.private_migration.apply', side_effect=verified_relocation), \
              mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints':True}), \
              mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete':True}):
             result = upgrade.upgrade({})
@@ -135,6 +146,8 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(result['failure'], 'INJECTED')
         self.assertEqual((old / 'session.jsonl').read_text(), 'retained session')
         self.assertFalse((private_dirs.attempt_root(state, 'dsh', task_id, 'attempt') / 'sessions').exists())
+        self.assertEqual(relocation_started, [True])
+        self.assertEqual(native_group.read_text(), '{"sessionIds":["worker-session","user-session"]}')
 
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()

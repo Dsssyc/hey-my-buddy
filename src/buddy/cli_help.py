@@ -52,6 +52,7 @@ SUMMARIES: dict[str, str] = {
     "paths": "Skill, launcher, data and runtime locations; reads files only and starts nothing.",
     "storage-plan": "Read-only storage reclamation plan.",
     "storage-apply": "Apply one confirmed storage plan.",
+    "worker-sessions": "List Buddy Worker sessions or plan and archive exact DSH workspace sessions.",
     "submit": "Admit one governed goal, prepare its execution workspace and route its execution configuration.",
     "get": "Compact owner view of one governed goal; includeAudit adds the immutable record.",
     "decide": "Record Host authority on the active request and authorize concrete helpers.",

@@ -22,6 +22,7 @@ class CodexContinuationTests(WorkflowTestCase):
             attempt = claim["attempt"]
             environment = {key: value for key, value in os.environ.items() if not key.startswith("BUDDY_")}
             environment.update(BUDDY_DEV_SOURCE="1", BUDDY_STATE_DIR=str(self.directory),
+                               CODEX_HOME=str(self.directory / 'native-account'), HOME=str(self.directory),
                                BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"),
                                BUDDY_CODEX_CLI=str(Path(__file__).parent / "fixtures/mock_codex.py"),
                                BUDDY_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
@@ -71,6 +72,7 @@ class CodexContinuationTests(WorkflowTestCase):
             result.pop("turn")
             result.update(sessionId=evidence.thread_id, nativeTurnId=evidence.turn_id, nativeCheckpoint=checkpoint,
                           processState={"shutdownConfirmed": True, "nativeExitCode": 0},
+                          nativeSession={'adapter': 'codex', 'storageOwner': 'buddy-goal'},
                           harnessAttempts=[{"harness": {"version": "previous-version"}}])
 
         self.finish_turn(board, first, runner_status="failed", exit_code=1, seal=False, result_mutator=payload)
@@ -98,6 +100,20 @@ class CodexContinuationTests(WorkflowTestCase):
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
         self.assertNotIn("nativeResume", document["context"])
         self.assertEqual(document["context"]["lastAssistantMessage"]["text"], "上一轮已经完成的调研内容。")
+
+    def test_historical_user_store_thread_reconstructs_without_touching_native_history(self):
+        board, failed = self.failed_run()
+        with board.store.db.write() as connection:
+            row = connection.execute('SELECT attempt_id,result_json FROM attempts WHERE task_id=?', (failed['runId'],)).fetchone()
+            receipt = json.loads(row['result_json'])
+            receipt['result']['nativeSession']['storageOwner'] = 'harness-user-store'
+            connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (json.dumps(receipt), row['attempt_id']))
+        document = self.continued_input(board, failed)
+        self.assertEqual(document['resumeMode'], 'reconstructed-new-session')
+        self.assertEqual(document['context']['resumeReason'], 'private-native-home-required')
+        self.assertEqual(document['previousSessionId'], 'native-session-1')
+        self.assertNotIn('nativeResume', document['context'])
+        self.assertEqual(document['context']['lastAssistantMessage']['text'], '上一轮已经完成的调研内容。')
 
     def test_harness_version_change_reconstructs_with_the_same_message(self):
         board, failed = self.failed_run()

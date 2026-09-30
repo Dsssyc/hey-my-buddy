@@ -30,7 +30,7 @@
  *   socket inode is removed.
  *
  * Wire protocol (version 1):
- *   request  { version: 1, id: string, method: 'ping'|'resolve'|'attach',
+ *   request  { version: 1, id: string, method: 'ping'|'resolve'|'attach'|'inspect-session'|'archive-session',
  *              cwd?: string, sessionId?: string, workspaceId?: string }
  *   response { version: 1, id, ok: true, value }
  *          | { version: 1, id, ok: false, error: <fixed code> }
@@ -88,6 +88,8 @@ export const ERROR_CODES = Object.freeze({
   CWD_MISMATCH: 'cwd-mismatch',
   WORKSPACE_MISMATCH: 'workspace-mismatch',
   ATTACH_FAILED: 'attach-failed',
+  SESSION_MISMATCH: 'session-mismatch',
+  CLEANUP_FAILED: 'cleanup-failed',
   INTERNAL: 'internal',
 });
 
@@ -355,13 +357,14 @@ async function handleRequest(request, services) {
   if (request.method === 'ping') return success({ ready: true });
   if (request.method === 'resolve') return await resolveWorkspace(request, services.registry);
   if (request.method === 'attach') return await attachSession(request, services);
+  if (request.method === 'inspect-session') return await inspectSession(request, services);
+  if (request.method === 'archive-session') return await archiveSession(request, services);
   return failure(ERROR_CODES.UNSUPPORTED_METHOD);
 }
 
 /**
  * Canonicalize an existing directory and create (or reuse) its workspace.
- * Returns the resolved identity only; `created` stays false because the
- * registry interface does not report whether the record already existed.
+ * The registry does not atomically report whether this call created the row.
  */
 async function resolveWorkspace(request, registry) {
   if (!isAbsoluteDirectoryPath(request.cwd)) return failure(ERROR_CODES.BAD_REQUEST);
@@ -384,6 +387,59 @@ async function resolveWorkspace(request, registry) {
   const path = String(workspace.path);
   if (path !== canonical) return failure(ERROR_CODES.RESOLVE_FAILED);
   return success({ id: String(workspace.id), path, created: false });
+}
+
+/** Verify an exact board-bound session against both owning native services. */
+async function inspectSession(request, { registry, persistence }) {
+  if (!isUsableString(request.sessionId) || !isUsableString(request.workspaceId)
+    || !isAbsoluteDirectoryPath(request.cwd)) return failure(ERROR_CODES.BAD_REQUEST);
+  const workspace = registry.get(request.workspaceId);
+  if (!workspace || workspace.path !== request.cwd || !Array.isArray(workspace.sessionIds)
+    || !workspace.sessionIds.includes(request.sessionId)) return failure(ERROR_CODES.SESSION_MISMATCH);
+  let snapshot;
+  try { snapshot = await persistence.stat(request.sessionId); } catch { return failure(ERROR_CODES.SESSION_MISMATCH); }
+  const header = snapshot?.header;
+  if (!isObject(header) || header.id !== request.sessionId || header.cwd !== request.cwd
+    || header.parentSession != null || header.origin === 'subagent'
+    || (typeof header.delegationDepth === 'number' && header.delegationDepth > 0)) {
+    return failure(ERROR_CODES.SESSION_MISMATCH);
+  }
+  return success({ sessionId: request.sessionId, workspaceId: request.workspaceId,
+    cwd: request.cwd, revision: String(snapshot.revision),
+    sessionIds: [...workspace.sessionIds].map(String) });
+}
+
+/** Archive through the official registry, then detach; never touch the log. */
+async function archiveSession(request, services) {
+  const checked = await inspectSession(request, services);
+  if (!checked.ok && request.replay !== true) return checked;
+  if (!checked.ok) {
+    // The caller durably wrote its exact plan intent before the prior request.
+    // A lost reply may arrive after archive/detach. Recheck the immutable native
+    // header and refuse an id that was subsequently attached anywhere else.
+    let snapshot;
+    try { snapshot = await services.persistence.stat(request.sessionId); }
+    catch { return failure(ERROR_CODES.SESSION_MISMATCH); }
+    if (snapshot?.header?.id !== request.sessionId || snapshot.header.cwd !== request.cwd
+      || snapshot.header.parentSession != null || snapshot.header.origin === 'subagent'
+      || (typeof snapshot.header.delegationDepth === 'number' && snapshot.header.delegationDepth > 0)
+      || String(snapshot.revision) !== request.revision || !Array.isArray(services.registry.list())
+      || services.registry.list().some(group => group.sessionIds.includes(request.sessionId))) {
+      return failure(ERROR_CODES.SESSION_MISMATCH);
+    }
+  } else if (checked.value.revision !== request.revision) return failure(ERROR_CODES.SESSION_MISMATCH);
+  const workspace = services.registry.get(request.workspaceId);
+  if (workspace && workspace.path !== request.cwd) return failure(ERROR_CODES.WORKSPACE_MISMATCH);
+  try {
+    await services.registry.archiveSession(request.sessionId);
+    if (workspace && workspace.sessionIds.includes(request.sessionId)) await workspace.detachSession(request.sessionId);
+    // The SDK has no atomic delete-if-empty operation. Its delete can race an
+    // unrelated attach through a separate table update chain, so retain groups.
+    const groupRetainedReason = workspace?.sessionIds.length
+      ? 'other-sessions-remain'
+      : request.created === true ? 'conditional-delete-unavailable' : 'creation-unproven';
+    return success({ sessionArchived: true, groupRemoved: false, groupRetainedReason });
+  } catch { return failure(ERROR_CODES.CLEANUP_FAILED); }
 }
 
 /**

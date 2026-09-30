@@ -46,6 +46,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "backup": ("control", "backup"),
     "storage-plan": ("control", "storage_plan"),
     "storage-apply": ("control", "storage_apply"),
+    "worker-sessions": ("control", "worker_sessions"),
     # -- single governed goal lifecycle ------------------------------------
     "submit": ("control", "workflow_submit"),
     "get": ("control", "workflow_get"),

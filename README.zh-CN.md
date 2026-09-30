@@ -18,7 +18,7 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.24.0（contract 0.24.0、schema 15）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.21.0（contract 0.21.0、schema 15），实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未日常安装或发布；schema 14 → 15 仅通过显式空闲升级迁移。
+hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.24.0（contract 0.24.0、schema 15）：skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。当前源码候选是 0.25.0（contract 0.25.0、schema 15），实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未日常安装或发布；schema 14 → 15 仅通过显式空闲升级迁移。
 
 在用户确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
@@ -107,3 +107,5 @@ Codex Host 为每个运行中的委派派生一个只做监控的原生子代理
 B 批源码加入原生计费标注、额度耗尽的候选过滤，以及 Buddy 配置和 `harness-verify` 的当前版本审阅验证；新版本验证前沿用快速路由降级。取消显示记录中的发起者与理由，控制台说明已精简。Worker 独立账户和登录须在私有目录前提合入后继续。[源码与原生检查记录](docs/acceptance/worker-accounts-phase1-0.23.0.md)与日常安装分别记录。
 
 0.24.0 源码将 attempt 证据与 harness 私有状态分区。请求安装授权前，用新包的 `buddy backup-preflight '{}'` 查看将复制、跳过和拒绝的路径；它不启动服务、不写数据。安装器在停机前检查该清单，已识别且停止已证明的旧布局只在已验证备份后整理；凭据与原生私有目录不进入备份。详情见[操作文档](docs/reference/operations.md#backup-upgrade-and-storage-contract)。
+
+0.25.0 源码让普通 DSH 会话默认私有存储，Codex 编码会话按工作目标私有存储，凭据只在停止确认后清理，并提供历史 Worker 会话的只读列表。显式 DSH 清理只归档已记录的 Worker 会话，无法安全删除的分组会保留并报告原因；Codex 归档或删除须另经用户同意并使用原生接口。运行时清理逐项报告格式异常，已识别且确认无进程使用的早期格式可回收。详情见[操作文档](docs/reference/operations.md#worker-session-history)；源码夹具、经授权的原生检查与安装分别记录。

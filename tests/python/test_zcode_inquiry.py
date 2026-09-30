@@ -935,7 +935,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
         first = latest = None
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            current = activity_module.read_sidecar(path, task_id="goal-1", attempt_id="attempt-1", generation=1)
+            current = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
             if current and current["phase"] == "streaming-model":
                 if first is None:
                     first = current
@@ -963,7 +963,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
 
         path = activity_module.sidecar_path(context.directory)
         self.assertTrue(path.is_file(), "the runner did not publish activity.json")
-        payload = activity_module.read_sidecar(path, task_id="goal-1", attempt_id="attempt-1", generation=1)
+        payload = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
         self.assertIsNotNone(payload, "the emitted sidecar must satisfy the real buddy.activity reader")
         self.assertIn(payload["phase"], activity_module.PHASES)
         self.assertEqual(payload["nativeSessionId"], outcome.result["turn"]["sessionId"])
@@ -977,7 +977,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
             self.assertNotIn(forbidden, raw)
         # The binding is enforced: another attempt or generation reads nothing.
         self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id="other", generation=1))
-        self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id="attempt-1", generation=2))
+        self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=2))
 
     def test_same_phase_updates_are_throttled_but_recorded_phase_changes_are_written(self):
         context = self.context(timeout=20)
@@ -1103,7 +1103,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertIn("attentionPath", tree)
         credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         self.assertEqual(tree["inquiryJournalPath"], credentials["resultsPath"])
-        self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": "attempt-1",
+        self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": context.attempt_id,
                                             "generation": 1, "turnId": "turn-1"})
         self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
         from buddy.adapters.zcode_runner import governed_prompt

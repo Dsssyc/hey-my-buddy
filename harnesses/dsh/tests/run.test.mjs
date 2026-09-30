@@ -141,7 +141,10 @@ describe('dsh launcher resolution', () => {
 
     const patch = readArtifactJson(s.artifacts, 'patch.json');
     const copyDir = readArtifact(s.artifacts, 'settings-copy-dir.txt');
-    assert.deepEqual(patch, [{ id: 'settings', config: { path: join(copyDir, 'settings.json'), watch: false } }]);
+    assert.deepEqual(patch, [
+      { id: 'settings', config: { path: join(copyDir, 'settings.json'), watch: false } },
+      { id: 'session-persistence-jsonl', config: { root: join(dirname(payload.logPaths.stdout), 'sessions') } },
+    ]);
     assert.ok(basename(copyDir).startsWith('deepseek-delegate-settings-'));
     assert.deepEqual(readArtifactJson(s.artifacts, 'settings-copy.json'), { 'agent-default-model': DEFAULT_ROUTE });
 
@@ -667,8 +670,8 @@ describe('private per-run inquiry bridge mount', () => {
     assert.equal(JSON.stringify(payload).includes('unit-test-token'), false, 'the token is never echoed');
 
     const patch = readArtifactJson(s.artifacts, 'patch.json');
-    assert.equal(patch.length, 2, 'settings plus the per-run bridge');
-    const bridge = patch[1].insert[0];
+    assert.equal(patch.length, 3, 'settings, private sessions, and the per-run bridge');
+    const bridge = patch[2].insert[0];
     assert.equal(bridge.id, 'deepseek-delegate-inquiry-bridge');
     assert.ok(bridge.name.endsWith('plugins/inquiry-bridge.mjs'));
     assert.equal(bridge.config.socketPath, socketPath);
@@ -732,7 +735,7 @@ describe('private per-run inquiry bridge mount', () => {
     assert.equal(payload.status, 'ok');
     assert.equal(payload.inquiry.enabled, true);
     assert.equal(payload.inquiry.socketPath, socketPath);
-    const bridge = readArtifactJson(s.artifacts, 'patch.json')[1].insert[0];
+    const bridge = readArtifactJson(s.artifacts, 'patch.json')[2].insert[0];
     assert.equal(bridge.config.token, '-leading-dash-token');
     rmSync(socketDir, { recursive: true, force: true });
   });
@@ -754,6 +757,6 @@ describe('private per-run inquiry bridge mount', () => {
     assert.equal(payload.inquiry.socketPath, null);
     assert.match(payload.inquiry.error, /Unix socket limit/);
     const patch = readArtifactJson(s.artifacts, 'patch.json');
-    assert.equal(patch.length, 1, 'no bridge row is mounted');
+    assert.equal(patch.length, 2, 'only settings and private sessions are mounted');
   });
 });

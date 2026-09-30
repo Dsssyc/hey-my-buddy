@@ -36,10 +36,13 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.adapter = ZcodeAdapter()
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, timeout=10, effort="low"):
-        identity = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,
+        # Production attempt IDs are globally unique. Fixed fixture IDs collide
+        # at the short inquiry socket when independent private suites run together.
+        attempt_id = f"attempt-{index}-{self.root.name[-8:]}"
+        identity = {"version": 1, "taskId": "goal-1", "attemptId": attempt_id, "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                     "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(task_id="goal-1", attempt_id=attempt_id, generation=index,
                                 spec={"cwd": str(self.cwd), "task": "fixture task", "timeoutSeconds": timeout,
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},

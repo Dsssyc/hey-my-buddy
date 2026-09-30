@@ -37,6 +37,7 @@ from unittest import mock
 from buddy.adapters import turn_io
 from buddy.adapters.base import ExecutionContext, ProcessHandle
 from buddy.adapters.dsh import DshAdapter
+from buddy.schemas import normalize_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "harnesses/dsh/scripts/run.mjs"
@@ -68,6 +69,16 @@ STUB = textwrap.dedent(
     exit 0
     """
 )
+
+
+class DshWorkspaceDefaultTests(unittest.TestCase):
+    def test_grouping_requires_explicit_opt_in_even_when_adapter_changes(self):
+        with tempfile.TemporaryDirectory(prefix="buddy-dsh-spec-") as root:
+            common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
+            self.assertFalse(normalize_spec(common)["workspace"])
+            self.assertFalse(normalize_spec({**common, "adapter": "dsh"})["workspace"])
+            self.assertTrue(normalize_spec({**common, "workspace": True})["workspace"])
+            self.assertFalse(normalize_spec({**common, "adapter": "codex"})["workspace"])
 
 
 @unittest.skipUnless(shutil.which("node") and RUNNER.is_file(), "Node.js and the dsh runner are required")
@@ -103,8 +114,8 @@ class DshSessionRootTests(unittest.TestCase):
             "--dsh-bin", str(self.stub),
             "--log-dir", str(self.root / "logs"),
         ]
-        if not workspace:
-            base.append("--no-workspace")
+        if workspace:
+            base.append("--workspace")
         return subprocess.run([*base, *flags], capture_output=True, text=True, timeout=60,
                               env=self.environment())
 
@@ -140,10 +151,22 @@ class DshSessionRootTests(unittest.TestCase):
         self.assertTrue(self.session_root.is_dir())
         self.assertEqual(stat.S_IMODE(self.session_root.stat().st_mode), 0o700)
 
+    def test_default_run_uses_a_private_session_root_without_grouping(self):
+        completed = self.invoke()
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        result = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(result["workspace"]["enabled"], False)
+        self.assertEqual(result["nativeStorage"]["scope"], "run-private-sessions")
+        log_dir = Path(result["logPaths"]["stdout"]).parent
+        self.assertTrue((log_dir / "sessions").is_dir())
+        rows = json.loads((self.artifacts / "patch.json").read_text())
+        session_row = next(row for row in rows if row.get("id") == "session-persistence-jsonl")
+        self.assertEqual(session_row["config"], {"root": str(log_dir / "sessions")})
+
     def test_a_grouped_run_never_gets_a_private_session_root(self):
         completed = self.invoke(f"--session-root={self.session_root}", workspace=True)
         self.assertEqual(completed.returncode, 2, completed.stdout)
-        self.assertIn("requires --no-workspace", completed.stderr)
+        self.assertIn("cannot be combined with --workspace", completed.stderr)
         self.assertFalse((self.artifacts / "argv.txt").exists(), "the stub dsh must never start")
 
     def test_the_session_root_must_be_an_absolute_path(self):

@@ -48,6 +48,7 @@ METHODS = [
     "paths",
     "storage-plan",
     "storage-apply",
+    "worker-sessions",
     # -- single governed goal lifecycle ------------------------------------
     "submit",
     "get",

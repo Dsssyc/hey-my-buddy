@@ -149,7 +149,9 @@ def main():
             state = read_state()
             thread_id = f"thread-{state['next']}"
             state["next"] += 1
-            state["threads"][thread_id] = {"cwd": params["cwd"], "turns": []}
+            state["threads"][thread_id] = {"cwd": params["cwd"], "turns": [],
+                                         'codexHome': os.environ.get('CODEX_HOME'),
+                                         'sqliteHome': os.environ.get('CODEX_SQLITE_HOME')}
             write_state(state)
             policy = ({'activePermissionProfile': {'id': params['permissions']},
                        'sandbox': {'type': 'readOnly', 'networkAccess': False}, 'approvalPolicy': 'never',
@@ -161,13 +163,13 @@ def main():
                                                        "modelProvider": "openai", "turns": []}}})
         elif method == "thread/read":
             state = read_state()["threads"].get(params["threadId"])
-            if not state:
+            if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
                 send({"id": ident, "error": {"code": -1, "message": "missing"}})
             else:
                 send({"id": ident, "result": {"thread": {"id": params["threadId"], **state}}})
         elif method == "thread/resume":
             state = read_state()["threads"].get(params["threadId"])
-            if not state:
+            if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
                 send({"id": ident, "error": {"code": -1, "message": "missing"}})
             else:
                 send({"id": ident, "result": {"thread": {"id": params["threadId"], "cwd": state["cwd"],

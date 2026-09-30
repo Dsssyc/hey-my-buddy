@@ -4,7 +4,7 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The recorded daily installation is [0.20.0/contract 0.20.0/schema 14](../acceptance/installed-0.20.0.md). The current source candidate is 0.24.0/contract 0.24.0/schema 15; source preparation does not install it, migrate the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `buddy.home`.
+The recorded daily installation is [0.24.0/contract 0.24.0/schema 15](../acceptance/installed-0.24.0.md). The current source candidate is 0.25.0/contract 0.25.0/schema 15; source preparation does not install it, migrate the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `buddy.home`.
 
 ## Installation
 
@@ -12,11 +12,11 @@ The source candidate installs through one fixed-version package command. The com
 
 ```sh
 # After the user decides the release channel and the version is published
-uvx hey-my-buddy@0.24.0 install
+uvx hey-my-buddy@0.25.0 install
 
 # Unpublished candidate: build a wheel and install from its absolute path
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.24.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.25.0-py3-none-any.whl hey-my-buddy install
 ```
 
 The package exposes exactly one command, `hey-my-buddy install`; any other argument returns `PACKAGE_INSTALL_USAGE`. Run the command outside the Host or agent sandbox, in a real user session; it needs no sudo and writes only inside the user's home. Installing or switching the daily service still requires the user's separate authorization.
@@ -48,8 +48,8 @@ Windows is not validated on a real machine. The code and scripts are portable â€
 `install.sh` (macOS, Linux) and `install.ps1` (Windows) do one job: prepare a fixed private `uv`, then hand installation to the package entry.
 
 ```sh
-sh install.sh --version 0.19.0 [--wheel-url https://.../hey_my_buddy-0.24.0-py3-none-any.whl]
-./install.ps1 -Version 0.19.0 [-WheelUrl https://.../hey_my_buddy-0.24.0-py3-none-any.whl]
+sh install.sh --version 0.19.0 [--wheel-url https://.../hey_my_buddy-0.25.0-py3-none-any.whl]
+./install.ps1 -Version 0.19.0 [-WheelUrl https://.../hey_my_buddy-0.25.0-py3-none-any.whl]
 ```
 
 They use an existing `uv` on `PATH`; otherwise they download the pinned uv 0.12.19 release into a private directory under the hey-my-buddy data home, verify it against the pinned SHA-256 list, and run `uv tool run --from <fixed package or wheel> hey-my-buddy install`. They print their private uv destination before downloading, then print the package source and delegate the remaining write-path plan to the installer. They never change `PATH`, shell configuration or Host settings, never need sudo, and never install a global `buddy` command. Stable error codes are `BOOTSTRAP_ARGS` (invalid version or wheel URL), `BOOTSTRAP_PLATFORM`, `BOOTSTRAP_FETCH`, `BOOTSTRAP_VERIFY`, `BOOTSTRAP_WRITE`, `BOOTSTRAP_EXTRACT` and `PACKAGE_INSTALL_FAILED`; each prints one line with a repair action.
@@ -191,7 +191,7 @@ Tests and previews always use separate private state and runtime roots. Never po
 
 ## Workspace bridge
 
-`workspace: true` (the default) groups the DSH session through a bundled host plugin; it controls session grouping only, while a governed task's `executionWorkspace` is a separate checkout/worktree ownership contract. Grouped runs require the bridge to be installed and its dsh profile running; there is no silent fallback to an ungrouped run. Run the installer from the plugin or repository root, the directory that contains `bin/buddy`.
+`workspace: false` is the DSH default and writes a session in the attempt-private area. Explicit `workspace: true` groups the session through a bundled host plugin; it controls session grouping only, while a governed task's `executionWorkspace` is a separate checkout/worktree ownership contract. Grouped runs require the bridge to be installed and its dsh profile running; there is no silent fallback to an ungrouped run. Run the installer from the plugin or repository root, the directory that contains `bin/buddy`.
 
 ```sh
 node harnesses/dsh/scripts/install-workspace-bridge.mjs
@@ -200,7 +200,7 @@ node harnesses/dsh/scripts/install-workspace-bridge.mjs
 - The installer defaults to `--profile web` and appends one entry to that profile's `cordis.patch.yml`, keeping existing text and writing a private backup first. Use `--home`, `--profile` or `--workspace-socket` for another existing long-lived profile.
 - The bridge serves an owner-private Unix socket, by default `$DSH_HOME/deepseek-delegate/workspace.sock` (`~/.dsh` when `DSH_HOME` is unset). There is no Web URL, browser token or HTTP dependency.
 - Long-lived profiles hot-reload the user patch; otherwise start `dsh web` normally.
-- Before a model run, the runner checks that the bridge answers and resolves the canonical cwd. If it is missing, unusable or misconfigured, the run fails with an explicit error (exit 2) instead of running ungrouped. Use `workspace: false` to opt out deliberately.
+- Before a model run, the runner checks that the bridge answers and resolves the canonical cwd. If it is missing, unusable or misconfigured, the run fails with an explicit error (exit 2) instead of running ungrouped. Ordinary default execution uses the private session root and needs no bridge.
 - A stale socket left by an unclean exit is **refused, never replaced**. Verify the old host process has stopped, then remove that socket yourself and restart the profile.
 - The bridge never activates an Agent; it validates the run's persisted root session and cwd, calls the official workspace API inside the owning host, and verifies membership. Task outcome and grouping outcome stay separately visible.
 
@@ -211,6 +211,21 @@ node harnesses/dsh/scripts/run.mjs --cwd /path/to/project --attach-session SESSI
 ```
 
 This verifies the session exists before adopting it, runs no model, and does not scan or bulk-reassign history. The stored session cwd must equal the canonical workspace path.
+
+## Worker session history
+
+`buddy worker-sessions '{"adapter":"dsh"}'` and `buddy worker-sessions '{"adapter":"codex"}'` read only board-proven native identities; they do not open user harness stores or call a native harness. DSH includes only exact recorded workspace session bindings, and uncertain stop remains blocked. Codex labels user-store and goal-private Worker threads whose creation is proven by the governed native receipt; actual archive or deletion requires the user's separate confirmation and Codex's native interface.
+
+```sh
+buddy worker-sessions '{"adapter":"dsh","action":"plan"}'
+buddy worker-sessions '{"adapter":"dsh","action":"apply","planDigest":"<planDigest>","selectionDigest":"<selectionDigest>"}'
+```
+
+DSH `plan` reads the owning workspace bridge to verify native headers and membership without changing them; a real native check needs separate user approval before the Host invokes it. `apply` is the explicit cleanup request and needs no per-session confirmation. It rechecks board ownership, confirmed shutdown, native revision and membership, archives the exact Worker session through the native registry, and detaches it from its recorded group. The current DSH SDK supplies neither atomic creation provenance nor an atomic empty-group delete. This version retains the groups and reports why; it never guesses ownership or deletes a group that could acquire another session. Other sessions and mixed groups remain untouched. The result reports `sessionsArchived`, `groupsRemoved:0`, deduplicated `groupsRetained`, `groupRetention:[{workspaceId,reason}]`, failures and `nativeLogsRetained:true`; DSH's published persistence API has no physical log-deletion contract. Reuse the same plan and selection digests after a lost response so the durable journal can finish the exact operation. Ordinary replay receipts under `worker-session-cleanup/<64-hex>.json` are fsynced before native mutation and included in backup; links and undeclared journal entries are refused.
+
+This upgrade leaves native DSH groups and historical Codex threads in place. Historical cleanup is a separate explicit post-installation Host action. Ordinary old-layout private files still relocate only after verified backup under decision 11's existing journal, validation and rollback. Any future upgrade that reorganizes native DSH groups must run after `backup.verify`, retain exact reversible identities and validate rollback before claiming completion; merely changing a default cannot authorize native history changes.
+
+Ordinary Codex execution and eligible native continuation share a goal-private `CODEX_HOME`; the selected file-based login is linked only in that private area and removed after confirmed native and controller stop. Unknown stop retains it. The Worker-account consumption seam is described in [codex.md](codex.md); this slice does not create accounts or change login configuration.
 
 ## Private state and environment
 
@@ -268,7 +283,7 @@ This release ships one skill (`skills/buddy`, built by `packaging/build-skill.py
 
 ### Storage wire shapes
 
-`storage_plan` accepts `{}` and returns `{planId, createdAt, expiresAt, categories, candidates, orphanProcesses}`. Each category is `{id, label, bytes, reclaimableBytes, count, eligibleCount, reasons}`; ids are `harnesses`, `zcode` (retained old homes), `workspaces`, `runtimes`, `backup`, `durable`. Candidates are `{id, category, path, bytes, eligible, reasons}`. Reasons are stable strings; unknown reasons remain visible. Orphan process observations contain `{pid, kind, stateDir, runtimeDir}`; missing ownership data is null, never guessed. `storage_apply` accepts `{planId, commandId, confirm:true}` and returns `{planId, removedBytes, removed, skipped, complete}`. `removed` is an array of `{id, path, bytes}` records, and `skipped` is an array of `{id, path, reasons: string[]}` records; neither field is a count. A completed result has `complete: true`. `STORAGE_INCOMPLETE` means deletion already started and must be resumed with the same planId/commandId; its durable receipt remains replayable after plan expiry. A fresh plan must not discard that unresolved operation. Results are durably replayable by the same command identity; changed parameters conflict. Expiry is 15 minutes. A changed candidate is skipped with explicit reasons; browser reply loss preserves the command identity for safe replay. `buddy storage plan` and `buddy storage apply '<JSON>'` map to these named operations.
+`storage_plan` accepts `{}` and returns `{planId, createdAt, expiresAt, categories, candidates, orphanProcesses}`. Each category is `{id, label, bytes, reclaimableBytes, count, eligibleCount, reasons}`; ids are `harnesses`, `zcode` (retained old homes), `workspaces`, `runtimes`, `backup`, `durable`. Candidates are `{id, category, path, bytes, eligible, reasons}`. Reasons are stable strings; unknown reasons remain visible. Orphan process observations contain `{pid, kind, stateDir, runtimeDir}`; missing ownership data is null, never guessed. `storage_apply` accepts `{planId, commandId, confirm:true}` and returns `{planId, removedBytes, removed, skipped, complete}`. `removed` is an array of `{id, path, bytes}` records, and `skipped` is an array of `{id, path, reasons: string[]}` records; neither field is a count. Runtime entries with unsupported format, missing or unsafe READY markers are individually listed in `skipped` and do not abort the inventory or cleanup. A recognized early-format READY runtime with exact content/root/interpreter identity can be reclaimed after successful process and mapped-file inspection; current/previous generations and unknown usage remain protected. A completed result has `complete: true`, including a completed scan that reports protected or malformed entries as skipped. `STORAGE_INCOMPLETE` means deletion already started and must be resumed with the same planId/commandId; its durable receipt remains replayable after plan expiry. A fresh plan must not discard that unresolved operation. Results are durably replayable by the same command identity; changed parameters conflict. Expiry is 15 minutes. A changed candidate is skipped with explicit reasons; browser reply loss preserves the command identity for safe replay. `buddy storage plan` and `buddy storage apply '<JSON>'` map to these named operations.
 
 Legacy stable runtimes created before build provenance existed may have no source commit metadata. Their first upgrade backup records `pluginCommit: null` with `pluginCommitStatus: unavailable-in-source-metadata`, while retaining the exact runtime content identity and manifest hash; it never guesses a commit. Packages staged from a current source tree embed `src/buddy/build-info.json`, and newly materialized runtimes carry the source commit in `READY.json`. Normal service backups include that recorded commit.
 

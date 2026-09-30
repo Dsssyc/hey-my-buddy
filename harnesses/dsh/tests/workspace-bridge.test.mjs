@@ -114,17 +114,38 @@ function workspaceHandle(record, calls, attachSession) {
       }
       if (!record.sessionIds.includes(sessionId)) record.sessionIds.unshift(sessionId);
     },
+    async detachSession(sessionId) {
+      record.sessionIds = record.sessionIds.filter(id => id !== sessionId);
+    },
   };
 }
 
 /** `create` canonicalizes exactly like the real registry, so aliases collide. */
 function makeRegistry(options = {}) {
   const records = new Map();
-  const calls = { create: [], attachSession: [] };
+  const calls = { create: [], attachSession: [], archived: [] };
   let nextId = 0;
   return {
     calls,
     records,
+    async resolveByPath(cwd) {
+      const record = records.get(realpathSync(cwd));
+      return record === undefined ? undefined : workspaceHandle(record, calls, options.attachSession);
+    },
+    get(id) {
+      const record = [...records.values()].find(item => item.id === id);
+      return record === undefined ? undefined : workspaceHandle(record, calls, options.attachSession);
+    },
+    list() {
+      return [...records.values()].map(record => workspaceHandle(record, calls, options.attachSession));
+    },
+    async archiveSession(sessionId) { calls.archived.push(sessionId); },
+    async delete(id) {
+      const entry = [...records.entries()].find(([, record]) => record.id === id);
+      if (!entry) return false;
+      records.delete(entry[0]);
+      return true;
+    },
     async create(cwd) {
       const canonical = realpathSync(cwd);
       calls.create.push(canonical);
@@ -145,6 +166,11 @@ function makePersistence(sessions, options = {}) {
   const calls = { list: 0 };
   return {
     calls,
+    async stat(id) {
+      const value = typeof sessions === 'function' ? sessions() : sessions;
+      const header = value.find(item => item.id === id);
+      return header ? { header, revision: 'fixture-revision' } : undefined;
+    },
     async list() {
       calls.list += 1;
       if (options.fail === true) throw new Error(options.message ?? 'persistence failure');
@@ -543,6 +569,69 @@ describe('attach', () => {
     }
     assert.equal(persistence.calls.list, 0);
     assert.equal(registry.calls.create.length, 0);
+  });
+});
+
+describe('historical archive', () => {
+  test('archives only the exact Buddy session and keeps a mixed group', async (t) => {
+    const dir = caseDir('archive-mixed');
+    const registry = makeRegistry();
+    const workspace = await registry.create(dir);
+    await workspace.attachSession('buddy-session');
+    await workspace.attachSession('unrelated-session');
+    const bridge = await start(t, { dir, registry,
+      persistence: makePersistence([rootHeader(dir, 'buddy-session'), rootHeader(dir, 'unrelated-session')]) });
+    const request = { version: 1, id: 'inspect', method: 'inspect-session',
+      sessionId: 'buddy-session', workspaceId: workspace.id, cwd: dir };
+    const inspected = await rpc(bridge.socketPath, request);
+    assert.equal(inspected.ok, true);
+    assert.deepEqual(inspected.value.sessionIds, ['unrelated-session', 'buddy-session']);
+    const archived = await rpc(bridge.socketPath, { ...request, id: 'archive', method: 'archive-session',
+      revision: inspected.value.revision, created: true });
+    assert.deepEqual(archived.value, { sessionArchived: true, groupRemoved: false,
+      groupRetainedReason: 'other-sessions-remain' });
+    assert.deepEqual(registry.get(workspace.id).sessionIds, ['unrelated-session']);
+    assert.deepEqual(registry.calls.archived, ['buddy-session']);
+  });
+
+  test('retains empty groups even when an old receipt claims creation', async (t) => {
+    const dir = caseDir('archive-empty');
+    const existingDir = makeDir(dir, 'existing');
+    const newDir = makeDir(dir, 'new');
+    const registry = makeRegistry();
+    const existing = await registry.create(existingDir);
+    const created = await registry.create(newDir);
+    await existing.attachSession('early-buddy');
+    await created.attachSession('new-buddy');
+    const bridge = await start(t, { dir, registry,
+      persistence: makePersistence([rootHeader(existingDir, 'early-buddy'), rootHeader(newDir, 'new-buddy')]) });
+    for (const [workspace, cwd, sessionId, createdProof] of [
+      [existing, existingDir, 'early-buddy', false], [created, newDir, 'new-buddy', true],
+    ]) {
+      const request = { version: 1, id: sessionId, sessionId, workspaceId: workspace.id, cwd };
+      const inspected = await rpc(bridge.socketPath, { ...request, method: 'inspect-session' });
+      const reply = await rpc(bridge.socketPath, { ...request, method: 'archive-session',
+        revision: inspected.value.revision, created: createdProof });
+      assert.equal(reply.value.groupRemoved, false);
+      assert.equal(reply.value.groupRetainedReason,
+        createdProof ? 'conditional-delete-unavailable' : 'creation-unproven');
+    }
+    assert.ok(registry.get(existing.id));
+    assert.ok(registry.get(created.id));
+  });
+
+  test('a lost reply can replay an already detached exact session', async (t) => {
+    const dir = caseDir('archive-replay');
+    const registry = makeRegistry();
+    const workspace = await registry.create(dir);
+    await workspace.attachSession('owned');
+    const bridge = await start(t, { dir, registry, persistence: makePersistence([rootHeader(dir, 'owned')]) });
+    const request = { version: 1, id: 'inspect', sessionId: 'owned', workspaceId: workspace.id, cwd: dir };
+    const inspected = await rpc(bridge.socketPath, { ...request, method: 'inspect-session' });
+    const archive = { ...request, method: 'archive-session', revision: inspected.value.revision, created: false };
+    assert.equal((await rpc(bridge.socketPath, archive)).ok, true);
+    assert.equal((await rpc(bridge.socketPath, { ...archive, id: 'replay', replay: true })).ok, true);
+    assert.deepEqual(registry.get(workspace.id).sessionIds, []);
   });
 });
 

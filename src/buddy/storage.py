@@ -112,6 +112,24 @@ def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str
     return []
 
 
+def _legacy_runtime_identity(directory: Path, ready: Path) -> bool:
+    """Recognize an older READY marker without requiring today's asset layout."""
+    if re.fullmatch(r'[0-9a-f]{32}', directory.name) is None:
+        return False
+    try:
+        marker = _read_storage_json(ready)
+    except (BoardError, OSError, UnicodeError):
+        return False
+    interpreter = marker.get('python')
+    if not isinstance(interpreter, str):
+        return False
+    python_path = Path(interpreter)
+    if not python_path.is_absolute() or '..' in python_path.parts or not python_path.is_relative_to(directory):
+        return False
+    return (marker.get('state') == 'READY' and marker.get('contentId') == directory.name
+            and marker.get('runtimeRoot') == str(directory.parent))
+
+
 def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     if run is None or task is None:
         return ['owner-unproven']
@@ -232,27 +250,45 @@ def inspect(store) -> dict:
         retained_ids = None
     if private_dirs.linked_component(runtime_root) is not None:
         add('runtimes', runtime_root, ['linked-path'])
+    elif runtime_root.exists() and not runtime_root.is_dir():
+        add('runtimes', runtime_root, ['runtime-format-unsupported'])
     elif runtime_root.exists():
         for path in sorted(runtime_root.iterdir()):
+            if private_dirs.linked_component(path) is not None:
+                add('runtimes', path, ['linked-path'])
+                continue
+            try:
+                path_stat = path.lstat()
+            except OSError:
+                add('runtimes', path, ['runtime-identity-unproven'])
+                continue
+            if not stat.S_ISDIR(path_stat.st_mode):
+                add('runtimes', path, ['runtime-format-unsupported'])
+                continue
             ready = path / 'READY.json'
             if private_dirs.linked_component(ready) is not None:
                 add('runtimes', path, ['linked-path'])
                 continue
             try:
                 ready_stat = ready.lstat()
-            except FileNotFoundError:
+            except OSError:
+                add('runtimes', path, ['runtime-identity-unproven'])
                 continue
-            if not path.is_dir() or not stat.S_ISREG(ready_stat.st_mode):
+            if not stat.S_ISREG(ready_stat.st_mode):
+                add('runtimes', path, ['runtime-format-unsupported'])
                 continue
             reasons = (['retention-history-unproven'] if retained_ids is None else
-                       ['retained-runtime'] if path.name in retained_ids else runtime_usage(path, commands, known))
+                       ['retained-runtime'] if path.name in retained_ids else [])
             if foreign_default_root:
                 reasons.append('runtime-owned-by-default-state')
-            if private_dirs.linked_component(ready) is not None:
-                add('runtimes', path, [*reasons, 'linked-path'])
-                continue
-            if not is_ready(path):
+            try:
+                current_ready = is_ready(path)
+            except (BoardError, OSError, ValueError, TypeError, UnicodeError):
+                current_ready = False
+            if not current_ready and not _legacy_runtime_identity(path, ready):
                 reasons.append('runtime-identity-unproven')
+            if not reasons:
+                reasons.extend(runtime_usage(path, commands, known))
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
@@ -428,7 +464,13 @@ def apply(store, params: dict) -> dict:
         current = {row['id']: row for row in inspect(store)['candidates']}
         done = {row['id'] for row in result['removed'] + result['skipped']}
         for candidate in planned['candidates']:
-            if not candidate['eligible'] or candidate['id'] in done:
+            if candidate['id'] in done:
+                continue
+            if not candidate['eligible']:
+                if candidate['category'] == 'runtimes':
+                    result['skipped'].append({'id': candidate['id'], 'path': candidate['path'],
+                                              'reasons': candidate['reasons']})
+                    _save_receipt(receipt, result)
                 continue
             fresh = current.get(candidate['id'])
             if (fresh is None or not fresh['eligible'] or

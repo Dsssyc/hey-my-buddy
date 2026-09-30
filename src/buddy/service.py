@@ -45,6 +45,7 @@ CONTROL_OPERATIONS = (
     "backup",
     "storage_plan",
     "storage_apply",
+    "worker_sessions",
     "task_submit",
     "task_get",
     "task_list",
@@ -743,6 +744,11 @@ class BoardService(_BaseResource):
             )
 
         return self._guard("workspace.cleanup_apply", request_json, handler)
+
+    def worker_sessions(self, request_json: str) -> str:
+        from . import worker_sessions
+        return self._guard("worker.sessions", request_json,
+                           lambda params: worker_sessions.handle(self.store, params))
 
     def workflow_suggest(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

@@ -21,6 +21,33 @@ from buddy.private_dirs import context_root
 
 
 class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
+    def test_private_fixture_states_keep_concurrent_inquiry_bridges_separate(self):
+        peer = ZcodeFixtureCase()
+        peer.setUp()
+        self.addCleanup(peer.doCleanups)
+        own = self.context('inquiry-live', timeout=40)
+        other = peer.context('inquiry-live', timeout=40)
+        own_handle = self.adapter.start(own)
+        self.addCleanup(lambda: own_handle.terminate(grace_seconds=.2) if own_handle.group_alive() else None)
+        peer_handle = peer.adapter.start(other)
+        self.addCleanup(lambda: peer_handle.terminate(grace_seconds=.2) if peer_handle.group_alive() else None)
+        own_credentials = self.credentials(own)
+        peer_credentials = self.credentials(other)
+        self.assertNotEqual(own.attempt_id, other.attempt_id)
+        self.assertNotEqual(own_credentials['socketPath'], peer_credentials['socketPath'])
+        self.ask(own, 'own-question', 'Answer this private fixture.', own_credentials)
+        self.ask(other, 'peer-question', 'Answer the other private fixture.', peer_credentials)
+        self.release(own)
+        self.release(other)
+        for adapter, context, handle in ((self.adapter, own, own_handle), (peer.adapter, other, peer_handle)):
+            self.assertIsNotNone(handle.wait(40))
+            result = adapter.collect(handle, context)
+            self.assertEqual(result.status, 'ok', result.to_report())
+            self.assertTrue(result.shutdown_confirmed)
+        self.assertNotIn('peer-question', self.records(own_credentials, 'own-question')[-1]['inquiryId'])
+        self.assertEqual(self.records(own_credentials, 'peer-question'), [])
+        self.assertEqual(self.records(peer_credentials, 'own-question'), [])
+
     def credentials(self, context, timeout=20):
         """Wait until the attempt mounted its bridge AND admitted the root turn."""
         path = context_root(context, "zcode") / "inquiry.json"
@@ -90,7 +117,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(records[2]["answer"]["toolCallId"], "call-answer-q-1")
         self.assertEqual(records[2]["answer"]["via"], "tool:buddy_answer_inquiry")
         self.assertEqual(records[2]["taskId"], "goal-1")
-        self.assertEqual(records[2]["attemptId"], "attempt-1")
+        self.assertEqual(records[2]["attemptId"], context.attempt_id)
         self.assertEqual(outcome.result["inquiry"]["requested"], 1)
         self.assertEqual(outcome.result["inquiry"]["answered"], 1)
         self.assertEqual(outcome.result["inquiry"]["queued"], 0)

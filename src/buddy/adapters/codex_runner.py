@@ -316,6 +316,18 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         from .codex_config import read_only_config
         (private_home / "config.toml").write_text(read_only_config(control['cwd']))
         environment["CODEX_HOME"] = str(private_home)
+    elif not control.get('discover'):
+        from .codex_home import prepare_coding_home
+        from ..errors import BoardError
+        try:
+            home = prepare_coding_home(native_root, control['credentialSource'])
+        except BoardError as error:
+            raise CodexProtocolError(error.code.lower().replace('_', '-'), error.message) from None
+        environment['CODEX_HOME'] = str(home)
+        environment['CODEX_SQLITE_HOME'] = str(home)
+        # Command overrides keep repository config from redirecting native state.
+        command = [*command, '-c', 'sqlite_home=' + json.dumps(str(home)),
+                   '-c', 'cli_auth_credentials_store="file"']
     # Version is diagnostic only. Discovery never makes a paid model call.
     try:
         version_timeout = (max(0.1, min(5, deadline - time.monotonic()))
@@ -335,11 +347,13 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         if control.get("noToolRequest") or control.get("readOnlyRequest"):
             _remove_private_auth(native_root)
         return {'status': 'error', 'code': 'adapter-unavailable', 'modelStarted': False,
+                'codingHomePrepared': bool(control.get('credentialSource')),
                 'error': 'The selected Codex executable could not start', 'processState': {'shutdownConfirmed': True}}, 1
     finally:
         os.close(fd)
     handle = ProcessHandle(process, own_group=True, log_paths={})
     result = {"status": "error", "mode": "codex", "harnessVersion": version,
+              'codingHomePrepared': bool(control.get('credentialSource')),
               "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
     record = None
     connection = None
@@ -409,7 +423,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                     raise CodexProtocolError("native-resume-unavailable", "native continuation requires the bound Codex thread")
                 binding = _read_binding(native_root, previous)
                 expected = {"taskId": identity["taskId"], "threadId": previous,
-                            "cwd": control["cwd"], "configuration": requested}
+                            "cwd": control["cwd"], "configuration": requested,
+                            "codexHome": environment['CODEX_HOME'],
+                            "credentialSource": control['credentialSource']}
                 if {key: binding.get(key) for key in expected} != expected or not isinstance(binding.get("lastTurnId"), str):
                     raise CodexProtocolError("native-resume-unavailable", "the Codex thread binding differs from this goal, checkout or configuration")
                 resume = (turn_input.get("context") or {}).get("nativeResume")
@@ -578,7 +594,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             and shutdown and process.returncode == 0):
         binding = {"taskId": checkpoint["taskId"], "threadId": thread_id, "cwd": control["cwd"],
                    "configuration": result["resolved"], "lastTurnId": turn_id,
-                   "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"]}
+                   "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"],
+                   "codexHome": environment['CODEX_HOME'], 'credentialSource': control['credentialSource']}
         _write_binding(native_root, thread_id, binding)
         checkpoint["bindingSaved"] = True
     if record is not None:
