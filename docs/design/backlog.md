@@ -39,4 +39,5 @@
 
 ## 服务与凭据
 
+- **安装后清理旧运行时失败，旧运行时越积越多。** 0.24.0 安装时运行时清理报告 `complete: false` 与 `NotADirectoryError`，安装器注明升级已验证、清理可单独重试。运行时目录中除当前与上一版外还留有 11 个旧目录（约 470 MB，最早为 2026-09-19），其中几个只有 48 KB 或 2 MB，像是不完整或早期格式的运行时。建议：清理遇到格式不符的目录时跳过并在结果中列出，而不是整体中止；早期格式的旧运行时在确认没有进程使用后照常回收；随 B 批第二阶段处理，之后可用 `buddy storage` 回收空间。（2026-09-30）
 - **Claude 适配器关于 `ANTHROPIC_API_KEY` 的注释与代码不符。** `src/buddy/adapters/claude_config.py` 的注释说保留该变量作为第一方密钥路径，但 `NATIVE_ENVIRONMENT_ALLOWLIST` 并不传递它，因此 Claude Worker 目前只能用订阅登录。建议在 ADR-019 实现时决定是否支持，并同步注释与 `docs/reference/claude.md`。（2026-09-29）
