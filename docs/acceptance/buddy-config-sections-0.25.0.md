@@ -34,7 +34,7 @@ Buddy 配置默认进入“模型”，左侧以图标与标签导航“模型 /
 
 组件测试委派 run `88a75358-6d89-41a6-8d8a-3a53a10ebb44`，objective `obj-c246ce0e-5162-48ab-9162-e1b332d4b8f1`，decision `dec-753d8736-a513-4504-a5c6-6050f0f983de`。未指定部分配置字段，使用任务级 `routingPreferences` 表达轻量测试偏好；该偏好没有合法匹配，快速 Router 选择 ZCode / `zai-api` / `GLM-5.3-Flash` / `max`。Worker 仅改 4 个测试文件，已确认自身与后代停止。
 
-Host 审查固定产物 `fd6fb964-f149-4147-887c-def7ddf8b03d`，以输入 `763f3d720e8a59ab14260c2e893d39ec34c434a2` 到封存输出 `f78d1598d4c664701596a8f2812236ac6b90c476` 的补丁整合，使用当前最终实现重新跑过 616 项前端测试。整合证明、acknowledge 与 Worker checkout 回收将在最终提交后记录。
+Host 审查固定产物 `fd6fb964-f149-4147-887c-def7ddf8b03d`，以输入 `763f3d720e8a59ab14260c2e893d39ec34c434a2` 到封存输出 `f78d1598d4c664701596a8f2812236ac6b90c476` 的补丁整合，使用当前最终实现重新跑过 616 项前端测试。整合至实现提交 `9121bacb98cd78483b2705c40ea43d3fb1b64086`，服务验证整合记录 `int-a38d66b9-518d-40e5-a334-034c187c5928` 为 verified，随后对上述固定 artifact 记录 accepted。回收计划 `cln-89d8983c-f537-4db1-a879-712cdf8cd7b7` 通过 eligibility 检查并 apply 返回 `removed:true`；Worker checkout 已回收，固定产物、Git refs 与补丁保留。本分支 worktree 保留供 Host 合并。
 
 已从 `docs/design/backlog.md` 的“控制台”节删除已完成的“Buddy 配置页改为分区导航”与“审阅能力一行的控件高度与位置不齐”两条。其余积压项由对应会话处理。
 
