@@ -60,3 +60,14 @@ def read_only_config(cwd: str) -> str:
             '":tmpdir" = "deny"\n":slash_tmp" = "deny"' + mac_temp + '\n'
             + json.dumps(str(Path(cwd).resolve())) + ' = "read"\n'
             '[permissions.buddy-router.network]\nenabled = false\n')
+
+
+def policy_matches(actual, wanted):
+    """Requested controls must match; native default metadata may coexist.
+
+    Callers separately require the exact filesystem grant map so extra native
+    metadata cannot authorize another path.
+    """
+    if isinstance(wanted, dict):
+        return isinstance(actual, dict) and all(policy_matches(actual.get(key), value) for key, value in wanted.items())
+    return type(actual) is type(wanted) and actual == wanted

@@ -126,6 +126,7 @@ CONSOLE_OPERATIONS = (
     "capabilities",
     "harness_verify",
     "harness_set",
+    "quota_redetect",
     "evaluation_write_begin",
     "evaluation_write_renew",
     "user_policy_publish",

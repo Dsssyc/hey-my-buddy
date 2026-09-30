@@ -14,6 +14,7 @@ FILES = frozenset({
     'activity.json', 'native-usage.json', 'attention.json',
     'inquiry.results.jsonl', 'inquiry.sock.error.json',
     'codex-control.json', 'claude-control.json', 'readonly-control.json', 'no-tool-control.json',
+    'review-evidence.json',
     # Retained historical routing evidence, not produced by the current runner.
     'decision-input.json', 'decision-output.json',
 })

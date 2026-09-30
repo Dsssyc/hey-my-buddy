@@ -44,6 +44,7 @@ SUMMARIES: dict[str, str] = {
     "adapters": "Adapter report; the same operation as capabilities.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
     "harness-verify": "Prepare or explicitly start one native review verification for an enabled configuration.",
+    "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "runtime": "Installed-runtime identity, description and source-leak report.",
     "backup": "Service-owned verified rolling backup.",
     "backup-preflight": "Read-only evidence backup inventory: copying, skipping and refusal reasons; starts nothing.",
@@ -141,6 +142,7 @@ METHOD_NOTES: dict[str, tuple[str, ...]] = {
     "restart": ("the CLI name fixes action to 'restart'; stop and status are separate CLI names",),
     "adapters": ("the same C-Two operation as capabilities",),
     "upgrade": ("runs the same installer as install with the upgrade coordinator",),
+    "quota-redetect": ("reuse requestId after a lost reply, even if the chance was consumed; changed inputs conflict; no model/balance query or recovery claim",),
     "backup-preflight": ("reads directory entries only; no locks, files, database writes, service or runtime startup; samples are bounded to 20 paths per outcome",),
     "wait-capacity": ("takes no parameters",),
 }

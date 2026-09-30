@@ -137,21 +137,19 @@ def _read_only_call(connection, control, result, catalog):
             for model in catalog["providers"][0]["models"]):
         raise CodexProtocolError("invalid-configuration", "Unknown native read-only configuration")
     import tomllib
-    from .codex_config import read_only_config
+    from .codex_config import read_only_config, policy_matches
     expected = tomllib.loads(read_only_config(control['cwd']))
     configured = connection.call('config/read', {'cwd': control['cwd'], 'includeLayers': False}).get('config') or {}
-    def matches(actual, wanted):
-        if isinstance(wanted, dict):
-            return isinstance(actual, dict) and all(matches(actual.get(key), value) for key, value in wanted.items())
-        return type(actual) is type(wanted) and actual == wanted
+    # Failed readback must survive too; review-check publishes only a strict,
+    # sanitized projection before removing this private controller result.
+    result['nativeConfigPolicy'] = configured
     profile = (configured.get('permissions') or {}).get('buddy-router') or {}
     filesystem = {key: value for key, value in (profile.get('filesystem') or {}).items() if value is not None}
-    if (not matches(configured, expected) or configured.get('mcp_servers')
+    if (not policy_matches(configured, expected) or configured.get('mcp_servers')
             or filesystem != expected['permissions']['buddy-router']['filesystem'] or profile.get('extends')):
         raise CodexProtocolError('readonly-policy-unverified', 'Codex effective configuration differs from the private read-only policy')
     # Retain the acknowledged effective config, not our requested TOML. Review
     # certification must inspect native evidence rather than our own proposal.
-    result['nativeConfigPolicy'] = configured
     response = connection.call("thread/start", {
         "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
@@ -160,14 +158,14 @@ def _read_only_call(connection, control, result, catalog):
     })
     profile = response.get('activePermissionProfile') or {}
     native_sandbox = response.get('sandbox') or {}
+    result['nativePolicy'] = {'activePermissionProfile': profile, 'sandbox': native_sandbox,
+                              'approvalPolicy': response.get('approvalPolicy'), 'model': response.get('model'),
+                              'modelProvider': response.get('modelProvider'), 'cwd': response.get('cwd')}
     if (profile.get('id') != 'buddy-router' or response.get('approvalPolicy') != 'never'
             or native_sandbox.get('type') != 'readOnly' or native_sandbox.get('networkAccess', False) is not False):
         raise CodexProtocolError('readonly-policy-unverified', 'Codex did not acknowledge the private read-only permission profile')
     if response.get('model') != spec['model'] or response.get('modelProvider') != 'openai' or Path(response.get('cwd') or '').resolve() != Path(control['cwd']).resolve():
         raise CodexProtocolError('readonly-configuration-mismatch', 'Codex acknowledged a different read-only configuration')
-    result['nativePolicy'] = {'activePermissionProfile': profile, 'sandbox': native_sandbox,
-                              'approvalPolicy': response['approvalPolicy'], 'model': response.get('model'),
-                              'modelProvider': response.get('modelProvider'), 'cwd': response.get('cwd')}
     if request.get('captureEvidence'):
         result['nativeToolEvents'] = []
         result['nativeRawToolEvents'] = []

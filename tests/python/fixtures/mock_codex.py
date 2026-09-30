@@ -129,6 +129,8 @@ def main():
             send({"id": ident, "result": {"userAgent": "fixture"}})
         elif method == 'config/read':
             configured = tomllib.loads((Path(os.environ['CODEX_HOME']) / 'config.toml').read_text())
+            if case == 'readonly-config-mismatch':
+                configured['features']['apps'] = True
             send({'id': ident, 'result': {'config': configured}})
         elif method == "account/read":
             send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",

@@ -663,10 +663,13 @@ class EvaluationStore:
                 )
             ]
             from .billing import for_provider
+            from .quota_routing import configuration_retry
             for profile in profiles:
                 profile["billing"] = for_provider(connection, profile["adapter"], profile["provider"])
                 from .native_observations import exhausted
-                profile['quotaExhausted'] = exhausted(connection, profile) is not None
+                profile['quotaExhausted'] = exhausted(connection, profile, now=now) is not None
+                if profile['quotaExhausted']:
+                    profile['quotaRetry'] = configuration_retry(connection, profile, now=now)
             profile_ids = [profile["profileId"] for profile in profiles]
             marks = ",".join("?" for _ in profile_ids) or "NULL"
             cards = [self._card_view(row) for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)]

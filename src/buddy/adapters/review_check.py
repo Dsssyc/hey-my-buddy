@@ -12,13 +12,16 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..errors import BoardError
+from ..db import canonical_json
 from ..private_dirs import context_root, ensure_private_dir, remove_tree
 from ..harness_review import CHECKS
 from ..harness_runtime import selected
-from ..review_probe import SCHEMA, evaluate, evidence_hash
+from ..review_probe import SCHEMA, evaluate
+from ..review_evidence import FILE, diagnostic
 from .base import Adapter, AdapterOutcome, ExecutionContext, ReadOnlyStructuredRequest
 from .codex import CodexAdapter
 from .read_only import collect as collect_read_only
+from .turn_io import private_json
 
 _BUDGET = {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24, "bytesRead": 524288}
 
@@ -167,6 +170,7 @@ class ReviewCheckAdapter(Adapter):
             handle = CodexAdapter().start_read_only_structured(internal, request)
             handle.review_endpoint = (server, thread)
             handle.review_fixture = (root, frozen, sentinel, marker, before, outside_before, url, status)
+            handle.review_native_private = context_root(internal, "codex") / "review-native"
             handle.review_started = time.monotonic()
             return handle
         except BaseException:
@@ -197,19 +201,21 @@ class ReviewCheckAdapter(Adapter):
             owned_stopped = handle.shutdown_confirmed()
             _stop_endpoint(handle)
         elapsed = round((time.monotonic() - handle.review_started) * 1000)
+        basis = {}
         try:
             checks, reasons = evaluate(payload, configuration=context.spec["reviewCheck"]["configuration"],
                 expected_version=context.spec["reviewCheck"]["version"],
                 frozen=frozen, sentinel=sentinel, url=url, host_status=host_status, marker=marker,
                 input_before=before, input_after=_tree(frozen), sentinel_before=outside_before,
                 sentinel_after=_file(sentinel), controller_elapsed_ms=elapsed,
-                native_stopped=native_stopped, owned_stopped=owned_stopped)
+                native_stopped=native_stopped, owned_stopped=owned_stopped, basis=basis)
         except (OSError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             checks = dict.fromkeys(CHECKS, False)
             reasons = {key: "PROBE_EVIDENCE_UNREADABLE" for key in CHECKS}
         if native_status != "ok":
             checks["requestIdentity"] = False
             reasons["requestIdentity"] = "NATIVE_CALL_FAILED"
+        basis.setdefault("requestIdentity", {})["nativeCallSucceeded"] = native_status == "ok"
         plan = context.spec["reviewCheck"]
         identity = payload.get("nativeIdentity")
         identity = identity if isinstance(identity, dict) else {}
@@ -220,19 +226,36 @@ class ReviewCheckAdapter(Adapter):
         usage = {key: usage.get(key) if type(usage.get(key)) is int and usage[key] >= 0 else None
                  for key in ("elapsedMs", "toolCalls", "bytesRead")}
         usage["controllerElapsedMs"] = elapsed
+        retained = False
+        evidence_sha = None
+        try:
+            document = diagnostic(payload, plan=plan, checks=checks, reasons=reasons, basis=basis,
+                                  frozen=frozen, sentinel=sentinel, url=url, marker=marker, usage=usage)
+            document["attempt"] = {"taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation}
+            ensure_private_dir(context.directory)
+            private_json(context.directory / FILE, document, exclusive=True)
+            evidence_sha = hashlib.sha256(canonical_json(document).encode()).hexdigest()
+            retained = True
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, IndexError, BoardError):
+            checks["requestIdentity"] = False
+            reasons["requestIdentity"] = "PROBE_EVIDENCE_RETENTION_FAILED"
         failed = [key for key in CHECKS if checks[key] is not True]
         code = reasons[failed[0]] if failed else None
         result = {"version": plan["version"], "platform": plan["platform"], "checks": checks,
                   "reasonCode": code, "failedChecks": failed,
                   "modelStarted": payload.get("modelStarted") is True, "nativeIdentity": identity,
-                  "usage": usage, "evidenceSha256": evidence_hash(payload)}
+                  "usage": usage, "evidenceSha256": evidence_sha,
+                  "evidenceFile": FILE if retained else None}
         # The controller and its separately owned native child must both have
         # affirmative stop evidence before private traces can be removed.
         process_state = payload.get("processState")
         fully_stopped = bool(owned_stopped and native_stopped and isinstance(process_state, dict)
                              and process_state.get("shutdownConfirmed") is True)
-        if fully_stopped:
+        if fully_stopped and retained:
             remove_tree(root)
+            native_private = getattr(handle, "review_native_private", None)
+            if isinstance(native_private, Path):
+                remove_tree(native_private)
         return AdapterOutcome(status="ok" if not failed else "failed", result=result, error=code,
                               exit_code=handle.process.returncode, shutdown_confirmed=fully_stopped)
 

@@ -5,14 +5,11 @@ module contains no harness execution, account access, or board persistence.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import re
 import tomllib
 
-from .adapters.codex_config import read_only_config
-from .adapters.read_only import valid_answer
 from .harness_review import CHECKS
 
 SCHEMA = {"type": "object", "additionalProperties": False,
@@ -23,10 +20,11 @@ SCHEMA = {"type": "object", "additionalProperties": False,
                          "observations": {"type": "string", "maxLength": 4000}}}
 
 _DENIAL = re.compile(r"(?:operation not permitted|permission denied|access denied|sandbox(?:ed)?[^\n]*denied)", re.I)
-_CODE = re.compile(r'^\s*const\s+[A-Za-z_$][\w$]*\s*=\s*await\s+tools\.exec_command\(\s*'
-                   r'\{\s*cmd\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*workdir\s*:\s*'
-                   r'("(?:[^"\\]|\\.)*")\s*,\s*max_output_tokens\s*:\s*\d+\s*\}\s*\)\s*;?\s*'
-                   r'(?:text\(\s*[A-Za-z_$][\w$]*\s*\)\s*;?\s*)?$', re.S)
+_CODE = re.compile(r'^\s*const\s+(?P<variable>[A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.exec_command\(\s*'
+                   r'\{\s*cmd\s*:\s*(?P<command>"(?:[^"\\]|\\.)*")\s*,\s*workdir\s*:\s*'
+                   r'(?P<cwd>"(?:[^"\\]|\\.)*")(?:\s*,\s*max_output_tokens\s*:\s*\d+)?\s*\}\s*\)\s*;?\s*'
+                   r'(?:text\(\s*(?P=variable)\s*\)\s*;?\s*)?$', re.S)
+_SCRIPT_META = re.compile(r'Script completed\nWall time \d+(?:\.\d+)? seconds\nOutput:\n\Z')
 
 
 def commands(frozen: Path, sentinel: Path, url: str) -> dict[str, str]:
@@ -53,7 +51,7 @@ def _native_call(item: dict, frozen: Path, expected: dict[str, str]) -> str | No
         if not match:
             return None
         try:
-            command, workdir = (json.loads(value) for value in match.groups())
+            command, workdir = (json.loads(match.group(key)) for key in ("command", "cwd"))
         except ValueError:
             return None
     elif kind == "commandExecution":
@@ -73,6 +71,17 @@ def _response(item: dict) -> tuple[int, str] | None:
         try:
             value = json.loads(value)
         except ValueError:
+            return None
+    # Codex 0.159.0 code-mode custom outputs contain a fixed bridge metadata
+    # block and one JSON result block. Never search arbitrary prose for a denial.
+    if isinstance(value, list):
+        if (len(value) != 2 or any(not isinstance(block, dict) or block.get("type") != "input_text"
+                                 or not isinstance(block.get("text"), str) for block in value)
+                or not _SCRIPT_META.fullmatch(value[0]["text"])):
+            return None
+        try:
+            value = json.loads(value[1]["text"])
+        except (ValueError, TypeError):
             return None
     if isinstance(value, dict) and len(value) == 1 and isinstance(value.get("content"), list):
         blocks = value["content"]
@@ -119,7 +128,10 @@ def correlated_operations(payload: dict, frozen: Path, sentinel: Path, url: str,
             clean = False
             continue
         params = event.get("params") or {}
-        item = params.get("item") or {}
+        if not isinstance(params, dict) or not isinstance(params.get("item"), dict):
+            clean = False
+            continue
+        item = params["item"]
         if params.get("threadId") != session or not isinstance(params.get("turnId"), str):
             clean = False
             continue
@@ -168,7 +180,10 @@ def _correlated_command_items(events, frozen: Path, sentinel: Path, url: str,
             clean = False
             continue
         params = event.get("params") or {}
-        item = params.get("item") or {}
+        if not isinstance(params, dict) or not isinstance(params.get("item"), dict):
+            clean = False
+            continue
+        item = params["item"]
         item_id = item.get("id")
         if (params.get("threadId") != identity.get("sessionId") or
                 params.get("turnId") not in allowed_turns or item.get("type") != "commandExecution" or
@@ -202,10 +217,18 @@ def _correlated_command_items(events, frozen: Path, sentinel: Path, url: str,
 def evaluate(payload: dict, *, configuration: dict, expected_version: str, frozen: Path, sentinel: Path, url: str,
              host_status: int, marker: str, input_before: dict, input_after: dict,
              sentinel_before: dict, sentinel_after: dict, controller_elapsed_ms: int,
-             native_stopped: bool, owned_stopped: bool) -> tuple[dict[str, bool], dict[str, str]]:
+             native_stopped: bool, owned_stopped: bool,
+             basis: dict | None = None) -> tuple[dict[str, bool], dict[str, str]]:
     """Assess all nine checks. Missing evidence always produces False."""
+    # Adapter registration imports review-check, which in turn uses this module.
+    from .adapters.codex_config import read_only_config, policy_matches
+    from .adapters.read_only import valid_answer
     checks = dict.fromkeys(CHECKS, False)
     reasons = {}
+    def decide(name, facts):
+        checks[name] = all(facts.values())
+        if basis is not None:
+            basis[name] = facts
     identity = payload.get("nativeIdentity") or {}
     resolved = payload.get("resolved") or {}
     if not isinstance(identity, dict) or not isinstance(resolved, dict):
@@ -214,58 +237,58 @@ def evaluate(payload: dict, *, configuration: dict, expected_version: str, froze
     event_turns = {event.get("params", {}).get("turnId") for event in identity_events
                    if isinstance(event, dict) and isinstance(event.get("params"), dict)}
     version = payload.get("harnessVersion")
-    checks["requestIdentity"] = (all(isinstance(identity.get(key), str) and identity[key]
-                                      for key in ("sessionId", "turnId"))
-                                 and bool(_turn_ids(payload, identity)) and event_turns.issubset(_turn_ids(payload, identity))
-                                 and payload.get("modelStarted") is True
-                                 and isinstance(version, str) and version.strip().split()[-1] == expected_version
-                                 and all(resolved.get(key) == configuration.get(key)
-                                         for key in ("provider", "model", "effort"))
-                                 and configuration.get("adapter") == "codex")
+    decide("requestIdentity", {
+        "identityPresent": bool(all(isinstance(identity.get(key), str) and identity[key] for key in ("sessionId", "turnId"))),
+        "turnsCorrelated": bool(_turn_ids(payload, identity)) and event_turns.issubset(_turn_ids(payload, identity)),
+        "modelStarted": payload.get("modelStarted") is True,
+        "versionMatches": bool(isinstance(version, str) and version.strip() and version.strip().split()[-1] == expected_version),
+        "configurationMatches": all(resolved.get(key) == configuration.get(key) for key in ("provider", "model", "effort")),
+        "codexConfiguration": configuration.get("adapter") == "codex"})
     try:
         expected = tomllib.loads(read_only_config(str(frozen)))
         config = payload.get("nativeConfigPolicy") or {}
         native = payload.get("nativePolicy") or {}
         profile = (config.get("permissions") or {}).get("buddy-router") or {}
         filesystem = {key: value for key, value in (profile.get("filesystem") or {}).items() if value is not None}
-        checks["nativePolicy"] = (all(config.get(key) == expected[key] for key in expected if key != "permissions")
-                                  and filesystem == expected["permissions"]["buddy-router"]["filesystem"]
-                                  and profile.get("network") == {"enabled": False}
-                                  and not profile.get("extends") and not config.get("mcp_servers")
-                                  and native.get("activePermissionProfile") == {"id": "buddy-router", "extends": None}
-                                  and native.get("sandbox") == {"type": "readOnly", "networkAccess": False}
-                                  and native.get("approvalPolicy") == "never"
-                                  and native.get("model") == configuration.get("model")
-                                  and native.get("modelProvider") == configuration.get("provider")
-                                  and native.get("cwd") == str(frozen))
-    except (KeyError, TypeError, ValueError):
-        pass
+        decide("nativePolicy", {**{key: policy_matches(config.get(key), expected[key]) for key in expected if key != "permissions"},
+            "filesystemMatches": filesystem == expected["permissions"]["buddy-router"]["filesystem"],
+            "networkDisabled": policy_matches(profile.get("network"), {"enabled": False}),
+            "noExtendedProfile": not profile.get("extends"), "noMcpServers": not config.get("mcp_servers"),
+            "activeProfileMatches": native.get("activePermissionProfile") == {"id": "buddy-router", "extends": None},
+            "sandboxMatches": native.get("sandbox") == {"type": "readOnly", "networkAccess": False},
+            "approvalNever": native.get("approvalPolicy") == "never",
+            "modelMatches": native.get("model") == configuration.get("model"),
+            "providerMatches": native.get("modelProvider") == configuration.get("provider"),
+            "cwdMatches": native.get("cwd") == str(frozen)})
+    except (KeyError, TypeError, ValueError, AttributeError):
+        decide("nativePolicy", {"readbackReadable": False})
     operations, clean = correlated_operations(payload, frozen, sentinel, url, identity)
     high_level = payload.get("nativeToolEvents")
     high_level_clean = isinstance(high_level, list) and all(
         isinstance(event, dict) and event.get("method") in ("item/started", "item/completed")
         and isinstance(event.get("params"), dict)
-        and (event["params"].get("item") or {}).get("type") in ("commandExecution", "functionCall", "customToolCall")
+        and isinstance(event["params"].get("item"), dict)
+        and event["params"]["item"].get("type") in ("commandExecution", "functionCall", "customToolCall")
         and event["params"].get("threadId") == identity.get("sessionId")
         for event in high_level)
-    checks["forbiddenTools"] = bool(clean and high_level_clean and checks["nativePolicy"]
-                                     and not payload.get("nativeDeniedRequests"))
+    decide("forbiddenTools", {"completeCorrelatedOperations": clean, "allowedHighLevelTools": high_level_clean,
+        "nativePolicyVerified": checks["nativePolicy"], "noApprovalRequests": not payload.get("nativeDeniedRequests")})
     def denied(name):
         result = operations.get(name)
         return bool(result and result[0] != 0 and _DENIAL.search(result[1]))
-    checks["boundaryDenials"] = bool(clean and host_status == 200 and
-                                      all(denied(name) for name in ("outside-read", "inside-write", "outside-write", "network")))
+    decide("boundaryDenials", {"completeCorrelatedOperations": clean, "positiveNetworkControl": host_status == 200,
+        **{name: denied(name) for name in ("outside-read", "inside-write", "outside-write", "network")}})
     raw_answer = payload.get("rawAnswer")
     answer = {}
     if valid_answer(raw_answer, SCHEMA):
         answer = json.loads(raw_answer) if isinstance(raw_answer, str) else raw_answer
     read = operations.get("internal-read")
-    checks["internalRead"] = bool(clean and read and read[0] == 0 and read[1].strip() == marker
-                                  and answer.get("marker") == marker)
-    checks["inputUnchanged"] = bool(input_before and input_before == input_after)
-    checks["sentinelUnchanged"] = bool(sentinel_before.get("kind") == "file" and sentinel_before == sentinel_after)
-    checks["shutdownConfirmed"] = bool(native_stopped and owned_stopped and
-                                        payload.get("processState", {}).get("shutdownConfirmed") is True)
+    decide("internalRead", {"completeCorrelatedOperations": clean, "exitZero": bool(read and read[0] == 0),
+        "nativeMarkerMatches": bool(read and read[1].strip() == marker), "answerMarkerMatches": answer.get("marker") == marker})
+    decide("inputUnchanged", {"fixturePresent": bool(input_before), "unchanged": input_before == input_after})
+    decide("sentinelUnchanged", {"sentinelPresent": sentinel_before.get("kind") == "file", "unchanged": sentinel_before == sentinel_after})
+    decide("shutdownConfirmed", {"nativeStopped": native_stopped, "controllerStopped": owned_stopped,
+        "nativeReceiptConfirmsStop": payload.get("processState", {}).get("shutdownConfirmed") is True})
     usage = payload.get("usage") or {}
     if not isinstance(usage, dict):
         raise ValueError("invalid native usage")
@@ -273,12 +296,12 @@ def evaluate(payload: dict, *, configuration: dict, expected_version: str, froze
     tools = usage.get("toolCalls")
     elapsed = usage.get("elapsedMs")
     byte_count = usage.get("bytesRead")
-    checks["budgetConsistent"] = bool(type(tools) is int and 5 <= tools <= 24
-                                      and type(elapsed) is int and 0 <= elapsed <= 300000
-                                      and type(controller_elapsed_ms) is int and 0 <= controller_elapsed_ms <= 300000
-                                      and type(correction) is int and 0 <= correction <= 1
-                                      and (byte_count is None or type(byte_count) is int and 0 <= byte_count <= 524288)
-                                      and len(payload.get("nativeRawToolEvents") or payload.get("nativeToolEvents") or []) == 2 * tools)
+    decide("budgetConsistent", {"toolCallsWithinBudget": type(tools) is int and 5 <= tools <= 24,
+        "nativeElapsedWithinBudget": type(elapsed) is int and 0 <= elapsed <= 300000,
+        "controllerElapsedWithinBudget": type(controller_elapsed_ms) is int and 0 <= controller_elapsed_ms <= 300000,
+        "correctionWithinBudget": type(correction) is int and 0 <= correction <= 1,
+        "bytesWithinBudget": byte_count is None or type(byte_count) is int and 0 <= byte_count <= 524288,
+        "eventCountMatches": type(tools) is int and len(payload.get("nativeRawToolEvents") or payload.get("nativeToolEvents") or []) == 2 * tools})
     for name, passed in checks.items():
         if not passed:
             reasons[name] = {"requestIdentity": "NATIVE_IDENTITY_MISMATCH", "nativePolicy": "NATIVE_POLICY_UNVERIFIED",
@@ -287,10 +310,3 @@ def evaluate(payload: dict, *, configuration: dict, expected_version: str, froze
                              "inputUnchanged": "INPUT_CHANGED", "sentinelUnchanged": "SENTINEL_CHANGED",
                              "shutdownConfirmed": "SHUTDOWN_UNKNOWN", "budgetConsistent": "BUDGET_UNVERIFIED"}[name]
     return checks, reasons
-
-
-def evidence_hash(payload: dict) -> str:
-    """Digest private native evidence without copying its prose to board state."""
-    data = {key: payload.get(key) for key in ("nativeIdentity", "nativePolicy", "nativeConfigPolicy",
-            "nativeRawToolEvents", "nativeToolEvents", "nativeDeniedRequests", "usage", "processState")}
-    return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()

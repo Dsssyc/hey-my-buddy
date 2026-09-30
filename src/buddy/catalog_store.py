@@ -149,10 +149,13 @@ def profiles(evaluation, params):
         rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
         values = [evaluation._profile_view(row) for row in rows[:limit]]
         from .billing import for_provider
+        from .quota_routing import configuration_retry
         for value in values:
             value['billing'] = for_provider(db, value['adapter'], value['provider'])
             from .native_observations import exhausted
             value['quotaExhausted'] = exhausted(db, value) is not None
+            if value['quotaExhausted']:
+                value['quotaRetry'] = configuration_retry(db, value)
         ids = [value['profileId'] for value in values]
         marks = ','.join('?' for _ in ids) or 'NULL'
         cards = [evaluation._card_view(row) for row in db.execute(f'SELECT * FROM evaluation_cards WHERE profile_id IN ({marks})', ids)]

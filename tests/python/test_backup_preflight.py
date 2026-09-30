@@ -14,6 +14,17 @@ from support import BoardTestCase, DELEGATE_ROOT, _child_environment
 
 
 class BackupPreflightTests(BoardTestCase):
+    def test_review_diagnostic_is_copied_and_unsafe_replacement_is_refused(self):
+        board, root = self.files('review-evidence.json')
+        report = backup.preflight(board.directory)
+        self.assertIn('attempts/run/attempt/review-evidence.json', report['copied']['paths'])
+        result = backup.create(board.store)
+        manifest = backup.verify(Path(result['path']))
+        self.assertIn('state/attempts/run/attempt/review-evidence.json', manifest['files'])
+        (root / 'review-evidence.json').unlink()
+        (root / 'review-evidence.json').symlink_to(self.directory)
+        self.assertIn('attempts/run/attempt/review-evidence.json', backup.preflight(board.directory)['rejected']['paths'])
+
     def files(self, *names):
         board = self.board()
         root = board.directory / 'attempts/run/attempt'

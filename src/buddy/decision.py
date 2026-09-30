@@ -248,10 +248,29 @@ class DecisionCoordinator:
 
     @staticmethod
     def _select_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False) -> list[sqlite3.Row]:
-        """Legal candidates: enabled, available, capability-matching, pinned and not excluded.
+        """Legal candidates without any quota retry: the read-only projection.
 
         Pin/exclude is enforced here in Python and never delegated to the model;
         ``prefer`` stays a soft ordering hint that only enters the bounded input.
+        """
+        rows, _retried = DecisionCoordinator._scan_candidates(
+            connection, required_capabilities, constraints=constraints, coding_only=coding_only)
+        return rows
+
+    @staticmethod
+    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, decision_id: str | None = None, consume_retries: bool = False, now: str | None = None, materialize_observations: bool = False) -> tuple[list[sqlite3.Row], list[str]]:
+        """Legal candidates, plus the single-use quota retry windows a decision may use.
+
+        Pin/exclude is enforced here in Python and never delegated to the model;
+        ``prefer`` stays a soft ordering hint that only enters the bounded input.
+        Without ``decision_id`` this is a pure read: exhausted configurations stay
+        excluded and nothing is claimed. Inside a decision's write transaction a
+        no-reset exhaustion whose retry window is open is admitted exactly once —
+        the claim is durable in that same transaction, so a concurrent decision
+        re-reads the marker and stays excluded. With ``consume_retries`` unset the
+        same admission rule is evaluated without claiming anything, which is the
+        publish-time bounds re-check: a window this decision already consumed
+        keeps its selection legal.
         """
         clauses, values = DecisionCoordinator._candidate_bounds(
             required_capabilities=required_capabilities, constraints=constraints, coding_only=coding_only)
@@ -259,10 +278,24 @@ class DecisionCoordinator:
         clauses.append("(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')")
         values.append(MAX_DECISION_PROFILES + 1)
         from .native_observations import exhausted
-        return [row for row in connection.execute(
+        from .quota_routing import claim, materialize
+        selected: list[sqlite3.Row] = []
+        retried: list[str] = []
+        for row in connection.execute(
             "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id "
-            "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values)
-            if exhausted(connection, row) is None]
+            "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values):
+            if materialize_observations:
+                materialize(connection, row['adapter'], row['provider'], now=now)
+            if exhausted(connection, row, now=now) is None:
+                selected.append(row)
+            elif decision_id is not None and claim(
+                    connection, row, decision_id=decision_id, consume=consume_retries, now=now) is not None:
+                # A profile admitted through a retry window is retried whether it
+                # claimed the window itself or shares the record this decision
+                # already claimed: both entered only because the window opened.
+                selected.append(row)
+                retried.append(row["profile_id"])
+        return selected, retried
 
     def _excluded_profiles(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> tuple[list[dict], int]:
         """The user-excluded configurations inside these hard bounds, frozen now.
@@ -300,7 +333,7 @@ class DecisionCoordinator:
         ]
         return entries, total
 
-    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None) -> dict:
+    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None, quota_retry: list[str] | None = None) -> dict:
         """Submission-time routing facts: the frozen candidate count and exclusions.
 
         The basis is recorded once with the request and never recomputed, so a
@@ -310,7 +343,10 @@ class DecisionCoordinator:
         """
         excluded, excluded_count = self._excluded_profiles(
             connection, required_capabilities=required_capabilities, constraints=constraints)
-        return {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedProfiles": excluded}
+        basis = {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedProfiles": excluded}
+        if quota_retry:
+            basis["quotaRetryProfileIds"] = quota_retry
+        return basis
 
     # -- bounded model input -------------------------------------------------
     def _profile_input(self, row: sqlite3.Row) -> dict:
@@ -608,14 +644,16 @@ class DecisionCoordinator:
             state = self._state(connection)
             # The legal candidate set is frozen before any Router resolution: a
             # sole legal candidate is selected by the program with no Router
-            # call, so that path cannot depend on Router availability.
-            candidates = self._select_candidates(
+            # call, so that path cannot depend on Router availability. Candidate
+            # inspection leaves retries open until a selection is adopted.
+            candidates, quota_retry = self._scan_candidates(
                 connection, request.get("requiredCapabilities", []),
-                constraints=request.get("constraints"), coding_only=True)
+                constraints=request.get("constraints"), coding_only=True,
+                decision_id=decision_id, consume_retries=False, now=now, materialize_observations=True)
             request["routingBasis"] = self._freeze_routing_basis(
                 connection, candidates=candidates,
                 required_capabilities=request.get("requiredCapabilities", []),
-                constraints=request.get("constraints"))
+                constraints=request.get("constraints"), quota_retry=quota_retry)
             status = "queued"
             # New decisions are always selection requests; there is no internal
             # maintenance request path left on the blackboard.
@@ -1217,9 +1255,14 @@ class DecisionCoordinator:
                          now=now, reason=reason, evidence_ids=evidence_ids)
             return
         request = json.loads(row["requested_json"])
-        current_ids = {item["profile_id"] for item in self._select_candidates(
+        # Bounds re-check without claiming: a no-reset exhaustion whose retry this
+        # very decision consumed stays legal for its own frozen answer, and a
+        # window that opened after the freeze is legal but never burned here.
+        current_rows, _retried = self._scan_candidates(
             connection, request.get("requiredCapabilities") or [],
-            constraints=request.get("constraints"), coding_only=True)}
+            constraints=request.get("constraints"), coding_only=True,
+            decision_id=row["decision_id"], consume_retries=False, now=now)
+        current_ids = {item["profile_id"] for item in current_rows}
         if profile_id not in current_ids:
             self._finish(connection, row, status="needs-host", now=now,
                          output={**output, "code": "router-out-of-bounds"},
@@ -1289,6 +1332,15 @@ class DecisionCoordinator:
 
     def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: str | None = None, error: str | None = None, profile_id: str | None = None, evidence_ids: list[str] | None = None, output: dict | None = None, proposal: dict | None = None, published_revision: int | None = None, selected: dict | None = None) -> None:
         """One atomic terminal transition for a decision and its audit material."""
+        if status == "completed" and profile_id and selected:
+            from .quota_routing import claim
+            # Candidate inspection must not spend an unchosen provider's retry.
+            # Selection and this single-use claim share the write transaction;
+            # another selector either sees exhaustion or rechecks its bounds.
+            if claim(connection, selected, decision_id=row["decision_id"], now=now) is None:
+                status, profile_id, selected = "needs-host", None, None
+                reason, error = "The selected quota retry was consumed by another decision", "router-out-of-bounds"
+                output = {**(output or {}), "code": error}
         if status not in DECISION_STATUSES:
             raise BoardError("INTERNAL_ERROR", f"Unknown decision status {status!r}")
         connection.execute(

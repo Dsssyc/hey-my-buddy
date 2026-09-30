@@ -38,6 +38,7 @@ CONTROL_OPERATIONS = (
     "harness_set",
     "harness_verify",
     "harness_prepare",
+    "quota_redetect",
     "service_control",
     "console",
     "console_snapshot",
@@ -590,6 +591,33 @@ class BoardService(_BaseResource):
         def handler(params):
             return request(self.store, params)
         return self._guard('harness.verify', request_json, handler)
+
+    def quota_redetect(self, request_json: str) -> str:
+        from .quota_routing import redetect
+        from .usage import identifier
+
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'provider', 'requestId'}, 'quota.redetect')
+            request_id = schemas.required_string(params, 'requestId', max_length=128)
+            name = schemas.required_string(params, 'adapter', max_length=32)
+            from .harness_health import _name
+            _name(name)
+            provider = identifier(schemas.required_string(params, 'provider', max_length=128))
+            if provider is None:
+                raise BoardError('INVALID_ARGUMENT', 'provider must be one identifier, not free text')
+            request = {'adapter': name, 'provider': provider}
+            command_id = 'quota-redetect:' + request_id
+            with self.store.db.write() as db:
+                previous = self.store._receipt(db, command_id, 'quota.redetect', request, 'quota-control')
+                if previous is not None:
+                    return {**previous, 'duplicate': True}
+                response = {'quota': redetect(db, name, provider, now=self.store.now()), 'duplicate': False}
+                self.store._append_event(db, 'harness.quota_redetect', payload=response)
+                self.store._store_receipt(db, command_id, 'quota.redetect', request, response, subject='quota-control')
+                head = self.store._head_of(db)
+            self.store._notify(head)
+            return response
+        return self._guard('quota.redetect', request_json, handler)
 
     def _touch_harnesses(self, params, *, explicit=False):
         if not self.automatic_discovery:

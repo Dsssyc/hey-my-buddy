@@ -137,3 +137,5 @@ The [Codex monitoring and continuation repair](acceptance/codex-monitor-and-cont
 The [ADR-019 first-stage record](acceptance/worker-accounts-phase1-0.23.0.md) covers console copy, cancellation attribution, billing labels, exhaustion eligibility and data-backed review checks; its [native-check plan](design/adr019-native-checks.md) keeps per-check authorization and remaining platform limits explicit.
 
 [ADR-019 decision 11 private-directory source design](design/private-directories.md) inventories each adapter’s evidence, credentials and native content; [0.24.0 acceptance](acceptance/private-directories-0.24.0.md) records private fixtures, invariant coverage and remaining Windows/daily-board boundaries. This prerequisite adds no independent account or login behavior; B phase two stays paused until integration.
+
+[Routing validation and quota recovery](design/routing-validation.md) describes ADR-019 second-stage subbatch ②; its [0.25.0 acceptance](acceptance/routing-validation-0.25.0.md) distinguishes the approved native probe, offline replay and remaining verification from installed behavior.
