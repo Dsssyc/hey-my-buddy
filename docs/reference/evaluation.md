@@ -127,3 +127,7 @@ Source lives in `apps/console/` (React 19, Vite 8, TypeScript); a relative-base 
 ## Native eligibility facts (0.23.0)
 
 Profile reads include bounded native `billing` and derived `quotaExhausted`; neither is user-editable. Billing never changes enablement, preference or routing eligibility. Native exhaustion temporarily filters candidates without changing user policy, and only reset or newer available native evidence restores them. Review capability is projected dynamically from the current harness/version/platform certificate; a successful explicit verification makes it visible immediately without requiring catalog refresh. See [harnesses](harnesses.md) for records, checks and native verification boundaries.
+
+## Credential lineage for quota (0.26.0)
+
+Native quota, exhaustion and retry facts are keyed by adapter/provider/limit plus service-selected source and credential revision. A delayed result uses its claim-time lineage, never its own account label or the current selection. Current reminders, billing and automatic eligibility read only the current lineage; switching back to the same unchanged lineage retains its observations, while replacing credentials requires fresh native facts. Quota re-detection and atomic retry claims stay in that same lineage. Token usage remains the existing per-attempt record; no new usage snapshot or account-driven model-card publication is added.

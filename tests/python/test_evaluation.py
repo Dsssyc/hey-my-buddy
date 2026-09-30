@@ -1292,7 +1292,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         from buddy.errors import BoardError as _BoardError
 
         original = catalog.discover
-        catalog.discover = lambda: (_ for _ in ()).throw(_BoardError("CATALOG_UNAVAILABLE", "no harness"))
+        catalog.discover = lambda **_kwargs: (_ for _ in ()).throw(_BoardError("CATALOG_UNAVAILABLE", "no harness"))
         try:
             self.assert_code("CATALOG_UNAVAILABLE", board.call, "model_catalog_refresh", {"requestId": "cat-3"})
         finally:

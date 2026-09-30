@@ -55,7 +55,8 @@ class SkillPackageTests(unittest.TestCase):
 
     def _upgrade_environment(self, root: Path, state: Path) -> dict:
         return {'BUDDY_STATE_DIR': str(state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'agents'),
-                'BUDDY_CLAUDE_SKILLS_DIR': str(root / 'claude'), 'CODEX_HOME': str(root / 'codex')}
+                'BUDDY_CLAUDE_SKILLS_DIR': str(root / 'claude'), 'CODEX_HOME': str(root / 'codex'),
+                'BUDDY_RUNTIME_ROOT': str(root / 'runtime'), 'HOME': str(root / 'home')}
 
     def test_same_marker_with_changed_content_reports_an_update(self):
         with tempfile.TemporaryDirectory(prefix='buddy-skill-content-') as temporary:
@@ -103,7 +104,7 @@ class SkillPackageTests(unittest.TestCase):
             (state / 'active-runtime.json').write_text('{}')
             source = root / 'source'
             active = root / 'runtime' / ('a' * 32)
-            with mock.patch.dict(os.environ, {'BUDDY_STATE_DIR': str(state), 'BUDDY_AGENT_SKILLS_DIR': str(home)}, clear=True), \
+            with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(home)}, clear=True), \
                  mock.patch('buddy.skill_install.packaged_skill', return_value=source), \
                  mock.patch('buddy.skill_install._marker', return_value={'version': 'fixture', 'contract': 'fixture'}), \
                  mock.patch('buddy.skill_install._matches', return_value=True), \
@@ -131,7 +132,7 @@ class SkillPackageTests(unittest.TestCase):
             journal.write_text('{}')
             def recover(_params):
                 journal.unlink()
-            with mock.patch.dict(os.environ, {'BUDDY_STATE_DIR': str(state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
+            with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
                  mock.patch('buddy.upgrade.upgrade', side_effect=recover) as recovery, \
                  mock.patch('buddy.upgrade.idle_snapshot', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
                  mock.patch('buddy.skill_install._place') as place:

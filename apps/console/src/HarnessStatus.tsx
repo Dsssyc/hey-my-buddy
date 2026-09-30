@@ -11,6 +11,7 @@ import { quotaView } from "./host-workflow";
 import { HarnessReview } from "./HarnessReview";
 import { QuotaRecovery } from "./QuotaRecovery";
 import { billingLabel } from "./BillingQuotaLabel";
+import { HarnessAccount } from "./HarnessAccount";
 
 /** Status wording and the non-colour badge tone; an unknown future state stays visible as recorded. */
 const HARNESS_STATUS_LABEL: Record<HarnessStatusValue, string> = {
@@ -169,6 +170,14 @@ export function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sess
       return next;
     });
   }
+  function showFacts(adapter: string, kind: "account" | "quota") {
+    setOpen(previous => new Set([...previous, adapter]));
+    window.requestAnimationFrame(() => {
+      const element = document.getElementById(`harness-${adapter}-${kind}`);
+      element?.focus();
+      element?.scrollIntoView?.({ block: "nearest" });
+    });
+  }
   function expectedRevision(adapter: string): number {
     return rows.find(row => row.adapter === adapter)?.revision ?? 0;
   }
@@ -252,6 +261,8 @@ export function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sess
             </Badge>}
             <span className="harness-summary" title={harnessTitle(row)}>{harnessSummary(row)}</span>
             <span className="harness-row-actions">
+              <button type="button" className="button small-button" aria-label={`${name} 账户`} onClick={() => showFacts(row.adapter, "account")}>账户</button>
+              <button type="button" className="button small-button" aria-label={`${name} 额度`} onClick={() => showFacts(row.adapter, "quota")}>额度</button>
               <button type="button" className="icon-button harness-row-toggle" aria-expanded={isOpen}
                 aria-label={`${name} ${isOpen ? "收起详情" : "检测详情"}`}
                 title={`${name} ${isOpen ? "收起详情" : "检测详情"}`}
@@ -272,7 +283,7 @@ export function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sess
               <div><dt>来源</dt><dd>{harnessSource(row)}</dd></div>
               <div><dt>上次检测</dt><dd>{row.checkedAt ? dayClock(row.checkedAt) : "未记录"}</dd></div>
               {row.manualPath && <div><dt>手动路径</dt><dd><code className="mono harness-path">{row.manualPath}</code></dd></div>}
-              <div><dt>额度观测</dt><dd>
+              <div id={`harness-${row.adapter}-quota`} tabIndex={-1}><dt>额度观测</dt><dd>
                 {!quota
                   ? <span className="muted">未记录观测（未知）</span>
                   : <>
@@ -290,7 +301,8 @@ export function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sess
                   </>}
               </dd></div>
             </dl>
-            <div className="harness-account-controls" data-adapter={row.adapter} />
+            <HarnessAccount row={row} name={name} api={api} csrfToken={snapshot.csrfToken} canWrite={canWrite}
+              title={writableTitle} onRefreshed={reloadSnapshot} />
             <HarnessReview row={row} snapshot={snapshot} api={api} canWrite={canWrite} onRefresh={reloadSnapshot} />
             <QuotaRecovery row={row} api={api} csrfToken={snapshot.csrfToken} canWrite={canWrite}
               title={writableTitle} onRefreshed={reloadSnapshot} />
@@ -346,4 +358,3 @@ function HarnessManualPath({ row, name, disabled, busy, title, onSave }: {
     {localError && <p className="error-message" role="alert">{localError}</p>}
   </form>;
 }
-

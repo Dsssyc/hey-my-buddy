@@ -124,6 +124,7 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     ensure_private_dir(context.directory)
     control = {
         "directory": str(context.directory), "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
+        "account": context.runtime.get('account'),
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "sessionId": str(uuid.uuid4()), "access": "read",
@@ -174,6 +175,7 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
     evidence = directory / invocation_name
     control = {
         "directory": str(invocation), "nativeRoot": str(invocation / "native"), "evidenceRoot": str(evidence),
+        "account": context.runtime.get('account'),
         "cwd": str(cwd.resolve()), "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,

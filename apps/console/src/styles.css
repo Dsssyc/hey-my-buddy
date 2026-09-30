@@ -804,6 +804,13 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-row-toggle:hover { color: var(--ink); background: var(--subtle); }
 .harness-detail { display: grid; gap: 8px; padding: 6px 12px 10px; border-top: 1px dashed var(--line); }
 .harness-account-controls:empty { display: none; }
+.harness-account-controls { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.harness-account-controls h4, .harness-account-controls p { margin: 0; }
+.harness-account-source, .harness-account-key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.harness-account-key label { display: grid; gap: 4px; flex: 1 1 16em; }
+.harness-account-key input { width: 100%; max-width: 32em; }
+.harness-account-login { display: grid; gap: 6px; }
+.harness-row-actions { flex-wrap: wrap; }
 .harness-facts { display: grid; gap: 2px; margin: 0; }
 .harness-facts > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
 .harness-facts dt { color: var(--muted); }

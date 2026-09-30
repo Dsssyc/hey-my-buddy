@@ -37,7 +37,12 @@ PROTOCOL_VERSION = 2
 #: adapters and the internal decision infrastructure own.
 METHOD_MAP: dict[str, tuple[str, str]] = {
     "accounts": ("control", "accounts"),
-    "account_set": ("control", "account_set"),
+    "account-set": ("control", "account_set"),
+    "account-login": ("control", "account_login"),
+    "account-status": ("control", "account_status"),
+    "account-cancel": ("control", "account_cancel"),
+    "account-logout": ("control", "account_logout"),
+    "account-remove": ("control", "account_remove"),
     "ping": ("control", "ping"),
     "health": ("control", "health"),
     "capabilities": ("control", "capabilities"),

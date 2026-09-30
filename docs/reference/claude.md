@@ -28,4 +28,10 @@ The four Sonnet 5 probes requested effort `medium` and used `isolated` only for 
 
 ## Repository bootstrap work division (user-directed, post-P1)
 
-Billing labels use the native `auth status` result and remain unknown when authentication method or subscription facts are insufficient; no credentials are opened for classification. These labels do not affect routing. Independent account login and the unresolved `ANTHROPIC_API_KEY`/native-storage path remain deferred to ADR-019’s second stage.
+Billing labels use the native `auth status` result and remain unknown when authentication method or subscription facts are insufficient; no credentials are opened for classification. These labels do not affect routing. From 0.26.0 the approved macOS API-key path uses a dedicated Worker keychain entry; Claude OAuth remains unverified.
+
+## Independent API-key path (0.26.0)
+
+On the tested macOS Claude Code 2.1.284 path, the authenticated account form or CLI stdin supplies a key to Security.framework using an exact `hey-my-buddy.worker-account.claude` service and a state-root identity. No credential enumeration occurs. The key is read only while constructing the actual native Claude child environment and injected as `ANTHROPIC_API_KEY`; parent/controller environments carry only a nonsecret frozen account marker. Host-inherited keys and third-party endpoint overrides are still excluded. No key enters argv, SQLite, receipts, events, evidence or backup inventory. Keychain refusal/unavailability fails without a plaintext fallback; Windows/Linux stores are unverified.
+
+The private configuration root is `harnesses/claude/accounts/worker/`. Read-only native `auth status --json` with an invalid test key established the first-party `api_key` metadata path; a separately approved native keychain write/read/delete cycle established the system-store channel. These checks made no model turn. Paid Claude execution with a new independent key was not run, and there is no Claude OAuth button or claim of its login isolation. [The account-source contract](harnesses.md#account-sources-and-verified-private-paths-0260) governs switching, credential retention and quota attribution.

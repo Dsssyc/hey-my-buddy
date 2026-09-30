@@ -5,7 +5,7 @@ description: Delegate clear work with routing and owned workspaces; verify artif
 
 # Hey My Buddy
 
-Delegate when it lowers verification cost. Host owns acceptance and authorization; Workers cannot create goals.
+Host owns acceptance and authorization; Workers cannot create goals.
 
 ## Start here
 
@@ -13,7 +13,7 @@ Use the absolute launcher (`~/.agents/skills/buddy/scripts/buddy`; Windows `scri
 
 Review needs a version certificate. Read `health` for routing slots, mode and capacity; report failures with decision code and `routingMode`/`fallback`. A sole candidate needs no Router; fast sends the task to its provider, review reads a frozen repository copy.
 
-References: [usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [operations](../../docs/reference/operations.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude.md).
+Refs: [usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude.md).
 
 ## Delegate through acceptance
 
@@ -29,7 +29,7 @@ Before install, run `backup-preflight '{}'`; resolve refusals ([operations](../.
 
 ## Capabilities and authority
 
-Read [capabilities](../../docs/reference/harnesses.md); name unverified paths.
+Read [harnesses](../../docs/reference/harnesses.md) for capabilities and user account controls. Shared login is read-only; keys use private stdin/form, never packets/argv/replay.
 
 Worker sessions stay private (DSH groups only with `workspace:true`); `worker-sessions` lists them ([details](../../docs/reference/operations.md#worker-session-history)).
 

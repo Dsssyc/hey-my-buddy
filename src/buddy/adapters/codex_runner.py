@@ -391,7 +391,19 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                                         **({'capabilities': {'experimentalApi': True}} if control.get('readOnlyRequest') or control.get('noToolRequest') else {})})
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
-        if not isinstance(account, dict) or account.get("type") != "chatgpt":
+        binding = control.get('credentialSource') or control.get('account') or {}
+        if not binding and incoming.get('BUDDY_ACCOUNT_SELECTION'):
+            try:
+                selected_account = decode_json(incoming['BUDDY_ACCOUNT_SELECTION'])
+                from ..private_dirs import account_root
+                if (selected_account.get('adapter') == 'codex' and selected_account.get('source') == 'worker'
+                        and incoming.get('CODEX_HOME') == str(account_root(Path(incoming['BUDDY_STATE_DIR']), 'codex'))):
+                    binding = selected_account
+            except (KeyError, ValueError, TypeError, AttributeError):
+                pass
+        independent = binding.get('source') == 'worker'
+        if (not isinstance(account, dict) or account.get("type") not in
+                (('chatgpt', 'apiKey') if independent else ('chatgpt',))):
             raise CodexProtocolError("account-plan-required", "Codex requires an existing ChatGPT account-plan login")
         catalog = _catalog(connection, version)
         if control.get("discover"):

@@ -92,11 +92,12 @@ class AccountServiceTests(WorkflowTestCase):
         from buddy.transport import METHOD_MAP
         from buddy.cli_help import render
         self.assertEqual(CONTRACT_VERSION, '0.26.0')
-        for name in ('accounts', 'account_set'):
-            self.assertTrue(hasattr(BuddyControl, name))
+        for name in ('accounts', 'account-set'):
+            operation = name.replace('-', '_')
+            self.assertTrue(hasattr(BuddyControl, operation))
             self.assertIn(name, METHODS)
-            self.assertEqual(METHOD_MAP[name], ('control', name))
-        text, _ = render('account_set', METHODS)
+            self.assertEqual(METHOD_MAP[name], ('control', operation))
+        text, _ = render('account-set', METHODS)
         for field in ('adapter', 'source', 'expectedRevision'):
             self.assertIn(field, text)
 

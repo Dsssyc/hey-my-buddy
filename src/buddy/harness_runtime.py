@@ -65,6 +65,7 @@ def controller_environment(directory, environment=None, *, read_only=False):
                'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
                'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
                'BUDDY_PYTHON', 'BUDDY_HARNESS_RECORD_FILE', 'BUDDY_CLAUDE_SETTINGS_POLICY')
+    allowed = (*allowed, 'BUDDY_ACCOUNT_SELECTION')
     for key in allowed:
         if key in source:
             env[key] = source[key]

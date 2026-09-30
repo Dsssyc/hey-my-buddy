@@ -150,13 +150,23 @@ class HarnessHealth:
                 raise BoardError('ACCOUNT_BINDING_CHANGED', 'The selected account changed before native preflight')
             if (self.board.directory / 'upgrade.json').exists():
                 return old
+            from .accounts import assert_credentials_current
+            try:
+                with self.board.db.read() as db:
+                    assert_credentials_current(db, old['account'])
+            except BoardError as error:
+                if error.code == 'ACCOUNT_IN_USE':
+                    return old
+                raise
             now = utc_now()
             if not force and not preflight and (old.get('scanAfter') or '') > now:
                 return old
             environment = self.environment()
             from .accounts import execution_environment
             try:
-                environment = execution_environment(self.board.directory, old['account'], environment, purpose='health')
+                from .harness_runtime import bound
+                with bound([old]):
+                    environment = execution_environment(self.board.directory, old['account'], environment, purpose='health')
             except BoardError as error:
                 if error.code == 'ACCOUNT_CAPABILITY_UNVERIFIED':
                     return old

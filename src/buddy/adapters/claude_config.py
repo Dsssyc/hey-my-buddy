@@ -65,8 +65,10 @@ MODEL_FALLBACK_VARIABLES = (
 #: The bounded environment the native child receives. Host, worker and other
 #: harness credentials (``BUDDY_*``) must never leak to a model-driven process,
 #: so everything not named here is dropped. First-party auth is preserved: the
-#: subscription login lives under the user's config dir, and ``ANTHROPIC_API_KEY``
-#: is the documented first-party key path. CA certificate path variables name
+#: subscription login lives under the user's config dir. An inherited
+#: ``ANTHROPIC_API_KEY`` is excluded; only the verified independent account
+#: provider injects its system-store key into the actual native child.
+#: CA certificate path variables name
 #: trust roots, not credentials. ``BUDDY_CLAUDE_FIXTURE_*`` are local
 #: test-fixture controls only; they carry no credentials and never exist in
 #: production environments.
@@ -318,7 +320,7 @@ def native_environment(environment: dict) -> dict:
     configuration.
     """
     from ..harness_discovery import native_environment as clean
-    result = clean(environment, command=cli_command(environment))
+    result = clean(environment, command=cli_command(environment), adapter='claude')
     if os.environ.get("BUDDY_DEV_SOURCE") == "1":
         for key in ("BUDDY_CLAUDE_FIXTURE_AUTH_STATUS", "BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"):
             if key in environment:

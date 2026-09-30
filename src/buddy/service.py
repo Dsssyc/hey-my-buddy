@@ -37,6 +37,11 @@ CONTROL_OPERATIONS = (
     "capabilities",
     "accounts",
     "account_set",
+    "account_login",
+    "account_status",
+    "account_cancel",
+    "account_logout",
+    "account_remove",
     "harness_set",
     "harness_verify",
     "harness_prepare",
@@ -263,6 +268,8 @@ class BoardService(_BaseResource):
         self.harnesses = HarnessHealth(store, catalog_refresh=self._refresh_harness_catalog)
         from .accounts import Accounts
         self.account_settings = Accounts(store)
+        from .account_operations import AccountOperations
+        self.account_operations = AccountOperations(self)
         # Startup/upgrade verification must not mutate health or retained model
         # facts. A missing record projects as unknown until a Host-triggered scan.
         # Console-user authority: only a session the console itself registered can
@@ -565,6 +572,51 @@ class BoardService(_BaseResource):
                 raise BoardError('INVALID_ARGUMENT', 'expectedRevision is required')
             return {'account': self.account_settings.set(name, source, params['expectedRevision'])}
         return self._guard('account.set', request_json, handler)
+
+    def account_login(self, request_json: str) -> str:
+        def handler(params):
+            if set(params) - {'adapter', 'mode', 'expectedRevision', 'apiKey'}:
+                raise BoardError('INVALID_ARGUMENT', 'Unknown private account login field')
+            schemas.reject_unknown(params, {'adapter', 'mode', 'expectedRevision', 'apiKey'}, 'account.login')
+            schemas.required_string(params, 'adapter', max_length=32)
+            schemas.required_string(params, 'mode', max_length=16)
+            if params['mode'] == 'api-key':
+                schemas.required_string(params, 'apiKey', max_length=16384)
+            if 'expectedRevision' not in params:
+                raise BoardError('INVALID_ARGUMENT', 'expectedRevision is required')
+            schemas.optional_int(params, 'expectedRevision', 0, 0, 2**53 - 1)
+            return self.account_operations.login(params)
+        return self._guard('account.login', request_json, handler)
+
+    def account_status(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'loginId'}, 'account.status')
+            schemas.required_string(params, 'adapter', max_length=32)
+            schemas.required_string(params, 'loginId', max_length=128)
+            return self.account_operations.status(params)
+        return self._guard('account.status', request_json, handler)
+
+    def account_cancel(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'loginId'}, 'account.cancel')
+            schemas.required_string(params, 'adapter', max_length=32)
+            schemas.required_string(params, 'loginId', max_length=128)
+            return self.account_operations.cancel(params)
+        return self._guard('account.cancel', request_json, handler)
+
+    def account_logout(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'expectedRevision'}, 'account.logout')
+            schemas.required_string(params, 'adapter', max_length=32)
+            return self.account_operations.logout(params)
+        return self._guard('account.logout', request_json, handler)
+
+    def account_remove(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'expectedRevision'}, 'account.remove')
+            schemas.required_string(params, 'adapter', max_length=32)
+            return self.account_operations.logout(params, remove=True)
+        return self._guard('account.remove', request_json, handler)
 
     def harness_prepare(self, request_json: str) -> str:
         def handler(params):

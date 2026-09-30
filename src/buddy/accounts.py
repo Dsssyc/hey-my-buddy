@@ -123,6 +123,7 @@ class WorkerAccountProvider:
     """Host-installed native evidence boundary; never populated from RPC input."""
     environment: Callable | None = None
     capabilities: dict = field(default_factory=dict)
+    versions: tuple[str, ...] = ()
 
 
 _providers: dict[str, WorkerAccountProvider] = {}
@@ -145,8 +146,22 @@ def using_provider(adapter, provider):
             _providers[adapter] = previous
 
 
-def capabilities(adapter):
+def _provider(adapter):
     provider = _providers.get(adapter)
+    if provider is None:
+        from .account_integrations import providers
+        provider = providers().get(adapter)
+    return provider
+
+
+def capabilities(adapter, *, health=None):
+    provider = _provider(adapter)
+    if provider and provider.versions:
+        if health is None:
+            from .harness_runtime import selected
+            health = selected(adapter)
+        if not health or health.get('version') not in provider.versions:
+            provider = None
     return {name: bool(provider and provider.capabilities.get(name) is True
                        and provider.environment is not None) for name in CAPABILITIES}
 
@@ -156,8 +171,10 @@ def execution_environment(state, account, environment, *, purpose='execution'):
     adapter = _adapter(account['adapter'])
     item = identity(account)
     if item['source'] == 'native':
-        return dict(environment)
-    provider = _providers.get(adapter)
+        result = dict(environment)
+        result.pop('BUDDY_ACCOUNT_SELECTION', None)
+        return result
+    provider = _provider(adapter)
     if not capabilities(adapter)['workerAccount']:
         raise BoardError('ACCOUNT_CAPABILITY_UNVERIFIED', 'Worker account isolation has no approved native integration')
     secure_account_root(Path(state), adapter)
@@ -194,11 +211,11 @@ def secure_account_root(state, adapter):
 def view(connection, adapter, *, account=None):
     selected = account or selection(connection, adapter)
     item = identity(selected)
-    caps = capabilities(adapter)
-    if item['source'] == 'native':
-        caps = {name: caps[name] if name == 'workerAccount' else False for name in CAPABILITIES}
     row = connection.execute('SELECT status,record_json,checked_at FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
     record = json.loads(row['record_json']) if row else {}
+    caps = capabilities(adapter, health=record)
+    if item['source'] == 'native':
+        caps = {name: caps[name] if name == 'workerAccount' else False for name in CAPABILITIES}
     observed_account = identity(record['account']) if isinstance(record.get('account'), dict) else {'source': 'native', 'credentialRevision': 0}
     matches = observed_account == item
     checked = row['checked_at'] if row and matches else None
@@ -217,8 +234,12 @@ def view(connection, adapter, *, account=None):
     billing = record.get('billingByProvider') if matches else None
     kinds = {fact.get('kind') for fact in billing.values() if isinstance(fact, dict)} if isinstance(billing, dict) else set()
     account_type = next(iter(kinds)) if len(kinds) == 1 and kinds <= {'subscription', 'metered'} else None
-    return {**selected, 'status': status, 'accountType': account_type, 'checkedAt': checked,
-            'capabilities': caps, 'reasonCode': reason, 'guidance': guidance}
+    result = {**selected, 'status': status, 'accountType': account_type, 'checkedAt': checked,
+              'capabilities': caps, 'reasonCode': reason, 'guidance': guidance}
+    if pending and pending.get('loginId') and pending.get('expiresAt'):
+        result['pendingLogin'] = {'loginId': pending['loginId'], 'expiresAt': pending['expiresAt'],
+            'state': 'unconfirmed' if pending['status'] == 'uncertain' else 'pending', 'kind': pending.get('kind')}
+    return result
 
 
 def _invalidate(connection, adapter, account):
@@ -275,7 +296,7 @@ class Accounts:
         return result
 
     @contextmanager
-    def credential_change(self, adapter, source, *, expected_credential_revision):
+    def credential_change(self, adapter, source, *, expected_credential_revision, expected_selection_revision=None):
         """Reserve credentials atomically, without holding SQLite during native I/O.
 
         Native-source use records an external credential change; it grants no
@@ -290,6 +311,10 @@ class Accounts:
         mutation_key = 'account-mutation:' + canonical_json([adapter, source])
         operation_id = uuid.uuid4().hex
         with self.board.db.write() as connection:
+            if expected_selection_revision is not None:
+                selected = selection(connection, adapter)
+                if selected['source'] != source or selected['revision'] != expected_selection_revision:
+                    raise BoardError('REVISION_CONFLICT', 'Account selection changed before credential admission')
             name = 'account-credential:' + canonical_json([adapter, source])
             revision = _read(connection, name, 0)
             if revision != expected_credential_revision:
@@ -313,7 +338,8 @@ class Accounts:
                 secure_account_root(self.board.directory, adapter)
         except BaseException:
             with self.board.db.write() as connection:
-                _write(connection, mutation_key, {'operationId': operation_id, 'status': 'uncertain', 'credentialRevision': revision})
+                pending = _read(connection, mutation_key, {})
+                _write(connection, mutation_key, {**pending, 'operationId': operation_id, 'status': 'uncertain', 'credentialRevision': revision})
             raise
         else:
             self.credential_change_stopped(adapter, source, operation_id=operation_id, shutdown_confirmed=True)
