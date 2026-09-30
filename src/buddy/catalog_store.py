@@ -10,21 +10,38 @@ from .db import canonical_json, sha256_text
 from .errors import BoardError
 
 
-def begin(evaluation, request_id=None):
+def begin(evaluation, request_id=None, *, harnesses=None):
     request_id = request_id or 'catalog-' + str(uuid.uuid4())
     with evaluation.db.write() as db:
         db.execute('INSERT OR IGNORE INTO catalog_observations(request_id,created_at) VALUES(?,?)', (request_id, evaluation._now()))
         row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
-        return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None}
+        from .accounts import ADAPTERS
+        from .harness_health import read_health
+        records = harnesses if harnesses is not None else [read_health(db, name) for name in ADAPTERS]
+        db.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)', ('catalog-accounts:' + str(row['observation_id']),
+                   canonical_json({record['adapter']: record['account'] for record in records})))
+        db.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)', ('catalog-harnesses:' + str(row['observation_id']), canonical_json(records)))
+        bindings = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(row['observation_id']),)).fetchone()
+        frozen = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-harnesses:' + str(row['observation_id']),)).fetchone()
+        return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None,
+                'accounts': json.loads(bindings[0]), 'harnesses': json.loads(frozen[0])}
 
 
-def current(db):
+def current(db, *, accounts=None):
     providers, results = [], []
     for row in db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id ORDER BY c.adapter'):
+        from .accounts import identity
+        saved = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-account:' + row['adapter'],)).fetchone()
+        account = json.loads(saved[0]) if saved else {'source': 'native', 'credentialRevision': 0}
+        if accounts is not None and (row['adapter'] not in accounts or account != identity(accounts[row['adapter']])):
+            results.append({'adapter': row['adapter'], 'status': 'unknown', 'reason': 'ACCOUNT_BINDING_CHANGED'})
+            continue
         results.append({'adapter': row['adapter'], 'status': row['status'], 'reason': row['reason']})
         if row['payload_json']:
             from .harness_health import read_health
             healthy = read_health(db, row['adapter'])['available']
+            from .accounts import selection
+            healthy = healthy and account == identity(selection(db, row['adapter']))
             providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
                               'unavailableReason': m.get('unavailableReason') if healthy else 'HARNESS_UNHEALTHY'} for m in p['models']]}
                              for p in json.loads(row['payload_json'])['providers'] if p['adapter'] == row['adapter'])
@@ -60,13 +77,23 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,discovered_at,source,harness_version,provider_version,payload_json,created_at) VALUES(?,?,?,?,?,?,?)', (discovery_id, now, payload['source'], payload.get('harnessVersion'), payload.get('providerVersion'), canonical_json(payload), now))
         revision = int(evaluation._state(db)['table_revision']) + 1
         applied, stale, changed = [], [], 0
+        from .accounts import identity, selection
+        saved_accounts = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(observation_id),)).fetchone()
+        frozen_accounts = json.loads(saved_accounts[0]) if saved_accounts else {}
         for result in payload['discoveries']:
             name = result['adapter']
+            account = frozen_accounts.get(name, {'source': 'native', 'credentialRevision': 0})
+            if identity(account) != identity(selection(db, name)):
+                stale.append(name)
+                continue
             prior = db.execute('SELECT * FROM catalog_current WHERE adapter=?', (name,)).fetchone()
             if prior and int(prior['observation_id']) > observation_id:
                 stale.append(name)
                 continue
             complete = result['status'] == 'complete'
+            if complete:
+                db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           ('catalog-account:' + name, canonical_json(identity(account))))
             selected_discovery = discovery_id if complete else (prior['discovery_id'] if prior else None)
             db.execute('INSERT INTO catalog_current(adapter,observation_id,discovery_id,status,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(adapter) DO UPDATE SET observation_id=excluded.observation_id,discovery_id=excluded.discovery_id,status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at', (name, observation_id, selected_discovery, result['status'], result.get('reason'), now))
             applied.append(name)

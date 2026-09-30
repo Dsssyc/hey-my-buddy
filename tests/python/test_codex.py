@@ -19,6 +19,9 @@ FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 
 class CodexAdapterTests(unittest.TestCase):
     def setUp(self):
+        developer_source = mock.patch.dict(os.environ, {'BUDDY_DEV_SOURCE': '1'})
+        developer_source.start()
+        self.addCleanup(developer_source.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -112,16 +115,23 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_selected_worker_account_never_falls_back_to_native_credentials(self):
         from buddy.private_dirs import account_root
+        from buddy.accounts import WorkerAccountProvider, using_provider
+        provider = WorkerAccountProvider(capabilities={'workerAccount': True}, environment=lambda state, account, environment, purpose:
+                                         {**environment, 'CODEX_HOME': str(account_root(state, 'codex'))})
+        approved = using_provider('codex', provider)
+        approved.__enter__()
+        self.addCleanup(approved.__exit__, None, None, None)
         (self.home / 'auth.json').write_text('shared login')
         context = self.context()
         context.runtime['workerAccount'] = {'source': 'worker', 'revision': 1}
         root = account_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex')
-        root.mkdir(parents=True)
+        root.mkdir(mode=0o700, parents=True)
         first = self.execute(context)
         self.assertEqual(first.status, 'failed')
         self.assertEqual(first.result['code'], 'codex-account-unavailable')
         self.assertFalse(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).exists())
         (root / 'auth.json').write_text('worker login')
+        (root / 'auth.json').chmod(0o600)
         second_context = self.context(index=2)
         second_context.runtime['workerAccount'] = dict(context.runtime['workerAccount'])
         second = self.execute(second_context)

@@ -36,6 +36,8 @@ PROTOCOL_VERSION = 2
 #: ``execution-*`` names reach the ordinary task records that the command/external
 #: adapters and the internal decision infrastructure own.
 METHOD_MAP: dict[str, tuple[str, str]] = {
+    "accounts": ("control", "accounts"),
+    "account_set": ("control", "account_set"),
     "ping": ("control", "ping"),
     "health": ("control", "health"),
     "capabilities": ("control", "capabilities"),

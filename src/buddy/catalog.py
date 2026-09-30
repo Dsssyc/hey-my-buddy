@@ -7,6 +7,7 @@ calls a model or publishes an evaluation card.
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import json
 import os
 import re
@@ -150,7 +151,7 @@ def discovery_available() -> bool:
     return any(item.model_discovery and item.discovery_available()[0] for item in adapters().values())
 
 
-def discover() -> dict:
+def discover(*, directory=None, database=None) -> dict:
     override = _override()
     if override is not None:
         return override
@@ -159,13 +160,27 @@ def discover() -> dict:
     for name, instance in adapters().items():
         if not instance.model_discovery:
             continue
-        usable, reason = instance.discovery_available()
-        if not usable:
-            warnings.append(f"{name}: {reason or 'harness unavailable'}")
-            discoveries.append({"adapter": name, "status": "unknown", "reason": reason or "harness unavailable"})
-            continue
+        from .harness_runtime import selected, bound
+        selected_health = selected(name)
         try:
-            payload = canonical_payload(instance.discover_models())
+            environment = dict(os.environ)
+            if selected_health and selected_health.get('account'):
+                from .accounts import execution_environment
+                state = directory or environment.get('BUDDY_STATE_DIR')
+                if not state and selected_health['account']['source'] == 'worker':
+                    raise BoardError('ACCOUNT_CAPABILITY_UNVERIFIED', 'Account model discovery requires the private state root')
+                environment = execution_environment(state, selected_health['account'], environment, purpose='catalog')
+            with bound([selected_health], environment=environment) if selected_health else nullcontext():
+                usable, reason = instance.discovery_available()
+                if not usable:
+                    warnings.append(f"{name}: {reason or 'harness unavailable'}")
+                    discoveries.append({"adapter": name, "status": "unknown", "reason": reason or "harness unavailable"})
+                    continue
+                from .accounts import native_operation
+                with native_operation(database, selected_health['account'], 'catalog') if database and selected_health and selected_health.get('account') else nullcontext() as stop:
+                    payload = canonical_payload(instance.discover_models())
+                    if stop is not None:
+                        stop['shutdownConfirmed'] = True
             if any(entry["adapter"] != name for entry in payload["providers"]):
                 raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
         except BoardError as error:

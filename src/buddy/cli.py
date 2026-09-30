@@ -38,6 +38,8 @@ METHODS = [
     "health",
     "capabilities",
     "adapters",
+    "accounts",
+    "account_set",
     "harness-set",
     "harness-verify",
     "quota-redetect",

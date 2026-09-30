@@ -45,6 +45,8 @@ SUMMARIES: dict[str, str] = {
     "harness-set": "Choose the harness executable or restore automatic detection.",
     "harness-verify": "Prepare or explicitly start one native review verification for an enabled configuration.",
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
+    "accounts": "Read sanitized account sources and capabilities without a native refresh.",
+    "account_set": "Select native or Worker account source for future attempts using expectedRevision.",
     "runtime": "Installed-runtime identity, description and source-leak report.",
     "backup": "Service-owned verified rolling backup.",
     "backup-preflight": "Read-only evidence backup inventory: copying, skipping and refusal reasons; starts nothing.",

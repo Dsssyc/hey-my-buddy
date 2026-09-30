@@ -104,6 +104,10 @@ class ReviewCheckAdapter(Adapter):
         if plan.get("adapter") != "codex":
             raise BoardError("UNSUPPORTED", "This harness has no native review verifier")
         record = selected("codex", context.environment)
+        from ..accounts import identity
+        account = context.runtime.get('account') or {'source': 'native', 'credentialRevision': 0}
+        if identity(account) != identity(plan.get('account') or {'source': 'native', 'credentialRevision': 0}):
+            raise BoardError('HARNESS_REVIEW_BINDING_CHANGED', 'The account differs from the admitted review plan')
         bound = plan.get("harness") or {}
         if not isinstance(record, dict) or record.get("status") != "ready" or any(
                 record.get(key) != bound.get(key) for key in ("adapter", "version", "command", "locationFingerprint")):

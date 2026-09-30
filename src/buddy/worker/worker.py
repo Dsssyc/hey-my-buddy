@@ -671,6 +671,10 @@ class Worker:
             turn=claim.get("turn") if isinstance(claim.get("turn"), dict) else None,
             agent_credential=claim.get("agentCredential") or None,
         )
+        if isinstance(claim.get('account'), dict):
+            from ..accounts import execution_environment
+            context.runtime['account'] = dict(claim['account'])
+            context.environment = execution_environment(self.state_dir, claim['account'], context.environment)
         implementation = get_adapter(spec["adapter"])
         usable, reason = implementation.available()
         if not usable:

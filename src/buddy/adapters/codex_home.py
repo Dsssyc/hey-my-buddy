@@ -11,6 +11,22 @@ from ..errors import BoardError
 from ..private_dirs import _absolute, account_root, ensure_private_dir, linked_component
 
 
+def frozen_account(runtime: dict) -> dict | None:
+    """Prefer the service identity over the earlier credential-consumption seam."""
+    account = runtime.get('account')
+    if account is not None:
+        return account
+    worker = runtime.get('workerAccount')
+    if worker is None:
+        return None
+    if (not isinstance(worker, dict) or worker.get('source') != 'worker'
+            or type(worker.get('revision')) is not int or worker['revision'] < 1
+            or set(worker) != {'source', 'revision'}):
+        raise BoardError('INVALID_ARGUMENT', 'Codex Worker account selection must be frozen with a revision')
+    return {'adapter': 'codex', 'source': 'worker', 'revision': worker['revision'],
+            'credentialRevision': worker['revision']}
+
+
 @contextmanager
 def _pinned_home(home: Path):
     """Pin every ancestor; a replaced path cannot redirect credential mutation."""
@@ -35,13 +51,25 @@ def _pinned_home(home: Path):
         os.close(fd)
 
 
-def credential_source(state: Path, environment: dict, worker_account: dict | None = None) -> dict:
+def credential_source(state: Path, environment: dict, worker_account: dict | None = None,
+                      *, account: dict | None = None) -> dict:
     """Account owners may pass a frozen Worker selection; never fall back from it.
 
     This seam does not create an account, initiate login or change user settings.
-    The future account owner supplies a revision when it changes the login source.
+    The service freezes source and credentialRevision independently of selection CAS.
     """
-    if worker_account is not None:
+    if account is not None:
+        if (not isinstance(account, dict) or account.get('adapter') != 'codex'
+                or account.get('source') not in ('native', 'worker')
+                or type(account.get('revision')) is not int or account['revision'] < 0
+                or type(account.get('credentialRevision')) is not int or account['credentialRevision'] < 0):
+            raise BoardError('INVALID_ARGUMENT', 'Codex requires a service-frozen account identity')
+        kind, credential_revision = account['source'], account['credentialRevision']
+        home = (account_root(state, 'codex') if kind == 'worker' else
+                Path(environment.get('CODEX_HOME') or Path(environment.get('HOME') or Path.home()) / '.codex').expanduser().absolute())
+        if kind == 'worker' and (linked_component(home) is not None or not home.is_dir()):
+            raise BoardError('CODEX_ACCOUNT_UNAVAILABLE', 'The selected Worker account home is unavailable')
+    elif worker_account is not None:
         if (not isinstance(worker_account, dict) or worker_account.get('source') != 'worker'
                 or type(worker_account.get('revision')) is not int or worker_account['revision'] < 1
                 or set(worker_account) != {'source', 'revision'}):
@@ -49,11 +77,13 @@ def credential_source(state: Path, environment: dict, worker_account: dict | Non
         home = account_root(state, 'codex')
         if linked_component(home) is not None or not home.is_dir():
             raise BoardError('CODEX_ACCOUNT_UNAVAILABLE', 'The selected Worker account home is unavailable')
-        kind, revision = 'worker', worker_account['revision']
+        kind, credential_revision = 'worker', worker_account['revision']
     else:
         home = Path(environment.get('CODEX_HOME') or Path(environment.get('HOME') or Path.home()) / '.codex').expanduser().absolute()
-        kind, revision = 'native', 0
-    return {'home': str(home), 'source': kind, 'revision': revision,
+        kind, credential_revision = 'native', 0
+    # Selection CAS revisions do not identify credentials. A source switch and a
+    # credential change independently fence retained native-session bindings.
+    return {'home': str(home), 'source': kind, 'credentialRevision': credential_revision,
             'identity': hashlib.sha256(str(home).encode()).hexdigest()}
 
 

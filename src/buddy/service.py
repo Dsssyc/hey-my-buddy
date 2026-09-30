@@ -35,6 +35,8 @@ CONTROL_OPERATIONS = (
     "ping",
     "health",
     "capabilities",
+    "accounts",
+    "account_set",
     "harness_set",
     "harness_verify",
     "harness_prepare",
@@ -259,6 +261,8 @@ class BoardService(_BaseResource):
         from .harness_health import HarnessHealth
         self.automatic_discovery = automatic_discovery
         self.harnesses = HarnessHealth(store, catalog_refresh=self._refresh_harness_catalog)
+        from .accounts import Accounts
+        self.account_settings = Accounts(store)
         # Startup/upgrade verification must not mutate health or retained model
         # facts. A missing record projects as unknown until a Host-triggered scan.
         # Console-user authority: only a session the console itself registered can
@@ -520,15 +524,19 @@ class BoardService(_BaseResource):
         from . import catalog_store
         from .adapters import adapter
         from .harness_runtime import bound
-        observation = catalog_store.begin(self.evaluation)
+        observation = catalog_store.begin(self.evaluation, harnesses=[record])
         try:
-            with bound([record]):
-                payload = adapter(name).discover_models()
+            from .accounts import execution_environment, native_operation
+            environment = execution_environment(self.store.directory, record['account'], self.harnesses.environment(), purpose='catalog')
+            with bound([record], environment=environment):
+                with native_operation(self.store.db, record['account'], 'catalog') as stop:
+                    payload = adapter(name).discover_models()
+                    stop['shutdownConfirmed'] = True
             payload['discoveries'] = [{'adapter': name, 'status': 'complete'}]
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
-                self.harnesses.invalidate(name, record['revision'], error.code)
+                self.harnesses.invalidate(name, record['revision'], error.code, account=record['account'])
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):
@@ -541,6 +549,22 @@ class BoardService(_BaseResource):
                 raise BoardError('INVALID_ARGUMENT', 'expectedRevision must be a nonnegative integer')
             return {'harness': self.harnesses.set_path(name, params['path'], expected_revision=revision)}
         return self._guard('harness.set', request_json, handler)
+
+    def accounts(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, set(), 'accounts')
+            return {'accounts': self.account_settings.all()}
+        return self._guard('accounts', request_json, handler)
+
+    def account_set(self, request_json: str) -> str:
+        def handler(params):
+            schemas.reject_unknown(params, {'adapter', 'source', 'expectedRevision'}, 'account.set')
+            name = schemas.required_string(params, 'adapter', max_length=32)
+            source = schemas.required_string(params, 'source', max_length=16)
+            if 'expectedRevision' not in params:
+                raise BoardError('INVALID_ARGUMENT', 'expectedRevision is required')
+            return {'account': self.account_settings.set(name, source, params['expectedRevision'])}
+        return self._guard('account.set', request_json, handler)
 
     def harness_prepare(self, request_json: str) -> str:
         def handler(params):
@@ -559,6 +583,10 @@ class BoardService(_BaseResource):
                 name = attempt['model_adapter'] or attempt['adapter']
                 if name not in ('dsh', 'zcode', 'codex', 'claude'):
                     return {'harness': None}
+                from .accounts import attempt_account, identity, selection
+                account = attempt_account(db, attempt)
+                saved = db.execute('SELECT value FROM meta WHERE key=?', ('attempt-harness:' + attempt['attempt_id'],)).fetchone()
+                frozen_health = json.loads(saved[0]) if saved else None
                 request = {key: params.get(key) for key in ('attemptId', 'generation', 'retry', 'failedOnly', 'healthRevision')}
                 subject = self.store._subject(params['workerId'], params['nonce'], attempt['attempt_id'])
                 receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
@@ -566,9 +594,24 @@ class BoardService(_BaseResource):
                     return receipt
                 if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
                     raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
-            if retry or failed_only:
-                self.harnesses.invalidate(name, params.get('healthRevision'))
-            record = self.harnesses.get(name) if failed_only else self.harnesses.refresh(name, force=retry, preflight=True)
+            with self.store.db.read() as db:
+                current_account = selection(db, name)
+            current_source = identity(account) == identity(current_account)
+            if current_source and (retry or failed_only):
+                self.harnesses.invalidate(name, params.get('healthRevision'), account=account)
+            try:
+                record = (self.harnesses.get(name) if failed_only else self.harnesses.refresh(name, force=retry, preflight=True, account=account)) if current_source else frozen_health
+            except BoardError as error:
+                if error.code != 'ACCOUNT_BINDING_CHANGED':
+                    raise
+                record = frozen_health
+            if record is None:
+                raise BoardError('ACCOUNT_BINDING_UNAVAILABLE', 'The attempt has no retained harness for its frozen account')
+            if identity(record['account']) != identity(account):
+                record = frozen_health
+            if record is None:
+                raise BoardError('ACCOUNT_BINDING_UNAVAILABLE', 'The attempt has no retained harness for its frozen account')
+            record = {**record, 'account': {**record['account'], **account}}
             with self.store.db.write() as db:
                 attempt, _worker = self.store._verify_attempt_actor(db, params)
                 receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
@@ -658,13 +701,19 @@ class BoardService(_BaseResource):
             if self.automatic_discovery:
                 from .harness_health import HARNESSES
                 for name in HARNESSES:
-                    self.harnesses.refresh(name, force=True)
+                    try:
+                        self.harnesses.refresh(name, force=True, account=observation['accounts'][name])
+                    except BoardError as error:
+                        if error.code != 'ACCOUNT_BINDING_CHANGED':
+                            raise
                 with self.store.db.read() as db:
-                    cached = catalog_store.current(db)
+                    cached = catalog_store.current(db, accounts=observation['accounts'])
                 discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
                     {'adapter': row['adapter'], 'status': 'unknown', 'reason': row.get('reasonCode')} for row in self.harnesses.all()]}
             else:
-                discovered = catalog.discover()
+                from .harness_runtime import bound
+                with bound(observation['harnesses']):
+                    discovered = catalog.discover(directory=self.store.directory, database=self.store.db)
             recorded = self.evaluation.record_catalog(discovered, observation["observationId"])
             return {**recorded, "requestId": request_id}
 

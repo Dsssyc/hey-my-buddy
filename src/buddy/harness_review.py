@@ -26,17 +26,25 @@ def certificates():
     return json.loads(Path(__file__).with_name("review-certificates.json").read_text())
 
 
-def _key(adapter, version, platform):
-    return PREFIX + canonical_json([adapter, version, platform])
+def _key(adapter, version, platform, account=None):
+    from .accounts import identity
+    parts = [adapter, version, platform]
+    account = identity(account or {'source': 'native', 'credentialRevision': 0})
+    if account != {'source': 'native', 'credentialRevision': 0}:
+        parts.extend([account['source'], account['credentialRevision']])
+    return PREFIX + canonical_json(parts)
 
 
 def verification_view(connection, adapter, health, *, platform=None):
     platform = platform or sys.platform
     version = health.get("version")
-    key = _key(adapter, version, platform)
+    from .accounts import identity, selection
+    account = identity(selection(connection, adapter)) if connection else identity(health.get('account') or {'source': 'native', 'credentialRevision': 0})
+    key = _key(adapter, version, platform, account)
     saved = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone() if connection else None
     record = json.loads(saved[0]) if saved else next((dict(item) for item in certificates()
-        if (item["adapter"], item["version"], item["platform"]) == (adapter, version, platform)), None)
+        if account == {'source': 'native', 'credentialRevision': 0}
+        and (item["adapter"], item["version"], item["platform"]) == (adapter, version, platform)), None)
     if record is None:
         prior = any(item["adapter"] == adapter and item["platform"] == platform for item in certificates())
         if connection:
@@ -99,6 +107,7 @@ def request(board, params):
             raise BoardError("CONFIGURATION_UNAVAILABLE", "Choose an enabled configuration in a healthy harness with a known version")
         selected = {key: profile[key] for key in schemas.CONFIGURATION_FIELDS}
         plan = {"adapter": name, "version": health["version"], "platform": sys.platform,
+                "account": {key: health['account'][key] for key in ('source', 'credentialRevision')},
                 "profileId": profile_id, "configuration": selected, "checks": list(CHECKS),
                 "budget": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24, "bytesRead": 524288},
                 "maxNativeTurns": 2, "formatCorrectionOnly": True, "modelCall": True}
@@ -109,7 +118,7 @@ def request(board, params):
             " WHERE a.task_id=t.task_id AND (a.execution_state IN ('starting','executing','finalizing','uncertain') OR a.shutdown_confirmed=0 AND a.result_json IS NOT NULL))) LIMIT 1", (ADAPTER, name)).fetchone()
         if pending:
             raise BoardError('HARNESS_REVIEW_BUSY', 'A verification for this harness is pending or its stop is unconfirmed; inspect its run')
-        key = _key(name, health["version"], sys.platform)
+        key = _key(name, health["version"], sys.platform, health['account'])
         current = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         if current:
             previous_run = json.loads(current[0]).get("runId")
@@ -142,14 +151,18 @@ def complete(board, connection, task, attempt, *, result, status, shutdown_confi
     if task["adapter"] != ADAPTER:
         return
     intent = json.loads(task["spec_json"])["reviewCheck"]
-    key = _key(intent["adapter"], intent["version"], intent["platform"])
+    from .accounts import attempt_account, identity, selection
+    frozen_account = attempt_account(connection, attempt)
+    key = _key(intent["adapter"], intent["version"], intent["platform"], intent.get('account'))
     current = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     if not current or json.loads(current[0]).get("runId") != task["task_id"]:
         return
     from .harness_health import read_health
     health = read_health(connection, intent["adapter"])
     checks = result.get("checks") if isinstance(result, dict) else None
-    binding = health.get('status') == 'ready' and all(health.get(k) == intent['harness'].get(k) for k in ('version', 'command', 'locationFingerprint'))
+    binding = (identity(frozen_account) == identity(selection(connection, intent['adapter']))
+               and identity(frozen_account) == identity(intent.get('account') or {'source': 'native', 'credentialRevision': 0})
+               and health.get('status') == 'ready' and all(health.get(k) == intent['harness'].get(k) for k in ('version', 'command', 'locationFingerprint')))
     passed = bool(status == "ok" and shutdown_confirmed and isinstance(checks, dict)
                   and all(checks.get(check) is True for check in CHECKS)
                   and result.get("version") == intent["version"] and result.get("platform") == intent["platform"]

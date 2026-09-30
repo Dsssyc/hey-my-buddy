@@ -13,7 +13,7 @@ control capacity that cancel, renew and result commits need.
 """
 import c_two as cc
 
-CONTRACT_VERSION = "0.25.0"
+CONTRACT_VERSION = "0.26.0"
 CONTROL_NAME = "buddy-control"
 WAIT_NAME = "buddy-wait"
 
@@ -30,6 +30,12 @@ class BuddyControl:
         ...
 
     def capabilities(self, request_json: str) -> str:
+        ...
+
+    def accounts(self, request_json: str) -> str:
+        ...
+
+    def account_set(self, request_json: str) -> str:
         ...
 
     def harness_set(self, request_json: str) -> str:

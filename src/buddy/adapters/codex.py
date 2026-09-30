@@ -69,15 +69,20 @@ class CodexAdapter(Adapter):
             raise BoardError("INVALID_ARGUMENT", "Codex requires the private Buddy state directory", adapter=self.name)
         if context.turn_output_file().exists():
             raise BoardError("CONFLICT", "the attempt already has a turn result", adapter=self.name)
+        from .codex_home import credential_source, frozen_account
+        account = frozen_account(context.runtime)
+        if account is not None:
+            from ..accounts import execution_environment
+            context.environment = execution_environment(Path(context.environment['BUDDY_STATE_DIR']), account,
+                                                        context.environment, purpose='execution')
         try:
             cli_command(context.environment)
         except CodexUnavailable as error:
             raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter=self.name) from None
         turn_io.prepare_turn(context)
         root = ensure_private_dir(native_root(Path(context.environment["BUDDY_STATE_DIR"]), self.name, context.task_id))
-        from .codex_home import credential_source
         source = credential_source(Path(context.environment["BUDDY_STATE_DIR"]), context.environment,
-                                   context.runtime.get('workerAccount'))
+                                   account=account)
         turn_io.private_json(context.directory / "codex-control.json", {
             "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,

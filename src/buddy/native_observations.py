@@ -1,4 +1,4 @@
-"""Service persistence and freshness of native usage/quota evidence."""
+"""Service persistence, credential lineage and freshness of native evidence."""
 from datetime import datetime, timezone
 import json
 
@@ -15,11 +15,54 @@ def _time(value):
         return None
 
 
+def _quota_key(adapter, account):
+    return 'account-quota:' + canonical_json([adapter, account['source'], account['credentialRevision']])
+
+
+def latest_quota(connection, adapter, account=None):
+    """Read the latest observation for one service-selected credential lineage."""
+    from .accounts import identity, selection
+    account = identity(account if account is not None else selection(connection, adapter))
+    row = connection.execute('SELECT value FROM meta WHERE key=?', (_quota_key(adapter, account),)).fetchone()
+    if row:
+        return json.loads(row[0])
+    row = connection.execute('SELECT quota_json FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
+    quota = json.loads(row[0]) if row and row[0] else None
+    if not isinstance(quota, dict):
+        return None
+    tagged = quota.get('account') or {'source': 'native', 'credentialRevision': 0}
+    return quota if tagged == account else None
+
+
+def record_quota(connection, adapter, quota, account=None, *, now=None):
+    """Persist trusted attribution; native payload account labels are ignored.
+
+    Every lineage keeps its own monotone observation in meta. quota_json remains
+    the current display projection; an old attempt's receipt cannot replace it.
+    """
+    from .accounts import identity, selection
+    from .quota_routing import record
+    account = identity(account if account is not None else selection(connection, adapter))
+    if not isinstance(quota, dict) or _time(quota.get('observedAt')) is None:
+        return
+    observed = {**quota, 'account': account}
+    record(connection, adapter, observed, account=account, now=now)
+    previous = latest_quota(connection, adapter, account=account)
+    previous_time = _time(previous.get('observedAt')) if previous else None
+    if previous_time and previous_time >= _time(observed['observedAt']):
+        return
+    connection.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       (_quota_key(adapter, account), canonical_json(observed)))
+    if account == identity(selection(connection, adapter)):
+        connection.execute('UPDATE harness_health SET quota_json=? WHERE adapter=?', (canonical_json(observed), adapter))
+
+
 def persist(connection, attempt, result):
     """Called once inside the result transaction, after actor and replay checks."""
     if not isinstance(result, dict) or not any(result.get(key) is not None for key in ("tokenUsage", "quota", "quotaFailure")):
         return
     from .usage import normalize_token_usage, normalize_quota, normalize_quota_failure
+    from .accounts import attempt_account
     usage = normalize_token_usage(result.get("tokenUsage"))
     connection.execute("UPDATE attempts SET token_usage_json=? WHERE attempt_id=?",
                        (canonical_json(usage) if usage is not None else None, attempt["attempt_id"]))
@@ -28,20 +71,14 @@ def persist(connection, attempt, result):
     if quota is None and failure is not None and failure["code"] == "quota-exceeded":
         quota = normalize_quota({"source": failure["source"], "observedAt": failure.get("observedAt"),
                                  "reachedType": failure["nativeCode"], 'resetsAt': failure.get('resetsAt'), "windows": []})
-    if quota is None or _time(quota.get("observedAt")) is None:
+    account = attempt_account(connection, attempt)
+    if quota is None or account is None:
         return
-    old = connection.execute("SELECT quota_json FROM harness_health WHERE adapter=?", (attempt["model_adapter"] or attempt["adapter"],)).fetchone()
-    if old is None:
-        return
-    previous = json.loads(old["quota_json"]) if old["quota_json"] else None
-    previous_time = _time(previous.get("observedAt")) if previous else None
+    # The claim's service-owned account, not the receipt's claimed account,
+    # identifies this observation even if the effective selection has changed.
     observed = {**quota, "attemptId": attempt["attempt_id"], "provider": (quota.get("scope") or {}).get("provider") or attempt["model_provider"]}
-    from .quota_routing import record
-    record(connection, attempt["model_adapter"] or attempt["adapter"], observed)
-    if previous_time and previous_time >= _time(quota["observedAt"]):
-        return
-    connection.execute("UPDATE harness_health SET quota_json=? WHERE adapter=?",
-                       (canonical_json(observed), attempt["model_adapter"] or attempt["adapter"]))
+    record_quota(connection, attempt["model_adapter"] or attempt["adapter"], observed,
+                 account=account)
 
 
 def quota_view(value, *, now=None):
@@ -58,16 +95,15 @@ def quota_view(value, *, now=None):
     return {**value, "windows": windows, "stale": stale or bool(windows and all(w["stale"] for w in windows))}
 
 
-def exhausted(connection, configuration, *, now=None):
+def exhausted(connection, configuration, *, account=None, now=None):
     from .quota_routing import exhausted as routing_exhausted
-    return routing_exhausted(connection, configuration, now=now)
+    return routing_exhausted(connection, configuration, account=account, now=now)
 
-def warnings(connection, configuration, *, now=None):
+def warnings(connection, configuration, *, account=None, now=None):
     if not configuration or not configuration.get("adapter"):
         return []
-    row = connection.execute("SELECT quota_json FROM harness_health WHERE adapter=?", (configuration["adapter"],)).fetchone()
-    quota = quota_view(json.loads(row[0]) if row and row[0] else None, now=now)
-    explicit = exhausted(connection, configuration, now=now)
+    quota = quota_view(latest_quota(connection, configuration["adapter"], account=account), now=now)
+    explicit = exhausted(connection, configuration, account=account, now=now)
     if explicit is not None:
         return [{**explicit, "adapter": configuration["adapter"], "provider": configuration["provider"],
                  "message": "A recent native observation reports this selected configuration has exhausted its quota."}]
@@ -76,14 +112,14 @@ def warnings(connection, configuration, *, now=None):
     from .usage import classify_quota_code
     if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
         return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "adapter": configuration["adapter"],
-                 "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
+                 "provider": quota.get("provider"), "account": quota.get("account"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
                  "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a temporary rate limit."}]
     if quota.get("reachedType") or quota.get("ordinaryUsageAllowed") is False:
         return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "adapter": configuration["adapter"],
-                 "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
+                 "provider": quota.get("provider"), "account": quota.get("account"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
                  "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a quota limit; its current reset state may be unknown."}]
     return [{"code": "HARNESS_QUOTA_NEAR_LIMIT", "adapter": configuration["adapter"],
-             "provider": quota.get("provider"), "source": quota.get("source"),
+             "provider": quota.get("provider"), "account": quota.get("account"), "source": quota.get("source"),
              "observedAt": quota.get("observedAt"), "window": window,
              "message": "Recent native quota observation is near its limit; review before continuing."}
             for window in quota["windows"] if not window["stale"]

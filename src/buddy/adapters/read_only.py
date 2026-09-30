@@ -102,7 +102,25 @@ def no_tool_prompt(prompt: str, schema: dict) -> str:
     return prompt + "\n\nReturn only one JSON value matching this schema: " + canonical_json(schema)
 
 
+def _account_environment(name: str, context: ExecutionContext, *, purpose: str) -> dict:
+    """Consume the same service-frozen selection as the coding attempt."""
+    account = context.runtime.get('account')
+    if name == 'codex':
+        from .codex_home import frozen_account
+        account = frozen_account(context.runtime)
+    if account is None:
+        return context.environment
+    if not isinstance(account, dict) or account.get('adapter') != name:
+        raise BoardError('INVALID_ARGUMENT', 'Structured calls require the matching frozen account')
+    state = context.environment.get('BUDDY_STATE_DIR')
+    if not state:
+        raise BoardError('INVALID_ARGUMENT', 'Account selection requires the private state directory')
+    from ..accounts import execution_environment
+    return execution_environment(Path(state), account, context.environment, purpose=purpose)
+
+
 def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
+    native_environment = _account_environment(name, context, purpose='review')
     ensure_private_dir(context.directory)
     control = {
         "directory": str(context.directory), "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
@@ -117,7 +135,7 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     path = context.directory / "readonly-control.json"
     private_json(path, control)
     from ..harness_runtime import controller_environment
-    environment = controller_environment(context.directory, context.environment, read_only=True)
+    environment = controller_environment(context.directory, native_environment, read_only=True)
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
     stdout, stderr = open_logs(context.log_paths())
@@ -135,6 +153,7 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
 
 def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructuredRequest) -> ProcessHandle:
     """Start a separate native controller without a workflow turn or agent authority."""
+    native_environment = _account_environment(name, context, purpose='router')
     cwd = Path(request.cwd)
     if (context.turn is not None or context.agent_credential is not None
             or type(request.timeout_seconds) is not int or not 0 < request.timeout_seconds <= 60
@@ -165,9 +184,9 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
     path = context.directory / "no-tool-control.json"
     private_json(path, control)
     from ..harness_runtime import controller_environment
-    environment = controller_environment(context.directory, context.environment, read_only=True)
-    if name == "dsh" and context.environment.get("DSH_HOME"):
-        environment["DSH_HOME"] = context.environment["DSH_HOME"]
+    environment = controller_environment(context.directory, native_environment, read_only=True)
+    if name == "dsh" and native_environment.get("DSH_HOME"):
+        environment["DSH_HOME"] = native_environment["DSH_HOME"]
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
     stdout, stderr = open_logs(context.log_paths())
