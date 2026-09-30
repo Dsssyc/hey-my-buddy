@@ -82,6 +82,7 @@ class NoToolCodexTests(unittest.TestCase):
         env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
         env.update(HOME=str(self.root), CODEX_HOME=str(self.home), PYTHONPATH=str(SOURCE),
                    BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
+                   BUDDY_STATE_DIR=str(self.root / "state"),
                    BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",

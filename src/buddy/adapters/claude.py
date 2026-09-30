@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from ..errors import BoardError
+from ..private_dirs import context_root, ensure_private_dir
 from .. import usage
 from . import turn_io
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
@@ -72,6 +73,7 @@ class ClaudeAdapter(Adapter):
         return True, None
 
     def prepare(self, context: ExecutionContext) -> None:
+        context.private_adapter = self.name
         if any(not isinstance(context.spec.get(key), str) or not context.spec[key].strip()
                for key in ("provider", "model", "effort")):
             raise BoardError("INVALID_ARGUMENT", "Claude requires a complete provider, model and effort after routing", adapter=self.name)
@@ -100,9 +102,7 @@ class ClaudeAdapter(Adapter):
         except ClaudeUnavailable as error:
             raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter=self.name) from None
         turn_io.prepare_turn(context)
-        root = context.directory / "claude-private"
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(root, 0o700)
+        root = ensure_private_dir(context_root(context, self.name) / "claude-private")
         manifest = context.turn_input.get("executionWorkspace")
         manifest = manifest if isinstance(manifest, dict) else {}
         turn_io.private_json(context.directory / "claude-control.json", {

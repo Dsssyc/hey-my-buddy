@@ -10,20 +10,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from ..errors import BoardError
+from ..private_dirs import context_root, ensure_private_dir
 from . import turn_io
 from ..runtime import resource_path
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
 
-UNIX_SOCKET_PATH_BUDGET = 105 if sys.platform.startswith('linux') else 101
 TERMINATE_GRACE_SECONDS = 3.0
 
 
@@ -86,40 +84,14 @@ class DshAdapter(Adapter):
         return str(resource_path("dsh.runner"))
 
     def prepare(self, context: ExecutionContext) -> None:
+        context.private_adapter = self.name
         usable, reason = self.available()
         if not usable:
             raise BoardError("ADAPTER_UNAVAILABLE", reason or "the dsh adapter is unavailable", adapter=self.name)
         turn_io.prepare_turn(context)
 
     def inquiry_paths(self, context: ExecutionContext) -> dict:
-        candidates = [
-            context.directory,
-            Path("/tmp") / "hey-my-buddy-inquiry" / context.attempt_id,
-            Path(os.environ.get("TMPDIR", "/tmp")) / "hey-my-buddy-inquiry" / context.attempt_id,
-        ]
-        directory = next(
-            (
-                candidate
-                for candidate in candidates
-                if len(str(candidate / "inquiry.sock").encode()) <= UNIX_SOCKET_PATH_BUDGET
-            ),
-            candidates[-1],
-        )
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(directory, 0o700)
-        credentials = {
-            "socketPath": str(directory / "inquiry.sock"),
-            "resultsPath": str(directory / "inquiry.results.jsonl"),
-            "errorPath": str(directory / "inquiry.sock.error.json"),
-            # Hex, never base64url: a leading '-' would be parsed as an option.
-            "token": secrets.token_hex(32),
-        }
-        # The service reads these credentials from disk; they are never part of a
-        # public task view, so the token cannot leak through a status/result read.
-        credentials_path = context.directory / "inquiry.json"
-        credentials_path.write_text(json.dumps(credentials))
-        os.chmod(credentials_path, 0o600)
-        return {"directory": directory, **credentials}
+        return turn_io.inquiry_paths(context)
 
     def workspace_cwd(self, context: ExecutionContext) -> str:
         return turn_io.workspace_cwd(context)
@@ -136,10 +108,14 @@ class DshAdapter(Adapter):
             "--timeout",
             str(spec["timeoutSeconds"]),
             "--log-dir",
-            str(context.directory),
+            str(context.directory / "dsh-run"),
+            "--flat-log-dir",
+            "--private-dir",
+            str(ensure_private_dir(context_root(context, self.name))),
             f"--inquiry-socket={inquiry['socketPath']}",
             f"--inquiry-token={inquiry['token']}",
             f"--inquiry-results={inquiry['resultsPath']}",
+            f"--inquiry-error={inquiry['errorPath']}",
         ]
         if not spec.get("workspace", True):
             # The session rollout becomes attempt-private through the runner's
@@ -152,7 +128,7 @@ class DshAdapter(Adapter):
             # never relocated, so native model auth keeps resolving in the
             # owning harness.
             args.append("--no-workspace")
-            args.append(f"--session-root={context.directory / 'sessions'}")
+            args.append(f"--session-root={ensure_private_dir(context_root(context, self.name) / 'sessions')}")
         from ..harness_runtime import selected
         selected_harness = selected('dsh', context.environment)
         if selected_harness and selected_harness.get('executable'):

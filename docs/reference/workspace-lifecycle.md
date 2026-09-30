@@ -42,3 +42,5 @@ Cleanup is a two-step Host decision. The plan names one registered managed check
 ```
 
 A task that needed no repository integration records `{"notRequired": true, "reason": "read-only analysis with no repository changes to integrate"}` against its final artifact instead of a verified target. The Host still owns the actual integration; a returned patch, a Worker's completion message or a one-line success note is not integration evidence.
+
+Confirmed managed-workspace removal also reclaims Buddy-owned private goal/session roots for that allocation and its stopped helpers borrowing the same checkout, including owned routing tasks. A helper with its own independent allocation waits for its own cleanup. The same acceptance/integration, lineage-stop, dependency and fixed-path checks run before admission; native links and Windows reparse points are never followed. An interrupted private cleanup can replay the existing cleanup plan after checkout removal. Account roots stay protected.

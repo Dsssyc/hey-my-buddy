@@ -11,6 +11,7 @@ import { createAuthorityLatch } from "./console-session";
 import { Objectives } from "./Objectives";
 import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
+import { BackupAttention } from "./BackupAttention";
 import { Badge, Icon } from "./ui";
 import { errorText } from "./api";
 import { refreshVisibleReads } from "./global-refresh";
@@ -153,6 +154,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
     <main id="main" className="main-content" tabIndex={-1}>
       <h1 className="sr-only">{tabs[tab]}</h1>
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
+      <BackupAttention report={snapshot.backupPreflight} />
       {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
         <span title={conflictTitle}>设置已更新；请核对草稿。</span>
         {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">

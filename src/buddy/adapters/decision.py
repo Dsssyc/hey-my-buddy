@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-import tempfile
 import time
 
 from ..errors import BoardError
+from ..private_dirs import context_root, ensure_private_dir
 from .. import router, router_input
 from .base import Adapter, ExecutionContext, ProcessHandle, ReadOnlyStructuredRequest
 from . import read_only
@@ -36,9 +36,11 @@ class DecisionAdapter(Adapter):
             if not getattr(native, "no_tool_structured", False):
                 raise BoardError("UNSUPPORTED_ADAPTER", "This native adapter has no no-tool structured capability")
             from .base import NoToolStructuredRequest
-            # A state root may itself live inside the Host's repository. Keep
-            # native cwd outside it so ancestor project instructions cannot leak.
-            root = Path(tempfile.mkdtemp(prefix="buddy-no-tool-"))
+            # The native call receives an empty owner-private cwd under its
+            # actual harness attempt; its no-tool profile disables project input.
+            root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
+            if any(root.iterdir()):
+                raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
             request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60,
                                               capture_evidence=document.get("captureEvidence") is True)
             child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
@@ -52,17 +54,13 @@ class DecisionAdapter(Adapter):
             raise BoardError("UNSUPPORTED_ADAPTER", "This native read-only structured capability is unverified")
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         manifest = document.get("executionWorkspace")
-        root, digest = router_input.prepare(manifest, context.directory)
+        root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
         budget = document["budget"]
         request = ReadOnlyStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], budget)
         child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)},
                                 turn=None, agent_credential=None)
         started = time.monotonic()
-        try:
-            handle = native.start_read_only_structured(child_context, request)
-        except BaseException:
-            router_input.discard(root)
-            raise
+        handle = native.start_read_only_structured(child_context, request)
         handle.router_input = (manifest, root, digest)
         handle.router_started = started
         return handle

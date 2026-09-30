@@ -42,6 +42,7 @@ METHODS = [
     "harness-verify",
     "runtime",
     "backup",
+    "backup-preflight",
     "upgrade",
     "install",
     "paths",
@@ -688,6 +689,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.method == "install":
             from .skill_install import install
             result = install(params)
+        elif args.method == "backup-preflight":
+            from .backup import preflight_command
+            result = preflight_command(params)
         elif args.method == "paths":
             from .skill_install import paths
             result = paths(params)

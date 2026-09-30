@@ -87,8 +87,8 @@ class BackupTests(BoardTestCase):
         manifest = backup.verify(current)
         entries = set(manifest['files'])
         self.assertIn('state/attempts/run/attempt/result.json', entries)
-        self.assertIn('state/attempts/run/attempt/native/builtin-provider.json', entries)
-        self.assertIn('state/attempts/run/attempt/native/personal-provider.json', entries)
+        self.assertNotIn('state/attempts/run/attempt/native/builtin-provider.json', entries)
+        self.assertNotIn('state/attempts/run/attempt/native/personal-provider.json', entries)
         self.assertFalse(any(name.startswith('state/attempts/run/attempt/native/codex-home/') for name in entries))
         self.assertNotIn('state/attempts/run/attempt/builtin-provider.json', entries)
         self.assertNotIn('state/attempts/run/attempt/personal-provider.json', entries)
@@ -129,7 +129,7 @@ class BackupTests(BoardTestCase):
         self.assertFalse(any(name.startswith(prefix + 'native/') for name in entries))
         self.assertNotIn(prefix + 'builtin-provider.json', entries)
         self.assertNotIn(prefix + 'personal-provider.json', entries)
-        self.assertEqual(manifest['skippedAttemptEntries'], {'count': 0, 'paths': []})
+        self.assertEqual(manifest['skippedAttemptEntries']['count'], 4)
         self.assertTrue((dsh_modules / '.bin').is_symlink())
         self.assertTrue((codex_home / 'auth.json').is_symlink())
         self.assertEqual(secret.read_text(), 'private credential')
@@ -139,27 +139,27 @@ class BackupTests(BoardTestCase):
                                               b'native session state', b'private provider key'))]
         self.assertEqual(leaked, [])
 
-    def test_other_attempt_symlinks_are_skipped_and_recorded(self):
+    def test_undeclared_attempt_symlinks_are_skipped_and_recorded(self):
         board = self.board()
         attempt = board.directory / 'attempts/run/attempt'
         attempt.mkdir(parents=True)
         secret = self.directory / 'leak.txt'
         secret.write_text('link target must not be copied')
-        (attempt / 'result.json').symlink_to(secret)
+        (attempt / 'unregistered.json').symlink_to(secret)
         (attempt / 'linked-dir').symlink_to(self.directory)
-        (attempt / 'plain.json').write_text('{"kept":true}')
+        (attempt / 'task.txt').write_text('{"kept":true}')
 
         result = board.call('backup', {})
         current = Path(result['path'])
         manifest = backup.verify(current)
         entries = set(manifest['files'])
-        self.assertIn('state/attempts/run/attempt/plain.json', entries)
-        self.assertNotIn('state/attempts/run/attempt/result.json', entries)
+        self.assertIn('state/attempts/run/attempt/task.txt', entries)
+        self.assertNotIn('state/attempts/run/attempt/unregistered.json', entries)
         self.assertFalse(any('linked-dir' in name for name in entries))
         self.assertEqual(result['skippedAttemptEntries'], 2)
         self.assertEqual(manifest['skippedAttemptEntries'],
-                         {'count': 2, 'paths': ['attempts/run/attempt/linked-dir', 'attempts/run/attempt/result.json']})
-        self.assertTrue((attempt / 'result.json').is_symlink())
+                         {'count': 2, 'paths': ['attempts/run/attempt/linked-dir', 'attempts/run/attempt/unregistered.json']})
+        self.assertTrue((attempt / 'unregistered.json').is_symlink())
         self.assertEqual(secret.read_text(), 'link target must not be copied')
         leaked = [name for name in entries if (current / name).read_bytes().find(b'link target must not be copied') >= 0]
         self.assertEqual(leaked, [])
@@ -204,5 +204,5 @@ class BackupTests(BoardTestCase):
         result = board.call('backup', {})
         manifest = backup.verify(Path(result['path']))
         self.assertEqual(manifest['skippedAttemptEntries'],
-                         {'count': 1, 'paths': ['attempts/run/attempt/no-tool-not-a-hex-name/dsh-home/link']})
+                         {'count': 1, 'paths': ['attempts/run/attempt/no-tool-not-a-hex-name']})
         self.assertEqual(secret.read_text(), 'target')

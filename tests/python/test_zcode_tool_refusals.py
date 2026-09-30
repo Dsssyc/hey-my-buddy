@@ -48,7 +48,8 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         self.assertEqual(turn["provenance"]["toolResultSuccess"], True)
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
         # Exactly one admitted native input; the refusal never restarted the turn.
-        methods = (context.directory / "native-logs" / "methods.jsonl").read_text()
+        from buddy.private_dirs import context_root
+        methods = (context_root(context, "zcode") / "native-logs" / "methods.jsonl").read_text()
         self.assertEqual(methods.split().count("session/send"), 1)
 
     def test_pending_inquiry_refusal_then_checkpoint_answer_and_finish(self):
@@ -63,7 +64,8 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         context = self.context("inquiry-refusal-wrapped", timeout=40)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        credentials_path = context.directory / "inquiry.json"
+        from buddy.private_dirs import context_root
+        credentials_path = context_root(context, "zcode") / "inquiry.json"
         deadline = time.monotonic() + 20.0
         credentials = None
         while time.monotonic() < deadline:
@@ -79,8 +81,8 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
                                               {"inquiryId": "q-1", "question": "Unblock the refusal retry?"},
                                               timeout_ms=4000)
         self.assertTrue(asked["ok"], asked)
-        (context.directory / "native-logs").mkdir(exist_ok=True)
-        (context.directory / "native-logs" / "release-turn").touch()
+        from buddy.private_dirs import context_root
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())

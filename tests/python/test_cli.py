@@ -71,7 +71,7 @@ class MethodSurfaceTests(unittest.TestCase):
             with self.subTest(method=method):
                 self.assertEqual(transport.METHOD_MAP[method], target)
         # Await, the new-package upgrade coordinator and skill install are CLI-level helpers.
-        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await", "upgrade", "install", "paths"})
+        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await", "upgrade", "install", "paths", "backup-preflight"})
         self.assertEqual(cli.LOCAL_METHODS, ("worker-start", "worker-stop"))
 
     def test_execution_results_unwrap_the_task_view_and_goal_results_do_not(self):

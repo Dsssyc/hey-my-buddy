@@ -1203,7 +1203,12 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         manifest, frozen_root, expected_digest = self.input_verify.call_args.args
         self.assertEqual(manifest, decision["input"]["executionWorkspace"])
         self.assertEqual(request_view.cwd, str(frozen_root))
-        self.input_prepare.assert_called_once_with(manifest, context.directory)
+        from buddy.private_dirs import context_root
+        private_root = context_root(context, native.name)
+        self.input_prepare.assert_called_once_with(manifest, private_root)
+        self.assertTrue(Path(frozen_root).is_relative_to(private_root))
+        self.assertFalse(private_root.is_relative_to(context.directory))
+        self.assertFalse((context.directory / "frozen-input").exists())
         self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest)
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())

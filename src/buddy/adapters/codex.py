@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .. import usage
 from ..errors import BoardError
+from ..private_dirs import native_root, ensure_private_dir
 from . import turn_io
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
@@ -54,6 +55,7 @@ class CodexAdapter(Adapter):
             return False, str(error)
 
     def prepare(self, context: ExecutionContext) -> None:
+        context.private_adapter = self.name
         if any(not isinstance(context.spec.get(key), str) or not context.spec[key].strip()
                for key in ("provider", "model", "effort")):
             raise BoardError("INVALID_ARGUMENT", "Codex requires a complete provider, model and effort after routing", adapter=self.name)
@@ -72,9 +74,7 @@ class CodexAdapter(Adapter):
         except CodexUnavailable as error:
             raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter=self.name) from None
         turn_io.prepare_turn(context)
-        root = Path(context.environment["BUDDY_STATE_DIR"]) / "harnesses" / "codex" / hashlib.sha256(context.task_id.encode()).hexdigest()
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(root, 0o700)
+        root = ensure_private_dir(native_root(Path(context.environment["BUDDY_STATE_DIR"]), self.name, context.task_id))
         turn_io.private_json(context.directory / "codex-control.json", {
             "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,

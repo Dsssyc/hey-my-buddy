@@ -28,6 +28,7 @@ from test_zcode import ZcodeFixtureCase
 
 from buddy import activity as activity_module
 from buddy import inquiry as inquiry_module
+from buddy.private_dirs import context_root
 from buddy.adapters import turn_io
 from buddy.adapters.zcode_mcp import attention_requests, pending_inquiries, read_inquiry_entries, respond
 from buddy.adapters.zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES,
@@ -942,7 +943,8 @@ class ActivitySidecarTests(ZcodeFixtureCase):
                     latest = current
                     break
             time.sleep(0.05)
-        (context.directory / "native-logs" / "release-turn").touch()
+        from buddy.private_dirs import context_root
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(10), "controller did not settle")
         self.assertEqual(self.adapter.collect(handle, context).status, "ok")
         self.assertIsNotNone(first, "no initial streaming observation")
@@ -997,7 +999,8 @@ class ActivitySidecarTests(ZcodeFixtureCase):
 class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
     def credentials(self, context, timeout=20):
         """Wait until the attempt mounted its bridge AND admitted the root turn."""
-        path = context.directory / "inquiry.json"
+        from buddy.private_dirs import context_root
+        path = context_root(context, "zcode") / "inquiry.json"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if path.is_file():
@@ -1015,7 +1018,8 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
     def native_log(self, context, name: str) -> str:
-        path = context.directory / "native-logs" / name
+        from buddy.private_dirs import context_root
+        path = context_root(context, "zcode") / "native-logs" / name
         return path.read_text() if path.exists() else ""
 
     def test_a_live_question_queues_without_touching_the_native_session(self):
@@ -1032,8 +1036,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         answered = inquiry_module.bridge_request(credentials, "answer", {"inquiryId": "q-live"}, timeout_ms=4000)
         self.assertTrue(answered["ok"], answered)
         self.assertFalse(answered["value"]["answer"]["available"])
-        (context.directory / "native-logs").mkdir(exist_ok=True)
-        (context.directory / "native-logs" / "release-turn").touch()
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(30), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -1058,8 +1061,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         context = self.context("live", timeout=30)
         handle = self.adapter.start(context)
         credentials = self.credentials(context)
-        (context.directory / "native-logs").mkdir(exist_ok=True)
-        (context.directory / "native-logs" / "release-turn").touch()
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(30), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -1072,7 +1074,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         context = self.context("attention", timeout=30)
         _, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        responses = json.loads((context.directory / "native-logs" / "interaction-responses.json").read_text())
+        responses = json.loads((context_root(context, "zcode") / "native-logs" / "interaction-responses.json").read_text())
         self.assertEqual(responses["permission"]["result"]["decision"], "deny")
         self.assertEqual(responses["userInput"]["result"]["action"], "decline")
         self.assertEqual(responses["unknown"]["error"]["code"], -32601)
@@ -1097,9 +1099,9 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         context = self.context(timeout=20)
         _, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        tree = json.loads((context.directory / "finish-bridge.json").read_text())
+        tree = json.loads((context_root(context, "zcode") / "finish-bridge.json").read_text())
         self.assertIn("attentionPath", tree)
-        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         self.assertEqual(tree["inquiryJournalPath"], credentials["resultsPath"])
         self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": "attempt-1",
                                             "generation": 1, "turnId": "turn-1"})

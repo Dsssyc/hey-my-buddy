@@ -8,34 +8,43 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
+import stat
 import subprocess
 import time
 import uuid
 
-from . import schemas
+from . import private_dirs, schemas
 from .db import utc_now
 from .errors import BoardError
 from .runtime import DEFAULT_RUNTIME_ROOT, is_ready
 
 GRACE_SECONDS = 3 * 86400
-LABELS = {'zcode':'ZCode 私有主目录', 'workspaces':'受管检出', 'runtimes':'运行时', 'backup':'备份', 'durable':'看板与记录'}
+LABELS = {'harnesses':'Harness 私有会话', 'zcode':'ZCode 旧私有主目录', 'workspaces':'受管检出',
+          'runtimes':'运行时', 'backup':'备份', 'durable':'看板与记录'}
 
 
 def tree_info(path: Path) -> tuple[int, str, bool]:
-    """Size and mutation fingerprint, never traversing symlinks."""
+    """Size and mutation fingerprint without traversing any reparse point."""
     size = 0
     digest = hashlib.sha256()
-    safe = not path.is_symlink()
+    safe = private_dirs.linked_component(path) is None
+    if not safe:
+        return 0, '', False
     if not path.exists():
         return 0, '', safe
-    paths = [path]
-    if path.is_dir() and safe:
-        for parent, dirs, files in os.walk(path, followlinks=False):
-            paths.extend(Path(parent) / name for name in dirs + files)
+    paths = []
+    def collect(item: Path):
+        paths.append(item)
+        if private_dirs.linked(item) or not item.is_dir():
+            return
+        with os.scandir(item) as entries:
+            children = [Path(entry.path) for entry in entries]
+        for child in children:
+            collect(child)
+    collect(path)
     for item in sorted(paths):
         stat = item.lstat()
-        if item.is_file() and not item.is_symlink():
+        if not private_dirs.linked(item) and item.is_file():
             size += stat.st_size
         digest.update(f'{item.relative_to(path)}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}\n'.encode())
     return size, digest.hexdigest(), safe
@@ -108,12 +117,12 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
         return ['owner-unproven']
     # Cancelled runs can currently continue. Preserve them rather than changing
     # existing Host recovery semantics merely to make reclaimable bytes bigger.
-    if run['state'] != 'accepted' or task['acceptance_verdict'] != 'accepted':
-        return ['continuation-supported']
     shutdown = store.workflow.shutdown_summary(connection, run['run_id'])
     reasons = []
     if not all(shutdown.get(k) is True for k in ('selfConfirmed', 'descendantsConfirmed')):
         reasons.append('shutdown-unconfirmed')
+    if run['state'] != 'accepted' or task['acceptance_verdict'] != 'accepted':
+        return ['continuation-supported', *reasons]
     try:
         accepted = datetime.fromisoformat(task['accepted_at'].replace('Z', '+00:00')).timestamp()
         if now - accepted < GRACE_SECONDS:
@@ -134,13 +143,14 @@ def inspect(store) -> dict:
     orphaned, commands, known = process_inventory(state)
     now = time.time()
     def add(category, path, reasons, **metadata):
-        if any(parent.is_symlink() for parent in (path, *path.parents)):
+        linked = private_dirs.linked_component(path)
+        if linked is not None:
             size, fingerprint, safe = 0, '', False
         else:
             size, fingerprint, safe = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
-        if not path.exists():
+        if linked is None and not path.exists():
             return
         rows.append({'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
                      'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
@@ -153,8 +163,10 @@ def inspect(store) -> dict:
         runs = connection.execute('SELECT * FROM workflow_runs').fetchall()
         for run in runs:
             task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
-            native_owners[hashlib.sha256(run['run_id'].encode()).hexdigest()] = (
-                run['run_id'], _zcode_reasons(store, connection, run, task, now))
+            reasons = _zcode_reasons(store, connection, run, task, now)
+            native_owners[hashlib.sha256(run['run_id'].encode()).hexdigest()] = (run['run_id'], reasons)
+            for routed in store.workflow._routing_tasks(connection, run['run_id']):
+                native_owners[hashlib.sha256(routed['task_id'].encode()).hexdigest()] = (run['run_id'], reasons)
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
@@ -163,12 +175,35 @@ def inspect(store) -> dict:
             sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
     home_root = state / 'harnesses/zcode'
-    if any(p.is_symlink() for p in (state / 'harnesses', home_root)):
-        add('zcode', state / 'harnesses' if (state / 'harnesses').is_symlink() else home_root, ['linked-path'])
+    if any(private_dirs.linked(p) for p in (state / 'harnesses', home_root)):
+        add('zcode', state / 'harnesses' if private_dirs.linked(state / 'harnesses') else home_root, ['linked-path'])
     elif home_root.exists():
         for path in sorted(home_root.iterdir()):
+            if path.name in ('goals', 'accounts'):
+                continue
             run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
             add('zcode', path, reasons, runId=run_id)
+    harnesses = state / 'harnesses'
+    if harnesses.exists() and not private_dirs.linked(harnesses):
+        for adapter in sorted(private_dirs.ADAPTERS):
+            adapter_root = harnesses / adapter
+            if private_dirs.linked(adapter_root):
+                add('harnesses', adapter_root, ['linked-path'], adapter=adapter)
+                continue
+            if not adapter_root.exists():
+                continue
+            goals = adapter_root / 'goals'
+            if private_dirs.linked(goals):
+                add('harnesses', goals, ['linked-path'], adapter=adapter)
+                continue
+            if goals.exists():
+                for path in sorted(goals.iterdir()):
+                    run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
+                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
+            if adapter != 'zcode':
+                for path in sorted(adapter_root.iterdir()):
+                    if path.name not in ('goals', 'accounts'):
+                        add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
     seen = set()
     for run_id, revision, manifest, retained, reasons, sealed in workspace_inputs:
         try:
@@ -195,18 +230,27 @@ def inspect(store) -> dict:
         retained_ids = {keep['current'], keep['previous']}
     except (OSError, KeyError, ValueError):
         retained_ids = None
-    if any(p.is_symlink() for p in (runtime_root, *runtime_root.parents)):
+    if private_dirs.linked_component(runtime_root) is not None:
         add('runtimes', runtime_root, ['linked-path'])
     elif runtime_root.exists():
         for path in sorted(runtime_root.iterdir()):
-            if not path.is_dir() or not (path / 'READY.json').exists():
+            ready = path / 'READY.json'
+            if private_dirs.linked_component(ready) is not None:
+                add('runtimes', path, ['linked-path'])
+                continue
+            try:
+                ready_stat = ready.lstat()
+            except FileNotFoundError:
+                continue
+            if not path.is_dir() or not stat.S_ISREG(ready_stat.st_mode):
                 continue
             reasons = (['retention-history-unproven'] if retained_ids is None else
                        ['retained-runtime'] if path.name in retained_ids else runtime_usage(path, commands, known))
             if foreign_default_root:
                 reasons.append('runtime-owned-by-default-state')
-            if any(p.is_symlink() for p in (runtime_root, *runtime_root.parents)):
-                reasons.append('linked-path')
+            if private_dirs.linked_component(ready) is not None:
+                add('runtimes', path, [*reasons, 'linked-path'])
+                continue
             if not is_ready(path):
                 reasons.append('runtime-identity-unproven')
             add('runtimes', path, reasons)
@@ -215,11 +259,14 @@ def inspect(store) -> dict:
         if path.name in {'workspaces','harnesses','backups'} or path == runtime_root:
             continue
         add('durable', path, ['durable-record'])
-    harnesses = state / 'harnesses'
-    if harnesses.exists() and not harnesses.is_symlink():
+    if harnesses.exists() and not private_dirs.linked(harnesses):
         for path in sorted(harnesses.iterdir()):
-            if path.name != 'zcode':
+            if path.name not in private_dirs.ADAPTERS:
                 add('durable', path, ['durable-record'])
+                continue
+            accounts = path / 'accounts'
+            if accounts.exists() or private_dirs.linked(accounts):
+                add('durable', accounts, ['user-account-protected'])
     categories = []
     for key, label in LABELS.items():
         members = [r for r in rows if r['category'] == key]
@@ -231,13 +278,105 @@ def inspect(store) -> dict:
     return {'createdAt': utc_now(), 'categories': categories, 'candidates': rows, 'orphanProcesses': orphaned}
 
 
+def _guard_storage(path: Path) -> None:
+    linked = private_dirs.linked_component(path)
+    if linked is not None:
+        raise BoardError('STORAGE_UNSAFE', 'Storage path contains a link or reparse point', path=str(linked))
+
+
+def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
+    _guard_storage(path)
+    try:
+        fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
+    except BoardError as error:
+        raise BoardError('STORAGE_UNSAFE', 'Storage record is unsafe', path=str(path)) from error
+    with os.fdopen(fd, 'r', encoding='utf-8') as stream:
+        try:
+            value = json.load(stream)
+        except ValueError as error:
+            raise BoardError('STORAGE_UNSAFE', 'Storage record is invalid JSON', path=str(path)) from error
+    if not isinstance(value, dict):
+        raise BoardError('STORAGE_UNSAFE', 'Storage record must be an object', path=str(path))
+    return value
+
+
+def _atomic_storage_json(path: Path, value: dict) -> None:
+    _guard_storage(path)
+    temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
+    _guard_storage(temporary)
+    try:
+        try:
+            fd = private_dirs.open_regular_fd(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except BoardError as error:
+            raise BoardError('STORAGE_UNSAFE', 'Storage temporary file is unsafe', path=str(temporary)) from error
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _guard_storage(path)
+        _guard_storage(temporary)
+        os.replace(temporary, path)
+        _guard_storage(path)
+    finally:
+        _guard_storage(temporary)
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_pending(result: dict, planned: dict, state: Path) -> None:
+    pending = result.get('pending')
+    if pending is None:
+        return
+    if result.get('complete') or not isinstance(pending, dict):
+        raise BoardError('STORAGE_UNSAFE', 'Storage recovery journal is invalid')
+    candidates = planned['candidates']
+    matches = [row for row in candidates if isinstance(row, dict) and row.get('id') == pending.get('id')]
+    if len(matches) != 1:
+        raise BoardError('STORAGE_UNSAFE', 'Pending removal is absent from its original plan')
+    candidate = matches[0]
+    category = candidate.get('category')
+    if (candidate.get('eligible') is not True or category not in ('harnesses', 'zcode', 'runtimes') or
+            any(pending.get(key) != candidate.get(key) for key in ('id', 'path', 'fingerprint', 'bytes')) or
+            not isinstance(pending.get('path'), str) or not Path(pending['path']).is_absolute() or
+            pending['id'] != hashlib.sha256(pending['path'].encode()).hexdigest()[:24]):
+        raise BoardError('STORAGE_UNSAFE', 'Pending removal does not match its eligible plan candidate')
+    original = Path(pending['path'])
+    if '..' in original.parts:
+        raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
+    root = Path(state).absolute()
+    if category == 'runtimes':
+        allowed_parent = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
+        allowed = original.parent == allowed_parent
+    elif category == 'zcode':
+        allowed = original.parent == root / 'harnesses' / 'zcode'
+    else:
+        allowed = any(original.parent == root / 'harnesses' / adapter / 'goals'
+                      for adapter in private_dirs.ADAPTERS)
+    tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
+    has_identity = 'device' in pending or 'inode' in pending
+    if (not allowed or pending.get('tomb') != str(tomb) or
+            has_identity and (not isinstance(pending.get('device'), int) or
+                              not isinstance(pending.get('inode'), int))):
+        raise BoardError('STORAGE_UNSAFE', 'Pending removal path is outside its fixed storage boundary')
+
+
 @contextmanager
 def locked(store):
     path = store.directory / 'storage'
-    if path.is_symlink():
-        raise BoardError('STORAGE_UNSAFE', 'Storage plan root cannot be linked')
+    _guard_storage(path)
     path.mkdir(mode=0o700, exist_ok=True)
-    fd = os.open(path / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    _guard_storage(path)
+    if not path.is_dir():
+        raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))
+    lock_path = path / '.lock'
+    _guard_storage(lock_path)
+    try:
+        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    except BoardError as error:
+        raise BoardError('STORAGE_UNSAFE', 'Storage lock is unsafe', path=str(lock_path)) from error
     try:
         locking.lock(fd, blocking=False)
         yield path
@@ -248,17 +387,15 @@ def locked(store):
 
 
 def plan(store, params: dict) -> dict:
-    from .daemon import atomic_json
     schemas.reject_unknown(params, set(), 'storage.plan')
     with locked(store) as directory:
         result = inspect(store)
         result.update(planId='stg-' + uuid.uuid4().hex, expiresAt=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat())
-        atomic_json(directory / (result['planId'] + '.json'), result)
+        _atomic_storage_json(directory / (result['planId'] + '.json'), result)
         return result
 
 
 def apply(store, params: dict) -> dict:
-    from .daemon import atomic_json
     schemas.reject_unknown(params, {'planId', 'commandId', 'confirm'}, 'storage.apply')
     plan_id = schemas.required_string(params, 'planId', max_length=64, pattern=re.compile(r'^stg-[0-9a-f]{32}$'))
     command = schemas.required_string(params, 'commandId', max_length=128)
@@ -266,23 +403,25 @@ def apply(store, params: dict) -> dict:
         raise BoardError('CONFIRMATION_REQUIRED', 'Confirm the exact storage plan before applying it')
     with locked(store) as directory:
         receipt = directory / ('receipt-' + hashlib.sha256(command.encode()).hexdigest() + '.json')
-        if receipt.exists():
-            saved = json.loads(receipt.read_text())
-            if saved['planId'] != plan_id:
+        saved = _read_storage_json(receipt, missing_ok=True)
+        if saved is not None:
+            if saved.get('planId') != plan_id:
                 raise BoardError('CONFLICT', 'This commandId belongs to another storage plan')
-            if saved.get('complete'):
-                return saved
         try:
             path = directory / (plan_id + '.json')
-            if path.is_symlink():
-                raise ValueError()
-            planned = json.loads(path.read_text())
+            planned = _read_storage_json(path)
         except (OSError, ValueError):
             raise BoardError('NOT_FOUND', 'Storage plan is unavailable')
-        if not receipt.exists() and datetime.fromisoformat(planned['expiresAt']).timestamp() < time.time():
+        if planned.get('planId') != plan_id or not isinstance(planned.get('candidates'), list):
+            raise BoardError('STORAGE_UNSAFE', 'Storage plan identity is invalid')
+        if saved is not None:
+            _validate_pending(saved, planned, store.directory)
+            if saved.get('complete'):
+                return saved
+        if saved is None and datetime.fromisoformat(planned['expiresAt']).timestamp() < time.time():
             raise BoardError('PLAN_EXPIRED', 'Storage plan expired; inspect again')
         result = {'planId': plan_id, 'removedBytes': 0, 'removed': [], 'skipped': [], 'complete': False}
-        if receipt.exists():
+        if saved is not None:
             result = saved
         if result.get('pending'):
             _finish_pending(result, receipt)
@@ -292,7 +431,8 @@ def apply(store, params: dict) -> dict:
             if not candidate['eligible'] or candidate['id'] in done:
                 continue
             fresh = current.get(candidate['id'])
-            if fresh is None or not fresh['eligible'] or fresh['fingerprint'] != candidate['fingerprint']:
+            if (fresh is None or not fresh['eligible'] or
+                    any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
                 result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']})
                 continue
             try:
@@ -302,7 +442,7 @@ def apply(store, params: dict) -> dict:
                     planned_workspace = store.workflow.cleanup_plan(request, console_authority=authority)
                     wp = planned_workspace['plan']
                     store.workflow.cleanup_apply({**request, 'commandId': request['commandId'] + ':apply', 'expectedRevision': planned_workspace['targetRevision'], 'planId': wp['planId'], 'confirmPath': fresh['path']}, console_authority=authority)
-                elif candidate['category'] in ('zcode', 'runtimes'):
+                elif candidate['category'] in ('harnesses', 'zcode', 'runtimes'):
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
                     if tree_info(original)[1:] != (fresh['fingerprint'], True):
@@ -312,7 +452,10 @@ def apply(store, params: dict) -> dict:
                         if runtime_usage(original, commands, known):
                             raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                     tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
-                    result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb), 'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint']}
+                    identity = original.lstat()
+                    result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb),
+                                         'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint'],
+                                         'device':identity.st_dev, 'inode':identity.st_ino}
                     _save_receipt(receipt, result)
                     _finish_pending(result, receipt)
                     continue
@@ -332,19 +475,27 @@ def apply(store, params: dict) -> dict:
 
 def _finish_pending(result: dict, receipt: Path) -> None:
     """Resume only a previously journaled exact tomb; never count it as skipped."""
-    from .daemon import atomic_json
     pending = result['pending']
     original, tomb = Path(pending['path']), Path(pending['tomb'])
-    if any(p.is_symlink() for p in (original, tomb, *original.parents)):
-        raise BoardError('STORAGE_UNSAFE', 'Removal path identity changed')
-    if original.exists():
-        if tomb.exists() or tree_info(original)[1] != pending['fingerprint']:
+    _guard_storage(original)
+    _guard_storage(tomb)
+    original_exists = original.exists()
+    tomb_exists = tomb.exists()
+    if original_exists:
+        identity = original.lstat()
+        if (tomb_exists or ('device' in pending and
+                           (identity.st_dev != pending['device'] or identity.st_ino != pending['inode'])) or
+                tree_info(original)[1:] != (pending['fingerprint'], True)):
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
         os.rename(original, tomb)
         from .backup import sync_dir
         sync_dir(original.parent)
-    if tomb.exists():
-        shutil.rmtree(tomb)
+        tomb_exists = True
+    if tomb_exists:
+        identity = tomb.lstat()
+        if 'device' in pending and (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']):
+            raise BoardError('STORAGE_CHANGED', 'Pending tomb no longer matches its candidate')
+        private_dirs.remove_tree(tomb)
         from .backup import sync_dir
         sync_dir(tomb.parent)
     result['removed'].append({k:pending[k] for k in ('id','path','bytes')})
@@ -373,17 +524,15 @@ def cleanup_accepted_workspace(store, run_id: str) -> dict:
 
 def prune_old_runtimes(store) -> dict:
     """Upgrade-authorized retention; other storage categories remain untouched."""
-    from .daemon import atomic_json
     planned = plan(store, {})
     for candidate in planned['candidates']:
         if candidate['category'] != 'runtimes':
             candidate['eligible'] = False
-    atomic_json(store.directory / 'storage' / (planned['planId'] + '.json'), planned)
+    _atomic_storage_json(store.directory / 'storage' / (planned['planId'] + '.json'), planned)
     return apply(store, {'planId':planned['planId'], 'commandId':'upgrade-' + planned['planId'], 'confirm':True})
 
 
 def _save_receipt(path: Path, result: dict) -> None:
-    from .daemon import atomic_json
     from .backup import sync_dir
-    atomic_json(path, result)
+    _atomic_storage_json(path, result)
     sync_dir(path.parent)

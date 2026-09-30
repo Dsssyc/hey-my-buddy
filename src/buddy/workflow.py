@@ -4586,6 +4586,19 @@ class WorkflowCoordinator:
             manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
             retained = self._allocation_provenance(connection, run_row)
             sealed = self._latest_handoff(connection, run_row, manifest)
+            # This plan already proved the whole owned lineage stopped. Reclaim
+            # only sessions bound to the checkout being removed, including
+            # routing tasks and helpers that borrowed this exact allocation.
+            private_goals = [run_id]
+            for child in self._owned_children(connection, run_id):
+                child_run = connection.execute("SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?",
+                                               (child['child_task_id'],)).fetchone()
+                if child_run is not None:
+                    child_manifest = json.loads(child_run['workspace_manifest_json'] or '{}')
+                    if child_manifest.get('checkoutRoot') == plan['path']:
+                        private_goals.append(child['child_task_id'])
+            for goal_id in list(private_goals):
+                private_goals.extend(task['task_id'] for task in self._routing_tasks(connection, goal_id))
         path = Path(plan["path"])
         inspection = None
         if path.exists() or path.is_symlink():
@@ -4626,6 +4639,10 @@ class WorkflowCoordinator:
         removed = None
         if path.exists() or path.is_symlink():
             removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
+        from . import private_dirs
+        for goal_id in dict.fromkeys(private_goals):
+            for adapter in private_dirs.ADAPTERS:
+                private_dirs.remove_tree(private_dirs.goal_root(self.board.directory, adapter, goal_id))
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             plan = connection.execute(

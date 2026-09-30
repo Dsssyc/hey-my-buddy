@@ -352,6 +352,19 @@ export type ConsoleAccess = {
   revision: number;
   sessions: { id: string; lastSeen: number; current: boolean }[];
 };
+export type BackupInventory = {
+  count: number;
+  paths: string[];
+  entries: { path: string; reason: string }[];
+};
+export type BackupPreflight = {
+  policy: string;
+  ok: boolean;
+  needsAttention: boolean;
+  copied: BackupInventory;
+  skipped: BackupInventory;
+  rejected: BackupInventory;
+};
 export type Snapshot = {
   harnesses?: HarnessHealth[];
   csrfToken: string;
@@ -382,6 +395,8 @@ export type Snapshot = {
   decisions: Decision[];
   /** Read-only bounded selection health; absent data is unknown, not success. */
   routingHealth?: RoutingHealth;
+  /** Current read-only evidence inventory; absence means no observation. */
+  backupPreflight?: BackupPreflight;
   /** Recorded verification samples per profile; independent of published card prose. */
   sampleCounts: Record<string, number>;
   /**

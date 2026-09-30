@@ -316,7 +316,8 @@ class CodexAdapterTests(unittest.TestCase):
         result = collect(handle)
         self.assertEqual(result.status, 'ok', result.result)
         self.assertTrue(result.shutdown_confirmed)
-        self.assertFalse((context.directory / 'native/codex-home/auth.json').is_symlink())
+        from buddy.private_dirs import context_root
+        self.assertFalse((context_root(context, "codex") / 'review-native/codex-home/auth.json').is_symlink())
         self.assertEqual(source_auth.read_text(), 'private fixture auth')
 
     def test_auth_cleanup_preserves_a_regular_file(self):

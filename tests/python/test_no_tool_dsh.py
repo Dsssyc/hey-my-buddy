@@ -121,6 +121,9 @@ class DshNoToolTests(unittest.TestCase):
                 control = json.loads((self.root / f"attempt-{self.index}" / 'no-tool-control.json').read_text())
                 self.assertTrue((Path(control['directory']) / "dsh-home" /
                                  "profiles" / "headless" / "package.json").is_file())
+                evidence = Path(control["evidenceRoot"])
+                self.assertTrue((evidence / "call-1/request.json").is_file())
+                self.assertTrue((evidence / f"call-{count + 1}/result.json").is_file())
                 self.assertFalse((self.dsh_home / "profiles" / "headless" / "cordis.yml").exists())
 
     def test_enum_is_not_corrected(self):

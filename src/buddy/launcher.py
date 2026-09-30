@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         clean_host_environment()
         from buddy.home import default_state_dir
         state = Path(os.environ.get('BUDDY_STATE_DIR') or default_state_dir()).expanduser().resolve()
-        if args and args[0] not in {'upgrade','install','--help','-h'}:
+        if args and args[0] not in {'upgrade','install','backup-preflight','--help','-h'}:
             if (state / 'upgrade.json').exists():
                 from buddy.errors import BoardError
                 raise BoardError('UPGRADE_IN_PROGRESS', 'The launcher is fenced until upgrade verification or recovery finishes')

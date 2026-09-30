@@ -79,7 +79,8 @@ class ExecutionContext:
         return self.directory / "turn-output.json"
 
     def credential_file(self) -> Path:
-        return self.directory / "agent-credential.json"
+        from ..private_dirs import context_root
+        return context_root(self, getattr(self, "private_adapter", None)) / "agent-credential.json"
 
     def log_paths(self) -> dict:
         return {

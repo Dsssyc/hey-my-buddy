@@ -17,12 +17,17 @@ class SharedTurnIOTests(ZcodeFixtureCase):
 
     def test_canonical_input_and_scoped_credential_are_distinct_private_files(self):
         context = self.context()
+        context.spec["adapter"] = "zcode"
         context.agent_credential = "private-agent-token"
         turn_io.prepare_turn(context)
         self.assertEqual(hashlib.sha256(context.turn_input_file().read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
         self.assertNotIn(context.agent_credential, context.turn_input_file().read_text())
         self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
         self.assertEqual(context.environment["BUDDY_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+        from buddy.private_dirs import context_root
+        self.assertEqual(context.credential_file().parent, context_root(context, "zcode"))
+        self.assertFalse(context.credential_file().is_relative_to(context.directory))
+        self.assertFalse((context.directory / "agent-credential.json").exists())
 
     def test_adapter_specific_flush_does_not_bypass_common_identity_or_stop(self):
         context = self.context()

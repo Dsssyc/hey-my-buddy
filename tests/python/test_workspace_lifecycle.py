@@ -20,6 +20,7 @@ from unittest import mock
 from support import FakeClock
 from test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
 
+from buddy import private_dirs
 from buddy import workflow as workflow_module
 from buddy import workspace as workspace_module
 from buddy.db import canonical_json
@@ -417,18 +418,17 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             self.assertTrue(self.repo.exists())
 
     def test_storage_native_removal_resumes_after_interrupted_delete(self):
-        import hashlib
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         run_id = submitted['runId']
         with board.store.db.write() as connection:
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
-        native = board.directory / 'harnesses/zcode' / hashlib.sha256(run_id.encode()).hexdigest()
-        native.mkdir(parents=True)
-        (native / 'sessions.sqlite').write_bytes(b'private session fixture')
+        native = private_dirs.goal_root(board.directory, 'zcode', run_id)
+        session = private_dirs.ensure_private_dir(native / 'native') / 'sessions.sqlite'
+        session.write_bytes(b'private session fixture')
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             request = {'planId':planned['planId'], 'commandId':'native-interrupted', 'confirm':True}
-            with mock.patch('buddy.storage.shutil.rmtree', side_effect=OSError('injected')):
+            with mock.patch('buddy.storage.private_dirs.remove_tree', side_effect=OSError('injected')):
                 with self.assertRaises(BoardError) as caught:
                     board.call('storage_apply', request)
             self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')
@@ -483,6 +483,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def test_cleanup_removes_only_the_registered_worktree_and_is_idempotent(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         run_id = submitted["runId"]
+        private_goal = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', run_id))
+        (private_goal / 'session.json').write_text('private native binding')
+        account = private_dirs.ensure_private_dir(private_dirs.account_root(board.directory, 'codex'))
+        (account / 'account.json').write_text('protected account fixture')
         planned = self.plan(board, view)
         plan = planned["plan"]
         self.assertEqual(plan["state"], "planned")
@@ -507,6 +511,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["plan"]["state"], "applied")
         self.assertFalse(checkout.exists())
+        self.assertFalse(private_goal.exists())
+        self.assertEqual((account / 'account.json').read_text(), 'protected account fixture')
         # Only the checkout was removed: manifests, patches and Git refs stay readable.
         workspace_dir = Path(self.directory) / "workspaces" / manifest["workspaceId"]
         self.assertTrue((workspace_dir / "manifest.json").exists())

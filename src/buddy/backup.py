@@ -9,8 +9,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
+import stat
 import sqlite3
 import subprocess
 import sys
@@ -20,10 +20,12 @@ import time
 from .db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, Database, utc_now
 from .contracts import CONTRACT_VERSION
 from .errors import BoardError
+from . import attempt_evidence, private_dirs
+from .private_dirs import linked as _linked
 
 
 def digest(path: Path) -> str:
-    with path.open('rb') as stream:
+    with _open(path, 'rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
@@ -34,9 +36,10 @@ def sync_dir(path: Path) -> None:
     journal and payload files are flushed, but a power-loss guarantee for
     directory renames is not claimed; recovery covers process interruption.
     """
+    _guard(path)
     if _windows():
         return
-    fd = os.open(path, os.O_RDONLY)
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
     try:
         os.fsync(fd)
     finally:
@@ -48,15 +51,15 @@ def _windows() -> bool:
 
 
 def _rename(source: Path, target: Path) -> None:
+    _guard(source)
+    _guard(target)
     os.replace(source, target)
-
-
-def _linked(path: Path) -> bool:
-    return path.is_symlink() or path.is_junction()
 
 
 def exchange(left: Path, right: Path) -> None:
     """Atomic directory exchange: after a crash current is always one whole copy."""
+    _guard(left)
+    _guard(right)
     libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform == 'darwin':
         fn = libc.renamex_np
@@ -72,9 +75,6 @@ def exchange(left: Path, right: Path) -> None:
         raise OSError(ctypes.get_errno(), 'Atomic backup exchange failed')
 
 
-#: One no-tool invocation directory created by read_only.start_no_tool: uuid4().hex.
-_NO_TOOL_DIRECTORY = re.compile(r'no-tool-[0-9a-f]{32}')
-
 #: Bound for any state-relative path carried in an error or the manifest.
 _SHOWN_PATH_LIMIT = 200
 
@@ -84,77 +84,202 @@ def _shown_path(relative: str) -> str:
     return text
 
 
-def _excluded_attempt_path(relative: Path, *, directory: bool) -> bool:
-    """Harness-private homes below ``attempts/``, by exact structural position.
-
-    Read-only Router calls keep their private Codex home and ZCode provider
-    snapshots directly under ``attempts/<runId>/<attemptId>/``. A no-tool
-    invocation additionally owns ``dsh-home`` (DSH private profile, including
-    its node_modules links), the whole ``native`` private root (Codex
-    ``codex-home`` with its auth link, ZCode storage/session state) and its own
-    provider snapshots. Call evidence such as ``no-tool-<hex>/call-N/`` stays.
-    """
-    parts = relative.parts
-    if len(parts) == 4 and parts[2] == 'native' and parts[3] == 'codex-home':
-        return True
-    if len(parts) == 4 and _NO_TOOL_DIRECTORY.fullmatch(parts[2]):
-        if directory:
-            return parts[3] in ('dsh-home', 'native')
-        return parts[3] in ('builtin-provider.json', 'personal-provider.json')
-    if not directory:
-        return len(parts) == 3 and parts[2] in ('builtin-provider.json', 'personal-provider.json')
-    return False
+def _linked_component(path: Path) -> Path | None:
+    return private_dirs.linked_component(path)
 
 
-def _regular_files(root: Path, *, exclude_attempt_private: bool = False,
-                   skipped: list[str] | None = None, scope: str = ''):
-    """Yield regular files below ``root`` without following links.
+def _guard(path: Path) -> None:
+    component = _linked_component(path)
+    if component is not None:
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup path contains a linked component', path=str(component))
 
-    A linked or nonregular entry is refused with ``BACKUP_UNSAFE_PATH`` naming
-    its path relative to the state directory (``scope`` prefixes the walk
-    root). With a ``skipped`` collector — the ``attempts`` fallback — such
-    entries are recorded there and never followed or copied instead.
-    """
-    if _linked(root):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source cannot be a symlink')
-    if not root.exists():
+
+def _open_fd(path: Path, flags: int) -> int:
+    try:
+        return private_dirs.open_regular_fd(path, flags)
+    except BoardError as error:
+        raise BoardError('BACKUP_UNSAFE_PATH', error.message, **error.details) from error
+
+
+def _open(path: Path, mode: str):
+    flags = os.O_RDONLY if mode == 'rb' else os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = _open_fd(path, flags)
+    return os.fdopen(fd, mode)
+
+
+def _regular_files(root: Path, *, scope: str = ''):
+    """Walk verified backup payloads and non-attempt state; never follow links."""
+    _guard(root)
+    try:
+        root_info = root.lstat()
+    except FileNotFoundError:
         return
+    if not stat.S_ISDIR(root_info.st_mode):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source must be a directory', path=scope or str(root))
 
     def report(path: Path) -> str:
         relative = str(path.relative_to(root))
         return _shown_path(scope + '/' + relative if scope else relative)
 
-    for directory, dirs, files in os.walk(root, followlinks=False):
-        parent = Path(directory)
-        if exclude_attempt_private:
-            dirs[:] = [name for name in dirs
-                       if not _excluded_attempt_path((parent / name).relative_to(root), directory=True)]
-            files = [name for name in files
-                     if not _excluded_attempt_path((parent / name).relative_to(root), directory=False)]
-        linked = sorted(name for name in dirs if _linked(parent / name))
-        if linked:
-            if skipped is None:
-                shown = report(parent / linked[0])
+    def visit(parent):
+        _guard(parent)
+        with os.scandir(parent) as entries:
+            children = sorted(Path(entry.path) for entry in entries)
+        for path in children:
+            if _linked_component(path):
+                shown = report(path)
                 raise BoardError('BACKUP_UNSAFE_PATH',
-                                 'Backup source contains a linked directory: ' + shown, path=shown)
-            dirs[:] = [name for name in dirs if name not in linked]
-            skipped.extend(report(parent / name) for name in linked)
-        for name in files:
-            path = parent / name
-            if _linked(path) or not path.is_file():
-                if skipped is None:
-                    shown = report(path)
-                    raise BoardError('BACKUP_UNSAFE_PATH',
-                                     'Backup source contains a nonregular file: ' + shown, path=shown)
-                skipped.append(report(path))
+                                 'Backup source contains a linked path: ' + shown, path=shown)
+            metadata = path.lstat()
+            if stat.S_ISDIR(metadata.st_mode):
+                yield from visit(path)
+            elif stat.S_ISREG(metadata.st_mode):
+                yield path
+            else:
+                shown = report(path)
+                raise BoardError('BACKUP_UNSAFE_PATH',
+                                 'Backup source contains a nonregular file: ' + shown, path=shown)
+    yield from visit(root)
+
+
+STATE_FILES = ('console-sessions.json', 'console-settings.json', 'worker-pool.json',
+               'runtime-retention.json', 'active-runtime.json', 'launch-settings.json')
+
+
+def _scan(path: Path, *, attempt_depth: int | None = None):
+    """Inventory entries only, pruning every undeclared directory and every link.
+
+    ``attempt_depth`` is the number of structural containers still to enter
+    before paths become relative to one attempt. Skipped directory trees count
+    as one entry, including empty directories; their contents are never read.
+    """
+    def visit(item, depth, relative=Path()):
+        component = _linked_component(item)
+        if component is not None and component != private_dirs._absolute(item):
+            yield 'rejected', item, 'linked-path'
+            return
+        try:
+            info = item.lstat()
+        except FileNotFoundError:
+            return
+        except OSError:
+            yield 'rejected', item, 'unreadable-path'
+            return
+        link = component is not None or _linked(item)
+        is_dir = stat.S_ISDIR(info.st_mode) and not link
+        structural = depth is not None and (depth > 0 or not relative.parts)
+        expected_file = depth is None or depth == 0 and attempt_evidence.is_evidence(relative)
+        expected_dir = depth is None or structural or attempt_evidence.is_evidence_directory(relative)
+        declared = expected_file or expected_dir
+        if not declared:
+            yield 'skipped', item, 'not-evidence-directory' if is_dir else 'not-evidence-file'
+        elif link:
+            yield 'rejected', item, 'linked-evidence' if depth == 0 else 'linked-path'
+        elif is_dir and not expected_dir or not is_dir and not expected_file:
+            yield 'rejected', item, 'wrong-evidence-type' if depth == 0 else 'non-directory-path'
+        elif is_dir:
+            try:
+                children = sorted(item.iterdir())
+            except OSError:
+                yield 'rejected', item, 'unreadable-directory'
+                return
+            for child in children:
+                new_depth = None if depth is None else max(0, depth - 1)
+                new_relative = relative / child.name if depth == 0 else Path()
+                # Entering the attempt establishes a new relative root.
+                yield from visit(child, new_depth, new_relative)
+        elif stat.S_ISREG(info.st_mode) and (depth is None or depth == 0):
+            yield 'copied', item, 'declared-evidence' if depth == 0 else 'durable-state'
+        else:
+            yield 'rejected', item, 'nonregular-evidence' if depth == 0 else 'nonregular-path'
+    yield from visit(path, attempt_depth)
+
+
+def _single(path: Path):
+    if _linked_component(path):
+        yield 'rejected', path, 'linked-path'
+        return
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(metadata.st_mode):
+        yield 'rejected', path, 'nonregular-path'
+    else:
+        yield from _scan(path)
+
+
+def preflight_entries(state: Path):
+    """Complete read-only stream used by backup, diagnostics and upgrade admission."""
+    state = Path(state)
+    if _linked_component(state):
+        yield 'rejected', state, 'linked-state-root' if _linked(state) else 'linked-state-ancestor'
+        return
+    if not state.exists():
+        return
+    if not state.is_dir():
+        yield 'rejected', state, 'non-directory-state-root'
+        return
+    # Online backup reads SQLite itself; the database path must still be regular.
+    yield from _single(state / 'board.sqlite3')
+    # Root -> goal -> attempt -> declared relative evidence.
+    yield from _scan(state / 'attempts', attempt_depth=2)
+    for name in ('controls', 'submissions'):
+        yield from _scan(state / name)
+    workers = state / 'workers'
+    if _linked(workers) or workers.exists() and not workers.is_dir():
+        yield 'rejected', workers, 'linked-path' if _linked(workers) else 'non-directory-path'
+    elif workers.exists():
+        for worker in sorted(workers.iterdir()):
+            if _linked(worker) or not worker.is_dir():
+                yield 'rejected', worker, 'linked-path' if _linked(worker) else 'non-directory-path'
                 continue
-            yield path
+            receipts = worker / 'receipts'
+            if _linked(receipts) or receipts.exists() and not receipts.is_dir():
+                yield 'rejected', receipts, 'linked-path' if _linked(receipts) else 'non-directory-path'
+            elif receipts.exists():
+                for receipt in sorted(receipts.iterdir()):
+                    if receipt.name.endswith('.json'):
+                        yield from _single(receipt)
+            for name in ('startup.json', 'orphaned.json'):
+                yield from _single(worker / name)
+    for name in STATE_FILES:
+        yield from _single(state / name)
+
+
+def preflight(state: Path) -> dict:
+    """Report copying/skipping/refusal without locks, writes, hashing or startup."""
+    result = {kind: {'count': 0, 'paths': [], 'entries': []}
+              for kind in ('copied', 'skipped', 'rejected')}
+    for kind, path, reason in preflight_entries(state):
+        row = result[kind]
+        row['count'] += 1
+        if len(row['entries']) < 20:
+            relative = _shown_path(path.relative_to(state).as_posix())
+            row['paths'].append(relative)
+            row['entries'].append({'path': relative, 'reason': reason})
+    return {'policy': attempt_evidence.POLICY, 'ok': result['rejected']['count'] == 0,
+            'needsAttention': result['skipped']['count'] > 0 or result['rejected']['count'] > 0,
+            **result}
+
+
+def preflight_command(params: dict) -> dict:
+    """CLI-local read, deliberately independent of service and runtime startup."""
+    from . import schemas, home
+    schemas.reject_unknown(params, set(), 'backup-preflight')
+    if os.environ.get('BUDDY_AGENT_CREDENTIAL') or os.environ.get('BUDDY_AGENT_CREDENTIAL_FILE'):
+        raise BoardError('UNAUTHORIZED', 'A Worker cannot inspect Host backup sources')
+    state = Path(os.environ.get('BUDDY_STATE_DIR') or home.default_state_dir()).expanduser().absolute()
+    return preflight(state)
 
 
 def _private_copy(source: Path, target: Path) -> None:
+    if _linked_component(source) or not stat.S_ISREG(source.lstat().st_mode):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source changed to a linked or special file', path=str(source))
+    if _linked_component(target):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup destination cannot be linked', path=str(target))
     target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    with source.open('rb') as src, target.open('xb') as dst:
-        os.chmod(target, 0o600)
+    with _open(source, 'rb') as src, _open(target, 'xb') as dst:
         shutil.copyfileobj(src, dst)
         dst.flush()
         os.fsync(dst.fileno())
@@ -189,25 +314,36 @@ def verify(directory: Path) -> dict:
 
 
 def _verify(directory: Path) -> dict:
-    if _linked(directory) or _linked(directory / 'manifest.json'):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation cannot be linked')
-    manifest = json.loads((directory / 'manifest.json').read_text())
+    _guard(directory)
+    with _open(directory / 'manifest.json', 'rb') as stream:
+        manifest = json.load(stream)
     if manifest.get('format') != 1 or manifest.get('schema') not in (SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
+    policy = manifest.get('attemptEvidencePolicy')
+    if policy is not None and policy != attempt_evidence.POLICY:
+        raise BoardError('BACKUP_INVALID', 'Unsupported attempt evidence policy')
+    if policy == attempt_evidence.POLICY:
+        for relative in manifest['files']:
+            parts = Path(relative).parts
+            if parts[:2] == ('state', 'attempts') and (len(parts) < 5 or not attempt_evidence.is_evidence(Path(*parts[4:]).as_posix())):
+                raise BoardError('BACKUP_INVALID', 'Backup contains undeclared attempt evidence', file=relative)
     actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p != directory / 'manifest.json'}
     if actual != set(manifest['files']):
         raise BoardError('BACKUP_INVALID', 'Backup inventory mismatch')
     for relative, row in manifest['files'].items():
         path = directory / relative
-        if Path(relative).is_absolute() or '..' in Path(relative).parts or _linked(path):
+        if Path(relative).is_absolute() or '..' in Path(relative).parts:
             raise BoardError('BACKUP_INVALID', 'Unsafe manifest path')
-        if path.stat().st_size != row['bytes'] or digest(path) != row['sha256']:
+        _guard(path)
+        if path.lstat().st_size != row['bytes'] or digest(path) != row['sha256']:
             raise BoardError('BACKUP_INVALID', 'Backup payload hash mismatch', file=relative)
+    _guard(directory.parent)
     with tempfile.TemporaryDirectory(prefix='.verify-', dir=directory.parent) as raw:
         trial = Path(raw)
-        with gzip.open(directory / 'board.sqlite3.gz', 'rb') as source, (trial / 'board.sqlite3').open('wb') as destination:
-            shutil.copyfileobj(source, destination)
-        os.chmod(trial / 'board.sqlite3', 0o600)
+        with _open(directory / 'board.sqlite3.gz', 'rb') as compressed, _open(trial / 'board.sqlite3', 'xb') as destination:
+            with gzip.GzipFile(fileobj=compressed, mode='rb') as source:
+                shutil.copyfileobj(source, destination)
+        _guard(trial / 'board.sqlite3')
         with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
             if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
                 raise BoardError('BACKUP_INVALID', 'SQLite integrity check failed')
@@ -226,13 +362,13 @@ def _verify(directory: Path) -> dict:
 
 
 def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path, Path]:
+    _guard(root)
     if _linked(root) or (root.exists() and not root.is_dir()):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup root must be a real directory')
     incoming, current, previous = (root / name for name in ('.incoming', 'current', '.previous'))
     journal, temporary = root / '.publish.json', root / '.publish.tmp'
     for path in (incoming, current, previous, journal, temporary, root / '.lock'):
-        if _linked(path):
-            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup publication path cannot be linked')
+        _guard(path)
     for path in (incoming, current, previous):
         if path.exists() and not path.is_dir():
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation must be a directory')
@@ -246,8 +382,7 @@ def _publication_journal(root: Path, *, had_current: bool) -> None:
     _, _, _, journal, temporary = _backup_paths(root)
     if journal.exists() or temporary.exists():
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Existing publication journal must be recovered')
-    with temporary.open('x') as stream:
-        os.chmod(temporary, 0o600)
+    with _open(temporary, 'x') as stream:
         json.dump({'format': 1, 'hadCurrent': had_current}, stream)
         stream.flush()
         os.fsync(stream.fileno())
@@ -274,7 +409,8 @@ def _recover_publication(root: Path) -> None:
             sync_dir(root)
         return
     try:
-        record = json.loads(journal.read_text())
+        with _open(journal, 'rb') as stream:
+            record = json.load(stream)
     except (OSError, ValueError) as error:
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Publication journal is unreadable') from error
     if (not isinstance(record, dict) or set(record) != {'format', 'hadCurrent'}
@@ -344,7 +480,7 @@ def recover(state: Path) -> Path:
     _backup_paths(root)
     if not root.exists():
         return root / 'current'
-    lock = os.open(root / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    lock = _open_fd(root / '.lock', os.O_CREAT | os.O_RDWR)
     locked = False
     try:
         locking.lock(lock)
@@ -359,12 +495,20 @@ def recover(state: Path) -> Path:
 
 def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
     started = time.monotonic()
+    if _linked_component(store.directory):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
     state = store.directory.resolve()
+    inventory = list(preflight_entries(state))
+    for kind, path, reason in inventory:
+        if kind == 'rejected':
+            relative = _shown_path(path.relative_to(state).as_posix())
+            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup refuses ' + relative + ': ' + reason,
+                             path=relative, reason=reason)
     root = state / 'backups'
     incoming, current, previous, journal, _ = _backup_paths(root)
     root.mkdir(mode=0o700, exist_ok=True)
     os.chmod(root, 0o700)
-    lock = os.open(root / '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    lock = _open_fd(root / '.lock', os.O_CREAT | os.O_RDWR)
     try:
         locking.lock(lock, blocking=False)
     except BlockingIOError:
@@ -385,49 +529,40 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             shutil.rmtree(incoming)
         incoming.mkdir(mode=0o700)
         snapshot = incoming / 'board.sqlite3'
+        _guard(state / 'board.sqlite3')
+        with _open(snapshot, 'xb'):
+            pass
+        _guard(snapshot)
         with store.db.connect() as source, closing(sqlite3.connect(snapshot)) as target:
             source.backup(target)
         os.chmod(snapshot, 0o600)
         with closing(sqlite3.connect(snapshot)) as connection:
             snapshot_metadata = database_snapshot(connection)
             schema = int(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
-        with snapshot.open('rb') as source, gzip.open(incoming / 'board.sqlite3.gz', 'wb', compresslevel=6) as target:
-            shutil.copyfileobj(source, target)
-        os.chmod(incoming / 'board.sqlite3.gz', 0o600)
+        with _open(snapshot, 'rb') as source, _open(incoming / 'board.sqlite3.gz', 'xb') as compressed:
+            with gzip.GzipFile(fileobj=compressed, mode='wb', compresslevel=6) as target:
+                shutil.copyfileobj(source, target)
         snapshot.unlink()
-        skipped_attempt_entries: list[str] = []
-        for name in ('attempts', 'controls', 'submissions'):
-            for path in _regular_files(state / name, exclude_attempt_private=name == 'attempts',
-                                       skipped=skipped_attempt_entries if name == 'attempts' else None, scope=name):
+        skipped_attempt_entries = sorted(_shown_path(path.relative_to(state).as_posix())
+                                         for kind, path, _ in inventory if kind == 'skipped')
+        for kind, path, _ in inventory:
+            if kind == 'copied' and path != state / 'board.sqlite3':
                 _private_copy(path, incoming / 'state' / path.relative_to(state))
-        if _linked(state / 'workers'):
-            raise BoardError('BACKUP_UNSAFE_PATH', 'Worker root cannot be linked')
-        for path in sorted([*(state / 'workers').glob('*/receipts/*.json'), *(state / 'workers').glob('*/startup.json'), *(state / 'workers').glob('*/orphaned.json')]):
-            if _linked(path) or any(_linked(p) for p in (path.parent, path.parent.parent)):
-                raise BoardError('BACKUP_UNSAFE_PATH', 'Receipt spool cannot be linked: ' + _shown_path(str(path.relative_to(state))),
-                                 path=_shown_path(str(path.relative_to(state))))
-            _private_copy(path, incoming / 'state' / path.relative_to(state))
-        for name in ('console-sessions.json', 'console-settings.json', 'worker-pool.json', 'runtime-retention.json', 'active-runtime.json', 'launch-settings.json'):
-            source = state / name
-            if source.exists():
-                if _linked(source):
-                    raise BoardError('BACKUP_UNSAFE_PATH', 'State record cannot be linked: ' + name, path=name)
-                _private_copy(source, incoming / 'state' / source.name)
         skipped_attempt_entries.sort()
-        files = {str(path.relative_to(incoming)): {'bytes': path.stat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
+        files = {str(path.relative_to(incoming)): {'bytes': path.lstat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
         manifest = {'format': 1, 'createdAt': utc_now(), 'schema': schema, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
                     'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata',
+                    'attemptEvidencePolicy': attempt_evidence.POLICY,
                     'skippedAttemptEntries': {'count': len(skipped_attempt_entries), 'paths': skipped_attempt_entries[:20]},
                     'files': files}
         manifest_path = incoming / 'manifest.json'
-        with manifest_path.open('x') as stream:
-            os.chmod(manifest_path, 0o600)
+        with _open(manifest_path, 'x') as stream:
             json.dump(manifest, stream, ensure_ascii=False, sort_keys=True)
             stream.flush()
             os.fsync(stream.fileno())
         verify(incoming)
         for path in _regular_files(incoming):
-            with path.open('rb') as stream:
+            with _open(path, 'rb') as stream:
                 os.fsync(stream.fileno())
         for directory, _, _ in os.walk(incoming, topdown=False):
             sync_dir(Path(directory))
@@ -467,17 +602,19 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
 
 
 def manifest_path_size(current: Path) -> int:
-    return (current / 'manifest.json').stat().st_size
+    with _open(current / 'manifest.json', 'rb') as stream:
+        return os.fstat(stream.fileno()).st_size
 
 
 def source_commit() -> str | None:
     from .runtime import project_root
     for metadata in (project_root() / 'READY.json', project_root() / 'src/buddy/build-info.json'):
         try:
-            value = json.loads(metadata.read_text()).get('sourceCommit')
+            with _open(metadata, 'rb') as stream:
+                value = json.load(stream).get('sourceCommit')
             if isinstance(value, str) and len(value) == 40:
                 return value
-        except (OSError, ValueError):
+        except (OSError, ValueError, BoardError):
             pass
     try:
         return subprocess.check_output(['git', '-C', str(project_root()), 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL, text=True).strip()
