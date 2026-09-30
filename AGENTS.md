@@ -26,6 +26,8 @@ Use uv from the repository root. Prepare the console development dependencies wi
 
 Tests use private state and runtime roots created by the test harness, never the daily board. When tests run inside a hey-my-buddy process, clear the inherited runtime, Worker and agent credentials for each test subprocess: `BUDDY_STATE_DIR`, `BUDDY_RUNTIME_ROOT`, `BUDDY_RUNTIME`, `BUDDY_RUNTIME_IDENTITY`, `BUDDY_WORKER_STATE`, `BUDDY_WORKER_ID`, `BUDDY_AGENT_CREDENTIAL`, `BUDDY_AGENT_CREDENTIAL_FILE`, `VIRTUAL_ENV`, `UV_PROJECT_ENVIRONMENT`. `BUDDY_DEV_SOURCE=1` alone cannot override a pinned runtime. A private cold-start test verifies stable interpreter, package and resource paths, including after the source directory is replaced.
 
+`main` changes only through pull requests and is protected on GitHub. Enable the shared hooks once per clone with `git config core.hooksPath .githooks`; `.githooks/reference-transaction` keeps local `main` equal to the fetched `origin/main`.
+
 Build the skill with `uv run --frozen python packaging/build-skill.py --destination <separate directory>/buddy`. Installation and upgrade are described in [operations](docs/reference/operations.md). Keep raw local logs and experiment scripts in the ignored `tmp/`.
 
 ## Documentation

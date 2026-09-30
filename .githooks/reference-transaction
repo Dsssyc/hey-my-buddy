@@ -1,0 +1,16 @@
+#!/bin/sh
+# Local main only follows origin/main; main itself changes through pull requests.
+# Refuses commits, merges, resets, branch moves and deletion of refs/heads/main
+# unless the new value is exactly the fetched origin/main.
+[ "$1" = "prepared" ] || exit 0
+remote=$(git rev-parse --quiet --verify refs/remotes/origin/main 2>/dev/null)
+status=0
+while read -r old new ref; do
+  [ "$ref" = "refs/heads/main" ] || continue
+  if [ -n "$remote" ] && [ "$new" = "$remote" ]; then
+    continue
+  fi
+  echo "hey-my-buddy: local main only follows origin/main; change main through a pull request." >&2
+  status=1
+done
+exit $status
