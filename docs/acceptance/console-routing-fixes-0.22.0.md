@@ -51,3 +51,7 @@ Buddy 配置页的外层原为固定高度但不滚动，模型区域允许 flex
 与 ADR-019 第 11 条的 `socu/private-dirs` 批次分开交付。本批没有修改 `src/buddy/adapters/`、备份、升级或 schema 文件；在当前本地仓库没有可解析的该分支引用，因此没有验证两批组合合并。合并时保留 ADR-019 的滚动修复标记和另一批第 11 条的变更，分别处理 backlog；统一 `pyproject.toml`、`uv.lock` 与 `src/buddy/contracts.py` 的契约版本，并在最终树重新构建 `src/buddy/console_assets`，不要择一保留旧资源。备份/升级应继续完整保留 `console-settings.json` 的端口、登录开关和修订号；本批使用该现有 sidecar，没有引入新备份路径。
 
 建议两批合入目标分支后，对组合树再次完成相同检查并重新构建共享 skill，再按已授权的安装流程切换日常服务。组合合并、安装以及安装后的固定地址验证均等待用户授权；本次源码验证不作为安装证明。
+
+## Host 合并验收（2026-09-30）
+
+Claude Code Host 在 `socu/integration-0.22` 上把本分支（`68be9d4`）合入 `socu/buddy-core` 当时的 `3c45c0e`，合并提交 `62fd32b`；唯一冲突在 backlog，保留"取消原因一律显示为用户取消"一条，删去本批完成的三条。独立只读审查（run `b5514429`，路由按软偏好选中 Codex GPT-6 Sol high）检查了免登录下的跨站写入、跨源读取、登录开关与会话撤销、单候选约束与容量及路由快照，没有发现安全问题；确认一处低严重度缺陷：零合法候选停在 Host 边界时，路由来源仍标为"模型选择"。修正任务（run `f92715f6`，路由选中 ZCode GLM-5.3-Flash max）让来源按记录冻结的 `routingBasis` 判定，候选数为 0 时记为 `no-candidate`、控制台显示"无合法候选"，缺少冻结依据的历史记录不补写；Host 读完改动后原样整合为 `9cf4bf7`。本批与 B 批第一阶段合并后的完整检查见 [B 批第一阶段记录](worker-accounts-phase1-0.23.0.md) 的 Host 合并验收一节。
