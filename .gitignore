@@ -1,5 +1,5 @@
-# Local dsh delegation scratch: task specs, stdout/stderr logs, machine paths
-/.dsh-skill-build/
+# Local scratch: logs, probe output, experiment scripts, machine paths
+/tmp/
 
 # macOS
 .DS_Store

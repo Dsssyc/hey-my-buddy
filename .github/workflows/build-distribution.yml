@@ -1,0 +1,39 @@
+name: Build distribution
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/console/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+      - name: Build console assets
+        working-directory: apps/console
+        run: |
+          npm ci
+          npm run build
+      - name: Build wheel and sdist
+        run: uv build --out-dir dist
+      - name: Write SHA-256 manifest
+        run: |
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hey-my-buddy-distribution
+          path: dist/*
+          if-no-files-found: error

@@ -1,0 +1,23 @@
+# Installed console entry and brief CLI output: 0.13.0
+
+## Authorization and identity
+
+On 2026-09-27 the user authorized installation of the verified 0.13.0 candidate and confirmed that the C-Two Host was inactive after exhausting its quota. The installed source is immutable commit `945272046b35ab8549359050c406c061a565a60f`, with contract 0.13.0 and schema 11. The `socu/buddy-core` checkout remains on the 0.14.0/schema-12 development line; this installation did not include its work-objective backend or perform a schema conversion. The [console-entry record](console-entry-0.13.0.md) and [brief-output record](cli-brief-output-0.13.0.md) retain the preceding source verification.
+
+The installed Codex plugin is `hey-my-buddy@personal`, version `0.13.0+codex.20260927013543`, enabled at `/Users/soku/.codex/plugins/cache/personal/hey-my-buddy/0.13.0+codex.20260927013543`. Its stable runtime content ID is `84df041c9b0acce4ba5b05944ee48321`; the replacement service ID is `d557b975-2f52-4887-a9dd-ff8514f97bbe`. Matching `health`, `runtime`, `ping` and plugin-list readbacks verified the installed identity, with no source-path leaks.
+
+## Preparation and cutover
+
+An independent export from `9452720` passed all 8 CLI-view tests, staging validation and a private real-CLI/HTTP probe. All 79 declared runtime assets matched the commit byte for byte. The probe verified brief/full output, compact JSON, single-use entry, cookie authentication, write transfer with read-only older sessions, mutation fencing, console-close and stale-close behavior, served asset hashes and continued operation after moving the staged source away. Its private service and supervisors released their locks. This assessment used no model calls or Computer Use.
+
+The probe's launcher generated a local virtual environment and bytecode in its staged directory. The installation therefore restaged from the immutable export, applied the plugin-creator cachebuster helper, synchronized portable metadata and rechecked the clean distributable inventory. No virtual environment, bytecode or tests were installed in the plugin package; runtime dependencies were materialized separately before the cutover.
+
+The live board had zero active work and no unconfirmed attempts. The matching 0.12.0 client detached its daemon without cancelling tasks; all idle supervisors were retired and their ownership locks acquired before backup. The complete recoverable archive is `/Users/soku/.local/share/hey-my-buddy/archive-before-cli-brief-0.13.0-20260927-093711`, retaining state and the previous plugin source. The database hash matched the backup and remained unchanged through plugin replacement. The new daemon and supervisors then started on the same schema-11 board with the existing capacity settings.
+
+## Installed verification
+
+Readback compared retained records against the archive: 135 tasks, 181 attempts, 475 artifacts, 102 governed runs, 330 workflow artifacts, 148 turns and 67 integration records were unchanged. All 104 Host control files were byte-identical. User policy and evaluation tables were preserved, including 4 cards, 52 evidence rows, 116 profiles, 2 preferences, 7 annotations and 3 model-family concurrency settings; the evaluation revision remained 24. SQLite integrity and foreign-key checks passed. The machine-wide limit remained 7, and the family limits remained DSH Flash 10, GLM-5.3 4 and GLM-5.3-Flash 10. All seven managed supervisors reported idle.
+
+The installed CLI read an existing accepted design goal without modifying its ownership. Default `get` returned the brief view without the echoed goal, nested task or turn history; `output: full` retained the complete response and the title fallback. The two parsed JSON representations measured 4,800 and 24,329 characters respectively; this is a response-size observation, not a monetary or total-token saving claim. Brief/full `list` returned the same run identities. The installed console redeemed its entry into an authenticated session, reported write access and served JavaScript/CSS byte-identical to the installed package.
+
+Raw scripts and logs are retained in `tmp/brief-install-assessment-20260927-lmSYov/` and `tmp/brief-install-20260927-sC5fKc/`. The user-owned uncommitted `docs/acceptance/production-repairs-0.8.0.md` was excluded from packaging and left unchanged. Existing Hosts must use the installed 0.13.0 launcher and read its skill; scripts needing nested task or historical fields must request `output: full`. Codex foreground waiting remains unchanged, and Claude Code's documented background-await flow is now distributed. The quota-interrupted C-Two Host was not awakened by this installation.

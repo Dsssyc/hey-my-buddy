@@ -1,0 +1,95 @@
+:root {
+  color-scheme: light;
+  --canvas: #f5f5f0;
+  --surface: #ffffff;
+  --surface-raised: #f0f3f1;
+  --detail-separator: #85968b;
+  --subtle: #f5f6f3;
+  --ink: #22342d;
+  --muted: #607068;
+  --faint: #738078;
+  --line: #e2e7e0;
+  --line-strong: #cbd5cc;
+  --accent: #24654d;
+  --accent-dark: #174d39;
+  --accent-wash: #edf5ee;
+  --accent-soft: #f4f8f3;
+  --accent-line: #cee2d3;
+  --on-accent: #ffffff;
+  --warning: #866022;
+  --warning-wash: #fbf5e7;
+  --warning-line: #ecdfbf;
+  --danger: #a03b35;
+  --danger-wash: #fcf0ee;
+  --danger-line: #edcfcb;
+  --focus: #81ad90;
+  --edit-surface: #fbfdf9;
+  --edit-line: #a9c9b5;
+  --edit-wash: #f1f7f1;
+  --overlay: rgb(0 0 0 / 35%);
+  /* Execution-configuration colours (work-objective timeline). They deliberately
+     avoid the brand green, which stays reserved for selection, running and now. */
+  --cfg-1: #9a5226;
+  --cfg-2: #3e6aa1;
+  --cfg-3: #2f7684;
+  --cfg-4: #7a5ba6;
+  --cfg-5: #9b4d6a;
+  --cfg-6: #5d6b3a;
+  --on-cfg: #ffffff;
+  /* User preference colours on effort tags. Each also has its own glyph and
+     border style, so colour is never the only signal. */
+  --pref-prefer: #2f5f9e;
+  --pref-prefer-wash: #edf3fb;
+  --pref-pin: #6a4a9c;
+  --pref-pin-wash: #f4f0fa;
+  --pref-exclude: #9a3f36;
+  --pref-exclude-wash: #fbefed;
+  --radius: 8px;
+}
+
+/* The console keeps an explicit light default; the switch writes the dark values
+   below. Every surface, form, disabled state, error, focus ring and selection
+   reads from these tokens, so both themes stay complete. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111315;
+  --surface: #181a1d;
+  --surface-raised: #25292e;
+  --detail-separator: #717b86;
+  --subtle: #202327;
+  --ink: #e6e8ea;
+  --muted: #aeb3ba;
+  --faint: #9ca3ab;
+  --line: #2a2d31;
+  --line-strong: #3a3e44;
+  --accent: #7cc79f;
+  --accent-dark: #9bd7b4;
+  --accent-wash: #242a2c;
+  --accent-soft: #1e2226;
+  --accent-line: #475a50;
+  --on-accent: #0e1a14;
+  --warning: #e0bb77;
+  --warning-wash: #322b1b;
+  --warning-line: #564a2d;
+  --danger: #f0a09a;
+  --danger-wash: #3a2321;
+  --danger-line: #5c3733;
+  --focus: #b6c5d6;
+  --edit-surface: #1c1f22;
+  --edit-line: #465059;
+  --edit-wash: #1a1d20;
+  --overlay: rgb(0 0 0 / 60%);
+  --cfg-1: #e0a276;
+  --cfg-2: #93b4e6;
+  --cfg-3: #7cc4cf;
+  --cfg-4: #bda3e6;
+  --cfg-5: #e39ab5;
+  --cfg-6: #b6c27f;
+  --on-cfg: #101512;
+  --pref-prefer: #93b6ea;
+  --pref-prefer-wash: #1c2533;
+  --pref-pin: #c3a8ec;
+  --pref-pin-wash: #28213a;
+  --pref-exclude: #eb9e95;
+  --pref-exclude-wash: #362220;
+}

@@ -1,8 +1,10 @@
 # ADR-001: Python transactional agent blackboard over C-Two
 
+本页保留决策时的历史事实与方案；实现链接指向当前对应路径，旧实现请通过 Git 历史查看。现行行为以[当前架构](../reference/architecture.md)及 ADR-007 为准。
+
 Status: Accepted for implementation; acceptance evidence is required before release. Date: 2026-09-19
 
-> **Historical record.** This ADR preserves the design requirements that led to the 0.4.0 implementation. It is not a description of current behavior, and its implementation and migration instructions are historical — do not repeat the migration. Implemented behavior is documented in [architecture.md](../../deepseek-delegate/references/architecture.md); the acceptance evidence is [python-blackboard-0.4.0.md](../acceptance/python-blackboard-0.4.0.md).
+> **Historical record.** This ADR preserves the design requirements that led to the 0.4.0 implementation. It is not a description of current behavior, and its implementation and migration instructions are historical — do not repeat the migration. Implemented behavior is documented in [architecture.md](../reference/architecture.md); the acceptance evidence is [python-blackboard-0.4.0.md](../acceptance/python-blackboard-0.4.0.md).
 
 ## Purpose
 
@@ -115,7 +117,7 @@ Port the private read-only dashboard to Python or a static client of the Python 
 9. Legacy migration: dry-run, idempotent import, malformed/conflicting/active input rollback; original files unchanged; imported results and acceptance readable.
 10. Self-hosted acceptance: the new skill/CLI starts a real dsh task producing a verifiable artifact; observe inquiry, restart the new daemon during its run, await the same run, independently verify artifact bytes/hash and acknowledge. A second run through the command/external adapter validates generic participation.
 
-Run the relevant full checks once after implementation, then targeted checks for subsequent repairs. Keep machine-local logs under `.dsh-skill-build/`; commit a portable acceptance summary with commands, outcomes and explicit limitations.
+Run the relevant full checks once after implementation, then targeted checks for subsequent repairs. Keep machine-local logs under `tmp/`; commit a portable acceptance summary with commands, outcomes and explicit limitations.
 
 ## Sources and design basis
 

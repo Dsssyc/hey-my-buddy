@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设计示意稿 · 工作目标时间轴 · hey my buddy</title>
+<!--
+  Static design mockup for docs/design/work-objective-timeline.md.
+  Self-contained: local CSS/JS only, no network, fonts or external scripts.
+  Every delegation, Host, model, time and count below is a design example.
+  Narrow layouts use container queries so the demo width switch works; the
+  production console keeps its media queries.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --canvas: #f5f5f0; --surface: #ffffff; --subtle: #f5f6f3; --ink: #22342d; --muted: #607068; --faint: #738078;
+  --line: #e2e7e0; --line-strong: #cbd5cc; --accent: #24654d; --accent-dark: #174d39; --accent-wash: #edf5ee;
+  --accent-soft: #f4f8f3; --accent-line: #cee2d3; --on-accent: #ffffff; --warning: #866022; --warning-wash: #fbf5e7;
+  --warning-line: #ecdfbf; --danger: #a03b35; --danger-wash: #fcf0ee; --danger-line: #edcfcb; --focus: #81ad90;
+  --overlay: rgb(0 0 0 / 35%); --radius: 8px;
+  /* New in this design: execution-configuration colours only. */
+  --cfg-1: #9a5226; --cfg-2: #3e6aa1; --cfg-3: #2f7684; --cfg-4: #7a5ba6; --cfg-5: #9b4d6a; --cfg-6: #5d6b3a;
+  --on-cfg: #ffffff; --cancel-hatch: rgb(255 255 255 / 42%);
+  --demo-h: 44px;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #121715; --surface: #1a1f1c; --subtle: #222824; --ink: #e7ece8; --muted: #a6b1aa; --faint: #8c9890;
+  --line: #2e3531; --line-strong: #414a44; --accent: #7cc79f; --accent-dark: #9bd7b4; --accent-wash: #1d2c25;
+  --accent-soft: #1b241f; --accent-line: #33503f; --on-accent: #0e1a14; --warning: #e0bb77; --warning-wash: #322b1b;
+  --warning-line: #564a2d; --danger: #f0a09a; --danger-wash: #3a2321; --danger-line: #5c3733; --focus: #6fb894;
+  --overlay: rgb(0 0 0 / 60%);
+  --cfg-1: #e0a276; --cfg-2: #93b4e6; --cfg-3: #7cc4cf; --cfg-4: #bda3e6; --cfg-5: #e39ab5; --cfg-6: #b6c27f;
+  --on-cfg: #101512; --cancel-hatch: rgb(0 0 0 / 38%);
+}
+
+/* ---- Existing console language (subset of apps/console/src/styles.css) ---- */
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; color: var(--ink); background: var(--canvas); font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled, button[aria-disabled="true"] { cursor: not-allowed; opacity: .52; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3, p { margin: 0; }
+h2 { font-size: 17px; line-height: 1.4; } h3 { font-size: 14px; }
+ul { margin: 0; padding: 0; list-style: none; }
+input, select { width: 100%; min-width: 0; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: var(--surface); padding: 8px 10px; }
+input::placeholder { color: var(--faint); }
+.app-shell { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; container: app / inline-size; background: var(--canvas); }
+.app-header { display: flex; align-items: center; gap: 32px; flex: 0 0 auto; min-height: 60px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.brand strong { font-size: 15px; letter-spacing: -.03em; }
+.brand-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font: 700 25px/1 Georgia, serif; flex-shrink: 0; }
+.primary-tabs { display: flex; align-self: stretch; gap: 8px; }
+.primary-tabs a { display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 3px solid transparent; color: var(--muted); white-space: nowrap; font-size: 13px; }
+.primary-tabs a:hover { background: var(--subtle); }
+.primary-tabs a.active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.nav-count { padding: 0 5px; background: var(--warning-wash); color: var(--warning); border-radius: 3px; font-size: 11px; }
+.header-status { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.connection { font-size: 12px; color: var(--muted); }
+.edit-switch { display: inline-flex; align-items: center; gap: 7px; }
+.switch-track { position: relative; display: inline-block; width: 30px; height: 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--subtle); }
+.switch-thumb { position: absolute; top: 1px; left: 1px; width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); }
+.edit-state { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.main-content { flex: 1; min-height: 0; min-width: 0; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.view-panel { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.workspace-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(260px, 330px) 10px minmax(0, 1fr); }
+.panel { min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.list-panel, .detail-panel { display: flex; flex-direction: column; height: 100%; }
+.pane-divider { position: relative; }
+.pane-divider::after { content: ""; position: absolute; top: 42%; bottom: 42%; left: 4px; width: 2px; border-radius: 2px; background: var(--line-strong); }
+.panel-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.panel-toolbar h2 { font-size: 14px; }
+.list-filters { flex-shrink: 0; display: grid; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.search input, .filter-pair select { font-size: 12px; }
+.filter-pair { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-pair > label { flex: 1 1 110px; min-width: 0; }
+.list-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.group-heading { display: flex; width: 100%; align-items: center; justify-content: space-between; border: 0; border-block: 1px solid var(--line); background: var(--subtle); padding: 7px 12px; font-size: 11px; font-weight: 600; color: var(--muted); text-align: left; }
+.task-row { display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 12px 14px; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.task-row:hover { background: var(--subtle); }
+.task-row.selected { background: var(--accent-wash); box-shadow: inset 3px 0 var(--accent); }
+.task-title { font-size: 13px; font-weight: 550; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; }
+.row-between > * { min-width: 0; }
+.detail-header { flex-shrink: 0; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.detail-header h2 { overflow-wrap: anywhere; }
+.assignment-line { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.assignment-line span { overflow-wrap: anywhere; }
+.routing-link { border: 0; padding: 0; background: transparent; color: var(--accent); font-size: inherit; text-align: left; }
+.routing-link span:last-child { margin-left: 8px; text-decoration: underline; text-underline-offset: 3px; }
+.detail-tabs { display: flex; flex-shrink: 0; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 16px; background: var(--surface); overflow-x: auto; }
+.detail-tabs button { white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 10px 12px; font-size: 12px; }
+.detail-tabs button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.detail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px; scrollbar-gutter: stable; }
+.detail-section { margin-top: 20px; } .detail-section:first-child { margin-top: 0; }
+.detail-body h3 { margin-bottom: 9px; }
+.segmented { display: flex; flex-wrap: wrap; gap: 4px; }
+.segmented button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; }
+.segmented button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: var(--surface); font-size: 12px; font-weight: 550; }
+.button:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--subtle); border-color: var(--muted); }
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.small-button { min-height: 30px; padding: 4px 10px; }
+.icon-button { display: inline-flex; align-items: center; justify-content: center; padding: 7px; color: var(--muted); background: transparent; border: 0; border-radius: 4px; }
+.badge { display: inline-flex; padding: 2px 6px; border: 1px solid var(--line); border-radius: 3px; font-size: 10px; font-weight: 500; white-space: nowrap; }
+.badge-neutral { background: var(--subtle); color: var(--muted); }
+.badge-green { background: var(--accent-wash); color: var(--accent); border-color: var(--accent-line); }
+.badge-amber { background: var(--warning-wash); color: var(--warning); border-color: var(--warning-line); }
+.badge-red { background: var(--danger-wash); color: var(--danger); border-color: var(--danger-line); }
+.chip-row { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; flex-shrink: 0; }
+.facts { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px 16px; margin: 16px 0; font-size: 12px; }
+.facts dt { color: var(--muted); } .facts dd { margin: 0; overflow-wrap: anywhere; }
+.banner { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 4px; font-size: 12px; }
+.readonly-banner { background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
+.error-message { color: var(--danger); font-size: 12px; margin: 8px 0; overflow-wrap: anywhere; }
+.new-records { display: block; width: 100%; border: 0; padding: 12px; font-size: 12px; color: var(--accent); background: var(--accent-wash); flex-shrink: 0; }
+.detail-placeholder, .empty-state { padding: 32px 24px; color: var(--muted); }
+.detail-placeholder { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+.detail-placeholder h2, .empty-state h2 { color: var(--ink); }
+.empty-state h2 { margin: 12px 0; }
+.empty-state p, .detail-placeholder p { font-size: 13px; max-width: 45ch; }
+.empty-mark { font-size: 24px; }
+.small { font-size: 11px; } .muted { color: var(--muted); }
+.truncate { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mono { font-family: ui-monospace, monospace; font-size: 11px; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* ---- Design-demo chrome (not part of the console) ---- */
+.demo-bar { position: sticky; top: 0; z-index: 50; height: var(--demo-h); display: flex; align-items: center; gap: 14px; padding: 0 16px; background: var(--ink); color: var(--canvas); font-size: 12px; overflow-x: auto; white-space: nowrap; }
+.demo-bar strong { font-weight: 600; }
+.demo-bar label { display: inline-flex; align-items: center; gap: 5px; }
+.demo-bar select { width: auto; padding: 2px 6px; font-size: 12px; }
+.demo-bar input[type="checkbox"] { width: 14px; height: 14px; }
+.frame { height: calc(100dvh - var(--demo-h)); min-height: 560px; }
+.frame.narrow { width: 390px; margin-inline: auto; border-inline: 1px solid var(--line-strong); }
+.annotations { max-width: 980px; margin: 28px auto 60px; padding: 0 20px; font-size: 13px; color: var(--muted); }
+.annotations h2 { color: var(--ink); margin-bottom: 10px; font-size: 15px; }
+.annotations li { list-style: disc; margin: 6px 0 6px 18px; }
+
+/* ---- New: objective list ---- */
+.count-line { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; }
+.cnt { display: inline-flex; gap: 3px; white-space: nowrap; }
+.cnt-active { color: var(--accent); } .cnt-host { color: var(--warning); font-weight: 600; } .cnt-review { color: var(--ink); } .cnt-ended { color: var(--muted); }
+
+/* ---- New: timeline view ---- */
+.timeline-view, .run-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tl-head h2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tl-note { font-size: 11px; color: var(--faint); }
+.narrow-back { display: none; }
+.tl-toolbar { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 20px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.legend-title { font-weight: 600; color: var(--ink); }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; overflow-wrap: anywhere; }
+.swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; background: var(--c); flex-shrink: 0; }
+.swatch.queue { background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--line-strong); height: 7px; }
+.swatch.routing { background: repeating-linear-gradient(135deg, var(--muted) 0 1.5px, transparent 1.5px 4px); height: 9px; }
+.swatch.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); }
+.glyph { font-weight: 700; }
+.glyph.bad { color: var(--danger); } .glyph.warn { color: var(--warning); } .glyph.ok { color: var(--accent); }
+.tl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.tl-tools .button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+.refresh-state { white-space: nowrap; }
+.refresh-state::before { content: "●"; color: var(--accent); margin-right: 4px; font-size: 9px; }
+.refresh-state.stale::before { color: var(--warning); }
+.trunc-banner { margin: 8px 20px 0; background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
+.tl-scroll { --label-w: 240px; flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; margin-top: 8px; border-top: 1px solid var(--line); }
+.tl-grid { position: relative; min-width: 100%; }
+.tl-row { display: grid; grid-template-columns: var(--label-w) var(--track-w); height: 40px; border-bottom: 1px solid var(--line); }
+.tl-row.axis { position: sticky; top: 0; z-index: 6; height: 36px; background: var(--surface); }
+.tl-row.markers { background: var(--accent-soft); }
+.tl-label { position: sticky; left: 0; z-index: 4; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 10px; border: 0; border-right: 1px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; font-size: 12px; }
+button.tl-label:hover { background: var(--subtle); }
+.tl-row.markers .tl-label, .tl-row.axis .tl-label { background: var(--surface); color: var(--muted); font-size: 11px; font-weight: 600; }
+.tl-row.axis .tl-label { z-index: 7; }
+.tl-label .lbl-title { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 550; }
+.tl-label .lbl-title span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-label .lbl-sub { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-label.helper { padding-left: calc(10px + var(--depth) * 16px); }
+.tl-label.helper::before { content: ""; position: absolute; left: calc(var(--depth) * 16px - 2px); top: 0; height: 50%; width: 8px; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+.tl-label.selected-run { box-shadow: inset 3px 0 var(--accent); }
+.st { flex-shrink: 0; width: 14px; text-align: center; font-size: 11px; font-weight: 700; }
+.st.running { color: var(--accent); } .st.bad { color: var(--danger); } .st.warn { color: var(--warning); } .st.ok { color: var(--accent); } .st.muted { color: var(--muted); }
+.new-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); }
+.trunc-chip { font-size: 10px; font-weight: 500; color: var(--warning); }
+.tl-track { position: relative; }
+.tl-overlay { position: absolute; top: 0; bottom: 0; left: var(--label-w); width: var(--track-w); pointer-events: none; z-index: 1; }
+.tl-row > .tl-track { z-index: 2; }
+.fold-band { position: absolute; top: 0; bottom: 0; border-inline: 1px dashed var(--line-strong); background: repeating-linear-gradient(90deg, transparent 0 7px, var(--line) 7px 8px), var(--subtle); }
+.expanded-band { position: absolute; top: 0; bottom: 0; background: var(--subtle); border-inline: 1px dotted var(--line-strong); }
+.now-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); }
+.guide-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--focus); }
+.tick { position: absolute; bottom: 0; height: 100%; border-left: 1px solid var(--line); padding: 3px 0 0 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.fold-button, .collapse-button { position: absolute; top: 3px; bottom: 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 10px; line-height: 1.2; }
+.fold-button:hover, .collapse-button:hover { color: var(--accent); border-color: var(--accent); }
+.collapse-button { bottom: auto; height: 22px; flex-direction: row; gap: 4px; padding: 0 6px; white-space: nowrap; }
+.now-chip { position: absolute; bottom: 3px; transform: translateX(-50%); padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 2; }
+.tl-item { position: absolute; top: 50%; transform: translateY(-50%); }
+.sp { height: 22px; min-width: 4px; padding: 0 6px; border: 0; border-radius: 3px; background: var(--c); color: var(--on-cfg); font-size: 11px; text-align: left; white-space: nowrap; }
+.sp::before { content: ""; position: absolute; inset: -6px -2px; } /* larger hit area for short spans */
+.sp-text { display: block; overflow: hidden; text-overflow: ellipsis; position: relative; }
+.sp.queue { height: 8px; padding: 0; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--line-strong); }
+.sp.routing { height: 12px; padding: 0 4px; background: repeating-linear-gradient(135deg, var(--muted) 0 1.5px, transparent 1.5px 4px); color: var(--ink); font-size: 10px; line-height: 12px; }
+.sp.routing .sp-text { background: var(--surface); display: inline-block; padding: 0 2px; }
+.sp.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); color: var(--warning); }
+.sp.wait.open { border-right: 0; border-radius: 3px 0 0 3px; }
+.sp.failed { box-shadow: 0 0 0 1.5px var(--danger); }
+.sp.cancelled { background-image: repeating-linear-gradient(135deg, var(--cancel-hatch) 0 2px, transparent 2px 6px); }
+.sp.running { background: linear-gradient(90deg, var(--c) 72%, color-mix(in srgb, var(--c) 40%, transparent)); }
+.sp.unknown { background: transparent; border: 1.5px dotted var(--c); color: var(--ink); padding: 0; }
+.sp.unknown .solid { position: absolute; inset: -1.5px auto -1.5px -1.5px; background: var(--c); border-radius: 2px; color: var(--on-cfg); padding: 0 6px; line-height: 22px; overflow: hidden; }
+.sp.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
+.sp.failed.selected { box-shadow: 0 0 0 1.5px var(--danger), 0 0 0 3px var(--surface), 0 0 0 5px var(--focus); }
+.sp:focus-visible, .mk:focus-visible, .flag:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.end-mark { position: absolute; top: -7px; right: -7px; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid currentColor; background: var(--surface); font-size: 9px; font-weight: 700; line-height: 12px; text-align: center; font-style: normal; z-index: 1; }
+.end-mark.bad { color: var(--danger); } .end-mark.muted { color: var(--muted); } .end-mark.warn { color: var(--warning); }
+.pulse { position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--c); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { transform: scale(1.7); opacity: .35; } }
+.mk, .flag { width: 18px; height: 18px; margin-left: -9px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 16px; text-align: center; }
+.mk.accept, .flag.accept { color: var(--accent); border-color: var(--accent-line); }
+.mk.cancel { color: var(--danger); border-color: var(--danger-line); }
+.mk.decide { color: var(--warning); border-color: var(--warning-line); }
+.mk.cluster { font-weight: 700; background: var(--subtle); }
+.flag { border-radius: 50%; font-weight: 700; }
+.tl-state { padding: 28px 20px; color: var(--muted); font-size: 13px; }
+.tl-state[role="alert"] { color: var(--danger); }
+.skeleton { height: 22px; margin: 12px 20px; border-radius: 3px; background: linear-gradient(90deg, var(--subtle), var(--line), var(--subtle)); }
+.inspector { flex-shrink: 0; min-height: 46px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--subtle); font-size: 12px; }
+.inspector strong { font-weight: 600; }
+.inspector .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
+/* Chronological list: narrow screens and the desktop "以列表查看" option. */
+.tl-list { display: none; flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; border-top: 1px solid var(--line); }
+.as-list .tl-scroll, .as-list .inspector { display: none; }
+.as-list .tl-list { display: block; }
+.tl-entry { display: grid; grid-template-columns: 44px 18px minmax(0, 1fr); gap: 2px 8px; width: 100%; padding: 9px 14px; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; font-size: 12px; }
+.tl-entry:hover { background: var(--subtle); }
+.tl-entry.selected { background: var(--accent-wash); box-shadow: inset 3px 0 var(--accent); }
+.tl-entry time { color: var(--muted); font-size: 11px; }
+.tl-entry .e-title { overflow-wrap: anywhere; font-weight: 550; }
+.tl-entry .e-meta { grid-column: 3; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--muted); }
+.tl-gap { padding: 6px 14px; font-size: 11px; color: var(--muted); background: var(--subtle); border-bottom: 1px solid var(--line); text-align: center; }
+/* Run detail opened from the timeline */
+.locator { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 20px; border-bottom: 1px solid var(--line); background: var(--subtle); font-size: 12px; }
+.locator .crumbs { min-width: 0; flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.locator .from { flex-basis: 100%; font-size: 11px; color: var(--muted); }
+.lock-note { flex-basis: 100%; color: var(--warning); font-size: 11px; }
+.turn-focus { padding: 10px 12px; border: 1px solid var(--accent-line); border-left: 3px solid var(--accent); border-radius: 4px; background: var(--accent-soft); font-size: 12px; }
+.existing-slot { margin-top: 16px; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 5px; color: var(--muted); font-size: 12px; }
+
+/* ---- Responsive (container queries stand in for the console's media queries) ---- */
+@container app (max-width: 1100px) {
+  .tl-scroll { --label-w: 180px; }
+}
+@container app (max-width: 900px) {
+  .app-header { gap: 12px; padding-inline: 16px; }
+  .brand strong { display: none; }
+  .primary-tabs a { padding-inline: 12px; }
+}
+@container app (max-width: 760px) {
+  .app-header { display: grid; grid-template-columns: 1fr auto; gap: 0; padding: 10px 12px 0; }
+  .brand strong { display: block; font-size: 14px; }
+  .primary-tabs { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 6px; }
+  .primary-tabs a { justify-content: center; padding: 9px 4px; font-size: 12px; gap: 5px; }
+  .primary-tabs svg { width: 15px; height: 15px; }
+  .header-status .edit-cluster, .header-status .version { display: none; }
+  .main-content { padding: 8px; }
+  .workspace-grid { display: block; }
+  .pane-divider { display: none; }
+  .workspace-grid:not(.has-selection) > .detail-panel, .workspace-grid.has-selection > .list-panel { display: none; }
+  .narrow-back { display: inline-flex; }
+  .detail-header { padding: 12px 14px; }
+  .detail-header h2 { font-size: 15px; }
+  .tl-toolbar, .locator { padding-inline: 14px; }
+  .tl-tools .list-toggle { display: none; }
+  .trunc-banner { margin-inline: 14px; }
+  .tl-scroll, .inspector { display: none; }
+  .tl-list { display: block; }
+  .detail-tabs { padding: 0 6px; gap: 0; }
+  .detail-tabs button { flex: 1; padding: 9px 4px; }
+  .detail-body { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+</style>
+</head>
+<body>
+<div class="demo-bar" role="region" aria-label="设计示例控制">
+  <strong>设计示意稿 · 所有数据均为设计示例，不来自真实黑板</strong>
+  <label>宽度 <select id="demo-width"><option value="desktop">桌面</option><option value="narrow">窄屏 390px</option></select></label>
+  <label>状态 <select id="demo-state">
+    <option value="normal">正常（含截断提示）</option><option value="none">未选择工作目标</option>
+    <option value="loading">首次读取中</option><option value="error">读取失败（无旧数据）</option>
+    <option value="stale">读取失败（保留旧数据）</option><option value="empty">没有工作目标</option>
+  </select></label>
+  <label><input type="checkbox" id="demo-readonly">只读会话</label>
+  <label><input type="checkbox" id="demo-locked">详情锁定（操作结果未确认）</label>
+</div>
+
+<div class="frame" id="frame">
+<div class="app-shell">
+  <header class="app-header">
+    <a class="brand" href="#"><span class="brand-icon">b</span><strong>hey my buddy</strong></a>
+    <nav class="primary-tabs" aria-label="主要导航">
+      <a href="#" class="active" aria-current="page"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/></svg><span>委派记录</span><span class="nav-count" title="最新记录中等待 Host 决定的目标">1</span></a>
+      <a href="#"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></svg><span>模型卡片</span></a>
+      <a href="#"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg><span>路由配置</span></a>
+    </nav>
+    <div class="header-status">
+      <span class="connection">已连接</span>
+      <span class="badge badge-amber" id="readonly-badge" hidden>只读会话</span>
+      <span class="small muted version">V42</span>
+      <div class="edit-cluster"><button type="button" role="switch" aria-checked="false" class="button small-button edit-switch"><span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span><span>编辑模式</span></button><span class="edit-state">只读</span></div>
+      <button type="button" class="icon-button" id="theme" role="switch" aria-checked="false" aria-label="深色主题"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg></button>
+      <button type="button" class="icon-button" aria-label="刷新工作台" title="只读刷新，不调用模型"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17"/></svg></button>
+    </div>
+  </header>
+  <main id="main" class="main-content" tabindex="-1">
+    <div class="banner readonly-banner" id="readonly-banner" role="status" hidden><strong>此页面已由新窗口接管写权限</strong><span>新窗口已取得写权限，此页面现在是只读。你仍然可以浏览、筛选、查看任务详情、路由与评价历史；草稿和选择都保留在本页，不会被丢弃或重新加载。</span></div>
+    <section class="view-panel" aria-label="委派记录">
+      <div class="workspace-grid" id="grid">
+        <section class="panel list-panel" aria-label="工作目标列表">
+          <div class="panel-toolbar"><h2>工作目标</h2><button class="button small-button" type="button">刷新记录</button></div>
+          <div class="list-filters">
+            <div class="segmented" aria-label="按委派状态筛选"><button aria-pressed="true">全部</button><button aria-pressed="false">进行中</button><button aria-pressed="false">待决定</button><button aria-pressed="false">待验收</button></div>
+            <label class="search"><span class="sr-only">搜索工作目标</span><input maxlength="200" placeholder="工作目标、委派标题、项目或 ID"></label>
+            <div class="filter-pair"><label><span class="sr-only">项目筛选</span><select><option>全部项目</option></select></label><label><span class="sr-only">委派方筛选</span><select><option>全部委派方</option></select></label></div>
+            <p class="small muted">已加载 5 / 5 个工作目标 · 按最近活动排序</p>
+          </div>
+          <button class="new-records" id="reorder" type="button">有 1 个工作目标有新活动 · 按最近活动重新排序</button>
+          <div class="list-scroll" id="objective-list" tabindex="0" aria-label="工作目标条目"></div>
+        </section>
+        <div class="pane-divider" role="separator" aria-label="调整列表宽度" aria-orientation="vertical" tabindex="0"></div>
+        <aside class="panel detail-panel" aria-label="工作目标详情" id="detail-panel">
+          <div class="detail-placeholder" id="placeholder"><h2>选择一个工作目标</h2><p>查看各委派的排队、执行、等待 Host 与验收时间。只读，不调用模型。</p></div>
+          <div class="timeline-view" id="timeline-view" hidden></div>
+          <div class="run-view" id="run-view" hidden></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+</div>
+
+<section class="annotations" aria-label="设计标注">
+  <h2>设计标注</h2>
+  <ul>
+    <li>10:30–10:53 只有“实现 objectives 表…”的“等待 Host”片段，没有执行或事件；等待不是空闲，所以不折叠。</li>
+    <li>11:08–13:44 没有任何片段或事件，超过 30 分钟，折叠为断带；点刻度行上的断带按钮展开。</li>
+    <li>15:05–15:38 虽然没有新事件，但视觉审查委派的结束未确认尾段仍在占用，所以不折叠，也不显示为“已停止”。</li>
+    <li>10:53 的“决定”和 10:55 的“续接”相距不足 14px，合并为带数字的标记；聚焦后信息栏逐条列出。</li>
+    <li>点任何片段、行标签、结算旗标或 Host 标记，都在右栏打开现有委派详情，时间轴保持挂载；按 Esc 或“返回时间轴”回到原片段。</li>
+    <li>示意稿只为第一个、第三个和第四个工作目标提供时间轴数据；未在浏览器中截图验证。</li>
+  </ul>
+</section>
+
+<script>
+"use strict";
+/* ===== Design-example fixture: nothing below comes from a real board. ===== */
+// Minutes are relative to 2026-09-26 09:00 (design example clock).
+const NOW = 432;
+const CONFIGS = {
+  opus: { label: "claude / claude-opus-5-5", short: "opus-5.5" },
+  codex: { label: "codex / gpt-5-codex", short: "gpt-5-codex" },
+  glm: { label: "zcode / glm-5", short: "glm-5" },
+  sonnet: { label: "claude / claude-sonnet-5", short: "sonnet-5" },
+  flash: { label: "dsh / deepseek-v4-flash", short: "v4-flash" },
+};
+const PROJECTS = [
+  { id: "p1", label: "hey-my-buddy", path: "~/Desktop/codespace/mememe/hey-my-buddy", items: ["obj-1", "obj-2", "run-3f0e"] },
+  { id: "p2", label: "dsh-harness", path: "~/Desktop/codespace/dsh-harness", items: ["obj-4", "run-c7d2"] },
+];
+const OBJECTIVES = {
+  "obj-1": { project: "p1", title: "工作目标时间轴：设计、接口与实现", host: "codex-desktop", last: "刚刚", lastAbs: "09-26 16:12", status: "running", counts: { active: 2, ended: 4 }, total: 6, helpers: 1 },
+  "obj-2": { project: "p1", title: "0.13 控制台入口候选版收尾与文档", host: "codex-desktop", last: "12:40", lastAbs: "09-26 12:40", status: "delivered", counts: { review: 1, ended: 5 }, total: 6, helpers: 0 },
+  "run-3f0e": { project: "p1", title: "修复标题回退在 CRLF 输入下的显示", host: "codex-cli", last: "昨天 18:22", lastAbs: "09-25 18:22", status: "accepted", counts: { ended: 1 }, total: 1, helpers: 0, standalone: true },
+  "obj-4": { project: "p2", title: "DSH 插件在 Windows 路径下的沙箱回归排查", host: "dsh-host-02", last: "16:11", lastAbs: "09-26 16:11", status: "awaiting-host", counts: { active: 1, host: 1 }, total: 2, helpers: 0 },
+  "run-c7d2": { project: "p2", title: "为 hook 脚本补充超长参数截断与多字节字符边界的单元测试，并核对 Windows 与 macOS 下 argv 长度上限的差异记录", host: "dsh-host-02", last: "09-24 21:03", lastAbs: "09-24 21:03", status: "failed", counts: { ended: 1 }, total: 1, helpers: 0, standalone: true },
+};
+const TIMELINES = {
+  "obj-1": {
+    truncated: { events: { shown: 12, total: 15 } },
+    runs: [
+      { id: "run-7c1e", title: "设计工作目标时间轴视图与交互规范", titleSource: "Host 标题", cfg: "opus", created: 12, status: "accepted",
+        spans: [{ k: "queue", s: 12, e: 14 }, { k: "exec", s: 14, e: 58, turn: 1, out: "done", attempt: "att-2f81" }], settle: { t: 80, kind: "accepted" } },
+      { id: "run-a93f", title: "实现 objectives 表、objective_list 与只读时间轴接口", titleSource: "Host 标题", cfg: "codex", created: 20, status: "accepted",
+        spans: [{ k: "queue", s: 20, e: 21 }, { k: "routing", s: 21, e: 24, decision: "run-d02b" }, { k: "exec", s: 24, e: 70, turn: 1, out: "done", attempt: "att-9a10" },
+          { k: "wait", s: 70, e: 113, req: "schema 版本号需与性能优化的合入顺序对齐，请 Host 决定是否先合入性能优化" }, { k: "exec", s: 115, e: 125, turn: 2, out: "done", attempt: "att-9a4c" }],
+        settle: { t: 285, kind: "accepted" } },
+      { id: "run-5b20", parent: "run-a93f", depth: 1, title: "补充 schema 升级离线副本的验证测试", titleSource: "最近结果摘要", cfg: "glm", created: 38, status: "completed",
+        spans: [{ k: "queue", s: 38, e: 40 }, { k: "exec", s: 40, e: 62, turn: 1, out: "failed", note: "测试命令超时", attempt: "att-51c2" }, { k: "exec", s: 64, e: 90, turn: 2, out: "done", attempt: "att-51f7" }] },
+      { id: "run-e61d", title: "按设计稿实现 ObjectiveTimeline 组件与布局计算", titleSource: "原始任务首行", cfg: "glm", created: 290, status: "cancelled",
+        spans: [{ k: "queue", s: 290, e: 291 }, { k: "routing", s: 291, e: 294, decision: "run-d7a4" }, { k: "exec", s: 294, e: 320, turn: 1, out: "cancelled", attempt: "att-e0b3" }] },
+      { id: "run-40c8", title: "时间轴界面带截图的视觉与交互审查", titleSource: "Host 标题", cfg: "sonnet", created: 325, status: "reconciliation-needed",
+        spans: [{ k: "queue", s: 325, e: 330 }, { k: "exec", s: 330, e: 365, turn: 1, out: "unknown", attempt: "att-40aa" }] },
+      { id: "run-91ab", title: "修正折叠区间展开后的键盘焦点顺序", titleSource: "Host 标题", cfg: "flash", created: 398, status: "running", fresh: true,
+        spans: [{ k: "queue", s: 398, e: 400 }, { k: "exec", s: 400, e: null, turn: 1, out: "running", attempt: "att-91c0" }] },
+    ],
+    events: [
+      { t: 12, k: "dispatch", run: "run-7c1e" }, { t: 20, k: "dispatch", run: "run-a93f" }, { t: 38, k: "dispatch", run: "run-5b20", label: "授权协助任务" },
+      { t: 80, k: "accept", run: "run-7c1e" }, { t: 113, k: "decide", run: "run-a93f" }, { t: 115, k: "continue", run: "run-a93f" },
+      { t: 127, k: "integrate", run: "run-a93f" }, { t: 285, k: "accept", run: "run-a93f" }, { t: 290, k: "dispatch", run: "run-e61d" },
+      { t: 320, k: "cancel", run: "run-e61d" }, { t: 325, k: "dispatch", run: "run-40c8" }, { t: 398, k: "dispatch", run: "run-91ab" },
+    ],
+  },
+  "run-3f0e": {
+    runs: [{ id: "run-3f0e", title: "修复标题回退在 CRLF 输入下的显示", titleSource: "原始任务首行", cfg: "glm", created: -920, status: "accepted",
+      spans: [{ k: "queue", s: -920, e: -919 }, { k: "exec", s: -919, e: -890, turn: 1, out: "done", attempt: "att-3f11" }], settle: { t: -878, kind: "accepted" } }],
+    events: [{ t: -920, k: "dispatch", run: "run-3f0e" }, { t: -878, k: "accept", run: "run-3f0e" }],
+  },
+  "obj-4": {
+    runs: [
+      { id: "run-b812", title: "复现 Windows 路径下沙箱拒绝写入 tmp 的问题", titleSource: "Host 标题", cfg: "flash", created: 352, status: "awaiting-host",
+        spans: [{ k: "queue", s: 352, e: 353 }, { k: "exec", s: 353, e: 395, turn: 1, out: "done", attempt: "att-b8a0" }, { k: "wait", s: 395, e: null, req: "需要 Host 决定是否允许在隔离工作树外写入临时目录" }] },
+      { id: "run-0e44", title: "整理 macOS 与 Windows 沙箱规则差异清单", titleSource: "Host 标题", cfg: "glm", created: 360, status: "running",
+        spans: [{ k: "queue", s: 360, e: 362 }, { k: "routing", s: 362, e: 364, decision: "run-d9e2" }, { k: "exec", s: 364, e: null, turn: 1, out: "running", attempt: "att-0e51" }] },
+    ],
+    events: [{ t: 352, k: "dispatch", run: "run-b812" }, { t: 360, k: "dispatch", run: "run-0e44" }],
+  },
+};
+
+/* ===== Vocabulary ===== */
+const STATUS = {
+  running: ["执行中", "green", "▸", "running"], "awaiting-host": ["等待 Host", "amber", "◆", "warn"], delivered: ["等待验收", "neutral", "✓", "muted"],
+  accepted: ["已验收", "neutral", "✓", "ok"], completed: ["执行完成", "green", "■", "muted"], cancelled: ["已取消", "neutral", "⊘", "muted"],
+  failed: ["执行失败", "red", "✕", "bad"], "reconciliation-needed": ["等待核对", "amber", "?", "warn"],
+};
+const OUT = { done: "执行完成", failed: "执行失败", cancelled: "已取消", running: "执行中", unknown: "结束未确认" };
+const EVENT = { dispatch: ["派发", "▶"], decide: ["决定", "◆"], continue: ["续接", "↻"], integrate: ["整合", "⊕"], accept: ["验收", "✓"], reject: ["验收问题", "!"], cancel: ["取消", "✕"] };
+const EVENT_SECTION = { dispatch: "overview", decide: "assistance", continue: "execution", integrate: "artifacts", accept: "artifacts", reject: "artifacts", cancel: "overview" };
+const SPAN_SECTION = { queue: "overview", routing: "routing", exec: "execution", wait: "assistance" };
+const SECTIONS = [["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]];
+const FOLD_W = 64, IDLE_LIMIT = 30;
+
+/* ===== Helpers ===== */
+const $ = selector => document.querySelector(selector);
+const esc = value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const pad = n => String(n).padStart(2, "0");
+function clock(m) { const a = ((540 + m) % 1440 + 1440) % 1440; return pad(Math.floor(a / 60)) + ":" + pad(Math.round(a % 60)); }
+function day(m) { const d = Math.floor((540 + m) / 1440); return d === 0 ? "" : d < 0 ? "09-25 " : "09-27 "; }
+function dur(min) { min = Math.round(min); if (min < 60) return min + " 分钟"; const h = Math.floor(min / 60), r = min % 60; return h + " 小时" + (r ? " " + r + " 分" : ""); }
+function durShort(min) { min = Math.round(min); const h = Math.floor(min / 60), r = min % 60; return (h ? h + " 时" : "") + (r ? " " + r + " 分" : ""); }
+function badge(status) { const [text, tone] = STATUS[status] || [status, "neutral"]; return `<span class="badge badge-${tone}">${esc(text)}</span>`; }
+function countLine(o) {
+  const parts = [["active", "●", "进行中"], ["host", "◆", "待决定"], ["review", "✓", "待验收"], ["ended", "■", "已结束"]]
+    .filter(([k]) => o.counts[k]).map(([k, g, t]) => `<span class="cnt cnt-${k}"><span aria-hidden="true">${g}</span>${t} ${o.counts[k]}</span>`);
+  return `<span class="count-line">${parts.join("")}<span class="muted">共 ${o.total} 个委派</span></span>`;
+}
+
+/* ===== State ===== */
+const state = { selected: "obj-1", showList: false, view: "timeline", ref: null, focusKey: null, expanded: {}, asList: false, demo: "normal", readonly: false, locked: false };
+const items = new Map(); // key -> { run, section, text, from }
+
+/* ===== Objective list ===== */
+function renderList() {
+  const root = $("#objective-list");
+  $("#reorder").hidden = state.demo === "empty";
+  if (state.demo === "empty") {
+    root.innerHTML = `<div class="empty-state"><div class="empty-mark" aria-hidden="true">＋</div><h2>还没有工作目标</h2><p>Host 提交委派后，这里按项目列出工作目标；旧记录各自显示为独立委派。</p></div>`;
+    return;
+  }
+  root.innerHTML = PROJECTS.map(p => `<section class="project-group">
+    <button class="group-heading" aria-expanded="true" title="${esc(p.path)}"><span>▾ ${esc(p.label)}</span><span class="small">已加载 ${p.items.length} 个工作目标</span></button>
+    <ul>${p.items.map(key => { const o = OBJECTIVES[key]; const on = state.selected === key;
+      return `<li><button class="task-row${on ? " selected" : ""}" aria-pressed="${on}" data-obj="${key}" ${state.locked && !on ? 'aria-disabled="true" title="有结果未确认的操作：核对前不切换"' : ""}>
+        <span class="row-between"><span class="chip-row">${badge(o.status)}${o.standalone ? '<span class="badge badge-neutral">独立委派</span>' : ""}</span><time class="small muted" title="${o.lastAbs}">${o.last}</time></span>
+        <strong class="task-title" title="${esc(o.title)}">${esc(o.title)}</strong>
+        ${countLine(o)}
+        <span class="small muted truncate" title="${esc(o.host)}">来源 Host：${esc(o.host)}</span>
+      </button></li>`; }).join("")}</ul></section>`).join("");
+}
+
+/* ===== Timeline layout (pure) ===== */
+function layout(tl, avail, expanded) {
+  const occupied = []; let start = Infinity, last = -Infinity, open = false;
+  for (const r of tl.runs) {
+    start = Math.min(start, r.created);
+    for (const s of r.spans) {
+      const e = s.e == null || s.out === "unknown" ? NOW : s.e; // running, waiting and unconfirmed spans occupy until now
+      if (e === NOW) open = true;
+      occupied.push([s.s, e]); last = Math.max(last, e);
+    }
+    if (r.settle) { occupied.push([r.settle.t - 1, r.settle.t + 1]); last = Math.max(last, r.settle.t); }
+  }
+  for (const ev of tl.events) { occupied.push([ev.t - 1, ev.t + 1]); start = Math.min(start, ev.t); last = Math.max(last, ev.t); }
+  const t0 = Math.floor((start - 2) / 10) * 10, t1 = open ? NOW + 8 : last + 8;
+  occupied.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const iv of occupied) { const top = merged[merged.length - 1]; if (top && iv[0] <= top[1]) top[1] = Math.max(top[1], iv[1]); else merged.push([...iv]); }
+  const segments = []; let cursor = t0;
+  for (let i = 0; i + 1 < merged.length; i++) {
+    const gs = merged[i][1], ge = merged[i + 1][0];
+    if (ge - gs <= IDLE_LIMIT) continue;
+    const key = gs + ":" + ge;
+    segments.push({ type: "live", s: cursor, e: gs });
+    segments.push({ type: expanded.has(key) ? "expanded" : "fold", s: gs, e: ge, key });
+    cursor = ge;
+  }
+  segments.push({ type: "live", s: cursor, e: t1 });
+  const liveMin = segments.filter(g => g.type !== "fold").reduce((n, g) => n + g.e - g.s, 0);
+  const folds = segments.filter(g => g.type === "fold").length;
+  const ppm = Math.max(1.6, (avail - folds * FOLD_W) / liveMin);
+  let x = 0;
+  for (const g of segments) { g.x = x; g.w = g.type === "fold" ? FOLD_W : (g.e - g.s) * ppm; x += g.w; }
+  const at = t => {
+    const g = segments.find(seg => t >= seg.s && t <= seg.e) || (t < t0 ? segments[0] : segments[segments.length - 1]);
+    return g.type === "fold" ? g.x + (t - g.s) / (g.e - g.s) * FOLD_W : g.x + (t - g.s) * ppm;
+  };
+  const step = ppm >= 4 ? 15 : ppm >= 1.9 ? 30 : 60, ticks = [];
+  for (const g of segments) if (g.type !== "fold")
+    for (let t = Math.ceil(g.s / step) * step; t < g.e; t += step) if (at(t) - g.x > 16 || g.x === 0) ticks.push(t);
+  return { segments, at, ppm, width: x + 12, ticks, open };
+}
+
+/* ===== Timeline rendering ===== */
+function cfgIndex(tl) { const order = []; for (const r of tl.runs) if (!order.includes(r.cfg)) order.push(r.cfg); return cfg => order.indexOf(cfg) % 6 + 1; }
+function spanText(run, s) {
+  const e = s.e == null ? NOW : s.e, time = `${day(s.s)}${clock(s.s)} 至 ${s.e == null ? "现在" : clock(e)}，${dur(e - s.s)}`;
+  if (s.k === "queue") return `排队，${run.title}，${time}`;
+  if (s.k === "routing") return `路由，${run.title}，内部路由计算 ${s.decision}，${time}`;
+  if (s.k === "wait") return `等待 Host，${run.title}，${time}${s.e == null ? "（仍在等待）" : ""}，请求：${s.req}`;
+  return `执行片段，${run.title}，第 ${s.turn} 轮，${CONFIGS[run.cfg].label}，${time}，${OUT[s.out]}${s.note ? "：" + s.note : ""}${s.out === "unknown" ? "（最后记录 " + clock(s.e) + "）" : ""}`;
+}
+function renderSpan(run, s, i, L, color) {
+  const key = run.id + ":s" + i, e = s.e == null ? NOW : s.e;
+  const x = L.at(s.s), w = Math.max(4, (s.out === "unknown" ? L.at(NOW) : L.at(e)) - x);
+  const text = spanText(run, s), selected = state.ref && state.ref.key === key ? " selected" : "";
+  items.set(key, { run: run.id, section: SPAN_SECTION[s.k], text, from: s.k === "exec" ? `第 ${s.turn} 轮 · 执行片段 ${clock(s.s)}–${s.e == null ? "现在" : clock(e)} · ${CONFIGS[run.cfg].label}` : text.split("，")[0] + ` ${clock(s.s)}–${s.e == null ? "现在" : clock(e)}` });
+  const base = `data-key="${key}" data-x="${x + w / 2}" aria-label="${esc(text)}" style="left:${x}px;width:${w}px;--c:var(--cfg-${color})"`;
+  if (s.k === "queue") return `<button class="tl-item sp queue${selected}" ${base}></button>`;
+  if (s.k === "routing") return `<button class="tl-item sp routing${selected}" ${base}>${w >= 34 ? '<span class="sp-text">路由</span>' : ""}</button>`;
+  if (s.k === "wait") return `<button class="tl-item sp wait${s.e == null ? " open" : ""}${selected}" ${base}><span class="sp-text">${w >= 110 ? "等待 Host · " + durShort(e - s.s).trim() : w >= 64 ? "等待 Host" : w >= 34 ? "等待" : ""}</span></button>`;
+  const short = CONFIGS[run.cfg].short;
+  const label = (full, mid) => w >= 150 ? full : w >= 72 ? mid : w >= 30 ? String(s.turn) : "";
+  if (s.out === "unknown") {
+    const solid = L.at(s.e) - x;
+    return `<button class="tl-item sp unknown${selected}" ${base}><span class="solid" style="width:${solid}px">${solid >= 72 ? `第${s.turn}轮 · ${short}` : ""}</span><i class="end-mark warn" style="right:auto;left:${solid - 8}px" aria-hidden="true">?</i><span class="sp-text" style="margin-left:${solid + 10}px">${w - solid >= 90 ? "结束未确认" : ""}</span></button>`;
+  }
+  const mark = s.out === "failed" ? '<i class="end-mark bad" aria-hidden="true">✕</i>' : s.out === "cancelled" ? '<i class="end-mark muted" aria-hidden="true">⊘</i>' : s.out === "running" ? '<i class="pulse" aria-hidden="true"></i>' : "";
+  const tail = s.out === "done" ? "" : " · " + OUT[s.out];
+  return `<button class="tl-item sp exec ${s.out}${selected}" ${base}><span class="sp-text">${esc(label(`第${s.turn}轮 · ${short}${tail}`, `第${s.turn}轮${tail ? tail : " · " + short}`))}</span>${mark}</button>`;
+}
+function renderMarkers(tl, L) {
+  const placed = tl.events.map((ev, i) => ({ ev, i, x: L.at(ev.t) })).sort((a, b) => a.x - b.x), groups = [];
+  for (const p of placed) { const g = groups[groups.length - 1]; if (g && p.x - g[g.length - 1].x < 14) g.push(p); else groups.push([p]); }
+  return groups.map(g => {
+    const key = "ev:" + g[0].i, run = r => tl.runs.find(x => x.id === r);
+    const lines = g.map(({ ev }) => `Host 事件：${ev.label || EVENT[ev.k][0]}，${run(ev.run).title}，${day(ev.t)}${clock(ev.t)}`);
+    items.set(key, { run: g[0].ev.run, section: EVENT_SECTION[g[0].ev.k], text: lines.join("；"), from: lines[0], x: g[0].x });
+    const cls = g.length > 1 ? "cluster" : g[0].ev.k;
+    return `<button class="tl-item mk ${cls}" data-key="${key}" data-x="${g[0].x}" data-guide="${g[0].x}" style="left:${g[0].x}px" aria-label="${esc(lines.join("；"))}">${g.length > 1 ? g.length : EVENT[g[0].ev.k][1]}</button>`;
+  }).join("");
+}
+function renderCanvas(tl) {
+  const scroll = $("#tl-scroll"); if (!scroll) return;
+  const labelW = parseInt(getComputedStyle(scroll).getPropertyValue("--label-w"), 10) || 240;
+  const avail = (scroll.clientWidth || 900) - labelW - 24;
+  const L = layout(tl, avail, state.expanded[state.selected] || new Set()), color = cfgIndex(tl);
+  scroll.style.setProperty("--track-w", L.width + "px");
+  const axis = L.ticks.map(t => `<span class="tick" style="left:${L.at(t)}px">${day(t) && t === L.ticks[0] ? day(t) : ""}${clock(t)}</span>`).join("")
+    + L.segments.map(g => g.type === "fold"
+      ? `<button class="fold-button" data-gap="${g.key}" style="left:${g.x + 3}px;width:${FOLD_W - 6}px" aria-label="空闲 ${dur(g.e - g.s)}，${clock(g.s)} 至 ${clock(g.e)}，已折叠，展开" title="${clock(g.s)}–${clock(g.e)} 没有任何片段或事件"><span>空闲</span><span>${durShort(g.e - g.s)}</span></button>`
+      : g.type === "expanded" ? `<button class="collapse-button" data-gap="${g.key}" style="left:${g.x + 4}px" aria-label="收起空闲 ${dur(g.e - g.s)}">收起空闲 ${durShort(g.e - g.s)}</button>` : "").join("")
+    + (L.open ? `<span class="now-chip" style="left:${L.at(NOW)}px">现在 ${clock(NOW)}</span>` : "");
+  const overlay = L.segments.map(g => g.type === "fold" ? `<div class="fold-band" style="left:${g.x}px;width:${g.w}px"></div>` : g.type === "expanded" ? `<div class="expanded-band" style="left:${g.x}px;width:${g.w}px"></div>` : "").join("")
+    + (L.open ? `<div class="now-line" style="left:${L.at(NOW)}px"></div>` : "") + `<div class="guide-line" id="guide" hidden></div>`;
+  const trunc = tl.truncated && tl.truncated.events;
+  const markerRow = `<div class="tl-row markers" data-row="0"><div class="tl-label"><span>Host 事件</span>${trunc ? `<span class="trunc-chip">‹ ${trunc.total - trunc.shown} 条事件未返回</span>` : ""}</div><div class="tl-track">${renderMarkers(tl, L)}</div></div>`;
+  const rows = tl.runs.map((r, ri) => {
+    const st = STATUS[r.status], key = r.id + ":label", sub = (r.parent ? "协助任务 · " : "") + CONFIGS[r.cfg].label;
+    items.set(key, { run: r.id, section: "overview", text: `委派，${r.title}，${r.parent ? "层级 2，协助任务，" : ""}${st[0]}，标题来源：${r.titleSource}`, from: "行标签" });
+    const settle = r.settle ? (() => { const k = r.id + ":settle", x = L.at(r.settle.t);
+      items.set(k, { run: r.id, section: "artifacts", text: `结算：已验收，${r.title}，${day(r.settle.t)}${clock(r.settle.t)}`, from: `结算 ${clock(r.settle.t)}` });
+      return `<button class="tl-item flag accept" data-key="${k}" data-x="${x}" style="left:${x}px" aria-label="结算：已验收，${clock(r.settle.t)}">✓</button>`; })() : "";
+    const onRun = state.ref && state.ref.run === r.id ? " selected-run" : "";
+    return `<div class="tl-row" data-row="${ri + 1}"><button class="tl-item tl-label${r.parent ? " helper" : ""}${onRun}" style="--depth:${r.depth || 0}" data-key="${key}" data-x="-1" title="${esc(r.title)}" aria-label="${esc(items.get(key).text)}">
+      <span class="lbl-title">${r.parent ? '<span aria-hidden="true" class="muted">↳</span>' : ""}<span class="st ${st[3]}" aria-hidden="true">${st[2]}</span>${r.fresh ? '<span class="new-mark">新</span>' : ""}<span>${esc(r.title)}</span></span>
+      <span class="lbl-sub">${esc(st[0])} · ${esc(sub)}</span></button>
+      <div class="tl-track">${r.spans.map((s, i) => renderSpan(r, s, i, L, color(r.cfg))).join("")}${settle}</div></div>`;
+  }).join("");
+  scroll.innerHTML = `<div class="tl-grid" id="tl-grid" role="group" aria-label="工作目标时间轴" style="width:calc(var(--label-w) + ${L.width}px)">
+    <div class="tl-row axis"><div class="tl-label">委派 / 时间</div><div class="tl-track">${axis}</div></div>
+    ${markerRow}${rows}<div class="tl-overlay" aria-hidden="true">${overlay}</div></div>`;
+  // Roving tabindex: one tab stop inside the canvas.
+  const all = [...scroll.querySelectorAll(".tl-item")];
+  const current = all.find(el => el.dataset.key === state.focusKey) || scroll.querySelector('.tl-row[data-row="1"] .sp.exec') || all[0];
+  all.forEach(el => { el.tabIndex = el === current ? 0 : -1; });
+  return L;
+}
+function renderChronological(tl) {
+  const L = layout(tl, 800, new Set()), entries = [];
+  for (const r of tl.runs) r.spans.forEach((s, i) => entries.push({ t: s.s, key: r.id + ":s" + i, r, s }));
+  tl.events.forEach((ev, i) => entries.push({ t: ev.t, key: "ev:" + i, ev, r: tl.runs.find(x => x.id === ev.run) }));
+  entries.sort((a, b) => a.t - b.t || (a.ev ? -1 : 1));
+  const gaps = L.segments.filter(g => g.type !== "live");
+  const color = cfgIndex(tl); let html = "", gi = 0;
+  for (const en of entries) {
+    while (gi < gaps.length && gaps[gi].e <= en.t) { html += `<div class="tl-gap">空闲 ${durShort(gaps[gi].e - gaps[gi].s)}（${clock(gaps[gi].s)}–${clock(gaps[gi].e)}，没有任何片段或事件）</div>`; gi++; }
+    const helper = en.r.parent ? "↳ 协助 · " : "", sel = state.ref && state.ref.key === en.key ? " selected" : "";
+    if (en.ev) {
+      if (!items.has(en.key)) items.set(en.key, { run: en.r.id, section: EVENT_SECTION[en.ev.k], text: `Host 事件：${en.ev.label || EVENT[en.ev.k][0]}，${en.r.title}，${clock(en.t)}`, from: `Host ${en.ev.label || EVENT[en.ev.k][0]} ${clock(en.t)}` });
+      html += `<button class="tl-entry${sel}" data-open="${en.key}" data-run="${en.r.id}" data-section="${EVENT_SECTION[en.ev.k]}"><time>${clock(en.t)}</time><span class="glyph" aria-hidden="true">${EVENT[en.ev.k][1]}</span><span class="e-title">Host ${en.ev.label || EVENT[en.ev.k][0]} · ${helper}${esc(en.r.title)}</span></button>`;
+      continue;
+    }
+    const s = en.s, e = s.e == null ? NOW : s.e;
+    const kind = s.k === "queue" ? "排队" : s.k === "routing" ? "路由" : s.k === "wait" ? "等待 Host" : `第 ${s.turn} 轮执行`;
+    const glyph = s.k === "exec" ? `<span class="swatch" style="--c:var(--cfg-${color(en.r.cfg)})"></span>` : `<span class="swatch ${s.k}"></span>`;
+    const result = s.k === "exec" ? OUT[s.out] : s.e == null ? "仍在等待" : "";
+    const resultGlyph = { failed: "✕ ", cancelled: "⊘ ", unknown: "? ", running: "▸ " }[s.out] || "";
+    html += `<button class="tl-entry${sel}" data-open="${en.key}" data-run="${en.r.id}" data-section="${SPAN_SECTION[s.k]}"><time>${clock(s.s)}</time><span aria-hidden="true">${glyph}</span>
+      <span class="e-title">${kind} · ${helper}${esc(en.r.title)}</span>
+      <span class="e-meta">${s.k === "exec" ? `<span>${esc(CONFIGS[en.r.cfg].label)}</span>` : ""}<span>${dur(e - s.s)}${s.e == null ? "（至今）" : ""}</span>${result ? `<span>${resultGlyph}${result}</span>` : ""}</span></button>`;
+  }
+  $("#tl-list").innerHTML = html;
+}
+function renderTimeline() {
+  const view = $("#timeline-view"), key = state.selected, o = OBJECTIVES[key], tl = TIMELINES[key];
+  const p = PROJECTS.find(x => x.id === o.project);
+  const used = tl ? [...new Set(tl.runs.map(r => r.cfg))] : [];
+  const color = tl ? cfgIndex(tl) : () => 1;
+  view.classList.toggle("as-list", state.asList);
+  const hasGaps = tl && layout(tl, 800, new Set()).segments.some(g => g.type !== "live");
+  const stale = state.demo === "stale";
+  let body;
+  if (state.demo === "loading") body = `<p class="tl-state" role="status">正在读取时间轴…</p><div class="skeleton" style="width:60%"></div><div class="skeleton" style="width:45%;margin-left:30%"></div><div class="skeleton" style="width:35%;margin-left:52%"></div>`;
+  else if (state.demo === "error") body = `<div class="tl-state" role="alert">读取时间轴失败：本地黑板没有响应。列表仍可选择其他工作目标。<div style="margin-top:12px"><button class="button small-button">重试读取</button></div></div>`;
+  else if (!tl) body = `<p class="tl-state">设计示例未提供此工作目标的时间轴数据；请查看第一、第三或第四个工作目标。</p>`;
+  else body = `${tl.truncated ? `<div class="banner trunc-banner" role="status">时间轴已截断：Host 事件显示 ${tl.truncated.events.shown} / ${tl.truncated.events.total} 条，较早的 ${tl.truncated.events.total - tl.truncated.events.shown} 条未返回。委派与执行片段未截断。</div>` : ""}
+    <div class="tl-scroll" id="tl-scroll"></div><div class="tl-list" id="tl-list" aria-label="按时间排序的记录"></div>
+    <div class="inspector" id="inspector" aria-live="polite"><span class="muted">悬停或聚焦片段查看记录。</span><span class="hint">Enter 打开委派详情 · 方向键移动</span></div>`;
+  view.innerHTML = `<header class="detail-header tl-head">
+      <div class="row-between"><button class="button small-button narrow-back" id="back-to-list" type="button">返回工作目标</button><span class="small muted truncate" title="${esc(p.path)}">${esc(p.label)}</span><span class="chip-row"><span class="badge badge-neutral">设计示例</span>${o.standalone ? '<span class="badge badge-neutral">独立委派</span>' : ""}${badge(o.status)}</span></div>
+      <h2 title="${esc(o.title)}">${esc(o.title)}</h2>
+      <p class="assignment-line"><span>来源 Host：${esc(o.host)}</span><span>共 ${o.total} 个委派${o.helpers ? `（含 ${o.helpers} 个协助任务）` : ""}</span><span>最近活动 ${esc(o.lastAbs.startsWith("09-26") ? o.lastAbs.slice(6) : o.lastAbs)}</span>${countLine(o)}</p>
+      <p class="tl-note">${o.standalone ? "这条旧记录没有工作目标，按字段为空的规则单独显示，不与其他记录合并。" : "工作目标只用于归档与浏览，不调度任务，也不作为验收条件。"}</p>
+    </header>
+    <div class="tl-toolbar">
+      <div class="legend" aria-label="执行配置图例"><span class="legend-title">执行配置</span>${used.map(c => `<span class="legend-item"><span class="swatch" style="--c:var(--cfg-${color(c)})"></span>${esc(CONFIGS[c].label)}</span>`).join("") || "—"}</div>
+      <div class="legend" aria-label="状态图例"><span class="legend-item"><span class="swatch queue"></span>排队</span><span class="legend-item"><span class="swatch routing"></span>路由</span><span class="legend-item"><span class="swatch wait"></span>等待 Host</span><span class="legend-item"><span class="glyph ok">▸</span>执行中</span><span class="legend-item"><span class="glyph bad">✕</span>失败</span><span class="legend-item"><span class="glyph">⊘</span>已取消</span><span class="legend-item"><span class="glyph warn">?</span>结束未确认</span></div>
+      <div class="tl-tools">
+        ${hasGaps ? `<button class="button small-button" id="fold-all" type="button">${(state.expanded[key] || new Set()).size ? "折叠空闲" : "展开全部空闲"}</button>` : ""}
+        <button class="button small-button list-toggle" id="as-list" type="button" aria-pressed="${state.asList}">以列表查看</button>
+        <span class="refresh-state${stale ? " stale" : ""}">${stale ? "显示的是 16:11:42 的数据 · 最近一次读取失败" : "每 3 秒只读刷新 · 截至 16:12:05"}</span>
+        ${stale ? '<button class="button small-button" type="button">重试读取</button>' : ""}
+      </div>
+    </div>${body}`;
+  if (tl && !["loading", "error"].includes(state.demo)) { renderCanvas(tl); renderChronological(tl); }
+}
+
+/* ===== Run detail (existing TaskDetails, opened from the timeline) ===== */
+function renderRun() {
+  const ref = state.ref, tl = TIMELINES[state.selected], run = tl.runs.find(r => r.id === ref.run), o = OBJECTIVES[state.selected];
+  const st = STATUS[run.status], lock = state.locked ? ' aria-disabled="true" title="有结果未确认的操作：核对前不切换"' : "";
+  const tabsHtml = SECTIONS.map(([k, t]) => `<button type="button" role="tab" aria-selected="${ref.section === k}" tabindex="${ref.section === k ? 0 : -1}" data-tab="${k}">${t}</button>`).join("");
+  const span = /:s(\d+)$/.test(ref.key || "") ? run.spans[Number(ref.key.split(":s")[1])] : null;
+  const focus = span && span.k === "exec" ? `<section class="detail-section turn-focus"><strong>第 ${span.turn} 轮</strong> · attempt <span class="mono">${span.attempt}</span> · ${clock(span.s)}–${span.e == null ? "现在" : clock(span.e)} · ${OUT[span.out]}${span.note ? "：" + esc(span.note) : ""}<br><span class="small muted">高亮来自时间轴的片段；该回合的原始记录在现有“执行记录”栏目中显示。</span></section>` : "";
+  $("#run-view").innerHTML = `<div class="locator">
+      <button class="button small-button" id="back-to-timeline" type="button"${lock}>‹ 返回时间轴</button>
+      <span class="crumbs" title="${esc(o.title)} › ${esc(run.title)}">${esc(o.title)} › ${esc(run.title)}</span>
+      <span class="from">来自时间轴：${esc(items.get(ref.key) ? items.get(ref.key).from : "")}</span>
+      ${state.locked ? '<span class="lock-note" role="status">有结果未确认的操作：核对前不切换工作目标或委派，以免丢失操作标识。当前委派的其他栏目仍可浏览。</span>' : ""}
+    </div>
+    <header class="detail-header">
+      <div class="row-between"><span class="small muted truncate">${esc(PROJECTS.find(p => p.id === o.project).label)}</span><span class="badge badge-${st[1]}">${st[0]}</span></div>
+      <h2 tabindex="-1" id="run-title" title="${esc(run.title)}">${esc(run.title)}</h2>
+      <p class="assignment-line"><span>委派方：${esc(o.host)}</span><button class="routing-link" type="button"><span>→ ${esc(CONFIGS[run.cfg].label)}</span><span>查看选择依据</span></button></p>
+    </header>
+    <div class="detail-tabs" role="tablist" aria-label="委派详情栏目">${tabsHtml}</div>
+    <div class="detail-body">
+      ${state.readonly ? '<p class="small muted" role="status" style="margin-bottom:12px">新窗口已取得写权限，此页面为只读：这项操作不会提交。草稿与浏览状态保留在本页。任务详情、路由依据与验收记录仍可查看。</p>' : ""}
+      ${focus}
+      <div class="existing-slot">此处是现有 <span class="mono">TaskDetails</span> / <span class="mono">WorkflowPanel</span> 的“${SECTIONS.find(s => s[0] === ref.section)[1]}”栏目，内容与控件保持不变。时间轴不复制任何取消、决定、续接或验收控件；只读会话下这些现有控件按现有规则停用，草稿保留在 <span class="mono">RecordDrafts</span> 中。</div>
+      <dl class="facts"><dt>委派 ID</dt><dd class="mono">${run.id}</dd><dt>上级目标</dt><dd class="mono">${run.parent || "无"}</dd><dt>标题来源</dt><dd>${run.titleSource}（设计示例）</dd></dl>
+    </div>`;
+}
+
+/* ===== Composition ===== */
+function render() {
+  document.documentElement.dataset.theme = document.documentElement.dataset.theme || "light";
+  $("#readonly-banner").hidden = !state.readonly; $("#readonly-badge").hidden = !state.readonly;
+  const selected = state.demo === "none" || state.demo === "empty" ? null : state.selected;
+  items.clear();
+  renderList();
+  $("#grid").classList.toggle("has-selection", !!selected && !state.showList);
+  $("#placeholder").hidden = !!selected;
+  $("#timeline-view").hidden = !selected || state.view !== "timeline";
+  $("#run-view").hidden = !selected || state.view !== "detail";
+  if (!selected) return;
+  renderTimeline(); // stays mounted (hidden) while a run detail is open
+  if (state.view === "detail") renderRun();
+}
+function openItem(key, run, section) {
+  if (state.locked && state.view === "detail") return;
+  state.ref = { key, run, section }; state.focusKey = key; state.view = "detail"; render();
+  $("#run-title").focus();
+}
+function backToTimeline() {
+  if (state.locked) return;
+  state.view = "timeline"; render();
+  const key = CSS.escape(state.focusKey || "");
+  const el = [...document.querySelectorAll(`[data-key="${key}"], [data-open="${key}"]`)].find(node => node.offsetParent);
+  if (el && el.offsetParent) { el.focus(); el.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+}
+function inspect(el) {
+  const info = items.get(el.dataset.key), box = $("#inspector"); if (!info || !box) return;
+  const [head, ...rest] = info.text.split("，");
+  box.innerHTML = `<strong>${esc(head)}</strong><span>${esc(rest.join(" · "))}</span><span class="hint">Enter 打开委派详情 · 方向键移动</span>`;
+  const guide = $("#guide"); if (guide) { guide.hidden = !el.dataset.guide; if (el.dataset.guide) guide.style.left = el.dataset.guide + "px"; }
+}
+
+document.addEventListener("click", event => {
+  const t = event.target;
+  const obj = t.closest("[data-obj]");
+  if (obj) { if (state.locked && obj.dataset.obj !== state.selected) return; state.selected = obj.dataset.obj; state.showList = false; state.view = "timeline"; state.ref = null; state.focusKey = null; render(); return; }
+  const gap = t.closest("[data-gap]");
+  if (gap) { const set = state.expanded[state.selected] || (state.expanded[state.selected] = new Set()); set.has(gap.dataset.gap) ? set.delete(gap.dataset.gap) : set.add(gap.dataset.gap); render(); return; }
+  const item = t.closest(".tl-item");
+  if (item && items.get(item.dataset.key)) { const info = items.get(item.dataset.key); openItem(item.dataset.key, info.run, info.section); return; }
+  const entry = t.closest("[data-open]");
+  if (entry) { openItem(entry.dataset.open, entry.dataset.run, entry.dataset.section); return; }
+  const tab = t.closest("[data-tab]");
+  if (tab) { state.ref.section = tab.dataset.tab; render(); document.querySelector(`[data-tab="${tab.dataset.tab}"]`).focus(); return; }
+  if (t.closest("#back-to-timeline")) { backToTimeline(); return; }
+  if (t.closest("#back-to-list")) { state.showList = true; render(); return; }
+  if (t.closest("#as-list")) { state.asList = !state.asList; render(); return; }
+  if (t.closest("#fold-all")) { const tl = TIMELINES[state.selected], set = state.expanded[state.selected] || new Set();
+    state.expanded[state.selected] = set.size ? new Set() : new Set(layout(tl, 800, new Set()).segments.filter(g => g.type === "fold").map(g => g.key)); render(); return; }
+  if (t.closest("#theme")) { const dark = document.documentElement.dataset.theme !== "dark"; document.documentElement.dataset.theme = dark ? "dark" : "light"; $("#theme").setAttribute("aria-checked", dark); return; }
+  if (t.closest("#reorder")) { $("#reorder").hidden = true; }
+});
+document.addEventListener("focusin", event => { const el = event.target.closest && event.target.closest(".tl-item"); if (el) inspect(el); });
+document.addEventListener("mouseover", event => { const el = event.target.closest && event.target.closest(".tl-item"); if (el) inspect(el); });
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && state.view === "detail" && !event.target.closest("input, textarea, select")) { event.preventDefault(); backToTimeline(); return; }
+  const cur = event.target.closest && event.target.closest(".tl-item"); if (!cur) return;
+  const grid = $("#tl-grid"), rows = [...grid.querySelectorAll(".tl-row[data-row]")].map(r => [...r.querySelectorAll(".tl-item")].sort((a, b) => a.dataset.x - b.dataset.x));
+  const ri = rows.findIndex(r => r.includes(cur)), ci = rows[ri].indexOf(cur), x = Number(cur.dataset.x);
+  let next = null;
+  if (event.key === "ArrowRight") next = rows[ri][ci + 1];
+  else if (event.key === "ArrowLeft") next = rows[ri][ci - 1];
+  else if (event.key === "Home") next = rows[ri][0];
+  else if (event.key === "End") next = rows[ri][rows[ri].length - 1];
+  else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const row = rows[ri + (event.key === "ArrowDown" ? 1 : -1)];
+    if (row && row.length) next = row.reduce((best, el) => Math.abs(el.dataset.x - x) < Math.abs(best.dataset.x - x) ? el : best, row[0]);
+  } else if (event.key === " ") { event.preventDefault(); cur.click(); return; }
+  else if (event.key === "Escape") { event.preventDefault(); $("#as-list").focus(); return; }
+  else return;
+  event.preventDefault();
+  if (next) { cur.tabIndex = -1; next.tabIndex = 0; state.focusKey = next.dataset.key; next.focus(); next.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+});
+$("#demo-width").addEventListener("change", e => { $("#frame").classList.toggle("narrow", e.target.value === "narrow"); state.showList = false; render(); });
+$("#demo-state").addEventListener("change", e => { state.demo = e.target.value; state.view = "timeline"; state.locked = false; $("#demo-locked").checked = false; if (state.demo === "normal" || state.demo === "stale") state.selected = state.selected || "obj-1"; render(); });
+$("#demo-readonly").addEventListener("change", e => { state.readonly = e.target.checked; render(); });
+$("#demo-locked").addEventListener("change", e => {
+  state.locked = e.target.checked;
+  if (state.locked && state.view !== "detail" && TIMELINES[state.selected]) { const r = TIMELINES[state.selected].runs[0]; state.locked = false; openItem(r.id + ":label", r.id, "assistance"); state.locked = true; }
+  render();
+});
+let resizeTimer; window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 120); });
+render();
+</script>
+</body>
+</html>

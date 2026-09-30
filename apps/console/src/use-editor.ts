@@ -1,0 +1,1108 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Dispatch, SetStateAction } from "react";
+import type { ConsoleApi } from "./api";
+import { ApiError, errorText, isSessionExpiredRefusal, uncertainResponse } from "./api";
+import { LOGIN_EXPIRED_ACTION_REFUSAL, LOGIN_EXPIRED_SAVE_REFUSAL, UNRESOLVED_SAVE_NOTE, createAuthorityLatch } from "./console-session";
+import type { AuthorityLatch } from "./console-session";
+import {
+  changeCount as countChanges,
+  configurationChanged as configurationDiffers,
+  draftDiffers,
+  effectivePreferences,
+  historyView,
+  makeDraft,
+  publication,
+  rebaseDraft,
+  retainedAdditions,
+  withHistory,
+} from "./draft";
+import type { HistoryEntries, RebaseConflict } from "./draft";
+import { attentionIssues, blockingIssues } from "./policy";
+import type { ConsoleView, Draft, Snapshot, WriterGrant } from "./types";
+
+/** Queue poll while another writer holds the table; each renew also extends the lease. */
+export const QUEUE_POLL_MS = 750;
+/** Lease keep-alive while this page still holds a known writer intent. */
+export const LEASE_KEEPALIVE_MS = 10000;
+/** A bounded wait: after this the draft and intent stay, and the user decides. */
+const QUEUE_LIMIT_MS = 300000;
+/**
+ * Codes the board uses for a writer identity that is already terminal or gone.
+ * They prove a renewal cannot continue and an abort has nothing left to release;
+ * an authorization or validation refusal proves neither.
+ */
+const TERMINAL_GRANT_CODES = [
+  "WRITER_NOT_ACTIVE",
+  "WRITER_EXPIRED",
+  "STALE_GENERATION",
+  "NOT_FOUND",
+];
+
+type BeginIntent = { requestId: string; expectedRevision: number; kind: "human" };
+/** One abort attempt whose exact command identity is reused on every retry. */
+type AbortIntent = { grant: WriterGrant; commandId: string; createdAt: number };
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const isActive = (grant: WriterGrant) => grant.state === undefined || grant.state === "active";
+const isTerminalGrant = (error: unknown) =>
+  error instanceof ApiError && TERMINAL_GRANT_CODES.includes(error.code);
+const isRevisionConflict = (error: unknown) =>
+  error instanceof ApiError && ["REVISION_CONFLICT", "CONFLICT"].includes(error.code);
+
+export type EditorConflict = { basedOn: number; latest: number };
+
+/**
+ * Direct editing for the Buddy settings page: there is no edit switch.
+ *
+ * The first change to any control clones the published table into a local
+ * draft and never asks the board for a lease; a draft that becomes clean again
+ * with nothing in flight is dropped, so the save bar only exists while there is
+ * something to save or resolve. Only "保存" takes the existing
+ * evaluation_write_begin grant, waits for it if another writer is ahead, renews
+ * it, and publishes the dirty human patches through `user_policy_publish`. A lost
+ * reply keeps the same command/request identity so a retry can never republish a
+ * different payload.
+ *
+ * Every intent that could still exist on the board is either resolved or
+ * retained for retry: an unresolved begin is re-sent with its original request
+ * ID before the page exits, discards or reloads, and an abort whose reply was
+ * lost is never reported as a confirmed release.
+ */
+export function useEditor(
+  api: ConsoleApi,
+  snapshot: Snapshot,
+  refresh: () => Promise<Snapshot | null>,
+  mutationsAvailable: boolean,
+  unavailableReason: string,
+  authority?: AuthorityLatch,
+) {
+  const [draft, setDraftState] = useState<Draft | null>(null);
+  const [baseline, setBaseline] = useState<Draft | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntries | null>(null);
+  const [rebaseConflicts, setRebaseConflicts] = useState<RebaseConflict[]>([]);
+  const [grant, setGrantState] = useState<WriterGrant | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState("");
+  const [blocked, setBlocked] = useState("");
+  const [notice, setNotice] = useState("");
+  const [uncertain, setUncertain] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  /** A local draft exists (the page has unsaved or unresolved edits). */
+  const mode = draft !== null;
+
+  const csrf = useRef(snapshot.csrfToken);
+  csrf.current = snapshot.csrfToken;
+  const localLatch = useRef<AuthorityLatch | null>(null);
+  if (!localLatch.current) localLatch.current = createAuthorityLatch();
+  const latch = authority ?? localLatch.current;
+  const sessionId = useRef(snapshot.consoleSession?.id);
+  sessionId.current = snapshot.consoleSession?.id;
+  /** Latch-aware authority from the polling snapshot; a stale closure never writes. */
+  const sessionWritable = latch.writable(snapshot);
+  const writable = useRef(sessionWritable);
+  writable.current = sessionWritable;
+  const alive = useRef(true);
+  const grantRef = useRef<WriterGrant | null>(null);
+  const baselineRef = useRef<Draft | null>(null);
+  /** Retained profiles loaded from `model_profiles`; merged into the local view. */
+  const historyRef = useRef<HistoryEntries | null>(null);
+  /** A program publication whose merge waits for fresh retained-row data. */
+  const pendingRebase = useRef<Snapshot | null>(null);
+  const draftRef = useRef<Draft | null>(null);
+  /**
+   * A begin whose reply was lost; kept so a retry reuses the same request ID.
+   * `beginDispatched` separates an intent that left this page from one that was
+   * only prepared locally, and `beginAmbiguous` marks a dispatched intent whose
+   * outcome was never confirmed.
+   */
+  const pendingBegin = useRef<BeginIntent | null>(null);
+  const beginDispatched = useRef(false);
+  const beginAmbiguous = useRef(false);
+  /**
+   * A staged publication. Once dispatched it keeps its command ID and payload
+   * until a definite reply resolves it, even if this page becomes read-only in
+   * the meantime: a later 401 login-expired refusal cannot prove that an earlier
+   * attempt with the same command ID did not commit.
+   */
+  const pendingSave = useRef<ReturnType<typeof publication> | null>(null);
+  const saveDispatched = useRef(false);
+  const saveAmbiguous = useRef(false);
+  /** An abort whose reply was lost or refused; its identity stays retryable. */
+  const unresolvedAbort = useRef<AbortIntent | null>(null);
+  const cancelRequested = useRef(false);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+
+  const setGrant = useCallback((value: WriterGrant | null) => {
+    grantRef.current = value;
+    setGrantState(value);
+  }, []);
+  const setBaselineValue = useCallback((value: Draft | null) => {
+    baselineRef.current = value;
+    setBaseline(value);
+  }, []);
+  const setDraft: Dispatch<SetStateAction<Draft | null>> = useCallback((update) => {
+    setDraftState((previous) => {
+      const next = typeof update === "function"
+        ? (update as (value: Draft | null) => Draft | null)(previous)
+        : update;
+      draftRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const dirty = useMemo(
+    () => (baseline && draft ? draftDiffers(baseline, draft) : false),
+    [baseline, draft],
+  );
+  const changeCount = useMemo(
+    () => (baseline && draft ? countChanges(baseline, draft) : 0),
+    [baseline, draft],
+  );
+  const configurationDirty = useMemo(
+    () => (baseline && draft ? configurationDiffers(baseline, draft) : false),
+    [baseline, draft],
+  );
+  // One console view: published/loaded program facts, retained history rows and
+  // the local human draft when editing. Cards, samples, evidence and the
+  // recorded occupancy stay taken from the recorded snapshot/history, never
+  // from the draft; the draft supplies only the user-owned fields.
+  // The effective preferences come from the board's view while nothing is
+  // drafted, and are recomputed with the same rule from the draft while editing.
+  const view: ConsoleView = useMemo(() => {
+    const recorded = historyView(snapshot, historyEntries);
+    if (!draft) return recorded;
+    const edited = {
+      ...recorded,
+      profiles: draft.profiles,
+      familyPreferences: draft.familyPreferences,
+      preferenceOverrides: draft.preferenceOverrides,
+      familyAnnotations: draft.familyAnnotations,
+      configuration: draft.configuration,
+      modelConcurrency: draft.modelConcurrency,
+    };
+    return { ...edited, preferences: effectivePreferences(edited) };
+  }, [snapshot, draft, historyEntries]);
+  // A new enable/pin/selector needs a currently legal model; unrelated patches
+  // never wait for an old stale pin or decision setting to be repaired.
+  const blocking = useMemo(
+    () => (baseline && draft ? blockingIssues(baseline, draft) : []),
+    [baseline, draft],
+  );
+  const attention = useMemo(
+    () => attentionIssues(view),
+    [view],
+  );
+  // A newer publication is only a conflict once no reply is still pending: after a
+  // lost publish reply the revision may have advanced because of *this* draft.
+  const conflict: EditorConflict | null = useMemo(
+    () => (draft && !confirming && snapshot.tableRevision !== draft.tableRevision
+      ? { basedOn: draft.tableRevision, latest: snapshot.tableRevision }
+      : null),
+    [draft, confirming, snapshot.tableRevision],
+  );
+
+  // The draft is frozen while a save, discovery, discard or reload is in flight
+  // and while a staged publication waits for confirmation, so a payload can
+  // never be edited out from under its own retry. A read-only session freezes
+  // the retained draft without discarding it.
+  const busy = saving || auxiliaryBusy;
+  /** Controls accept edits: no save, discovery or unconfirmed publication in flight. */
+  const editing = !busy && !confirming && sessionWritable;
+  const saveBlockedReason = !mutationsAvailable && mode
+    ? unavailableReason || "当前无法提交保存，草稿会保留在本页。"
+    : "";
+
+  /**
+   * Every write this page can dispatch checks this first. A definite
+   * definite CONSOLE_SESSION_EXPIRED (HTTP 401) refusal latches the loss for this
+   * session, so an in-flight or stale callback cannot dispatch another write
+   * before the next poll and an older writable snapshot cannot restore rights.
+   * This is not a security boundary; the board enforces authority regardless of
+   * UI state.
+   */
+  function mayWrite(): boolean {
+    // A sibling may revoke the shared session before this hook rerenders.
+    return writable.current && latch.writable(snapshot);
+  }
+
+  /** Latches the loss of authority for the current public session. */
+  function loseAuthority(): void {
+    latch.lose(sessionId.current);
+    writable.current = false;
+  }
+
+  /**
+   * Whether a dispatched command still has an unknown result. These records are
+   * never dropped by a read-only handoff, a lease renewal failure or a poll:
+   * only a definite reply for the same command identity resolves them.
+   */
+  function hasUnknownIntent(): boolean {
+    return pendingSave.current !== null
+      || (pendingBegin.current !== null && beginAmbiguous.current)
+      || unresolvedAbort.current !== null;
+  }
+
+  function forgetBegin(): void {
+    pendingBegin.current = null;
+    beginDispatched.current = false;
+    beginAmbiguous.current = false;
+  }
+
+  function forgetPublication(): void {
+    pendingSave.current = null;
+    saveDispatched.current = false;
+    saveAmbiguous.current = false;
+  }
+
+  /**
+   * Drops only the local lease mirror. A known lease can expire without
+   * forgetting an unknown publication or begin: their command identity and
+   * unknown-result status stay retained.
+   */
+  function dropGrantMirror(): void {
+    setGrant(null);
+  }
+
+  /**
+   * Error copy for a read-only refusal that lands on a command whose earlier
+   * attempt may still have committed. A plain first-request refusal uses the
+   * canonical read-only copy; an ambiguous command must never be described as
+   * definitely not committed.
+   */
+  function readOnlyRefusalText(ambiguous: boolean): string {
+    return ambiguous ? UNRESOLVED_SAVE_NOTE : LOGIN_EXPIRED_SAVE_REFUSAL;
+  }
+
+  // Keep a *known* writer intent alive. Once an outcome is unknown the page stops
+  // renewing an idle writer, so an ambiguous operation cannot hold the table
+  // indefinitely; the short lease expires and the user resolves it deliberately.
+  useEffect(() => {
+    if (!grant || busy || uncertain || !sessionWritable) return;
+    const timer = setInterval(async () => {
+      const owner = grantRef.current;
+      if (!owner || !alive.current) return;
+      if (!mayWrite()) return;
+      try {
+        const next = await api.command<Partial<WriterGrant>>(
+          "evaluation_write_renew",
+          { writerId: owner.writerId, generation: owner.generation, writerToken: owner.writerToken },
+          csrf.current,
+        );
+        if (!alive.current || grantRef.current?.writerId !== owner.writerId) return;
+        const merged = { ...owner, ...next };
+        grantRef.current = merged;
+        setGrantState(merged);
+        setUncertain(false);
+      } catch (failure) {
+        if (!alive.current) return;
+        if (isSessionExpiredRefusal(failure)) {
+          // The newer window owns the table now. No renew, release or retry is
+          // sent; the short lease expires by itself and the draft stays local.
+          // Any dispatched-but-unconfirmed command keeps its identity and status.
+          loseAuthority();
+          dropGrantMirror();
+          setUncertain(hasUnknownIntent());
+          setError(hasUnknownIntent() ? UNRESOLVED_SAVE_NOTE : errorText(failure));
+        } else if (isTerminalGrant(failure)) {
+          // A dead lease proves nothing about an earlier ambiguous publication:
+          // the unknown result and its command identity stay retained.
+          dropGrantMirror();
+          if (hasUnknownIntent()) {
+            setUncertain(true);
+            setNotice("保存资格已过期，结果未知；请重试同一保存。");
+          } else {
+            setUncertain(false);
+            setNotice("保存资格已过期；请重试保存。");
+          }
+        } else if (uncertainResponse(failure)) {
+          setUncertain(true);
+          setError("编辑资格未知；请重试保存。");
+        } else {
+          // A refused renewal says nothing about the lease: release it, and keep
+          // the identity when even the release cannot be confirmed.
+          const released = await release(owner);
+          if (!alive.current) return;
+          setGrant(null);
+          setUncertain(!released);
+          setError(released
+            ? errorText(failure)
+            : `${errorText(failure)} 释放结果未知；请重试保存。`);
+        }
+      }
+    }, LEASE_KEEPALIVE_MS);
+    return () => clearInterval(timer);
+  }, [api, grant?.writerId, busy, uncertain, sessionWritable, setGrant]);
+
+  /**
+   * Drops the local draft. `preserveIntent` keeps every possibly-dispatched
+   * command identity and its unknown-result status when a release or publish
+   * outcome is still unconfirmed. An explicit discard still drops the draft
+   * itself, but never a command the board may already have committed.
+   */
+  function closeDraft(preserveIntent = false) {
+    setDraft(null);
+    setBaselineValue(null);
+    draftRef.current = null;
+    setConfirming(false);
+    setWaiting(false);
+    setBlocked("");
+    cancelRequested.current = false;
+    pendingRebase.current = null;
+    setRebaseConflicts([]);
+    if (!preserveIntent) {
+      forgetBegin();
+      forgetPublication();
+      unresolvedAbort.current = null;
+      dropGrantMirror();
+      setUncertain(false);
+    }
+  }
+
+  /**
+   * Applies one user edit, opening the local draft on the first one. Local
+   * only: no begin, no renew, no model request. A frozen draft (a save,
+   * discovery or unconfirmed publication in flight) and a read-only page refuse
+   * the edit with the reason instead of changing anything.
+   */
+  function update(change: (draft: Draft) => Draft) {
+    setBlocked("");
+    if (busy) {
+      setBlocked("正在保存或读取目录；请稍后修改。");
+      return;
+    }
+    if (confirming) {
+      setBlocked("保存结果未知；请核对或重试同一保存。");
+      return;
+    }
+    if (!mayWrite()) {
+      // A read-only page never opens a new draft; an existing draft stays as is.
+      setBlocked(LOGIN_EXPIRED_ACTION_REFUSAL);
+      return;
+    }
+    if (!draftRef.current) {
+      setNotice("");
+      // Retained history rows join the draft from the start, so disabling a
+      // retired configuration is an ordinary local edit with a recorded baseline.
+      const next = withHistory(makeDraft(snapshot), historyRef.current);
+      draftRef.current = next;
+      setDraft(next);
+      setBaselineValue(structuredClone(next));
+    }
+    setDraft((current) => (current ? change(current) : current));
+  }
+
+  // A draft that is clean again, with nothing dispatched, pending or
+  // conflicting, is dropped: the page falls back to the published table and the
+  // save bar disappears. Anything unresolved keeps the draft for the user.
+  useEffect(() => {
+    if (!draft || dirty || busy || confirming || uncertain || waiting) return;
+    if (rebaseConflicts.length || pendingRebase.current) return;
+    if (grantRef.current || pendingBegin.current || unresolvedAbort.current || pendingSave.current) return;
+    closeDraft();
+  }, [draft, dirty, busy, confirming, uncertain, waiting, grant, rebaseConflicts]);
+
+  /**
+   * Sends one begin intent. A definite reply clears the uncertainty; an unknown
+   * one keeps the request ID so a retry cannot take a second writer intent.
+   */
+  async function begin(intent: BeginIntent): Promise<WriterGrant | null> {
+    if (!mayWrite()) {
+      // No new writer intent may be created from a read-only page.
+      loseAuthority();
+      if (!beginDispatched.current) {
+        // This intent never left the page: a plain local refusal with nothing
+        // ambiguous to retain.
+        forgetBegin();
+        setUncertain(false);
+        setError(LOGIN_EXPIRED_SAVE_REFUSAL);
+      } else {
+        // A previously dispatched request still has no reply. Its request ID and
+        // unknown-result status are kept for the new writable window.
+        setUncertain(true);
+        setError(readOnlyRefusalText(beginAmbiguous.current));
+      }
+      return null;
+    }
+    beginDispatched.current = true;
+    try {
+      const next = await api.command<WriterGrant>("evaluation_write_begin", intent, csrf.current);
+      if (!alive.current) return null;
+      forgetBegin();
+      setGrant(next);
+      setUncertain(false);
+      setError("");
+      return next;
+    } catch (failure) {
+      if (!alive.current) return null;
+      if (isSessionExpiredRefusal(failure)) {
+        loseAuthority();
+        dropGrantMirror();
+        if (beginAmbiguous.current) {
+          // The refusal proves only that this retry was denied; the earlier
+          // attempt with the same request ID may already have created a grant.
+          setUncertain(true);
+          setError(UNRESOLVED_SAVE_NOTE);
+        } else {
+          // A definitely rejected first request: nothing was created.
+          forgetBegin();
+          setUncertain(false);
+          setError(errorText(failure));
+        }
+        return null;
+      }
+      if (uncertainResponse(failure)) {
+        // The board may have created a grant for this exact request. Keep the
+        // request ID and recovery state instead of pretending it never happened.
+        beginAmbiguous.current = true;
+        setUncertain(true);
+        setError("编辑资格未知；请重试保存。");
+        return null;
+      }
+      forgetBegin();
+      setUncertain(false);
+      setError(errorText(failure));
+      if (isRevisionConflict(failure)) await refresh();
+      return null;
+    }
+  }
+
+  /** True once the last known lease window passed: no grant can still be live. */
+  function leaseExpired(intent: AbortIntent): boolean {
+    const expiry = Date.parse(intent.grant.expiresAt);
+    if (Number.isFinite(expiry)) return Date.now() > expiry;
+    // A payload-only identity carries no expiry; the longest bounded queue wait
+    // is still a conservative ceiling for a short writer lease.
+    return Date.now() > intent.createdAt + QUEUE_LIMIT_MS;
+  }
+
+  /**
+   * Sends one abort intent. Only a success or a terminal-writer code proves the
+   * release; a lost *or refused* request proves nothing and is retained.
+   */
+  async function sendAbort(intent: AbortIntent): Promise<boolean> {
+    // A read-only page cannot prove a release over HTTP; nothing is sent.
+    if (!mayWrite()) return false;
+    try {
+      await api.command(
+        "evaluation_write_abort",
+        {
+          commandId: intent.commandId,
+          writerId: intent.grant.writerId,
+          generation: intent.grant.generation,
+          writerToken: intent.grant.writerToken,
+        },
+        csrf.current,
+      );
+      return true;
+    } catch (failure) {
+      return isTerminalGrant(failure);
+    }
+  }
+
+  /**
+   * Releases one grant. False means the outcome is unknown: the exact intent,
+   * including its command ID, stays in recovery state for a later retry.
+   */
+  async function release(owner: WriterGrant | null): Promise<boolean> {
+    if (!owner) return true;
+    // A read-only page cannot prove a release over HTTP: no abort is created or
+    // retained, and any earlier unresolved abort keeps its own identity.
+    if (!mayWrite()) return false;
+    const intent: AbortIntent = { grant: owner, commandId: crypto.randomUUID(), createdAt: Date.now() };
+    const released = await sendAbort(intent);
+    if (!alive.current) return false;
+    if (released) {
+      if (unresolvedAbort.current?.commandId === intent.commandId) unresolvedAbort.current = null;
+      return true;
+    }
+    unresolvedAbort.current = intent;
+    return false;
+  }
+
+  /** Retries a retained abort with its original command ID. */
+  async function flushUnresolvedAbort(): Promise<boolean> {
+    const intent = unresolvedAbort.current;
+    if (!intent) return true;
+    // A read-only session must not send the retained abort; the bounded lease
+    // is the recovery and no confirmed release is claimed.
+    if (!mayWrite()) return false;
+    if (leaseExpired(intent)) {
+      // The short lease passed its own expiry, so the intent cannot still exist;
+      // dropping it is bounded recovery, not a confirmed release claim.
+      unresolvedAbort.current = null;
+      return true;
+    }
+    const released = await sendAbort(intent);
+    if (!alive.current) return false;
+    if (!released) return false;
+    unresolvedAbort.current = null;
+    return true;
+  }
+
+  /**
+   * Resolves every writer intent this page may still hold: a lost abort, an
+   * unresolved begin (re-sent with its original request ID) and a known grant.
+   * False means at least one outcome is unknown and its recovery state is kept.
+   */
+  async function releaseIntents(): Promise<boolean> {
+    if (!mayWrite()) {
+      // Dropping the local mirror is bounded recovery, not a confirmed release:
+      // the board has already taken write authority and any short grant expires.
+      // Dispatched-but-unconfirmed commands keep their identity and unknown
+      // result; no release is claimed either way.
+      dropGrantMirror();
+      setNotice(hasUnknownIntent()
+        ? "登录已失效；请重新登录后核对保存结果。"
+        : "登录已失效；请重新登录后保存。");
+      return false;
+    }
+    if (!(await flushUnresolvedAbort())) return false;
+    if (!grantRef.current && pendingBegin.current) {
+      await begin(pendingBegin.current);
+      if (!alive.current) return false;
+      if (pendingBegin.current) return false;
+    }
+    const owner = grantRef.current;
+    if (!owner) return true;
+    const released = await release(owner);
+    if (!alive.current) return false;
+    setGrant(null);
+    return released;
+  }
+
+  async function acquire(current: Draft): Promise<WriterGrant | null> {
+    // A release whose reply was lost must resolve before a second writer
+    // identity is requested, so one page can never hold two intents.
+    if (!(await flushUnresolvedAbort())) {
+      if (!alive.current) return null;
+      setUncertain(true);
+      setError("编辑资格释放未确认；请稍后重试。");
+      return null;
+    }
+    const existing = grantRef.current;
+    if (existing && !pendingSave.current && existing.tableRevision === current.tableRevision) {
+      return existing;
+    }
+    // A superseded intent (for example after a renewal reported a newer table
+    // revision) must not stay queued or active behind the new one.
+    if (existing) {
+      const released = await release(existing);
+      if (!alive.current) return null;
+      if (!released) {
+        setGrant(null);
+        setUncertain(true);
+        setError("编辑资格释放未确认；请稍后重试。");
+        return null;
+      }
+      setGrant(null);
+    }
+    const intent = pendingBegin.current ?? {
+      requestId: crypto.randomUUID(),
+      expectedRevision: current.tableRevision,
+      kind: "human" as const,
+    };
+    if (!pendingBegin.current) {
+      // A fresh intent has no history: it is neither dispatched nor ambiguous.
+      pendingBegin.current = intent;
+      beginDispatched.current = false;
+      beginAmbiguous.current = false;
+    }
+    return begin(intent);
+  }
+
+  /**
+   * Ends a queued wait because this session is read-only. Nothing is released:
+   * the bounded lease expires by itself and no confirmed release is claimed.
+   */
+  function stopQueuedWriteForReadOnly(): null {
+    dropGrantMirror();
+    setUncertain(hasUnknownIntent());
+    setError(readOnlyRefusalText(hasUnknownIntent()));
+    return null;
+  }
+
+  /**
+   * Waits behind admitted readers, renewing the queued intent until it may
+   * write. The live latch-aware authority is re-checked before every iteration
+   * and again after each delay, immediately before the renew, so a poll that
+   * reports a read-only session stops outbound renewals without needing a first
+   * server refusal. The retained draft and any unknown command stay untouched.
+   */
+  async function ensureActive(owner: WriterGrant): Promise<WriterGrant | null> {
+    if (!mayWrite()) {
+      dropGrantMirror();
+      setUncertain(hasUnknownIntent());
+      setError(readOnlyRefusalText(hasUnknownIntent()));
+      return null;
+    }
+    if (isActive(owner)) return owner;
+    cancelRequested.current = false;
+    setWaiting(true);
+    setNotice(owner.queuePosition && owner.queuePosition > 1
+      ? `等待保存 · 前面 ${owner.queuePosition - 1} 位`
+      : "等待保存…");
+    const deadline = Date.now() + QUEUE_LIMIT_MS;
+    let current = owner;
+    try {
+      for (;;) {
+        if (!alive.current) return null;
+        // Before every iteration: never renew or release from a read-only page.
+        if (!mayWrite()) return stopQueuedWriteForReadOnly();
+        // A cancellation or deadline reached while a renew was in flight still
+        // releases the intent before anything can be published.
+        if (cancelRequested.current) return await cancelQueuedWrite(current);
+        if (isActive(current)) break;
+        if (Date.now() > deadline) {
+          const released = await release(current);
+          if (!alive.current) return null;
+          setGrant(null);
+          if (released) {
+            setUncertain(false);
+            setError("等待超时；请重试保存，草稿已保留。");
+          } else {
+            setUncertain(true);
+            setError("等待超时，释放未确认；请重试保存。");
+          }
+          return null;
+        }
+        await delay(QUEUE_POLL_MS);
+        if (!alive.current) return null;
+        // Immediately before the renew: a polled read-only snapshot ends the
+        // wait without any outbound request.
+        if (!mayWrite()) return stopQueuedWriteForReadOnly();
+        if (cancelRequested.current) return await cancelQueuedWrite(current);
+        let next: Partial<WriterGrant>;
+        try {
+          next = await api.command<Partial<WriterGrant>>(
+            "evaluation_write_renew",
+            { writerId: current.writerId, generation: current.generation, writerToken: current.writerToken },
+            csrf.current,
+          );
+        } catch (failure) {
+          if (!alive.current) return null;
+          if (isSessionExpiredRefusal(failure)) {
+            // An in-flight wait lost write authority: stop renewing at once and
+            // keep the draft; no release or retry is attempted automatically.
+            loseAuthority();
+            dropGrantMirror();
+            setUncertain(hasUnknownIntent());
+            setError(readOnlyRefusalText(hasUnknownIntent()));
+            return null;
+          }
+          if (uncertainResponse(failure)) {
+            // Keep the identity for a retry and stop renewing: recovery is bounded
+            // instead of holding a writer this page can no longer confirm.
+            setUncertain(true);
+            setError("编辑资格未知；请重试保存。");
+            return null;
+          }
+          const released = await release(current);
+          if (!alive.current) return null;
+          setGrant(null);
+          if (released) {
+            setUncertain(false);
+            setError(errorText(failure));
+          } else {
+            setUncertain(true);
+            setError(`${errorText(failure)} 释放结果未知；请重试保存。`);
+          }
+          return null;
+        }
+        if (!alive.current) return null;
+        current = { ...current, ...next };
+        grantRef.current = current;
+        setGrantState(current);
+        setUncertain(false);
+        setError("");
+      }
+      // The final gate before the queued intent can be published through.
+      if (!mayWrite()) return stopQueuedWriteForReadOnly();
+      setNotice("");
+      return current;
+    } finally {
+      if (alive.current) setWaiting(false);
+    }
+  }
+
+  async function cancelQueuedWrite(owner: WriterGrant): Promise<null> {
+    if (!alive.current) return null;
+    const released = await release(owner);
+    if (!alive.current) return null;
+    if (released) {
+      setGrant(null);
+      setUncertain(false);
+      setNotice("已取消等待；草稿已保留。");
+    } else {
+      // Never claim a release the board did not confirm.
+      setGrant(null);
+      setUncertain(true);
+      setError("编辑资格释放未知；请稍后重试，草稿已保留。");
+    }
+    return null;
+  }
+
+  async function publish(payload: ReturnType<typeof publication>) {
+    const staged = pendingSave.current === payload;
+    if (!mayWrite()) {
+      if (staged && saveDispatched.current) {
+        // This exact command already left the page without a confirmed result.
+        // Its command ID and payload stay retained: a read-only retry proves
+        // nothing about the earlier attempt, which may have committed. No
+        // automatic replay, release or new identity.
+        setUncertain(true);
+        setConfirming(true);
+        setError(UNRESOLVED_SAVE_NOTE);
+      } else {
+        // Never dispatched: an unsent intent is not an unknown result.
+        if (staged) forgetPublication();
+        setUncertain(hasUnknownIntent());
+        setConfirming(false);
+        setError(LOGIN_EXPIRED_SAVE_REFUSAL);
+      }
+      return;
+    }
+    saveDispatched.current = true;
+    try {
+      await api.command("user_policy_publish", payload, csrf.current);
+      if (!alive.current) return;
+      forgetPublication();
+      forgetBegin();
+      unresolvedAbort.current = null;
+      dropGrantMirror();
+      setUncertain(false);
+      setConfirming(false);
+      setNotice("已发布新版本");
+      closeDraft();
+      await refresh();
+    } catch (failure) {
+      if (!alive.current) return;
+      if (isSessionExpiredRefusal(failure)) {
+        loseAuthority();
+        dropGrantMirror();
+        if (saveAmbiguous.current) {
+          // This retry was definitely refused, but an earlier attempt with the
+          // same command ID is unresolved and may have committed. Keep the
+          // staged payload, its identity and its unknown-result status.
+          setUncertain(true);
+          setConfirming(true);
+          setError(UNRESOLVED_SAVE_NOTE);
+          return;
+        }
+        // A first request that was definitely refused: nothing committed, so
+        // only the local draft stays. No retry, renew or release is attempted.
+        forgetPublication();
+        setUncertain(hasUnknownIntent());
+        setConfirming(false);
+        setError(errorText(failure));
+        return;
+      }
+      if (saveAmbiguous.current && failure instanceof ApiError
+        && ["FORBIDDEN", "UNAUTHORIZED"].includes(failure.code)) {
+        // A restarted daemon may reject stale CSRF before reading its receipt.
+        // Keep the earlier publication identity and refresh authentication data.
+        setUncertain(true);
+        setConfirming(true);
+        setError(UNRESOLVED_SAVE_NOTE);
+        await refresh();
+        return;
+      }
+      if (uncertainResponse(failure)) {
+        // The payload and its commandId stay staged: a retry resolves the same
+        // command instead of publishing a second revision. Idle renewals stop so
+        // an unknown outcome cannot hold the table indefinitely.
+        saveAmbiguous.current = true;
+        setUncertain(true);
+        setConfirming(true);
+        setError("保存结果未知，可能已生效；请重试同一保存。");
+        return;
+      }
+      forgetPublication();
+      setConfirming(false);
+      setUncertain(false);
+      // Release the intent the payload names even if the local mirror was dropped:
+      // a definitive failure must not leave a queued or active lease behind.
+      const stagedGrant = grantRef.current ?? {
+        writerId: payload.writerId,
+        generation: payload.generation,
+        writerToken: payload.writerToken,
+      } as WriterGrant;
+      const released = await release(stagedGrant);
+      if (!alive.current) return;
+      dropGrantMirror();
+      if (!released) setUncertain(true);
+      if (isRevisionConflict(failure)) {
+        await refresh();
+        setError("设置已更新；请重新加载核对或放弃草稿。");
+        return;
+      }
+      setError(errorText(failure));
+    }
+  }
+
+  async function save() {
+    const current = draftRef.current;
+    const base = baseline;
+    if (!current || !base || busy) {
+      if (busy) setBlocked("正在读取目录或保存；请稍后重试。");
+      return;
+    }
+    if (!mayWrite()) {
+      if (pendingSave.current && saveDispatched.current) {
+        // A command that already left the page keeps its identity and unknown
+        // result; the draft stays visible, copyable and unmodified. A local
+        // retry cannot resolve it from a read-only page.
+        setUncertain(true);
+        setConfirming(true);
+        setBlocked(UNRESOLVED_SAVE_NOTE);
+      } else {
+        // An unsent payload is not an unknown result; the draft itself stays.
+        if (pendingSave.current) forgetPublication();
+        const unknown = hasUnknownIntent();
+        setUncertain(unknown);
+        setConfirming(false);
+        setBlocked(unknown ? UNRESOLVED_SAVE_NOTE : LOGIN_EXPIRED_SAVE_REFUSAL);
+      }
+      return;
+    }
+    if (!mutationsAvailable) {
+      setBlocked(unavailableReason || "暂无法保存；请稍后重试，草稿已保留。");
+      return;
+    }
+    setBlocked("");
+    setError("");
+    setNotice("");
+    // A blocked patch (a new enable, pin or selector for an unavailable model)
+    // is refused locally with the exact reason, so no other patch is published
+    // against a payload the board would reject as a whole. The check reads the
+    // live draft instead of a possibly older render memo.
+    const blocked = blockingIssues(base, current);
+    if (blocked.length) {
+      setError(`${blocked.length} 项无法保存：${blocked.map((issue) => issue.message).join(" ")}`);
+      return;
+    }
+    setSaving(true);
+    try {
+      if (pendingSave.current) {
+        // The staged payload carries its own writer identity, so a lost reply can
+        // still be resolved even if the local lease mirror expired.
+        await publish(pendingSave.current);
+        return;
+      }
+      if (!draftDiffers(base, current)) {
+        // Publishing an empty patch would advance the revision for nothing.
+        return;
+      }
+      if (snapshot.tableRevision !== current.tableRevision) {
+        setError(`设置已更新；请重新加载核对或放弃草稿。`);
+        return;
+      }
+      const owner = await acquire(current);
+      if (!owner) return;
+      const ready = await ensureActive(owner);
+      if (!ready) return;
+      const payload = publication(base, current, ready, crypto.randomUUID());
+      pendingSave.current = payload;
+      saveDispatched.current = false;
+      saveAmbiguous.current = false;
+      await publish(payload);
+    } finally {
+      if (alive.current) setSaving(false);
+    }
+  }
+
+  async function discard() {
+    if (busy) {
+      setBlocked(waiting ? "正在排队；请先取消等待。" : "正在保存；请等待结果。");
+      return;
+    }
+    if (confirming) {
+      setBlocked("保存结果未知；请核对或重试同一保存。");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const released = await releaseIntents();
+      if (!alive.current) return;
+      closeDraft(!released);
+      if (released) setNotice("草稿已放弃");
+      else {
+        setUncertain(true);
+        setError("草稿已放弃；编辑资格释放未知。");
+      }
+      await refresh();
+    } finally {
+      if (alive.current) setSaving(false);
+    }
+  }
+
+  /** Deliberate reload: the draft is replaced by the latest published revision. */
+  async function reloadLatest() {
+    if (busy || confirming) {
+      setBlocked("保存未确认；请核对后重新加载。");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      if (!mayWrite()) dropGrantMirror();
+      else if (grantRef.current || pendingBegin.current || unresolvedAbort.current) {
+        const released = await releaseIntents();
+        if (!alive.current) return;
+        if (!released) {
+          setUncertain(true);
+          setError("编辑资格释放未知；请稍后重新加载。");
+          return;
+        }
+      }
+      const next = withHistory(makeDraft(snapshot), historyRef.current);
+      draftRef.current = next;
+      setDraft(next);
+      setBaselineValue(structuredClone(next));
+      // A deliberate reload replaces the draft only. A dispatched command with
+      // an unknown result keeps its identity and status; the new writable window
+      // is the place to check it.
+      if (mayWrite()) {
+        forgetBegin();
+        forgetPublication();
+        unresolvedAbort.current = null;
+        dropGrantMirror();
+        setUncertain(false);
+      }
+      pendingRebase.current = null;
+      setRebaseConflicts([]);
+      setNotice(`已加载 V${next.tableRevision}；请核对后保存。`);
+    } finally {
+      if (alive.current) setSaving(false);
+    }
+  }
+
+  /** Cancels a queued wait; the loop itself releases the intent exactly once. */
+  function cancelSave() {
+    if (!busy || !waiting) return;
+    cancelRequested.current = true;
+    setNotice("正在取消等待…");
+  }
+
+  /**
+   * Adopts retained profile rows loaded from `model_profiles`. They become part
+   * of the local view immediately, and of the draft and its baseline when a
+   * draft exists, so a disable or an opinion on a retired configuration stays a
+   * normal diffed patch instead of an untracked insertion.
+   *
+   * Rows are only trusted at the revision they were read at: a page that no
+   * longer matches the published table is dropped before it can seed a view or
+   * a baseline. A deferred rebase retries here, because this is the moment the
+   * missing fresh row data actually arrives.
+   */
+  function adoptHistory(entries: HistoryEntries | null) {
+    const usable = entries && entries.tableRevision === snapshot.tableRevision ? entries : null;
+    historyRef.current = usable;
+    setHistoryEntries(usable);
+    const current = draftRef.current;
+    const base = baselineRef.current;
+    if (!current || !base || saving || confirming || uncertain) return;
+    if (grantRef.current || pendingBegin.current || unresolvedAbort.current) return;
+    const pending = pendingRebase.current;
+    if (pending && pending.tableRevision === snapshot.tableRevision) {
+      const retried = rebaseDraft(current, base, pending, usable);
+      if (retried.conflicts.length) {
+        // A missing-row disagreement can still be resolved by fresh data; a real
+        // competing value needs the user's deliberate reload or discard.
+        pendingRebase.current = retried.conflicts.some((issue) => issue.kind === "unread")
+          ? pending
+          : null;
+        setRebaseConflicts(retried.conflicts);
+        return;
+      }
+      pendingRebase.current = null;
+      setRebaseConflicts([]);
+      draftRef.current = retried.draft;
+      setDraft(retried.draft);
+      setBaselineValue(retried.baseline);
+      return;
+    }
+    const nextDraft = withHistory(current, retainedAdditions(current, base, usable));
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    setBaselineValue(withHistory(base, usable));
+  }
+
+  /**
+   * Adopts a freshly published snapshot (this page's own program directory
+   * discovery, or another program publication). Directory facts come only from
+   * the board; dirty human fields are replayed field by field. A field another
+   * writer changed, or one whose fresh row is not readable yet, keeps the
+   * original draft and its expectedRevision and is reported as a conflict.
+   */
+  function rebase(next: Snapshot) {
+    const current = draftRef.current;
+    // The ref is authoritative: a retained page adopted while `discover` was
+    // awaiting the refresh must not be compared away by an older render value.
+    const base = baselineRef.current;
+    if (!current || !base) return;
+    if (saving || confirming || uncertain) return;
+    if (grantRef.current || pendingBegin.current || unresolvedAbort.current) return;
+    const adopted = rebaseDraft(current, base, next, historyRef.current);
+    if (adopted.conflicts.length) {
+      pendingRebase.current = adopted.conflicts.some((issue) => issue.kind === "unread") ? next : null;
+      setRebaseConflicts(adopted.conflicts);
+      return;
+    }
+    pendingRebase.current = null;
+    setRebaseConflicts([]);
+    draftRef.current = adopted.draft;
+    setDraft(adopted.draft);
+    setBaselineValue(adopted.baseline);
+  }
+
+  return {
+    mode,
+    editing,
+    /** Recorded write authority for this browser session. */
+    sessionWritable,
+    draft,
+    view,
+    setDraft,
+    baseline,
+    grant,
+    busy,
+    setAuxiliaryBusy,
+    waiting,
+    uncertain,
+    confirming,
+    dirty,
+    changeCount,
+    configurationDirty,
+    blocking,
+    attention,
+    conflict,
+    rebaseConflicts,
+    error,
+    notice,
+    blocked,
+    saveBlockedReason,
+    update,
+    save,
+    discard,
+    reloadLatest,
+    rebase,
+    adoptHistory,
+    cancelSave,
+  };
+}
+export type Editor = ReturnType<typeof useEditor>;

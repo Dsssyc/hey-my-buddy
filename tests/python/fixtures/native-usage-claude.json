@@ -1,0 +1,143 @@
+{
+  "comment": "Desensitized minimal Claude Code stream-json records. Field names, nullability and units are copied from the installed 2.1.284 CLI's embedded schemas: the Anthropic usage object (input_tokens excludes cache; cache_creation_input_tokens and cache_read_input_tokens are nullable), the assistant message frame's message.id/usage, and rate_limit_info (status, rateLimitType, resetsAt unix seconds, utilization as the fraction of the window used, and unifiedWindows with per-window fractions). Every session id, message id, model id and text is replaced; no credential, prompt, tool output or reasoning text is retained.",
+  "source": "claude/stream-json",
+  "harnessVersion": "2.1.284",
+  "sessionId": "session-fixture-0001",
+  "modelId": "claude-fixture-5",
+  "assistantFrames": [
+    {
+      "type": "assistant",
+      "session_id": "session-fixture-0001",
+      "uuid": "frame-fixture-0001",
+      "message": {
+        "id": "msg-fixture-0001",
+        "role": "assistant",
+        "content": [
+          {"type": "reasoning", "text": "fixture reasoning that is never assistant output"},
+          {"type": "text", "text": "Read the fixture file first."}
+        ],
+        "usage": {"input_tokens": 12000, "cache_read_input_tokens": 31000, "cache_creation_input_tokens": 2000,
+                  "output_tokens": 200, "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 0},
+                  "service_tier": "standard"}
+      }
+    },
+    {
+      "type": "assistant",
+      "session_id": "session-fixture-0001",
+      "uuid": "frame-fixture-0001-replay",
+      "message": {
+        "id": "msg-fixture-0001",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Read the fixture file first."}],
+        "usage": {"input_tokens": 12000, "cache_read_input_tokens": 31000, "cache_creation_input_tokens": 2000,
+                  "output_tokens": 200, "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 0},
+                  "service_tier": "standard"}
+      }
+    },
+    {
+      "type": "assistant",
+      "session_id": "session-foreign-0001",
+      "uuid": "frame-fixture-foreign",
+      "message": {
+        "id": "msg-fixture-foreign",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "foreign session output"}],
+        "usage": {"input_tokens": 9999, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                  "output_tokens": 9999}
+      }
+    },
+    {
+      "type": "assistant",
+      "session_id": "session-fixture-0001",
+      "uuid": "frame-fixture-child",
+      "parent_tool_use_id": "toolu_fixture_subagent_0001",
+      "message": {
+        "id": "msg-fixture-child",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "subagent output"}],
+        "usage": {"input_tokens": 8888, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                  "output_tokens": 8888}
+      }
+    },
+    {
+      "type": "assistant",
+      "session_id": "session-fixture-0001",
+      "uuid": "frame-fixture-0002",
+      "message": {
+        "id": "msg-fixture-0002",
+        "role": "assistant",
+        "content": [
+          {"type": "text", "text": "Fixture final answer: the bounded work is done."},
+          {"type": "tool_use", "id": "toolu_fixture_0001", "name": "Bash", "input": {"command": "true"}},
+          {"type": "reasoning", "text": "fixture reasoning that is never assistant output"}
+        ],
+        "usage": {"input_tokens": 3000, "cache_read_input_tokens": 40000, "cache_creation_input_tokens": 0,
+                  "output_tokens": 150, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                  "service_tier": "standard"}
+      }
+    }
+  ],
+  "resultUsage": {
+    "input_tokens": 15000,
+    "cache_read_input_tokens": 71000,
+    "cache_creation_input_tokens": 2000,
+    "output_tokens": 350,
+    "output_tokens_details": {"thinking_tokens": 25},
+    "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 0},
+    "server_tool_use": null,
+    "service_tier": "standard"
+  },
+  "rateLimitWarning": {
+    "rate_limit_info": {
+      "status": "allowed_warning",
+      "rateLimitType": "five_hour",
+      "resetsAt": 1790467200,
+      "utilization": 0.42,
+      "unifiedWindows": {
+        "five_hour": {"utilization": 0.42, "resetsAt": 1790467200},
+        "seven_day": {"utilization": 0.9, "resetsAt": 1790985600}
+      }
+    }
+  },
+  "rateLimitRejected": {
+    "rate_limit_info": {
+      "status": "rejected",
+      "rateLimitType": "five_hour",
+      "resetsAt": 1790467200,
+      "utilization": 0.5,
+      "unifiedWindows": {
+        "five_hour": {"utilization": 0.5, "resetsAt": 1790467200}
+      }
+    }
+  },
+  "resultQuotaDenial": {
+    "subtype": "error_quota_during_execution",
+    "is_error": true,
+    "api_error_status": null
+  },
+  "expected": {
+    "resultSource": "claude/stream-json-result-usage",
+    "assistantSource": "claude/stream-json-assistant-usage",
+    "inputTokensExcludingCache": 15000,
+    "cachedInputTokens": 73000,
+    "outputTokens": 350,
+    "reasoningOutputTokens": 25,
+    "unifiedInputTokens": 88000,
+    "records": 2,
+    "lastAssistantText": "Fixture final answer: the bounded work is done."
+  },
+  "expectedQuota": {
+    "source": "claude/stream-json-rate-limit-event",
+    "provider": "anthropic",
+    "windows": [
+      {"name": "five_hour", "usedPercent": 42, "resetsAt": "2026-09-27T00:00:00Z"},
+      {"name": "seven_day", "usedPercent": 90, "resetsAt": "2026-10-03T00:00:00Z"}
+    ]
+  },
+  "expectedRejectedQuota": {
+    "reachedType": "five_hour",
+    "windows": [
+      {"name": "five_hour", "usedPercent": 50, "resetsAt": "2026-09-27T00:00:00Z"}
+    ]
+  }
+}
