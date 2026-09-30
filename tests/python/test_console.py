@@ -154,7 +154,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "tableRevision", "gate", "configuration", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "backupPreflight", "csrfToken", "tableRevision", "gate", "configuration", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
         self.assertTrue(snapshot["csrfToken"])

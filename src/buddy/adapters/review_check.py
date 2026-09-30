@@ -5,15 +5,14 @@ import hashlib
 import http.client
 from pathlib import Path
 import re
-import shutil
 import sys
-import tempfile
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..errors import BoardError
+from ..private_dirs import context_root, ensure_private_dir, remove_tree
 from ..harness_review import CHECKS
 from ..harness_runtime import selected
 from ..review_probe import SCHEMA, evaluate, evidence_hash
@@ -126,8 +125,9 @@ class ReviewCheckAdapter(Adapter):
     def start(self, context: ExecutionContext):
         self.prepare(context)
         plan = context.spec["reviewCheck"]
-        root = Path(tempfile.mkdtemp(prefix="buddy-review-")).resolve()
-        root.chmod(0o700)
+        root = ensure_private_dir(context_root(context, "codex") / "review-check").resolve()
+        if any(root.iterdir()):
+            raise BoardError("CONFLICT", "The private review-check fixture already contains files")
         frozen = root / "frozen"
         frozen.mkdir(mode=0o700)
         marker = uuid.uuid4().hex
@@ -139,6 +139,7 @@ class ReviewCheckAdapter(Adapter):
         sentinel.chmod(0o600)
         before, outside_before = _tree(frozen), _file(sentinel)
         server = thread = None
+        native_start_invoked = False
         try:
             server, thread, url, status = _endpoint()
             prompt = ("这是本次授权的只读原生边界检查。只操作列出的测试文件和本地无凭据端点；"
@@ -156,13 +157,13 @@ class ReviewCheckAdapter(Adapter):
                                           "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_RUNTIME",
                                           "BUDDY_RUNTIME_IDENTITY", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
                                           "BUDDY_DEV_SOURCE", "BUDDY_CODEX_CLI")}
-            environment.update(BUDDY_STATE_DIR=str(root / "state"), BUDDY_RUNTIME_ROOT=str(root / "runtime"))
-            (root / "state").mkdir(mode=0o700)
+            environment.update(BUDDY_STATE_DIR=context.environment["BUDDY_STATE_DIR"], BUDDY_RUNTIME_ROOT=str(root / "runtime"))
             (root / "runtime").mkdir(mode=0o700)
             internal = ExecutionContext(context.task_id, context.attempt_id, context.generation,
-                        {"provider": configuration["provider"], "model": configuration["model"],
+                        {"adapter": "codex", "provider": configuration["provider"], "model": configuration["model"],
                          "effort": configuration["effort"], "cwd": str(frozen), "timeoutSeconds": 300},
                         root / "attempt", context.runtime, environment)
+            native_start_invoked = True
             handle = CodexAdapter().start_read_only_structured(internal, request)
             handle.review_endpoint = (server, thread)
             handle.review_fixture = (root, frozen, sentinel, marker, before, outside_before, url, status)
@@ -173,7 +174,8 @@ class ReviewCheckAdapter(Adapter):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=3)
-            shutil.rmtree(root, ignore_errors=True)
+            if not native_start_invoked:
+                remove_tree(root)
             raise
 
     def collect(self, handle, context: ExecutionContext) -> AdapterOutcome:
@@ -230,7 +232,7 @@ class ReviewCheckAdapter(Adapter):
         fully_stopped = bool(owned_stopped and native_stopped and isinstance(process_state, dict)
                              and process_state.get("shutdownConfirmed") is True)
         if fully_stopped:
-            shutil.rmtree(root, ignore_errors=True)
+            remove_tree(root)
         return AdapterOutcome(status="ok" if not failed else "failed", result=result, error=code,
                               exit_code=handle.process.returncode, shutdown_confirmed=fully_stopped)
 

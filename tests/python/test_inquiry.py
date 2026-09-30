@@ -20,6 +20,7 @@ from pathlib import Path
 from support import FIXTURE_CATALOG, BoardTestCase
 
 from buddy.errors import BoardError
+from buddy.private_dirs import attempt_root, ensure_private_dir
 from buddy.inquiry import (
     MAX_JOURNAL_BYTES,
     bridge_request,
@@ -151,9 +152,10 @@ class TestInquiry(BoardTestCase):
 
         directory = self.directory / "attempts" / task["runId"] / attempt["attemptId"]
         directory.mkdir(parents=True, exist_ok=True)
+        private = ensure_private_dir(attempt_root(self.directory, adapter, task["runId"], attempt["attemptId"]))
         bridge = FakeBridge(directory)
         fsync_json(
-            directory / "inquiry.json",
+            private / "inquiry.json",
             {
                 "socketPath": str(bridge.path),
                 "resultsPath": str(directory / "inquiry.results.jsonl"),

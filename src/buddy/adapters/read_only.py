@@ -1,9 +1,11 @@
 """Generic structured calls using native harness permissions, without a workflow turn."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import time
@@ -11,10 +13,23 @@ import uuid
 
 from .base import AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle, ReadOnlyStructuredRequest, open_logs
 from ..errors import BoardError
+from ..private_dirs import context_root, ensure_private_dir
 from .windows_process import owned_popen
-from .turn_io import private_json, canonical_json
+from .turn_io import private_json, canonical_json, guard_private_path
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
+
+
+@dataclass(frozen=True)
+class _NoToolEvidence:
+    adapter: str
+    task_id: str
+    attempt_id: str
+    generation: int
+    directory: Path
+    private_root: Path
+    evidence_root: Path
+    request_json: str
 
 
 def schema_errors(value, schema: dict) -> list[str]:
@@ -88,9 +103,9 @@ def no_tool_prompt(prompt: str, schema: dict) -> str:
 
 
 def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
-    context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_private_dir(context.directory)
     control = {
-        "directory": str(context.directory), "nativeRoot": str(context.directory / "native"),
+        "directory": str(context.directory), "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "sessionId": str(uuid.uuid4()), "access": "read",
@@ -103,6 +118,8 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     private_json(path, control)
     from ..harness_runtime import controller_environment
     environment = controller_environment(context.directory, context.environment, read_only=True)
+    for log_path in context.log_paths().values():
+        guard_private_path(Path(log_path))
     stdout, stderr = open_logs(context.log_paths())
     try:
         process = owned_popen([sys.executable, "-m", f"buddy.adapters.{name}_runner", "--control", str(path)],
@@ -132,22 +149,27 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
             raise ValueError("directory is not owner-private")
     except (OSError, ValueError):
         raise BoardError("INVALID_ARGUMENT", "no-tool cwd must be an existing empty private directory") from None
-    context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    invocation = context.directory / ("no-tool-" + uuid.uuid4().hex)
-    invocation.mkdir(mode=0o700)
+    directory = ensure_private_dir(context.directory)
+    invocation_name = "no-tool-" + uuid.uuid4().hex
+    invocation = ensure_private_dir(context_root(context, name) / invocation_name)
+    evidence = directory / invocation_name
     control = {
-        "directory": str(invocation), "nativeRoot": str(invocation / "native"),
+        "directory": str(invocation), "nativeRoot": str(invocation / "native"), "evidenceRoot": str(evidence),
         "cwd": str(cwd.resolve()), "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                           "captureEvidence": request.capture_evidence},
     }
+    binding = _NoToolEvidence(name, context.task_id, context.attempt_id, context.generation,
+                              directory, invocation, evidence, canonical_json(control["noToolRequest"]))
     path = context.directory / "no-tool-control.json"
     private_json(path, control)
     from ..harness_runtime import controller_environment
     environment = controller_environment(context.directory, context.environment, read_only=True)
     if name == "dsh" and context.environment.get("DSH_HOME"):
         environment["DSH_HOME"] = context.environment["DSH_HOME"]
+    for log_path in context.log_paths().values():
+        guard_private_path(Path(log_path))
     stdout, stderr = open_logs(context.log_paths())
     try:
         process = owned_popen([sys.executable, "-m", f"buddy.adapters.{name}_runner", "--control", str(path)],
@@ -159,16 +181,52 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
     handle = ProcessHandle(process, own_group=True, log_paths=context.log_paths())
     handle.deadline = time.monotonic() + request.timeout_seconds
     handle.no_tool = True
+    handle.no_tool_control = path
+    handle.no_tool_evidence = binding
     return handle
+
+
+def _evidence_json(path: Path) -> object:
+    path = guard_private_path(path)
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 256 * 1024:
+        raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence must be bounded ordinary JSON", path=str(path))
+    with path.open("rb") as stream:
+        raw = stream.read(256 * 1024 + 1)
+    if len(raw) > 256 * 1024:
+        raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence exceeds its byte bound", path=str(path))
+    return json.loads(raw)
+
+
+def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
+    observed_calls = 0
+    # These paths and the request are frozen at start, never reconstructed from
+    # the controller's mutable on-disk configuration after it has run.
+    for number in (1, 2):
+        source = guard_private_path(binding.private_root / f"call-{number}")
+        if not source.exists():
+            continue
+        if not source.is_dir():
+            raise BoardError("PRIVATE_PATH_UNSAFE", "No-tool call source is not a directory", path=str(source))
+        pair = [guard_private_path(source / name) for name in ("request.json", "result.json")]
+        if not all(path.exists() for path in pair):
+            continue
+        values = [_evidence_json(path) for path in pair]
+        target = ensure_private_dir(binding.evidence_root / f"call-{number}")
+        for source_file, value in zip(pair, values):
+            private_json(target / source_file.name, value)
+        observed_calls += 1
+    if not observed_calls:
+        evidence = ensure_private_dir(binding.evidence_root / "call-1")
+        private_json(evidence / "request.json", json.loads(binding.request_json))
+        private_json(evidence / "result.json", payload)
 
 
 def collect(handle: ProcessHandle) -> AdapterOutcome:
     payload = None
     try:
-        path = Path(handle.log_paths["stdout"])
-        if path.stat().st_size <= 256 * 1024:
-            payload = json.loads(path.read_text())
-    except (OSError, ValueError, RecursionError):
+        payload = _evidence_json(Path(handle.log_paths["stdout"]))
+    except (OSError, ValueError, BoardError, RecursionError):
         pass
     if not isinstance(payload, dict):
         payload = {"status": "error", "code": "invalid-native-result"}
@@ -179,9 +237,28 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
         payload = {"status": "error", "code": "invalid-native-result",
                    "processState": payload.get("processState", {})}
     stopped = (payload.get("processState", {}).get("shutdownConfirmed") is True
-               and handle.shutdown_confirmed())
+               and handle.shutdown_confirmed() is True)
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"
     if stopped and payload.get("status") == "cancelled":
         status = "cancelled"
+    if stopped and getattr(handle, "no_tool", False) is True:
+        binding = getattr(handle, "no_tool_evidence", None)
+        try:
+            if not isinstance(binding, _NoToolEvidence):
+                raise BoardError("PRIVATE_PATH_UNSAFE", "The no-tool handle has no frozen evidence binding")
+            _retain_no_tool_evidence(binding, payload)
+        except (OSError, ValueError, TypeError, BoardError, RecursionError) as error:
+            diagnostic = {"status": "failed", "reason": str(error),
+                          "nativeStatus": payload.get("status"), "nativeCode": payload.get("code")}
+            if isinstance(binding, _NoToolEvidence):
+                diagnostic.update(privateRoot=str(binding.private_root), evidenceRoot=str(binding.evidence_root),
+                                  identity={"adapter": binding.adapter, "taskId": binding.task_id,
+                                            "attemptId": binding.attempt_id, "generation": binding.generation,
+                                            "directory": str(binding.directory)})
+            if isinstance(error, BoardError):
+                diagnostic.update(reasonCode=error.code, **error.details)
+            handle.evidence_retention_failure = diagnostic
+            payload = {**payload, "status": "error", "code": "evidence-retention-failed", "evidenceRetention": diagnostic}
+            status = "failed"
     return AdapterOutcome(status=status, result=payload, error=payload.get("code") if status != "ok" else None,
                           exit_code=handle.process.returncode, shutdown_confirmed=stopped)

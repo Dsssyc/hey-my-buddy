@@ -16,12 +16,16 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 # ``support`` puts the project's own ``src`` directory first on sys.path, so the
 # tests exercise this checkout rather than any installed copy of the package.
 from support import BoardTestCase, wait_for
 
 from buddy.errors import BoardError
+from buddy.adapters.base import AdapterOutcome
+from buddy.private_dirs import attempt_root, ensure_private_dir
 from buddy.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
 from buddy.worker.worker import Worker
 
@@ -275,6 +279,36 @@ class TestConcurrency(BoardTestCase):
 
 class TestCrashWindows(BoardTestCase):
     """Group 3: no duplicate execution and no silently lost committed result."""
+
+    def _isolated_worker_claim(self, adapter: str):
+        task_id = f"stop-proof-{adapter}"
+        attempt_id = f"attempt-{adapter}"
+        native_adapter = "codex" if adapter in {"decision", "review-check"} else adapter
+        client = SimpleNamespace(
+            progress=lambda *_args, **_kwargs: None,
+            call=lambda *_args, **_kwargs: {
+                "harness": {"adapter": native_adapter, "available": True, "revision": 1, "command": ["mock"]}
+            },
+        )
+        worker = Worker(f"w-{adapter}", self.directory, client=client, log=lambda _message: None)
+        worker.spool.write_startup({"nonce": "a" * 32, "attemptId": attempt_id})
+        claim = {
+            "task": {"taskId": task_id, "spec": {
+                "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), "timeoutSeconds": 60,
+                "reviewCheck": {"adapter": "codex"} if adapter == "review-check" else None,
+            }},
+            "attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
+            "decisionInput": {"routingMode": "fast", "profile": {"adapter": "codex"}}
+            if adapter == "decision" else None,
+        }
+        return worker, claim
+
+    @staticmethod
+    def _finished_fake_handle():
+        return SimpleNamespace(
+            pid=123, pgid=123, cancel_requested=False,
+            wait=lambda timeout: 0, shutdown_confirmed=lambda: True,
+        )
 
     def test_crash_before_spawn_releases_the_attempt_honestly(self):
         board = self.board()
@@ -534,6 +568,257 @@ class TestCrashWindows(BoardTestCase):
             "shutdown is confirmed from the owned handle, not inferred from the missing marker",
         )
         self.assertIsNone(result["result"], "no adapter outcome exists for a worker failure")
+
+    def test_native_controller_exit_does_not_prove_native_stop_after_collect_failure(self):
+        """A gone outer controller cannot release credentials for an unseen native child."""
+        import buddy.worker.worker as worker_module
+
+        for adapter in ("codex", "zcode", "claude", "dsh", "decision", "review-check"):
+            with self.subTest(adapter=adapter):
+                worker, claim = self._isolated_worker_claim(adapter)
+                private_adapter = "codex" if adapter in {"decision", "review-check"} else adapter
+                private_root = ensure_private_dir(attempt_root(
+                    self.directory, private_adapter, claim["task"]["taskId"], claim["attempt"]["attemptId"]
+                ))
+                credential = private_root / "agent-credential.json"
+                credential.write_text('{"token":"private-test-sentinel"}')
+                handle = self._finished_fake_handle()
+                cancelled = []
+
+                def collect_failure(_handle, _context):
+                    raise RuntimeError("native collection failed")
+
+                fake_adapter = SimpleNamespace(
+                    available=lambda: (True, None), prepare=lambda _context: None,
+                    start=lambda _context: handle, collect=collect_failure,
+                    cancel=lambda owned: cancelled.append(owned),
+                )
+                with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                        mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+                    receipt = worker.execute(claim)
+                self.assertFalse(receipt["report"]["shutdownConfirmed"])
+                self.assertEqual(cancelled, [handle])
+                self.assertTrue(credential.exists(), "unknown native stop must retain credentials")
+
+    def test_native_collect_proof_survives_later_receipt_failure(self):
+        """A durable receipt error cannot erase a completed native stop proof."""
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("codex")
+        private_root = ensure_private_dir(attempt_root(
+            self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"]
+        ))
+        credential = private_root / "agent-credential.json"
+        credential.write_text('{"token":"private-test-sentinel"}')
+        handle = self._finished_fake_handle()
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=lambda _context: None,
+            start=lambda _context: handle,
+            collect=lambda _handle, _context: AdapterOutcome(
+                status="failed", result={"status": "native-error"}, shutdown_confirmed=True,
+            ),
+            cancel=lambda _handle: self.fail("proved stopped handle must not need cancellation"),
+        )
+        original_receipt = worker.receipt
+        calls = 0
+
+        def fail_first_receipt(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("injected receipt failure")
+            return original_receipt(*args)
+
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}), \
+                mock.patch.object(worker, "receipt", side_effect=fail_first_receipt):
+            receipt = worker.execute(claim)
+        self.assertEqual(calls, 2)
+        self.assertTrue(receipt["report"]["shutdownConfirmed"])
+        self.assertFalse(credential.exists(), "native stop proof permits credential cleanup")
+
+    def test_native_collect_proof_survives_later_cleanup_failure(self):
+        """Cleanup errors retain stop proof and get another chance in the exception path."""
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("zcode")
+        private_root = ensure_private_dir(attempt_root(
+            self.directory, "zcode", claim["task"]["taskId"], claim["attempt"]["attemptId"]
+        ))
+        credential = private_root / "agent-credential.json"
+        credential.write_text('{"token":"private-test-sentinel"}')
+        handle = self._finished_fake_handle()
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=lambda _context: None,
+            start=lambda _context: handle,
+            collect=lambda _handle, _context: AdapterOutcome(
+                status="failed", result={"status": "native-error"}, shutdown_confirmed=True,
+            ),
+            cancel=lambda _handle: self.fail("proved stopped handle must not need cancellation"),
+        )
+        original_cleanup = worker._cleanup_attempt_credentials
+        calls = 0
+
+        def fail_first_cleanup(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("injected cleanup failure")
+            return original_cleanup(*args)
+
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}), \
+                mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=fail_first_cleanup):
+            receipt = worker.execute(claim)
+        self.assertEqual(calls, 2)
+        self.assertTrue(receipt["report"]["shutdownConfirmed"])
+        self.assertFalse(credential.exists(), "exception cleanup removes the stopped attempt credential")
+
+    def test_persistent_cleanup_error_cannot_erase_native_stop_or_prevent_receipt(self):
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("claude")
+        private_root = ensure_private_dir(attempt_root(
+            self.directory, "claude", claim["task"]["taskId"], claim["attempt"]["attemptId"]
+        ))
+        credential = private_root / "agent-credential.json"
+        credential.write_text('{"token":"private-test-sentinel"}')
+        handle = self._finished_fake_handle()
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=lambda _context: None, start=lambda _context: handle,
+            collect=lambda _handle, _context: AdapterOutcome(status="failed", shutdown_confirmed=True),
+            cancel=lambda _handle: self.fail("complete native stop proof already exists"),
+        )
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}), \
+                mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=RuntimeError("cleanup unavailable")):
+            receipt = worker.execute(claim)
+        self.assertTrue(receipt["report"]["shutdownConfirmed"])
+        self.assertEqual(receipt["report"]["status"], "failed")
+        self.assertTrue(credential.exists(), "cleanup failed, so credentials must remain for diagnosis")
+
+    def test_virtual_adapter_receipt_retains_evidence_failure_paths(self):
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("decision")
+        handle = self._finished_fake_handle()
+        private_root = attempt_root(self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"])
+        diagnostic = {"status": "failed", "privateRoot": str(private_root / "no-tool-fixture"),
+                      "evidenceRoot": str(self.directory / "attempts" / claim["task"]["taskId"] /
+                                          claim["attempt"]["attemptId"] / "no-tool-fixture")}
+        handle.evidence_retention_failure = diagnostic
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=lambda _context: None, start=lambda _context: handle,
+            collect=lambda _handle, _context: AdapterOutcome(
+                status="failed", result={"status": "error", "code": "evidence-retention-failed"},
+                error="evidence-retention-failed", shutdown_confirmed=True),
+            cancel=lambda _handle: self.fail("complete native stop proof already exists"),
+        )
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+            receipt = worker.execute(claim)
+        self.assertTrue(receipt["report"]["shutdownConfirmed"])
+        self.assertEqual(receipt["report"]["result"]["evidenceRetention"], diagnostic)
+
+    def test_retry_start_discounts_previous_stop_proof_and_keeps_credentials(self):
+        """The next start can spawn before raising without returning a handle."""
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("codex")
+        private_root = ensure_private_dir(attempt_root(
+            self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"]
+        ))
+        credential = private_root / "agent-credential.json"
+        first_handle = self._finished_fake_handle()
+        starts = 0
+
+        def start(_context):
+            nonlocal starts
+            starts += 1
+            credential.write_text('{"token":"private-test-sentinel"}')
+            if starts == 2:
+                raise RuntimeError("spawn may have happened before start returned")
+            return first_handle
+
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=lambda _context: None,
+            start=start,
+            collect=lambda _handle, _context: AdapterOutcome(
+                status="failed", result={"modelStarted": False, "code": "native-exit"},
+                shutdown_confirmed=True,
+            ),
+            cancel=lambda _handle: self.fail("the prior stopped handle is no longer current"),
+        )
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+            receipt = worker.execute(claim)
+        self.assertEqual(starts, 2, "the first confirmed pre-model failure must trigger one retry")
+        self.assertFalse(receipt["report"]["shutdownConfirmed"])
+        self.assertTrue(credential.exists(), "second start's uncertain child retains its credential")
+
+    def test_start_error_without_handle_does_not_retry_unknown_child(self):
+        """A matching executable error cannot prove start failed before spawn."""
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("codex")
+        private_root = ensure_private_dir(attempt_root(
+            self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"]
+        ))
+        credential = private_root / "agent-credential.json"
+        starts = 0
+
+        def uncertain_start(_context):
+            nonlocal starts
+            starts += 1
+            credential.write_text('{"token":"private-test-sentinel"}')
+            raise FileNotFoundError(2, "injected after possible spawn", "mock")
+
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=lambda _context: None,
+            start=uncertain_start,
+            collect=lambda _handle, _context: self.fail("no handle was returned"),
+            cancel=lambda _handle: self.fail("no handle was returned"),
+        )
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+            receipt = worker.execute(claim)
+        self.assertEqual(starts, 1, "unknown first start cannot safely launch a retry")
+        self.assertFalse(receipt["report"]["shutdownConfirmed"])
+        self.assertTrue(credential.exists(), "unknown stop retains the credential")
+
+    def test_retry_preparation_failure_preserves_previous_stop_proof(self):
+        """A failed validation before the next start leaves the prior proof intact."""
+        import buddy.worker.worker as worker_module
+
+        worker, claim = self._isolated_worker_claim("codex")
+        prepared = 0
+        started = 0
+
+        def prepare(_context):
+            nonlocal prepared
+            prepared += 1
+            if prepared == 2:
+                raise BoardError("ADAPTER_UNAVAILABLE", "injected retry validation failure")
+
+        def start(_context):
+            nonlocal started
+            started += 1
+            return self._finished_fake_handle()
+
+        fake_adapter = SimpleNamespace(
+            available=lambda: (True, None), prepare=prepare, start=start,
+            collect=lambda _handle, _context: AdapterOutcome(
+                status="failed", result={"modelStarted": False, "code": "native-exit"},
+                shutdown_confirmed=True,
+            ),
+            cancel=lambda _handle: self.fail("the prior handle already stopped"),
+        )
+        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+            receipt = worker.execute(claim)
+        self.assertEqual(prepared, 2)
+        self.assertEqual(started, 1, "the second preparation must fail before another spawn")
+        self.assertTrue(receipt["report"]["shutdownConfirmed"])
 
     def test_commit_before_lost_reply_is_replayed_not_duplicated(self):
         board = self.board()

@@ -83,7 +83,7 @@ class DecisionCapabilityTests(unittest.TestCase):
 
     def test_decision_dispatches_generic_request_with_frozen_input_and_no_agent_authority(self):
         class Native(Adapter):
-            name = "native-fixture"
+            name = "codex"
             read_only_structured = True
             read_only_structured_verified = True
 
@@ -98,18 +98,22 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
             budget = router.budget("brief")
-            document = {"profile": {"adapter": "native-fixture", "provider": "fixture", "model": "model", "effort": "off"},
+            document = {"profile": {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([PROFILE_ID]),
                         "profiles": [{"profileId": PROFILE_ID}], "task": "bounded read"}
             context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
                                        spec={"cwd": root, "timeoutSeconds": 60}, directory=directory,
-                                       runtime={}, environment={}, decision_input=document,
+                                       runtime={}, environment={"BUDDY_STATE_DIR": str(Path(root) / "state"),
+                                           "BUDDY_RUNTIME_ROOT": str(Path(root) / "runtime"), "BUDDY_DEV_SOURCE": "1"}, decision_input=document,
                                        turn={"input": {}}, agent_credential="must-not-pass")
             with mock.patch("buddy.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
                 "buddy.adapters.adapter", return_value=Native()
             ):
                 handle = DecisionAdapter().start(context)
-            prepare.assert_called_once_with(manifest, directory)
+            from buddy.private_dirs import context_root
+            private_root = context_root(context, "codex")
+            prepare.assert_called_once_with(manifest, private_root)
+            self.assertFalse(private_root.is_relative_to(directory))
             child, request = calls[0]
             self.assertIsInstance(request, ReadOnlyStructuredRequest)
             self.assertEqual(request.cwd, str(frozen))
@@ -118,7 +122,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertEqual(request.budget, budget)
             self.assertIsNone(child.turn)
             self.assertIsNone(child.agent_credential)
-            self.assertEqual(child.spec["model"], "model")
+            self.assertEqual(child.spec["model"], "fixture-model")
             self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
 
     def test_unverified_capability_is_rejected_before_input_preparation_or_spawn(self):

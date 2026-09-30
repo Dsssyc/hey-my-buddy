@@ -97,9 +97,10 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])
-        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        from buddy.private_dirs import context_root
+        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         self.assertEqual(len(credentials["token"]), 64)
-        self.assertEqual(oct((context.directory / "inquiry.json").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(oct((context_root(context, "zcode") / "inquiry.json").stat().st_mode & 0o777), "0o600")
 
     def test_child_finish_does_not_replace_or_disable_root_finish(self):
         _, outcome = self.execute(self.context("child-first"))
@@ -190,7 +191,8 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, first = self.execute(first_context)
         self.assertEqual(first.status, "failed", first.to_report())
         self.assertNotIn("turn", first.result)
-        root = Path(json.loads((first_context.directory / "zcode-control.json").read_text())["nativeRoot"])
+        from buddy.private_dirs import context_root
+        root = Path(json.loads((context_root(first_context, "zcode") / "zcode-control.json").read_text())["nativeRoot"])
         prior_session = json.loads((root / "sessions.fixture.json").read_text())["sessionId"]
         _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
         self.assertEqual(second.status, "ok", second.to_report())

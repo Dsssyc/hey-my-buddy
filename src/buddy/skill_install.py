@@ -163,8 +163,9 @@ def install(params: dict) -> dict:
     from .contracts import CONTRACT_VERSION
     print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
     if (state / 'board.sqlite3').exists() and not (state / 'upgrade.json').exists():
-        from .upgrade import idle_snapshot
+        from .upgrade import idle_snapshot, layout_readiness
         idle_snapshot(state)
+        layout_readiness(state)
     home.mkdir(parents=True, exist_ok=True)
     target = home / SKILL
     lock = os.open(home / f".{SKILL}-install.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -175,8 +176,9 @@ def install(params: dict) -> dict:
             from .upgrade import upgrade
             upgrade({})  # Recover the recorded generation before starting another install.
         if (state / 'board.sqlite3').exists():
-            from .upgrade import idle_snapshot
+            from .upgrade import idle_snapshot, layout_readiness
             idle_snapshot(state)
+            layout_readiness(state)
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:

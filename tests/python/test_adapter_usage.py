@@ -230,7 +230,7 @@ class DshUsageContractTests(unittest.TestCase):
     def test_the_runner_receives_the_attempt_private_sidecar_path(self):
         context = self.context()
         arguments = DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "t",
-                                                     "resultsPath": "/tmp/results.jsonl"})
+                                                     "resultsPath": "/tmp/results.jsonl", "errorPath": "/tmp/results.error.json"})
         self.assertIn("--usage-file", arguments)
         self.assertEqual(arguments[arguments.index("--usage-file") + 1], str(native_usage_sidecar_path(context)))
         self.assertEqual(native_usage_sidecar_path(context).name, "native-usage.json")

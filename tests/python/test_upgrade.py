@@ -3,14 +3,26 @@ import json
 import os
 from pathlib import Path
 from unittest import mock
-from buddy import backup, upgrade
+from buddy import backup, private_dirs, upgrade
 from buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def stopped_attempt(self, board):
+        task_id = board.call('task_submit', {'requestId':'upgrade-legacy', 'task':'stopped legacy attempt',
+            'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/true']})['task']['runId']
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET state='completed',selected_attempt_id='attempt' WHERE task_id=?", (task_id,))
+            connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
+                               "execution_state,adapter,shutdown_confirmed,created_at,updated_at)"
+                               " VALUES('attempt',?,1,'fixture','fixture','finished','command',1,'then','then')",
+                               (task_id,))
+        return task_id
+
     def test_upgrade_backs_up_board_with_historical_codex_auth_link(self):
         board = self.board()
         state = board.directory
+        task_id = self.stopped_attempt(board)
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
@@ -18,7 +30,7 @@ class UpgradeTests(BoardTestCase):
         endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old',
                     'pid': 123, 'contractVersion': '0.19.0'}
         (state / 'control.json').write_text(json.dumps(endpoint))
-        home = state / 'attempts/run/attempt/native/codex-home'
+        home = state / 'attempts' / task_id / 'attempt/native/codex-home'
         home.mkdir(parents=True)
         secret = self.directory / 'private-auth.json'
         secret.write_text('private credential')
@@ -39,12 +51,14 @@ class UpgradeTests(BoardTestCase):
         self.assertTrue(result['upgraded'], result)
         manifest = backup.verify(Path(result['backup']['path']))
         self.assertFalse(any('codex-home' in name for name in manifest['files']))
-        self.assertTrue((home / 'auth.json').is_symlink())
+        self.assertFalse((home / 'auth.json').is_symlink())
+        self.assertTrue((private_dirs.attempt_root(state, 'codex', task_id, 'attempt') / 'native/codex-home/cache.sqlite').exists())
         self.assertEqual(secret.read_text(), 'private credential')
 
     def test_upgrade_succeeds_with_no_tool_private_links_in_attempts(self):
         board = self.board()
         state = board.directory
+        task_id = self.stopped_attempt(board)
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
@@ -52,7 +66,7 @@ class UpgradeTests(BoardTestCase):
         endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old',
                     'pid': 123, 'contractVersion': '0.19.0'}
         (state / 'control.json').write_text(json.dumps(endpoint))
-        invocation = state / ('attempts/run/attempt/no-tool-' + 'a' * 32)
+        invocation = state / ('attempts/' + task_id + '/attempt/no-tool-' + 'a' * 32)
         dsh_modules = invocation / 'dsh-home/profiles/headless/node_modules'
         dsh_modules.mkdir(parents=True)
         (dsh_modules / '.bin').symlink_to(self.directory)
@@ -63,7 +77,6 @@ class UpgradeTests(BoardTestCase):
         (codex_home / 'auth.json').symlink_to(secret)
         (invocation / 'call-1').mkdir(parents=True)
         (invocation / 'call-1/request.json').write_text('{"prompt":"call evidence"}')
-        (state / 'attempts/run/attempt/scratch-link').symlink_to(secret)
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
              mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
@@ -79,17 +92,49 @@ class UpgradeTests(BoardTestCase):
         self.assertTrue(result['upgraded'], result)
         manifest = backup.verify(Path(result['backup']['path']))
         entries = set(manifest['files'])
-        prefix = 'state/attempts/run/attempt/no-tool-' + 'a' * 32 + '/'
+        prefix = 'state/attempts/' + task_id + '/attempt/no-tool-' + 'a' * 32 + '/'
         self.assertIn(prefix + 'call-1/request.json', entries)
         self.assertFalse(any(name.startswith(prefix + 'dsh-home/') for name in entries))
         self.assertFalse(any(name.startswith(prefix + 'native/') for name in entries))
-        self.assertEqual(manifest['skippedAttemptEntries'],
-                         {'count': 1, 'paths': ['attempts/run/attempt/scratch-link']})
+        self.assertGreaterEqual(manifest['skippedAttemptEntries']['count'], 2)
         leaked = [name for name in entries if (Path(result['backup']['path']) / name).read_bytes().find(b'private credential') >= 0]
         self.assertEqual(leaked, [])
-        self.assertTrue((dsh_modules / '.bin').is_symlink())
-        self.assertTrue((codex_home / 'auth.json').is_symlink())
+        self.assertFalse((dsh_modules / '.bin').is_symlink())
+        self.assertTrue((private_dirs.attempt_root(state, 'dsh', task_id, 'attempt') /
+                         invocation.name / 'dsh-home/profiles/headless/node_modules/.bin').is_symlink())
+        self.assertFalse((codex_home / 'auth.json').is_symlink())
         self.assertEqual(secret.read_text(), 'private credential')
+
+    def test_failed_runtime_switch_restores_legacy_session_layout(self):
+        board = self.board()
+        state = board.directory
+        task_id = self.stopped_attempt(board)
+        old = state / 'attempts' / task_id / 'attempt/sessions'
+        old.mkdir(parents=True)
+        (old / 'session.jsonl').write_text('retained session')
+        root = self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        previous.mkdir(parents=True)
+        target.mkdir()
+        endpoint = {'runtimeIdentity':'runtime:' + previous.name, 'serviceId':'old',
+                    'pid':123, 'contractVersion':'0.19.0'}
+        (state / 'control.json').write_text(json.dumps(endpoint))
+        health = {**endpoint, 'maxConcurrent':1, 'waitCapacity':32}
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(root)}), \
+             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
+             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('buddy.upgrade.runtime.read_ready', return_value={'sourceCommit':'fixture'}), \
+             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir':str(target)}), \
+             mock.patch('buddy.upgrade.probe', return_value=health), \
+             mock.patch('buddy.upgrade.detach'), \
+             mock.patch('buddy.upgrade.start', side_effect=[BoardError('INJECTED','target failed'), health]), \
+             mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints':True}), \
+             mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete':True}):
+            result = upgrade.upgrade({})
+        self.assertFalse(result['upgraded'], result)
+        self.assertEqual(result['failure'], 'INJECTED')
+        self.assertEqual((old / 'session.jsonl').read_text(), 'retained session')
+        self.assertFalse((private_dirs.attempt_root(state, 'dsh', task_id, 'attempt') / 'sessions').exists())
 
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
@@ -185,6 +230,59 @@ class UpgradeTests(BoardTestCase):
         self.assertFalse((state / 'upgrade.json').exists())
         self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
 
+    def _assert_fence_rejects_new_path(self, relative: str, *, linked: bool):
+        board = self.board()
+        state = board.directory.resolve()
+        root = self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        previous.mkdir(parents=True)
+        endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old',
+                    'pid': 123, 'contractVersion': '0.19.0'}
+        (state / 'control.json').write_text(json.dumps(endpoint))
+        health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
+        original_write = upgrade.write_journal
+        inserted = False
+        sentinel = self.directory / 'outside-sentinel'
+        sentinel.write_text('keep outside')
+
+        def fenced_write(path, value):
+            nonlocal inserted
+            original_write(path, value)
+            if path == state / 'upgrade.json' and not inserted:
+                inserted = True
+                candidate = state / relative
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                if linked:
+                    candidate.symlink_to(sentinel)
+                else:
+                    candidate.write_text('new undeclared content')
+
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
+             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
+             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('buddy.upgrade.probe', return_value=health), \
+             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('buddy.upgrade.write_journal', side_effect=fenced_write), \
+             mock.patch('buddy.upgrade.detach') as detach, \
+             mock.patch('buddy.upgrade.start', return_value=health) as start, \
+             mock.patch('buddy.upgrade.backup.create') as create:
+            result = upgrade.upgrade({})
+        self.assertTrue(inserted)
+        self.assertEqual(result['error']['code'], 'BACKUP_PREFLIGHT_FAILED', result)
+        self.assertIn(relative, result['error']['details']['paths'])
+        detach.assert_not_called()
+        start.assert_not_called()
+        create.assert_not_called()
+        self.assertFalse((state / 'upgrade.json').exists())
+        self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
+        self.assertEqual(sentinel.read_text(), 'keep outside')
+
+    def test_fenced_upgrade_refuses_new_linked_evidence_before_detach(self):
+        self._assert_fence_rejects_new_path('controls/new.json', linked=True)
+
+    def test_fenced_upgrade_refuses_new_unknown_content_before_detach(self):
+        self._assert_fence_rejects_new_path('attempts/unknown.txt', linked=False)
+
     def test_transaction_admission_rechecks_a_fence_after_rpc_entry(self):
         board = self.board()
         (board.directory / 'upgrade.json').write_text('{}')
@@ -226,7 +324,9 @@ class UpgradeTests(BoardTestCase):
         control.write_text('{"changed":true}')
         with board.store.db.write() as connection:
             connection.execute("INSERT INTO meta(key,value) VALUES('post-backup','changed')")
+        (board.directory / '.restore.sqlite3').write_bytes(b'partial earlier restore')
         upgrade.restore(board.directory,current)
+        self.assertFalse((board.directory / '.restore.sqlite3').exists())
         self.assertEqual(json.loads(control.read_text()),{'original':True})
         self.assertEqual((native/'sessions.sqlite').read_bytes(),b'native')
         self.assertTrue((home/'auth.json').is_symlink())
@@ -236,6 +336,72 @@ class UpgradeTests(BoardTestCase):
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT value FROM meta WHERE key='post-backup'").fetchone())
         upgrade.idle_snapshot(board.directory)
+
+    def test_restore_rejects_linked_snapshot_without_truncating_target(self):
+        board = self.board()
+        state = board.directory
+        current = Path(backup.create(board.store)['path'])
+        sentinel = self.directory / 'outside-sentinel'
+        sentinel.write_bytes(b'keep outside')
+        (state / '.restore.sqlite3').symlink_to(sentinel)
+        with self.assertRaises(BoardError) as caught:
+            upgrade.restore(state, current)
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+        self.assertEqual(sentinel.read_bytes(), b'keep outside')
+        self.assertTrue((state / '.restore.sqlite3').is_symlink())
+
+    def test_restore_rejects_reparse_snapshot_without_changing_sentinel(self):
+        board = self.board()
+        state = board.directory.resolve()
+        current = Path(backup.create(board.store)['path'])
+        snapshot = state / '.restore.sqlite3'
+        snapshot.write_bytes(b'keep reparse sentinel')
+        original_linked = private_dirs.linked
+        with mock.patch('buddy.private_dirs.linked', side_effect=lambda path: path == snapshot or original_linked(path)):
+            with self.assertRaises(BoardError) as caught:
+                upgrade.restore(state, current)
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+        self.assertEqual(snapshot.read_bytes(), b'keep reparse sentinel')
+
+    def test_restore_rejects_linked_intermediate_parent_before_recovery(self):
+        board = self.board()
+        state = board.directory
+        current = Path(backup.create(board.store)['path'])
+        alias = self.directory / 'linked-state-parent'
+        alias.symlink_to(state, target_is_directory=True)
+        with mock.patch('buddy.upgrade.backup.recover') as recover:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.restore(alias, current)
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+        recover.assert_not_called()
+
+    def test_restore_rejects_linked_backup_parent_before_verification(self):
+        board = self.board()
+        current = Path(backup.create(board.store)['path'])
+        alias = self.directory / 'linked-backup-parent'
+        alias.symlink_to(current.parent, target_is_directory=True)
+        with mock.patch('buddy.upgrade.backup.recover') as recover:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.restore(board.directory, alias / current.name)
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+        recover.assert_not_called()
+
+    def test_restore_rejects_linked_state_destination_without_touching_target(self):
+        board = self.board()
+        state = board.directory
+        control = state / 'controls/x.json'
+        control.parent.mkdir()
+        control.write_text('{"backedUp":true}')
+        current = Path(backup.create(board.store)['path'])
+        sentinel = self.directory / 'outside-sentinel'
+        sentinel.write_bytes(b'keep outside')
+        control.unlink()
+        control.symlink_to(sentinel)
+        with self.assertRaises(BoardError) as caught:
+            upgrade.restore(state, current)
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+        self.assertEqual(sentinel.read_bytes(), b'keep outside')
+        self.assertTrue(control.is_symlink())
 
     def test_startup_timeout_never_signals_a_daemon_or_cancels_work(self):
         board=self.board()

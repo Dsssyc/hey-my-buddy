@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import sys
 import secrets
 import uuid
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..errors import BoardError
+from ..private_dirs import context_root, ensure_private_dir, linked
 from .base import ExecutionContext
 
 MAX_INPUT_BYTES = 262144
@@ -47,39 +49,91 @@ def input_hash(value: dict) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
-def private_json(path: Path, value: dict, *, exclusive: bool = False) -> None:
-    """Write a bounded private artifact; immutable receipts must not overwrite."""
-    raw = canonical_json(value).encode()
-    target = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp") if exclusive else path
-    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | (os.O_EXCL if exclusive else os.O_TRUNC)
-    fd = os.open(target, flags, 0o600)
+def guard_private_path(path: Path) -> Path:
+    """Inspect every component without resolving away a hostile link/reparse point."""
+    path = Path(path).absolute()
+    # Only canonicalize the macOS root aliases, as the private-directory API does.
+    if sys.platform == "darwin" and len(path.parts) > 1 and path.parts[1] in ("var", "tmp"):
+        path = Path("/private", *path.parts[1:])
+    for component in (*reversed(path.parents), path):
+        if linked(component):
+            raise BoardError("PRIVATE_PATH_UNSAFE", "Private path contains a linked component", path=str(component))
+    return path
+
+
+def private_json(path: Path, value: object, *, exclusive: bool = False) -> None:
+    """Publish ordinary JSON without following links, including any parent component."""
+    _private_bytes(path, canonical_json(value).encode(), exclusive=exclusive)
+
+
+def _private_bytes(path: Path, raw: bytes, *, exclusive: bool = False) -> None:
+    path = guard_private_path(path)
     try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BoardError("PRIVATE_PATH_UNSAFE", "Private artifact target is not a regular file", path=str(path))
+    target = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    parent = None
+    # Pin each POSIX directory without following links so a replacement after the
+    # component checks cannot redirect the temporary file or its publication.
+    if os.name != "nt":
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        parent = os.open(path.anchor, flags)
+        try:
+            for part in path.parent.parts[1:]:
+                child = os.open(part, flags, dir_fd=parent)
+                os.close(parent)
+                parent = child
+        except BaseException:
+            os.close(parent)
+            raise
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    created = False
+    try:
+        guard_private_path(target)
+        fd = os.open(target.name if parent is not None else target, flags, 0o600,
+                     **({"dir_fd": parent} if parent is not None else {}))
+        created = True
         with os.fdopen(fd, "wb") as stream:
             if hasattr(os, "fchmod"):
                 os.fchmod(stream.fileno(), 0o600)
             else:
+                guard_private_path(target)
                 os.chmod(target, 0o600)
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
+        guard_private_path(path)
         if exclusive:
-            os.link(target, path)
-        if os.name != "nt":
-            parent = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(parent)
-            finally:
-                os.close(parent)
+            os.link(target.name if parent is not None else target, path.name if parent is not None else path,
+                    **({"src_dir_fd": parent, "dst_dir_fd": parent} if parent is not None else {}))
+        else:
+            os.replace(target.name if parent is not None else target, path.name if parent is not None else path,
+                       **({"src_dir_fd": parent, "dst_dir_fd": parent} if parent is not None else {}))
+        if parent is not None:
+            os.fsync(parent)
     finally:
-        if exclusive:
-            target.unlink(missing_ok=True)
+        try:
+            if created:
+                if parent is not None:
+                    try:
+                        os.unlink(target.name, dir_fd=parent)
+                    except FileNotFoundError:
+                        pass
+                else:
+                    guard_private_path(target)
+                    target.unlink(missing_ok=True)
+        finally:
+            if parent is not None:
+                os.close(parent)
 
 
 def prepare_turn(context: ExecutionContext) -> None:
-    context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(context.directory, 0o700)
-    context.task_file().write_text(context.spec["task"])
-    os.chmod(context.task_file(), 0o600)
+    ensure_private_dir(context.directory)
+    _private_bytes(context.task_file(), context.spec["task"].encode())
     write_turn_files(context)
     verify_workspace(context)
 
@@ -91,6 +145,7 @@ def write_turn_files(context: ExecutionContext) -> None:
         raise BoardError("INVALID_ARGUMENT", "the governed turn input exceeds its byte bound")
     private_json(context.turn_input_file(), context.turn_input)
     if context.agent_credential:
+        ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
         private_json(context.credential_file(), {
             "token": context.agent_credential, "taskId": context.task_id,
             "attemptId": context.attempt_id, "generation": context.generation, "turnId": context.turn_id,
@@ -107,19 +162,20 @@ def workspace_cwd(context: ExecutionContext) -> str:
 
 #: ``sun_path`` budget for a private Unix socket. The attempt directory can be
 #: deep, so callers fall back to a short temp directory and keep the credentials
-#: (not the socket) in the attempt directory the service reads.
+#: (not the socket) in the harness-private attempt directory the service reads.
 UNIX_SOCKET_PATH_BUDGET = 105 if sys.platform.startswith("linux") else 101
 
 
 def inquiry_paths(context: ExecutionContext) -> dict:
     """Owner-private paths and token for one attempt's inquiry bridge.
 
-    The credentials file always lives in the attempt directory so the service can
+    The credentials file always lives in the harness-private attempt directory so the service can
     find it; only the socket may move to a short temp directory. Every directory is
     created 0700 and the token is hex so it can never be parsed as an option.
     """
+    private_root = ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
     candidates = [
-        context.directory,
+        private_root,
         Path("/tmp") / "hey-my-buddy-inquiry" / context.attempt_id,
         Path(os.environ.get("TMPDIR", "/tmp")) / "hey-my-buddy-inquiry" / context.attempt_id,
     ]
@@ -127,16 +183,15 @@ def inquiry_paths(context: ExecutionContext) -> dict:
         (candidate for candidate in candidates if len(str(candidate / "inquiry.sock").encode()) <= UNIX_SOCKET_PATH_BUDGET),
         candidates[-1],
     )
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(directory, 0o700)
+    directory = ensure_private_dir(directory)
     credentials = {
         "socketPath": str(directory / "inquiry.sock"),
-        "resultsPath": str(directory / "inquiry.results.jsonl"),
-        "errorPath": str(directory / "inquiry.sock.error.json"),
+        "resultsPath": str(context.directory / "inquiry.results.jsonl"),
+        "errorPath": str(context.directory / "inquiry.sock.error.json"),
         "token": secrets.token_hex(32),
     }
-    context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    credentials_path = context.directory / "inquiry.json"
+    ensure_private_dir(context.directory)
+    credentials_path = private_root / "inquiry.json"
     private_json(credentials_path, credentials)
     return {"directory": directory, **credentials}
 

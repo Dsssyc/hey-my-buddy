@@ -25,6 +25,7 @@ from typing import Any
 from . import schemas
 from .errors import BoardError
 from .store import BoardStore
+from .private_dirs import attempt_root
 
 PROTOCOL_VERSION = 1
 DEFAULT_TRANSPORT_TIMEOUT_MS = 1500
@@ -234,7 +235,8 @@ def observe(store: BoardStore, params: dict) -> dict:
     view = store.task_get({k: params[k] for k in ("runId", "taskId") if k in params})["task"]
     attempt = view.get("selectedAttempt") or {}
     adapter = view.get("adapter")
-    credentials = inquiry_credentials(store.directory / "attempts" / view["taskId"] / attempt.get("attemptId", ""))
+    credentials = (inquiry_credentials(attempt_root(store.directory, adapter, view["taskId"], attempt["attemptId"]))
+                   if adapter in {"dsh", "zcode"} and attempt.get("attemptId") else None)
     if credentials is None:
         credentials = _credentials_from_log_paths(attempt)
     recorded = None
@@ -295,7 +297,9 @@ def observe(store: BoardStore, params: dict) -> dict:
                 _mark_unavailable(store, view["taskId"], inquiry_id, result.get("code"))
         live = _live(result.get("value")) if result.get("ok") and inquiry_id is None else live
 
-    journal = read_journal(credentials.get("resultsPath") if credentials else None)
+    evidence_journal = (store.directory / "attempts" / view["taskId"] / attempt["attemptId"] /
+                        "inquiry.results.jsonl") if attempt.get("attemptId") else None
+    journal = read_journal(credentials.get("resultsPath") if credentials else str(evidence_journal) if evidence_journal else None)
     if inquiry_id is not None and inquiry_id in journal["entries"]:
         record = journal["entries"][inquiry_id]
         mismatch = _journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))

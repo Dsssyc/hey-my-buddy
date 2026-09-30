@@ -4,12 +4,12 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
-import shutil
 import subprocess
 import time
 
 from .errors import BoardError
 from . import workspace
+from .private_dirs import remove_tree
 
 #: Upper bound for writing the private mirror before the Router starts.
 MATERIALIZE_SECONDS = 120
@@ -133,7 +133,8 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
 
 def discard(root: Path) -> None:
     """Remove a Router mirror; the manifest and digests remain the durable evidence."""
-    shutil.rmtree(root, ignore_errors=True)
+    if root.exists():
+        remove_tree(root)
 
 
 def verify(manifest: dict, root: Path, expected: str) -> dict:

@@ -522,24 +522,35 @@ class Worker:
         # The holder records the live child handle the instant it exists. Recovery
         # decisions are made from that handle — never from whether a marker file
         # happened to be written, which can fail after a child is already running.
-        holder: dict = {"handle": None, "adapter": None, "started": False}
+        holder: dict = {"handle": None, "adapter": None, "started": False, "start_invoked": False}
         try:
             return self._execute_guarded(claim, task, spec, attempt, directory, holder)
         except BaseException as error:  # noqa: BLE001 - every failure becomes a receipt
             handle = holder.get("handle")
             implementation = holder.get("adapter")
-            shutdown_confirmed = False
-            if handle is not None and implementation is not None:
+            shutdown_confirmed = holder.get("confirmed_stopped") is True
+            if not shutdown_confirmed and handle is not None and implementation is not None:
                 try:
                     implementation.cancel(handle)
                     handle.wait(timeout=15)
-                    shutdown_confirmed = handle.shutdown_confirmed()
                 except Exception as cleanup_error:  # noqa: BLE001 - keep the honest default
                     self.log(f"could not confirm this attempt's child stopped: {cleanup_error!r}")
-                    shutdown_confirmed = False
-            elif not holder.get("started"):
-                # start() raised before it returned a handle, so no process exists.
+                # Command owns one group. For every harness adapter, including
+                # decision and review-check, the outer controller can stop
+                # while its separately owned native process survives.
+                if spec["adapter"] == "command":
+                    try:
+                        shutdown_confirmed = handle.shutdown_confirmed() is True
+                    except Exception as proof_error:  # noqa: BLE001 - an unreadable proof is unknown
+                        self.log(f"could not inspect the command's stop proof: {proof_error!r}")
+            elif not shutdown_confirmed and not holder.get("start_invoked"):
+                # Validation failed before start() could spawn anything.
                 shutdown_confirmed = True
+            if shutdown_confirmed:
+                try:
+                    self._cleanup_attempt_credentials(claim, spec, task, attempt)
+                except Exception as cleanup_error:
+                    self.log(f"private credential cleanup needs attention ({cleanup_error!r})")
             self.log(
                 f"execution failed after the attempt started: {error!r} "
                 f"(shutdownConfirmed={shutdown_confirmed})"
@@ -608,8 +619,11 @@ class Worker:
                             return self._review_unavailable(claim, directory, history, 'router-review-unverified')
                     return self._execute_selected(claim, task, spec, attempt, directory, holder)
             except (OSError, BoardError) as error:
-                # Popen/prepare failures are retryable only before a child exists.
-                # Any spawned child keeps its ordinary receipt and stop ownership.
+                # A start() error with no returned handle may still follow spawn.
+                # Retry only if start was never called or the previous child has
+                # independently produced complete stop proof.
+                if holder.get('start_invoked') and not holder.get('confirmed_stopped'):
+                    raise
                 startup_failure = (isinstance(error, BoardError) and error.code in {'ADAPTER_UNAVAILABLE', 'HARNESS_UNAVAILABLE', 'HARNESS_PREMODEL_FAILED'})
                 startup_failure = startup_failure or (isinstance(error, OSError) and error.filename in record.get('command', []))
                 if retry and not holder.get('started') and startup_failure:
@@ -695,6 +709,11 @@ class Worker:
             )
         started = time.monotonic()
         holder["adapter"] = implementation
+        # A previous pre-model retry may have proved its own child stopped. That
+        # proof cannot cover this start(): it might spawn before raising a handle.
+        holder.pop("confirmed_stopped", None)
+        holder.pop("handle", None)
+        holder["start_invoked"] = True
         handle = implementation.start(context)
         holder["handle"] = handle
         holder["started"] = True
@@ -749,12 +768,21 @@ class Worker:
             renewal.stop()
             renewal.join(timeout=2)
         outcome = implementation.collect(handle, context)
+        holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
+        # Virtual adapters project native results. Keep the controller's retention
+        # failure diagnostic in the final receipt even when that projection omits it.
+        retention_failure = getattr(handle, "evidence_retention_failure", None)
+        if isinstance(retention_failure, dict) and isinstance(outcome.result, dict):
+            outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
+        if outcome.shutdown_confirmed:
+            self._cleanup_attempt_credentials(claim, spec, task, attempt)
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
                 and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
                 and outcome.result.get('code') in {'adapter-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
             fsync_json(directory / 'harness-prestart-failure.json', {'code': outcome.result['code'], 'shutdownConfirmed': True})
             holder['started'] = False
+            holder['confirmed_stopped'] = True
             holder.pop('handle', None)
             raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
         if timed_out and outcome.status == "ok":
@@ -777,6 +805,19 @@ class Worker:
         report["logPaths"] = context.log_paths()
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
+
+    def _cleanup_attempt_credentials(self, claim: dict, spec: dict, task: dict, attempt: dict) -> None:
+        from ..private_dirs import cleanup_attempt_credentials
+        private_adapter = spec["adapter"]
+        if private_adapter == "decision":
+            private_adapter = ((claim.get("decisionInput") or {}).get("profile") or {}).get("adapter")
+        elif private_adapter == "review-check":
+            private_adapter = "codex"
+        if private_adapter in {"dsh", "zcode", "codex", "claude", "command"}:
+            try:
+                cleanup_attempt_credentials(self.state_dir, private_adapter, task["taskId"], attempt["attemptId"])
+            except (OSError, BoardError) as cleanup_error:
+                self.log(f"private credential cleanup needs attention ({cleanup_error!r})")
 
     def _nonce(self) -> str:
         intent = self.spool.read_startup() or {}

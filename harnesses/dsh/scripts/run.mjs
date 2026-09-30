@@ -319,6 +319,8 @@ try {
       effort: { type: 'string' },
       timeout: { type: 'string', default: String(DEFAULT_TIMEOUT_SECONDS) },
       'log-dir': { type: 'string' },
+      'flat-log-dir': { type: 'boolean', default: false },
+      'private-dir': { type: 'string' },
       'dsh-bin': { type: 'string' },
       'settings-file': { type: 'string' },
       'session-root': { type: 'string' },
@@ -329,6 +331,7 @@ try {
       'inquiry-socket': { type: 'string' },
       'inquiry-token': { type: 'string' },
       'inquiry-results': { type: 'string' },
+      'inquiry-error': { type: 'string' },
       'turn-input-file': { type: 'string' },
       'turn-output-file': { type: 'string' },
       'activity-file': { type: 'string' },
@@ -375,6 +378,7 @@ if (values['task-file'] !== undefined && values['task-file'].trim() === '') {
 const inquiryRawSocket = values['inquiry-socket'] === undefined ? undefined : values['inquiry-socket'].trim();
 const inquiryToken = values['inquiry-token'] === undefined ? undefined : values['inquiry-token'].trim();
 const inquiryRawResults = values['inquiry-results'] === undefined ? undefined : values['inquiry-results'].trim();
+const inquiryRawError = values['inquiry-error'] === undefined ? undefined : values['inquiry-error'].trim();
 const inquiryParts = [inquiryRawSocket, inquiryToken, inquiryRawResults].filter(part => part !== undefined).length;
 if (inquiryParts !== 0 && inquiryParts !== 3) {
   fail('--inquiry-socket, --inquiry-token and --inquiry-results must be supplied together');
@@ -382,6 +386,7 @@ if (inquiryParts !== 0 && inquiryParts !== 3) {
 if (inquiryRawSocket !== undefined && inquiryRawSocket === '') fail('--inquiry-socket must not be blank');
 if (inquiryToken !== undefined && inquiryToken === '') fail('--inquiry-token must not be blank');
 if (inquiryRawResults !== undefined && inquiryRawResults === '') fail('--inquiry-results must not be blank');
+if (inquiryRawError !== undefined && (!isAbsolute(inquiryRawError) || inquiryRawError.includes('\0'))) fail('--inquiry-error must be an absolute path');
 if (inquiryToken !== undefined && (inquiryToken.length > 256 || inquiryToken.includes('\0'))) {
   fail('--inquiry-token must be at most 256 characters and contain no NUL');
 }
@@ -634,6 +639,10 @@ function createLogDir() {
   try {
     if (logParent !== undefined) {
       mkdirSync(logParent, { recursive: true, mode: 0o700 });
+      if (values['flat-log-dir']) {
+        if (lstatSync(logParent).isSymbolicLink() || !isDirectory(logParent)) throw new Error('unsafe log directory');
+        return logParent;
+      }
       return mkdtempSync(join(logParent, 'deepseek-delegate-run-'));
     }
     return mkdtempSync(join(tmpdir(), 'deepseek-delegate-logs-'));
@@ -687,7 +696,7 @@ if (inquiryRawSocket !== undefined) {
       if ((parent.mode & 0o077) !== 0) throw new Error('its parent is not owner-private (0700)');
       inquirySocketPath = resolvedSocket;
       inquiryResultsPath = resolve(inquiryRawResults);
-      inquiryErrorPath = `${resolvedSocket}${INQUIRY_ERROR_SUFFIX}`;
+      inquiryErrorPath = inquiryRawError === undefined ? `${resolvedSocket}${INQUIRY_ERROR_SUFFIX}` : resolve(inquiryRawError);
     } catch (error) {
       inquiryMountError = `inquiry socket directory is unusable: ${error.message}`;
     }
@@ -698,7 +707,9 @@ let tempDir;
 let settingsCopy;
 let patchFile;
 try {
-  tempDir = mkdtempSync(join(tmpdir(), 'deepseek-delegate-settings-'));
+  const privateParent = values['private-dir'] === undefined ? tmpdir() : resolve(values['private-dir']);
+  if (values['private-dir'] !== undefined && (!isAbsolute(values['private-dir']) || !isDirectory(privateParent) || lstatSync(privateParent).isSymbolicLink())) throw new Error('unsafe private directory');
+  tempDir = mkdtempSync(join(privateParent, 'deepseek-delegate-settings-'));
   settingsCopy = join(tempDir, 'settings.json');
   patchFile = join(tempDir, 'patch.json');
   writeFileSync(settingsCopy, JSON.stringify(runSettings), { mode: 0o600 });
@@ -1005,7 +1016,7 @@ function emitPayload(payload) {
   clearTimeout(killTimer);
   clearTimeout(failsafeTimer);
   try {
-    if (tempDir !== undefined) rmSync(tempDir, { recursive: true, force: true });
+    if (tempDir !== undefined && payload.processState?.shutdownConfirmed === true) rmSync(tempDir, { recursive: true, force: true });
   } catch { /* best effort: never skip the result because cleanup failed */ }
   // A grouped run is only a success when the host verified the membership.
   const grouped = payload.workspace === undefined || payload.workspace.enabled !== true || payload.workspace.bound === true;
@@ -1037,7 +1048,7 @@ async function settle(status, exitCode, signal, error) {
     shutdownConfirmed = !processGroupAlive();
   }
   try {
-    if (tempDir !== undefined) rmSync(tempDir, { recursive: true, force: true });
+    if (tempDir !== undefined && shutdownConfirmed) rmSync(tempDir, { recursive: true, force: true });
   } catch { /* best effort */ }
   const workspace = workspaceEnabled ? await finalizeGrouping(status, shutdownConfirmed) : baseWorkspace();
   settling = false;

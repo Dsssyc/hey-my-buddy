@@ -17,12 +17,13 @@ from pathlib import Path
 from test_zcode import ZcodeFixtureCase
 
 from buddy import inquiry as inquiry_module
+from buddy.private_dirs import context_root
 
 
 class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
     def credentials(self, context, timeout=20):
         """Wait until the attempt mounted its bridge AND admitted the root turn."""
-        path = context.directory / "inquiry.json"
+        path = context_root(context, "zcode") / "inquiry.json"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if path.is_file():
@@ -42,8 +43,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         return credentials, asked["value"]
 
     def release(self, context):
-        (context.directory / "native-logs").mkdir(exist_ok=True)
-        (context.directory / "native-logs" / "release-turn").touch()
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
 
     def records(self, credentials, inquiry_id):
         path = Path(credentials["resultsPath"])
@@ -53,11 +53,11 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
                 if line.strip() and json.loads(line).get("inquiryId") == inquiry_id]
 
     def native_log(self, context, name):
-        path = context.directory / "native-logs" / name
+        path = context_root(context, "zcode") / "native-logs" / name
         return path.read_text() if path.exists() else ""
 
     def wait_file(self, context, name, timeout=20):
-        path = context.directory / "native-logs" / name
+        path = context_root(context, "zcode") / "native-logs" / name
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not path.exists():
             time.sleep(0.05)
@@ -113,7 +113,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"]["disposition"], "completed")
         self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
-        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         records = self.records(credentials, "q-1")
         self.assertEqual([record["state"] for record in records], ["queued", "delivered", "answered"])
 
@@ -131,7 +131,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
-        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         records = self.records(credentials, "q-1")
         self.assertEqual(records[0]["state"], "queued")
         self.assertEqual(records[-1]["state"], "unavailable")
@@ -147,7 +147,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
-        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         records = self.records(credentials, "q-1")
         self.assertEqual([record["state"] for record in records], ["queued", "delivered", "unavailable"])
         self.assertIn("ended before this inquiry was answered", records[-1]["reason"])
@@ -183,7 +183,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertTrue(receipt_text.lstrip().startswith("{"), receipt_text)
         discarded = inquiry_module.bridge_request(credentials, "discard", {"inquiryId": "q-1"})
         self.assertTrue(discarded["ok"], discarded)
-        (context.directory / "native-logs" / "discard-done").touch()
+        (context_root(context, "zcode") / "native-logs" / "discard-done").touch()
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -209,7 +209,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         late = inquiry_module.bridge_request(credentials, "ask", {"inquiryId": "q-late", "question": "Too late?"},
                                              timeout_ms=4000)
         self.assertTrue(late["ok"], late)
-        (context.directory / "native-logs" / "late-asked").touch()
+        (context_root(context, "zcode") / "native-logs" / "late-asked").touch()
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())

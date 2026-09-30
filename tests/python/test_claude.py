@@ -446,7 +446,8 @@ class ClaudeAdapterTests(unittest.TestCase):
         argv = self.fixture_state()["argv"]
         self.assertEqual(flag_value(argv, "--setting-sources"), "")
         self.assertIn("--strict-mcp-config", argv)
-        self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context.directory.resolve()))
+        from buddy.private_dirs import context_root
+        self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context_root(context, "claude").resolve()))
 
     def test_unsupported_settings_policy_is_refused_before_any_model_input(self):
         for policy in ("", "global"):

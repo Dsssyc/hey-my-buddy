@@ -372,6 +372,8 @@ class DshNoDeadlineSentinelTests(unittest.TestCase):
             "MOCK_ARTIFACT_DIR": str(self.artifacts),
             "MOCK_STUB_SLEEP_SECONDS": "3",
             "BUDDY_PYTHON": sys.executable,
+            "BUDDY_STATE_DIR": str(self.root / "state"),
+            "BUDDY_RUNTIME_ROOT": str(self.root / "runtime"),
             "PYTHONPATH": os.pathsep.join([str(ROOT / "src"), str(ROOT / "tests" / "python")]),
         })
         return env
@@ -401,7 +403,7 @@ class DshNoDeadlineSentinelTests(unittest.TestCase):
     def test_the_runner_receives_the_zero_sentinel_verbatim(self):
         arguments = DshAdapter().arguments(
             self.context(timeout_seconds=0, stub=self.stub(DELAY_STUB)),
-            {"socketPath": "/tmp/unused.sock", "token": "0" * 64, "resultsPath": "/tmp/unused.jsonl"},
+            {"socketPath": "/tmp/unused.sock", "token": "0" * 64, "resultsPath": "/tmp/unused.jsonl", "errorPath": "/tmp/unused.error.json"},
         )
         self.assertEqual(arguments[arguments.index("--timeout") + 1], "0")
 

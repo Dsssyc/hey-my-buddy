@@ -392,11 +392,11 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
         context = ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
             spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30, "workspace": workspace},
-            directory=directory, runtime={}, environment=dict(os.environ), turn=turn,
+            directory=directory, runtime={}, environment={**os.environ, "BUDDY_STATE_DIR": str(directory / "state")}, turn=turn,
         )
         with mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)}):
             return DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "a" * 64,
-                                                    "resultsPath": "/tmp/inquiry.jsonl"})
+                                                    "resultsPath": "/tmp/inquiry.jsonl", "errorPath": "/tmp/inquiry.error.json"})
 
     def test_grouped_runs_keep_the_owning_harness_session_store(self):
         args = self.arguments(workspace=True)

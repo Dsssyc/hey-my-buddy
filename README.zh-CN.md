@@ -105,3 +105,5 @@ Codex Host 为每个运行中的委派派生一个只做监控的原生子代理
 仓库验证使用 uv 与受支持的 Node 版本（见 `apps/console/package.json`）。先执行 `npm --prefix apps/console ci` 准备控制台测试依赖，再执行 `uv run --frozen python -m buddy.checks`；完整检查包含由真实前端解析器读取合成预览数据的回归测试。
 
 B 批源码加入原生计费标注、额度耗尽的候选过滤，以及 Buddy 配置和 `harness-verify` 的当前版本审阅验证；新版本验证前沿用快速路由降级。取消显示记录中的发起者与理由，控制台说明已精简。Worker 独立账户和登录须在私有目录前提合入后继续。[源码与原生检查记录](docs/acceptance/worker-accounts-phase1-0.23.0.md)与日常安装分别记录。
+
+0.24.0 源码将 attempt 证据与 harness 私有状态分区。请求安装授权前，用新包的 `buddy backup-preflight '{}'` 查看将复制、跳过和拒绝的路径；它不启动服务、不写数据。安装器在停机前检查该清单，已识别且停止已证明的旧布局只在已验证备份后整理；凭据与原生私有目录不进入备份。详情见[操作文档](docs/reference/operations.md#backup-upgrade-and-storage-contract)。

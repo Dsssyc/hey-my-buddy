@@ -43,6 +43,10 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .conflict-banner { background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
 .conflict-details { flex-basis: 100%; margin: 0; padding-left: 18px; }
 .guard-banner { background: var(--subtle); color: var(--muted); border: 1px solid var(--line); }
+.backup-attention { align-items: stretch; flex-direction: column; }
+.backup-attention p { margin: 0; }
+.backup-attention summary { cursor: pointer; }
+.backup-attention ul { margin: 6px 0; padding-left: 18px; overflow-wrap: anywhere; }
 .attention-banner { background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
 .unavailable-mark { color: var(--warning); font-size: 10px; font-weight: 600; }
 .variant-switch .effort-choice.unavailable { border-style: dashed; color: var(--muted); }

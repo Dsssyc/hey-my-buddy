@@ -5,8 +5,9 @@ import { clockTime } from "./objective-display";
 import { useBackgroundInert } from "./modal";
 
 /** Fixed display order (0.16 storage panel); unknown ids stay visible after these. */
-const CATEGORY_ORDER = ["zcode", "workspaces", "runtimes", "backup", "durable"] as const;
+const CATEGORY_ORDER = ["harnesses", "zcode", "workspaces", "runtimes", "backup", "durable"] as const;
 const CATEGORY_LABEL: Record<string, string> = {
+  harnesses: "Harness 私有会话",
   zcode: "ZCode 私有主目录",
   workspaces: "受管检出",
   runtimes: "运行时",
@@ -33,6 +34,7 @@ const REASON_LABEL: Record<string, string> = {
   "retention-history-unproven": "保留期记录未证实",
   "retained-runtime": "保留的运行时",
   "owner-unproven": "归属未证实",
+  "user-account-protected": "账户目录由用户管理",
   "linked-path": "存在链接路径",
   "not-accepted": "目标尚未验收",
   "final-artifact-missing": "最终产物缺失",

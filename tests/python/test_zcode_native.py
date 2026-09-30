@@ -136,7 +136,8 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertNotIn("turn", first.result)
         self.assertFalse(failed.turn_output_file().exists())
         self.assertTrue(any(request["missingRequestRejected"] for request in self.requests))
-        root = Path(json.loads((failed.directory / "zcode-control.json").read_text())["nativeRoot"])
+        from buddy.private_dirs import context_root
+        root = Path(json.loads((context_root(failed, "zcode") / "zcode-control.json").read_text())["nativeRoot"])
         previous = next(json.loads(path.read_text())["sessionId"] for path in root.glob("*.json"))
         self.omit_first_request = False
         recovered = self.context(index=2, mode="reconstructed-new-session", effort="high", timeout=30)

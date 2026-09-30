@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from ..errors import BoardError
+from ..private_dirs import context_root, native_root, ensure_private_dir
 from .. import usage
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
@@ -56,6 +57,7 @@ class ZcodeAdapter(Adapter):
             return False, str(error)
 
     def prepare(self, context: ExecutionContext) -> None:
+        context.private_adapter = self.name
         if any(not isinstance(context.spec.get(k), str) or not context.spec[k].strip() for k in ("provider", "model", "effort")):
             raise BoardError("INVALID_ARGUMENT", "ZCode coding requires a complete provider, model and effort after routing", adapter=self.name)
         try:
@@ -75,17 +77,16 @@ class ZcodeAdapter(Adapter):
         if context.turn_output_file().exists():
             raise BoardError("CONFLICT", "the attempt already has a turn result; it cannot execute twice", adapter=self.name)
         turn_io.prepare_turn(context)
-        root = Path(state) / "harnesses" / "zcode" / hashlib.sha256(context.task_id.encode()).hexdigest()
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(root, 0o700)
+        root = ensure_private_dir(native_root(Path(state), self.name, context.task_id))
         # The controller hosts the private inquiry bridge: read-only activity is
         # always available, and a Host question is queued for cooperative
         # delivery at the root's next checkpoint (see
         # zcode_protocol.COOPERATIVE_INQUIRY_NOTE). No native command may inject
         # one.
         inquiry = turn_io.inquiry_paths(context)
-        turn_io.private_json(context.directory / "zcode-control.json", {
-            "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),
+        private_control = context_root(context, self.name) / "zcode-control.json"
+        turn_io.private_json(private_control, {
+            "directory": str(context.directory.resolve()), "privateRoot": str(context_root(context, self.name).resolve()), "nativeRoot": str(root.resolve()),
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
@@ -100,7 +101,7 @@ class ZcodeAdapter(Adapter):
         stdout, stderr = open_logs(paths)
         try:
             process = owned_popen([sys.executable, "-m", "buddy.adapters.zcode_runner", "--control",
-                                        str(context.directory / "zcode-control.json")],
+                                        str(context_root(context, self.name) / "zcode-control.json")],
                                        cwd=turn_io.workspace_cwd(context), env=controller_environment(context.directory, context.environment),
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                                        start_new_session=True, close_fds=True)
@@ -260,7 +261,7 @@ def _native_session(payload: dict, context: ExecutionContext, shutdown_confirmed
     bound = False
     if session_id:
         try:
-            control = json.loads((context.directory / "zcode-control.json").read_text())
+            control = json.loads((context_root(context, "zcode") / "zcode-control.json").read_text())
             native_root = Path(control["nativeRoot"])
             binding = native_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
             bound = binding.is_file()

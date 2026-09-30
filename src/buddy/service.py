@@ -288,6 +288,7 @@ class BoardService(_BaseResource):
 
     def health(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
+            from .backup import preflight
             schemas.reject_unknown(params, set(), "health")
             identity = runtime.resolve_runtime()
             pool = self.control.get("worker_pool") or {}
@@ -310,6 +311,7 @@ class BoardService(_BaseResource):
                 "maxConcurrent": self.store.max_concurrent,
                 "capacity": self.store.capacity_report(),
                 "routingHealth": self.decisions.health_summary(),
+                "backupPreflight": preflight(self.store.directory),
                 "managedWorkerIds": list(pool.get("workerIds") or []),
                 "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
                 "stoppedWorkerIds": list(pool.get("stoppedWorkerIds") or []),
@@ -474,6 +476,8 @@ class BoardService(_BaseResource):
 
             snapshot["capabilities"]["consoleAssets"] = assets_ready()
             snapshot["routingHealth"] = self.decisions.health_summary()
+            from .backup import preflight
+            snapshot["backupPreflight"] = preflight(self.store.directory)
             return snapshot
 
         return self._guard("console.snapshot", request_json, handler)

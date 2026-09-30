@@ -172,6 +172,8 @@ class ReviewProbeTests(unittest.TestCase):
                             "locationFingerprint": "frozen"}}
         context = ExecutionContext("task", "attempt", 1, {"adapter": "review-check", "reviewCheck": plan},
                                    self.root / "attempt", {}, {"BUDDY_DEV_SOURCE": "1", "BUDDY_CODEX_CLI": "/wrong",
+                                   "BUDDY_STATE_DIR": str(self.root / "state"),
+                                   "BUDDY_RUNTIME_ROOT": str(self.root / "runtime"),
                                    "BUDDY_AGENT_CREDENTIAL": "private"})
         handle = Mock()
         handle.shutdown_confirmed.return_value = True
@@ -193,6 +195,9 @@ class ReviewProbeTests(unittest.TestCase):
             self.assertNotIn("BUDDY_CODEX_CLI", internal.environment)
             self.assertNotIn("BUDDY_AGENT_CREDENTIAL", internal.environment)
             private_root = handle.review_fixture[0]
+            from buddy.private_dirs import context_root
+            self.assertTrue(private_root.is_relative_to(context_root(context, "codex")))
+            self.assertFalse(private_root.is_relative_to(context.directory))
             self.assertEqual(private_root.stat().st_mode & 0o777, 0o700)
             self.assertTrue(private_root.is_dir())
             outcome = adapter.collect(handle, context)
