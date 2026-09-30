@@ -66,7 +66,8 @@ test('raw harness probe omits governed fields and the terminal plugin', (t) => {
   const payload = parsePayload(result);
   assert.equal(Object.hasOwn(payload, 'turn'), false);
   assert.equal(Object.hasOwn(payload, 'turnResultPath'), false);
-  assert.equal(readArtifactJson(s.artifacts, 'patch.json').length, 1);
+  const patch = readArtifactJson(s.artifacts, 'patch.json');
+  assert.deepEqual(patch.map(row => row.id), ['settings', 'session-persistence-jsonl']);
   assert.equal(existsSync(s.outputFile), false);
 });
 

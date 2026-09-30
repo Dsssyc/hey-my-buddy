@@ -90,15 +90,80 @@ class StorageTests(BoardTestCase):
     def test_inventory_does_not_follow_a_link_and_reports_current_previous(self):
         board = self.board()
         root = Path(os.environ['BUDDY_RUNTIME_ROOT']);root.mkdir()
-        for name in ('current','previous','older'):
-            target=root/name;target.mkdir();(target/'READY.json').write_text('{}')
+        older = 'e' * 32
+        for name in ('current','previous',older):
+            target=root/name;target.mkdir()
+            (target/'READY.json').write_text(json.dumps({
+                'state': 'READY', 'contentId': name, 'format': 0,
+                'runtimeRoot': str(root), 'python': str(target / 'venv/bin/python'),
+            }))
         (board.directory/'runtime-retention.json').write_text(json.dumps({'current':'current','previous':'previous'}))
         with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), mock.patch('buddy.storage.runtime_usage', return_value=['runtime-in-use']):
             planned=board.call('storage_plan', {})
         rows=[r for r in planned['candidates'] if r['category']=='runtimes']
         self.assertEqual(len(rows),3)
         self.assertTrue(all(not r['eligible'] for r in rows))
-        self.assertIn('runtime-in-use', next(r for r in rows if r['path'].endswith('/older'))['reasons'])
+        self.assertIn('runtime-in-use', next(r for r in rows if r['path'].endswith('/' + older))['reasons'])
+
+    def test_pruning_reports_bad_entries_and_reclaims_an_unused_older_ready_format(self):
+        board = self.board()
+        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root.mkdir()
+        older = root / ('a' * 32)
+        older.mkdir()
+        (older / 'READY.json').write_text(json.dumps({
+            'state': 'READY', 'contentId': older.name, 'format': 0,
+            'runtimeRoot': str(root), 'python': str(older / 'venv/bin/python'),
+        }))
+        (older / 'payload').write_bytes(b'old runtime')
+        expected_bytes = sum(path.stat().st_size for path in older.iterdir())
+        active, unknown = 'b' * 32, 'c' * 32
+        for name in ('current', 'previous', active, unknown, 'incomplete'):
+            candidate = root / name
+            candidate.mkdir()
+            if name != 'incomplete':
+                (candidate / 'READY.json').write_text(json.dumps({
+                    'state': 'READY', 'contentId': name, 'format': 0,
+                    'runtimeRoot': str(root), 'python': str(candidate / 'venv/bin/python'),
+                }))
+        (root / 'install.lock').write_text('lock')
+        (root / 'linked').symlink_to(older, target_is_directory=True)
+        corrupt = root / 'corrupt-marker'
+        corrupt.mkdir()
+        (corrupt / 'READY.json').write_bytes(b'\xff')
+        nonregular = root / 'nonregular-marker'
+        (nonregular / 'READY.json').mkdir(parents=True)
+        false_identity = root / ('d' * 32)
+        false_identity.mkdir()
+        (false_identity / 'READY.json').write_text(json.dumps({
+            'state': 'READY', 'contentId': false_identity.name, 'format': 0,
+            'runtimeRoot': str(root), 'python': str(self.directory / 'outside-python'),
+        }))
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': 'current', 'previous': 'previous',
+        }))
+        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), \
+             mock.patch('buddy.storage.runtime_usage', side_effect=lambda path, *_: (
+                 ['runtime-in-use'] if path.name == active else
+                 ['process-inspection-unavailable'] if path.name == unknown else [])):
+            result = storage.prune_old_runtimes(board.store)
+        self.assertTrue(result['complete'])
+        self.assertEqual([row['path'] for row in result['removed']], [str(older)])
+        self.assertEqual(result['removedBytes'], expected_bytes)
+        self.assertFalse(older.exists())
+        skipped = {Path(row['path']).name: row['reasons'] for row in result['skipped']}
+        self.assertIn('retained-runtime', skipped['current'])
+        self.assertIn('retained-runtime', skipped['previous'])
+        self.assertIn('runtime-in-use', skipped[active])
+        self.assertIn('process-inspection-unavailable', skipped[unknown])
+        self.assertIn('runtime-identity-unproven', skipped['incomplete'])
+        self.assertIn('runtime-format-unsupported', skipped['install.lock'])
+        self.assertIn('linked-path', skipped['linked'])
+        self.assertIn('runtime-identity-unproven', skipped['corrupt-marker'])
+        self.assertIn('runtime-format-unsupported', skipped['nonregular-marker'])
+        self.assertIn('runtime-identity-unproven', skipped[false_identity.name])
+        self.assertEqual(len(result['removed']), 1)
+        self.assertEqual(len(result['skipped']), 10)
 
     def test_linked_native_root_does_not_read_or_reclaim_external_home(self):
         board=self.board()

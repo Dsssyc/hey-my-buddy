@@ -252,7 +252,7 @@ def normalize_spec(params: dict) -> dict:
         "cwd": _canonical_cwd(params.get("cwd")),
         "task": task_text,
         "timeoutSeconds": execution_timeout(params),
-        "workspace": optional_bool(params, "workspace", True),
+        "workspace": optional_bool(params, "workspace", False),
         "requiredCapabilities": string_list(params, "requiredCapabilities", limit=MAX_CAPABILITIES),
         "exclusiveResources": string_list(
             params, "exclusiveResources", limit=MAX_RESOURCES, pattern=RESOURCE_ID_PATTERN

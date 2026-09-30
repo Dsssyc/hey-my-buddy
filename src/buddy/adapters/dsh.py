@@ -117,7 +117,7 @@ class DshAdapter(Adapter):
             f"--inquiry-results={inquiry['resultsPath']}",
             f"--inquiry-error={inquiry['errorPath']}",
         ]
-        if not spec.get("workspace", True):
+        if not spec.get("workspace", False):
             # The session rollout becomes attempt-private through the runner's
             # supported per-run patch overlay on the JSONL session backend root.
             # This is only safe without workspace grouping: the installed
@@ -129,6 +129,8 @@ class DshAdapter(Adapter):
             # owning harness.
             args.append("--no-workspace")
             args.append(f"--session-root={ensure_private_dir(context_root(context, self.name) / 'sessions')}")
+        else:
+            args.append("--workspace")
         from ..harness_runtime import selected
         selected_harness = selected('dsh', context.environment)
         if selected_harness and selected_harness.get('executable'):

@@ -375,7 +375,7 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
 class DshNativeStorageArgumentsTests(unittest.TestCase):
     """Only the ungrouped session rollout moves; the DSH home and its credentials never do."""
 
-    def arguments(self, workspace: bool, *, governed: bool = False) -> list[str]:
+    def arguments(self, workspace: bool | None, *, governed: bool = False) -> list[str]:
         import tempfile
         from unittest import mock
 
@@ -391,7 +391,8 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
                                                   "previousSessionId": None, "context": {}, "executionWorkspace": {}}}
         context = ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30, "workspace": workspace},
+            spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30,
+                  **({} if workspace is None else {"workspace": workspace})},
             directory=directory, runtime={}, environment={**os.environ, "BUDDY_STATE_DIR": str(directory / "state")}, turn=turn,
         )
         with mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)}):
@@ -400,6 +401,7 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
 
     def test_grouped_runs_keep_the_owning_harness_session_store(self):
         args = self.arguments(workspace=True)
+        self.assertIn("--workspace", args)
         self.assertNotIn("--no-workspace", args)
         self.assertFalse(any(arg.startswith("--session-root") for arg in args), args)
         self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
@@ -413,6 +415,12 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
         # The relocated DSH home broke native credential resolution; the owning
         # home must never be moved or simulated again.
         self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
+
+    def test_missing_workspace_spec_stays_private(self):
+        args = self.arguments(workspace=None)
+        self.assertIn("--no-workspace", args)
+        self.assertNotIn("--workspace", args)
+        self.assertTrue(any(arg.startswith("--session-root=") for arg in args), args)
 
     def test_a_governed_turn_publishes_its_activity_sidecar_in_the_attempt_directory(self):
         plain = self.arguments(workspace=True)

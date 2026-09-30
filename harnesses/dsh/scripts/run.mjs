@@ -112,13 +112,14 @@ const USAGE = [
   '  --session-root <dir>    private session root for THIS ungrouped child only:',
   '                          a per-run patch overlay moves just the JSONL session',
   '                          backend under this attempt directory, so its rollout',
-  '                          never joins the user session store. Requires',
-  '                          --no-workspace, because the owning workspace bridge',
+  '                          never joins the user session store. Incompatible',
+  '                          with --workspace, because the owning workspace bridge',
   '                          verifies sessions in its own store. DSH_HOME, the',
   '                          credentials store and the settings document are',
   '                          never moved, so native auth keeps resolving from the',
   '                          owning harness',
-  '  --no-workspace          run without workspace grouping',
+  '  --workspace             explicitly group this run in the DSH sidebar',
+  '  --no-workspace          run without workspace grouping (the default)',
   '  --workspace-socket <p>  private host socket (default DSH_WORKSPACE_SOCKET,',
   '                          then $DSH_HOME/deepseek-delegate/workspace.sock)',
   '  --workspace-timeout <s> bound per socket request, 1-120 (default 15)',
@@ -324,6 +325,7 @@ try {
       'dsh-bin': { type: 'string' },
       'settings-file': { type: 'string' },
       'session-root': { type: 'string' },
+      workspace: { type: 'boolean', default: false },
       'no-workspace': { type: 'boolean', default: false },
       'workspace-socket': { type: 'string' },
       'workspace-timeout': { type: 'string', default: String(DEFAULT_WORKSPACE_TIMEOUT_SECONDS) },
@@ -350,8 +352,9 @@ if (process.platform === 'win32') {
   fail('Windows is not supported; this launcher manages POSIX process groups (macOS/Linux only)');
 }
 
-const workspaceEnabled = values['no-workspace'] !== true;
 const attachSession = values['attach-session'] === undefined ? undefined : values['attach-session'].trim();
+if (values.workspace && values['no-workspace']) fail('--workspace and --no-workspace cannot be combined');
+const workspaceEnabled = values.workspace || (attachSession !== undefined && !values['no-workspace']);
 
 if (values.cwd === undefined) fail(`--cwd is required\n\n${USAGE}`);
 if (values.cwd.trim() === '') fail('--cwd must not be blank');
@@ -407,12 +410,13 @@ if (rawSessionRoot !== undefined) {
   // A private session root is incompatible with workspace grouping: the owning
   // workspace bridge proves the completed session from ITS OWN session store
   // (`sessionPersistence.list()`), so the grouped run would fail as
-  // unknown-session and exit 1. Require an explicit --no-workspace.
+  // unknown-session and exit 1. Require an ungrouped run.
   if (workspaceEnabled) {
-    fail('--session-root requires --no-workspace: the workspace bridge verifies sessions in the owning host session store');
+    fail('--session-root cannot be combined with --workspace: the workspace bridge verifies sessions in the owning host session store');
   }
 }
-const sessionRootDir = rawSessionRoot === undefined ? undefined : resolve(rawSessionRoot);
+let sessionRootDir = rawSessionRoot === undefined ? undefined : resolve(rawSessionRoot);
+const attemptSessionRoot = sessionRootDir !== undefined;
 if (attachSession !== undefined && inquiryRawSocket !== undefined) {
   fail('--attach-session does not mount an inquiry bridge: it runs no model task');
 }
@@ -655,6 +659,9 @@ const logDir = createLogDir();
 const stdoutLog = join(logDir, 'stdout.log');
 const stderrLog = join(logDir, 'stderr.log');
 const capturePath = workspaceEnabled ? join(logDir, CAPTURE_FILENAME) : null;
+// Standalone runs without an attempt root still keep sessions in this run's
+// private log directory. The Buddy adapter supplies its unified attempt root.
+if (!workspaceEnabled && sessionRootDir === undefined) sessionRootDir = join(logDir, 'sessions');
 
 // The per-run session override must be usable before the child starts; an
 // unusable path is a usage error, never a paid run whose session cannot
@@ -889,6 +896,7 @@ function baseWorkspace(bound = false) {
     id: workspaceInfo === undefined ? null : workspaceInfo.id,
     path: cwd,
     sessionId: null,
+    ...(typeof workspaceInfo?.created === 'boolean' ? { created: workspaceInfo.created } : {}),
   };
 }
 
@@ -922,7 +930,8 @@ async function finalizeGrouping(status, shutdownConfirmed) {
       workspaceId: workspaceInfo.id,
       cwd,
     }, { timeoutMs: workspaceTimeoutMs });
-    return { enabled: true, bound: true, id: adopted.id, path: adopted.path, sessionId: adopted.sessionId };
+    return { enabled: true, bound: true, id: adopted.id, path: adopted.path, sessionId: adopted.sessionId,
+      ...(typeof workspaceInfo?.created === 'boolean' ? { created: workspaceInfo.created } : {}) };
   } catch (error) {
     workspace.error = `grouping failed: ${error instanceof WorkspaceError ? error.message : 'unexpected grouping failure'}`;
     return workspace;
@@ -990,7 +999,8 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
       // moves ONLY the JSONL session backend's root through the per-run patch
       // overlay; the DSH home, credentials store and settings document keep
       // their owning-harness values, so native auth is never moved or simulated.
-      scope: sessionRootDir === undefined ? 'harness-user-store' : 'task-private-sessions',
+      scope: sessionRootDir === undefined ? 'harness-user-store'
+        : attemptSessionRoot ? 'task-private-sessions' : 'run-private-sessions',
       sessionRootPrivate: sessionRootDir !== undefined,
       sessionRootSource: sessionRootDir === undefined
         ? 'the owning harness session store'

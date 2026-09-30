@@ -19,7 +19,7 @@ async function fixture(t) {
   mkdirSync(artifacts);
   const mock = writeMockDsh(join(dir, 'bin'));
   const requests = [];
-  const state = { failAttach: false, wrongIdentity: false };
+  const state = { failAttach: false, wrongIdentity: false, created: true };
   const server = createServer(socket => {
     let buffer = '';
     socket.on('error', () => {});
@@ -30,7 +30,7 @@ async function fixture(t) {
       requests.push(request);
       let value;
       if (request.method === 'ping') value = { ready: true };
-      if (request.method === 'resolve') value = { id: 'workspace-1', path: dir };
+      if (request.method === 'resolve') value = { id: 'workspace-1', path: dir, created: state.created };
       if (request.method === 'attach') {
         // CLI must not attach until the model process has stopped.
         if (request.sessionId === 'session-mock-0001') assert.equal(existsSync(join(dir, 'exit-marker')), true);
@@ -43,7 +43,7 @@ async function fixture(t) {
   chmodSync(socketPath, 0o600);
   t.after(async () => { await new Promise(ok => server.close(ok)); rmSync(dir, { recursive: true, force: true }); });
   async function run(extra = [], overrides = {}, attach = false) {
-    const args = ['--cwd', dir, '--workspace-socket', socketPath];
+    const args = ['--cwd', dir, '--workspace', '--workspace-socket', socketPath];
     if (!attach) args.push('--task-file', task, '--settings-file', settings, '--dsh-bin', mock);
     args.push(...extra);
     return await new Promise((ok, no) => {
@@ -63,6 +63,7 @@ test('grouped run needs no web URL; verifies exact session after headless exit',
   const r = await f.run([], { DSH_WEB_URL: 'deliberately-invalid-obsolete-value' });
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.payload.workspace.bound, true);
+  assert.equal(r.payload.workspace.created, true);
   assert.equal(r.payload.workspace.sessionId, 'session-mock-0001');
   assert.deepEqual(f.requests.map(r => r.method), ['ping', 'resolve', 'attach']);
   assert.equal(r.stdout.includes('deliberately-invalid'), false);
@@ -82,6 +83,15 @@ test('binding failure preserves task status and can be retried without a model',
   assert.equal(retry.code, 0, retry.stderr);
   assert.equal(retry.payload.mode, 'attach');
   assert.equal(existsSync(join(f.artifacts, 'argv.json')), false);
+});
+
+test('grouped run reports an existing workspace without claiming creation', async t => {
+  const f = await fixture(t);
+  f.state.created = false;
+  const r = await f.run();
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.payload.workspace.bound, true);
+  assert.equal(r.payload.workspace.created, false);
 });
 
 test('missing bridge fails before model launch', async t => {

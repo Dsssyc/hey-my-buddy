@@ -75,6 +75,9 @@ class CodexAdapter(Adapter):
             raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter=self.name) from None
         turn_io.prepare_turn(context)
         root = ensure_private_dir(native_root(Path(context.environment["BUDDY_STATE_DIR"]), self.name, context.task_id))
+        from .codex_home import credential_source
+        source = credential_source(Path(context.environment["BUDDY_STATE_DIR"]), context.environment,
+                                   context.runtime.get('workerAccount'))
         turn_io.private_json(context.directory / "codex-control.json", {
             "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,
@@ -82,6 +85,7 @@ class CodexAdapter(Adapter):
             "taskFile": str(context.task_file()), "activityFile": str(context.directory / "activity.json"),
             "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
             "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
+            "credentialSource": source,
         })
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
@@ -108,6 +112,14 @@ class CodexAdapter(Adapter):
         payload = _read_result(Path(handle.log_paths["stdout"]))
         exit_code = handle.process.returncode
         shutdown = bool(payload and payload.get("processState", {}).get("shutdownConfirmed") is True and handle.shutdown_confirmed())
+        if shutdown and payload.get('codingHomePrepared') is True:
+            from .codex_home import remove_coding_auth
+            try:
+                removed = remove_coding_auth(native_root(Path(context.environment['BUDDY_STATE_DIR']), self.name, context.task_id))
+                payload['credentialCleanup'] = {'complete': True, 'removed': removed}
+            except (BoardError, OSError) as cleanup_error:
+                payload['credentialCleanup'] = {'complete': False,
+                    'error': cleanup_error.code if isinstance(cleanup_error, BoardError) else 'filesystem-error'}
         if payload is None:
             payload = {"status": "invalid-result", "code": "invalid-result", "error": "Codex controller produced no complete result"}
         status = "failed"
@@ -131,12 +143,12 @@ class CodexAdapter(Adapter):
             "adapter": "codex",
             "sessionId": session_id if isinstance(session_id, str) else None,
             "captured": isinstance(session_id, str) and bool(session_id),
-            "storageScope": "harness-user-store",
-            "storageOwner": "harness-user-store",
-            "nativeAppVisibility": "unknown",
+            "storageScope": "buddy-goal-private",
+            "storageOwner": "buddy-goal",
+            "nativeAppVisibility": "not-listed-in-native-app",
             "resumeMode": (context.turn_input or {}).get("resumeMode"),
             "resumable": bool(shutdown and (record is not None or checkpoint and checkpoint_resumable(payload, checkpoint))),
-            "note": "Codex owns the native thread in its configured home; App indexing visibility is unverified. Native continuation rechecks the goal, checkout, configuration and last completed turn binding.",
+            "note": "The native thread stays in this goal's private CODEX_HOME. Native continuation rechecks the goal, home, credential source, checkout, configuration and last completed turn binding; live App visibility requires native verification.",
         }
         payload["turnResultPath"] = str(context.turn_output_file())
         if isinstance(getattr(context, "effective_workspace", None), dict):

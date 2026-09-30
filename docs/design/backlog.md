@@ -20,15 +20,6 @@
   - 低风险任务适度探索样本少但能胜任的配置，并在路由记录中标明。
   - Host 的任务偏好只表达任务需要（如"需要强推理""需要快"），不写厂商或 harness 名称。
 
-## Worker 会话不出现在用户的 harness 界面
-
-- **Codex 与 DSH 的 Worker 会话会出现在用户自己的应用里。** 用户于 2026-09-30 确认：Codex 的历史中能看到 Worker 的线程，DSH 的侧边栏分组已被 Worker 会话"污染得不能看"；Claude Code 没有这个问题。ZCode 的 Worker 会话已按工作目标私有存储，不在 ZCode 应用中列出。原因：DSH 委派默认 `workspace: true`，通过 `dsh web` 中的 workspace bridge 把会话写入用户自己的会话库并挂到侧边栏分组（web profile 没运行时还会让委派直接失败，exit 2）；Codex 只有审阅与快速路由使用私有 CODEX_HOME，普通执行用的是用户自己的 `~/.codex`。用户同意按以下方式修改，计划放在 B 批第二阶段（依赖第 11 条的私有区）：
-  - DSH 默认不分组，使用 attempt 私有的会话目录；侧边栏分组改为用户显式开启的选项。同步 workers.md、operations.md 与 skill。
-  - Codex 普通执行也改用按工作目标划分的私有 CODEX_HOME，放在第 11 条的私有区，登录凭据的链接同样只放在私有区；续做的原生会话恢复使用同一私有目录。
-  - 清理 DSH 中已有的 Worker 会话与分组：服务依据记录的 workspace 会话标识，只清理 Buddy 创建的会话与分组。用户很少直接使用 DSH，表示不需要逐项确认；清理后报告数量，并且绝不触碰其他会话。
-  - Codex 历史中已有的 Worker 线程：先列出 Buddy 创建的线程，经用户确认后通过 Codex 原生的归档或删除接口处理。
-
 ## 服务与凭据
 
-- **安装后清理旧运行时失败，旧运行时越积越多。** 0.24.0 安装时运行时清理报告 `complete: false` 与 `NotADirectoryError`，安装器注明升级已验证、清理可单独重试。运行时目录中除当前与上一版外还留有 11 个旧目录（约 470 MB，最早为 2026-09-19），其中几个只有 48 KB 或 2 MB，像是不完整或早期格式的运行时。建议：清理遇到格式不符的目录时跳过并在结果中列出，而不是整体中止；早期格式的旧运行时在确认没有进程使用后照常回收；随 B 批第二阶段处理，之后可用 `buddy storage` 回收空间。（2026-09-30）
 - **Claude 适配器关于 `ANTHROPIC_API_KEY` 的注释与代码不符。** `src/buddy/adapters/claude_config.py` 的注释说保留该变量作为第一方密钥路径，但 `NATIVE_ENVIRONMENT_ALLOWLIST` 并不传递它，因此 Claude Worker 目前只能用订阅登录。建议在 ADR-019 实现时决定是否支持，并同步注释与 `docs/reference/claude.md`。（2026-09-29）
