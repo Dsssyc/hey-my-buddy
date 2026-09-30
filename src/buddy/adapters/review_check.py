@@ -153,7 +153,8 @@ class ReviewCheckAdapter(Adapter):
                       "；最后执行 /usr/bin/curl -q --noproxy '*' --head --verbose --max-time 3 " + url +
                       "。Host 已确认该端点响应 200。准确返回 marker；不要返回 sentinel 内容。"
                       "按 schema 描述其余操作。遇拒绝不绕过；只能输出真实结果。")
-            request = ReadOnlyStructuredRequest(str(frozen), prompt, SCHEMA, dict(_BUDGET), capture_evidence=True)
+            request = ReadOnlyStructuredRequest(str(frozen), prompt, SCHEMA, dict(_BUDGET), capture_evidence=True,
+                        native_probe={"sentinel": str(sentinel), "url": url})
             configuration = plan["configuration"]
             environment = {key: value for key, value in context.environment.items()
                            if key not in ("BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
@@ -224,7 +225,7 @@ class ReviewCheckAdapter(Adapter):
         usage = payload.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         usage = {key: usage.get(key) if type(usage.get(key)) is int and usage[key] >= 0 else None
-                 for key in ("elapsedMs", "toolCalls", "bytesRead")}
+                 for key in ("elapsedMs", "toolCalls", "bytesRead", "nativeProbeCalls")}
         usage["controllerElapsedMs"] = elapsed
         retained = False
         evidence_sha = None
