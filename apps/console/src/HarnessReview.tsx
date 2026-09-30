@@ -81,9 +81,9 @@ export function HarnessReview({ row, snapshot, api, canWrite, onRefresh }: {
     } finally { setBusy(false); }
   }
   return <div className="harness-review">
-    <span>审阅能力：{certificate?.verified ? "已验证" : labels[status] ?? "未验证"}</span>
+    <span className="harness-review-status">审阅能力：{certificate?.verified ? "已验证" : labels[status] ?? "未验证"}</span>
     <Help label="审阅能力验证说明">点击会调用所选模型检查权限，检查数据发给该模型提供方；最多增加一次格式纠正。</Help>
-    <label>验证配置 <select aria-label="审阅验证配置" value={profileId} disabled={busy || waiting || !!intent || !canWrite}
+    <label className="harness-review-config">验证配置 <select aria-label="审阅验证配置" value={profileId} disabled={busy || waiting || !!intent || !canWrite}
       onChange={event => setProfileId(event.target.value)}>
       <option value="">请选择配置</option>
       {profiles.map(profile => <option key={profile.profileId} value={profile.profileId}>{profile.model} / {profile.effort}</option>)}

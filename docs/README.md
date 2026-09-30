@@ -39,7 +39,7 @@ Daily [installation is 0.24.0/schema 15](acceptance/installed-0.24.0.md): the sh
 | [reference/cli.md](reference/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, result envelopes, event kinds and error codes |
 | [reference/operations.md](reference/operations.md) | Installation, runtime lifecycle, private state and environment, the DSH workspace bridge, recovery and removal |
 | [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, family preferences and notes, evidence, the reader/writer gate, the private console HTTP surface, the Buddy 配置/设置 pages and the two configured Router profiles |
-| [reference/console.md](reference/console.md) | One-time console entry, authenticated browser sessions, single-writer handoff, inactivity and CLI lifecycle |
+| [reference/console.md](reference/console.md) | Console access and CLI lifecycle, persistent sessions, Buddy configuration sections, deep links and verification |
 | [reference/objectives.md](reference/objectives.md) | Work-objective grouping, `objective-list`/`objective-timeline` read shapes, timeline presentation and the schema-13 offline preparation tool |
 | [reference/evaluation-maintenance.md](reference/evaluation-maintenance.md) | Harness-owned bounded fact preparation, archived reviews, shared card updates, publication and history |
 | [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol in both modes: the tool-free fast request and the read-only review request, frozen candidates, answer bounds, provisional budgets, input verification and the native capability boundary |
@@ -137,3 +137,5 @@ The [Codex monitoring and continuation repair](acceptance/codex-monitor-and-cont
 The [ADR-019 first-stage record](acceptance/worker-accounts-phase1-0.23.0.md) covers console copy, cancellation attribution, billing labels, exhaustion eligibility and data-backed review checks; its [native-check plan](design/adr019-native-checks.md) keeps per-check authorization and remaining platform limits explicit.
 
 [ADR-019 decision 11 private-directory source design](design/private-directories.md) inventories each adapter’s evidence, credentials and native content; [0.24.0 acceptance](acceptance/private-directories-0.24.0.md) records private fixtures, invariant coverage and remaining Windows/daily-board boundaries. This prerequisite adds no independent account or login behavior; B phase two stays paused until integration.
+
+[Buddy 配置分区导航 0.25.0](acceptance/buddy-config-sections-0.25.0.md) records the model, Router and Harness sections, deep links, aligned controls and synthetic browser matrix; verification and merge boundaries are recorded there.

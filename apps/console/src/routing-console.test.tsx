@@ -170,10 +170,13 @@ describe("routing configuration", () => {
       task: "不应出现在配置页的长任务说明。".repeat(200),
     }));
     const command = vi.fn();
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddy/router";
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command)} />);
-    await user.click(await screen.findByRole("button", { name: "详情" }));
+    await screen.findByRole("region", { name: "路由状态" });
+    // The Router section is the expanded page itself; the old stacked page's
+    // "详情" fold step is gone.
+    expect(screen.queryByRole("button", { name: "详情" })).toBeNull();
     const budget = screen.getByRole("radiogroup", { name: "审阅预算" });
     expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
     expect(screen.getAllByText(/快速路由固定 60 秒/).length).toBeGreaterThan(0);

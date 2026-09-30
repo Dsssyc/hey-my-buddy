@@ -82,7 +82,7 @@ function fixture() {
 
 async function openBuddy() {
   const user = userEvent.setup();
-  window.location.hash = "#buddy";
+  window.location.hash = "#buddy/harness";
   render(<App suppliedApi={fixture().api} />);
   await screen.findByRole("region", { name: "Harness 状态" });
   return user;

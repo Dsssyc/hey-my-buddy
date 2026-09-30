@@ -90,7 +90,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(records[2]["answer"]["toolCallId"], "call-answer-q-1")
         self.assertEqual(records[2]["answer"]["via"], "tool:buddy_answer_inquiry")
         self.assertEqual(records[2]["taskId"], "goal-1")
-        self.assertEqual(records[2]["attemptId"], "attempt-1")
+        self.assertEqual(records[2]["attemptId"], context.attempt_id)
         self.assertEqual(outcome.result["inquiry"]["requested"], 1)
         self.assertEqual(outcome.result["inquiry"]["answered"], 1)
         self.assertEqual(outcome.result["inquiry"]["queued"], 0)
@@ -239,6 +239,33 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertNotIn("child", json.dumps(answered[0]["answer"]))
         # The child's own answer text never reached the journal.
         self.assertNotIn("child answer must not count", json.dumps(records))
+
+    def test_concurrent_private_attempts_keep_late_questions_bound(self):
+        other = ZcodeFixtureCase()
+        other.setUp()
+        self.addCleanup(other.doCleanups)
+        attempts = []
+        for fixture in (self, other):
+            context = fixture.context("inquiry-late", timeout=40)
+            handle = fixture.adapter.start(context)
+            self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.2) if h.group_alive() else None)
+            attempts.append((fixture, context, handle, self.credentials(context)))
+        # Both bridges are alive before either finishes. A question must reach
+        # its own authenticated bridge and journal even with another suite live.
+        for fixture, context, handle, credentials in attempts:
+            self.release(context)
+            self.assertIsNotNone(self.wait_file(context, "finish-accepted"))
+            _, asked = self.ask(context, "q-late", "Too late?", credentials)
+            (context_root(context, "zcode") / "native-logs" / "late-asked").touch()
+            self.assertIsNotNone(handle.wait(40), "controller did not exit")
+            outcome = fixture.adapter.collect(handle, context)
+            self.assertEqual(outcome.status, "ok", outcome.to_report())
+            self.assertTrue(outcome.shutdown_confirmed)
+            records = self.records(credentials, "q-late")
+            self.assertEqual([record["state"] for record in records], ["queued", "unavailable"])
+            self.assertEqual(records[0]["questionSha256"], asked["questionSha256"])
+            self.assertEqual(records[0]["attemptId"], context.attempt_id)
+            self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
 
     def test_a_forged_answer_receipt_fails_the_whole_turn(self):
         context = self.context("inquiry-forged", timeout=40)

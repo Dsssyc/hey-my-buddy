@@ -751,9 +751,22 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .segment.checked.pref-exclude { border-color: var(--pref-exclude); background: var(--pref-exclude-wash); color: var(--pref-exclude); border-style: dashed; }
 .segment:has(input:disabled) { cursor: not-allowed; opacity: .6; }
 
-/* Buddy 配置: one routing line on top, then the list/detail split. */
-.buddy-page { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
-.buddy-page > .workspace-grid { flex: 1 0 420px; min-height: 420px; height: auto; }
+/* Buddy 配置: the active section owns the remaining shell height. */
+.buddy-page { height: 100%; min-height: 0; display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 12px; overflow: hidden; }
+.buddy-sections { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.buddy-sections a { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 12px; border-radius: 4px; color: var(--muted); font-size: 13px; }
+.buddy-sections svg { flex-shrink: 0; }
+.buddy-sections a:hover { background: var(--subtle); }
+.buddy-sections a[aria-current="page"] { color: var(--accent); background: var(--accent-wash); font-weight: 600; }
+.buddy-section-page { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.buddy-status { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-height: 36px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 12px; }
+.buddy-status a { overflow-wrap: anywhere; text-underline-offset: 3px; }
+.buddy-status a:hover { text-decoration: underline; }
+.buddy-status .status-attention { color: var(--warning); }
+.buddy-page .segment { min-height: 32px; }
+.buddy-section { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
+.buddy-models { overflow: hidden; scrollbar-gutter: auto; }
+.buddy-models > .workspace-grid { height: 100%; min-height: 0; }
 .routing-status-bar { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 12px; }
 .routing-status-bar.warning { border-color: var(--warning-line); background: var(--warning-wash); }
 .routing-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px; }
@@ -776,6 +789,7 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px; }
 .harness-status-facts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); min-width: 0; }
 .harness-status-line > .button { margin-left: auto; }
+.harness-status-line > .button { height: 32px; }
 .harness-status-bar > .guard-banner, .harness-status-bar > .success-message { margin: 0; padding: 6px 12px; }
 .harness-status-list { border-top: 1px solid var(--line); }
 .harness-status-row { border-top: 1px solid var(--line); }
@@ -784,9 +798,12 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-name { font-weight: 600; min-width: 5.5em; }
 .harness-summary { flex: 1 1 240px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .harness-row-actions { display: inline-flex; gap: 6px; margin-left: auto; }
-.harness-row-toggle { min-width: 24px; min-height: 24px; align-self: center; font-size: 15px; line-height: 1; }
+.harness-row-actions { align-items: center; }
+.harness-row-actions > button { height: 32px; }
+.harness-row-toggle { min-width: 32px; min-height: 32px; align-self: center; font-size: 15px; line-height: 1; }
 .harness-row-toggle:hover { color: var(--ink); background: var(--subtle); }
 .harness-detail { display: grid; gap: 8px; padding: 6px 12px 10px; border-top: 1px dashed var(--line); }
+.harness-account-controls:empty { display: none; }
 .harness-facts { display: grid; gap: 2px; margin: 0; }
 .harness-facts > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
 .harness-facts dt { color: var(--muted); }
@@ -815,12 +832,12 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .family-header h2 { font-size: 17px; }
 .family-fields { display: grid; gap: 14px; }
 .family-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-items: start; }
-.family-label { display: inline-flex; align-items: center; min-height: 28px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.family-label { display: inline-flex; align-items: center; min-height: 32px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .family-value { display: grid; gap: 8px; min-width: 0; }
 .family-value textarea { width: 100%; }
 .reason-input { max-width: 36em; font-size: 12px; }
 .concurrency-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.concurrency-row input { width: 80px; }
+.concurrency-row input { width: 80px; height: 32px; padding-block: 4px; }
 .evaluation-list { gap: 4px; }
 .evaluation-list > p { margin: 4px 0 6px; }
 .effort-evaluation { border: 1px solid var(--line); border-radius: 5px; }
@@ -872,6 +889,11 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .settings-page .panel-heading h2 { font-size: 16px; font-weight: 600; }
 .settings-page .segment { min-height: 36px; justify-content: center; }
 @media (max-width: 760px) {
+  .buddy-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
+  .buddy-sections { flex-direction: row; gap: 0; padding: 0; overflow: hidden; }
+  .buddy-sections a { flex: 1; justify-content: center; border-radius: 0; }
+  .buddy-sections a + a { border-left: 1px solid var(--line); }
+  .routing-details { grid-template-columns: minmax(0, 1fr); }
   .family-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .routing-status-line > .button { margin-left: 0; }
   .harness-status-line > .button, .harness-row-actions { margin-left: 0; }
@@ -917,6 +939,11 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .right-dock.side > .detail-stage .detail-tabs { background: var(--surface-raised); }
 .right-dock.side > .detail-stage .locator,
 .right-dock.side > .detail-stage .detail-header { position: relative; z-index: 1; }
-.harness-review { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-block: .5rem; }
+.harness-review { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 8px; min-width: 0; }
+.harness-review-status { display: inline-flex; align-items: center; min-height: 32px; }
+.harness-review .help { margin: 0; }
+.harness-review .help-button { width: 32px; height: 32px; }
+.harness-review-config { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; white-space: nowrap; }
+.harness-review-config select { flex: 1; width: auto; min-width: 0; height: 32px; padding: 4px 8px; }
+.harness-review > .button { height: 32px; padding-block: 4px; }
 .harness-review > p { flex-basis: 100%; margin: 0; }
-.harness-review select { max-width: 100%; }

@@ -97,6 +97,8 @@ export function Icon({
   name:
     | "tasks"
     | "models"
+    | "route"
+    | "terminal"
     | "settings"
     | "refresh"
     | "arrow"
@@ -109,6 +111,8 @@ export function Icon({
   const paths = {
     tasks: "M4 5h16M4 12h16M4 19h10",
     models: "m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5",
+    route: "M12 20V10M12 10l-6-6M12 10l6-6M3 4h3v3M18 7V4h3",
+    terminal: "M4 4h16v16H4ZM7 8l3 3-3 3M12 15h4",
     settings: "M4 7h16M4 17h16M8 4v6M16 14v6",
     refresh:
       "M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17",

@@ -30,7 +30,7 @@ const tabHashes: Record<Tab, string> = { tasks: "tasks", buddy: "buddy", setting
 /** Old bookmarks of the retired "模型卡片" (`models`) and "路由配置" (`settings`) pages land on their successor. */
 const legacyTabs: Record<string, Tab> = { models: "buddy", settings: "buddy" };
 function currentTab(): Tab {
-  const key = window.location.hash.slice(1);
+  const key = window.location.hash.slice(1).split("/")[0];
   const known = (Object.keys(tabs) as Tab[]).find(tab => tabHashes[tab] === key);
   return known ?? legacyTabs[key] ?? "tasks";
 }

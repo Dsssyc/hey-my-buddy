@@ -152,7 +152,7 @@ function fixture(options: FixtureOptions = {}) {
 }
 
 async function openBuddy(f: ReturnType<typeof fixture>) {
-  window.location.hash = "#buddy";
+  window.location.hash = "#buddy/harness";
   render(<App suppliedApi={f.api} />);
   await screen.findByRole("region", { name: "Harness 状态" });
 }

@@ -294,13 +294,16 @@ describe("the model family list", () => {
     expect(screen.getByRole("button", { name: "Claude Sonnet 5，已启用 1/2，Router" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^▸ Codex/ }));
     expect(screen.getByRole("button", { name: "GPT-6 Sol，已启用 0/2" })).toBeTruthy();
-    expect(screen.getByText("Router")).toBeTruthy();
+    // The Router mark belongs to the model list; the hidden Router section's
+    // own heading is a different element with the same word.
+    expect(within(screen.getByRole("region", { name: "模型家族" })).getByText("Router")).toBeTruthy();
   });
 
-  it("shows the recorded harness health beside the family list without calling anything", async () => {
+  it("opens recorded harness health from the global status without calling anything", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
+    await user.click(screen.getByRole("link", { name: "Harness 可用 1/2" }));
     const strip = screen.getByRole("region", { name: "Harness 状态" });
     expect(within(strip).getByText("可用 1/2")).toBeTruthy();
     expect(within(strip).getByText(/^找到：路径 \/Users\/fixture\/\.local\/bin\/claude · 版本 2\.0\.1/)).toBeTruthy();
@@ -446,7 +449,7 @@ describe("the Router menu", () => {
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
     await user.click(within(menu).getByRole("button", { name: "设为快速 Router" }));
-    expect(screen.getByRole("region", { name: "路由状态" }).textContent).toContain("快速 Router：Claude Sonnet 5 · medium");
+    expect(screen.getByRole("region", { name: "全局状态" }).textContent).toContain("快速 Router：可用");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0].configuration).toEqual({ fastRouterProfileId: mediumId });

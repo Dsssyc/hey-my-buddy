@@ -23,7 +23,7 @@ Details: [usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.
 4. At a boundary `decide` on helpers or `continue` with input; a routing boundary takes a legal configuration with a reason, or `reroute:true`. An enabled configuration may change with a reason unless `configurationLocked`; partial work is unverified. See [recovery](../../docs/reference/workflow.md).
 5. Verify changed paths, risky hunks and checks on the fixed artifact, then `integration-record` and `acknowledge` the exact sealed `artifactId` (`finalArtifactId` when delivered) and integration ID, or `notRequired` with a reason. Completion, prose and RPC replies are not acceptance. A waiting Host may finish directly; failed/cancelled goals use `verdict:"recorded"` for a conclusion. Reclaim reviewed checkouts with `workspace-cleanup-plan`/`workspace-cleanup-apply`.
 
-`buddy console` opens the fixed loopback URL, no login by default (`{"browser":false}` returns it). Optional login uses 10-minute entries; sessions have no age expiry and can be revoked in Settings ([console](../../docs/reference/console.md)).
+`buddy console`: fixed loopback URL, login off (`{"browser":false}` returns it). `Buddy 配置`: `模型` / `Router` / `Harness`. Login: 10-minute entries; sessions persist and can be revoked in [Settings](../../docs/reference/console.md).
 
 Before install approval, use the new package's `backup-preflight '{}'` (local, read-only); resolve refused/unknown paths. See [operations](../../docs/reference/operations.md).
 

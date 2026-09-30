@@ -388,8 +388,10 @@ describe("stale settings and unrelated saves", () => {
     render(<App suppliedApi={f.api} />);
     // The unavailable decision family stays hidden behind the filter.
     await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("button", { name: "详情" }));
-    expect(screen.getByText(/需要处理/)).toBeTruthy();
+    // The stale review Router is no longer a stacked detail page: the global
+    // status strip carries the attention and links to the effort it names.
+    const status = screen.getByRole("region", { name: "全局状态" });
+    expect(within(status).getByRole("link", { name: "审阅 Router 需处理，去处理" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "只改这条意见");

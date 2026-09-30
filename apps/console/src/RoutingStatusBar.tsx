@@ -38,7 +38,7 @@ export function RoutingHealthDetails({ health }: { health: RoutingHealth | undef
     health.boundsRejectedCount == null ? null : `边界检查拒绝 ${health.boundsRejectedCount} 次`,
     health.inputChangedCount == null ? null : `输入已变化 ${health.inputChangedCount} 次`,
   ].filter((entry) => entry !== null) : [];
-  return <div className="routing-status" aria-label="路由健康">
+  return <div className="routing-status" aria-label="路由健康" tabIndex={-1}>
     <h3>路由健康 <Help label="路由健康说明">弃权、取消和过期不计为失败；显示最近 5 条失败。</Help></h3>
     {!health
       ? <p className="muted">路由摘要未知</p>
@@ -76,9 +76,10 @@ export function RoutingHealthDetails({ health }: { health: RoutingHealth | undef
  * Router (with a jump to its family), the budget choice and the health window.
  * The Router itself is chosen on an effort tag, never here.
  */
-export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
+export function RoutingStatusBar({ data, snapshot, editor, onShowRouter, expanded = false }: {
   data: ConsoleView; snapshot: Snapshot; editor: Editor;
   onShowRouter: (profileId: string) => void;
+  expanded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const routerIds = { fast: data.configuration.fastRouterProfileId, review: data.configuration.reviewRouterProfileId };
@@ -104,8 +105,9 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
   }
   return <section className={"routing-status-bar" + (warning ? " warning" : "")} aria-label="路由状态">
     <div className="routing-status-line">
-      {warning && <p className="routing-warning"><span aria-hidden="true">⚠ </span>{warning}</p>}
-      <span className="routing-status-facts">
+      {expanded && <h2>Router</h2>}
+      {!expanded && warning && <p className="routing-warning"><span aria-hidden="true">⚠ </span>{warning}</p>}
+      {!expanded && <span className="routing-status-facts">
         {(["fast", "review"] as RoutingMode[]).map(mode => <span key={mode}>{MODE_LABEL[mode]} Router：<strong>{name(mode)}</strong>{routerDirty(mode) && <span className="unsaved-mark">未保存</span>}</span>)}
         <span aria-hidden="true" className="routing-sep">｜</span>
         <span>默认模式：<strong>{MODE_LABEL[defaultMode]}</strong>{modeDirty && <span className="unsaved-mark">未保存</span>}</span>
@@ -113,14 +115,15 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter }: {
         <span>审阅预算：{BUDGET_LABEL[budget]}{budgetDirty && <span className="unsaved-mark">未保存</span>}</span>
         <span aria-hidden="true" className="routing-sep">｜</span>
         <span>状态：{health.text}</span>
-      </span>
-      <button type="button" className="button small-button" aria-expanded={open} aria-controls="routing-details"
+      </span>}
+      {!expanded && <button type="button" className="button small-button" aria-expanded={open} aria-controls="routing-details"
         onClick={() => setOpen(value => !value)}>详情</button>
+      }
     </div>
-    <div id="routing-details" className="routing-details" hidden={!open}>
+    <div id="routing-details" className="routing-details" hidden={!open && !expanded}>
       <div className="routing-detail-block">
         <h3>Router 位置 <Help label="Router 说明">快速 Router 需支持无工具调用；审阅 Router 需已验证只读调用。请在已启用档位的菜单中设置。</Help></h3>
-        {(["fast", "review"] as RoutingMode[]).map(mode => <p className="router-line" key={mode}>
+        {(["fast", "review"] as RoutingMode[]).map(mode => <p className="router-line" key={mode} id={`router-${mode}`} tabIndex={-1}>
           <span>{MODE_LABEL[mode]} Router：</span><strong>{name(mode)}</strong>
           {routerIds[mode] && <Badge tone={candidate(mode) ? "green" : "amber"}>{candidate(mode) ? "可担任" : "需要处理"}</Badge>}
           {routers[mode] && <button type="button" className="button small-button" onClick={() => onShowRouter(routers[mode]!.profileId)}>查看所在家族</button>}
