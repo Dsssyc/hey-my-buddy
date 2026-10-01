@@ -456,6 +456,46 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIs(result.result['nativeConfigPolicy']['features']['apps'], True)
         self.assertTrue(result.shutdown_confirmed)
 
+    def test_native_controller_probe_uses_the_same_profile_and_fixed_targets(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        from buddy.sandbox_probe import results
+        context = self.context()
+        context.turn = None
+        (self.cwd / 'marker.txt').write_text('private-marker\n')
+        sentinel = self.root / ('outside-' + 'a' * 32 + '.txt')
+        sentinel.write_text('private-sentinel\n')
+        request = ReadOnlyStructuredRequest(str(self.cwd.resolve()), 'fixture', answer_schema(['legal']), budget(),
+            capture_evidence=True, native_probe={'sentinel': str(sentinel.resolve()), 'url': 'http://127.0.0.1:12345/'})
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        outcome = collect(handle)
+        self.assertTrue(results(outcome.result['nativeSandboxProbes'])[1])
+        self.assertEqual(len(json.loads((self.root/'fixture.json').read_text())['sandboxProbes']), 5)
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(sentinel.read_text(), 'private-sentinel\n')
+
+    def test_unrelated_native_probe_response_fails_before_model_start(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        context = self.context('probe-unrelated-reply')
+        context.turn = None
+        (self.cwd / 'marker.txt').write_text('private-marker\n')
+        sentinel = self.root / ('outside-' + 'b' * 32 + '.txt')
+        sentinel.write_text('private-sentinel\n')
+        request = ReadOnlyStructuredRequest(str(self.cwd.resolve()), 'fixture', answer_schema(['legal']), budget(),
+            capture_evidence=True, native_probe={'sentinel': str(sentinel.resolve()), 'url': 'http://127.0.0.1:12345/'})
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        outcome = collect(handle)
+        self.assertFalse(outcome.result['modelStarted'])
+        self.assertEqual(outcome.result['code'], 'invalid-protocol')
+        self.assertTrue(outcome.shutdown_confirmed)
+
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
         from buddy.adapters.base import ReadOnlyStructuredRequest
         from buddy.adapters.read_only import collect

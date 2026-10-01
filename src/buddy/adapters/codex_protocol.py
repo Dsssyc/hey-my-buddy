@@ -46,6 +46,8 @@ class Connection:
         self.messages: queue.Queue = queue.Queue(maxsize=128)
         self.responses: dict[int, dict] = {}
         self.next_id = 1
+        self.strict_responses = False
+        self.pending_ids: set[int] = set()
         self.on_notification = lambda _message: None
         self.on_request = lambda _message: None
         os.set_blocking(process.stdin.fileno(), False)
@@ -106,6 +108,8 @@ class Connection:
         elif "id" in message:
             if type(message["id"]) is not int or len(self.responses) >= 16:
                 raise CodexProtocolError("invalid-protocol", "invalid native response identity")
+            if self.strict_responses and (message["id"] not in self.pending_ids or message["id"] in self.responses):
+                raise CodexProtocolError("invalid-protocol", "uncorrelated or duplicate native sandbox reply")
             self.responses[message["id"]] = message
         elif isinstance(message.get("method"), str):
             self.on_notification(message)
@@ -115,10 +119,12 @@ class Connection:
     def call(self, method: str, params: dict) -> dict:
         request_id = self.next_id
         self.next_id += 1
+        self.pending_ids.add(request_id)
         self.send({"id": request_id, "method": method, "params": params})
         while request_id not in self.responses:
             self.pump()
         response = self.responses.pop(request_id)
+        self.pending_ids.discard(request_id)
         if "error" in response:
             raise CodexProtocolError("native-rpc-error", f"Codex rejected {method}")
         result = response.get("result")

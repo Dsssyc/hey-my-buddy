@@ -15,6 +15,7 @@ from buddy.adapters.codex_config import read_only_config
 from buddy.adapters.review_check import ReviewCheckAdapter, _file, _tree
 from buddy.review_probe import commands, evaluate
 from buddy.review_evidence import FILE, diagnostic
+from buddy.sandbox_probe import FORMAT as PROBE_FORMAT, PROBES
 from buddy.db import canonical_json
 
 
@@ -59,6 +60,12 @@ class ReviewProbeTests(unittest.TestCase):
                             "network": "denied", "observations": ""},
                         "usage": {"toolCalls": 5, "elapsedMs": 1000, "bytesRead": None},
                         "correctionCount": 0, "processState": {"shutdownConfirmed": True}}
+        self.payload["nativeSandboxProbes"] = {"format": PROBE_FORMAT, "permissionProfile": "buddy-router",
+            "operations": [{"operation": name, "requestId": index + 50, "method": "command/exec",
+                "permissionProfile": "buddy-router", "exitCode": 0 if name == "internal-read" else 1,
+                "stdout": "randommarker\n" if name == "internal-read" else "",
+                "stderr": "" if name == "internal-read" else "Operation not permitted", "truncated": False}
+                for index, name in enumerate(PROBES)]}
 
     def assess(self, **changes):
         return evaluate(self.payload, configuration=self.configuration, expected_version="0.157.0", frozen=self.frozen,
@@ -88,13 +95,13 @@ class ReviewProbeTests(unittest.TestCase):
         self.events[1]["params"]["item"]["output"] = json.dumps({"exit_code": 1, "output": "Operation not permitted"})
         self.assertFalse(self.assess()["internalRead"])
 
-    def test_command_must_be_exact_and_correlated(self):
+    def test_commands_are_auxiliary_but_replies_remain_correlated(self):
         self.events[0]["params"]["item"]["arguments"] = json.dumps({"code":
             'const r = await tools.exec_command({cmd:"cat marker.txt; echo forged",workdir:' +
             json.dumps(str(self.frozen)) + ',max_output_tokens:2000}); text(r);'})
         checks = self.assess()
-        self.assertFalse(checks["forbiddenTools"])
-        self.assertFalse(checks["boundaryDenials"])
+        self.assertTrue(checks["forbiddenTools"])
+        self.assertTrue(checks["boundaryDenials"])
 
     def test_printed_denial_and_mismatched_response_do_not_pass(self):
         self.events[2]["params"]["item"]["call_id"] = "other-call"
@@ -173,9 +180,10 @@ class ReviewProbeTests(unittest.TestCase):
         self.events[1]["params"]["item"]["output"][0]["text"] = "The model says permission denied"
         self.assertFalse(self.assess()["boundaryDenials"])
         self.events[1]["params"]["item"]["output"][0]["text"] = "Script completed\nWall time 0.123 seconds\nOutput:\n"
+        # Model source syntax is never evidence of an extra native call.
         self.events[0]["params"]["item"]["input"] += ' text("Operation not permitted");'
-        self.assertFalse(self.assess()["internalRead"])
-        self.events[0]["params"]["item"]["input"] = self.events[2]["params"]["item"]["input"].replace('text(r)', 'text(other)')
+        self.assertTrue(self.assess()["internalRead"])
+        self.events.append(dict(self.events[0]))
         self.assertFalse(self.assess()["forbiddenTools"])
 
     def test_policy_identity_and_budget_have_independent_evidence(self):

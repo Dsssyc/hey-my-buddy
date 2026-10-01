@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -132,6 +133,10 @@ def _read_only_call(connection, control, result, catalog):
     """A structured native call with no workflow identity or completion tools."""
     from .read_only import valid_answer
     spec, request = control["spec"], control["readOnlyRequest"]
+    if request.get("nativeProbe") is not None:
+        if connection.responses:
+            raise CodexProtocolError("invalid-protocol", "Review starts with an uncorrelated native reply")
+        connection.strict_responses = True
     if spec.get("provider") != "openai" or not any(
             model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
             for model in catalog["providers"][0]["models"]):
@@ -175,6 +180,18 @@ def _read_only_call(connection, control, result, catalog):
     if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
         raise CodexProtocolError("wrong-native-workspace", "Read-only native checkout differs")
     result.update(sessionId=thread_id, resolved=dict(spec))
+    probe = request.get("nativeProbe")
+    if probe is not None:
+        from ..sandbox_probe import run as native_probe
+        if (not request.get("captureEvidence") or not isinstance(probe, dict)
+                or set(probe) != {"sentinel", "url"} or not isinstance(probe.get("sentinel"), str)
+                or not isinstance(probe.get("url"), str)
+                or Path(probe["sentinel"]).parent != Path(control["cwd"]).parent
+                or not re.fullmatch(r"outside-[0-9a-f]{32}\.txt", Path(probe["sentinel"]).name)
+                or not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}/", probe["url"])):
+            raise CodexProtocolError("invalid-configuration", "Invalid private native sandbox fixture")
+        result["nativeSandboxProbes"] = native_probe(connection, frozen=Path(control["cwd"]),
+                            sentinel=Path(probe["sentinel"]), url=probe["url"])
     previous_tools = 0
     prompt = request["prompt"]
     for call_index in range(2):
@@ -229,7 +246,7 @@ def _read_only_call(connection, control, result, catalog):
             control['_readonlyRawCalls'] = len(raw_calls)
             result["usage"] = {"toolCalls": previous_tools + observed_tools, "bytesRead": None}
             # A limit of N allows N native tool calls; the next one is interrupted.
-            if previous_tools + observed_tools > request["budget"]["toolCalls"]:
+            if previous_tools + observed_tools + (5 if probe is not None else 0) > request["budget"]["toolCalls"]:
                 raise CodexProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
             if activity:
                 _activity(control, evidence, *activity)
@@ -258,6 +275,8 @@ def _read_only_call(connection, control, result, catalog):
             break
         previous_tools += max(evidence.tool_calls, len(raw_calls))
         prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
+    if probe is not None:
+        result["usage"]["nativeProbeCalls"] = 5
 
 
 def _observe_quota(connection, evidence) -> dict | None:

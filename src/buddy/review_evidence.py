@@ -13,7 +13,7 @@ from .harness_review import CHECKS
 from .review_probe import _DENIAL, _SCRIPT_META, _native_call, _response, _turn_ids, commands
 
 FILE = "review-evidence.json"
-FORMAT = "buddy-review-evidence-v1"
+FORMAT = "buddy-review-evidence-v2"
 _METHODS = {"rawResponseItem/completed", "item/started", "item/completed",
             "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
             "item/permissions/requestApproval", "item/tool/requestUserInput"}
@@ -144,6 +144,7 @@ def event_summaries(payload, frozen, sentinel, url, marker):
                      "turn": alias(turns, turn, "t"),
                      "call": alias(calls, json.dumps([turn if isinstance(turn, str) else None, call]) if isinstance(call, str) else None, "c"),
                      "operation": operation, "parserReadable": parser_readable,
+                     "operationAuxiliary": True,
                      "knownFields": [key for key in ("arguments", "input", "command", "cwd", "output", "exitCode", "aggregatedOutput") if key in item]}
             if item.get("type") == "commandExecution" and type(item.get("exitCode")) is int and isinstance(item.get("aggregatedOutput"), str):
                 response = (item["exitCode"], item["aggregatedOutput"])
@@ -167,9 +168,28 @@ def diagnostic(payload, *, plan, checks, reasons, basis, frozen, sentinel, url, 
             "wrong-native-turn", "native-turn-failed", "invalid-configuration", "readonly-budget-exhausted",
             "native-rpc-error", "invalid-native-result", "native-exit", "deadline", "user-cancel", "native-shutdown-failed")),
         "policyReadback": policy_readback(payload, frozen, plan["configuration"]),
+        "sandboxProbes": probe_summaries(payload.get("nativeSandboxProbes"), marker),
         "events": event_summaries(payload, frozen, sentinel, url, marker),
         "eventCounts": {key: len(payload[key]) if isinstance(payload.get(key), list) else None
                         for key in ("nativeRawToolEvents", "nativeToolEvents", "nativeDeniedRequests")},
         "truncated": payload.get("nativeEvidenceTruncated") is True, "usage": usage,
         "checks": {key: {"passed": checks[key] is True, "reasonCode": reasons.get(key),
                          "basis": basis.get(key, {"evidenceReadable": False})} for key in CHECKS}}
+
+
+def probe_summaries(value, marker):
+    from .sandbox_probe import PROBES, PROFILE, results
+    parsed, complete = results(value)
+    records = _dict(value).get("operations")
+    records = records if isinstance(records, list) else []
+    return {"complete": complete, "permissionProfileMatches": _dict(value).get("permissionProfile") == PROFILE,
+        "operations": [{"operation": _value(record.get("operation"), PROBES),
+            "request": "p" + str(index + 1), "requestId": _number(record.get("requestId")),
+            "methodMatches": record.get("method") == "command/exec",
+            "permissionProfileMatches": record.get("permissionProfile") == PROFILE,
+            "exitCode": _number(record.get("exitCode")), "truncated": record.get("truncated") is not False,
+            "stdoutBytes": min(len(record["stdout"].encode()), 8192) if isinstance(record.get("stdout"), str) else None,
+            "stderrBytes": min(len(record["stderr"].encode()), 8192) if isinstance(record.get("stderr"), str) else None,
+            "denialMatched": bool(isinstance(record.get("stderr"), str) and _DENIAL.search(record["stderr"])),
+            "markerMatches": isinstance(record.get("stdout"), str) and record["stdout"].strip() == marker}
+            for index, record in enumerate(records[:5]) if isinstance(record, dict)]}
