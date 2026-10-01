@@ -36,4 +36,6 @@ Each Markdown prose paragraph occupies one source line; preserve structural newl
 
 Record actual verification in `docs/acceptance/`; never present a draft or a worker's success message as acceptance. State the verification boundary in public docs: a capability that is unverified, partially wired or waiting on installation is named as such rather than described as working.
 
+Records, fixtures and saved evidence name locations with `~` or a placeholder, never a machine's absolute home directory or the layout of its project directories; the check suite fails when a tracked file carries those of the machine running it.
+
 Public docs and the shared skill describe product behavior for any user. They do not carry one user's model, harness, quota or workflow choices; those belong in that user's Buddy 配置 or in the instructions of a specific task.
