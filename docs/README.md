@@ -85,6 +85,8 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Design proposals
 
+[ADR-022 proposal: expected duration and graceful stop](decisions/022-expected-duration-and-graceful-stop.md) replaces the hard execution deadline with an expected duration that marks a run overdue and wakes `await` instead of stopping it, asks a Worker to wrap up and report within a grace period before any forced stop (Codex through `turn/steer`, pending native verification), keeps fixed Router budgets and an optional maximum runtime, and reports stalls and stop reasons honestly. It is not implemented.
+
 [ADR-019: Worker accounts, usage visibility and private directories](decisions/019-worker-accounts-and-usage.md) is implemented through decision 11 and sub-batches ①–④ in the current source. Shared native login remains read-only; private account paths are admitted only by individually approved native evidence. Billing labels do not change routing; explicit native exhaustion temporarily excludes only matching current-account candidates. The [0.26.0 account acceptance](acceptance/worker-accounts-batch4-0.26.0.md) records source, macOS native paths and unverified platforms independently from the 0.25.0 daily installation.
 
 [Backlog](design/backlog.md) lists user-reported issues that are recorded but not yet in an implementation batch, with the cause when known and a suggested fix.
