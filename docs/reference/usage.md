@@ -28,7 +28,7 @@ The first command that needs the service installs a content-addressed stable run
 
 ### 2. Choose grouping and the execution workspace
 
-`workspace` is a boolean and only controls DSH session grouping; it defaults to `true`. Either install the DSH workspace bridge once ([operations.md](operations.md#workspace-bridge)) and keep grouping, or pass `"workspace": false` for an intentionally standalone run. The default is never silently downgraded; a grouped run fails honestly when the bridge is missing.
+`workspace` is a boolean and only controls DSH session grouping; it defaults to `false`, which keeps the session in the attempt-private area. Pass `"workspace": true` only to group the run through the installed DSH workspace bridge ([operations.md](operations.md#workspace-bridge)); a grouped run fails honestly when the bridge is missing.
 
 Independent of grouping, governed coding work names its Git isolation contract in a separate `executionWorkspace` object: `kind` (`existing` or `worktree`), source `cwd`, `access` (`read` or `write`), `base` (`commit` with `ref`, or `working-tree`), `includeUntracked`, `writeScope` and `integrator`. It is an ownership and artifact-verification contract, not session grouping and not an OS sandbox: concurrent writers use independent worktrees, a read workspace must keep its input unchanged, and declared paths are checkout-root-relative. The fixed-input matrix and reservation rules are in [workflow.md#workspace-and-artifact-rules](workflow.md#workspace-and-artifact-rules).
 
