@@ -445,21 +445,29 @@ class TestCrashWindows(BoardTestCase):
                     start_new_session=True,
                 )
                 self.children.append(replacement)
-                # Wait for boot evidence, not elapsed time: the replacement owns the
+                # Wait for evidence, not elapsed time: the replacement owns the
                 # supervisor lifetime lock (freed when its predecessor was killed) and
-                # has written a heartbeat newer than its own launch, so a resume-or-
-                # release decision has already had its chance.
+                # has written two distinct heartbeats newer than its own launch. A
+                # heartbeat follows the boot reconciliation and every claim pass, so
+                # two of them prove that at least one full claim pass ran after the
+                # boot decision and both had their chance to resume or release.
                 from buddy.checks import lock_is_held
 
                 replacement_dir = self.directory / "workers" / "fault"
+                heartbeats: set[str] = set()
+
+                def replacement_ran_a_claim_pass() -> bool:
+                    path = replacement_dir / "heartbeat.json"
+                    try:
+                        if path.stat().st_mtime >= replacement_started:
+                            heartbeats.add(json.loads(path.read_text())["at"])
+                    except (OSError, ValueError, KeyError):
+                        return False
+                    return len(heartbeats) >= 2 and lock_is_held(replacement_dir / "supervisor.lock")
+
                 self.assertTrue(
-                    wait_for(
-                        lambda: lock_is_held(replacement_dir / "supervisor.lock")
-                        and (replacement_dir / "heartbeat.json").exists()
-                        and (replacement_dir / "heartbeat.json").stat().st_mtime >= replacement_started,
-                        20,
-                    ),
-                    "the replacement worker never booted",
+                    wait_for(replacement_ran_a_claim_pass, 30),
+                    "the replacement worker never completed a claim pass",
                 )
                 after = self.cli("status", json.dumps({"runId": run_id}))[1]
                 self.assertEqual(

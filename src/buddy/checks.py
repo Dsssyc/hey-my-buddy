@@ -19,18 +19,21 @@ exit and asserts a clean root: no held Buddy lifetime lock, no live process tied
 the root, and no failed observation. A clean teardown removes the private root; an
 incomplete or unobservable one preserves the root together with a written evidence
 report. Process observation is strictly read-only (``ps`` argv matching plus
-``lsof``/``/proc`` open-file lookup): the runner never signals or kills a process,
+``lsof``/``/proc`` open-file lookup): the teardown never signals or kills a process,
 never matches or touches a process outside its own private root, and never reads or
-prints environment content.
+prints environment content. Only an interrupted parallel run stops processes, and
+then only the suite children it started itself; whatever those leave behind is the
+teardown's to observe.
 """
 from __future__ import annotations
 
 from . import locking
 import concurrent.futures
-import re
 import json
+import locale
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -169,10 +172,50 @@ def resolve_jobs(arguments: list[str]) -> int:
     return jobs
 
 
+#: How long a finished suite child's output is still collected. A detached process
+#: the child left behind keeps the inherited pipes open for as long as it lives; the
+#: runner does not wait for it, exactly as a serial run with inherited output never does.
+OUTPUT_DRAIN_SECONDS = 2.0
+
+#: How long an interrupted run waits for its terminated suite children before it
+#: kills the ones that are still running.
+INTERRUPT_GRACE_SECONDS = 10.0
+
+#: Terminal style sequences, which a colour-enabled unittest wraps around its summary.
+ANSI_STYLE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def python_test_modules(root: Path) -> list[str]:
-    """Every Python test module ``unittest discover`` would run, as module names."""
-    directory = root / "tests" / "python"
-    return sorted(path.stem for path in directory.glob("test*.py"))
+    """Every Python test module ``unittest discover`` would run, as module names.
+
+    Discovery descends into packages only, so a nested test file is scheduled exactly
+    when every directory between it and ``tests/python`` carries an ``__init__.py``.
+    """
+    top = root / "tests" / "python"
+    modules: list[str] = []
+    pending = [top]
+    while pending:
+        directory = pending.pop()
+        prefix = ".".join(directory.relative_to(top).parts)
+        for path in directory.iterdir():
+            if path.is_dir():
+                if (path / "__init__.py").is_file():
+                    pending.append(path)
+            elif path.is_file() and path.name.startswith("test") and path.suffix == ".py":
+                modules.append(f"{prefix}.{path.stem}" if prefix else path.stem)
+    return sorted(modules)
+
+
+def dsh_node_tests(root: Path) -> list[str]:
+    """The DSH Node suites under ``harnesses/dsh/tests``; their fixtures are not tests.
+
+    Browser tests belong to Vitest. An empty list is refused: ``node --test`` without
+    files would discover whatever the working directory holds and still exit 0.
+    """
+    tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
+    if not tests:
+        raise SystemExit("buddy.checks: no DSH Node tests found under harnesses/dsh/tests")
+    return tests
 
 
 def _scheduled_test_modules(modules: list[str]) -> list[str]:
@@ -192,29 +235,65 @@ class ChildOutcome:
         self.seconds = seconds
 
 
+def _collect_output(stream, chunks: list[bytes]) -> None:
+    """Read one child pipe until it closes, however long a leftover process holds it."""
+    try:
+        while chunk := stream.read(65536):
+            chunks.append(chunk)
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
 def run_suite_child(root: Path, private_root: Path, directory_name: str, label: str,
-                    command: list[str], live: set, guard: threading.Lock) -> ChildOutcome:
-    """Run one suite child inside its own private state, runtime and temp root."""
+                    command: list[str], live: set, guard: threading.Lock,
+                    stop: threading.Event) -> ChildOutcome | None:
+    """Run one suite child inside its own private state, runtime and temp root.
+
+    Returns ``None`` without starting anything once the run has been interrupted.
+    The child's exit ends the wait: output is collected by reader threads, so a
+    detached process that inherited the pipes cannot hold the runner.
+    """
     child_root = private_root / directory_name
-    (child_root / "tmp").mkdir(mode=0o700, parents=True)
     environment = child_environment(root, child_root)
     started = time.monotonic()
-    process = subprocess.Popen(
-        command,
-        cwd=str(root),
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
     with guard:
+        # The interrupt check, the spawn and the registration share one lock: an
+        # interrupted run either never starts this child or already sees it as live.
+        if stop.is_set():
+            return None
+        (child_root / "tmp").mkdir(mode=0o700, parents=True)
+        process = subprocess.Popen(
+            command,
+            cwd=str(root),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
         live.add(process)
+    collected: tuple[list[bytes], list[bytes]] = ([], [])
+    readers = [
+        threading.Thread(target=_collect_output, args=(stream, chunks), daemon=True)
+        for stream, chunks in zip((process.stdout, process.stderr), collected)
+    ]
+    for reader in readers:
+        reader.start()
     try:
-        stdout, stderr = process.communicate()
+        process.wait()
     finally:
         with guard:
             live.discard(process)
-    return ChildOutcome(label, process.returncode, stdout or "", stderr or "", time.monotonic() - started)
+    deadline = time.monotonic() + OUTPUT_DRAIN_SECONDS
+    for reader in readers:
+        reader.join(timeout=max(0.0, deadline - time.monotonic()))
+    encoding = locale.getencoding()
+    stdout, stderr = (b"".join(list(chunks)).decode(encoding, errors="replace") for chunks in collected)
+    return ChildOutcome(label, process.returncode, stdout, stderr, time.monotonic() - started)
 
 
 def _report_child_output(outcome: ChildOutcome) -> None:
@@ -236,7 +315,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     node = os.environ.get("BUDDY_NODE") or shutil.which("node")
     if not node:
         raise SystemExit("Node.js is required for the dsh process runner")
-    node_tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
+    node_tests = dsh_node_tests(root)
     tasks: list[tuple[str, str, list[str]]] = [
         *[(f"p{index:03d}", module, [sys.executable, "-m", "unittest", "-v", module])
           for index, module in enumerate(_scheduled_test_modules(python_test_modules(root)))],
@@ -245,29 +324,51 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     print(f"buddy.checks: {len(tasks) - 1} python test files across {jobs} workers, node suite in parallel")
     live: set = set()
     guard = threading.Lock()
+    stop = threading.Event()
     outcomes: list[ChildOutcome] = []
+    futures: list[concurrent.futures.Future] = []
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(jobs, len(tasks)))
     try:
-        futures = [
-            pool.submit(run_suite_child, root, private_root, directory_name, label, command, live, guard)
-            for directory_name, label, command in tasks
-        ]
+        for directory_name, label, command in tasks:
+            futures.append(pool.submit(
+                run_suite_child, root, private_root, directory_name, label, command, live, guard, stop
+            ))
         for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             outcome = future.result()
+            if outcome is None:
+                continue
             outcomes.append(outcome)
             state = "ok" if outcome.returncode == 0 else f"FAILED (exit {outcome.returncode})"
             print(f"[{done}/{len(tasks)}] {outcome.label} {state} {outcome.seconds:.1f}s")
             if outcome.returncode != 0:
                 _report_child_output(outcome)
     except BaseException:
-        # An interrupted run must not leave suite children behind the teardown.
+        # An interrupted run starts no further suite child and leaves none of its own
+        # behind the teardown: queued files are dropped, running children are asked to
+        # terminate, and one that outlasts the grace period is killed.
+        stop.set()
+        for future in futures:
+            future.cancel()
         with guard:
             running = list(live)
         for process in running:
             process.terminate()
+        deadline = time.monotonic() + INTERRUPT_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            with guard:
+                if not live:
+                    break
+            time.sleep(0.05)
+        with guard:
+            running = list(live)
+        for process in running:
+            process.kill()
         raise
     finally:
         pool.shutdown(wait=True)
+    # Every scheduled suite must have reported: a file without an outcome did not run.
+    reported = {outcome.label for outcome in outcomes}
+    never_ran = sorted(label for _, label, _ in tasks if label not in reported)
     python_failed = sorted(
         outcome.label for outcome in outcomes
         if outcome.label != "node suite" and outcome.returncode != 0
@@ -279,18 +380,28 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     for outcome in outcomes:
         if outcome.label == "node suite" or outcome.returncode != 0:
             continue
-        ran = re.search(r"^Ran (\d+) tests? in ", outcome.stderr, re.MULTILINE)
+        summary = ANSI_STYLE.sub("", outcome.stderr)
+        ran = re.search(r"^Ran (\d+) tests? in ", summary, re.MULTILINE)
         if ran is None:
             uncounted.append(outcome.label)
             continue
         ran_total += int(ran.group(1))
-        skipped = re.search(r"^OK \(.*?skipped=(\d+)", outcome.stderr, re.MULTILINE)
+        skipped = re.search(r"^OK \(.*?skipped=(\d+)", summary, re.MULTILINE)
         skipped_total += int(skipped.group(1)) if skipped else 0
     python_files = len(tasks) - 1
     print(f"buddy.checks: python tests run: {ran_total} (skipped {skipped_total}) "
           f"in {python_files - len(python_failed) - len(uncounted)} of {python_files} files")
     node_outcome = next((outcome for outcome in outcomes if outcome.label == "node suite"), None)
     failures = []
+    if node_outcome is not None and node_outcome.returncode == 0:
+        # The reporter's own summary line; its format belongs to Node, so a missing
+        # line is reported rather than failed, while a counted zero is a failure.
+        counted = re.search(r"^(?:ℹ|#) tests (\d+)", ANSI_STYLE.sub("", node_outcome.stdout), re.MULTILINE)
+        print(f"buddy.checks: node tests run: {counted.group(1) if counted else 'not reported'}")
+        if counted and int(counted.group(1)) == 0:
+            failures.append("node suite ran no tests")
+    if never_ran:
+        failures.append(f"{len(never_ran)} suite(s) never ran: {', '.join(never_ran)}")
     if python_failed:
         print("buddy.checks: python suite failed in "
               f"{len(python_failed)} file(s): {', '.join(python_failed)}")
@@ -315,10 +426,7 @@ def run_suites_serially(root: Path, private_root: Path) -> str | None:
     node = env.get("BUDDY_NODE") or shutil.which("node")
     if not node:
         raise SystemExit("Node.js is required for the dsh process runner")
-    # Browser tests belong to Vitest; only the DSH Node suites under harnesses/dsh are
-    # run here, and their support fixtures are not discovered as tests.
-    node_tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
-    result = subprocess.run([node, "--test", *node_tests], cwd=str(root), env=env)
+    result = subprocess.run([node, "--test", *dsh_node_tests(root)], cwd=str(root), env=env)
     if result.returncode != 0:
         return f"node suite exited with {result.returncode}"
     return None

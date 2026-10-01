@@ -348,21 +348,32 @@ class RetireStartupTests(CapacityTestCase):
         spawn_intent.write_text(json.dumps({"attemptId": attempt["attemptId"], "at": "2026-01-01T00:00:00.000Z"}))
         worker.retire_request_path.write_text(json.dumps({"workerId": "w-ambiguous", "requestedBy": "test"}))
 
+        # The fixture already holds the startup intent, so its presence proves nothing
+        # about the loop. Record every completed retirement pass instead: a second
+        # pass exists only if the first one reconciled, found the intent unresolved
+        # and declined to retire.
+        unresolved = [f"startup-intent:{attempt['attemptId']}"]
+        passes: list[list[str]] = []
+        settle_retirement = worker.settle_retirement
+
+        def recording_settle_retirement() -> list[str]:
+            remaining = settle_retirement()
+            passes.append(remaining)
+            return remaining
+
+        worker.settle_retirement = recording_settle_retirement
         thread = threading.Thread(target=worker.run, daemon=True)
         thread.start()
         try:
-            # Wait until the loop has actually reconciled the startup intent; a fixed
-            # sleep could only hope the reconciliation happened within it.
             self.assertTrue(
-                wait_for(
-                    lambda: worker.recovery_pending() == [f"startup-intent:{attempt['attemptId']}"],
-                    timeout=30,
-                ),
-                "the worker never reconciled the ambiguous startup intent",
+                wait_for(lambda: len(passes) >= 2, timeout=30),
+                "the worker retired or stalled instead of retrying the ambiguous startup intent",
             )
+            self.assertEqual(passes[:2], [unresolved, unresolved])
             self.assertTrue(
                 thread.is_alive(), "a retire intent must not retire past an unreconciled startup intent"
             )
+            self.assertEqual(worker.recovery_pending(), unresolved)
             # Settling the ambiguous attempt elsewhere lets the next reconciliation
             # clear the intent and only then may the worker retire.
             board.client().release(
