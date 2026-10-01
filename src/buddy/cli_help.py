@@ -1177,7 +1177,9 @@ class _Extractor:
             if limit is not None:
                 bounds = f"at most {self._render(limit, self._signature_module(parts, module))} entries"
         elif helper == "bounded_text":
-            kind = "string"
+            # bounded_text requires a string even with allow_empty=True;
+            # absent input is None and is refused by the runtime validator.
+            kind, required = "string", True
             maximum = _keyword(node, "max_bytes")
             bounds = f"≤{self._render(maximum, module)} UTF-8 bytes" if maximum is not None else None
             if _keyword_value(node, "allow_empty") is True:

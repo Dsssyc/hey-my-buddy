@@ -332,6 +332,14 @@ class HelpTests(unittest.TestCase):
         self.assertIn("note", accept)
         self.assertIn("10000", accept)
 
+    def test_accept_and_conclude_help_require_the_note(self):
+        for method in ("accept", "conclude"):
+            with self.subTest(method=method):
+                parameter = next(item for item in cli_help.method_help(method).parameters if item.name == "note")
+                self.assertTrue(parameter.required)
+                line = next(line for line in self.help_text(method).splitlines() if line.lstrip().startswith("note "))
+                self.assertIn("required", line)
+
     def test_conditional_parameters_are_marked(self):
         self.assertIn("conditional", self.help_text("continue"))
         self.assertIn("conditional", self.help_text("submit"))
