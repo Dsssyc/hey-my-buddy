@@ -20,4 +20,4 @@ Claude Code Host 于 2026-10-02 验收 Codex Host 交付的 `socu/adr021-logic`�
 
 ## 过程中的发现
 
-四个委派各承担了一整个模块，执行 60 至 229 分钟；最长的一个在执行中被 Host 用问询追加了七项修复，并被路由到轻量的 buddy。例证补入了 ADR-021 与 [ADR-022](../decisions/022-expected-duration-and-graceful-stop.md) 的背景；开发类委派怎样才算边界清晰，尚待确定后写入 skill。
+四个委派各承担了一整个模块，执行 60 至 229 分钟；最长的一个在执行中被 Host 用问询追加了七项修复，并被路由到轻量的 buddy。例证补入了 ADR-021 与 [ADR-022](../decisions/022-expected-duration-and-graceful-stop.md) 的背景。原因在于 ADR 与委派之间缺少一层设计：接口细节是在实现过程中才确定的。此后各阶段在委派之前先写执行计划，见 ADR-021 的工作分解。
