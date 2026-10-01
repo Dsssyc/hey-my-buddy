@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from . import locking
 import concurrent.futures
+import re
 import json
 import os
 from pathlib import Path
@@ -271,12 +272,31 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
         outcome.label for outcome in outcomes
         if outcome.label != "node suite" and outcome.returncode != 0
     )
+    # A parallel run prints only failing children, so the total must stay visible:
+    # every passing file reports how many tests it actually ran and skipped.
+    ran_total = skipped_total = 0
+    uncounted = []
+    for outcome in outcomes:
+        if outcome.label == "node suite" or outcome.returncode != 0:
+            continue
+        ran = re.search(r"^Ran (\d+) tests? in ", outcome.stderr, re.MULTILINE)
+        if ran is None:
+            uncounted.append(outcome.label)
+            continue
+        ran_total += int(ran.group(1))
+        skipped = re.search(r"^OK \(.*?skipped=(\d+)", outcome.stderr, re.MULTILINE)
+        skipped_total += int(skipped.group(1)) if skipped else 0
+    python_files = len(tasks) - 1
+    print(f"buddy.checks: python tests run: {ran_total} (skipped {skipped_total}) "
+          f"in {python_files - len(python_failed) - len(uncounted)} of {python_files} files")
     node_outcome = next((outcome for outcome in outcomes if outcome.label == "node suite"), None)
     failures = []
     if python_failed:
         print("buddy.checks: python suite failed in "
               f"{len(python_failed)} file(s): {', '.join(python_failed)}")
         failures.append(f"python suite failed in {len(python_failed)} file(s): {', '.join(python_failed)}")
+    if uncounted:
+        failures.append(f"python suite reported no test count in {len(uncounted)} file(s): {', '.join(sorted(uncounted))}")
     if node_outcome is not None and node_outcome.returncode != 0:
         failures.append(f"node suite exited with {node_outcome.returncode}")
     return "; ".join(failures) or None
