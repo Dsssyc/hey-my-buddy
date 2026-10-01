@@ -28,6 +28,9 @@ class HostMigrationTests(unittest.TestCase):
         # reaches every current board through the runtime's idempotent initialization
         # DDL, so both sides of this comparison get the same additive pass before the
         # shapes must match.
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_host_conclusions'"
+        ).fetchone(), "the historical migration itself must create Host conclusion storage")
         self.connection.executescript(SCHEMA)
         with closing(sqlite3.connect(":memory:")) as fresh:
             fresh.executescript(SCHEMA)

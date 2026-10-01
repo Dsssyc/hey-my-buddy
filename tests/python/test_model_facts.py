@@ -382,6 +382,31 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[-1], [list(FLASH_FAMILY)])
 
+    def test_switching_enabled_efforts_in_one_patch_never_refetches(self):
+        board = self.board()
+        self.write_fixture()
+        self.seed(board)
+        calls = self.count_refresh_calls()
+        self.publish(board, request_id="start", command_id="start",
+                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+        self.publish(board, request_id="switch1", command_id="switch1",
+                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False},
+                                      {"profileId": FLASH_LOW_PROFILE_ID, "enabled": True}])
+        self.assertEqual(len(calls), 1)
+        self.publish(board, request_id="switch2", command_id="switch2",
+                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True},
+                                      {"profileId": FLASH_LOW_PROFILE_ID, "enabled": False}])
+        self.assertEqual(len(calls), 1)
+
+    def test_alias_absence_and_ambiguous_normalization_stay_unknown(self):
+        self.assertEqual(model_facts.resolve_identity({}, "zai-api", "GLM-5.3"), (None, None))
+        models = {"a-b": {"models": {}}, "ab": {"models": {}}}
+        raw = json.dumps(models).encode()
+        self.assertEqual(model_facts.resolve_identity(model_facts.parse_source(raw), "A_B", "anything"), (None, None))
+        index = {"openai": {"model-1": {}, "model1": {}}}
+        self.assertEqual(model_facts.resolve_identity(index, "openai", "MODEL_1"), ("openai", None))
+        self.assertEqual(model_facts.resolve_identity(index, "openai", "model-1"), ("openai", "model-1"))
+
     def test_duplicate_publish_replay_does_not_refetch(self):
         board = self.board()
         self.write_fixture()

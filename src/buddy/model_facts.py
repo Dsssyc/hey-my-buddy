@@ -286,14 +286,16 @@ def resolve_identity(index: dict[str, dict[str, dict]], provider: str, model: st
             provider_id = provider
         else:
             wanted = normalize_family(provider)
-            provider_id = next((name for name in index if normalize_family(name) == wanted), None)
-    if provider_id is None:
+            matches = [name for name in index if normalize_family(name) == wanted]
+            provider_id = matches[0] if len(matches) == 1 else None
+    if provider_id is None or provider_id not in index:
         return None, None
     models = index[provider_id]
     if model in models:
         return provider_id, model
     wanted = normalize_family(model.removeprefix("models/"))
-    return provider_id, next((name for name in models if normalize_family(name.removeprefix("models/")) == wanted), None)
+    matches = [name for name in models if normalize_family(name.removeprefix("models/")) == wanted]
+    return provider_id, matches[0] if len(matches) == 1 else None
 
 
 def _families(families) -> list[tuple[str, str, str]]:

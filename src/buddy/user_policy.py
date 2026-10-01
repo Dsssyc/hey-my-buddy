@@ -158,28 +158,30 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
                 raise BoardError('NOT_FOUND', 'Unknown profileId', profileId=profile_id)
             profiles[profile_id] = dict(row)
             profiles[profile_id]['available'] = bool(row['available']) and read_health(connection, row['adapter'])['available']
+    touched_families = {tuple(profiles[entry["profileId"]][name] for name in FAMILY_FIELDS) for entry in settings}
+    initially_enabled = {
+        family: connection.execute(
+            "SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
+            family,
+        ).fetchone() is not None
+        for family in touched_families
+    }
     for entry in settings:
         if type(entry.get('enabled')) is not bool:
             raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean')
         profile = profiles[entry['profileId']]
         if entry['enabled'] and not profile['available']:
             raise BoardError('CONFIGURATION_UNAVAILABLE', 'This configuration is not currently available', profileId=entry['profileId'])
-        # A user enabling a model is the one trigger for the public model facts
-        # snapshot (ADR-021 decision 12): the family that gains its first enabled
-        # effort by this patch is reported to the caller, which refreshes the
-        # snapshot outside this transaction. Re-saving an enabled effort, a second
-        # effort of an already enabled family, and disabling never trigger a fetch.
-        was_enabled = bool(profile['enabled'])
         profile['enabled'] = int(entry['enabled'])
         connection.execute('UPDATE evaluation_profiles SET enabled=?, updated_revision=? WHERE profile_id=?', (profile['enabled'], revision, entry['profileId']))
-        if entry['enabled'] and not was_enabled:
-            family = tuple(profile[name] for name in FAMILY_FIELDS)
-            other = connection.execute(
-                'SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 AND profile_id<>?',
-                (*family, entry['profileId']),
-            ).fetchone()
-            if other is None and family not in enabled_families:
-                enabled_families.append(family)
+    # Compare the whole publication's before/after state. Moving the enabled
+    # effort within one model must not make a transient disable trigger a fetch.
+    for family in sorted(touched_families):
+        if not initially_enabled[family] and connection.execute(
+            "SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
+            family,
+        ).fetchone() is not None:
+            enabled_families.append(family)
     families = {}
     for entry in family_preferences + annotations:
         family = _family(entry)
