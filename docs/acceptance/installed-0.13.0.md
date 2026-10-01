@@ -4,7 +4,7 @@
 
 On 2026-09-27 the user authorized installation of the verified 0.13.0 candidate and confirmed that the C-Two Host was inactive after exhausting its quota. The installed source is immutable commit `945272046b35ab8549359050c406c061a565a60f`, with contract 0.13.0 and schema 11. The `socu/buddy-core` checkout remains on the 0.14.0/schema-12 development line; this installation did not include its work-objective backend or perform a schema conversion. The [console-entry record](console-entry-0.13.0.md) and [brief-output record](cli-brief-output-0.13.0.md) retain the preceding source verification.
 
-The installed Codex plugin is `hey-my-buddy@personal`, version `0.13.0+codex.20260927013543`, enabled at `/Users/soku/.codex/plugins/cache/personal/hey-my-buddy/0.13.0+codex.20260927013543`. Its stable runtime content ID is `84df041c9b0acce4ba5b05944ee48321`; the replacement service ID is `d557b975-2f52-4887-a9dd-ff8514f97bbe`. Matching `health`, `runtime`, `ping` and plugin-list readbacks verified the installed identity, with no source-path leaks.
+The installed Codex plugin is `hey-my-buddy@personal`, version `0.13.0+codex.20260927013543`, enabled at `~/.codex/plugins/cache/personal/hey-my-buddy/0.13.0+codex.20260927013543`. Its stable runtime content ID is `84df041c9b0acce4ba5b05944ee48321`; the replacement service ID is `d557b975-2f52-4887-a9dd-ff8514f97bbe`. Matching `health`, `runtime`, `ping` and plugin-list readbacks verified the installed identity, with no source-path leaks.
 
 ## Preparation and cutover
 
@@ -12,7 +12,7 @@ An independent export from `9452720` passed all 8 CLI-view tests, staging valida
 
 The probe's launcher generated a local virtual environment and bytecode in its staged directory. The installation therefore restaged from the immutable export, applied the plugin-creator cachebuster helper, synchronized portable metadata and rechecked the clean distributable inventory. No virtual environment, bytecode or tests were installed in the plugin package; runtime dependencies were materialized separately before the cutover.
 
-The live board had zero active work and no unconfirmed attempts. The matching 0.12.0 client detached its daemon without cancelling tasks; all idle supervisors were retired and their ownership locks acquired before backup. The complete recoverable archive is `/Users/soku/.local/share/hey-my-buddy/archive-before-cli-brief-0.13.0-20260927-093711`, retaining state and the previous plugin source. The database hash matched the backup and remained unchanged through plugin replacement. The new daemon and supervisors then started on the same schema-11 board with the existing capacity settings.
+The live board had zero active work and no unconfirmed attempts. The matching 0.12.0 client detached its daemon without cancelling tasks; all idle supervisors were retired and their ownership locks acquired before backup. The complete recoverable archive is `~/.local/share/hey-my-buddy/archive-before-cli-brief-0.13.0-20260927-093711`, retaining state and the previous plugin source. The database hash matched the backup and remained unchanged through plugin replacement. The new daemon and supervisors then started on the same schema-11 board with the existing capacity settings.
 
 ## Installed verification
 

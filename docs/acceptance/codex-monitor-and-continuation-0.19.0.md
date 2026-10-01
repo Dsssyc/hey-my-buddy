@@ -1,6 +1,6 @@
 # Codex 监控子代理与续做修复验收
 
-2026-09-29，从 `socu/buddy-core` 的 `9fcea9a860368d544ab2303c9f5db5e5f3c373bf` 新建分支 `socu/codex-monitor-subagent`，worktree 为 `/Users/soku/.codex/worktrees/codex-monitor-subagent/hey-my-buddy`。本次保留 contract 0.19.0/schema 14，不做数据迁移；基线中尚未安装的 `USER` 环境修正随本分支保留。日常运行时仍为[已安装的 0.19.0](installed-0.19.0.md)，本次没有安装、升级、重启日常服务，也没有修改用户配置或发布。
+2026-09-29，从 `socu/buddy-core` 的 `9fcea9a860368d544ab2303c9f5db5e5f3c373bf` 新建分支 `socu/codex-monitor-subagent`，worktree 为 `~/.codex/worktrees/codex-monitor-subagent/hey-my-buddy`。本次保留 contract 0.19.0/schema 14，不做数据迁移；基线中尚未安装的 `USER` 环境修正随本分支保留。日常运行时仍为[已安装的 0.19.0](installed-0.19.0.md)，本次没有安装、升级、重启日常服务，也没有修改用户配置或发布。
 
 ## 实现
 
@@ -18,7 +18,7 @@ run `9cc4223f-4f3f-4205-aeb4-cdc88b6e4939` 的第一轮原生会话为 `01a0eafc
 
 ## 经用户逐次批准的监控实测
 
-全部 Buddy 实测使用私有根 `/private/tmp/buddy-monitor-probe-jn8_gplj`，包含独立 state、runtime、skill 安装目录和只读 fixture。监控仍调用规定的绝对入口 `/Users/soku/.agents/skills/buddy/scripts/buddy`，通过显式私有 state/runtime 附着私有服务。私有测试板只启用了日常已启用的 `dsh:deepseek-official:deepseek-flash:off`；未改日常模型目录或设置。没有 Claude 调用，没有新 Router 调用，没有自动续做或付费重试。
+全部 Buddy 实测使用私有根 `/private/tmp/buddy-monitor-probe-jn8_gplj`，包含独立 state、runtime、skill 安装目录和只读 fixture。监控仍调用规定的绝对入口 `~/.agents/skills/buddy/scripts/buddy`，通过显式私有 state/runtime 附着私有服务。私有测试板只启用了日常已启用的 `dsh:deepseek-official:deepseek-flash:off`；未改日常模型目录或设置。没有 Claude 调用，没有新 Router 调用，没有自动续做或付费重试。
 
 第一次批准包含一个 DeepSeek Flash off Worker 委派和一个 Luna low 监控会话。run `c0342e2e-9210-471d-b540-2442dd72f688` 只读取 `marker.txt` 并用中文原样报告内容；一个本地 `sleep 45` command 先占用唯一执行槽，以便观察排队。Worker 原生执行 4.1 秒，包含排队与服务开销为 50.195 秒，2 次模型请求；固定输出 `2aabdd2e74e08bc4da1b5c7737a5c554fa9ad7d3` 的 marker 与输入一致，changedPaths 与 diff 均为空。第一个监控开始执行 await 时 Worker 已完成，所以 await 的实际等待为 0 秒，只证明模型覆盖、权限与结果交回，不能作为长等待证据。
 

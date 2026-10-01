@@ -1,6 +1,6 @@
 # Worker session privacy and storage acceptance (0.25.0)
 
-Verified on 2026-09-30 in `/Users/soku/.codex/worktrees/worker-session-privacy/hey-my-buddy`, branch `socu/worker-session-privacy`, based on `socu/buddy-core` at `58f1cdd250ab9bf8d90ba3b70f680975f050552d`. Package and named C-Two contract advance to 0.25.0; schema stays 15. This record covers source and private fixtures. No installation, real historical cleanup or user configuration change occurred. The installed Buddy service was used through its CLI for authorized source reviews; tests used private state/runtime roots and simulated native CLIs.
+Verified on 2026-09-30 in `~/.codex/worktrees/worker-session-privacy/hey-my-buddy`, branch `socu/worker-session-privacy`, based on `socu/buddy-core` at `58f1cdd250ab9bf8d90ba3b70f680975f050552d`. Package and named C-Two contract advance to 0.25.0; schema stays 15. This record covers source and private fixtures. No installation, real historical cleanup or user configuration change occurred. The installed Buddy service was used through its CLI for authorized source reviews; tests used private state/runtime roots and simulated native CLIs.
 
 ## Implemented behavior
 

@@ -1,6 +1,6 @@
 # Codex 原生沙盒证明修正（0.26.0）
 
-基线为 `socu/buddy-core` 的 `24b67af`，修正在独立 worktree `/Users/soku/.codex/worktrees/sandbox-review-results/hey-my-buddy` 的 `socu/sandbox-review-results` 完成。源码与契约升级为 0.26.0，schema 保持 15。范围只修审阅验证；没有安装、修改用户配置或直接读写日常状态目录。
+基线为 `socu/buddy-core` 的 `24b67af`，修正在独立 worktree `~/.codex/worktrees/sandbox-review-results/hey-my-buddy` 的 `socu/sandbox-review-results` 完成。源码与契约升级为 0.26.0，schema 保持 15。范围只修审阅验证；没有安装、修改用户配置或直接读写日常状态目录。
 
 ## 判定边界
 

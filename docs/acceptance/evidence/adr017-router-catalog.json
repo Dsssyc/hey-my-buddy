@@ -6,10 +6,10 @@
     "adapter": "codex",
     "status": "ready",
     "version": "0.157.0",
-    "executable": "/Users/soku/.nvm/versions/node/v24.21.0/bin/codex",
+    "executable": "~/.nvm/versions/node/v24.21.0/bin/codex",
     "command": [
-      "/Users/soku/.nvm/versions/node/v24.21.0/bin/node",
-      "/Users/soku/.nvm/versions/node/v24.21.0/bin/codex"
+      "~/.nvm/versions/node/v24.21.0/bin/node",
+      "~/.nvm/versions/node/v24.21.0/bin/codex"
     ],
     "source": "nvm"
   },

@@ -1,6 +1,6 @@
 # B 批第一阶段源码与验证记录
 
-2026-09-30。基线 `socu/integration-0.22` / `62fd32b`（A 批已合入，A 批后续修正由 Host 合并）。实施分支 `socu/worker-accounts`，独立 worktree `/Users/soku/.codex/worktrees/worker-accounts/hey-my-buddy`。源码与契约候选 `0.23.0`，schema 保持 15；没有修改 `backup.py`、`upgrade.py`、`storage.py` 或既有适配器的 attempt 目录布局。第 11 条与第二阶段均未实施。
+2026-09-30。基线 `socu/integration-0.22` / `62fd32b`（A 批已合入，A 批后续修正由 Host 合并）。实施分支 `socu/worker-accounts`，独立 worktree `~/.codex/worktrees/worker-accounts/hey-my-buddy`。源码与契约候选 `0.23.0`，schema 保持 15；没有修改 `backup.py`、`upgrade.py`、`storage.py` 或既有适配器的 attempt 目录布局。第 11 条与第二阶段均未实施。
 
 ## 源码范围与逐项结果
 

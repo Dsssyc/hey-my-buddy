@@ -10,8 +10,8 @@ const props = () => ({
   rows, total: rows.length, loading: false, error: "", nextCursor: null, reorder: null,
   filter: "all" as const, query: "", projectId: "", hostId: "",
   choices: {
-    projects: [{ id: "p1", label: "hey-my-buddy", path: "~/Desktop/codespace/mememe/hey-my-buddy" },
-      { id: "p2", label: "dsh-harness", path: "~/Desktop/codespace/dsh-harness" }],
+    projects: [{ id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
+      { id: "p2", label: "dsh-harness", path: "~/projects/dsh-harness" }],
     hosts: ["codex-desktop", "dsh-host-02"],
   },
   selected: null, rail: false, onExpand: vi.fn(), collapsible: false, onCollapse: vi.fn(),
@@ -31,7 +31,7 @@ describe("objective list (0.16 P1.4)", () => {
     const heading = screen.getByRole("button", { name: /▾ hey-my-buddy/ });
     expect(heading.textContent).toContain("2");
     expect(heading.textContent).not.toContain("已加载");
-    expect(heading.getAttribute("title")).toContain("~/Desktop/codespace/mememe/hey-my-buddy");
+    expect(heading.getAttribute("title")).toContain("~/projects/hey-my-buddy");
     expect(heading.getAttribute("title")).toContain("已加载 2 个");
     // The standalone row is collapsed away by default with its own heading.
     expect(screen.queryByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeNull();

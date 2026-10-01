@@ -31,7 +31,7 @@ export function objectiveSummary(overrides: Partial<ObjectiveSummary> = {}): Obj
     titleSource: "objective",
     description: "按用户认可的第 X 节设计工作目标时间轴。本目标覆盖只读接口、前端呈现与离线升级验证。",
     summary: null,
-    project: project("p1", "hey-my-buddy", "~/Desktop/codespace/mememe/hey-my-buddy"),
+    project: project("p1", "hey-my-buddy", "~/projects/hey-my-buddy"),
     sourceHostId: "codex-desktop",
     currentHostIds: ["codex-desktop"],
     createdAt: "2026-09-26T01:12:00Z",
@@ -174,7 +174,7 @@ export function listFixture(): ObjectiveSummary[] {
       sourceHostId: "codex-cli",
       counts: { roots: 1, helpers: 0, accepted: 0, active: 0, host: 0, review: 0, ended: 1 } }),
     objectiveSummary({ objectiveId: "obj-4", title: "DSH 插件在 Windows 路径下的沙箱回归排查",
-      project: project("p2", "dsh-harness", "~/Desktop/codespace/dsh-harness"),
+      project: project("p2", "dsh-harness", "~/projects/dsh-harness"),
       sourceHostId: "dsh-host-02", lastActivitySeq: 39, lastActivityAt: "2026-09-26T08:11:00Z", state: "host",
       counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 1, review: 0, ended: 0 } }),
   ];

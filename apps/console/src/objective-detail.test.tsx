@@ -27,7 +27,7 @@ function taskFixture(runId: string): Task {
     resultAvailable: true, shutdownConfirmed: true,
     delegation: { kind: runId === "r3" ? "helper" : "goal", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
       parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId,
-      project: { id: "p1", label: "hey-my-buddy", path: "~/Desktop/codespace/mememe/hey-my-buddy" },
+      project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
       configuration: { adapter: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
   if (runId === "r2") {
     base.workflow = { state: "awaiting-host", awaitingHost: true, hostId: "codex-desktop", ownerGeneration: 2, revision: 1 };

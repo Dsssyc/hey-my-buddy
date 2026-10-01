@@ -4,7 +4,7 @@ Recorded on 2026-09-24 against contract `0.6.0`, schema `8` and runtime `3ce39af
 
 ## Source and branch ownership
 
-The integration checkout is `/Users/soku/.codex/worktrees/buddy-core/hey-my-buddy`, branch `socu/buddy-core`, based on released 0.5 commit `0b674e91b467e2d688aa8d13196a507b85ca9c9e`. The current-contract/routing implementation was imported from `socu/buddy-current-core` through `0679e3fb189f3e450d21824667142e1e742824ac`; the ZCode implementation was imported from `socu/buddy-zcode` through `31f9d19a43097b4504e877e1218c9541b7ac0f4c`. Only the bounded deltas were assembled, followed by Host integration corrections. No wholesale branch merge replaced the integration tree.
+The integration checkout is `~/.codex/worktrees/buddy-core/hey-my-buddy`, branch `socu/buddy-core`, based on released 0.5 commit `0b674e91b467e2d688aa8d13196a507b85ca9c9e`. The current-contract/routing implementation was imported from `socu/buddy-current-core` through `0679e3fb189f3e450d21824667142e1e742824ac`; the ZCode implementation was imported from `socu/buddy-zcode` through `31f9d19a43097b4504e877e1218c9541b7ac0f4c`. Only the bounded deltas were assembled, followed by Host integration corrections. No wholesale branch merge replaced the integration tree.
 
 The original checkout on `socu/python-blackboard`, including the user's documentation and `.workbuddy/` changes, was preserved. The user-excluded `socu/buddy-codebuddy` branch and its worktree were not inspected for implementation, modified or merged. This delivery is a local integration branch and plugin installation, not a GitHub publication.
 
@@ -47,11 +47,11 @@ The source repository under `/private/tmp/buddy-installed-0.6.SIJMdh` retained c
 
 ## Daily-board archive and recoverability
 
-The former schema-7 daily service was stopped only after all 48 tasks were terminal (44 completed, three failed, one cancelled). Stop reported zero queued cancellations, zero new cancellation requests and no unresolved attempts. Its board, attempt files, artifact references, controls and Git worktrees remain in place under `/Users/soku/.local/share/hey-my-buddy`; moving that tree would invalidate absolute references.
+The former schema-7 daily service was stopped only after all 48 tasks were terminal (44 completed, three failed, one cancelled). Stop reported zero queued cancellations, zero new cancellation requests and no unresolved attempts. Its board, attempt files, artifact references, controls and Git worktrees remain in place under `~/.local/share/hey-my-buddy`; moving that tree would invalidate absolute references.
 
-An additional private database copy, `board.sqlite3.v7-archive-20260924T085224Z`, passed SQLite integrity checking. Its SHA-256 and the unchanged original database SHA-256 were both `7ca0fd91f5e9a2aa217c6a67a0bd395348a71c79c6ed2e1e095720d7138a39eb`, including after the installed 0.6 task. The fresh board is the separate `/Users/soku/.local/share/hey-my-buddy/state` directory. No old records were imported or converted.
+An additional private database copy, `board.sqlite3.v7-archive-20260924T085224Z`, passed SQLite integrity checking. Its SHA-256 and the unchanged original database SHA-256 were both `7ca0fd91f5e9a2aa217c6a67a0bd395348a71c79c6ed2e1e095720d7138a39eb`, including after the installed 0.6 task. The fresh board is the separate `~/.local/share/hey-my-buddy/state` directory. No old records were imported or converted.
 
-The prior registered plugin source is retained at `/Users/soku/plugins/hey-my-buddy.previous-1790240110365660000`. The removed standalone discovery symlink is recoverable from `/Users/soku/plugins/hey-my-buddy-entrypoints-1EQAqr/deepseek-delegate-link`; its former target is present in that prior source backup. The DSH profile patch was backed up as `cordis.patch.yml.before-buddy-0.6-20260924` before changing only the Buddy workspace-bridge path. The installed plugin is the sole skill distribution.
+The prior registered plugin source is retained at `~/plugins/hey-my-buddy.previous-1790240110365660000`. The removed standalone discovery symlink is recoverable from `~/plugins/hey-my-buddy-entrypoints-1EQAqr/deepseek-delegate-link`; its former target is present in that prior source backup. The DSH profile patch was backed up as `cordis.patch.yml.before-buddy-0.6-20260924` before changing only the Buddy workspace-bridge path. The installed plugin is the sole skill distribution.
 
 ## Scope of acceptance
 

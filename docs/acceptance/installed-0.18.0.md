@@ -8,7 +8,7 @@ The user authorized installation on 2026-09-28 after the [0.18.0 source acceptan
 
 After installation `health` reports status `ok`, contract 0.18.0, schema 13, a stable runtime, integrity `ok` and no foreign-key violations. The console snapshot carries `familyPreferences`, `preferenceOverrides`, the effective `preferences` and `familyAnnotations`, and no longer carries `annotations`; the migration produced no family default, one per-effort override and six family notes.
 
-`codex plugin remove hey-my-buddy@personal` (Codex CLI 0.157.0) removed the 0.17.0 plugin and its cache, so Codex and Claude Code now read the same skill. The personal marketplace at `/Users/soku/plugins/hey-my-buddy` still lists the plugin as not installed and was left in place.
+`codex plugin remove hey-my-buddy@personal` (Codex CLI 0.157.0) removed the 0.17.0 plugin and its cache, so Codex and Claude Code now read the same skill. The personal marketplace at `~/plugins/hey-my-buddy` still lists the plugin as not installed and was left in place.
 
 Two read-only smoke delegations ran on the installed 0.18.0 service from the frozen input `cc1da88`: DeepSeek Flash off (run `8fe07eef`) and Codex GPT-6 Sol high (run `20bd6150`). Both were admitted, delivered with confirmed shutdown and reported `git rev-parse --short HEAD` = `cc1da88` and zero `git status` entries, which the Host checked against the frozen input. Both were recorded as integration not required and accepted; the Host read the reported results after recording the acceptance rather than before, and the results matched. The Codex admission that failed three times earlier in the day passed because of the `PATH` noted above.
 

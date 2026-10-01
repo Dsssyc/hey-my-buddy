@@ -2,7 +2,7 @@
 
 ## 范围与状态
 
-2026-09-30，在 `794a901`（`socu/buddy-core`）上建立独立 worktree `/Users/soku/.codex/worktrees/console-routing-fixes/hey-my-buddy` 与分支 `socu/console-routing-fixes`。本记录覆盖四项源码修复、自动化验证与合成浏览器核对。契约及包版本为 `0.22.0`，SQLite schema 仍为 `15`，没有修改数据库 schema、适配器、备份或升级实现。未合并主开发分支，未安装或升级日常服务，未修改用户配置，也未访问日常控制台。
+2026-09-30，在 `794a901`（`socu/buddy-core`）上建立独立 worktree `~/.codex/worktrees/console-routing-fixes/hey-my-buddy` 与分支 `socu/console-routing-fixes`。本记录覆盖四项源码修复、自动化验证与合成浏览器核对。契约及包版本为 `0.22.0`，SQLite schema 仍为 `15`，没有修改数据库 schema、适配器、备份或升级实现。未合并主开发分支，未安装或升级日常服务，未修改用户配置，也未访问日常控制台。
 
 先写已接受的 [ADR-020](../decisions/020-loopback-console-access.md)，依据用户 2026-09-29 的决定；随后更新 [console.md](../reference/console.md)，再实现登录行为。设计与契约提交为 `f56dfd4`，登录与滚动实现为 `eb0bc3c`，目标列表为 `53be4b6`，路由及 Host 补充为 `13c83d1`，列表失败恢复及最终资源构建为 `8457ac3`。提交未添加 AI 署名。
 

@@ -1,6 +1,6 @@
 # Installed 0.16.0
 
-The user authorized immediate installation after verification on 2026-09-28. The verified package from source commit `7af8b60a7a59c63b3aef320b96f00289bc5a4bca` was staged into the existing personal marketplace at `/Users/soku/plugins/hey-my-buddy`, installed as `hey-my-buddy@personal` 0.16.0, and its new bundled launcher ran `buddy upgrade`. The upgrade returned `upgraded: true`; no manual state archive or database replacement was performed.
+The user authorized immediate installation after verification on 2026-09-28. The verified package from source commit `7af8b60a7a59c63b3aef320b96f00289bc5a4bca` was staged into the existing personal marketplace at `~/plugins/hey-my-buddy`, installed as `hey-my-buddy@personal` 0.16.0, and its new bundled launcher ran `buddy upgrade`. The upgrade returned `upgraded: true`; no manual state archive or database replacement was performed.
 
 ## Installed identity
 
@@ -10,13 +10,13 @@ The final source checks passed 1,185 Python tests and 233 Node 24 tests. Fronten
 
 ## Backup and storage
 
-The real upgrade created and verified the single rolling backup at `/Users/soku/.local/share/hey-my-buddy/state/backups/current`: 143,750,497 bytes, 2,894 payload files, 8.549 seconds. Integrity, foreign keys, hashes and private opening were verified by the shared backup implementation. Exactly one completed backup directory (`current`) remains.
+The real upgrade created and verified the single rolling backup at `~/.local/share/hey-my-buddy/state/backups/current`: 143,750,497 bytes, 2,894 payload files, 8.549 seconds. Integrity, foreign keys, hashes and private opening were verified by the shared backup implementation. Exactly one completed backup directory (`current`) remains.
 
 The upgrade removed 19 proven unused old runtimes totaling 1,007,964,885 bytes. Current and previous runtimes are retained; eight older directories with unproven runtime identity remain protected. Post-install read-only inventory reports ZCode homes 3,826,799,234 bytes, managed checkouts 3,551,805,352 bytes, runtime directories 413,976,307 bytes, backup 143,750,497 bytes and durable records 225,359,644 bytes. Three accepted ZCode homes totaling 138,195,356 bytes are eligible after grace; no native-home/workspace storage apply was requested or executed.
 
 All 100 identified orphan test processes were subsequently confirmed exited under the user's stop authorization. Final inventory found zero orphan Buddy processes. This includes three older launcher-test supervisors found in the final snapshot; their start time preceded the final complete test. Historical test directories/records were preserved. The staging helper's temporary previous-plugin source was removed after verification; it had matched the installed 0.15.1 cache before Codex updated that cache, and the verified previous stable runtime remains.
 
-After the user separately replied “删除,” Host reverified the current backup with the shared manifest, hash, SQLite integrity, foreign-key and private-open checks, and confirmed the daily service still ran contract 0.16.0/schema 12 on runtime `88cfd4423dd42ac7a6f94e70f77007f5`. Host then removed only `/Users/soku/.local/share/hey-my-buddy/archive-before-readonly-0.15.1-20260927-195555` (7,482,405,564 logical payload bytes) and confirmed it was absent while `backups/current` remained present. The user's Trash was untouched. Exact evidence is `tmp/016/archive-deletion-report.json`.
+After the user separately replied “删除,” Host reverified the current backup with the shared manifest, hash, SQLite integrity, foreign-key and private-open checks, and confirmed the daily service still ran contract 0.16.0/schema 12 on runtime `88cfd4423dd42ac7a6f94e70f77007f5`. Host then removed only `~/.local/share/hey-my-buddy/archive-before-readonly-0.15.1-20260927-195555` (7,482,405,564 logical payload bytes) and confirmed it was absent while `backups/current` remained present. The user's Trash was untouched. Exact evidence is `tmp/016/archive-deletion-report.json`.
 
 ## Console
 

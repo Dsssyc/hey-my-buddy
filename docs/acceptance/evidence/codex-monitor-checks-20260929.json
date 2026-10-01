@@ -12,6 +12,6 @@
   "privateRootRemoved": true,
   "logSha256": "cf747504f1dbfb6e7128090f04dba7f335480fe796cf3b15e5c815d1c95029c3",
   "resourceWarnings": [
-    "/Users/soku/.local/share/uv/python/cpython-3.13-macos-aarch64-none/lib/python3.13/subprocess.py:1140: ResourceWarning: subprocess 84922 is still running"
+    "~/.local/share/uv/python/cpython-3.13-macos-aarch64-none/lib/python3.13/subprocess.py:1140: ResourceWarning: subprocess 84922 is still running"
   ]
 }
