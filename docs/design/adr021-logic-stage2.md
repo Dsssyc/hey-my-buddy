@@ -146,7 +146,7 @@ L5、L6 的正常任务都只做到模拟夹具、公开安装代码/协议元�
 
 ## 委派、集成与记录
 
-所有 buddy 提交省略 harness/provider/model/effort，不给部分四元组；任务需要的复杂度、推理和验证能力写入任务描述。一个议程用一个 objective，每行任务单独委派，固定 requestId，保存 runId/objectiveId/controlFile。并行写入使用 `executionWorkspace.kind=worktree` 的独立检出；Host 的分支只由 Host 合入已验收成果，不改 main、socu/buddy-core 或其他会话的 worktree，不推送。
+所有 buddy 提交省略 harness/provider/model/effort，不给部分四元组；任务需要的复杂度、推理和验证能力写入任务描述。一个议程用一个 objective，每行任务单独委派，固定 requestId，保存 runId/objectiveId/controlFile。并行写入使用 `executionWorkspace.kind=worktree` 的独立检出；includeUntracked 只列源检出中已存在的未跟踪输入，尚未创建的输出文件由 writeScope 声明并在 Worker 提交中跟踪，不能将未来路径放入 includeUntracked；Host 的分支只由 Host 合入已验收成果，不改 main、socu/buddy-core 或其他会话的 worktree，不推送。
 
 每个运行的委派只有一个原生监控子智能体，依已安装 Codex Host 指南用 `gpt-6-luna`/`low`、`fork_turns=none` 明确启动，只执行同一 run 的 await；慢或 parent wait 超时继续等待原子智能体，需要进度时 Host 自己读 get。只在监控本身失败或提前结束时替换；无法建立监控才用前台 await。监控不读源码、不做实现、不使用控制文件、不改任务。Native 子智能体仅用于这类工具与上下文明确的监控，不代替 buddy 的代码委派。
 
@@ -171,3 +171,5 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 2026-10-02 按用户批准的四点修订：合入 core 的第 4 条更新；取消 Codex/Claude 运行重做及动态/Python 文件工具；一致性责任移到 L5 开头并由黑板统一判定；G 分成请求/冻结/Host 边界和认领/发布两个任务；付费检查只保留 DSH、ZCode 各一次、执行前逐次批准。原计划提交为 89a498b，本次修订单独提交后直接开工。
 
 已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。当前尚无实现或委派；完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
+
+首次 L4-A 提交在 admission 前被 INVALID_WORKSPACE 拒绝：安装版 includeUntracked 只允许已有未跟踪输入，不允许未来输出路径。未创建有效委派；调整提交模板为新输出仅列 writeScope，复用原 requestId，不改任务契约或日常数据。
