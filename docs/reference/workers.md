@@ -4,7 +4,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 
 ## Adapters
 
-`buddy capabilities` (also `buddy adapters`) reports each adapter with `available`, `reason`, `capabilities` and `executedBy`, plus `localCapabilities`, the named operations, wait admission, an honest `limitations` map and a `readOnlyStructured` block carrying `implemented`, `verified` and `sameAttemptContinuation` for the review mode; the tool-free structured capability of fast routing is advertised as `routing:fast` in each adapter's `capabilities`.
+`buddy capabilities` (also `buddy adapters`) reports each adapter with `available`, `reason`, `capabilities` and `executedBy`, plus `localCapabilities`, the named operations, wait admission, an honest `limitations` map and a `readOnlyStructured` block carrying `implemented`, `verified` and `sameAttemptContinuation` for the review mode; the tool-free structured capability of fast routing is advertised as `routing:fast` in each adapter's `capabilities`. A new adapter, or a behavior that several adapters share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
 
 | Adapter | `executedBy` | Capabilities | Requirements |
 | --- | --- | --- | --- |
