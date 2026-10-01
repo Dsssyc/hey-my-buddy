@@ -102,6 +102,7 @@ class HostGuideTests(unittest.TestCase):
             "monitoring-only native subagent",  # one monitor per running delegation
             "fork_turns",  # the monitor spawns with an empty history
             "wait-timeout",  # the three separate wait limits
+            "not a monitor failure",  # slow work keeps its monitor instead of moving to the foreground
             "~/.codex/rules",  # launcher sandbox allowance
             "prefix_rule",
             "not wake a closed Host session",  # the turn-end limit
