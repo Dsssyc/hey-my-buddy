@@ -43,7 +43,6 @@ SUMMARIES: dict[str, str] = {
     "capabilities": "Adapter report with availability, capabilities, named operations and the honest limitations map.",
     "adapters": "Adapter report; the same operation as capabilities.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
-    "harness-verify": "Prepare or explicitly start one native review verification for an enabled configuration.",
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "accounts": "Read sanitized account sources and capabilities without a native refresh.",
     "account-set": "Select native or Worker account source for future attempts using expectedRevision.",

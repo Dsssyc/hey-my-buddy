@@ -536,7 +536,7 @@ class Worker:
                 except Exception as cleanup_error:  # noqa: BLE001 - keep the honest default
                     self.log(f"could not confirm this attempt's child stopped: {cleanup_error!r}")
                 # Command owns one group. For every harness adapter, including
-                # decision and review-check, the outer controller can stop
+                # decision, the outer controller can stop
                 # while its separately owned native process survives.
                 if spec["adapter"] == "command":
                     try:
@@ -580,8 +580,6 @@ class Worker:
         from ..harness_runtime import bound, RECORD_FILE
 
         name = spec['adapter']
-        if name == 'review-check':
-            name = (spec.get('reviewCheck') or {}).get('adapter')
         review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
             name = (claim.get('decisionInput') or {}).get('profile', {}).get('adapter')
@@ -613,10 +611,6 @@ class Worker:
             holder['harnessRetry'] = retry
             try:
                 with bound([record]):
-                    if review:
-                        native = get_adapter(name)
-                        if not (native.read_only_structured and native.read_only_structured_verified):
-                            return self._review_unavailable(claim, directory, history, 'router-review-unverified')
                     return self._execute_selected(claim, task, spec, attempt, directory, holder)
             except (OSError, BoardError) as error:
                 # A start() error with no returned handle may still follow spawn.
@@ -638,7 +632,7 @@ class Worker:
         from ..router import routing_facts
         return self.receipt(claim, {'status': 'failed', 'result': {
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
-            'reason': 'The review harness is unavailable or its current version is not verified',
+            'reason': 'The review harness is unavailable',
             'modelStarted': False, 'harnessAttempts': history,
             'budget': (claim.get('decisionInput') or {}).get('budget'),
             **routing_facts(claim.get('decisionInput') or {})},
@@ -807,11 +801,6 @@ class Worker:
         )
         report["elapsedSeconds"] = round(time.monotonic() - started, 1)
         report["logPaths"] = context.log_paths()
-        if spec["adapter"] == "review-check":
-            # The native controller logs were private and may already be removed.
-            # Advertise only the retained diagnostic produced by this adapter.
-            from ..review_evidence import FILE
-            report["logPaths"] = {"reviewEvidence": str(directory / FILE)} if outcome.result.get("evidenceFile") == FILE else {}
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
 
@@ -820,8 +809,6 @@ class Worker:
         private_adapter = spec["adapter"]
         if private_adapter == "decision":
             private_adapter = ((claim.get("decisionInput") or {}).get("profile") or {}).get("adapter")
-        elif private_adapter == "review-check":
-            private_adapter = "codex"
         if private_adapter in {"dsh", "zcode", "codex", "claude", "command"}:
             try:
                 cleanup_attempt_credentials(self.state_dir, private_adapter, task["taskId"], attempt["attemptId"])

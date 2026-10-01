@@ -1,4 +1,5 @@
 """Review eligibility checks local mechanisms, never paid native evidence."""
+import importlib.util
 import json
 import unittest
 from unittest.mock import patch
@@ -14,8 +15,9 @@ from support import BoardTestCase
 
 class LocalEligibilityTests(unittest.TestCase):
     def test_native_sandbox_mechanisms_do_not_require_a_version_certificate(self):
+        self.assertIsNone(importlib.util.find_spec('buddy.harness_review'),
+                          "the retired certificate store must not ship with the package")
         with patch('buddy.adapters.base.sys.platform', 'darwin'), \
-             patch('buddy.harness_review.certificates', side_effect=AssertionError('certificate read')), \
              patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             for item in (CodexAdapter(), ClaudeAdapter()):

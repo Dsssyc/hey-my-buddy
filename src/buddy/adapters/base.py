@@ -123,7 +123,6 @@ class ReadOnlyStructuredRequest:
     output_schema: dict
     budget: dict
     capture_evidence: bool = False
-    native_probe: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -145,8 +144,6 @@ class Adapter:
     native_resume = False
     model_discovery = False
     read_only_structured = False
-    # Mock coverage is not native verification. Enable only after an approved probe.
-    read_only_structured_verified = False
     read_only_structured_resume = False
     system_sandbox_platforms: tuple[str, ...] = ()
     read_only_tool_categories: tuple[str, ...] = ()

@@ -133,8 +133,6 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
     }
-    if request.native_probe is not None:
-        control["readOnlyRequest"]["nativeProbe"] = request.native_probe
     path = context.directory / "readonly-control.json"
     private_json(path, control)
     from ..harness_runtime import controller_environment

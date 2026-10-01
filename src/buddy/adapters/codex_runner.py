@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -133,10 +132,6 @@ def _read_only_call(connection, control, result, catalog):
     """A structured native call with no workflow identity or completion tools."""
     from .read_only import valid_answer
     spec, request = control["spec"], control["readOnlyRequest"]
-    if request.get("nativeProbe") is not None:
-        if connection.responses:
-            raise CodexProtocolError("invalid-protocol", "Review starts with an uncorrelated native reply")
-        connection.strict_responses = True
     if spec.get("provider") != "openai" or not any(
             model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
             for model in catalog["providers"][0]["models"]):
@@ -145,16 +140,16 @@ def _read_only_call(connection, control, result, catalog):
     from .codex_config import read_only_config, policy_matches
     expected = tomllib.loads(read_only_config(control['cwd']))
     configured = connection.call('config/read', {'cwd': control['cwd'], 'includeLayers': False}).get('config') or {}
-    # Failed readback must survive too; review-check publishes only a strict,
-    # sanitized projection before removing this private controller result.
+    # Failed readback must survive too; the retained policy evidence is the
+    # acknowledged native state, never the controller's own proposal.
     result['nativeConfigPolicy'] = configured
     profile = (configured.get('permissions') or {}).get('buddy-router') or {}
     filesystem = {key: value for key, value in (profile.get('filesystem') or {}).items() if value is not None}
     if (not policy_matches(configured, expected) or configured.get('mcp_servers')
             or filesystem != expected['permissions']['buddy-router']['filesystem'] or profile.get('extends')):
         raise CodexProtocolError('readonly-policy-unverified', 'Codex effective configuration differs from the private read-only policy')
-    # Retain the acknowledged effective config, not our requested TOML. Review
-    # certification must inspect native evidence rather than our own proposal.
+    # Retain the acknowledged effective config, not our requested TOML; the
+    # caller must be able to inspect native evidence, not our proposal.
     response = connection.call("thread/start", {
         "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
@@ -180,18 +175,6 @@ def _read_only_call(connection, control, result, catalog):
     if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
         raise CodexProtocolError("wrong-native-workspace", "Read-only native checkout differs")
     result.update(sessionId=thread_id, resolved=dict(spec))
-    probe = request.get("nativeProbe")
-    if probe is not None:
-        from ..sandbox_probe import run as native_probe
-        if (not request.get("captureEvidence") or not isinstance(probe, dict)
-                or set(probe) != {"sentinel", "url"} or not isinstance(probe.get("sentinel"), str)
-                or not isinstance(probe.get("url"), str)
-                or Path(probe["sentinel"]).parent != Path(control["cwd"]).parent
-                or not re.fullmatch(r"outside-[0-9a-f]{32}\.txt", Path(probe["sentinel"]).name)
-                or not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}/", probe["url"])):
-            raise CodexProtocolError("invalid-configuration", "Invalid private native sandbox fixture")
-        result["nativeSandboxProbes"] = native_probe(connection, frozen=Path(control["cwd"]),
-                            sentinel=Path(probe["sentinel"]), url=probe["url"])
     previous_tools = 0
     prompt = request["prompt"]
     for call_index in range(2):
@@ -246,7 +229,7 @@ def _read_only_call(connection, control, result, catalog):
             control['_readonlyRawCalls'] = len(raw_calls)
             result["usage"] = {"toolCalls": previous_tools + observed_tools, "bytesRead": None}
             # A limit of N allows N native tool calls; the next one is interrupted.
-            if previous_tools + observed_tools + (5 if probe is not None else 0) > request["budget"]["toolCalls"]:
+            if previous_tools + observed_tools > request["budget"]["toolCalls"]:
                 raise CodexProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
             if activity:
                 _activity(control, evidence, *activity)
@@ -275,8 +258,6 @@ def _read_only_call(connection, control, result, catalog):
             break
         previous_tools += max(evidence.tool_calls, len(raw_calls))
         prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
-    if probe is not None:
-        result["usage"]["nativeProbeCalls"] = 5
 
 
 def _observe_quota(connection, evidence) -> dict | None:

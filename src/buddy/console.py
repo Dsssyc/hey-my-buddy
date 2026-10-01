@@ -131,7 +131,6 @@ CONSOLE_OPERATIONS = (
     "account_logout",
     "account_remove",
     "capabilities",
-    "harness_verify",
     "harness_set",
     "quota_redetect",
     "evaluation_write_begin",

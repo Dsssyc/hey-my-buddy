@@ -46,7 +46,6 @@ METHODS = [
     "account-logout",
     "account-remove",
     "harness-set",
-    "harness-verify",
     "quota-redetect",
     "runtime",
     "backup",

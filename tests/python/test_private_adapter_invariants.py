@@ -16,8 +16,8 @@ from buddy.adapters.base import ExecutionContext, NoToolStructuredRequest
 from buddy.adapters.codex import CodexAdapter
 from buddy.adapters.command import CommandAdapter
 from buddy.adapters.decision import DecisionAdapter
+from buddy.adapters.base import ReadOnlyStructuredRequest
 from buddy.adapters.dsh import DshAdapter
-from buddy.adapters.review_check import ReviewCheckAdapter, _BUDGET
 from buddy.adapters.zcode import ZcodeAdapter
 from buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
 from buddy.errors import BoardError
@@ -299,7 +299,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 cleanup_attempt_credentials(Path(environment["BUDDY_STATE_DIR"]), adapter.name, "task", "attempt")
                 self.assert_partition(context)
 
-    def test_decision_review_router_and_review_check_use_codex_private_root(self):
+    def test_review_read_only_calls_use_codex_private_root(self):
         fixture = self.fixture(codex_tests.CodexAdapterTests)
         context = fixture.context()
         account_home = fixture.root / "fixture-codex-home"
@@ -308,53 +308,21 @@ class PrivateAdapterInvariants(unittest.TestCase):
         context.environment["CODEX_HOME"] = str(account_home)
         context.directory = Path(context.environment["BUDDY_STATE_DIR"]) / "attempts" / context.task_id / context.attempt_id
         context.turn = None
-        profile = {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"}
-        context.decision_input = {"profile": profile, "profiles": [{"profileId": "legal"}],
-            "routingMode": "review", "tableRevision": 1, "task": "Select", "budget": router.budget(),
-            "outputSchema": router.answer_schema(["legal"])}
-        with mock.patch.object(CodexAdapter, "read_only_structured_verified", True):
-            handle = DecisionAdapter().start(context)
-            self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
-            self.assertIsNotNone(handle.wait(20))
-            outcome = DecisionAdapter().collect(handle, context)
+        context.agent_credential = None
+        # A review-mode call is a read-only structured invocation of the native
+        # adapter; the private-root and partition invariants live on that path.
+        request = ReadOnlyStructuredRequest(str(fixture.cwd), "Select from the frozen packet",
+                                             router.answer_schema(["legal"]), router.budget())
+        handle = CodexAdapter().start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        outcome = read_only.collect(handle)
         self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
         control = json.loads((context.directory / "readonly-control.json").read_text())
         self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, "codex")))
+        self.assertFalse((context_root(context, "codex") / "review-native/codex-home/auth.json").exists())
+        cleanup_attempt_credentials(Path(context.environment["BUDDY_STATE_DIR"]), "codex", context.task_id, context.attempt_id)
         self.assert_partition(context)
-
-        # Review-check is an internal Codex invocation. The mock CLI returns a
-        # bounded result but cannot certify real read/network denials.
-        check = fixture.context(index=2)
-        check.environment["CODEX_HOME"] = str(account_home)
-        check.directory = Path(check.environment["BUDDY_STATE_DIR"]) / "attempts" / check.task_id / check.attempt_id
-        check.directory.mkdir(mode=0o700, parents=True)
-        check.turn = None
-        check.spec = {"adapter": "review-check", "reviewCheck": {
-            "adapter": "codex", "harness": {"adapter": "codex", "status": "ready", "version": "fixture",
-                "command": [str(codex_tests.FIXTURE)], "locationFingerprint": "fixture"},
-            "version": "fixture", "platform": sys.platform, "budget": dict(_BUDGET),
-            "maxNativeTurns": 2, "formatCorrectionOnly": True, "modelCall": True,
-            "checks": list(__import__("buddy.harness_review", fromlist=["CHECKS"]).CHECKS),
-            "profileId": "codex:openai:fixture-model:low", "configuration": profile}}
-        check.spec["reviewCheck"]["configuration"] = {**profile}
-        from buddy.harness_runtime import controller_environment as original_controller_environment
-        review_trace = fixture.root / "review-check-fixture.json"
-        def mock_controller_environment(directory, environment, *, read_only=False):
-            return {**original_controller_environment(directory, environment, read_only=read_only),
-                    "BUDDY_DEV_SOURCE": "1", "BUDDY_CODEX_CLI": str(codex_tests.FIXTURE),
-                    "BUDDY_CODEX_FIXTURE_CASE": "ok", "BUDDY_CODEX_FIXTURE_STATE": str(review_trace)}
-        with (mock.patch("buddy.adapters.review_check.selected", return_value=check.spec["reviewCheck"]["harness"]),
-              mock.patch("buddy.harness_runtime.controller_environment", side_effect=mock_controller_environment)):
-            adapter = ReviewCheckAdapter()
-            handle = adapter.start(check)
-            self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
-            self.assertIsNotNone(handle.wait(20))
-            result = adapter.collect(handle, check)
-        self.assertTrue(result.shutdown_confirmed, result.to_report())
-        self.assertTrue(review_trace.is_file(), "review-check must execute only the mock Codex CLI")
-        self.assertFalse((context_root(check, "codex") / "review-native/codex-home/auth.json").exists())
-        cleanup_attempt_credentials(Path(check.environment["BUDDY_STATE_DIR"]), "codex", check.task_id, check.attempt_id)
-        self.assert_partition(check)
 
     def test_decision_fast_router_wraps_each_native_adapter(self):
         setups = (

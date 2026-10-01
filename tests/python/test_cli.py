@@ -24,7 +24,8 @@ import buddy.transport as transport
 from buddy.errors import BoardError
 
 #: Every CLI method that was removed by ADR-007, plus the ADR-008 removal of the
-#: internal maintenance call. None may remain as an alias.
+#: internal maintenance call and the ADR-021 retirement of the paid review
+#: verifier. None may remain as an alias.
 RETIRED_METHODS = (
     "run",
     "start",
@@ -43,6 +44,7 @@ RETIRED_METHODS = (
     "workspace-cleanup-apply",
     "evaluation-maintain",
     "evaluation-write-publish",
+    "harness-verify",
 )
 
 
