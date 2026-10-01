@@ -8,15 +8,22 @@ from pathlib import Path
 from .errors import BoardError
 
 _records = ContextVar('harness_records', default=None)
+_environment = ContextVar('harness_environment', default=None)
 RECORD_FILE = 'BUDDY_HARNESS_RECORD_FILE'
 
 
+def environment_for(environment=None):
+    return _environment.get() or (os.environ if environment is None else environment)
+
+
 @contextmanager
-def bound(records):
+def bound(records, *, environment=None):
     token = _records.set({record['adapter']: record for record in records})
+    env_token = _environment.set(environment)
     try:
         yield
     finally:
+        _environment.reset(env_token)
         _records.reset(token)
 
 
@@ -45,18 +52,20 @@ def command_for(adapter, environment=None):
 
 def native_environment(environment, *, adapter):
     from .harness_discovery import native_environment as clean
+    environment = environment_for(environment)
     return clean(environment, command=command_for(adapter, environment))
 
 
 def controller_environment(directory, environment=None, *, read_only=False):
     """Only trusted Python controllers receive the private command selection."""
-    source = os.environ if environment is None else environment
+    source = (_environment.get() or os.environ) if environment is None else environment
     from .harness_discovery import native_environment
     env = native_environment(source)
     allowed = ('PYTHONPATH', 'PYTHONSAFEPATH', 'PYTHONUTF8', 'PYTHONIOENCODING',
                'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
                'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
                'BUDDY_PYTHON', 'BUDDY_HARNESS_RECORD_FILE', 'BUDDY_CLAUDE_SETTINGS_POLICY')
+    allowed = (*allowed, 'BUDDY_ACCOUNT_SELECTION')
     for key in allowed:
         if key in source:
             env[key] = source[key]

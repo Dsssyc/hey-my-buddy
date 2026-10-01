@@ -265,7 +265,7 @@ def _scan_hash(snapshot: dict) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = ()) -> dict:
+def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = (), adapter=None) -> dict:
     """Build an account-preserving, credential-free environment for native CLIs.
 
     CA certificate path variables are preserved alongside the proxy variables:
@@ -296,6 +296,9 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
                 prefixes.append(parent)
     inherited_path = result.get("PATH", "")
     result["PATH"] = os.pathsep.join([*prefixes, *([inherited_path] if inherited_path else [])])
+    if adapter == 'claude':
+        from .account_integrations import inject_claude_key
+        result = inject_claude_key(result, environment)
     return result
 
 
@@ -523,7 +526,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
         if command is None:
             result["reasonCode"] = "interpreter-missing"
             return result
-    child_env = native_environment(environment, command=command)
+    child_env = native_environment(environment, command=command, adapter=adapter)
     code, output = _probe([*command, "--version"], child_env, deadline=deadline)
     if code is not None:
         result["reasonCode"] = code

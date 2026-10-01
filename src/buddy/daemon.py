@@ -601,6 +601,7 @@ class Daemon:
         try:
             self.store.initialize()
             service = self.service()
+            self.account_operations = service.account_operations
             self.harnesses = service.harnesses
             self.console = Console(self.store, service)
             self.console.start(issue_ticket=False)
@@ -803,6 +804,8 @@ class Daemon:
         return 0
 
     def cleanup(self) -> None:
+        if getattr(self, 'account_operations', None) is not None:
+            self.account_operations.close()
         if getattr(self, 'harnesses', None) is not None:
             self.harnesses.close()
         try:

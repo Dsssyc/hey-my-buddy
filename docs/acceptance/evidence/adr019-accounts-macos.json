@@ -1,0 +1,181 @@
+{
+  "platform": "darwin",
+  "sourceContract": "0.26.0",
+  "checks": {
+    "n1": {
+      "check": "N1",
+      "version": "codex-cli 0.159.0",
+      "versionExitCode": 0,
+      "observations": [
+        {
+          "scope": "private",
+          "accountType": null,
+          "planType": null,
+          "quota": null,
+          "modelCalls": 0,
+          "quotaRead": "unavailable",
+          "methodCounts": {
+            "initialize": 1,
+            "initialized": 1,
+            "account/read": 1,
+            "account/rateLimits/read": 1
+          },
+          "shutdownConfirmed": true,
+          "exitCode": 0
+        },
+        {
+          "scope": "native",
+          "accountType": "chatgpt",
+          "planType": "pro",
+          "quota": {
+            "version": 1,
+            "source": "codex/app-server-rate-limits",
+            "observedAt": "2026-09-30T12:54:34.148000Z",
+            "scope": {
+              "provider": "openai",
+              "limitId": "codex",
+              "planType": "pro"
+            },
+            "windows": [
+              {
+                "name": "primary",
+                "usedPercent": 98,
+                "resetsAt": "2026-10-03T17:01:16Z",
+                "windowDurationMins": 10080,
+                "limitId": "codex"
+              }
+            ],
+            "ordinaryUsageAllowed": true
+          },
+          "modelCalls": 0,
+          "methodCounts": {
+            "initialize": 1,
+            "initialized": 1,
+            "account/read": 1,
+            "account/rateLimits/read": 1
+          },
+          "shutdownConfirmed": true,
+          "exitCode": 0
+        }
+      ]
+    },
+    "n2a-key": {
+      "N2a": {
+        "modelCalls": 0,
+        "authUrlReturned": true,
+        "loginIdReturned": true,
+        "cancelStatus": "canceled",
+        "privateLoggedOut": true,
+        "methods": [
+          "initialize",
+          "initialized",
+          "account/login/start",
+          "account/login/cancel",
+          "account/read"
+        ],
+        "exitCode": 0,
+        "shutdownConfirmed": true
+      },
+      "fakeKey": {
+        "writeExitCode": 0,
+        "writeShutdownConfirmed": true,
+        "homeMode": "0o700",
+        "nativeFileExists": true,
+        "nativeFileMode": "0o600",
+        "readback": {
+          "modelCalls": 0,
+          "accountType": "apiKey",
+          "methods": [
+            "initialize",
+            "initialized",
+            "account/read"
+          ],
+          "exitCode": 0,
+          "shutdownConfirmed": true
+        }
+      }
+    },
+    "n2b-retry": {
+      "check": "N2b-retry",
+      "modelCalls": 0,
+      "nativeBeforeStop": {
+        "exitCode": 0,
+        "shutdownConfirmed": true
+      },
+      "startedAt": "2026-09-30T13:23:54.592351+00:00",
+      "privateInitiallyLoggedOut": true,
+      "completedNotification": true,
+      "nativeSuccess": true,
+      "elapsedSeconds": 97.1,
+      "failureCategory": "none",
+      "privateAccountType": "chatgpt",
+      "nativeFileExists": true,
+      "nativeFileMode": "0o600",
+      "privateStop": {
+        "exitCode": 0,
+        "shutdownConfirmed": true
+      },
+      "nativeAfterStop": {
+        "exitCode": 0,
+        "shutdownConfirmed": true
+      },
+      "nativeAccountUnchanged": true
+    },
+    "logout-claude": {
+      "modelCalls": 0,
+      "privateLogout": {
+        "privateLoggedOut": true,
+        "exitCode": 0,
+        "shutdownConfirmed": true
+      },
+      "claude": [
+        {
+          "fakeKeyInjected": false,
+          "loggedIn": false,
+          "authMethod": "none",
+          "apiProvider": "firstParty",
+          "exitCode": 1,
+          "shutdownConfirmed": true
+        },
+        {
+          "fakeKeyInjected": true,
+          "loggedIn": true,
+          "authMethod": "api_key",
+          "apiProvider": "firstParty",
+          "exitCode": 0,
+          "shutdownConfirmed": true
+        }
+      ]
+    },
+    "keychain": {
+      "check": "macos-keychain",
+      "modelCalls": 0,
+      "created": true,
+      "matched": true,
+      "deleted": true
+    },
+    "source-entry": {
+      "check": "source-entry",
+      "contract": "0.26.0",
+      "modelCalls": 0,
+      "account": {
+        "source": "worker",
+        "status": "ready",
+        "accountType": "metered",
+        "credentialRevision": 1
+      },
+      "secretInReply": false,
+      "secretInRecords": false,
+      "pendingOwners": 0,
+      "secretInBackupInventory": false,
+      "allOperationsSettled": true
+    },
+    "cleanup": {
+      "check": "private-cleanup",
+      "realPrivateLoggedOut": true,
+      "shutdownConfirmed": true,
+      "removedRoots": 6,
+      "modelCalls": 0
+    }
+  }
+}

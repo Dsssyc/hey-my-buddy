@@ -1,7 +1,9 @@
 """Native exhaustion persists until its reset or a newer available observation.
 
 Display freshness is separate. Unknown/partial observations cannot clear an
-exhaustion, and billing labels never affect these routing facts.
+exhaustion, and billing labels never affect these routing facts. Each persistent
+record and retry marker belongs to one source and credential revision; historical
+untagged records belong only to native revision zero.
 
 An exhaustion without a recorded reset would otherwise exclude its configuration
 forever, because the excluded configuration is never routed again and so never
@@ -58,24 +60,43 @@ def evidence(quota, *, now=None):
             'code': 'HARNESS_BALANCE_ZERO' if quota.get('balanceZero') is True else 'HARNESS_QUOTA_EXHAUSTED'}
 
 
-def _item_key(adapter, provider, limit_id):
-    return 'quota-routing:' + canonical_json([adapter, provider, limit_id])
+def _account(connection, adapter, account=None):
+    from .accounts import identity, selection
+    return identity(account if account is not None else selection(connection, adapter))
 
 
-def _marker_key(adapter, provider, limit_id):
-    return 'quota-retry:' + canonical_json([adapter, provider, limit_id])
+def _stored_account(item):
+    # Existing untagged evidence belongs only to the original native credentials.
+    return item.get('account') or {'source': 'native', 'credentialRevision': 0}
 
 
-def _marker(connection, adapter, provider, limit_id):
-    """The persisted single-use retry marker of one exhaustion record, or None."""
-    row = connection.execute('SELECT value FROM meta WHERE key=?', (_marker_key(adapter, provider, limit_id),)).fetchone()
+def _key(prefix, adapter, provider, limit_id, account):
+    parts = [adapter, provider, limit_id]
+    # Keep the initial-native record address; this is a read-compatible addition
+    # in meta, not a schema migration or conversion of historical observations.
+    if account != {'source': 'native', 'credentialRevision': 0}:
+        parts.extend([account['source'], account['credentialRevision']])
+    return prefix + canonical_json(parts)
+
+
+def _item_key(adapter, provider, limit_id, account):
+    return _key('quota-routing:', adapter, provider, limit_id, account)
+
+
+def _marker_key(adapter, provider, limit_id, account):
+    return _key('quota-retry:', adapter, provider, limit_id, account)
+
+
+def _marker(connection, adapter, provider, limit_id, account):
+    """The persisted single-use retry marker of one account's exhaustion."""
+    row = connection.execute('SELECT value FROM meta WHERE key=?', (_marker_key(adapter, provider, limit_id, account),)).fetchone()
     value = json.loads(row[0]) if row else None
     return value if isinstance(value, dict) else None
 
 
 def _write_marker(connection, adapter, provider, limit_id, marker):
     connection.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                       (_marker_key(adapter, provider, limit_id), canonical_json(marker)))
+                       (_marker_key(adapter, provider, limit_id, _stored_account(marker)), canonical_json(marker)))
 
 
 def retry_facts(connection, item, *, now=None):
@@ -92,7 +113,7 @@ def retry_facts(connection, item, *, now=None):
     if present is None or observed is None:
         return None
     adapter, provider, limit_id = item.get('adapter'), item.get('provider'), item.get('limitId')
-    marker = _marker(connection, adapter, provider, limit_id)
+    marker = _marker(connection, adapter, provider, limit_id, _stored_account(item))
     # A marker bound to an older observation is evidence of a newer exhaustion
     # event; the fresh observation owns a fresh natural window.
     if marker and marker.get('basis') != item.get('observedAt'):
@@ -107,7 +128,7 @@ def retry_facts(connection, item, *, now=None):
     pending_manual = bool(manual and (consumed is None or manual > consumed))
     if pending_manual:
         eligible = min(eligible, manual.timestamp())
-    return {'eligibleAt': _iso(eligible), 'open': present.timestamp() >= eligible,
+    return {'account': _stored_account(item), 'eligibleAt': _iso(eligible), 'open': present.timestamp() >= eligible,
             'pendingManual': pending_manual and present.timestamp() >= manual.timestamp(),
             'manualAt': _iso(manual.timestamp()) if manual else None,
             'consumedAt': _iso(consumed.timestamp()) if consumed else None, 'consumedBy': consumed_by}
@@ -118,19 +139,20 @@ def _iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
-def record(connection, adapter, quota, *, now=None):
+def record(connection, adapter, quota, *, account=None, now=None):
     from .native_observations import _time
+    account = _account(connection, adapter, account)
     if quota.get('ambiguousLimits') is True and quota.get('allLimitsAvailable') is True:
         for limit in [None, *quota.get('coveredLimits', [])]:
             record(connection, adapter, {**quota, 'ambiguousLimits': False, 'windows': [],
-                'scope': {'limitId': limit}, 'ordinaryUsageAllowed': True, 'balanceZero': False, 'reachedType': None})
+                'scope': {'limitId': limit}, 'ordinaryUsageAllowed': True, 'balanceZero': False, 'reachedType': None}, account=account, now=now)
         return
     item = evidence(quota, now=now)
     if item is None:
         return
     if item['limitId'] in ('codex' if adapter == 'codex' else item['provider'], item['provider']):
         item['limitId'] = None
-    key = _item_key(adapter, item['provider'], item['limitId'])
+    key = _item_key(adapter, item['provider'], item['limitId'], account)
     row = connection.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
     prior = json.loads(row[0]) if row else None
     if prior and _time(prior.get('lastObservedAt') or prior['observedAt']) >= _time(item['observedAt']):
@@ -143,12 +165,12 @@ def record(connection, adapter, quota, *, now=None):
         # A definitive newer observation replaces the record: exhaustion clears,
         # or a fresh exhaustion event starts a fresh natural retry window. Either
         # way the previous window's marker no longer describes this record.
-        connection.execute('DELETE FROM meta WHERE key=?', (_marker_key(adapter, item['provider'], item['limitId']),))
-        item = {**item, 'adapter': adapter, 'lastObservedAt': item['observedAt']}
+        connection.execute('DELETE FROM meta WHERE key=?', (_marker_key(adapter, item['provider'], item['limitId'], account),))
+        item = {**item, 'adapter': adapter, 'account': account, 'lastObservedAt': item['observedAt']}
     connection.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, canonical_json(item)))
 
 
-def blocking_records(connection, configuration, *, now=None):
+def blocking_records(connection, configuration, *, account=None, now=None):
     """Every exhaustion record currently blocking one configuration (read-only).
 
     Persisted ``meta`` records come first (newest blocking observation first);
@@ -160,12 +182,14 @@ def blocking_records(connection, configuration, *, now=None):
     adapter, provider, model = (configuration.get(key) for key in ('adapter', 'provider', 'model'))
     if not adapter or not provider:
         return []
+    account = _account(connection, adapter, account)
     allowed_limits = {None, model, provider, 'codex' if adapter == 'codex' else None}
     present = _time(now or utc_now())
     seen, blocking = {}, []
     for row in connection.execute("SELECT value FROM meta WHERE key LIKE 'quota-routing:%'"):
         item = json.loads(row[0])
-        if (item.get('adapter') != adapter or item.get('provider') != provider or item.get('limitId') not in allowed_limits):
+        if (item.get('adapter') != adapter or item.get('provider') != provider or item.get('limitId') not in allowed_limits
+                or _stored_account(item) != account):
             continue
         seen[item.get('limitId')] = _time(item.get('lastObservedAt') or item.get('observedAt'))
         reset = _time(item.get('resetsAt'))
@@ -176,8 +200,8 @@ def blocking_records(connection, configuration, *, now=None):
     for record in blocking:
         record.pop('observed', None)
     # Historical latest records remain readable; reads never manufacture state.
-    row = connection.execute('SELECT quota_json FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
-    quota = json.loads(row[0]) if row and row[0] else None
+    from .native_observations import latest_quota
+    quota = latest_quota(connection, adapter, account=account)
     item = evidence(quota, now=now)
     if item and item['limitId'] in ('codex' if adapter == 'codex' else provider, provider):
         item['limitId'] = None
@@ -186,26 +210,27 @@ def blocking_records(connection, configuration, *, now=None):
         if not (processed and processed >= _time(item['observedAt'])):
             reset = _time(item.get('resetsAt'))
             if present and (reset is None or reset > present):
-                blocking.append({'item': {**item, 'adapter': adapter}, 'meta': False})
+                blocking.append({'item': {**item, 'adapter': adapter, 'account': account}, 'meta': False})
     return blocking
 
 
 def _compact(item):
-    return {key: item.get(key) for key in ('code', 'source', 'observedAt', 'resetsAt')}
+    return {**{key: item.get(key) for key in ('code', 'source', 'observedAt', 'resetsAt')},
+            'account': _stored_account(item)}
 
 
-def exhausted(connection, configuration, *, now=None):
+def exhausted(connection, configuration, *, account=None, now=None):
     """Whether one configuration is currently excluded from normal routing.
 
     An open retry window does not change this answer: reads, reminders and the
     explicit-choice warning keep reporting the recorded exhaustion until a newer
     usable observation clears it. Only :func:`claim` admits a decision.
     """
-    records = blocking_records(connection, configuration, now=now)
+    records = blocking_records(connection, configuration, account=account, now=now)
     return _compact(records[0]['item']) if records else None
 
 
-def claim(connection, configuration, *, decision_id, consume=True, now=None):
+def claim(connection, configuration, *, decision_id, consume=True, account=None, now=None):
     """Admit one configuration's blocked no-reset exhaustions into a decision.
 
     Every blocking record must carry an open single-use window — or, for a
@@ -216,7 +241,7 @@ def claim(connection, configuration, *, decision_id, consume=True, now=None):
     retry window, so it keeps blocking. Returns the claimed/allowed facts (one
     per blocking record) or ``None`` when the configuration stays excluded.
     """
-    records = blocking_records(connection, configuration, now=now)
+    records = blocking_records(connection, configuration, account=account, now=now)
     if not records:
         return []
     admitted = []
@@ -233,6 +258,7 @@ def claim(connection, configuration, *, decision_id, consume=True, now=None):
             claimed.append({**facts, 'claimed': False})
             continue
         marker = {'adapter': item['adapter'], 'provider': item['provider'], 'limitId': item.get('limitId'),
+                  'account': _stored_account(item),
                   'basis': item.get('observedAt'), 'manualAt': None,
                   'consumedAt': now or utc_now(), 'consumedBy': decision_id}
         _write_marker(connection, item['adapter'], item['provider'], item.get('limitId'), marker)
@@ -240,16 +266,16 @@ def claim(connection, configuration, *, decision_id, consume=True, now=None):
     return claimed
 
 
-def materialize(connection, adapter, provider, *, now=None):
+def materialize(connection, adapter, provider, *, account=None, now=None):
     """Import retained pre-meta native exhaustion only inside a write action."""
-    row = connection.execute('SELECT quota_json FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
-    quota = json.loads(row[0]) if row and row[0] else None
+    from .native_observations import latest_quota
+    quota = latest_quota(connection, adapter, account=account)
     item = evidence(quota, now=now)
     if item and item['provider'] == provider and item['blocked']:
-        record(connection, adapter, quota, now=now)
+        record(connection, adapter, quota, account=account, now=now)
 
 
-def redetect(connection, adapter, provider, *, now=None):
+def redetect(connection, adapter, provider, *, account=None, now=None):
     """Open the retry window of one provider's blocked no-reset exhaustions now.
 
     The explicit re-detect is idempotent and honest: a window that is already
@@ -258,13 +284,14 @@ def redetect(connection, adapter, provider, *, now=None):
     chance to produce a real observation. Records with a known reset keep their
     scheduled recovery and are reported without any state change.
     """
-    materialize(connection, adapter, provider, now=now)
+    account = _account(connection, adapter, account)
+    materialize(connection, adapter, provider, account=account, now=now)
     records, opened, already = [], [], []
     for row in connection.execute("SELECT value FROM meta WHERE key LIKE 'quota-routing:%'"):
         item = json.loads(row[0])
-        if item.get('adapter') != adapter or item.get('provider') != provider:
+        if item.get('adapter') != adapter or item.get('provider') != provider or _stored_account(item) != account:
             continue
-        view = {key: item.get(key) for key in ('provider', 'limitId', 'code', 'source', 'observedAt', 'resetsAt')}
+        view = {key: item.get(key) for key in ('provider', 'limitId', 'code', 'source', 'observedAt', 'resetsAt', 'account')}
         facts = retry_facts(connection, item, now=now)
         if facts is None:
             view['retry'] = None
@@ -275,25 +302,26 @@ def redetect(connection, adapter, provider, *, now=None):
             # A fresh manual window supersedes any consumed one: the earlier
             # consumption's wait is intentionally short-circuited, and the next
             # claim will record its own consumption from scratch.
-            marker = {'adapter': adapter, 'provider': provider, 'limitId': item.get('limitId'),
+            marker = {'adapter': adapter, 'provider': provider, 'limitId': item.get('limitId'), 'account': account,
                       'basis': item.get('observedAt'), 'manualAt': now or utc_now(),
                       'consumedAt': None, 'consumedBy': None}
             _write_marker(connection, adapter, provider, item.get('limitId'), marker)
             opened.append(item.get('limitId'))
             view['retry'] = retry_facts(connection, item, now=now)
         records.append(view)
-    return {'adapter': adapter, 'provider': provider, 'records': records,
+    return {'adapter': adapter, 'provider': provider, 'account': account, 'records': records,
             'opened': opened, 'alreadyOpen': already}
 
 
-def routing_facts(connection, adapter, *, now=None):
+def routing_facts(connection, adapter, *, account=None, now=None):
     """Every persisted exhaustion record of one adapter with its retry window."""
+    account = _account(connection, adapter, account)
     views = []
     for row in connection.execute("SELECT value FROM meta WHERE key LIKE 'quota-routing:%'"):
         item = json.loads(row[0])
-        if item.get('adapter') != adapter:
+        if item.get('adapter') != adapter or _stored_account(item) != account:
             continue
-        views.append({'provider': item.get('provider'), 'limitId': item.get('limitId'),
+        views.append({'provider': item.get('provider'), 'limitId': item.get('limitId'), 'account': account,
                       'code': item.get('code'), 'source': item.get('source'),
                       'observedAt': item.get('observedAt'), 'lastObservedAt': item.get('lastObservedAt'),
                       'resetsAt': item.get('resetsAt'), 'blocked': item.get('blocked') is True,
@@ -302,7 +330,7 @@ def routing_facts(connection, adapter, *, now=None):
     return views
 
 
-def configuration_retry(connection, configuration, *, now=None):
+def configuration_retry(connection, configuration, *, account=None, now=None):
     """The retry window a routed profile view explains to its user, or ``None``.
 
     ``None`` means the configuration is not blocked, its recovery is already
@@ -310,7 +338,7 @@ def configuration_retry(connection, configuration, *, now=None):
     (no persisted record could carry a window). Otherwise the binding record is
     the blocking one whose window opens last.
     """
-    records = blocking_records(connection, configuration, now=now)
+    records = blocking_records(connection, configuration, account=account, now=now)
     windows = [retry_facts(connection, record['item'], now=now) if record['meta'] else None for record in records]
     if not records or not windows or any(facts is None for facts in windows):
         return None

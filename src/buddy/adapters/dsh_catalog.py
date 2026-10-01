@@ -12,19 +12,20 @@ from ..runtime import resource_path
 
 def discover_models() -> dict:
     from .dsh import node_binary
-    from ..harness_runtime import selected
-    from ..harness_discovery import native_environment
+    from ..harness_runtime import selected, environment_for
+    from ..harness_runtime import native_environment
     script = resource_path("dsh.catalog")
     node = node_binary()
     if node is None or not script.is_file():
         raise BoardError("CATALOG_UNAVAILABLE", "DSH catalog helper or Node.js is unavailable")
     try:
         record = selected('dsh') or {}
-        environment = native_environment(os.environ, command=record.get('command', []))
+        source_environment = environment_for()
+        environment = native_environment(source_environment, adapter='dsh')
         if record.get('executable'):
             environment['DSH_BIN'] = record['executable']
-        if os.environ.get('DSH_HOME'):
-            environment['DSH_HOME'] = os.environ['DSH_HOME']
+        if source_environment.get('DSH_HOME'):
+            environment['DSH_HOME'] = source_environment['DSH_HOME']
         completed = subprocess.run(
             [node, str(script)], capture_output=True, text=True, timeout=60, check=False, env=environment,
         )

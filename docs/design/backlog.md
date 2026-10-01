@@ -19,7 +19,3 @@
   - Router 原则写明：在能胜任的候选中选最便宜、最快的；软偏好只影响排序，不排除候选；没有证据不等于负面证据。
   - 低风险任务适度探索样本少但能胜任的配置，并在路由记录中标明。
   - Host 的任务偏好只表达任务需要（如"需要强推理""需要快"），不写厂商或 harness 名称。
-
-## 服务与凭据
-
-- **Claude 适配器关于 `ANTHROPIC_API_KEY` 的注释与代码不符。** `src/buddy/adapters/claude_config.py` 的注释说保留该变量作为第一方密钥路径，但 `NATIVE_ENVIRONMENT_ALLOWLIST` 并不传递它，因此 Claude Worker 目前只能用订阅登录。建议在 ADR-019 实现时决定是否支持，并同步注释与 `docs/reference/claude.md`。（2026-09-29）

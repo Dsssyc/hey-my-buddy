@@ -281,9 +281,15 @@ class DecisionCoordinator:
         from .quota_routing import claim, materialize
         selected: list[sqlite3.Row] = []
         retried: list[str] = []
+        health_available = {}
         for row in connection.execute(
             "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id "
             "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values):
+            from .harness_health import read_health
+            if row['adapter'] not in health_available:
+                health_available[row['adapter']] = read_health(connection, row['adapter'])['available']
+            if not health_available[row['adapter']]:
+                continue
             if materialize_observations:
                 materialize(connection, row['adapter'], row['provider'], now=now)
             if exhausted(connection, row, now=now) is None:
@@ -704,6 +710,12 @@ class DecisionCoordinator:
                         frozen_input.pop("evidence", None)
                     frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]], facts["routingMode"])
             create_task = status == "queued"
+            if frozen_input is not None:
+                from .accounts import identity, selection
+                names = {item['adapter'] for item in frozen_input.get('profiles', [])}
+                if frozen_input.get('profile', {}).get('adapter'):
+                    names.add(frozen_input['profile']['adapter'])
+                frozen_input['accounts'] = {name: identity(selection(connection, name)) for name in names}
             task_id = None
             if create_task:
                 task_id = self._create_task(
@@ -926,6 +938,13 @@ class DecisionCoordinator:
             self._finish(connection, row, status="needs-host", reason="No frozen Router input is recorded", now=now)
             self._cancel_queued_task(connection, task, now, "missing frozen Router input")
             return "decision-closed", None
+        from .accounts import identity, selection
+        bindings = document.get('accounts') or {name: {'source': 'native', 'credentialRevision': 0}
+            for name in {item['adapter'] for item in document.get('profiles', [])}}
+        if any(account != identity(selection(connection, name)) for name, account in bindings.items()):
+            self._finish(connection, row, status='stale', reason='The frozen candidate accounts changed before claim', now=now)
+            self._cancel_queued_task(connection, task, now, 'Account selection changed')
+            return 'decision-closed', None
         requested_profile = document.get("profile") or {}
         if any(profile_row[key] != requested_profile.get(key) for key in schemas.CONFIGURATION_FIELDS):
             self._finish(connection, row, status="stale", reason="The configured Router changed before claim", now=now)
@@ -1193,6 +1212,10 @@ class DecisionCoordinator:
                     f"{row['expected_revision']}; the result is retained but is not a current recommendation"
                 ),
             )
+        elif self._account_binding_changed(connection, attempt):
+            self._finish(connection, row, status='stale', output=output, now=now,
+                         reason='The frozen routing account changed; the old result is retained without adoption',
+                         error='ACCOUNT_BINDING_CHANGED')
         elif row["kind"] == "select":
             self._publish_select(connection, row, output=output, now=now)
         else:
@@ -1216,6 +1239,13 @@ class DecisionCoordinator:
                 else None
             )
         return summary
+
+    @staticmethod
+    def _account_binding_changed(connection, attempt):
+        from .accounts import identity, selection
+        row = connection.execute('SELECT value FROM meta WHERE key=?', ('attempt-routing-accounts:' + attempt['attempt_id'],)).fetchone()
+        bindings = json.loads(row[0]) if row else {}
+        return any(account != identity(selection(connection, name)) for name, account in bindings.items())
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> None:
         """Validate one select recommendation against the frozen candidate set.

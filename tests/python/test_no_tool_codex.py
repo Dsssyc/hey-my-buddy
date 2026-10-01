@@ -27,6 +27,8 @@ class NoToolCodexTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-no-tool-codex-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.runtime = self.root / 'empty-runtime'
+        self.runtime.mkdir(mode=0o700)
         self.home = self.root / "account-home"
         self.home.mkdir(mode=0o700)
         (self.home / "auth.json").write_text('{"test":"fake-auth-only"}')
@@ -48,7 +50,9 @@ class NoToolCodexTests(unittest.TestCase):
         control_path = directory / "control.json"
         control_path.write_text(json.dumps(control))
         env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-        env.update(HOME=str(self.root), CODEX_HOME=str(self.home), PYTHONPATH=str(SOURCE),
+        env.update(HOME=str(self.root), CODEX_HOME=str(self.home),
+                   PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
+                   BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.runtime),
                    BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
                    BUDDY_CODEX_FIXTURE_CASE=case, BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         process = subprocess.run([sys.executable, "-m", "buddy.adapters.codex_runner", "--control", str(control_path)],
@@ -80,7 +84,9 @@ class NoToolCodexTests(unittest.TestCase):
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "adapter"
         env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-        env.update(HOME=str(self.root), CODEX_HOME=str(self.home), PYTHONPATH=str(SOURCE),
+        env.update(HOME=str(self.root), CODEX_HOME=str(self.home),
+                   PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
+                   BUDDY_RUNTIME_ROOT=str(self.runtime),
                    BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
                    BUDDY_STATE_DIR=str(self.root / "state"),
                    BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))

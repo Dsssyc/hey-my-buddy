@@ -59,6 +59,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {PREVIOUS_SCHEMA_VERSION} or {SCHEMA_VERSION} only; no conversion was performed')
         active = connection.execute("SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')").fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
+        accounts_pending = connection.execute("SELECT key FROM meta WHERE key LIKE 'account-mutation:%' OR key LIKE 'account-operation:%'").fetchall()
+        if accounts_pending:
+            raise BoardError('UPGRADE_NOT_IDLE', 'A native account owner remains active or shutdown-unconfirmed; no account was stopped')
         if active or unresolved:
             raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])

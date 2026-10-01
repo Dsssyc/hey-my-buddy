@@ -19,6 +19,7 @@ HOST_INTERNAL_KEYS = frozenset({
     'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY', 'BUDDY_PYTHON',
     'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID',
     'BUDDY_SUPERVISOR_START_ID', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_HARNESS_RECORD_FILE',
+    'BUDDY_ACCOUNT_SELECTION',
 })
 
 #: The environment a long-lived Buddy service process may inherit. The daemon, an

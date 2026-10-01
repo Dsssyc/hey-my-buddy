@@ -19,6 +19,7 @@ COOKIE_SECONDS = 400 * 24 * 60 * 60
 MAX_ENTRIES = 16
 MAX_SESSIONS = 64
 READ_OPERATIONS = frozenset({
+    "accounts", "account_status",
     "evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get",
 })
 

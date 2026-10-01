@@ -35,6 +35,7 @@ export type HarnessHealth = {
   quotaRouting?: QuotaRoutingRecord[];
   reviewVerification?: ReviewVerification;
   billingByProvider?: Record<string, BillingFact>;
+  account?: import("./harness-account").HarnessAccount;
 };
 
 export type ReviewVerification = {
