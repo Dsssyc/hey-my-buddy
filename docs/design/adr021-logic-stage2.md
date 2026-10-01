@@ -1,6 +1,6 @@
 # ADR-021 逻辑线第二阶段执行计划
 
-本文是 [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2、3、4 条在 L4、L5、L6 中的实现设计，基线为 `socu/buddy-core` 的 `cf371da`，工作分支为独立 worktree 中的 `socu/adr021-logic-stage2`。已读 `AGENTS.md`、`CONTEXT.md`、[第一阶段验收](../acceptance/adr021-logic-stage1.md)、[ADR-007](../decisions/007-neutral-core-and-single-current-contract.md) 与 [当前架构](../reference/architecture.md)。本次先提交计划，等待用户回复后才委派或实现；L4 集成并完成模块验收后，才开始 L5、L6；本阶段结束于 L6，不开始 L7 或后续模块。
+本文是 [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2、3、4 条在 L4、L5、L6 中的实现设计，基线为 `socu/buddy-core` 的 `cf371da`，工作分支为独立 worktree 中的 `socu/adr021-logic-stage2`。已读 `AGENTS.md`、`CONTEXT.md`、[第一阶段验收](../acceptance/adr021-logic-stage1.md)、[ADR-007](../decisions/007-neutral-core-and-single-current-contract.md) 与 [当前架构](../reference/architecture.md)。用户已批准按 2026-10-02 修订的第 4 条执行，本分支已合入 `socu/buddy-core` 的 `29883a8`（合并提交 `e63cdc5`）；修订计划提交后直接委派与实现；L4 集成并完成模块验收后，才开始 L5、L6；本阶段结束于 L6，不开始 L7 或后续模块。
 
 ## 范围与交付边界
 
@@ -34,7 +34,7 @@ Python 黑板仍是权威状态的唯一写入者；Worker 运行时仍拥有原
 
 ### 不调用模型的资格检查
 
-适配器增加 `local_read_only_check() -> ReadOnlyEligibility`，结果含 `eligible`、`reasonCode`、`reason`、固定工具清单、是否具有原生沙盒、是否支持同一 attempt 的格式纠正。它校验本地实现、执行入口、限制工具集的配置生成器与工具处理器的一致性；只有布尔声明或方法继承自基类不算实现。基类返回不支持。检查不启动模型或会话，不探测账户、不读取凭据、不联网、不写状态；native 版本与路径健康继续使用黑板已有的本地发现结果。没有可确认的工具限制方式就判定不合格，不把未知当作可用。
+适配器增加 `local_read_only_check() -> ReadOnlyEligibility`，结果含 `eligible`、`reasonCode`、`reason`、是否具有原生系统沙盒、所支持的审阅执行入口、是否支持同一 attempt 的格式纠正。它区分两档：Codex/Claude 沿用已有的原生只读/禁网运行；DSH/ZCode 必须有将工具集限制到读取/搜索的实现。它校验本地入口与限制方式；只有布尔声明或方法继承自基类不算实现。基类返回不支持。检查不启动模型或会话，不探测账户、不读取凭据、不联网、不写状态；native 版本与路径健康继续使用黑板已有的本地发现结果。没有可确认的工具限制方式就判定不合格，不把未知当作可用。
 
 `read_only_structured`、`no_tool_structured` 和 `start_read_only_structured(context, request)` 的名称与现有请求字段保留；删除 `read_only_structured_verified` 的证书语义及其使用点。`capability_report` 与 harness health 不再给出 `reviewVerification` 或按版本的验证状态，改为 `readOnlyStructured` 下的本地资格结果，说明检查不调用模型、不能代表原生调用已经验证。`implemented` 与 `sameAttemptContinuation` 保留，付费证书相关的 `verified` 删除。更新版本可以更新发现结果，但不会因为缺少新版本证书而失去资格；每次运行仍检查原生协议和策略是否真的生效。
 
@@ -46,29 +46,25 @@ Python 黑板仍是权威状态的唯一写入者；Worker 运行时仍拥有原
 
 保留 `ReadOnlyStructuredRequest(cwd, prompt, output_schema, budget, capture_evidence)`，删除仅为退役付费沙盒探针服务的 `native_probe` 与运行分支。`cwd` 只指向 `router_input.prepare` 从不可变 `manifest.inputTree` 生成的私有冻结副本；独立 `selection-request` 没有仓库时使用空副本。当前 materialize/verify/digest、Git replace 防护、链接逃逸与停止后回收规则继续有效。
 
-新增公共 `read_only_policy.py`，定义纯数据的工具白名单、标准化工具事件与 `ReadOnlyToolEvidence` 累加器。标准化事件携带原生 session/turn/call ID、开始/结束阶段、工具名与只读操作种类，不保存文件内容、任意工具参数、提示词或推理。工具开始即计一次调用，以 call ID 去重；缺失身份、重复但不一致、完成无开始、结束时仍有未完成调用、未知事件、流截断或关闭后还有工具事件都不能产生有效证据。检查发生在原生 session/turn 过滤之前，子会话、MCP 或旧回合的非法调用不能因过滤而被漏掉；合法调用还必须绑定本次回合。
+统一工具证据放在 L5 开头实现，L6 复用。新增 `tool_evidence.py` 定义纯数据的标准化事件与完整性记录；分类由各原生 controller 按下面的固定规则产生，适配器不判断允许或违规，黑板在答案发布时统一判定。标准化事件携带原生 session/turn/call ID、开始/结束阶段、工具名与只读操作种类，不保存文件内容、任意工具参数、提示词或推理。工具开始即计一次调用，以 call ID 去重；缺失身份、重复但不一致、完成无开始、结束时仍有未完成调用、未知事件、流截断或关闭后还有工具事件都不能产生有效证据。检查发生在原生 session/turn 过滤之前，子会话、MCP 或旧回合的非法调用不能因过滤而被漏掉；合法调用还必须绑定本次回合。
 
-工具集合固定为读取、列目录和搜索。Claude/ZCode 只允许精确名称 `Read`、`Glob`、`Grep`，不接受别名或按字符串前缀放行。DSH/Codex 使用精确名称 `read_file`、`list_directory`、`search_files` 的受限处理器。写文件、编辑、shell、任意 JS、子代理、联网搜索/抓取、MCP 泛入口、审批和交互工具一律拒绝；模型文本声称自己没用工具不构成证据。出现非法调用马上请求停止，即使原生最终给出合法 JSON 也作废；停止未确认时仍报告未知并保留目录。
+统一分类固定为 `read`（读取/列目录）、`search`（仓库搜索）、`execute`（执行命令，包括原生 shell/code-mode）、`modify`（编辑/写入/删除/移动）、`network`（联网搜索/抓取）与 `other`（子代理、交互、未知或无法识别的工具）。原生事件先分类再做 session/turn 绑定，不能把 foreign/子会话中的调用过滤掉。未识别事件明确上报 other 或完整性不足，不静默忽略；工具参数与返回正文不进入普通记录。
 
-新增 `read_only_files.py` 的 Python 处理器供 Codex 动态工具使用，DSH 的 Node 处理器实现同一参数格式：`read_file({path, offset?, limit?})` 按行读取 UTF-8 文本，offset 从 0 起，limit 默认 200、上限 2000；`list_directory({path?})` 默认列根目录一层；`search_files({pattern, path?})` 在指定目录递归进行字面量文本搜索。路径只能是副本内的相对路径，拒绝绝对路径、`..`、NUL、逃逸链接与特殊文件；链接只能解析到副本内。单次结果至多 64 KiB，目录/搜索至多 1000 个条目/命中，遍历至多 10000 个文件；达到输出上限返回明确 `truncated`，路径或参数错误返回有界的工具错误，不能转成 shell。文件响应作为不可信数据返回，不能成为工具配置或指令。各工具不提供状态目录、配置目录或真实检出。
+`DecisionCoordinator` 的现有快速零工具检查处成为唯一判定点：fast 必须有完整事件证据且零调用；review 且原生系统沙盒事实为 true 时仅允许 read/search/execute；无系统沙盒时仅允许 read/search；任一不允许类别或流不完整使答案作废。原生系统沙盒事实由黑板 harness 状态与冻结 attempt 绑定给出，不接受模型或结果临时声称。控制器仍执行原生策略核对、deadline/预算与 owned-process 取消，工具事件本身不导致适配器生成“合格/违规”的 Router 结论。
+
+DSH 新工具仍采用 `read_file({path, offset?, limit?})`、`list_directory({path?})`、`search_files({pattern, path?})`；读取/列目录归 read，字面量文件搜索归 search。这些 Node 工具只操作冻结副本内的相对路径，拒绝绝对路径、..、NUL、逃逸链接和特殊文件，响应有界：64 KiB、读取至多 2000 行、目录/搜索至多 1000 条、遍历至多 10000 文件。工具拒绝返回有界错误，不调用 shell；不新增 Python 的 read_only_files.py，也不改变 Codex/Claude 的原生工具。
 
 预算保持现有数值：brief 为 60 秒/8 次工具，standard 为 300 秒/24 次，deep 为 600 秒/64 次；快速模式固定 60 秒。一次格式纠正与此前工具调用共用同一 attempt 的绝对 deadline 与累计工具预算，不重置计数；越界候选不纠正，Claude 保持现有一次调用。现有 `bytesRead` 未能可靠测量时仍为 null，131072/524288/2097152 的既有读字节值继续明确为记录的预算参数，不新声称已实施跨 harness 的字节硬上限；新处理器的单次响应界限另外验证。
 
-公共接口为 `ReadOnlyToolEvidence.observe(event)`、`finish(native_identity, stream_complete)` 与 `validate_tool_verification(summary, expected_binding, budget)`。标准化 event 的字段固定为 `nativeIdentity`、`callId`、`toolName`、`phase: start | end`；各 harness 的原生身份形状保持真实（DSH callId、ZCode sessionId/turnId、Codex thread/turn、Claude sessionId），不为缺失的原生字段捏造值。适配器负责确认完整原生结束，再调用 finish；计数和非法状态只由观察器计算。
+L5 的公共接口为 `normalize_tool_event(adapter, native_event)`、`ToolEventEvidence.observe(event)`、`finish(native_identity, stream_complete)`，以及只在黑板发布答案时调用的 `judge_tool_evidence(evidence, mode, has_system_sandbox)`。标准化事件字段固定为 nativeIdentity、callId、toolName、category、phase（start/end）；保持各 harness 的真实身份，不为原生未提供的 session/turn 捏造字段。原生 raw/high-level 对同一调用的重复投影要关联并去重，冲突或缺失关联必须上报完整性不足。finish 只汇总事实，不给 verified/allowed verdict。
 
-控制器生成 `toolVerification` 的固定字段为 `version: 1`、`binding: {adapter, taskId, attemptId, generation}`、`nativeIdentity`、`streamComplete`、`allowedTools`、`toolCalls`、`forbiddenToolCalls`、`unsettledToolCalls`。binding 由 Python 控制文件确定，DSH 插件不自己声称黑板身份；原生身份需与结果的 nativeIdentity 相等。只有完整结束、身份一致、非法/未完成为零且计数合法才可成功，原生工具调用可以为零，不强迫 Router 为了“证明会读”多调用一次工具。摘要由运行时从原生事件计算，不采纳模型提交的同名字段；`AdapterOutcome` 继续携带实际停止证据、usage、rawAnswer 与失败码。`DecisionAdapter.collect` 和 `DecisionCoordinator` 的发布入口都检查摘要、预算、冻结副本与停止证据，绕过某一个收集层也不能发布不合格答案。
+证据包名为 `toolEvidence`，固定字段为 version:1、binding:{adapter,taskId,attemptId,generation}、nativeIdentity、streamComplete、events、toolCalls、unsettledToolCalls、truncated；最多保留 128 个 start/end 事件，按 call 去重，超出界限明确 truncated 并由黑板作废。binding 来自 Python 控制文件，不是模型数据。黑板核对绑定、事件/计数一致、完整结束和预算，再用唯一规则决定；不接受模型提交的证据或适配器的自判结论。快速旧的 zeroToolVerified 字段在接入统一证据时仍保留其既有名字，禁止从它推断 review 合格。
 
-四项防护分别是冻结副本唯一输入、确认停止后核对副本与原 manifest、原生事件白名单、既有预算。失败码使用 `router-input-changed`、`router-tools-forbidden`、`router-tool-evidence-unverified`、`router-budget-exhausted`，未确认停止沿用现有停止边界。只有确认停止且副本未改动才删除镜像；有改动、证据不足或停止未知时保留私有证据。合法结构化选择经程序检查后直接生效，不新建人工审阅环节。
+四项防护是冻结副本唯一输入、确认停止后核对副本与原 manifest、黑板按原生工具事件判定、既有预算。输入改动、工具违规、证据不足和预算分别使用 router-input-changed、router-tools-forbidden、router-tool-evidence-unverified、router-budget-exhausted；未知停止沿用原边界并保留私有目录。L4 先保持现有收集/发布检查，统一工具证据在 L5-0A/0B 接入；本阶段不安装，因此中间提交不对日常看板生效。
 
-### Codex 与 Claude 的落地
+### 保留 Codex 与 Claude 审阅运行
 
-Codex 目前的审阅入口主要统计 `commandExecution` 与 raw call，不能据此声称工具仅只读。采用现有无工具通道对内建工具、技能、项目配置、应用、联网与子代理的关闭方式，仅在 `thread/start.dynamicTools` 中加入上面三个只读工具，由控制器通过 `item/tool/call` 处理；不开放通用 exec/code-mode。复用受限工具处理器，不另起黑板或 MCP 服务。继续启用私有 `buddy-router` 只读/禁网权限，核对 `config/read`、thread/start 的原生生效策略、cwd、model/provider 与工具回报后才发送模型输入；原生不支持动态工具或策略回报不符时，在模型输入之前失败并报告原因。
-
-动态工具采用 upstream 的实验 App Server 接口，设计依据是 [ThreadStartParams](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs) 和 [动态工具响应实现](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/dynamic_tools.rs)。这说明接口的形状，不证明当前安装版已可运行；实现时以本地公开协议元数据和模拟协议验证支持，不调用模型。字段不符时停止并由 Host 修改本计划，Worker 不自行改用 shell 或另一个通道。
-
-Claude 保留受限 CLI、空 MCP、隔离设置和原生沙盒，只向审阅回合提供 `Read,Glob,Grep`，移除仅在普通只读 Worker 路径需要的 Bash；不改变普通 Worker 的工具集合。私有审阅 settings 将冻结根加入 `filesystem.denyWrite`，使用空 network allowedDomains、strictAllowlist、禁用 unsandboxed fallback 和空 excludedCommands。模型输入前，通过现有 SDK control 通道的 `get_sandbox_dialog` 只读操作检查原生回报：supported/enabled 为 true、dependencies.errors 为空、no_sandbox_allowed/unsandboxed_fallback 为 false、限制中包含冻结根的 denyWrite、网络 allowedDomains/unixSockets 为空；缺失或不符就失败。该字段形状来自当前公开安装代码的 `buildSandboxDialogResponse`，不新增并不存在的 initialize 字段，不读取账户资料。
-
-Claude 的审阅结构化输出采用 schema 入提示与本地校验，不使用会额外提供答案工具的 `--json-schema` 路径；普通 Worker 的原生 schema 路径保留。解析绑定会话的原生最终 result/assistant JSON，沿用 64 KiB 答案上限，不能把 prose 当成完成或放行额外 `StructuredOutput` 工具。system/init 的实际工具清单与后续 tool_use 原生流核对三工具集合；若 init 只能在发送输入后到达，工具清单检查发生在那时，失败诚实记录 modelStarted=true，不能宣称是 pre-model 失败。收到审批、非白名单调用、子代理调用或不能确认的策略时作废；只有沙盒回报不合格的 preflight 能记 modelStarted=false。模型输出流与完整关闭通过公共摘要判定。
+取消原计划 L4-D、L4-E，取消 Codex 动态工具、Python read_only_files.py、Claude 新 JSON 答案通道与 get_sandbox_dialog 新检查。Codex 沿用现有只对冻结副本只读、其余拒绝、禁网的权限配置和原生生效策略核对；Claude Code 沿用 Glob、Grep、LS、Read 和原生沙盒。L4 只去掉付费证书门槛，不重做运行方式、工具、schema、沙盒或控制协议。L5-0B 只为它们投影统一工具事件，保留现有策略核对、工具流检查与停止证据；不发起付费原生检查。
 
 ### 持久路由边界与入口删除
 
@@ -88,7 +84,7 @@ DSH 增加独立的 `read-only-structured.mjs` 插件和只读工具处理器，
 
 每轮只允许 text/reasoning/usage、三个工具的完整 call block 与合法 finish；工具 arguments 必须在完整 block 结束后解析并校验，非法名立即拒绝，不先执行。批量工具调用按每一个 call 计数，先检查剩余额度再执行，输出只允许本次 call ID 的有界结果。每轮完成后再向原生 stream 提交工具结果，直到得到最终答案或绝对 deadline/累计工具上限；schema 格式纠正至多一次，复用全部预算。原生 usage 已知项累计、未知保持 null，DSH 的 observed 身份继续为 null，不伪造 provider attestation。
 
-Python 的 DSH 只读控制器消费既有 `ReadOnlyStructuredRequest`，启动方式复用当前私有 profile/owned child 模式，但不修改日常 DSH 设置、不增加全局插件。Node 请求固定为 `{callId, prompt, spec, cwd, budget}`，spec 只含 provider/model/effort；插件结果固定为 `{status, code?, modelStarted, rawAnswer?, resolved?, observed: null, nativeIdentity, usage, toolVerification}`，Python 按原始控制文件和 attempt 绑定检查，不接受多余的模型可写字段。模型输入前用免费 `--dump-config` 核对普通 runner 已关闭且唯一只读插件启用；本地资格检查只核对已安装的公共实现/资源，不运行模型。控制文件没有黑板凭据，toolVerification 从插件的已核对 stream 和 call/result 产生；controller 与 native process 都停止后才产生 `shutdownConfirmed`。
+Python 的 DSH 只读控制器消费既有 `ReadOnlyStructuredRequest`，启动方式复用当前私有 profile/owned child 模式，但不修改日常 DSH 设置、不增加全局插件。Node 请求固定为 `{callId, prompt, spec, cwd, budget}`，spec 只含 provider/model/effort；插件结果固定为 `{status, code?, modelStarted, rawAnswer?, resolved?, observed: null, nativeIdentity, usage, toolEvidence}`，Python 按原始控制文件和 attempt 绑定检查，不接受多余的模型可写字段。模型输入前用免费 `--dump-config` 核对普通 runner 已关闭且唯一只读插件启用；本地资格检查只核对已安装的公共实现/资源，不运行模型。控制文件没有黑板凭据，toolEvidence 从插件的原生 stream 和 call/result 分类产生，不自判合格；controller 与 native process 都停止后才产生 `shutdownConfirmed`。
 
 DSH 假 stream、假可执行程序和 Node 文件夹具覆盖合法读/列/搜、恶意工具名、半截 block、伪造 call ID、原生错误、模型身份不符、格式纠正、预算 N/N+1、超时、取消与停止未知；再通过 DecisionAdapter 夹具验证改动副本必作废及失败不能引起降级。本地/模拟验证后记录“原生未验证”。
 
@@ -98,7 +94,7 @@ DSH 假 stream、假可执行程序和 Node 文件夹具覆盖合法读/列/搜�
 
 本地资格检查核对受限配置生成器、session/create 的严格参数 schema、原生 registry 的 allowlist 过滤实现与精确工具集合；运行时核对 create 成功、根 session、冻结 cwd、model/effort 配置回报与订阅握手，再发送模型输入。ZCode 没有原生 OS 沙盒，ADR 不要求它回报并不存在的沙盒策略，也不发明 snapshot 中没有的 toolAllowlist 回显字段；受限请求被拒绝、已知协议形状变化或有实际工具清单但不匹配时，在模型输入前失败，事件中出现额外工具时立即作废。无 OS 沙盒能力不构成资格否定，也不能宣称已有 OS 级禁网或目录隔离。
 
-`ReadOnlyEvidence` 在现有 no-tool 的原生 session/event 规则上增加允许工具的 start/update/end 关联，使用公共事件摘要；canonical session/event 的完成、inputId/turnId 匹配、订阅序号和 session/close 回报是成功所需的事实。telemetry/state.updated 只作诊断，不能证明最终答案或代替工具完成。陌生 session、子代理、MCP、缺 toolCallId 的工具事件、未知 frame、断流、late tool event 全部拒绝。格式纠正仍属同一黑板 attempt，可以在已确认关闭的根 session 后另建一个受限 session，工具与时限累计，至多两次答案回合；正常工具循环中的模型往返不当成格式纠正。
+`ReadOnlyEvidence` 在现有 no-tool 的原生 session/event 规则上增加工具的 start/update/end 关联，使用 L5 的公共分类证据；canonical session/event 的完成、inputId/turnId 匹配、订阅序号和 session/close 回报是成功所需的事实。telemetry/state.updated 只作诊断，不能证明最终答案或代替工具完成。陌生 session、子代理、MCP、缺 toolCallId 的工具事件、未知 frame、断流、late tool event 如实投影为相应类别或不完整，最终由黑板判定；原生协议无法继续时报告实际失败和已有证据。格式纠正仍属同一黑板 attempt，可以在已确认关闭的根 session 后另建一个受限 session，工具与时限累计，至多两次答案回合；正常工具循环中的模型往返不当成格式纠正。
 
 在假 app-server 协议中验证请求参数、策略回报、合法读工具流、坏身份与序号、外来/子调用、断流、预算、一次纠正、close 失败、取消与停止未知，兼跑原 no-tool 与普通 ZCode Worker 回归；经 DecisionAdapter 验证副本变化和不可用边界。本地/模拟验证后记录“原生未验证”。
 
@@ -108,21 +104,21 @@ DSH 假 stream、假可执行程序和 Node 文件夹具覆盖合法读/列/搜�
 
 | 任务 | 修改与产物 | 不修改 | 验证 | 依赖与次序 |
 | --- | --- | --- | --- | --- |
-| L4-A 设置契约与换算 | 新 `router_settings.py`；不可变设置、补丁验证、纯转换与转换报告；新 `test_router_settings.py` | 不读写看板，不做迁移，不接工作流或前端 | 转换矩阵、quick、缺省/非法/null、两位置相同、无副作用/幂等；工具/模型调用设为会失败的 stub | 第一批；独立成果合入后供 L4-F 使用 |
-| L4-B 本地资格接口 | `adapters/base.py`、registry/capability report 及各 adapter 的本地检查；工具限制资源检查；`test_read_only_eligibility.py` | 不改 settings、路由决策或账户，不运行原生模型；DSH/ZCode 此时保持未实现 | 声明与实现不一致、资源缺失、未知支持、版本变化、每种模式；证明零模型/零状态写入 | 与 A 可并行；依赖相同固定接口文本 |
-| L4-C 只读工具与证据库 | 新 `read_only_policy.py`、`read_only_files.py`；纯事件检查、冻结根的三种工具、结构化 toolVerification 验证 | 不启动 harness，不改四个原生 runner、设置或工作流 | 允许/拒绝工具、call 关联、漏帧/截断/foreign/late、N/N+1、路径/链接/特殊文件、响应上限 | 与 A/B 可并行；先合入，D/E/L5/L6 只消费它 |
-| L4-D Codex 审阅适配 | Codex read-only 配置/runner、动态工具 dispatcher、模拟 App Server 夹具及对应测试 | 不改普通 Worker、no-tool 行为、Claude/DSH/ZCode 或公共策略定义 | 原生 config/policy/cwd 回报、仅三工具、stream/identity、预算累计、失败前 modelStarted=false、关闭/取消；no-tool 回归 | B、C 合入后；可与 E 并行写独立 worktree |
-| L4-E Claude 审阅适配 | Claude read-only argv/settings、get_sandbox_dialog 回报检查、纯 JSON 答案通道、事件归一化及夹具/测试 | 不改普通 Worker 的 Bash/schema 等能力、Codex 或公共策略定义 | Read/Glob/Grep、Bash/MCP/StructuredOutput/子调用拒绝、真实形状的策略缺失/不符、原生流结束、预算、取消；普通 Claude 只读/可写回归 | B、C 合入后；与 D 独立 |
-| L4-F 设置的存取与发布 | 接入 A/B；`router.py` 的 configuration/初始化、`evaluation.py`、`user_policy.py` 的字段补丁、修订、快照及相应 fixtures | 不改 DecisionCoordinator、运行收集/发布、迁移、前端或 paid API | 合并后的模式资格、字段省略/null、原子拒绝、权限/revision、旧板读取零写入与 upgrade-required、不阻塞无关设置 | A/B 合入后顺序执行；可在 D/E 完成前做，代码范围独立 |
-| L4-G 持久路由与答案发布 | 接入 B/C/D/E/F；`router.py` 的 profile_problem/resolve、`decision.py`、`adapters/decision.py` 的 claim/收集/发布；需要时仅改 `workflow.py` 的边界呈现 | 不改设置 writer 或 conversion，不做入口批量删除、界面设计或 L7 数据 | 缺失/不健康/额度/资格边界、claim/preflight 失效无第二次 attempt、四防护、回放、唯一/零候选、显式 buddy、容量、gate、取消/takeover | D/E/F 合入后；同一请求从选择到发布的契约已固定 |
-| L4-H 删除付费审阅验证 | CLI/help/transport/contracts/service/console/worker/store/scheduling/health 的 review-check 入口及专用资源；迁移其通用防护测试 | 不动普通执行/账户/停止逻辑，不重写历史证书或事件，不修改 skill | 入口拒绝、注册/包内无证书或 review-check、健康与预算/停止无退化；旧测试逐项登记去向 | G 后；机械删除按引用清单实施 |
-| L4-I 控制台最小适配 | 现有类型/API parser、单 Router 表单接线、删除 HarnessReview/证书控件与失效状态，必要的 preview/test fixture | 不做 U1/U4 视觉设计，不加维护/画像/探索入口，不改后台策略 | 实际 parser/preview 合约、设置请求、失效入口消失、既有受影响 frontend tests、typecheck/build | H 后；代码只在 apps/console，Host 合入并检查资源生成 |
-| L5-A DSH 只读原生插件 | 新 Node 只读插件与工具处理器、假 stream 与 Node tests | 不改 Python 路由、controller、普通 runner/no-tool/账户 | 三工具与真实文件、block/call/result 关联、非法工具、错误/断流、工具次数/期限、无工具回归 | L4 模块验收后；固定插件控制/回执格式由本计划确定 |
-| L5-B DSH controller 与接线 | DSH adapter/start、独立 Python read-only controller、私有 profile preflight、夹具、包装集成 | 不改 A 的工具/事件策略，不运行真实模型、不修改日常 settings | dump-config 失败、身份、格式纠正、owned stop、timeout/cancel、DecisionAdapter 四防护；原 DSH/no-tool 回归 | L5-A 合入后；Host 最后写 L5 记录并跑完整检查 |
-| L6-A ZCode 受限协议 | 新 `zcode_read_only.py` 的 session 参数、ReadOnlyEvidence 与结构化回合；mock app-server 和纯协议测试 | 不改普通 runner 调度、Router 设置、ZCode MCP/Worker | 严格参数/原生配置回报、允许工具和非法事件矩阵、序号/身份/完整流、纠正与累计预算、close/cancel，不虚构工具清单回显 | L4 模块验收后；可与 L5-A 并行写独立 worktree |
-| L6-B ZCode controller 与接线 | ZCode adapter、runner 独立 readOnlyRequest 分支、资格启用与集成测试 | 不改 A 的事件规则、普通 Worker/no-tool/账户，不运行真实模型 | controller 生命周期、模型/强度核对、shutdown、四防护、不可用边界；no-tool 与普通 ZCode 回归 | L6-A 合入后；Host 最后写 L6 记录并跑完整检查 |
+| L4-A 设置契约与换算 | 新 router_settings.py；不可变设置、补丁验证、纯转换与转换报告；test_router_settings.py | 不读写看板，不迁移，不接工作流/前端 | 转换矩阵、quick、缺省/非法/null、无副作用/幂等；禁止模型 stub | 第一批，与 B 可并行；先合入再接消费者 |
+| L4-B 本地资格接口 | base/registry 与各 adapter 的免费资格声明；systemSandbox 程序事实及 health 读取；取消证书 eligibility 使用 | 不重做 Codex/Claude 运行，不改设置、账户或 paid API；DSH/ZCode 尚未实现时返回不支持 | 两档检查、声明/实现不一致、版本变化、零模型/零状态写入 | 第一批，与 A 独立；F/G1/G2 消费 |
+| L4-F 设置存取与发布 | router 的 configuration/初始化、evaluation/user_policy 的字段补丁、修订、快照和 fixtures | 不改路由 request/claim/发布，不迁移、不改前端 | 权限/revision、字段省略/null、模式资格、原子拒绝、旧板 upgrade-required 零写入、不阻塞无关设置 | A/B 合入后 |
+| L4-G1 请求解析、冻结与 Host 边界 | router.resolve/profile_problem、DecisionCoordinator 请求创建和冻结、最小 workflow 边界呈现，删除 request 时 fallback | 不改 claim/答案发布、设置 writer、原生 runner | 多/零/唯一候选、完整 buddy、不可用具体原因、同一请求幂等和冻结设置、无自动第二个 Router | F 合入后；交付固定请求输入契约供 G2 |
+| L4-G2 认领复核与答案发布 | DecisionCoordinator 的 selector_family/claim/complete/publish、DecisionAdapter 收集；删除 claim/preflight fallback | 不改请求 admission、设置发布、原生运行方式或工具分类；统一工具证据留 L5 | 认领前健康/额度/资格/设置变化、家族容量、gate、预算/冻结副本/stop、取消/takeover/迟到答案、无重排 | G1 后；沿用现有工具检查，L5 接单一证据判定 |
+| L4-H 删除付费审阅验证 | CLI/help/transport/contracts/service/console/worker/store/scheduling/health 的 review-check 入口和专用资源；测试迁移 | 不重写历史状态，不动普通执行/账户/停止，不改 skill | 所有旧入口拒绝、包/registry 无证书或 review-check；通用防护有测试去向 | G2 后；按引用清单机械删除 |
+| L4-I 控制台最小适配 | 现有类型/parser、单 Router 表单接线、删除证书控件/验证入口、preview fixtures | 不做界面设计，不加维护/画像/探索，不改后台策略 | 设置请求、实际 parser/preview、受影响 Vitest、typecheck/build | H 后；仅 apps/console，Host 验收资源生成 |
+| L5-0A 统一证据契约与黑板判定 | 新 tool_evidence.py 分类/完整性结构、DecisionCoordinator 的唯一判定函数与格式校验 | 不改四个 harness 的运行/工具，不自造原生数据、不接 L7 | 同一矩阵：fast 零工具；sandbox 允许 read/search/execute；无 sandbox 仅 read/search；修改/联网/other/不完整/坏绑定作废 | L4 验收之后，L5 的第一项 |
+| L5-0B 四个适配器的事件投影 | controller 原生事件分类与 call 关联、toolEvidence 输出、DecisionAdapter 透传，fake protocol fixtures | 不重做 Codex/Claude 运行；适配器不自判允许/违规；不改统一规则 | 四种真实事件形状、raw/high-level 去重、foreign/子调用/late/截断、不伪造计数；黑板统一发布检查 | 0A 合入后；完成后 L5-A/L6-A 才接同一契约 |
+| L5-A DSH 只读原生插件 | 新 Node 只读插件/工具处理器、假 stream、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | read/search、block/call/result、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0B 后；与 L6-A 可并行，各自 worktree |
+| L5-B DSH controller 接线 | adapter/start、独立 Python controller、私有 profile preflight、夹具与包装 | 不改分类/判定、不修改日常配置、不跑真实模型 | dump-config、身份、纠正、owned stop、timeout/cancel、黑板四防护；DSH/no-tool 回归 | L5-A 合入后；Host 写记录并完整检查 |
+| L6-A ZCode 受限协议 | zcode_read_only.py 的 session 参数与结构化回合，mock app-server、使用 L5 证据 | 不改普通 runner 调度、设置或 MCP/Worker，不跑真实模型 | 严格参数/配置回报、工具事件/序号/身份、完整流、纠正/预算、close/cancel，不虚构工具回显 | L4 与 L5-0B 验收后，可与 L5-A 并行 |
+| L6-B ZCode controller 接线 | adapter、runner 独立 readOnlyRequest 分支、资格启用和集成测试 | 不改分类/判定、普通 Worker/no-tool/账户，不跑真实模型 | 身份/模型/强度、生命周期/stop、四防护、不可用边界；ZCode/no-tool 回归 | L6-A 合入后；Host 写记录并完整检查 |
 
-设置存取与持久路由分为 F、G 两个任务，前者只处理用户设置，后者只处理一个路由请求的执行与发布；两者都不能扩展为重新设计 Router。若实际引用面超出上表，Host 先写明新边界并修改计划再提交后续委派，不能在问询中把七八件新工作追加给原任务。L4-H 的批量删除虽然跨层，只承担一个退役结果；Host 会先生成引用与测试清单，避免删除尚有一般用途的验证代码。
+取消 L4-C/D/E：原 C 的一致性责任移到 L5-0A/0B，D/E 的运行重做取消。G 按用户要求分为请求边界 G1 与认领/发布 G2，互相不跨写各自的方法区；顺序集成避免共享文件冲突。若引用面超出表内范围，Host 先改计划再发新任务，不把新的设计/修复追加成漫长委派。
 
 Host 自己承担计划与模块记录、参考文档、`accept`/`conclude` 帮助的小修、最后集成审查与检查，不把它们追加到正在运行的委派。小修只改 help 提取器对公共必填字符串校验的识别或已有 override；不改 runtime 的 note 校验、验收或回收实现，增加能直接断言两个 help 将 note 标为 required 的既有 CLI help 用例即可。
 
@@ -144,7 +140,7 @@ L4 的 I 与 Host 文档/帮助改动全部合入之后，冻结当前 worktree�
 
 L5、L6 的正常任务都只做到模拟夹具、公开安装代码/协议元数据的静态核对与不调用模型的检查。Host 准备显式的开发 probe，默认 prepare-only，参数 `execute` 才可调用模型，普通检查套件不能启用它；它直接运行本 worktree 的 adapter/controller，不经另一套 Buddy 服务，不写日常看板或用户配置。准备不接触凭据，只预留经用户允许的现有账户绑定消费路径。
 
-每次付费原生检查前，Host 用中文列明 harness、准备验证的具体命题、冻结测试文件/输出、时长/工具上限、最多一次格式纠正和可能使用的 quota，然后停下逐次请求用户批准。一份批准只允许所列的一次 probe；重试、扩大范围、从 DSH 换到 ZCode、换 buddy 或再次调用模型都要另行批准。未批准不能以 delegate、health、资格刷新或测试名义绕过；记录写“原生未验证”。如用户不批准，完成其余代码与模拟检查后交付该边界，不把原生支持描述为已实测。
+付费原生检查仅 DSH、ZCode 各一次，不对 Codex/Claude 做付费检查。每次执行前，Host 用中文列明 harness、准备验证的具体命题、冻结测试文件/输出、时长/工具上限、最多一次格式纠正和可能使用的 quota，然后停下逐次请求用户批准。一份批准只允许所列的一次 probe；重试、扩大范围、从 DSH 换到 ZCode、换 buddy 或再次调用模型都要另行批准。未批准不能以 delegate、health、资格刷新或测试名义绕过；记录写“原生未验证”。如用户不批准，完成其余代码与模拟检查后交付该边界，不把原生支持描述为已实测。
 
 真实 probe 的验收需要一条完整原生工具调用与完成证据、结构化选择、预算与停止回报、副本未改动和真实工具结果；只能看到最终 JSON、RPC 成功、模型的“只读”声称或没有调用工具的超时都不够。若策略/协议不符，先记录事实并修正计划或实现，再请求下一次授权，不在同一次许可下自动重试。
 
@@ -166,10 +162,12 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 
 单一字段采用新的 `routerProfileId`，其余现有字段保留；纯换算只取旧默认模式对应的位置，缺失时保留未设置；旧设置只在 L15 显式升级转换。选择理由是保留用户原意、取消备用位置并避免读操作成为迁移。
 
-资格采用无模型的本地接口/工具限制检查；运行证据采用严格的事件身份、完整流与调用关联，工具限制不足或无法确认时失败。Codex 只开放专门的动态文件工具，Claude/ZCode 只开放精确原生读工具，DSH 用原生 LLM 流上的有界工具循环。选择理由是工具集合本身只读，不能借只读 sandbox 或最终答案替代调用证据。
+资格按有无系统沙盒分两档，Codex/Claude 保留已有运行；DSH/ZCode 限制工具为 read/search。统一证据放在 L5 开头，所有适配器只投影同一分类事实，黑板在现有快速零工具判定处统一决定；不在适配器或收集层另加 verdict。L4-G1 与 G2 分开请求边界和认领/发布，便于独立验证与审查。
 
 设置与路由输入冻结到同一请求，claim/preflight 失效停在 Host 边界；容量满继续排队；单候选和显式 buddy 的既有直接路径保留。预算沿用已实施的时间/调用数上限与未知字节计数，没有在本阶段发明另一个预算契约。原生检查与本地资格分开，DSH/ZCode 的未授权原生调用明确留空。
 
-## 当前进度
+## 计划修订与当前进度
 
-已完成隔离分支、规定文档与源码边界阅读、Node 24.21.0 的 console 依赖准备和本文设计。尚未委派、实现、运行完整检查或调用真实模型；提交本文后停下等待用户回复。
+2026-10-02 按用户批准的四点修订：合入 core 的第 4 条更新；取消 Codex/Claude 运行重做及动态/Python 文件工具；一致性责任移到 L5 开头并由黑板统一判定；G 分成请求/冻结/Host 边界和认领/发布两个任务；付费检查只保留 DSH、ZCode 各一次、执行前逐次批准。原计划提交为 89a498b，本次修订单独提交后直接开工。
+
+已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。当前尚无实现或委派；完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
