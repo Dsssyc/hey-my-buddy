@@ -27,7 +27,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 [Local harness discovery](reference/harnesses.md) owns the ADR-017 source candidate's health cache, executable selection, environment and diagnostic contracts; it does not change the installed-version evidence below.
 
-Daily [installation is 0.25.0/schema 15](acceptance/installed-0.25.0.md): the shared `buddy` skill in `~/.agents/skills` (linked from `~/.claude/skills`) implements both parts of ADR-018, ADR-020's optional loopback login, ADR-019 B phase one, ADR-019 decision 11 and the ADR-019 B phase two sub-batches ① to ③ (configuration sections, routing validation and quota recovery, Worker session privacy and storage cleanup). Each [acceptance record](acceptance/) separates automated tests, native checks and remaining limits; sub-batch ④ is implemented in the uninstalled [0.26.0 source candidate](acceptance/worker-accounts-batch4-0.26.0.md). [Cross-Host membership and human reclassification](design/objective-membership-options.md) remain proposals.
+Daily [installation is 0.26.0/schema 15](acceptance/installed-0.26.0.md): the shared `buddy` skill in `~/.agents/skills` (linked from `~/.claude/skills`) implements both parts of ADR-018, ADR-020's optional loopback login and all of ADR-019, including Worker accounts and native-sandbox review verification. Each [acceptance record](acceptance/) separates automated tests, native checks and remaining limits. [Cross-Host membership and human reclassification](design/objective-membership-options.md) remain proposals.
 
 | Document | Role |
 | --- | --- |
