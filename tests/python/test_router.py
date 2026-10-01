@@ -3,6 +3,7 @@ import unittest
 import json
 
 from buddy import router
+from buddy.adapters.dsh import DshAdapter
 from buddy.errors import BoardError
 
 
@@ -177,8 +178,8 @@ class RouterPublicationTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             recorded = json.loads(connection.execute('SELECT capabilities_json FROM evaluation_profiles WHERE profile_id=?', (PROFILE_ID,)).fetchone()[0])
         self.assertIn('decision', recorded)
-        with patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', False):
-            eligible = board.call('console_snapshot', {})
+        self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
+        eligible = board.call('console_snapshot', {})
         self.assertIn('decision', next(p for p in eligible['profiles'] if p['profileId'] == PROFILE_ID)['capabilities'])
 
     def test_outside_choice_is_rejected_and_not_abstention(self):

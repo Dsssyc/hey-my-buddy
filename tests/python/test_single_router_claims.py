@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from buddy.adapters.base import ExecutionContext
 from buddy.adapters.decision import DecisionAdapter
+from buddy.adapters.dsh import DshAdapter
 from buddy.errors import BoardError
 from support import InProcessBoard
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE_ID
@@ -258,11 +259,11 @@ class SingleRouterClaimTests(DecisionTestCase):
             directory=board.directory / 'adapter-unit', runtime={},
             environment={**os.environ, 'BUDDY_STATE_DIR': str(board.directory)}, decision_input=claim['decisionInput'])
         native = DecisionAdapter()
-        with patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', False):
-            self.assertTrue(native.available()[0])
-            handle = native.start(context)
-            handle.process.wait(timeout=5)
-            outcome = native.collect(handle, context)
+        self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
+        self.assertTrue(native.available()[0])
+        handle = native.start(context)
+        handle.process.wait(timeout=5)
+        outcome = native.collect(handle, context)
         self.assertEqual(outcome.status, 'ok')
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertTrue(outcome.result['inputVerification']['unchanged'])

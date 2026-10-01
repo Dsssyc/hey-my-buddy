@@ -47,7 +47,7 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
             command_id="seed-1",
             profileSettings=[{"profileId": item["profileId"], "enabled": True} for item in (PROFILE, SECOND_PROFILE)],
             preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}],
-            configuration={"reviewRouterProfileId": PROFILE_ID},
+            configuration={"routerProfileId": PROFILE_ID},
         )
         self.publish_cards(board, request_id="seed-cards", command_id="seed-cards", cards=[
                 {
@@ -541,7 +541,7 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
             request_id="seed-a",
             command_id="seed-a",
             profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
-            configuration={"reviewRouterProfileId": PROFILE_ID},
+            configuration={"routerProfileId": PROFILE_ID},
         )
         flash_one = self.model_task(board, "goal-flash-1", profile=PROFILE)
         pro_one = self.model_task(board, "goal-pro-1", profile=SECOND_PROFILE)
@@ -560,7 +560,7 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
             request_id="seed-b",
             command_id="seed-b",
             profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": True}],
-            configuration={"reviewRouterProfileId": PROFILE_ID},
+            configuration={"routerProfileId": PROFILE_ID},
         )
         step = self.prepare(board, "backfill-2", limit=1, profileId=SECOND_PROFILE_ID)
         self.assertEqual(step["newEvidenceIds"], [])
@@ -907,7 +907,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         for name, payload in (
             ("profiles", [PROFILE]),
             ("preferences", [{"profileId": PROFILE_ID, "mode": "exclude", "reason": "nope"}]),
-            ("configuration", {"reviewRouterProfileId": None}),
+            ("configuration", {"routerProfileId": None}),
         ):
             grant = board.call(
                 "evaluation_write_begin",

@@ -53,9 +53,6 @@ def install(testcase, *, path=None, **options):
             context, request, testcase._readonly_fixture, testcase._readonly_options),
     ))
     testcase.enterContext(patch.object(DshAdapter, "read_only_structured", True))
-    # The retired Worker preflight gate belongs to L4-H. Keep that fixture flag
-    # until H removes the gate; G2 adapter tests separately prove it is unused.
-    testcase.enterContext(patch.object(DshAdapter, "read_only_structured_verified", True))
     testcase.enterContext(patch.object(DshAdapter, "local_read_only_check", return_value={
         "eligible": True, "reasonCode": None, "reason": None,
         "systemSandbox": False,

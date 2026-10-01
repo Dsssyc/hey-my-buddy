@@ -171,7 +171,7 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 
 2026-10-02 按用户批准的四点修订：合入 core 的第 4 条更新；取消 Codex/Claude 运行重做及动态/Python 文件工具；一致性责任移到 L5 开头并由黑板统一判定；G 分成请求/冻结/Host 边界和认领/发布两个任务；付费检查只保留 DSH、ZCode 各一次、执行前逐次批准。原计划提交为 89a498b，本次修订单独提交后直接开工。
 
-已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。当前尚无实现或委派；完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
+已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。L4 的 A/B/F 由 Host 实现，G1/G2/H/I/J 已分别委派、审查、定向验证、合入并回收；当前进入 L4 完整检查。完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
 
 首次 L4-A 提交在 admission 前被 INVALID_WORKSPACE 拒绝：安装版 includeUntracked 只允许已有未跟踪输入，不允许未来输出路径。未创建有效委派；调整提交模板为新输出仅列 writeScope，原 intent 已形成不可变准备记录，修改输入后改用新 requestId，不删除旧证据，不改任务契约或日常数据。
 
@@ -182,3 +182,5 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 L4-I 只消费 B/F 已提交的确定接口，删除失效的前端控件无需等待 H 删除后台方法。因此将 I 的开工依赖由 H 改为 B/F，允许独立检出并行实现，模块验收仍等待 G2/H/I/J 全部集成。
 
 L4-H 的入口、registry、Worker 专用分支和证书资源与 G2 的 decision/发布方法区独立；调整为 G1 后并行。H 不编辑 decision.py、adapters/decision.py、evaluation.py 或 G2 测试文件，通用流/停止防护仍保留。
+
+L4 集成审查补齐 catalog 的免费资格投影，并迁移外围测试的双位置设置、证书属性和手写原生回执；保留原场景的历史绑定、偏好审计、停止证据、账户节流等断言。删除仅由已退役验证器引用的挑战分支与历史 replay 夹具。完整检查冻结 Host worktree，L5 尚未开工。

@@ -12,7 +12,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 | `zcode` | `built-in-worker` | `zcode`, `observe`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed ZCode CLI and an API-key provider; OAuth account providers are unavailable |
 | `codex` | `built-in-worker` | `codex`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed Codex App Server and an existing native account-plan login; API-key accounts are refused |
 | `claude` | `built-in-worker` | `claude`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery (0.11.0 candidate, no `native-session` or `inquiry`) | The installed Claude Code CLI with first-party Anthropic authentication; third-party provider overrides are refused, and execution is gated on an explicit `BUDDY_CLAUDE_SETTINGS_POLICY` — see [claude.md](claude.md) |
-| `decision` | `built-in-worker` | `decision` (Router attempt) | A native adapter with the capability of the effective routing mode: `no_tool_structured` for fast routing, or a verified read-only structured capability for review routing; Codex is verified for review on macOS with Codex CLI 0.157.0 in 0.19.0 and, like DSH and ZCode, implements the tool-free structured call in source; an unavailable review Router falls back to fast routing or opens the Host boundary |
+| `decision` | `built-in-worker` | `decision` (Router attempt) | A native adapter with the capability of the effective routing mode: `no_tool_structured` for fast routing, or a locally eligible read-only structured capability for review routing; Codex is verified for review on macOS with Codex CLI 0.157.0 in 0.19.0 and, like DSH and ZCode, implements the tool-free structured call in source; an unavailable Router opens the Host boundary without automatic fallback |
 | `command` | `built-in-worker` | `command`, `cancel`, `artifacts`, `deadline`, `argv` | `argv` with 1–256 entries; `argv[0]` must resolve |
 | `external` | `caller-owned-agent` | `external`, `artifacts`, `task-text` | no local process; the caller's agent claims and reports the task itself |
 
@@ -194,7 +194,7 @@ Result import persists usage and the newest quota observation in the same transa
 
 ## Internal review checks (0.23.0)
 
-The internal `review-check` executor is admitted only by `harness_verify`, not public coding or execution submission. Its frozen plan binds the selected harness version/platform/command, enabled model tuple and boundary-check budget. The ordinary Worker prepares the actual native harness, freezes the Codex family onto its attempt, owns the controller handles, observes cancellation and spools the normal durable result receipt. Publication uses that receipt transaction and rechecks the binding; no business turn, agent credential, artifact authority or model-capability sample is created. Unconfirmed native stop retains capacity and blocks another check. The Codex executor is implemented; other harness verifiers and native Windows/Linux results remain unverified.
+The paid `review-check` executor is removed. A Router uses the ordinary `decision` attempt and the selected native adapter, with no business turn, agent credential, completion tool or artifact authority. Native handles, cancellation, process reaping and durable receipt import retain their existing Worker ownership; unconfirmed native stop never frees an uncertain attempt or publishes an answer.
 
 ## Evidence and private state (0.24.0)
 

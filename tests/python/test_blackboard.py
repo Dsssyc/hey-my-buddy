@@ -283,7 +283,7 @@ class TestCrashWindows(BoardTestCase):
     def _isolated_worker_claim(self, adapter: str):
         task_id = f"stop-proof-{adapter}"
         attempt_id = f"attempt-{adapter}"
-        native_adapter = "codex" if adapter in {"decision", "review-check"} else adapter
+        native_adapter = "codex" if adapter == "decision" else adapter
         client = SimpleNamespace(
             progress=lambda *_args, **_kwargs: None,
             call=lambda *_args, **_kwargs: {
@@ -295,7 +295,6 @@ class TestCrashWindows(BoardTestCase):
         claim = {
             "task": {"taskId": task_id, "spec": {
                 "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), "timeoutSeconds": 60,
-                "reviewCheck": {"adapter": "codex"} if adapter == "review-check" else None,
             }},
             "attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
             "decisionInput": {"routingMode": "fast", "profile": {"adapter": "codex"}}
@@ -597,10 +596,10 @@ class TestCrashWindows(BoardTestCase):
         """A gone outer controller cannot release credentials for an unseen native child."""
         import buddy.worker.worker as worker_module
 
-        for adapter in ("codex", "zcode", "claude", "dsh", "decision", "review-check"):
+        for adapter in ("codex", "zcode", "claude", "dsh", "decision"):
             with self.subTest(adapter=adapter):
                 worker, claim = self._isolated_worker_claim(adapter)
-                private_adapter = "codex" if adapter in {"decision", "review-check"} else adapter
+                private_adapter = "codex" if adapter == "decision" else adapter
                 private_root = ensure_private_dir(attempt_root(
                     self.directory, private_adapter, claim["task"]["taskId"], claim["attempt"]["attemptId"]
                 ))

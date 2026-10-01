@@ -104,7 +104,7 @@ class BillingQuotaTests(BoardTestCase):
             health.refresh("codex", force=True)
             self.assertEqual(probe.call_count, 1)
             self.assertEqual(health.get("codex")["billingByProvider"]["openai"]["kind"], "subscription")
-            self.assertFalse(health.get("codex")["reviewVerification"]['verified'])
+            self.assertNotIn("reviewVerification", health.get("codex"))
         health.close()
 
     def test_only_fresh_matching_explicit_exhaustion_filters_candidates_and_router(self):

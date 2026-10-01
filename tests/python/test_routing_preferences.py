@@ -153,7 +153,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
 
 
 class DecisionCapabilityTests(unittest.TestCase):
-    def test_fast_capability_and_native_readiness_are_distinct_from_review_verification(self):
+    def test_fast_capability_and_native_readiness_are_distinct_from_review_eligibility(self):
         class Native(Adapter):
             name = 'fixture'
             read_only_structured = True
@@ -165,10 +165,13 @@ class DecisionCapabilityTests(unittest.TestCase):
             with mock.patch('buddy.adapters.adapters', return_value={'fixture': native}):
                 self.assertEqual(DecisionAdapter().available()[0], expected)
 
-    def test_native_verification_defaults_false_including_dsh(self):
+    def test_unimplemented_review_is_ineligible_without_certificate_attributes(self):
         for native in (Adapter, DshAdapter, CodexAdapter, ClaudeAdapter, ZcodeAdapter):
             with self.subTest(native=native.name):
-                self.assertFalse(native().read_only_structured_verified)
+                self.assertFalse(hasattr(native(), 'read_only_structured_verified'))
+        self.assertFalse(Adapter().local_read_only_check()['eligible'])
+        self.assertFalse(DshAdapter().local_read_only_check()['eligible'])
+        self.assertFalse(ZcodeAdapter().local_read_only_check()['eligible'])
         self.assertFalse(DshAdapter.read_only_structured)
         self.assertTrue(CodexAdapter.read_only_structured)
         self.assertTrue(ClaudeAdapter.read_only_structured)
@@ -180,7 +183,8 @@ class DecisionCapabilityTests(unittest.TestCase):
         class Native(Adapter):
             name = "codex"
             read_only_structured = True
-            read_only_structured_verified = True
+            def local_read_only_check(self):
+                return {'eligible': True}
 
             def start_read_only_structured(self, context, request):
                 calls.append((context, request))
@@ -220,16 +224,17 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertEqual(child.spec["model"], "fixture-model")
             self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
 
-    def test_unverified_capability_is_rejected_before_input_preparation_or_spawn(self):
+    def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
                                    decision_input={"profile": {"adapter": "codex"}})
         with mock.patch("buddy.adapters.adapter", return_value=CodexAdapter()), mock.patch(
             "buddy.router_input.prepare"
-        ) as prepare, mock.patch.object(CodexAdapter, "start_read_only_structured") as start:
+        ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
+                mock.patch.object(CodexAdapter, "start_read_only_structured") as start:
             with self.assertRaises(BoardError) as raised:
                 DecisionAdapter().start(context)
-        self.assertEqual(raised.exception.code, "UNSUPPORTED_ADAPTER")
+        self.assertEqual(raised.exception.code, "router-review-unsupported")
         prepare.assert_not_called()
         start.assert_not_called()
 
@@ -341,7 +346,10 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
             "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
-                       "inputVerification": {"unchanged": True, "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "zeroToolVerified": True,
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
                        "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
         })
         routed = board.call("workflow_get", {"runId": view["runId"]})
@@ -375,7 +383,10 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
             "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
-                       "inputVerification": {"unchanged": True, "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "zeroToolVerified": True,
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
                        "decision": {"profileId": SECOND_PROFILE_ID, "reason": "fixture selection", "evidence": []}},
         })
         routed = board.call("workflow_get", {"runId": view["runId"]})

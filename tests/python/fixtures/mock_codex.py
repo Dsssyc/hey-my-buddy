@@ -132,21 +132,6 @@ def main():
             if case == 'readonly-config-mismatch':
                 configured['features']['apps'] = True
             send({'id': ident, 'result': {'config': configured}})
-        elif method == 'command/exec':
-            state=read_state()
-            state.setdefault('sandboxProbes', []).append({'id': ident, **params})
-            write_state(state)
-            if case == 'probe-unrelated-reply':
-                send({'id': 987654, 'result': {'exitCode': 0, 'stdout': '', 'stderr': ''}})
-            argv=params['command']
-            if params.get('permissionProfile') != 'buddy-router' or 'sandboxPolicy' in params:
-                send({'id': ident, 'error': {'code': -32602, 'message': 'wrong probe profile'}})
-            elif argv[0] == '/bin/cat':
-                send({'id': ident, 'result': {'exitCode': 0, 'stdout': (Path(params['cwd'])/'marker.txt').read_text(), 'stderr': ''}})
-            elif case == 'probe-allow-network' and argv[0] == '/usr/bin/curl':
-                send({'id': ident, 'result': {'exitCode': 0, 'stdout': 'HTTP/1.0 200 OK', 'stderr': ''}})
-            else:
-                send({'id': ident, 'result': {'exitCode': 1, 'stdout': '', 'stderr': 'Operation not permitted'}})
         elif method == "account/read":
             send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
                                                             "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
