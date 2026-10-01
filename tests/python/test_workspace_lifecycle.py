@@ -1004,6 +1004,36 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # The root's own worktree is not the helper target and stays in place.
         self.assertTrue(flow["checkout"].exists())
 
+    def test_reclaim_helper_uses_the_control_roots_revision(self):
+        flow = self.root_with_helper_worktree(request_id="helper-root-revision")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        artifact = flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        accepted = board.call("workflow_accept", {
+            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+            "note": "helper reviewed before the control root changes", "keepCheckout": True,
+            "target": {"path": str(target["path"]), "ref": "HEAD"}, **self.control(flow["rootView"]),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        # Only the controlling root advances; the helper keeps its own revision.
+        for index in range(2):
+            root = self.view(board, run_id)
+            taken = board.call("workflow_takeover", {
+                "runId": run_id, "commandId": f"revision-takeover-{index}",
+                "expectedOwnerGeneration": root["ownerGeneration"],
+                "newHostId": f"host-revision-{index}", **self.control(root),
+            })
+            self.controls[run_id] = dict(taken["control"])
+        root = self.view(board, run_id)
+        helper = self.view(board, helper_id)
+        self.assertNotEqual(root["revision"], helper["revision"] + 1)
+        reclaimed = board.call("workflow_reclaim", {
+            "runId": run_id, "targetRunId": helper_id, **self.control(root),
+        })
+        self.assertTrue(reclaimed["removed"])
+        self.assertFalse(flow["helperCheckout"].exists())
+        self.assertTrue(flow["checkout"].exists())
+
     def test_an_accepted_helper_allocation_cleans_after_the_parent_is_accepted(self):
         flow = self.root_with_helper_worktree(request_id="helper-after-parent")
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]

@@ -3891,24 +3891,21 @@ class WorkflowCoordinator:
         # One conclusion per reviewed execution: the derived key binds the current
         # attempt, so the same note replays that execution's conclusion while a
         # later execution of the same goal records its own.
-        with self.db.read() as connection:
-            reviewed = connection.execute(
-                "SELECT selected_attempt_id FROM tasks WHERE task_id=?", (target_id,)
-            ).fetchone()
-        request_key = {"runId": owner_run_id, "targetRunId": target_id, "note": note,
-                       "attemptId": reviewed["selected_attempt_id"] if reviewed is not None else None}
-        command_id = "conclude-" + sha256_text(canonical_json(request_key))[:32]
         seal_work = None
         duplicate = None
         with self.db.read() as connection:
             owner = self._run_row(connection, owner_run_id)
             actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
+            target_snapshot = self._target_run(connection, owner, target_id)
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
+            request_key = {"runId": owner_run_id, "targetRunId": target_id, "note": note,
+                           "attemptId": task["selected_attempt_id"]}
+            command_id = "conclude-" + sha256_text(canonical_json(request_key))[:32]
             receipt = self.board._receipt(connection, command_id, "workflow.conclude", request_key)
             if receipt is not None:
                 duplicate = {**receipt, "duplicate": True}
             else:
-                target_snapshot = self._target_run(connection, owner, target_id)
-                task = self._conclude_precheck(connection, target_snapshot, task=None)
+                task = self._conclude_precheck(connection, target_snapshot, task)
                 seal_work = self._conclude_seal_work(connection, target_snapshot, task)
         sealed_record = None
         if seal_work is not None:
@@ -3937,6 +3934,13 @@ class WorkflowCoordinator:
             run_id = run_row["run_id"]
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             if duplicate is None:
+                # The receipt, seal and conclusion must describe one execution.
+                # A concurrent continuation can finish a later attempt while the
+                # Git seal runs; it cannot inherit this earlier Host review.
+                self._expect_revision(run_row, target_snapshot["revision"])
+                if (task["selected_attempt_id"] != request_key["attemptId"]
+                        or run_row["workspace_manifest_json"] != target_snapshot["workspace_manifest_json"]):
+                    raise BoardError("REVISION_CONFLICT", "The execution or workspace changed while concluding; re-read it and retry")
                 response = self._conclude_record(
                     connection, run_row=run_row, task=task, actor=actor, now=now, note=note,
                     command_id=command_id, request_key=request_key, sealed_record=sealed_record)
@@ -4153,8 +4157,11 @@ class WorkflowCoordinator:
             return {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
                     "path": plan["path"]}
         try:
+            # Planning advances the target only. An independently allocated
+            # helper's revision cannot stand in for its controlling root's.
+            apply_revision = planned["targetRevision"] if owner_run_id == run_id else revision
             applied = self.cleanup_apply(
-                {**params, "commandId": command + "-apply", "expectedRevision": planned["targetRevision"],
+                {**params, "commandId": command + "-apply", "expectedRevision": apply_revision,
                  "planId": plan["planId"], "confirmPath": plan["path"]},
             )
         except BoardError as error:

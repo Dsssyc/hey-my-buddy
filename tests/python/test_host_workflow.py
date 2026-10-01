@@ -1,5 +1,6 @@
 """Host controls are bound to immutable execution evidence and current ownership."""
 import json
+from unittest.mock import patch
 
 from buddy.errors import BoardError
 from test_workflow import CONFIGURATION, WorkflowTestCase
@@ -206,6 +207,42 @@ class HostCompletionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 2)
         self.assertTrue(board.call("workflow_conclude", params_again)["duplicate"])
+
+    def test_conclusion_refuses_an_execution_changed_during_partial_sealing(self):
+        board = self.board()
+        submitted = self.submit(board, kind="worktree")
+        self.register(board)
+        first = self.claim(board)
+        self.finish_turn(board, first, runner_status="failed", exit_code=1, seal=False)
+        current = board.call("workflow_get", {"runId": submitted["runId"]})
+        real_seal = self.workspace.host_seal
+        later_attempt = []
+
+        def seal_then_continue(*args, **kwargs):
+            sealed = real_seal(*args, **kwargs)
+            self.continue_run(board, current, command_id="continue-during-conclusion")
+            second = self.claim(board, claim_request_id="later-attempt")
+            later_attempt.append(second["claim"]["attempt"]["attemptId"])
+            self.finish_turn(board, second, runner_status="failed", exit_code=1,
+                             seal=False, session_id="later-session")
+            return sealed
+
+        with patch.object(self.workspace, "host_seal", side_effect=seal_then_continue):
+            with self.assertRaises(BoardError) as raised:
+                board.call("workflow_conclude", {"runId": current["runId"],
+                    "note": "only the first execution was reviewed", **self.control(current)})
+        self.assertEqual(raised.exception.code, "REVISION_CONFLICT")
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 0)
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM workflow_artifacts WHERE kind='partial-output'"
+            ).fetchone()[0], 0)
+        latest = board.call("workflow_get", {"runId": current["runId"]})
+        self.assertEqual(latest["state"], "failed")
+        self.assertIsNone(latest["hostConclusion"])
+        concluded = board.call("workflow_conclude", {"runId": current["runId"],
+            "note": "the later execution was reviewed separately", **self.control(latest)})
+        self.assertEqual(concluded["conclusion"]["attemptId"], later_attempt[0])
 
 
 from test_workspace_lifecycle import LifecycleTestCase
