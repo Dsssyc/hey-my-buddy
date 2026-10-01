@@ -146,3 +146,5 @@ The [ADR-019 first-stage record](acceptance/worker-accounts-phase1-0.23.0.md) co
 [Routing validation and quota recovery](design/routing-validation.md) describes ADR-019 second-stage subbatch ②; its [0.25.0 acceptance](acceptance/routing-validation-0.25.0.md) distinguishes the approved native probe, offline replay and remaining verification from installed behavior.
 
 [Native sandbox review proof](design/native-sandbox-review-proof.md) defines probe-owned review validation, structurally checked model tool streams and conservative replay of the historical diagnostics; [acceptance](acceptance/native-sandbox-review-0.27.0.md) records verification.
+
+The [parallel check runner record](acceptance/checks-speedup.md) covers the per-file parallel `buddy.checks` run: baseline and resulting times, the Host's coverage-equivalence, failure-injection and interrupt verification, and the unhandled SIGTERM boundary.
