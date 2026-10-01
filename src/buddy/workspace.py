@@ -705,11 +705,15 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
     }
 
 
-def _output_entries(root, manifest, observation, *, allow_outside_scope=False):
+def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None):
     initial = _entries(root, manifest["inputCommit"])
     initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
     excluded = manifest["snapshot"]["excludedEntries"] if manifest["kind"] == "existing" else {}
     scope = manifest["writeScope"]
+    # Paths an earlier Host decision already promoted (adopt) or a previous Host
+    # seal carried stay authorized even though they sit outside the original
+    # write scope; anything newly outside is still a violation.
+    allowed = set(allowed_paths or ())
     entries = dict(observation["tracked"])
     violations = set()
     adopted = set()
@@ -723,7 +727,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False):
         if item is None or [item[0], _sha(item[1])] != fingerprint:
             raise BoardError("WORKSPACE_CHANGED", "An output changed during sealing", path=path)
         entry = [item[0], _blob(root, item[1], write=True)]
-        if _in_scope(path, scope) or initial.get(path) == entry:
+        if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
         elif allow_outside_scope:
             entries[path] = entry
@@ -735,7 +739,8 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False):
     changed = sorted(path for path in initial.keys() | entries.keys() if initial.get(path) != entries.get(path))
     index_changes = {path for path in initial_index.keys() | observation["index"].keys()
                      if initial_index.get(path) != observation["index"].get(path)}
-    outside = {path for path in set(changed) | index_changes | excluded_changes if not _in_scope(path, scope)}
+    outside = {path for path in set(changed) | index_changes | excluded_changes
+               if not _in_scope(path, scope) and path not in allowed}
     if allow_outside_scope:
         # An explicitly adopted site promotes these exact paths; the record keeps
         # them named as adopted so a later reader never mistakes them for authorized.
@@ -782,6 +787,25 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
     shutdown. The same identity replays its immutable output even after later
     edits or removal of the execution worktree.
     """
+    return _seal_output(state_dir, manifest, task_id, attempt_id, suffix="", kind=None)
+
+
+def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *, allowed_paths=()) -> dict:
+    """Seal the Host's own unsealed managed changes as an independent partial output.
+
+    A Host conclusion must never overwrite the Worker's earlier fixed partial
+    output of the same task/attempt, so this record, its Git ref and its patch
+    live beside that output under ``<output id>-host`` and replay independently.
+    ``allowed_paths`` names the exact paths an earlier Host decision (an adopted
+    conflict site or a previous Host seal) already promoted; they are treated as
+    authorized while any newly changed path outside the write scope still fails.
+    """
+    return _seal_output(state_dir, manifest, task_id, attempt_id, suffix="-host", kind="host-output",
+                        allowed_paths=tuple(allowed_paths or ()))
+
+
+def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
+                 suffix: str, kind: str | None, allowed_paths: tuple = ()) -> dict:
     with _errors():
         _validate_manifest(manifest)
         if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
@@ -795,7 +819,7 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
         with _lock(workspace_dir):
             _mkdir(workspace_dir / "outputs")
             output_id = _sha(_json([task_id, attempt_id]))
-            directory = workspace_dir / "outputs" / output_id
+            directory = workspace_dir / "outputs" / (output_id + suffix)
             _mkdir(directory)
             repository = Path(manifest["snapshot"]["repositoryPath"])
             if _identity(repository) != manifest["repositoryId"]:
@@ -814,7 +838,8 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
                 entries, changed, excluded_changes = _entries(root, manifest["inputTree"]), [], []
             else:
                 try:
-                    entries, changed, excluded_changes, _adopted = _output_entries(root, manifest, observation)
+                    entries, changed, excluded_changes, _adopted = _output_entries(
+                        root, manifest, observation, allowed_paths=allowed_paths)
                 except BoardError as error:
                     # The failed site keeps a durable, bounded record of exactly
                     # which managed paths diverged and from which authorized state.
@@ -826,7 +851,7 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
             tree = _tree(root, entries)
             if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
                 raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
-            commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + output_id)
+            commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + directory.name)
             patch_data = _diff(repository, manifest["inputCommit"], commit)
             snapshot = {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
                         "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
@@ -841,11 +866,19 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
                       "inputCommit": manifest["inputCommit"], "commit": commit, "tree": tree, "changedPaths": changed,
                       "includedUntracked": snapshot["includedUntracked"],
                       "snapshot": snapshot, "snapshotSha256": _sha(_json(snapshot)),
-                      "ref": f"refs/buddy/workspaces/{workspace_id}/outputs/{output_id}",
+                      "ref": f"refs/buddy/workspaces/{workspace_id}/outputs/{directory.name}",
                       "diffPath": str(directory / "output.patch"), "diffSha256": _sha(patch_data)}
+            if kind is not None:
+                output["kind"] = kind
+            if allowed_paths:
+                # The exact previously promoted paths this record relied on; a later
+                # cleanup proof re-derives the same allowance from the sealed record.
+                output["adoptedPaths"] = sorted(allowed_paths)
+                snapshot["adoptedPaths"] = sorted(allowed_paths)
+                output["snapshotSha256"] = _sha(_json(snapshot))
             # Retention precedes the recovery record: GC must not discard a
             # chosen output while final reference publication is interrupted.
-            _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/output-{output_id}", commit)
+            _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/output-{directory.name}", commit)
             _write_once(directory / "pending.json", _json(output))
             _write_once(directory / "output.patch", patch_data)
             return _finish_output(repository, output, directory)
@@ -1319,6 +1352,8 @@ def _artifact_binding(original_input, final_input, artifact):
     if artifact.get("kind") == "resolution" and artifact.get("action") in ("restore", "adopt"):
         expected_ref = (f"refs/buddy/workspaces/{final_input['workspaceId']}/resolutions/"
                         f"{output_id}-{artifact['action']}")
+    elif artifact.get("kind") == "host-output":
+        expected_ref = f"refs/buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}-host"
     elif artifact.get("kind") is None:
         expected_ref = f"refs/buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}"
     else:
@@ -1342,8 +1377,21 @@ def _artifact_binding(original_input, final_input, artifact):
     return repository, _tree_changes(repository, original_input["inputTree"], artifact["tree"])
 
 
+def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict) -> dict:
+    """Prove one sealed output/resolution record against its fixed Git objects.
+
+    The record's ref, commit, tree, parent binding, patch hash and per-path
+    summary are re-derived from immutable Git objects; any drift raises. The
+    returned changed paths are the whole-goal delta the record provably carries,
+    so a caller can trust exactly the paths this record names.
+    """
+    with _errors():
+        _repository, changed = _artifact_binding(original_input, final_input, artifact)
+        return {"changedPaths": sorted(changed)}
+
+
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
-                       path: str, ref: str, strategy: str, before_commit: str,
+                       path: str, ref: str, strategy: str, before_commit: str | None = None,
                        repository_id: str | None = None, checkout_id: str | None = None,
                        adjusted_paths=None, host_paths=None, reason: str | None = None) -> dict:
     """Verify that one immutable artifact is actually present in a real target.
@@ -1352,16 +1400,20 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
     after trees come from the repository itself, never from the caller. The
     artifact is bound by the blob identity of every changed path, so a cherry-pick
     or an explicitly adjusted integration is verified by content rather than by a
-    client-supplied SHA.
+    client-supplied SHA. ``before_commit`` is only needed to prove real Host
+    additions inside one commit interval (``host_paths``); without it the check is
+    the pure content comparison of the artifact against the target tree.
     """
     with _errors():
         if strategy not in ("patch", "cherry-pick", "merge"):
             raise BoardError("INVALID_WORKSPACE", "A verified integration uses patch, cherry-pick or merge")
         if not isinstance(artifact, dict):
             raise BoardError("INVALID_WORKSPACE", "The integration source artifact is missing")
+        if bool(host_paths) and not before_commit:
+            raise BoardError("INVALID_WORKSPACE", "Host paths need a before/after commit interval to verify")
         _repository, changed = _artifact_binding(original_input, final_input, artifact)
-        if not isinstance(before_commit, str) or not before_commit:
-            raise BoardError("INVALID_WORKSPACE", "beforeCommit is required to bind a verified integration")
+        if before_commit is not None and (not isinstance(before_commit, str) or not before_commit):
+            raise BoardError("INVALID_WORKSPACE", "beforeCommit must name the target commit before the integration")
         adjustments = sorted({_relative(value) for value in (adjusted_paths or [])})
         unknown_adjustments = [value for value in adjustments if value not in changed]
         if unknown_adjustments:
@@ -1380,11 +1432,11 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             raise BoardError("WORKSPACE_CHANGED", "The integration target checkout changed",
                              expectedCheckoutId=checkout_id, actualCheckoutId=identity["checkoutId"])
         root = Path(identity["checkoutRoot"])
-        before = _commit(root, before_commit)
+        before = _commit(root, before_commit) if before_commit else None
+        before_tree = _line(root, "rev-parse", before + "^{tree}") if before else None
         after = _commit(root, ref)
-        before_tree = _line(root, "rev-parse", before + "^{tree}")
         after_tree = _line(root, "rev-parse", after + "^{tree}")
-        target_changes = _tree_changes(root, before_tree, after_tree)
+        target_changes = _tree_changes(root, before_tree, after_tree) if before else {}
         missing_host = sorted(set(host_paths) - set(target_changes))
         if missing_host:
             raise BoardError("INVALID_WORKSPACE", "Host paths must be actual changes in the target commit interval", paths=missing_host[:32])
@@ -1421,7 +1473,7 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
                                   "targetMode": actual["mode"], "targetOid": actual["oid"]})
         unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
         verification = {
-            "verified": bool(_is_ancestor(root, before, after) and not unrecorded),
+            "verified": bool((before is None or _is_ancestor(root, before, after)) and not unrecorded),
             "strategy": strategy,
             "target": {"kind": "checkout", "path": identity["checkoutRoot"], "checkoutId": identity["checkoutId"],
                        "repositoryId": identity["repositoryId"], "ref": ref},
@@ -1536,7 +1588,8 @@ def _allocation_refs(repository, allocation_id, manifest, retained):
     return sorted(set(refs))[:64]
 
 
-def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None) -> dict:
+def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None,
+                    allowed: list[str] | None = None) -> dict:
     """Eligibility facts for removing exactly one registered Buddy worktree.
 
     The deletion target is the *physical allocation* resolved from authoritative
@@ -1546,7 +1599,9 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
     ``buddy:<allocationId>`` Git lock are what authorize a removal. An arbitrary
     existing cwd under ``state/workspaces`` proves nothing by itself: the source
     checkout, a borrowed directory, a sibling worktree and an unknown path are all
-    reported as retention reasons instead of being deleted.
+    reported as retention reasons instead of being deleted. ``allowed`` names the
+    paths a board-bound Host decision already promoted on this manifest; the
+    proof never reads local adoption records on its own authority.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -1581,7 +1636,8 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
             if actual[field] != manifest[field]:
                 result["reasons"].append("identity-changed")
         try:
-            _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed, result)
+            _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
+                           result, allowed=tuple(allowed or ()))
         except BoardError:
             # The registered owner of this exact path may complete the same removal
             # while its eligibility is still being proven. The checkout then holds no
@@ -1596,8 +1652,13 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
         return result
 
 
-def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result) -> None:
-    """Fill one cleanup view with the worktree, seal and unsealed-change proof."""
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, allowed=()) -> None:
+    """Fill one cleanup view with the worktree, seal and unsealed-change proof.
+
+    ``allowed`` carries the exact paths earlier Host decisions already promoted on
+    this manifest; they stay authorized for the comparison while anything newly
+    outside the write scope still reports ``unsealed-changes``.
+    """
     record = _worktree_record(repository, checkout_root)
     if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
         result["reasons"].append("unregistered-checkout")
@@ -1627,7 +1688,8 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"], write=True)
     unsealed = []
     try:
-        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation)
+        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
+                                                                           allowed_paths=allowed)
         current_tree = _tree(checkout_root, entries_now)
         if current_tree != sealed["tree"]:
             unsealed = sorted(_tree_changes(checkout_root, sealed["tree"], current_tree))
@@ -1639,7 +1701,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
             return
         if error.code != "WORKSPACE_SCOPE_VIOLATION":
             raise
-        unsealed = list(error.details.get("paths") or [])
+        unsealed = [path for path in (error.details.get("paths") or []) if path not in set(allowed)]
     if unsealed or observation["fingerprint"] != snapshot.get("observationSha256"):
         result["reasons"].append("unsealed-changes")
         result["unsealedPaths"] = unsealed[:32]

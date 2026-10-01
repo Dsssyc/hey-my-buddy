@@ -567,23 +567,19 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(delivery["state"], "delivered")
         self.assertEqual(delivery["artifactId"], resolved["artifactId"])
         self.assertEqual(resolved["workspaceConflicts"][0]["delivery"]["state"], "delivered")
-        # Integration and acknowledgement need no further model turn. The resolved
-        # artifact is verified against a real target checkout that actually received it.
+        # Acceptance needs no further model turn. The resolved artifact is verified
+        # against a real target checkout that actually received it.
         target = self.verified_target(resolved["artifact"])
-        recorded = board.store.workflow.integration_record({
-            "runId": run_id, "commandId": "native-integration", "expectedRevision": resolved["revision"],
-            "artifactId": resolved["artifactId"], "strategy": "patch", "beforeCommit": target["before"],
+        accepted = board.call("workflow_accept", {
+            "runId": run_id, "artifactId": resolved["artifactId"],
+            "note": "reviewed the Host-resolved delivery",
             "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "reason": "the resolved output was applied to a real target", **self.control(resolved),
-        })
-        self.assertEqual(recorded["integration"]["state"], "verified")
-        self.assertEqual(recorded["integration"]["sourceCommit"], resolved["outputCommit"])
-        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["src/feature.py"])
-        accepted = board.call("workflow_acknowledge", {
-            "runId": run_id, "artifactId": resolved["artifactId"], "commandId": "native-ack",
-            "note": "reviewed the Host-resolved delivery", "verdict": "accepted", **self.control(recorded),
+            "beforeCommit": target["before"], **self.control(resolved),
         })
         self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["integration"]["state"], "verified")
+        self.assertEqual(accepted["integration"]["sourceCommit"], resolved["outputCommit"])
+        self.assertEqual(accepted["integration"]["verification"]["matchingPaths"], ["src/feature.py"])
         self.assertEqual(accepted["resolutionDelivery"]["conflictId"], conflict["conflictId"])
         self.assertEqual(accepted["resolutionDelivery"]["artifactId"], resolved["artifactId"])
         self.assertEqual(self.ledger(board, run_id), before)

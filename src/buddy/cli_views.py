@@ -30,12 +30,11 @@ GOVERNED_RECEIPTS = frozenset(
         "continue",
         "takeover",
         "cancel",
-        "acknowledge",
+        "accept",
+        "conclude",
+        "reclaim",
         "scope-amend",
         "workspace-resolve",
-        "integration-record",
-        "workspace-cleanup-plan",
-        "workspace-cleanup-apply",
         "suggest",
     }
 )
@@ -291,6 +290,10 @@ def governed_receipt(response: dict) -> dict:
             receipt[key] = response[key]
     if isinstance(response.get("integration"), dict):
         receipt["integration"] = _integration_brief(response["integration"])
+    if isinstance(response.get("reclaim"), dict):
+        # The retention evidence stays in the service view; a receipt carries the
+        # outcome and, when blocked, the concrete reasons.
+        receipt["reclaim"] = _pick(response["reclaim"], ("removed", "alreadyRemoved", "reasons", "path", "planId"))
     if response.get("plan") is not None:
         receipt["plan"] = _plan_brief(response["plan"])
         receipt.pop("cleanup", None)

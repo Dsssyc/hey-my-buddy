@@ -23,11 +23,11 @@ from buddy.service import CONTROL_OPERATIONS
 
 
 OPERATIONS = {
+    "accept": "workflow_accept",
+    "conclude": "workflow_conclude",
+    "reclaim": "workflow_reclaim",
     "scope-amend": "workflow_scope_amend",
     "workspace-resolve": "workflow_workspace_resolve",
-    "integration-record": "workflow_integration_record",
-    "workspace-cleanup-plan": "workspace_cleanup_plan",
-    "workspace-cleanup-apply": "workspace_cleanup_apply",
 }
 
 
@@ -145,57 +145,34 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         submitted, _claimed, manifest, checkout, _seal, view, artifact = self.run_worktree(board)
         control_file = cli._save_control(submitted["runId"], submitted["control"])
         target = self.target_with_artifact(artifact)
-        integration_params = {
-            "runId": view["runId"], "commandId": "cli-integrate", "expectedRevision": view["revision"],
-            "artifactId": artifact["artifactId"], "strategy": "patch", "beforeCommit": target["before"],
+        code, accepted = self.cli_call(board, "accept", {
+            "runId": view["runId"], "artifactId": artifact["artifactId"],
+            "note": "Inspected the sealed output and verified the target commit",
             "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "reason": "Host applied the sealed patch to the verified target", "controlFile": control_file,
-        }
-        code, integrated = self.cli_call(board, "integration-record", integration_params)
-        self.assertEqual(code, 0, integrated)
-        self.assertEqual(integrated["integration"]["state"], "verified")
-        self.assertEqual(integrated["integration"]["afterCommit"], target["after"])
-        self.assertNotIn(submitted["control"]["controlToken"], json.dumps(integrated))
-
-        code, refused = self.cli_call(board, "workspace-cleanup-plan", {
-            "runId": view["runId"], "commandId": "missing-control", "expectedRevision": integrated["revision"],
+            "beforeCommit": target["before"], "keepCheckout": True, "controlFile": control_file,
         })
+        self.assertEqual(code, 0, accepted)
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["integration"]["state"], "verified")
+        self.assertEqual(accepted["integration"]["afterCommit"], target["after"])
+        self.assertNotIn(submitted["control"]["controlToken"], json.dumps(accepted))
+
+        code, refused = self.cli_call(board, "reclaim", {"runId": view["runId"]})
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
-        code, stale = self.cli_call(board, "workspace-cleanup-plan", {
-            "runId": view["runId"], "commandId": "stale-control", "expectedRevision": integrated["revision"],
+        code, stale = self.cli_call(board, "reclaim", {
+            "runId": view["runId"],
             "hostId": submitted["control"]["hostId"], "ownerGeneration": 2,
             "controlToken": submitted["control"]["controlToken"],
         })
         self.assertEqual(code, 1)
         self.assertEqual(stale["error"]["code"], "STALE_GENERATION")
-
-        code, accepted = self.cli_call(board, "acknowledge", {
-            "runId": view["runId"], "commandId": "cli-accept", "artifactId": artifact["artifactId"],
-            "integrationId": integrated["integration"]["integrationId"],
-            "note": "Inspected the sealed output and verified the target commit", "verdict": "accepted",
-            "controlFile": control_file,
-        })
-        self.assertEqual(code, 0, accepted)
-        self.assertEqual(accepted["state"], "accepted")
-        self.assertNotIn(submitted["control"]["controlToken"], json.dumps(accepted))
-
-        code, planned = self.cli_call(board, "workspace-cleanup-plan", {
-            "runId": view["runId"], "commandId": "cli-plan", "expectedRevision": accepted["revision"],
-            "controlFile": control_file,
-        })
-        self.assertEqual(code, 0, planned)
-        plan = planned["plan"]
-        self.assertTrue(plan["eligible"])
-        self.assertEqual(plan["path"], manifest["checkoutRoot"])
         self.assertTrue(checkout.exists())
-        code, applied = self.cli_call(board, "workspace-cleanup-apply", {
-            "runId": view["runId"], "planId": plan["planId"], "commandId": "cli-apply",
-            "expectedRevision": planned["revision"], "confirmPath": plan["path"],
-            "controlFile": control_file,
-        })
+
+        code, applied = self.cli_call(board, "reclaim", {"runId": view["runId"], "controlFile": control_file})
         self.assertEqual(code, 0, applied)
         self.assertTrue(applied["removed"])
+        self.assertEqual(applied["path"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
         self.assertTrue(Path(artifact["diffPath"]).exists())
         self.assertNotIn(submitted["control"]["controlToken"], json.dumps(applied))

@@ -163,3 +163,44 @@ class MockWorkspace:
     # -- read helpers -------------------------------------------------------
     def manifest_for(self, request_id: str) -> dict:
         return dict(self.manifests[request_id])
+
+    # -- Host lifecycle surface: this double owns no disposable checkout -----
+    def integration_verify(self, artifact, *, original_input=None, final_input=None, path=None, ref=None,
+                           strategy="patch", before_commit=None, repository_id=None, checkout_id=None,
+                           adjusted_paths=None, host_paths=None, reason=None):
+        """The mock target carries the artifact only once its marker exists, or an
+        explicit adjustment names the differing paths."""
+        changed = [str(item) for item in (artifact.get("changedPaths") or [])]
+        target = Path(path)
+        carried = (target / ".buddy-integrated").exists()
+        return {
+            "verified": bool(carried or adjusted_paths), "strategy": strategy,
+            "target": {"kind": "checkout", "path": str(target.resolve()), "checkoutId": f"checkout:{target}",
+                       "repositoryId": f"repo:{target}", "ref": ref},
+            "beforeCommit": before_commit, "afterCommit": ref, "beforeTree": None, "afterTree": None,
+            "sourceCommit": artifact.get("commit"), "sourceTree": artifact.get("tree"),
+            "artifactAncestor": False,
+            "matchingPaths": changed if carried else [],
+            "differingPaths": [] if carried else [{"path": item} for item in changed],
+            "missingPaths": [], "adjustments": sorted(set(adjusted_paths or ())),
+            "hostPaths": sorted(host_paths or ()), "unrecordedPaths": [], "reason": reason,
+        }
+
+    def adopted_paths(self, state_dir, manifest):
+        return []
+
+    def host_seal(self, state_dir, manifest, task_id, attempt_id, *, allowed_paths=()):
+        return self.seal(state_dir, manifest, task_id, attempt_id)
+
+    def cleanup_inspect(self, state_dir, manifest, sealed=None, retained=None, allowed=None):
+        return {
+            "eligible": False, "reasons": ["not-a-managed-worktree"],
+            "workspaceId": manifest.get("workspaceId"), "manifestWorkspaceId": manifest.get("workspaceId"),
+            "kind": manifest.get("kind", "existing"), "checkoutId": manifest.get("checkoutId"),
+            "repositoryId": manifest.get("repositoryId"), "path": manifest.get("checkoutRoot"),
+            "cwd": manifest.get("path"), "allocation": None, "worktree": False, "locked": None,
+            "unsealedPaths": [], "refs": [], "sealedObservation": None,
+        }
+
+    def cleanup_remove(self, state_dir, manifest, *, retained=None):
+        raise BoardError("WORKSPACE_UNSAFE", "the mock double owns no disposable checkout")

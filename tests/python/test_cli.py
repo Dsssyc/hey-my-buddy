@@ -37,6 +37,10 @@ RETIRED_METHODS = (
     "workflow-cancel",
     "workflow-acknowledge",
     "workflow-suggest",
+    "acknowledge",
+    "integration-record",
+    "workspace-cleanup-plan",
+    "workspace-cleanup-apply",
     "evaluation-maintain",
     "evaluation-write-publish",
 )
@@ -51,7 +55,9 @@ class MethodSurfaceTests(unittest.TestCase):
             "continue": ("control", "workflow_continue"),
             "takeover": ("control", "workflow_takeover"),
             "cancel": ("control", "workflow_cancel"),
-            "acknowledge": ("control", "workflow_acknowledge"),
+            "accept": ("control", "workflow_accept"),
+            "conclude": ("control", "workflow_conclude"),
+            "reclaim": ("control", "workflow_reclaim"),
             "suggest": ("control", "workflow_suggest"),
             "execution-submit": ("control", "task_submit"),
             "execution-cancel": ("control", "task_cancel"),
@@ -80,7 +86,7 @@ class MethodSurfaceTests(unittest.TestCase):
             frozenset({"execution-submit", "execution-cancel", "execution-retry", "execution-acknowledge", "status"}),
         )
         self.assertEqual(transport.DIRECT_TASK_VIEW, frozenset({"wait"}))
-        for governed in ("submit", "get", "decide", "continue", "takeover", "cancel", "acknowledge", "suggest"):
+        for governed in ("submit", "get", "decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "suggest"):
             self.assertNotIn(governed, transport.UNWRAP_TASK)
             self.assertNotIn(governed, transport.DIRECT_TASK_VIEW)
 
@@ -94,7 +100,7 @@ class MethodSurfaceTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 2)
 
     def test_control_methods_are_the_current_governed_mutations(self):
-        self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "acknowledge", "scope-amend", "workspace-resolve", "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply"}))
+        self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))
 
     def test_console_keeps_the_canonical_name_and_no_alternative_spellings(self):
         self.assertEqual(transport.METHOD_MAP["console"], ("control", "console"))
@@ -122,9 +128,9 @@ class MethodSurfaceTests(unittest.TestCase):
             ("evaluation-write-begin", "evaluation_write_begin"),
             ("scope-amend", "workflow_scope_amend"),
             ("workspace-resolve", "workflow_workspace_resolve"),
-            ("integration-record", "workflow_integration_record"),
-            ("workspace-cleanup-plan", "workspace_cleanup_plan"),
-            ("workspace-cleanup-apply", "workspace_cleanup_apply"),
+            ("accept", "workflow_accept"),
+            ("conclude", "workflow_conclude"),
+            ("reclaim", "workflow_reclaim"),
             ("user-policy-publish", "user_policy_publish"),
             ("assessment-publish", "assessment_publish"),
             ("model-profiles", "model_profiles"),
@@ -158,7 +164,10 @@ class HelpTests(unittest.TestCase):
             "partial quadruple is rejected",
             "let the Router choose",
             "wait-timeout",
-            "Inspect the selected final artifact first",
+            "Accept one delivered artifact",
+            'adjusted":true (the note is the reason)',
+            "conclude ends a failed, cancelled or delivered-but-unaccepted goal",
+            "conclude ends a failed, cancelled or delivered-but-unaccepted goal",
             "execution-submit",
             "buddy get",
             "buddy await",
@@ -166,11 +175,15 @@ class HelpTests(unittest.TestCase):
             "latest-generation lookup",
         ):
             self.assertIn(required, text)
-        self.assertLess(len(text.splitlines()), 120, "help must stay concise")
+        # accept/conclude/reclaim replaced the five-step acknowledge protocol, so
+        # the lifecycle section carries three one-line examples where one used to be.
+        self.assertLess(len(text.splitlines()), 124, "help must stay concise")
 
     def test_help_never_names_a_retired_alias_or_implicit_control_lookup(self):
         text = self.help_text()
-        for removed in ("workflow-submit", "workflow-get", "workflow-decide", "workflow-continue", "buddy run ", "buddy start "):
+        for removed in ("workflow-submit", "workflow-get", "workflow-decide", "workflow-continue", "buddy run ", "buddy start ",
+                        "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply",
+                        "buddy acknowledge"):
             self.assertNotIn(removed, text)
         # The old misleading sentence used to promise a cached generation was reused.
         self.assertNotIn("without it the latest saved generation", text)

@@ -328,9 +328,9 @@ class HelpTests(unittest.TestCase):
         listing = self.help_text("list")
         self.assertIn("limit", listing)
         self.assertIn("1–100", listing)
-        acknowledge = self.help_text("acknowledge")
-        self.assertIn("note", acknowledge)
-        self.assertIn("10000", acknowledge)
+        accept = self.help_text("accept")
+        self.assertIn("note", accept)
+        self.assertIn("10000", accept)
 
     def test_conditional_parameters_are_marked(self):
         self.assertIn("conditional", self.help_text("continue"))

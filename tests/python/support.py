@@ -217,7 +217,10 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
 
 @contextmanager
 def private_state_dir(prefix: str = "buddy-test-"):
-    directory = Path(tempfile.mkdtemp(prefix=prefix))
+    # The resolved form keeps one path identity for the whole board: macOS's
+    # per-user /var/folders alias and its /private/var target must never be two
+    # different roots inside one test (storage boundaries and Git both resolve).
+    directory = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     os.chmod(directory, 0o700)
     previous = os.environ.get("BUDDY_MODEL_FACTS_FILE")
     os.environ["BUDDY_MODEL_FACTS_FILE"] = offline_facts_source(directory)
@@ -327,7 +330,7 @@ class InProcessBoard:
 class BoardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._stack = []
-        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-"))
+        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
         # In-process boards read the source hook from this process environment; pin
         # the same offline fixture path the child environments get, so enabling a

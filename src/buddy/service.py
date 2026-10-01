@@ -98,12 +98,11 @@ CONTROL_OPERATIONS = (
     "workflow_continue",
     "workflow_takeover",
     "workflow_cancel",
-    "workflow_acknowledge",
+    "workflow_accept",
+    "workflow_conclude",
+    "workflow_reclaim",
     "workflow_scope_amend",
     "workflow_workspace_resolve",
-    "workflow_integration_record",
-    "workspace_cleanup_plan",
-    "workspace_cleanup_apply",
     "workflow_suggest",
     "objective_list",
     "objective_timeline",
@@ -823,16 +822,32 @@ class BoardService(_BaseResource):
 
         return self._guard("workflow.cancel", request_json, handler)
 
-    def workflow_acknowledge(self, request_json: str) -> str:
+    def workflow_accept(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            result = self.store.workflow.acknowledge(
+            result = self.store.workflow.accept(
                 params, console_authority=workflow_module.console_authority_from_scope()
             )
-            if result.get("state") == "accepted" and self.on_accepted is not None:
+            if result.get("verdict") == "accepted" and self.on_accepted is not None:
                 self.on_accepted(result["runId"])
             return result
 
-        return self._guard("workflow.acknowledge", request_json, handler)
+        return self._guard("workflow.accept", request_json, handler)
+
+    def workflow_conclude(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.conclude(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.conclude", request_json, handler)
+
+    def workflow_reclaim(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.reclaim(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.reclaim", request_json, handler)
 
     def workflow_scope_amend(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
@@ -849,30 +864,6 @@ class BoardService(_BaseResource):
             )
 
         return self._guard("workflow.workspace_resolve", request_json, handler)
-
-    def workflow_integration_record(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.integration_record(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
-
-        return self._guard("workflow.integration_record", request_json, handler)
-
-    def workspace_cleanup_plan(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.cleanup_plan(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
-
-        return self._guard("workspace.cleanup_plan", request_json, handler)
-
-    def workspace_cleanup_apply(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.cleanup_apply(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
-
-        return self._guard("workspace.cleanup_apply", request_json, handler)
 
     def worker_sessions(self, request_json: str) -> str:
         from . import worker_sessions
