@@ -1150,29 +1150,29 @@ class NestedSpecTests(WorkflowTestCase):
         self.assertEqual(submitted["task"]["timeoutSeconds"], 0)
         self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["task"]["timeoutSeconds"], 0)
 
-    def test_nested_spec_shape_is_accepted_and_must_agree(self):
+    def test_nested_spec_shape_is_rejected_in_favor_of_the_flat_form(self):
+        # The retired duplicate spelling was accepted when both places agreed and
+        # rejected on disagreement; ADR-021 decision 17 removes the second place,
+        # so both cases are one rejection that names where the fields belong.
         board = self.board()
-        nested = {
-            "requestId": "req-nested",
-            "hostId": "host-1",
-            "spec": {"task": "nested task", "cwd": str(self.workdir("nested")), "timeoutSeconds": 600},
-            "executionWorkspace": {"kind": "worktree", "access": "write"},
-            "submissionToken": "n" * 32,
-        }
-        created = board.call("workflow_submit", nested)
-        self.assertEqual(created["goal"]["task"], "nested task")
-        self.assertEqual(created["task"]["timeoutSeconds"], 600)
         with self.assertRaises(BoardError) as raised:
-            board.call(
-                "workflow_submit",
-                {
-                    "requestId": "req-conflict",
-                    "hostId": "host-1",
-                    "task": "flat task",
-                    "cwd": str(self.workdir("nested")),
-                    "spec": {"task": "different task"},
-                },
-            )
+            board.call("workflow_submit", {
+                "requestId": "req-nested",
+                "hostId": "host-1",
+                "spec": {"task": "nested task", "cwd": str(self.workdir("nested")), "timeoutSeconds": 600},
+                "executionWorkspace": {"kind": "worktree", "access": "write"},
+                "submissionToken": "n" * 32,
+            })
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("flat", raised.exception.message)
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_submit", {
+                "requestId": "req-conflict",
+                "hostId": "host-1",
+                "task": "flat task",
+                "cwd": str(self.workdir("nested")),
+                "spec": {"task": "different task"},
+            })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
 

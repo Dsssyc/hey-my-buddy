@@ -427,7 +427,7 @@ class SelectionRequestTests(DecisionTestCase):
                     # Supply the same internal request used by workflow admission.
                     request = board.store.decisions._create(
                         request_id=f"freeze-{name}", request={"kind": "select", "task": "bounded selection",
-                            "constraints": constraints, "requiredCapabilities": [], "routingPreferences": [],
+                            "constraints": constraints, "requiredCapabilities": [],
                             "timeoutSeconds": 60, "budget": router.budget("brief")})
                 else:
                     request = board.call("selection_request", {"requestId": f"freeze-{name}",
@@ -711,22 +711,35 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["evidence"], [{"kind": "card", "ref": "card-not-supplied"}])
         self.assertEqual(decision["output"]["decision"]["evidence"], decision["evidence"])
 
-    def test_positive_dsh_task_preference_records_program_outcome(self):
+    def test_task_routing_preferences_are_rejected_with_the_three_expressions(self):
+        # The retired scenario recorded a positive task-preference outcome; the
+        # structured task preference itself is cancelled (ADR-021 decision 5), so
+        # the entry that used to accept it now rejects it and names the three
+        # remaining expressions.
+        board = self.board()
+        self.seed(board)
+        with self.assertRaises(BoardError) as raised:
+            board.call("selection_request", {
+                "requestId": "pick-preferences", "task": "work on the DSH harness source files",
+                "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness"}],
+            })
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("complete adapter/provider/model/effort quadruple", raised.exception.message)
+        self.assertIn("leave the choice to the Router", raised.exception.message)
+
+    def test_policy_facts_carry_no_task_preference_slot(self):
         board = self.board()
         self.seed(board)
         request = board.call("selection_request", {
-            "requestId": "pick-positive", "task": "work on the DSH harness source files",
-            "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness"}],
-        })
+            "requestId": "pick-facts", "task": "work on the DSH harness source files"})
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
         self.assertEqual(decision["input"]["policyFacts"]["hardConstraints"], {})
-        self.assertEqual(decision["input"]["policyFacts"]["taskPreference"],
-                         {"ruleIndex": 0, "matchingProfileIds": [PROFILE_ID, SECOND_PROFILE_ID]})
+        self.assertNotIn("taskPreference", decision["input"]["policyFacts"])
+        self.assertNotIn("routingPreferences", decision["input"])
         check = decision["output"]["policyCheck"]
-        self.assertEqual(check["taskPreference"], {"ruleIndex": 0, "outcome": "matched"})
-        self.assertEqual(check["hardConstraints"], {})
+        self.assertEqual(set(check), {"hardConstraints", "userPreference"})
         self.assertNotIn("policyCheck", decision["output"]["decision"])
         self.assertEqual(decision["policyCheck"], check)
 
@@ -735,16 +748,13 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "prefer flash"}])
         self.use_helper(profile_id=SECOND_PROFILE_ID, evidence="none")
         request = board.call("selection_request", {
-            "requestId": "pick-alternative", "task": "choose for this task",
-            "routingPreferences": [{"match": {"model": "deepseek-flash"}, "reason": "economical"}],
-        })
+            "requestId": "pick-alternative", "task": "choose for this task"})
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
         self.assertEqual(decision["profileId"], SECOND_PROFILE_ID)
         self.assertEqual(decision["output"]["policyCheck"]["userPreference"], "alternative")
-        self.assertEqual(decision["output"]["policyCheck"]["taskPreference"],
-                         {"ruleIndex": 0, "outcome": "alternative"})
+        self.assertNotIn("taskPreference", decision["output"]["policyCheck"])
         self.assertEqual(decision["evidence"], [])
         self.assertEqual(decision["input"]["cards"], [])
         self.assertEqual(decision["input"]["annotations"], [])

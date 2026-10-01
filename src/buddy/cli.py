@@ -137,12 +137,13 @@ examples:
   Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
   buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
       Admit one governed goal in an explicit executionWorkspace: kind existing|worktree,
-      absolute source cwd, access read|write, base {kind:commit|working-tree,ref?},
-      includeUntracked, writeScope, and attribution-only integrator/targetRef.
+      access read|write, base {kind:commit|working-tree,ref?}, includeUntracked,
+      writeScope and targetRef; the source cwd and the integrator are derived from
+      the top-level cwd and the submitting Host.
       Routing: a complete explicit adapter/provider/model/effort quadruple is validated
-      and dispatched without a routing-model call; a partial quadruple is a hard filter
-      and the configured decision profile fills the remaining choice; an unspecified
-      quadruple uses the bounded evaluation table and the fixed decision profile.
+      and delegated directly without a Router call; a partial quadruple is rejected —
+      omit every configuration field and let the Router choose, writing the task's
+      needs into the task description, or supply the complete quadruple.
       The first response (and a replay that still presents the private submission
       capability) returns the Host control capability; the CLI saves it to a 0600 file
       and prints only its controlFile path. The control token is never printed.

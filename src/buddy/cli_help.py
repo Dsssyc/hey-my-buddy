@@ -232,9 +232,16 @@ _HELPERS = frozenset(
 )
 
 #: Validation functions that return one nested sub-object of their first argument.
-#: Naming the nested key keeps ``helpers[].spec.*`` fields under ``helpers`` instead
-#: of leaking them to the top level.
-_NESTED_EXTRACTORS = {"_spec_fields": "nested_key"}
+#: Naming the nested key keeps sub-object fields under their parent instead of
+#: leaking them to the top level. ``_spec_fields`` no longer extracts a nested
+#: object: since ADR-021 decision 17 it is a flat restriction of its argument, so
+#: its result keeps the argument's own field identity (see ``_FLAT_RESTRICTIONS``).
+_NESTED_EXTRACTORS: dict[str, str] = {}
+
+#: Validation functions whose result is their first argument restricted to the
+#: ordinary submit fields. The result keeps the argument's tracked field identity,
+#: so the ordinary spec's bounds land where the fields are actually given.
+_FLAT_RESTRICTIONS = frozenset({"_spec_fields"})
 
 #: Prose notes attached when the reader follows one composite validator. The bounds
 #: themselves come from the function body; these sentences explain a relationship
@@ -799,6 +806,19 @@ class _Extractor:
                     if facts is not None:
                         facts.mirror_owners[nested[0]] = nested[1]
                     continue
+                if (isinstance(child.value, ast.Call) and isinstance(child.value.func, ast.Name)
+                        and child.value.func.id in _FLAT_RESTRICTIONS and child.value.args
+                        and isinstance(child.value.args[0], ast.Name)):
+                    first = child.value.args[0]
+                    # ``owner is None`` is the top level: the restriction keeps the
+                    # request object's own identity wherever the fields are given,
+                    # exactly like passing the object itself to the next validator.
+                    if first.id == params_var:
+                        tracked[name] = _TrackedValue(owner)
+                        continue
+                    if first.id in tracked:
+                        tracked[name] = _TrackedValue(tracked[first.id].field)
+                        continue
                 length = self._length_reference(child.value, tracked)
                 if length is not None:
                     tracked[name] = _TrackedValue(length[0], length[1])

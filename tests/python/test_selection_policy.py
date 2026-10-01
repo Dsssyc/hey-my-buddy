@@ -1,4 +1,9 @@
-"""Program-owned routing facts and generic Router answer boundaries."""
+"""Program-owned routing facts and generic Router answer boundaries.
+
+Task-local routing preferences and their program validation are cancelled
+(ADR-021 decision 5); the facts here cover what remains — hard constraints and
+the user's published prefer entries — plus the retired-parameter boundary."""
+
 from __future__ import annotations
 
 import copy
@@ -20,69 +25,61 @@ ZCODE_PROFILE = {
 }
 DISABLED_DSH_PROFILE = {**DSH_HIGH_PROFILE, "profileId": "dsh:deepseek-official:deepseek-v4-pro:high", "enabled": False}
 UNAVAILABLE_ZCODE_PROFILE = {**ZCODE_PROFILE, "profileId": "zcode:zai-api:GLM-5.3-Flash:low", "effort": "low", "available": False}
-POSITIVE_DSH_RULE = [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness for this task"}]
-ABSENT_PROVIDER_RULE = [{"match": {"provider": "not-installed"}, "reason": "Try this provider when available"}]
-def derived_facts(profiles=(DSH_PROFILE, ZCODE_PROFILE), routing_preferences=(), prefer=(), hard=None):
+def derived_facts(profiles=(DSH_PROFILE, ZCODE_PROFILE), prefer=(), hard=None):
     return selection_policy.policy_facts(
-        profiles=list(profiles), routing_preferences=list(routing_preferences),
-        prefer_profile_ids=list(prefer), hard_constraints=hard or {},
+        profiles=list(profiles), prefer_profile_ids=list(prefer), hard_constraints=hard or {},
     )
 
 
 class PolicyFactsTests(unittest.TestCase):
-    def test_positive_dsh_preference_matches_legal_dsh(self):
-        facts = derived_facts(routing_preferences=POSITIVE_DSH_RULE)
-        self.assertEqual(facts["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]})
-        self.assertEqual(facts["hardConstraints"], {})
-        check = selection_policy.expected_policy_check(facts, POSITIVE_DSH_RULE, DSH_ID)
-        self.assertEqual(check["taskPreference"], {"ruleIndex": 0, "outcome": "matched"})
-        self.assertEqual(check["userPreference"], "none")
+    def test_facts_carry_no_task_preference_slot(self):
+        # The retired scenarios matched ordered task-preference rules and recorded
+        # matched/alternative/fallback outcomes with a rule index; the slot itself
+        # is gone, and supplying the retired parameter is a hard signature error.
+        facts = derived_facts()
+        self.assertEqual(set(facts), {"hardConstraints", "userPreferredProfileIds"})
+        with self.assertRaises(TypeError):
+            selection_policy.policy_facts(
+                profiles=[], prefer_profile_ids=[],
+                routing_preferences=[{"match": {"adapter": "dsh"}, "reason": "retired"}],
+                hard_constraints={})
 
-    def test_absent_preferred_candidate_is_fallback_and_no_rules_is_none(self):
-        facts = derived_facts(routing_preferences=ABSENT_PROVIDER_RULE)
-        self.assertEqual(facts["taskPreference"], {"ruleIndex": None, "matchingProfileIds": []})
-        self.assertEqual(selection_policy.expected_policy_check(facts, ABSENT_PROVIDER_RULE, ZCODE_ID)["taskPreference"],
-                         {"ruleIndex": None, "outcome": "fallback"})
-        self.assertEqual(selection_policy.expected_policy_check(derived_facts(), [], ZCODE_ID)["taskPreference"],
-                         {"ruleIndex": None, "outcome": "none"})
-
-    def test_task_and_user_preferences_record_legal_alternatives_without_support(self):
-        facts = derived_facts(routing_preferences=POSITIVE_DSH_RULE, prefer=[DSH_ID])
-        check = selection_policy.expected_policy_check(facts, POSITIVE_DSH_RULE, ZCODE_ID)
-        self.assertEqual(check["taskPreference"], {"ruleIndex": 0, "outcome": "alternative"})
+    def test_user_preference_records_a_legal_alternative_without_support(self):
+        facts = derived_facts(prefer=[DSH_ID])
+        check = selection_policy.expected_policy_check(facts, ZCODE_ID)
         self.assertEqual(check["userPreference"], "alternative")
+        self.assertEqual(check["hardConstraints"], {})
         from buddy import router
         answer = {"profileId": ZCODE_ID, "reason": "file evidence supports another route", "evidence": []}
         self.assertEqual(router.validate_answer(answer, [DSH_ID, ZCODE_ID]), answer)
 
+    def test_no_user_preference_is_none_and_a_preferred_choice_is_matched(self):
+        self.assertEqual(selection_policy.expected_policy_check(derived_facts(), ZCODE_ID)["userPreference"], "none")
+        facts = derived_facts(prefer=[DSH_ID])
+        self.assertEqual(facts["userPreferredProfileIds"], [DSH_ID])
+        self.assertEqual(selection_policy.expected_policy_check(facts, DSH_ID)["userPreference"], "matched")
+
     def test_hard_bounds_and_unavailable_profiles_do_not_create_preference_matches(self):
         facts = derived_facts(profiles=(DSH_PROFILE, DISABLED_DSH_PROFILE, UNAVAILABLE_ZCODE_PROFILE),
-                              routing_preferences=POSITIVE_DSH_RULE, hard={"effort": "high"})
-        self.assertEqual(facts["taskPreference"], {"ruleIndex": 0, "matchingProfileIds": [DSH_ID]})
+                              prefer=[DISABLED_DSH_PROFILE["profileId"], UNAVAILABLE_ZCODE_PROFILE["profileId"]],
+                              hard={"effort": "high"})
+        self.assertEqual(facts["userPreferredProfileIds"], [])
         self.assertEqual(facts["hardConstraints"], {"effort": "high"})
-
-    def test_first_matching_rule_has_a_program_integer_index(self):
-        rules = [*ABSENT_PROVIDER_RULE, *POSITIVE_DSH_RULE]
-        facts = derived_facts(routing_preferences=rules)
-        check = selection_policy.expected_policy_check(facts, rules, DSH_ID)
-        self.assertEqual(check["taskPreference"], {"ruleIndex": 1, "outcome": "matched"})
-        self.assertIs(type(check["taskPreference"]["ruleIndex"]), int)
 
     def test_effort_variants_remain_user_controlled_alternatives(self):
         facts = derived_facts(profiles=(DSH_PROFILE, DSH_HIGH_PROFILE), prefer=[DSH_ID])
-        check = selection_policy.expected_policy_check(facts, [], DSH_HIGH_ID)
+        check = selection_policy.expected_policy_check(facts, DSH_HIGH_ID)
         self.assertEqual(check["userPreference"], "alternative")
         self.assertEqual(check["hardConstraints"], {})
 
     def test_facts_are_deterministic_and_never_mutate_user_inputs(self):
         profiles = [dict(DSH_PROFILE), dict(ZCODE_PROFILE)]
-        rules = [{"match": {"adapter": "dsh"}, "reason": "positive"}]
         prefer = [DSH_ID]
-        frozen = copy.deepcopy((profiles, rules, prefer))
-        first = derived_facts(profiles=profiles, routing_preferences=rules, prefer=prefer, hard={"effort": "off"})
-        self.assertEqual(first, derived_facts(profiles=profiles, routing_preferences=rules, prefer=prefer, hard={"effort": "off"}))
-        selection_policy.expected_policy_check(first, rules, DSH_ID)
-        self.assertEqual((profiles, rules, prefer), frozen)
+        frozen = copy.deepcopy((profiles, prefer))
+        first = derived_facts(profiles=profiles, prefer=prefer, hard={"effort": "off"})
+        self.assertEqual(first, derived_facts(profiles=profiles, prefer=prefer, hard={"effort": "off"}))
+        selection_policy.expected_policy_check(first, DSH_ID)
+        self.assertEqual((profiles, prefer), frozen)
 
 
 class RouterAnswerTests(unittest.TestCase):

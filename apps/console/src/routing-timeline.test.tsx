@@ -46,13 +46,13 @@ describe("recorded routing facts", () => {
   it("shows the selected target, preference deviation and measured usage without the internal task id", () => {
     const result = card({ configuration: { ...OPUS, model: "router-own-model" }, routing: {
       selectedProfile: OPUS, reason: "读取接口后选择更适合的模型", policyCheck: {
-        taskPreference: { ruleIndex: 0, outcome: "alternative" }, userPreference: "matched",
+        userPreference: "matched",
       }, usage: { elapsedMs: 1250, toolCalls: 0, bytesRead: 2048 },
     } });
     const fields = Object.fromEntries(result.fields.map(field => [field.label, field.value]));
     expect(fields["已选配置"]).toBe("Claude Opus 5.5 · high");
     expect(fields["理由"]).toBe("读取接口后选择更适合的模型");
-    expect(fields["偏好结果"]).toContain("任务：偏离偏好；用户：符合偏好；偏离理由：读取接口后选择更适合的模型");
+    expect(fields["偏好结果"]).toBe("用户：符合偏好");
     expect(fields["用时（elapsedMs）"]).toBe("1250 ms");
     expect(fields["工具调用（toolCalls）"]).toBe("0 次");
     expect(fields["读取量（bytesRead）"]).toBe("2048 bytes");

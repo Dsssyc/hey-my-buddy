@@ -50,8 +50,14 @@ MAX_WORKFLOW_INPUT_BYTES = 64 * 1024
 MAX_WORKFLOW_REASON_BYTES = 4000
 MAX_WORKFLOW_HELPERS = 8
 MAX_WORKFLOW_ARTIFACTS = 32
-MAX_ROUTING_PREFERENCES = 8
 MAX_CONTROL_TOKEN = 256
+
+#: ADR-021 decision 5: the three ways a Host may express the Worker choice.
+PARTIAL_CONFIGURATION_HINT = (
+    "supply the complete adapter/provider/model/effort quadruple to delegate directly, "
+    "or omit every configuration field and leave the choice to the Router, writing the "
+    "task's needs into the task description"
+)
 
 #: The Host control triple. ``hostId`` is attribution, ``ownerGeneration`` and
 #: ``controlToken`` are the authority: an owner name alone never authorizes.
@@ -69,7 +75,9 @@ WORKFLOW_HELPER_FIELDS: frozenset[str] = frozenset()
 
 
 #: Every field ``task_submit`` accepts. Anything else is INVALID_ARGUMENT, so a
-#: typo can never silently change what is executed.
+#: typo can never silently change what is executed. The retired task-local
+#: routing inputs (``routingPreferences``, ``routingMode``, ``allowRoutingFallback``)
+#: are ADR-021 decision 5 and are rejected here, not silently ignored.
 SUBMIT_FIELDS = frozenset(
     {
         "requestId",
@@ -84,18 +92,20 @@ SUBMIT_FIELDS = frozenset(
         "owner",
         "requiredCapabilities",
         "exclusiveResources",
-        "routingPreferences",
-        "routingMode",
-        "allowRoutingFallback",
     }
 )
 
 TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
 
 #: Every field ``workflow_submit`` accepts in addition to the ordinary spec, and
-#: every field one explicit helper specification accepts.
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "spec", "submissionToken", "title", "objective", "objectiveId", "objectiveOf", "configurationLocked"}
-WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role", "spec", "inheritRoutingPreferences"}
+#: every field one explicit helper specification accepts. The nested ``spec``
+#: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
+#: (ADR-021 decisions 5 and 17).
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "objective", "objectiveId", "objectiveOf", "configurationLocked"}
+WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role"}
+#: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
+#: naming one is an explicit rejection, never a silent ignore.
+RETIRED_SPEC_KEYS = ("spec", "routingPreferences", "routingMode", "allowRoutingFallback", "inheritRoutingPreferences")
 MIN_SUBMISSION_TOKEN = 16
 MAX_SUBMISSION_TOKEN = 256
 
@@ -260,13 +270,6 @@ def normalize_spec(params: dict) -> dict:
         value = optional_string(params, name)
         if value is not None:
             spec[name] = value
-    if "routingPreferences" in params:
-        spec["routingPreferences"] = normalize_routing_preferences(params["routingPreferences"])
-    if "routingMode" in params:
-        from .router import mode
-        spec["routingMode"] = mode(params["routingMode"])
-    if "allowRoutingFallback" in params:
-        spec["allowRoutingFallback"] = optional_bool(params, "allowRoutingFallback", True)
     argv = _argv(params, adapter)
     if argv:
         spec["argv"] = argv
@@ -328,16 +331,27 @@ def normalize_execution_workspace(params: dict) -> dict:
     """Validate one explicitly chosen ``executionWorkspace`` intent.
 
     Only the shape is checked here; the workspace module resolves refs, snapshots
-    the tree and reports unsupported cases with its own explicit errors.
+    the tree and reports unsupported cases with its own explicit errors. ``cwd``
+    and ``integrator`` are derived by the submitter from the ordinary spec's
+    ``cwd`` and the submitting Host (ADR-021 decision 17), never accepted as
+    input: supplying the duplicates is rejected with the spelling that remains.
     """
     raw = params.get("executionWorkspace")
     if raw is None:
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace is required; choose kind 'existing' or 'worktree'",
                          field="executionWorkspace")
     intent = require_object(raw, "executionWorkspace")
+    for duplicate in ("cwd", "integrator"):
+        if duplicate in intent:
+            raise BoardError(
+                "INVALID_ARGUMENT",
+                f"executionWorkspace.{duplicate} is a duplicate spelling; the intent is derived from the"
+                + (" top-level cwd" if duplicate == "cwd" else " submitting Host") + " of the submission",
+                field=f"executionWorkspace.{duplicate}",
+            )
     reject_unknown(
         intent,
-        {"kind", "cwd", "access", "base", "includeUntracked", "writeScope", "integrator", "targetRef"},
+        {"kind", "access", "base", "includeUntracked", "writeScope", "targetRef"},
         "executionWorkspace",
     )
     kind = optional_string(intent, "kind")
@@ -348,11 +362,6 @@ def normalize_execution_workspace(params: dict) -> dict:
     if access not in ("read", "write"):
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access must be 'read' or 'write'")
     normalized: dict[str, Any] = {"kind": kind, "access": access}
-    cwd = optional_string(intent, "cwd", max_length=4096)
-    if cwd is not None:
-        if not cwd.startswith("/"):
-            raise BoardError("INVALID_ARGUMENT", "executionWorkspace.cwd must be an absolute path")
-        normalized["cwd"] = cwd
     base = intent.get("base")
     if base is None:
         # The documented default: the current working tree, with ref omitted (a
@@ -380,9 +389,6 @@ def normalize_execution_workspace(params: dict) -> dict:
         normalized["writeScope"] = write_scope or ["."]
     elif write_scope:
         normalized["writeScope"] = write_scope
-    integrator = optional_string(intent, "integrator")
-    if integrator is not None:
-        normalized["integrator"] = integrator
     target_ref = optional_string(intent, "targetRef")
     if target_ref is not None:
         normalized["targetRef"] = target_ref
@@ -420,26 +426,23 @@ def require_expected_revision(params: dict) -> int:
     return value
 
 
-def _spec_fields(params: dict, *, nested_key: str, allowed: frozenset[str], what: str) -> dict:
-    """The ordinary spec fields, accepted flat or as one nested ``spec`` object.
+def _spec_fields(params: dict) -> dict:
+    """The ordinary spec fields, given flat. The nested ``spec`` object is retired.
 
-    Both spellings are the same contract: a field given in both places must agree
-    exactly, so a typo can never silently change what is executed.
+    ADR-021 decision 17 removes the duplicate spelling: one field given in two
+    places could never silently change what is executed, and now the second
+    place no longer exists. Naming it is rejected with where the field belongs.
     """
-    spec_params = {key: params[key] for key in SUBMIT_FIELDS if key in params}
-    nested = params.get(nested_key)
-    if nested is None:
-        return spec_params
-    nested = require_object(nested, nested_key)
-    reject_unknown(nested, SUBMIT_FIELDS, f"{what}.{nested_key}")
-    for key, value in nested.items():
-        if key in spec_params and spec_params[key] != value:
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                f"{key} is given both flat and inside {nested_key} with different values",
-                field=key,
-            )
-        spec_params.setdefault(key, value)
+    if "spec" in params:
+        raise BoardError(
+            "INVALID_ARGUMENT",
+            "spec is a retired duplicate spelling; give the ordinary spec fields flat, at the top level",
+            field="spec",
+        )
+    spec_params: dict = {}
+    for key in SUBMIT_FIELDS:
+        if key in params:
+            spec_params[key] = params[key]
     return spec_params
 
 
@@ -493,23 +496,47 @@ def normalize_submission_token(params: dict) -> str | None:
     return value
 
 
+def _reject_retired_spec_keys(params: dict) -> None:
+    """Name the retired duplicate and routing spellings, not a generic unknown field."""
+    if "spec" in params:
+        raise BoardError(
+            "INVALID_ARGUMENT",
+            "spec is a retired duplicate spelling; give the ordinary spec fields flat, at the top level",
+            field="spec",
+        )
+    if "inheritRoutingPreferences" in params:
+        raise BoardError(
+            "INVALID_ARGUMENT",
+            "inheritRoutingPreferences is retired: task-local routing preferences no longer exist, "
+            "so there is nothing for a helper to inherit",
+            field="inheritRoutingPreferences",
+        )
+    for key in ("routingPreferences", "routingMode", "allowRoutingFallback"):
+        if key in params:
+            raise BoardError(
+                "INVALID_ARGUMENT",
+                f"{key} is retired Host routing input; " + PARTIAL_CONFIGURATION_HINT,
+                field=key,
+            )
+
+
 def normalize_workflow_submit(params: dict) -> dict:
     """Validate one ``workflow_submit`` request into its canonical parts."""
     params = require_object(params, "workflow submit request")
     reject_untrusted_override(params)
+    _reject_retired_spec_keys(params)
     reject_unknown(params, WORKFLOW_SUBMIT_FIELDS, "workflow.submit")
     request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
     host_id = required_string(params, "hostId", max_length=256)
     submission_token = normalize_submission_token(params)
-    spec_params = _spec_fields(params, nested_key="spec", allowed=WORKFLOW_SUBMIT_FIELDS, what="workflow.submit")
+    spec_params = _spec_fields(params)
     spec = normalize_workflow_spec(spec_params)
     workspace_intent = normalize_execution_workspace(params)
-    if workspace_intent:
-        if "cwd" not in workspace_intent:
-            workspace_intent["cwd"] = spec["cwd"]
-        # The integrator is attribution, never authority; the Host that submitted the
-        # goal is the default named integrator.
-        workspace_intent.setdefault("integrator", spec_params.get("owner") or f"host:{host_id}")
+    # The workspace's source and integrator are derived, never accepted: the
+    # ordinary spec's cwd is the only source spelling, and the integrator is
+    # attribution owned by the submitting Host.
+    workspace_intent["cwd"] = spec["cwd"]
+    workspace_intent["integrator"] = spec_params.get("owner") or f"host:{host_id}"
     return {
         "requestId": request_id,
         "hostId": host_id,
@@ -523,12 +550,37 @@ def normalize_workflow_submit(params: dict) -> dict:
 
 
 def normalize_workflow_spec(params: dict) -> dict:
-    """Normalize a goal without inventing a missing routing constraint.
+    """Normalize a goal whose Worker choice is complete or absent, never partial.
 
     Ordinary internal task submission retains its execution defaults. A governed
-    goal instead preserves exactly which adapter/provider/model/effort constraints
-    the caller supplied, independently of its eventual execution configuration.
+    goal preserves exactly the adapter/provider/model/effort constraints the
+    caller supplied, and ADR-021 decision 5 allows only the two complete
+    expressions: the whole quadruple (delegated directly, no Router) or none of
+    it (the Router chooses). The ``command`` and ``external`` infrastructure
+    adapters are the minimal special case: they name no buddy, carry no
+    provider/model/effort and pass their own adapter field through unchanged.
     """
+    _reject_retired_spec_keys(params)
+    supplied = [key for key in CONFIGURATION_FIELDS if params.get(key) is not None]
+    adapter = params.get("adapter")
+    if adapter in ("command", "external"):
+        # Minimal special case: this infrastructure names no buddy, so naming
+        # provider/model/effort alongside it is a partial tuple in disguise.
+        inapplicable = [key for key in ("provider", "model", "effort") if params.get(key) is not None]
+        if inapplicable:
+            raise BoardError(
+                "INVALID_ARGUMENT",
+                f"the {adapter} adapter names no buddy; {inapplicable[0]} does not apply to it; " + PARTIAL_CONFIGURATION_HINT,
+                field=inapplicable[0],
+            )
+    elif supplied and len(supplied) != len(CONFIGURATION_FIELDS):
+        missing = [key for key in CONFIGURATION_FIELDS if key not in supplied]
+        raise BoardError(
+            "INVALID_ARGUMENT",
+            "configuration fields are all-or-nothing: a coding buddy is the complete "
+            f"adapter/provider/model/effort quadruple (missing {', '.join(missing)}); " + PARTIAL_CONFIGURATION_HINT,
+            field=missing[0],
+        )
     spec = normalize_spec(params)
     if params.get("adapter") is None:
         spec.pop("adapter", None)
@@ -537,23 +589,6 @@ def normalize_workflow_spec(params: dict) -> dict:
 
 def configuration_constraints(spec: dict) -> dict:
     return {key: spec[key] for key in CONFIGURATION_FIELDS if key in spec}
-
-
-def normalize_routing_preferences(value: Any) -> list[dict]:
-    if not isinstance(value, list) or len(value) > MAX_ROUTING_PREFERENCES:
-        raise BoardError("INVALID_ARGUMENT", f"routingPreferences must be a list of at most {MAX_ROUTING_PREFERENCES} entries")
-    result = []
-    for index, entry in enumerate(value):
-        entry = require_object(entry, f"routingPreferences[{index}]")
-        reject_unknown(entry, {"match", "reason"}, f"routingPreferences[{index}]")
-        match = require_object(entry.get("match"), f"routingPreferences[{index}].match")
-        reject_unknown(match, set(CONFIGURATION_FIELDS), f"routingPreferences[{index}].match")
-        if not match:
-            raise BoardError("INVALID_ARGUMENT", f"routingPreferences[{index}].match requires at least one configuration field")
-        normalized = {key: required_string(match, key, max_length=256) for key in CONFIGURATION_FIELDS if key in match}
-        reason = required_string(entry, "reason", max_length=512)
-        result.append({"match": normalized, "reason": reason})
-    return result
 
 
 def normalize_configuration(value: Any) -> dict:
@@ -578,23 +613,19 @@ def normalize_helpers(params: dict) -> list[dict]:
         if not isinstance(entry, dict):
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] must be a JSON object")
         reject_untrusted_override(entry)
+        _reject_retired_spec_keys(entry)
         reject_unknown(entry, WORKFLOW_HELPER_FIELDS, f"helpers[{index}]")
         request_id = required_string(entry, "requestId", max_length=MAX_REQUEST_ID)
         if request_id in seen:
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] repeats requestId {request_id!r}")
         seen.add(request_id)
-        spec_params = _spec_fields(
-            entry, nested_key="spec", allowed=WORKFLOW_HELPER_FIELDS, what=f"helpers[{index}]"
-        )
+        spec_params = _spec_fields(entry)
         spec = normalize_workflow_spec(spec_params)
-        inherit_preferences = optional_bool(entry, "inheritRoutingPreferences", False)
-        if inherit_preferences and "routingPreferences" in spec:
-            raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] cannot set routingPreferences and inheritRoutingPreferences together")
         workspace_intent = normalize_execution_workspace(entry)
-        if workspace_intent:
-            if "cwd" not in workspace_intent:
-                workspace_intent["cwd"] = spec["cwd"]
-            workspace_intent.setdefault("integrator", spec_params.get("owner") or "host")
+        # Same derivation as the parent submission: the helper's own ordinary
+        # spec cwd is the source, and the integrator is the approving Host.
+        workspace_intent["cwd"] = spec["cwd"]
+        workspace_intent["integrator"] = spec_params.get("owner") or "host"
         integrator = optional_bool(entry, "integrator", False)
         role = optional_string(entry, "role") or "helper"
         if role not in ("helper", "integrator"):
@@ -606,7 +637,6 @@ def normalize_helpers(params: dict) -> list[dict]:
                 "executionWorkspace": workspace_intent,
                 "integrator": bool(integrator) or role == "integrator",
                 "role": role,
-                "inheritRoutingPreferences": inherit_preferences,
             }
         )
     if helpers and sum(1 for helper in helpers if helper["integrator"]) > 1:

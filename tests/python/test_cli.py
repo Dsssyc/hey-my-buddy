@@ -154,9 +154,9 @@ class HelpTests(unittest.TestCase):
         for required in (
             "executionWorkspace",
             "controlFile",
-            "routing-model call",
-            "hard filter",
-            "evaluation table",
+            "without a Router call",
+            "partial quadruple is rejected",
+            "let the Router choose",
             "wait-timeout",
             "Inspect the selected final artifact first",
             "execution-submit",

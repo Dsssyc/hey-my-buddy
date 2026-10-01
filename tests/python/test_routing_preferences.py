@@ -1,4 +1,14 @@
-"""Task-local soft routing preferences and decision capability boundaries."""
+"""ADR-021 decision 5/17: the retired Host submission inputs are rejected.
+
+Task-local routing preferences, the submission's routing mode and fallback
+switch, the nested ``spec`` spelling and the duplicate ``executionWorkspace``
+source/integrator fields no longer exist; partial coding quadruples are
+rejected with the three remaining expressions. This suite keeps every retired
+entry point covered by a rejection test (nothing is silently deleted), while
+the parts of the old scenarios that survive — user pin/prefer/exclude, hard
+capabilities, override audit, direct delegation and sole-candidate selection —
+stay asserted under the new contract.
+"""
 from __future__ import annotations
 
 import json
@@ -24,37 +34,108 @@ from test_workflow import CONFIGURATION, WorkflowTestCase
 NONCE = "n" * 16
 
 
-class RoutingPreferenceSchemaTests(unittest.TestCase):
-    def test_soft_preferences_are_canonical_goal_input_without_hard_constraints(self):
-        with tempfile.TemporaryDirectory() as root:
-            spec = schemas.normalize_workflow_spec({
-                "requestId": "goal-soft", "task": "Inspect this checkout", "cwd": root,
-                "routingPreferences": [{"match": {"adapter": "zcode", "model": "candidate"}, "reason": "prefer this route for the task"}],
-            })
-            self.assertNotIn("adapter", schemas.configuration_constraints(spec))
-            self.assertEqual(spec["routingPreferences"][0]["match"], {"adapter": "zcode", "model": "candidate"})
-            self.assertEqual(schemas.normalize_workflow_spec({**spec, "requestId": "goal-soft"})["routingPreferences"], spec["routingPreferences"])
+class RetiredSubmissionInputTests(unittest.TestCase):
+    """The schema rejects every removed spelling at its entry, with guidance."""
 
-    def test_rejects_unbounded_or_unexplained_preferences(self):
-        invalid = [[{"match": {"adapter": "dsh"}, "reason": "x"}] * 9,
-                   [{"match": {}, "reason": "x"}],
-                   [{"match": {"model": "m"}, "reason": ""}],
-                   [{"match": {"efforts": "high"}, "reason": "x"}]]
-        for value in invalid:
-            with self.subTest(value=value), self.assertRaises(BoardError):
-                schemas.normalize_routing_preferences(value)
+    def submit_params(self, root):
+        return {"requestId": "goal-1", "hostId": "host-1", "task": "Inspect this checkout", "cwd": root,
+                "executionWorkspace": {"kind": "existing", "access": "write"}}
 
-    def test_helper_inheritance_must_be_explicit(self):
+    def test_nested_spec_is_rejected_at_both_entries(self):
         with tempfile.TemporaryDirectory() as root:
-            base = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
-                    "executionWorkspace": {"kind": "existing", "cwd": root}}
-            helper = schemas.normalize_helpers({"helpers": [base]})[0]
-            self.assertFalse(helper["inheritRoutingPreferences"])
-            inherited = schemas.normalize_helpers({"helpers": [{**base, "inheritRoutingPreferences": True}]})[0]
-            self.assertTrue(inherited["inheritRoutingPreferences"])
-            with self.assertRaises(BoardError):
-                schemas.normalize_helpers({"helpers": [{**base, "inheritRoutingPreferences": True,
-                    "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "explicit"}]}]})
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_workflow_submit({**self.submit_params(root),
+                    "spec": {"task": "nested task", "cwd": root, "timeoutSeconds": 600}})
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertIn("flat", raised.exception.message)
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_helpers({"helpers": [{
+                    "requestId": "helper", "task": "Check a dependency", "cwd": root,
+                    "executionWorkspace": {"kind": "existing", "access": "write"},
+                    "spec": {"task": "nested helper"}}]})
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+
+    def test_duplicate_workspace_fields_are_rejected_and_derived_instead(self):
+        with tempfile.TemporaryDirectory() as root:
+            for duplicate in ("cwd", "integrator"):
+                field = {"cwd": root} if duplicate == "cwd" else {"integrator": "host-1"}
+                with self.subTest(duplicate=duplicate):
+                    with self.assertRaises(BoardError) as raised:
+                        schemas.normalize_workflow_submit({**self.submit_params(root),
+                            "executionWorkspace": {"kind": "existing", "access": "write", **field}})
+                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                    self.assertIn(f"executionWorkspace.{duplicate}", raised.exception.message)
+            # The normalized intent still carries both, derived from the top level.
+            normalized = schemas.normalize_workflow_submit(self.submit_params(root))
+            self.assertEqual(normalized["executionWorkspace"]["cwd"], str(Path(root).resolve()))
+            self.assertEqual(normalized["executionWorkspace"]["integrator"], "host:host-1")
+            owned = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "named-owner"})
+            self.assertEqual(owned["executionWorkspace"]["integrator"], "named-owner")
+            helper = schemas.normalize_helpers({"helpers": [{
+                "requestId": "helper", "task": "Check a dependency", "cwd": root,
+                "executionWorkspace": {"kind": "existing", "access": "write"}}]})[0]
+            self.assertEqual(helper["executionWorkspace"]["cwd"], str(Path(root).resolve()))
+            self.assertEqual(helper["executionWorkspace"]["integrator"], "host")
+
+    def test_retired_routing_inputs_are_rejected_with_the_three_expressions(self):
+        retired = {
+            "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "prefer this route"}],
+            "routingMode": "fast",
+            "allowRoutingFallback": False,
+        }
+        with tempfile.TemporaryDirectory() as root:
+            for key, value in retired.items():
+                with self.subTest(key=key):
+                    with self.assertRaises(BoardError) as raised:
+                        schemas.normalize_workflow_submit({**self.submit_params(root), key: value})
+                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                    self.assertIn("retired Host routing input", raised.exception.message)
+                    # The message names the three expressions that remain.
+                    self.assertIn("quadruple", raised.exception.message)
+                    self.assertIn("Router", raised.exception.message)
+                    self.assertIn("task description", raised.exception.message)
+
+    def test_helper_inheritance_flag_is_rejected_because_nothing_is_inherited(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_helpers({"helpers": [{
+                    "requestId": "helper", "task": "Check a dependency", "cwd": root,
+                    "executionWorkspace": {"kind": "existing", "access": "write"},
+                    "inheritRoutingPreferences": True}]})
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertIn("inheritRoutingPreferences", raised.exception.message)
+
+    def test_partial_quadruples_are_rejected_at_both_entries(self):
+        partials = ({"adapter": "zcode"}, {"model": "candidate"}, {"adapter": "dsh", "effort": "off"},
+                    {"provider": "deepseek-official", "model": "deepseek-flash"})
+        with tempfile.TemporaryDirectory() as root:
+            for partial in partials:
+                with self.subTest(partial=partial):
+                    with self.assertRaises(BoardError) as raised:
+                        schemas.normalize_workflow_submit({**self.submit_params(root), **partial})
+                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                    self.assertIn("all-or-nothing", raised.exception.message)
+                    self.assertIn("task description", raised.exception.message)
+                    with self.assertRaises(BoardError):
+                        schemas.normalize_helpers({"helpers": [{
+                            "requestId": "helper", "task": "Check a dependency", "cwd": root,
+                            "executionWorkspace": {"kind": "existing", "access": "write"}, **partial}]})
+            # Both complete expressions normalize: the whole quadruple, and none of it.
+            complete = schemas.normalize_workflow_submit({**self.submit_params(root), **CONFIGURATION})
+            self.assertEqual(schemas.configuration_constraints(complete["spec"]), CONFIGURATION)
+            empty = schemas.normalize_workflow_submit(self.submit_params(root))
+            self.assertEqual(schemas.configuration_constraints(empty["spec"]), {})
+
+    def test_command_infrastructure_keeps_its_minimal_special_case(self):
+        with tempfile.TemporaryDirectory() as root:
+            command = schemas.normalize_workflow_submit({**self.submit_params(root),
+                "adapter": "command", "argv": ["/usr/bin/true"]})
+            self.assertEqual(command["spec"]["adapter"], "command")
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_workflow_submit({**self.submit_params(root),
+                    "adapter": "command", "argv": ["/usr/bin/true"], "model": "some-model"})
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertIn("names no buddy", raised.exception.message)
 
 
 class DecisionCapabilityTests(unittest.TestCase):
@@ -138,11 +219,15 @@ class DecisionCapabilityTests(unittest.TestCase):
         prepare.assert_not_called()
         start.assert_not_called()
 
+    def test_router_prompt_carries_no_task_preference_slot(self):
+        prompt = router.render_prompt({"routingMode": "review", "task": "choose", "profiles": [],
+                                       "policyFacts": {"hardConstraints": {}, "userPreferredProfileIds": []}})
+        self.assertNotIn("routingPreferences", prompt)
 
-class RoutingPreferenceWorkflowTests(WorkflowTestCase):
+
+class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
     seed = DecisionTestCase.seed
     use_helper = DecisionTestCase.use_helper
-    valid_decision = DecisionTestCase.valid_decision
 
     def setUp(self):
         super().setUp()
@@ -162,108 +247,152 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
             "familyAnnotationChanges": [{**family_key(PROFILE), "text": "Human preference for this workflow"}],
         })
 
-    def routed(self, board, *, request_id, preferences, **constraints):
-        result = board.call("workflow_submit", {
+    def routed(self, board, *, request_id, **extra):
+        params = {
             "requestId": request_id, "hostId": "host-1", "submissionToken": "submission-secret-1",
             "task": "Implement and verify the requested change", "cwd": str(self.workdir(request_id)),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-            "routingPreferences": preferences, **constraints,
-        })
+            "executionWorkspace": {"kind": "existing", "access": "write"}, **extra,
+        }
+        result = board.call("workflow_submit", params)
         if result.get("control"):
             self.controls[result["runId"]] = result["control"]
         return result
 
-    def select(self, board, view, profile_id):
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
-        owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="route-claim")
-        claim = owned["claim"]
-        document = claim["decisionInput"]
-        board.call("worker_result", {
-            "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"], "nonce": NONCE,
-            "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
-                       "inputVerification": {"unchanged": True, "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
-                       "decision": self.valid_decision(document, profile_id)},
-        })
-        return document
-
-    def test_soft_preference_falls_back_without_changing_goal_or_global_preferences(self):
+    def test_submit_rejects_the_retired_preference_and_mode_entries(self):
         board = self.board()
         self.annotations(board)
         self.seed(board)
-        prefs = [{"match": {"provider": "not-current"}, "reason": "Try this provider if available"}]
-        view = self.routed(board, request_id="route-soft", preferences=prefs)
-        document = self.select(board, view, PROFILE_ID)
-        self.assertEqual(document["routingPreferences"], prefs)
+        for key, value in (
+            ("routingPreferences", [{"match": {"provider": "not-current"}, "reason": "Try this provider"}]),
+            ("routingMode", "fast"),
+            ("allowRoutingFallback", False),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(BoardError) as raised:
+                    self.routed(board, request_id=f"rejected-{key}", **{key: value})
+                self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                self.assertIn("retired Host routing input", raised.exception.message)
+
+    def test_submit_rejects_the_nested_spec_and_duplicate_workspace_spellings(self):
+        board = self.board()
+        self.seed(board)
+        with self.assertRaises(BoardError) as raised:
+            self.routed(board, request_id="rejected-spec",
+                        spec={"task": "nested", "cwd": str(self.workdir("nested"))})
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("flat", raised.exception.message)
+        for duplicate, field in (("cwd", str(self.workdir("dup"))), ("integrator", "host-1")):
+            with self.subTest(duplicate=duplicate):
+                with self.assertRaises(BoardError):
+                    self.routed(board, request_id=f"rejected-{duplicate}",
+                                executionWorkspace={"kind": "existing", "access": "write", duplicate: field})
+
+    def test_submit_rejects_partial_quadruples_but_delegates_a_complete_buddy_directly(self):
+        board = self.board()
+        self.seed(board)
+        with self.assertRaises(BoardError) as raised:
+            self.routed(board, request_id="rejected-effort", effort="high")
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("all-or-nothing", raised.exception.message)
+        # The complete quadruple delegates directly: no routing task, explicit source.
+        delegated = self.routed(board, request_id="direct-buddy", **CONFIGURATION)
+        self.assertEqual(delegated["routing"]["status"], "explicit")
+        self.assertEqual(delegated["routing"]["source"], "original-explicit")
+        self.assertEqual(delegated["executionConfiguration"], CONFIGURATION)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
+            self.assertIsNone(connection.execute("SELECT current_routing_id FROM workflow_runs").fetchone()[0])
+            event = json.loads(connection.execute(
+                "SELECT payload_json FROM events WHERE kind='workflow.configuration_selected'").fetchone()[0])
+        self.assertNotIn("routingPreferences", event)
+
+    def test_router_input_and_views_no_longer_carry_preferences(self):
+        board = self.board()
+        self.annotations(board)
+        self.seed(board)
+        view = self.routed(board, request_id="route-plain")
+        self.assertEqual(view["routing"]["status"], "queued")
+        self.assertNotIn("routingPreferences", view["routing"])
+        self.assertNotIn("preferenceOutcome", view["routing"])
+        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="route-claim")
+        document = owned["claim"]["decisionInput"]
+        self.assertNotIn("routingPreferences", document)
+        self.assertNotIn("taskPreference", document["policyFacts"])
         note = document["annotations"][0]
         self.assertEqual({key: note[key] for key in ("adapter", "provider", "model", "text")},
                          {**family_key(PROFILE), "text": "Human preference for this workflow"})
-        self.assertTrue(note["revision"])
-        self.assertTrue(note["updatedAt"])
-        self.assertEqual(document["preferences"], [])
+        board.call("worker_result", {
+            "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
+            "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
+            "status": "ok", "shutdownConfirmed": True,
+            "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+                       "inputVerification": {"unchanged": True, "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
+                       "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+        })
         routed = board.call("workflow_get", {"runId": view["runId"]})
-        self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "fallback")
         self.assertEqual(routed["routing"]["source"], "model-selection")
-        self.assertEqual(routed["routing"]["routingPreferences"], prefs)
+        self.assertNotIn("routingPreferences", routed["routing"])
+        self.assertNotIn("preferenceOutcome", routed["routing"])
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM evaluation_preferences").fetchone()[0], 0)
-            self.assertEqual(connection.execute("SELECT reason FROM workflow_routes WHERE run_id=?", (view["runId"],)).fetchone()[0], "fixture selection")
+            requested = json.loads(connection.execute(
+                "SELECT payload_json FROM events WHERE kind='workflow.routing_requested'").fetchone()[0])
+            goal = json.loads(connection.execute("SELECT goal_json FROM workflow_runs").fetchone()[0])
+        self.assertNotIn("routingPreferences", requested)
+        self.assertNotIn("routingPreferences", goal)
 
-    def test_direct_selection_request_freezes_preferences_in_decision_input(self):
+    def test_capabilities_still_filter_and_user_alternative_is_audited(self):
         board = self.board()
         self.annotations(board)
-        self.seed(board)
-        prefs = [{"match": {"adapter": "dsh"}, "reason": "Use installed DSH when suitable"}]
-        response = board.call("selection_request", {"requestId": "select-soft", "task": "Choose a coding profile",
-                                                    "routingPreferences": prefs})
-        self.assertEqual(response["status"], "queued")
-        audit = board.call("selection_get", {"decisionId": response["decisionId"], "includeAudit": True})["decision"]
-        self.assertEqual(audit["requested"]["routingPreferences"], prefs)
-        with self.assertRaises(BoardError):
-            board.call("selection_request", {"requestId": "select-soft", "task": "Choose a coding profile",
-                                             "routingPreferences": [{"match": {"adapter": "codex"}, "reason": "Different request"}]})
-
-    def test_hard_constraint_remains_filter_when_soft_preference_disagrees(self):
-        board = self.board()
-        self.annotations(board)
-        # Two effort-high profiles keep the Router path under the hard constraint;
-        # a single constrained candidate would be selected by the program directly.
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
-        prefs = [{"match": {"effort": "off"}, "reason": "Try the cheaper effort"}]
-        view = self.routed(board, request_id="route-hard", preferences=prefs, effort="high")
-        document = self.select(board, view, SECOND_PROFILE_ID)
+        # Two effort-high profiles keep the Router path under the capability
+        # filter; a single constrained candidate would be selected by the program.
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
+                  preferences=[{"profileId": THIRD_PROFILE_ID, "mode": "prefer", "reason": "prefer flash-high"}])
+        view = self.routed(board, request_id="route-caps", requiredCapabilities=["effort:high"])
+        self.assertEqual(view["routing"]["requiredCapabilities"], ["effort:high"])
+        self.assertEqual(view["routing"]["constraints"], {})
+        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="cap-claim")
+        document = owned["claim"]["decisionInput"]
         self.assertEqual(sorted(entry["profileId"] for entry in document["profiles"]),
                          sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
+        board.call("worker_result", {
+            "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
+            "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
+            "status": "ok", "shutdownConfirmed": True,
+            "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+                       "inputVerification": {"unchanged": True, "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
+                       "decision": {"profileId": SECOND_PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+        })
         routed = board.call("workflow_get", {"runId": view["runId"]})
-        self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "fallback")
+        self.assertEqual(routed["routing"]["status"], "completed")
+        decision = board.call("selection_get", {"decisionId": view["routing"]["decisionId"]})["decision"]
+        self.assertEqual(decision["policyCheck"]["userPreference"], "alternative")
+        self.assertNotIn("taskPreference", decision["policyCheck"])
 
-    def test_legal_soft_preference_bypass_is_audited_as_alternative(self):
+    def test_helper_approval_rejects_the_inheritance_flag(self):
         board = self.board()
         self.annotations(board)
         self.seed(board)
-        prefs = [{"match": {"model": "deepseek-flash"}, "reason": "Prefer the flash model"}]
-        view = self.routed(board, request_id="route-alternative", preferences=prefs)
-        self.select(board, view, SECOND_PROFILE_ID)
-        routed = board.call("workflow_get", {"runId": view["runId"]})
-        self.assertEqual(routed["routing"]["preferenceOutcome"]["status"], "alternative")
-        self.assertEqual(routed["routing"]["preferenceOutcome"]["ruleIndex"], 0)
-
-    def test_helper_gets_parent_soft_preferences_only_on_explicit_inherit(self):
-        board = self.board()
-        self.annotations(board)
-        self.seed(board)
-        prefs = [{"match": {"model": "deepseek-flash"}, "reason": "Same model for helper"}]
-        parent = self.submit(board, routingPreferences=prefs)
+        parent = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
         current = board.call("workflow_get", {"runId": parent["runId"]})
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_decide", {"runId": parent["runId"],
+                "requestId": current["activeRequest"]["requestId"], "commandId": "helper-inherit",
+                "expectedRevision": current["revision"], "decision": "approve", **self.control(parent),
+                "helpers": [
+                    {"requestId": "inherit-helper", "task": "Inspect first dependency", "cwd": str(self.workdir("inherit-helper")),
+                     "executionWorkspace": {"kind": "existing", "access": "write"}, "inheritRoutingPreferences": True},
+                ]})
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("inheritRoutingPreferences", raised.exception.message)
+        # A plain helper carries no preference slot in its goal.
         approved = board.call("workflow_decide", {"runId": parent["runId"],
-            "requestId": current["activeRequest"]["requestId"], "commandId": "helper-preference",
+            "requestId": current["activeRequest"]["requestId"], "commandId": "helper-plain",
             "expectedRevision": current["revision"], "decision": "approve", **self.control(parent),
             "helpers": [
-                {"requestId": "inherit-helper", "task": "Inspect first dependency", "cwd": str(self.workdir("inherit-helper")),
-                 "executionWorkspace": {"kind": "existing", "access": "write"}, "inheritRoutingPreferences": True},
                 {"requestId": "plain-helper", "task": "Inspect second dependency", "cwd": str(self.workdir("plain-helper")),
                  "executionWorkspace": {"kind": "existing", "access": "write"}},
             ]})
@@ -272,16 +401,14 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
                 "SELECT request_id,task_id FROM tasks WHERE task_id IN (SELECT child_task_id FROM workflow_children WHERE parent_run_id=?)",
                 (parent["runId"],),
             )}
-        inherited = board.call("workflow_get", {"runId": children["inherit-helper"], "includeAudit": True})
         plain = board.call("workflow_get", {"runId": children["plain-helper"], "includeAudit": True})
-        self.assertEqual(inherited["audit"]["goal"]["routingPreferences"], prefs)
         self.assertNotIn("routingPreferences", plain["audit"]["goal"])
+        self.assertEqual(approved["children"][0]["taskId"], children["plain-helper"])
 
-    def test_host_override_requires_reason_and_retains_original_preference_audit(self):
+    def test_host_override_requires_reason_and_records_no_preferences(self):
         board = self.board()
         self.annotations(board)
-        prefs = [{"match": {"adapter": "zcode"}, "reason": "Try ZCode when available"}]
-        view = self.routed(board, request_id="route-override", preferences=prefs)
+        view = self.routed(board, request_id="route-override")
         self.assertEqual(view["routing"]["status"], "needs-host")
         # The shared fixture helper supplies a default reason for explicit
         # configurations; exercise the public request without that field.
@@ -292,19 +419,13 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         updated = self.continue_run(board, view, configuration=CONFIGURATION, reason="Host selected the installed configuration")
         self.assertEqual(updated["routing"]["source"], "host-override")
-        self.assertEqual(updated["routing"]["routingPreferences"], prefs)
+        self.assertNotIn("routingPreferences", updated["routing"])
         with board.store.db.read() as connection:
             row = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.configuration_overridden'",
                                      (view["runId"],)).fetchone()
             payload = json.loads(row["payload_json"])
         self.assertEqual(payload["reason"], "Host selected the installed configuration")
-        self.assertEqual(payload["routingPreferences"], prefs)
-
-    def test_original_complete_configuration_records_explicit_source(self):
-        board = self.board()
-        self.annotations(board)
-        view = self.submit(board, routingPreferences=[{"match": {"adapter": "dsh"}, "reason": "Prefer this"}])
-        self.assertEqual(view["routing"]["source"], "original-explicit")
+        self.assertNotIn("routingPreferences", payload)
 
 
 if __name__ == "__main__":
