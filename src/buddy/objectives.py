@@ -61,15 +61,17 @@ HOST_MARKERS = {
     "workflow.request_approved": "decide",
     "workflow.request_declined": "decide",
     "workflow.continued": "continue",
+    "workflow.review_rejected": "reject",
     "workflow.integration_recorded": "integrate",
     "workflow.acknowledged": "accept",
+    "workflow.host_concluded": "conclude",
     "workflow.cancelled": "cancel",
     "workflow.takeover": "takeover",
 }
 #: Display labels of the Host marker kinds (the verdict splits accept/reject).
 MARKER_LABELS = {
     "dispatch": "派发", "decide": "决定", "continue": "续接", "integrate": "整合",
-    "accept": "验收", "reject": "验收问题", "cancel": "取消", "takeover": "接管",
+    "accept": "验收", "reject": "验收问题", "conclude": "结论", "cancel": "取消", "takeover": "接管",
 }
 
 

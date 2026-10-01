@@ -2,11 +2,11 @@
 
 `harnesses/dsh/scripts/run.mjs` is the low-level Node runner that the `dsh` adapter spawns for every DSH task. Direct invocation owns one foreground process and prints its result as JSON; optional flags for governed turns also produce a private structured receipt. The runner has no authoritative blackboard records or `requestId` recovery, and its default standalone invocation reports `inquiry.enabled: false`. Use [usage.md](usage.md) and the [governed lifecycle](workflow.md) for durable task ownership, assistance, continuation and acceptance. ZCode uses its own native app-server controller ([workers.md](workers.md#zcode)) and Codex uses the installed App Server controller ([codex.md](codex.md)); neither goes through this runner. Paths on this page are relative to the plugin or repository root, the directory that contains `bin/buddy`.
 
-The same directory also ships the DSH bridge plugins (`harnesses/dsh/plugins/`), the model catalog script (`model-catalog.mjs`) and the workspace bridge installer (`install-workspace-bridge.mjs`, see [operations.md#workspace-bridge](operations.md#workspace-bridge)). These are DSH-specific harness assets, not public service commands. The old DSH decision script is removed; routing is owned by the harness-neutral [Router protocol](decision.md).
+The same directory also ships the DSH bridge plugins (`harnesses/dsh/plugins/`) and the model catalog script (`model-catalog.mjs`). These are DSH-specific harness assets, not public service commands. The old DSH decision script is removed; routing is owned by the harness-neutral [Router protocol](decision.md). DSH session grouping and its workspace bridge were removed by [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md).
 
 ## Quick start
 
-The default invocation writes a private session and works without the workspace bridge. To request sidebar grouping, install the host bridge ([operations.md](operations.md#workspace-bridge)) and explicitly pass `--workspace`.
+The default invocation writes a private session in the execution-private area; no host bridge is needed or supported.
 
 ```sh
 RUNNER="$PWD/harnesses/dsh/scripts/run.mjs"
@@ -18,14 +18,14 @@ Do not modify input.json or use the network. Verify result.json by reading it.
 Acceptance: result.json equals {"sum":21,"count":3}.
 EOF
 
-node "$RUNNER" --no-workspace \
+node "$RUNNER" \
   --cwd "$DELEGATE_DEMO_DIR" \
   --task-file "$DELEGATE_DEMO_DIR/task.md" \
   --timeout 1800
 cat "$DELEGATE_DEMO_DIR/result.json"
 ```
 
-`--cwd` is required, and `--task-file` is required for a run (it is omitted in attach mode). `node "$RUNNER" --help` lists every option and needs neither dsh nor credentials.
+`--cwd` and `--task-file` are required. `node "$RUNNER" --help` lists every option and needs neither dsh nor credentials.
 
 ## Options
 
@@ -38,24 +38,18 @@ cat "$DELEGATE_DEMO_DIR/result.json"
 | `--effort <name>` | `max` | reasoning effort for this run |
 | `--timeout <seconds>` | `1800` | whole-process-group execution limit, explicit `0` for no deadline or integer 10–86400; active cancellation still stops the owned group |
 | `--log-dir <dir>` | OS temp dir | parent directory for this run's private log directory |
-| `--evidence-dir <dir>` | omitted | fixed ordinary stdout/stderr/capture evidence directory supplied by the Worker; native sessions and settings stay in the private root |
 | `--dsh-bin <path>` | see precedence | dsh launcher to execute |
 | `--settings-file <path>` | see precedence | settings document to copy and override |
-| `--session-root <dir>` | this run's private log directory plus `sessions/` | absolute private JSONL session directory for an ungrouped child; requires the shipped `session-persistence-jsonl` profile entry |
-| `--workspace` | disabled | explicitly request sidebar grouping through the owning bridge |
-| `--no-workspace` | ungrouped by default | explicitly keep workspace grouping disabled |
-| `--attach-session <id>` | | group an existing completed session; no task file, no model run |
-| `--workspace-socket <path>` | see precedence | private socket served by the owning host plugin |
-| `--workspace-timeout <seconds>` | `15` | per-request bound, integer 1–120 |
+| `--session-root <dir>` | this run's private log directory plus `sessions/` | absolute private JSONL session directory for this child; requires the shipped `session-persistence-jsonl` profile entry |
 | `--inquiry-socket <path>`, `--inquiry-token <token>`, `--inquiry-results <path>` | | private per-run inquiry channel, supplied together by the owning Worker runtime; never by hand |
 | `--turn-input-file <path>`, `--turn-output-file <path>` | omitted for standalone runs | paired private absolute paths for a governed turn; input must exist and output must be absent |
 | `-h`, `--help` | | print help and exit (needs no dsh) |
 
-`--no-workspace` conflicts with `--workspace`, `--workspace-socket` and `--attach-session`; `--session-root` conflicts with grouped execution. `--attach-session` requests grouping explicitly. The `--inquiry-*` triple is never passed by hand: it mounts the per-run bridge that lets `buddy inquire` observe the run or ask its live agent a correlated question.
+The removed grouping flags (`--workspace`, `--no-workspace`, `--workspace-socket`, `--workspace-timeout`, `--attach-session`) are usage errors. The `--inquiry-*` triple is never passed by hand: it mounts the per-run bridge that lets `buddy inquire` observe the run or ask its live agent a correlated question.
 
-For governed ungrouped runs, the adapter passes an attempt-private `--session-root`. The native overlay changes only `session-persistence-jsonl.config.root`; it never changes `DSH_HOME`, copies the credential vault or moves settings. Grouped runs retain the owning harness session root because its workspace bridge verifies session membership there. The result records storage separately from Git isolation. A validated structured turn supplies the session ID even when grouping and its capture file are absent.
+For governed runs, the adapter passes an attempt-private `--session-root`; a standalone run defaults to a private run-local root. The native overlay changes only `session-persistence-jsonl.config.root`; it never changes `DSH_HOME`, copies the credential vault or moves settings. The result records storage separately from Git isolation. A validated structured turn supplies the session ID; without it the run reports no session identity.
 
-The two `--turn-*-file` flags must appear together and cannot be used with `--attach-session`. They work with `--no-workspace`; DSH session grouping and ownership of the execution workspace are separate contracts. Invalid turn flags, input schema or paths fail before the runner starts DSH.
+The two `--turn-*-file` flags must appear together. Ownership of the execution workspace is a separate contract from native session storage. Invalid turn flags, input schema or paths fail before the runner starts DSH.
 
 ## Precedence
 
@@ -66,7 +60,6 @@ The two `--turn-*-file` flags must appear together and cannot be used with `--at
 | model | `--model` → `DSH_DELEGATE_MODEL` → settings `agent-default-model.model` → `deepseek-flash` |
 | provider | `--provider` → `DSH_DELEGATE_PROVIDER` → settings `agent-default-model.provider` → `deepseek-official` |
 | effort | `--effort` → `DSH_DELEGATE_EFFORT` → `max` (never inherited from settings) |
-| Workspace socket | `--workspace-socket` → `DSH_WORKSPACE_SOCKET` → `$DSH_HOME/deepseek-delegate/workspace.sock` (home defaults to `~/.dsh`) |
 
 Notes:
 
@@ -145,40 +138,34 @@ stdout carries exactly one JSON object:
  "requested":{"provider":"deepseek-official","model":"deepseek-flash","reasoningEffort":"max"},
  "cwd":"/path/to/project","taskFile":"/path/to/task.md","dshBin":"/path/to/dsh",
  "inputDelivery":"inline",
- "logPaths":{"stdout":"/tmp/deepseek-delegate-logs-XXXX/stdout.log","stderr":"/tmp/deepseek-delegate-logs-XXXX/stderr.log","capture":"/tmp/deepseek-delegate-logs-XXXX/capture.json"},
+ "logPaths":{"stdout":"/tmp/deepseek-delegate-logs-XXXX/stdout.log","stderr":"/tmp/deepseek-delegate-logs-XXXX/stderr.log"},
  "inquiry":{"enabled":false,"socketPath":null,"resultsPath":null,"errorPath":null,"error":null},
  "finalText":"...","finalTextTruncated":false,
- "workspace":{"enabled":true,"bound":true,"id":"workspace-example","path":"/path/to/project","sessionId":"session-example"},
+ "nativeStorage":{"scope":"task-private-sessions","sessionRootPrivate":true},
  "processState":{"shutdownConfirmed":true},
  "note":"exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself."}
 ```
 
-- `status`: `ok`, `nonzero`, `timeout`, `cancelled`, `spawn-error` or governed `turn-result-error`; attach mode reports `ok` or `attach-error`.
+- `status`: `ok`, `nonzero`, `timeout`, `cancelled`, `spawn-error` or governed `turn-result-error`.
 - `elapsedSeconds` is the CLI duration measured with a monotonic clock, rounded to 0.1 s.
-- Wrapper exit code: `0` only when the task is `ok` and any requested grouping is verified; `1` for a task, termination or grouping failure; `2` for usage and configuration errors, which are reported on stderr without a JSON object; a signal received before the child spawns exits `130`.
+- Wrapper exit code: `0` only when the task is `ok`; `1` for a task or termination failure; `2` for usage and configuration errors, which are reported on stderr without a JSON object; a signal received before the child spawns exits `130`.
 - `requested` is the route and effort actually written into the settings copy.
 - `finalText` is at most 6000 characters of the head of the dsh stdout log, with `finalTextTruncated` (byte-based) telling you whether more existed. stderr and reasoning are never copied into the JSON.
-- `workspace` reports `enabled`, `bound`, `id`, `path`, `sessionId` and any binding `error`. Task `status`/`exitCode` and log paths survive a grouping failure; check the process exit and `workspace.bound`, not task status alone.
+- `nativeStorage` reports the execution-private session storage (`scope`, `sessionRootPrivate`, `credentialsStore`, `nativeAppVisibility`, `resumeMode`) separately from Git checkout isolation.
 - `inquiry` says whether this run's private bridge, requested by the owning Worker runtime, was mounted (`enabled`, its paths and any startup `error`). A bridge that fails to start never fails the run.
 - `processState.shutdownConfirmed` is true only when the owned process group was observed stopped; it is required before the adapter reports success and before `acknowledge`.
-- Logs use owner-private directories (`0700`) and files (`0600`). The Worker supplies an attempt-private `--log-dir` plus the declared `dsh-run/` evidence directory; fixed stdout/stderr/capture evidence sits under `attempts/`, while native sessions and temporary settings stay under `harnesses/`. Standalone runs use a unique directory under `--log-dir` or the OS temporary root. Pre-existing files are never truncated or reused.
+- Logs use owner-private directories (`0700`) and files (`0600`). The Worker supplies an attempt-private `--log-dir` plus the declared `dsh-run/` evidence directory; fixed stdout/stderr evidence sits under `attempts/`, while native sessions and temporary settings stay under `harnesses/`. Standalone runs use a unique directory under `--log-dir` or the OS temporary root. Pre-existing files are never truncated or reused.
 
 Governed runs additionally return `turn` (the validated record or `null`), `turnResultPath` and `turnResultError` (`null` when no turn-validation error was found). If headless exited zero but the required record is missing, malformed, mismatched or fails private-path checks, or the process group is not confirmed stopped, the runner reports `turn-result-error` and exits 1. The child `exitCode`, process evidence and log paths remain available. A valid file cannot promote nonzero, timeout or cancellation to success, and plain `finalText` cannot replace a missing structured outcome. A returned record alone does not prove shutdown or acceptance of the logical goal; the Python adapter's collection and sealing order is documented in [workers.md#governed-dsh-turns](workers.md#governed-dsh-turns).
-
-## Attach mode
-
-`--attach-session <id>` groups an already completed session instead of running a model. It verifies that the session exists before adoption, runs no model, changes no shared default model, and does not scan or bulk-reassign history. It emits a fixed `mode: "attach"` payload with no logs or final text. The stored session cwd must equal the canonical workspace path; use it to retry only the binding of a completed run.
 
 ## Bundled bridge plugins
 
 | Plugin | Role |
 | --- | --- |
-| `plugins/session-capture.mjs` | During a grouped run, matches the delivered prompt hash to the root session and records `{sessionId, cwd, promptSha256}` privately; an ambiguous match refuses the binding |
 | `plugins/inquiry-bridge.mjs` | Serves the per-run private socket for `inquire`; records activity and the correlated `buddy_inquiry_reply` answer over a bounded JSONL journal |
 | `plugins/turn-result.mjs` | Registers the root-scoped `buddy_finish_turn` tool and publishes the governed turn record from the awaited session flush |
-| `plugins/workspace-bridge.mjs` | Host-side plugin installed into a DSH profile; serves `ping`/`resolve`/`attach`, exact `inspect-session` and guarded `archive-session` on the private workspace socket |
-
-The workspace bridge checks root lineage and canonical cwd equality before it creates or attaches a session, and it verifies membership afterwards. It never activates an agent. Install, recovery and the stale-socket rule are owned by [operations.md#workspace-bridge](operations.md#workspace-bridge).
+| `plugins/activity.mjs` | Writes the bounded metadata-only `activity.json` projection of this turn's native events for the owning Worker |
+| `plugins/usage.mjs` | Writes the bounded native usage/quota sidecar for the owning adapter |
 
 ## Native usage sidecar
 

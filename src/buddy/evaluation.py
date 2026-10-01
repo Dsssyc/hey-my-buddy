@@ -21,6 +21,7 @@ is never rewritten in place; every publish creates the next revision atomically.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -88,7 +89,7 @@ INFRASTRUCTURE_FAILURE_MARKERS = (
 #: The immutable review ledger. Each Host acknowledgement appends exactly one of
 #: these events inside the same transaction that records the verdict, so the event
 #: sequence is a strictly increasing, clock-independent ordering of real reviews.
-REVIEW_EVENT_KINDS = ("task.accepted", "task.rejected", "workflow.acknowledged")
+REVIEW_EVENT_KINDS = ("task.accepted", "task.rejected", "workflow.acknowledged", "workflow.review_rejected")
 
 #: The same review kinds as one code-owned literal SQL list. ``events_review_seq_idx``
 #: is a partial index on exactly this predicate; bind parameters would leave SQLite
@@ -96,7 +97,7 @@ REVIEW_EVENT_KINDS = ("task.accepted", "task.rejected", "workflow.acknowledged")
 #: fall back to scanning every unrelated event. The kinds are module constants, never
 #: caller input, and the assert below keeps that guarantee at import time.
 _REVIEW_KIND_LITERALS = "(" + ",".join(f"'{kind}'" for kind in REVIEW_EVENT_KINDS) + ")"
-assert all(kind.replace(".", "").isalpha() for kind in REVIEW_EVENT_KINDS), REVIEW_EVENT_KINDS
+assert all(re.fullmatch(r"[a-z_.]+", kind) for kind in REVIEW_EVENT_KINDS), REVIEW_EVENT_KINDS
 
 #: Card input is text, risk and evidence references only: the counters, revision and
 #: timestamp are derived by the backend and a supplied one is an unknown field.
@@ -1024,6 +1025,16 @@ class EvaluationStore:
             )
             head = self.board._head_of(connection)
         self.board._notify(head)
+        if kind == "human" and published.get("enabledFamilies"):
+            # The user enabled a model: refresh the public facts snapshot after the
+            # publication committed, never inside a transaction and never on a
+            # schedule. A failed refresh keeps the previous snapshot and never fails
+            # the already-committed publication; the snapshot rows carry the outcome.
+            from . import model_facts
+            try:
+                model_facts.refresh_families(self.board, published["enabledFamilies"], now=self._now())
+            except Exception:  # noqa: BLE001 - the committed publication must not depend on the network
+                pass
         return response
 
     def write_abort(self, params: dict) -> dict:
@@ -1914,7 +1925,7 @@ class EvaluationStore:
             return verdict
         if review["review_kind"] == "task.accepted":
             return "accepted"
-        if review["review_kind"] == "task.rejected":
+        if review["review_kind"] in ("task.rejected", "workflow.review_rejected"):
             return "rejected"
         return None
 
@@ -2044,9 +2055,17 @@ class EvaluationStore:
         run = connection.execute(
             "SELECT final_artifact_id, final_attempt_id FROM workflow_runs WHERE run_id=?", (task_id,)
         ).fetchone()
-        if run is None or run["final_attempt_id"] != attempt_id:
+        if run is None:
             return False
-        if verdict == "accepted" and run["final_artifact_id"] != artifact_id:
+        if verdict == "accepted":
+            # An acceptance is only current while its artifact is still the run's
+            # final delivery.
+            return run["final_attempt_id"] == attempt_id and run["final_artifact_id"] == artifact_id
+        # A recorded rejection keeps its own attempt proof even after the Host
+        # continued the goal: the hash/turn binding above names exactly the
+        # reviewed attempt's sealed output, and the run's newer final binding is
+        # the continuation's, never this review's.
+        if run["final_attempt_id"] == attempt_id and run["final_artifact_id"] != artifact_id:
             return False
         return True
 

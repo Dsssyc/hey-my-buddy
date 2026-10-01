@@ -328,9 +328,9 @@ class HelpTests(unittest.TestCase):
         listing = self.help_text("list")
         self.assertIn("limit", listing)
         self.assertIn("1–100", listing)
-        acknowledge = self.help_text("acknowledge")
-        self.assertIn("note", acknowledge)
-        self.assertIn("10000", acknowledge)
+        accept = self.help_text("accept")
+        self.assertIn("note", accept)
+        self.assertIn("10000", accept)
 
     def test_conditional_parameters_are_marked(self):
         self.assertIn("conditional", self.help_text("continue"))
@@ -450,10 +450,11 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         self.assertIn("1048576 UTF-8 bytes", task.bounds or "")
         for field in ("model", "provider", "effort"):
             with self.subTest(field=field):
+                # The retired nested ``spec`` spelling is gone; the flat top-level
+                # field carries the same bound.
                 parameter = self.parameter("submit", field)
                 self.assertEqual(parameter.kind, "string")
                 self.assertIn("256 characters", parameter.bounds or "")
-                self.assertIn("256 characters", self.facts("submit", f"spec.{field}"))
 
     def test_submit_reports_both_halves_of_the_cwd_rule(self):
         cwd = self.parameter("submit", "cwd")
@@ -478,7 +479,13 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         names = {parameter.name for parameter in cli_help.method_help("decide").parameters}
         self.assertNotIn("adapter", names)
         self.assertNotIn("task", names)
-        self.assertEqual(self.parameter("decide", "helpers.spec.adapter").kind, "string")
+        # The retired nested ``spec`` spelling is gone; the helper's flat fields
+        # stay under ``helpers`` with their ordinary bounds.
+        helpers = self.parameter("decide", "helpers")
+        self.assertFalse([child for child in helpers.children if child.name == "spec"])
+        adapter = next(child for child in helpers.children if child.name == "adapter")
+        self.assertEqual(adapter.kind, "string")
+        self.assertIn("one of", " ".join(part for part in (adapter.default, adapter.bounds, adapter.expression) if part))
 
     def test_an_unknown_method_is_always_a_structured_error_with_candidates(self):
         for name, nearest in (("submt", "submit"), ("zzzzzz", None)):

@@ -1,4 +1,4 @@
-"""Private fixtures for board provenance and exact native archive selection."""
+"""Private fixtures for board provenance of the read-only session listing."""
 import json
 import os
 import tempfile
@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-from buddy import backup, worker_sessions
+from buddy import worker_sessions
 from buddy.errors import BoardError
 
 
@@ -19,8 +19,8 @@ class FakeDB:
     def read(self):
         yield self
 
-    def execute(self, _query, args):
-        adapter = args[0]
+    def execute(self, _query, args=()):
+        adapter = args[0] if args else 'codex'
         return mock.Mock(fetchall=lambda: [row for row in self.rows if row['adapter'] == adapter])
 
 
@@ -30,12 +30,13 @@ class FakeStore:
         self.db = FakeDB(rows)
 
 
-def dsh_row(session, *, group='group-1', created=False, stopped=True, cwd='/fixture/work'):
+def dsh_grouped_row(session, *, stopped=True):
+    """A receipt shape only the removed grouped feature could produce."""
     result = {'nativeSession': {'adapter': 'dsh', 'sessionId': session, 'captured': True,
                                 'sessionIdConflict': False, 'ambiguous': False},
-              'workspace': {'bound': True, 'id': group, 'sessionId': session,
-                            'path': cwd, 'created': created},
-              'workspaceManifest': {'path': cwd}}
+              'workspace': {'bound': True, 'id': 'group-1', 'sessionId': session,
+                            'path': '/fixture/work', 'created': False},
+              'workspaceManifest': {'path': '/fixture/work'}}
     return {'adapter': 'dsh', 'task_id': f'task-{session}', 'attempt_id': f'attempt-{session}',
             'cwd': '/source/project', 'execution_state': 'finished' if stopped else 'uncertain',
             'shutdown_confirmed': int(stopped),
@@ -48,102 +49,43 @@ class WorkerSessionTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.state = Path(self.temporary.name)
 
-    def test_list_uses_board_only_and_never_guesses_other_sessions(self):
-        rows = [dsh_row('buddy'), dsh_row('uncertain', stopped=False)]
-        unrelated = dsh_row('unrelated')
-        receipt = json.loads(unrelated['result_json'])
-        receipt['result']['workspace']['bound'] = False
-        unrelated['result_json'] = json.dumps(receipt)
-        rows.append(unrelated)
-        with mock.patch.object(worker_sessions, '_native', side_effect=AssertionError('native called')):
-            result = worker_sessions.handle(FakeStore(self.state, rows), {'adapter': 'dsh'})
-        self.assertEqual([r['sessionId'] for r in result['sessions']], ['buddy', 'uncertain'])
-        self.assertFalse(result['nativeAccess'])
-
-    def test_plan_apply_two_owned_siblings_keeps_unrelated_member(self):
-        store = FakeStore(self.state, [dsh_row('first'), dsh_row('second')])
-        members = ['unrelated', 'first', 'second']
-        calls = []
-
-        def native(method, payload):
-            calls.append((method, payload['sessionId']))
-            if method == 'inspect-session':
-                return {'revision': 'r1', 'sessionIds': list(members)}
-            members.remove(payload['sessionId'])
-            return {'sessionArchived': True, 'groupRemoved': False,
-                    'groupRetainedReason': 'other-sessions-remain'}
-
-        with mock.patch.object(worker_sessions, '_native', side_effect=native):
-            plan = worker_sessions.handle(store, {'action': 'plan'})
-            self.assertEqual(plan['sessionsSelected'], 2)
-            self.assertFalse(any(row['groupCreated'] for row in plan['selected']))
-            result = worker_sessions.handle(store, {'action': 'apply',
-                'planDigest': plan['planDigest'], 'selectionDigest': plan['selectionDigest']})
-            replay = worker_sessions.handle(store, {'action': 'apply',
-                'planDigest': plan['planDigest'], 'selectionDigest': plan['selectionDigest']})
-        self.assertEqual(result, replay)
-        self.assertEqual(result['sessionsArchived'], 2)
-        self.assertEqual(result['groupsRemoved'], 0)
-        self.assertEqual(result['groupsRetained'], 1)
-        self.assertEqual(members, ['unrelated'])
-        self.assertEqual([action for action, _ in calls].count('archive-session'), 2)
-
-    def test_lost_reply_replays_only_after_durable_intent(self):
-        store = FakeStore(self.state, [dsh_row('owned', created=True)])
-        members = ['owned']
-        first = True
-
-        def native(method, payload):
-            nonlocal first
-            if method == 'inspect-session':
-                if not members:
-                    raise BoardError('NATIVE_SESSION_UNAVAILABLE', 'already detached', reason='session-mismatch')
-                return {'revision': 'r1', 'sessionIds': list(members)}
-            if first:
-                first = False
-                members.clear()
-                raise BoardError('NATIVE_SESSION_UNAVAILABLE', 'reply lost')
-            self.assertTrue(payload['replay'])
-            return {'sessionArchived': True, 'groupRemoved': False,
-                    'groupRetainedReason': 'creation-unproven'}
-
-        with mock.patch.object(worker_sessions, '_native', side_effect=native):
-            plan = worker_sessions.handle(store, {'action': 'plan'})
-            params = {'action': 'apply', 'planDigest': plan['planDigest'],
-                      'selectionDigest': plan['selectionDigest']}
-            first_reply = worker_sessions.handle(store, params)
-            self.assertEqual(first_reply['sessionsArchived'], 0)
-            reply = worker_sessions.handle(store, params)
-        self.assertEqual(reply['sessionsArchived'], 1)
-        self.assertEqual(reply['groupsRemoved'], 0)
-        self.assertEqual(reply['groupsRetained'], 1)
-
-    def test_linked_journal_is_refused(self):
-        store = FakeStore(self.state, [dsh_row('owned')])
-        with mock.patch.object(worker_sessions, '_native', return_value={'revision': 'r', 'sessionIds': ['owned']}):
-            plan = worker_sessions.handle(store, {'action': 'plan'})
-        root = self.state / 'worker-session-cleanup'
-        root.mkdir()
-        outside = self.state / 'outside.json'
-        outside.write_text('{}')
-        (root / f"{plan['planDigest']}.json").symlink_to(outside)
-        with mock.patch.object(worker_sessions, '_native', return_value={'revision': 'r', 'sessionIds': ['owned']}):
+    def test_dsh_sessions_are_no_longer_listed_or_archived(self):
+        # ADR-021 decision 18: the product DSH grouping feature is gone, so a
+        # historical grouped receipt is neither listed nor acted upon, and the
+        # grouped-session plan/apply entry points are refused outright.
+        rows = [dsh_grouped_row('legacy-grouped')]
+        store = FakeStore(self.state, rows)
+        with self.assertRaises(BoardError) as raised:
+            worker_sessions.handle(store, {'adapter': 'dsh'})
+        self.assertEqual(raised.exception.code, 'UNSUPPORTED')
+        for action in ('plan', 'apply'):
             with self.assertRaises(BoardError) as raised:
-                worker_sessions.handle(store, {'action': 'apply', 'planDigest': plan['planDigest'],
-                                               'selectionDigest': plan['selectionDigest']})
-        self.assertEqual(raised.exception.code, 'PRIVATE_PATH_UNSAFE')
-        self.assertEqual(outside.read_text(), '{}')
+                worker_sessions.handle(store, {'action': action})
+            self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
+        with self.assertRaises(BoardError) as raised:
+            worker_sessions.handle(store, {'adapter': 'dsh', 'planDigest': '0' * 64, 'selectionDigest': '0' * 64})
+        self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
+        with self.assertRaises(BoardError) as raised:
+            worker_sessions.handle(store, {'adapter': 'codex', 'action': 'apply'})
+        self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
 
-    def test_backup_includes_only_regular_exact_journal_names(self):
-        root = self.state / 'worker-session-cleanup'
-        root.mkdir()
-        good = root / ('a' * 64 + '.json')
-        good.write_text('{}')
-        other = root / 'notes.json'
-        other.write_text('protected')
-        entries = list(backup.preflight_entries(self.state))
-        self.assertIn(('copied', good, 'durable-state'), entries)
-        self.assertIn(('rejected', other, 'undeclared-journal-entry'), entries)
+    def test_codex_list_uses_board_only_and_never_guesses_other_sessions(self):
+        row = {'adapter': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
+               'cwd': '/fixture/work', 'execution_state': 'finished', 'shutdown_confirmed': 1,
+               'result_json': json.dumps({'result': {
+                   'nativeSession': {'adapter': 'codex', 'sessionId': 'thread-1', 'captured': True,
+                                     'storageOwner': 'buddy-goal', 'resumeMode': 'initial',
+                                     'nativeAppVisibility': 'unknown'},
+                   'nativeCheckpoint': {'version': 1, 'sessionId': 'thread-1', 'taskId': 'goal-1',
+                                        'attemptId': 'attempt-1'}},
+                   'shutdownConfirmed': True})}
+        result = worker_sessions.handle(FakeStore(self.state, [row]), {'adapter': 'codex'})
+        self.assertEqual([r['sessionId'] for r in result['sessions']], ['thread-1'])
+        self.assertEqual(result['sessions'][0]['attemptIds'], ['attempt-1'])
+        self.assertFalse(result['nativeAccess'])
+        self.assertEqual(result['count'], 1)
+        default = worker_sessions.handle(FakeStore(self.state, [row]), {})
+        self.assertEqual(default['adapter'], 'codex')
 
     def test_codex_list_accepts_actual_stopped_adapter_fixture(self):
         from test_codex import CodexAdapterTests
@@ -160,8 +102,7 @@ class WorkerSessionTests(unittest.TestCase):
             row = {'adapter': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
                    'cwd': str(fixture.cwd), 'execution_state': 'finished', 'shutdown_confirmed': 1,
                    'result_json': json.dumps(receipt)}
-            with mock.patch.object(worker_sessions, '_native', side_effect=AssertionError('native called')):
-                result = worker_sessions.handle(FakeStore(self.state, [row]), {'adapter': 'codex'})
+            result = worker_sessions.handle(FakeStore(self.state, [row]), {'adapter': 'codex'})
             self.assertEqual(result['count'], 1)
             self.assertEqual(result['sessions'][0]['storageOwner'], 'buddy-goal')
             # Receipts before the checkpoint/nativeSession additions still have

@@ -227,8 +227,8 @@ def preflight_entries(state: Path):
     yield from _scan(state / 'attempts', attempt_depth=2)
     for name in ('controls', 'submissions'):
         yield from _scan(state / name)
-    # Exact plan replay receipts are ordinary state evidence. A linked journal
-    # root or an undeclared name must never be copied into a verified backup.
+    # Retired DSH archive receipts remain ordinary historical evidence. A linked
+    # journal root or an undeclared name must never enter a verified backup.
     session_journals = state / 'worker-session-cleanup'
     if _linked(session_journals) or session_journals.exists() and not session_journals.is_dir():
         yield 'rejected', session_journals, 'linked-path' if _linked(session_journals) else 'non-directory-path'

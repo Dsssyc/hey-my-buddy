@@ -112,12 +112,16 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["executionConfiguration"], CONFIGURATION)
         self.assertTrue(self.routed(board)["duplicate"])
 
-    def test_partial_constraints_are_hard_filters_and_invalid_selection_needs_host(self):
+    def test_partial_constraints_are_rejected_and_capabilities_filter_instead(self):
         board = self.board()
-        # Two effort-high profiles keep the Router path; the constraint is still a
-        # hard filter, and a third enabled profile would also be constrained away.
+        # Two effort-high profiles keep the Router path; the required capability is
+        # still a hard filter, and a third enabled profile would also be filtered out.
         self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
-        submitted = self.routed(board, effort="high")
+        with self.assertRaises(BoardError) as raised:
+            self.routed(board, effort="high")
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("all-or-nothing", raised.exception.message)
+        submitted = self.routed(board, requiredCapabilities=["effort:high"])
         claim = self.router_claim(board, submitted)
         self.assertEqual(sorted(profile["profileId"] for profile in claim["claim"]["decisionInput"]["profiles"]),
                          sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
@@ -212,15 +216,21 @@ class TestWorkflowRouting(WorkflowTestCase):
         recovered = self.continue_run(board, view, configuration=CONFIGURATION, reason="New Host selected an installed configuration after shutdown confirmation")
         self.assertEqual(recovered["executionConfiguration"], CONFIGURATION)
 
-    def test_host_configuration_cannot_break_locked_partial_constraints(self):
+    def test_host_configuration_cannot_break_locked_constraints(self):
+        # The retired scenario locked a partial `effort` constraint; a partial tuple
+        # is rejected input now, so the lock's surviving meaning is checked with the
+        # complete quadruple it can still be supplied with.
         board = self.board()
-        submitted = self.routed(board, effort="high", configurationLocked=True)
-        with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host attempted to override the original high effort constraint")
-        self.assertEqual(raised.exception.code, "CONFIGURATION_CONFLICT")
-        self.assertEqual(self.catalog_validation.call_count, 0)
         supplied = {**CONFIGURATION, "effort": "high"}
-        recovered = self.continue_run(board, submitted, configuration=supplied, reason="Host selected a configuration satisfying the original high effort constraint")
+        submitted = self.submit(board, configurationLocked=True, **supplied)
+        self.assertEqual(submitted["routing"]["status"], "explicit")
+        self.register(board)
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        awaiting = board.call("workflow_get", {"runId": submitted["runId"]})
+        with self.assertRaises(BoardError) as raised:
+            self.continue_run(board, awaiting, configuration=CONFIGURATION, reason="Host attempted to override the locked buddy")
+        self.assertEqual(raised.exception.code, "CONFIGURATION_CONFLICT")
+        recovered = self.continue_run(board, awaiting, configuration=supplied, reason="Host re-selected the locked buddy")
         self.assertEqual(recovered["executionConfiguration"], supplied)
 
     def test_routing_attention_refuses_assistance_before_workspace_or_catalog_work(self):
@@ -255,7 +265,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         parent = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
-        approved = self.helper_routing(board, parent, effort="high")
+        approved = self.helper_routing(board, parent, requiredCapabilities=["effort:high"])
         helper_id = approved["children"][0]["taskId"]
         helper = board.call("workflow_get", {"runId": helper_id})
         routing = self.router_claim(board, helper)
@@ -273,7 +283,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         parent = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = self.helper_routing(board, parent, effort="high")
+        view = self.helper_routing(board, parent, requiredCapabilities=["effort:high"])
         helper_id = view["children"][0]["taskId"]
         request = view["activeRequest"]
         self.assertTrue(request["routing"])
@@ -285,6 +295,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(continued["runId"], parent["runId"])
         self.assertEqual(continued["targetRunId"], helper_id)
         self.assertEqual(continued["counts"]["openRequests"], 0)
+        # The helper's required capability is part of its authorization, so the
+        # coding worker declares it before claiming the resolved helper.
+        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
         claimed = self.claim(board, run_id=helper_id, claim_request_id="helper")
         self.assertIsNotNone(claimed["claim"], claimed)
         self.assertEqual(claimed["claim"]["task"]["spec"]["effort"], "high")
@@ -302,7 +315,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         revision = board.call("console_snapshot", {})["tableRevision"]
         grant = board.console_call("evaluation_write_begin", {"requestId": "changing", "expectedRevision": revision, "kind": "human"})
-        submitted = self.routed(board, effort="high")
+        submitted = self.routed(board, requiredCapabilities=["effort:high"])
         blocked = self.router_claim(board, submitted)
         self.assertEqual(blocked["reason"], "evaluation-writer-pending")
         board.console_call("user_policy_publish", {
@@ -447,7 +460,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         DecisionTestCase.use_helper(self, profile_id=SECOND_PROFILE_ID)
         board = self.board(max_concurrent=1)
         self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
-        submitted = self.routed(board, effort="high")
+        submitted = self.routed(board, requiredCapabilities=["effort:high"])
         worker = Worker("routing-worker", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
         self.assertEqual(worker.run_once(), "ran")
@@ -467,11 +480,11 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
         self.assertEqual(worker.spool.pending(), [])
-        self.assertTrue(self.routed(board, effort="high")["duplicate"])
+        self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
-        self.register(board)
+        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="authorized-coding-turn")
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["executionConfiguration"], selected["executionConfiguration"])
 

@@ -39,7 +39,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             "timeoutSeconds": 20,
             "executionWorkspace": {"kind": "worktree", "access": "write",
                                    "base": {"kind": "commit", "ref": self.git("rev-parse", "HEAD").strip()},
-                                   "writeScope": ["tracked.txt"], "integrator": "host-1"}}), env=self.env())
+                                   "writeScope": ["tracked.txt"]}}), env=self.env())
         self.assertEqual(code, 0, submission)
         run_id = submission["runId"]
         last = {}

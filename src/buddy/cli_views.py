@@ -30,12 +30,11 @@ GOVERNED_RECEIPTS = frozenset(
         "continue",
         "takeover",
         "cancel",
-        "acknowledge",
+        "accept",
+        "conclude",
+        "reclaim",
         "scope-amend",
         "workspace-resolve",
-        "integration-record",
-        "workspace-cleanup-plan",
-        "workspace-cleanup-apply",
         "suggest",
     }
 )
@@ -116,7 +115,7 @@ _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
-_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "preferenceOutcome", "decisionId",
+_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "decisionId",
                   "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis")
 _WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
 _OUTPUT_ARTIFACT = (
@@ -291,6 +290,10 @@ def governed_receipt(response: dict) -> dict:
             receipt[key] = response[key]
     if isinstance(response.get("integration"), dict):
         receipt["integration"] = _integration_brief(response["integration"])
+    if isinstance(response.get("reclaim"), dict):
+        # The retention evidence stays in the service view; a receipt carries the
+        # outcome and, when blocked, the concrete reasons.
+        receipt["reclaim"] = _pick(response["reclaim"], ("removed", "alreadyRemoved", "reasons", "path", "planId"))
     if response.get("plan") is not None:
         receipt["plan"] = _plan_brief(response["plan"])
         receipt.pop("cleanup", None)

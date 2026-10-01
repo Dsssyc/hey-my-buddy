@@ -132,7 +132,7 @@ def request(board, params):
                   "harness": {key: health.get(key) for key in ("adapter", "version", "command", "locationFingerprint")}}
         spec = {"adapter": ADAPTER, "cwd": str(board.directory / "review-checks" / task_id),
                 "task": "Verify native read-only review boundaries.", "timeoutSeconds": 310,
-                "workspace": False, "requiredCapabilities": [ADAPTER], "exclusiveResources": [], "reviewCheck": intent}
+                "requiredCapabilities": [ADAPTER], "exclusiveResources": [], "reviewCheck": intent}
         connection.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
             "fingerprint_version,adapter,required_capabilities,cwd,exclusive_resources,timeout_seconds,state,queue_reason,revision,created_at,updated_at)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (task_id, task_request, "harness-review", canonical_json(spec), canonical_json(spec),

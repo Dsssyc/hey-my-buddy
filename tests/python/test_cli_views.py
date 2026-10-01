@@ -144,38 +144,21 @@ class CliViewTests(RealWorkspaceTestCase):
         control_file = submitted["controlFile"]
         artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(artifact)
-        code, recorded, _ = self.cli("integration-record", {
-            "runId": view["runId"], "commandId": "views-int", "expectedRevision": view["revision"],
-            "artifactId": artifact["artifactId"], "strategy": "patch", "beforeCommit": target["before"],
-            "target": {"path": str(target["path"]), "ref": "HEAD"}, "reason": "verified", "controlFile": control_file,
-        })
-        self.assertEqual(code, 0, recorded)
-        self.assertEqual(recorded["view"], "receipt")
-        self.assertTrue(recorded["integrationId"])
-        self.assertEqual(recorded["integration"]["integrationId"], recorded["integrationId"])
-        self.assertNotIn("summary", recorded.get("currentTurn", {}))
-        code, accepted, _ = self.cli("acknowledge", {
-            "runId": view["runId"], "artifactId": artifact["artifactId"], "integrationId": recorded["integrationId"],
-            "note": "inspected the sealed output", "controlFile": control_file,
+        code, accepted, text = self.cli("accept", {
+            "runId": view["runId"], "artifactId": artifact["artifactId"],
+            "note": "inspected the sealed output",
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "beforeCommit": target["before"], "controlFile": control_file,
         })
         self.assertEqual(code, 0, accepted)
+        self.assertEqual(accepted["view"], "receipt")
         self.assertEqual(accepted["state"], "accepted")
-        code, planned, _ = self.cli("workspace-cleanup-plan", {
-            "runId": view["runId"], "commandId": "views-plan", "expectedRevision": accepted["revision"],
-            "controlFile": control_file,
-        })
-        self.assertEqual(code, 0, planned)
-        plan = planned["plan"]
-        self.assertTrue(plan["eligible"])
-        self.assertNotIn("cleanup", planned, "the plan is printed once")
-        self.assertNotIn("evidence", plan)
-        code, applied, text = self.cli("workspace-cleanup-apply", {
-            "runId": view["runId"], "planId": plan["planId"], "commandId": "views-apply",
-            "expectedRevision": planned["revision"], "confirmPath": plan["path"], "controlFile": control_file,
-        })
-        self.assertEqual(code, 0, applied)
-        self.assertTrue(applied["removed"])
-        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertEqual(accepted["verdict"], "accepted")
+        self.assertTrue(accepted["integrationId"])
+        self.assertEqual(accepted["integration"]["integrationId"], accepted["integrationId"])
+        self.assertNotIn("summary", accepted.get("currentTurn", {}))
+        self.assertTrue(accepted["reclaim"]["removed"])
+        self.assertEqual(accepted["cleanup"]["state"], "applied")
         self.assertLess(len(text), 4000)
 
     def test_list_status_result_and_await_drop_duplicates(self):

@@ -569,7 +569,7 @@ CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     # that records the batch's facts, so a failed preparation consumes no progress.
     """
 CREATE INDEX IF NOT EXISTS events_review_seq_idx
-    ON events(seq) WHERE kind IN ('task.accepted','task.rejected','workflow.acknowledged');
+    ON events(seq) WHERE kind IN ('task.accepted','task.rejected','workflow.acknowledged','workflow.review_rejected');
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_maintenance_checkpoints (
@@ -606,6 +606,29 @@ CREATE TABLE IF NOT EXISTS family_preferences (
     mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
     reason            TEXT NOT NULL DEFAULT '',
     updated_revision  INTEGER NOT NULL,
+    PRIMARY KEY (adapter, provider, model)
+);
+""",
+    # Program-owned model facts snapshots (ADR-021 decision 12), one durable dated
+    # snapshot per model family extracted from the public models.dev catalog. Facts
+    # belong to the model, never to a buddy, and are never user-editable. A
+    # ``current`` row carries the extracted facts with their exact source, payload
+    # hash and fetch date; an ``unknown`` row records a completed fetch with no
+    # resolvable entry for this family. A failed fetch writes nothing, so the
+    # previous snapshot is retained untouched. Added to the shared pending schema 16;
+    # the explicit idle upgrade remains owned by the upgrade module.
+    """
+CREATE TABLE IF NOT EXISTS model_facts (
+    adapter          TEXT NOT NULL,
+    provider         TEXT NOT NULL,
+    model            TEXT NOT NULL,
+    status           TEXT NOT NULL CHECK (status IN ('current','unknown')),
+    facts_json       TEXT NOT NULL DEFAULT '{}',
+    identity_json    TEXT NOT NULL DEFAULT '{}',
+    source           TEXT NOT NULL,
+    payload_sha256   TEXT NOT NULL,
+    fetched_at       TEXT NOT NULL,
+    reason           TEXT,
     PRIMARY KEY (adapter, provider, model)
 );
 """,
@@ -1057,7 +1080,7 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     attempt_id       TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     run_revision     INTEGER NOT NULL,
     owner_generation INTEGER NOT NULL,
-    execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled')),
+    execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled','delivered')),
     note             TEXT NOT NULL,
     evidence_json    TEXT NOT NULL DEFAULT '[]',
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,

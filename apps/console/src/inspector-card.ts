@@ -188,11 +188,10 @@ export function buildInspectorCard(
     } else if (span.kind === "routing") {
       const routing = span.routing;
       const preference = (value: string | null | undefined) => ({
-        matched: "符合偏好", alternative: "偏离偏好", none: "没有偏好", fallback: "偏好无可用候选",
+        matched: "符合偏好", alternative: "偏离偏好", none: "没有偏好",
       }[value ?? ""] ?? (value || UNRECORDED));
-      const taskPreference = routing?.policyCheck?.taskPreference?.outcome;
       const userPreference = routing?.policyCheck?.userPreference;
-      const deviated = taskPreference === "alternative" || userPreference === "alternative";
+      const deviated = userPreference === "alternative";
       const reason = routing?.reason?.trim() || UNRECORDED;
       const amount = (value: number | null | undefined, unit: string) =>
         value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
@@ -203,7 +202,7 @@ export function buildInspectorCard(
       fields.push({ label: "已选配置", value: routing?.selectedProfile ? configurationLabel(routing.selectedProfile, profiles) : UNRECORDED });
       fields.push({ label: "理由", value: reason });
       fields.push({ label: "偏好结果", value: routing?.policyCheck
-        ? `任务：${preference(taskPreference)}；用户：${preference(userPreference)}${deviated ? `；偏离理由：${reason}` : ""}`
+        ? `用户：${preference(userPreference)}${deviated ? `；偏离理由：${reason}` : ""}`
         : UNRECORDED });
       fields.push(spanTimingValue(span, observedAtMs), { label: "结果", value: outcomeLabel(span, outcome) });
       fields.push({ label: "用时（elapsedMs）", value: amount(routing?.usage?.elapsedMs, "ms") },

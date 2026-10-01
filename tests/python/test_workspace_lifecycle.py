@@ -1,11 +1,12 @@
-"""Real-Git integration receipts and workspace cleanup over real temp checkouts.
+"""Real-Git acceptance and checkout reclaim over real temp checkouts.
 
 These tests exercise the Host-owned lifecycle operations against real Git
-repositories, real isolated worktrees and the real governed transactions: an
-accepted goal must hold a verified integration record (or an explicit
-not-required decision) for its final artifact, and a disposable checkout is only
-removed after acceptance, integration, confirmed shutdown and an idempotent,
-expiring plan that names the exact path. No test touches an existing workspace.
+repositories, real isolated worktrees and the real governed transactions: one
+``accept`` derives and verifies the integration itself (or records an explicit
+not-required decision) for the exact final artifact and then reclaims the
+checkout, and ``conclude``/``reclaim`` remove exactly one registered disposable
+checkout after acceptance or a recorded conclusion, confirmed shutdown and the
+whole eligibility proof. No test touches an existing workspace.
 """
 from __future__ import annotations
 
@@ -111,19 +112,31 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         return submitted, claimed, manifest, checkout, seal, view, artifact
 
-    def integrate(self, board, view, artifact, *, not_required=False, target=None, reason=None,
-                  command_id="integration-1", **extra):
+    def accept(self, board, view, artifact, *, not_required=False, target=None, reason=None,
+               note="inspected the sealed output", **extra):
+        """One-step acceptance: the service derives and verifies the integration itself."""
         params = {
-            "runId": view["runId"], "commandId": command_id, "expectedRevision": view["revision"],
-            "artifactId": artifact["artifactId"], **self.control(view), **extra,
+            "runId": view["runId"], "artifactId": artifact["artifactId"], "note": note,
+            **self.control(view),
         }
         if not_required:
-            params.update(notRequired=True,
-                          reason="the artifact needs no repository target" if reason is None else reason) 
+            params["notRequired"] = "the artifact needs no repository target" if reason is None else reason
         else:
-            params.update(strategy=extra.pop("strategy", "patch"), beforeCommit=target["before"],
-                          target={"path": str(target["path"]), "ref": "HEAD"}, reason=reason)
-        return board.store.workflow.integration_record(params)
+            self.assertIsNotNone(target)
+            target_params = {"path": str(target["path"]), "ref": target.get("ref") or "HEAD"}
+            for key in ("repositoryId", "checkoutId"):
+                if target.get(key):
+                    target_params[key] = target[key]
+            params["target"] = target_params
+            if target.get("before"):
+                params["beforeCommit"] = target["before"]
+        params.update(extra)
+        return board.call("workflow_accept", params)
+
+    def reclaim(self, board, view, **extra):
+        params = {"runId": view["runId"], **self.control(view)}
+        params.update(extra)
+        return board.call("workflow_reclaim", params)
 
     def target_with_artifact(self, artifact, *, name="target", previous=()):
         target = self.directory / name
@@ -141,55 +154,50 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return {"path": target, "before": before, "after": after}
 
     def acknowledge(self, board, view, artifact, *, verdict="accepted", **extra):
-        return board.call("workflow_acknowledge", {
-            "runId": view["runId"], "artifactId": artifact["artifactId"], "note": "inspected the sealed output",
-            "verdict": verdict, **self.control(view), **extra,
-        })
+        """Compatibility shim: every acknowledgement is one accept under the current contract."""
+        assert verdict == "accepted"
+        return self.accept(board, view, artifact, **extra)
 
-    def plan(self, board, view, *, command_id="clean-1"):
-        return board.store.workflow.cleanup_plan({
-            "runId": view["runId"], "commandId": command_id, "expectedRevision": view["revision"],
-            **self.control(view),
-        })
-
-    def apply(self, board, view, plan, *, command_id="clean-apply-1", confirm_path=None):
-        return board.store.workflow.cleanup_apply({
-            "runId": view["runId"], "planId": plan["planId"], "commandId": command_id,
-            "expectedRevision": view["revision"], "confirmPath": confirm_path or plan["path"],
-            **self.control(view),
-        })
-
-    # -- acceptance requires integration evidence ----------------------------
-    def test_acceptance_requires_a_verified_or_not_required_record(self):
+    # -- acceptance carries its integration evidence -------------------------
+    def test_acceptance_requires_a_verified_or_not_required_decision(self):
         board = self.board()
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board)
         with self.assertRaises(BoardError) as raised:
-            self.acknowledge(board, view, artifact)
-        self.assertEqual(raised.exception.code, "INTEGRATION_REQUIRED")
-        self.assertEqual(raised.exception.details["artifactId"], artifact["artifactId"])
-        with self.assertRaises(BoardError) as raised:
-            self.integrate(board, view, artifact, not_required=True, reason="")
+            board.call("workflow_accept", {
+                "runId": view["runId"], "artifactId": artifact["artifactId"],
+                "note": "inspected", **self.control(view),
+            })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as raised:
-            board.store.workflow.integration_record({
-                "runId": view["runId"], "commandId": "integration-bad-target",
-                "expectedRevision": view["revision"], "artifactId": artifact["artifactId"],
-                "notRequired": True, "reason": "no", "target": {"path": str(self.repo), "ref": "HEAD"},
+            self.accept(board, view, artifact, not_required=True, reason="")
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_accept", {
+                "runId": view["runId"], "artifactId": artifact["artifactId"], "note": "no",
+                "notRequired": "no", "target": {"path": str(self.repo), "ref": "HEAD"},
                 **self.control(view),
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        recorded = self.integrate(board, view, artifact, not_required=True, reason="no separate target")
-        self.assertFalse(recorded["duplicate"])
-        self.assertEqual(recorded["integration"]["state"], "not-required")
-        self.assertIsNone(recorded["integration"]["target"])
-        duplicate = self.integrate(board, recorded, artifact, not_required=True, reason="no separate target",
-                                   command_id="integration-2")
-        self.assertTrue(duplicate["duplicate"])
-        accepted = self.acknowledge(board, duplicate, artifact)
+        accepted = self.accept(board, view, artifact, not_required=True, reason="no separate target")
+        self.assertFalse(accepted["duplicate"])
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["integration"]["state"], "not-required")
+        self.assertIsNone(accepted["integration"]["target"])
         self.assertEqual(accepted["integration"]["artifactId"], artifact["artifactId"])
+        duplicate = board.call("workflow_accept", {
+            "runId": view["runId"], "artifactId": artifact["artifactId"],
+            "note": "inspected the sealed output", "notRequired": "no separate target",
+            **self.control(view),
+        })
+        self.assertTrue(duplicate["duplicate"])
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_accept", {
+                "runId": view["runId"], "artifactId": artifact["artifactId"],
+                "note": "a different review", "notRequired": "no separate target",
+                **self.control(view),
+            })
+        self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_a_stale_output_record_never_accepts_a_newer_final_artifact(self):
         board = self.board()
@@ -217,16 +225,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         outputs = [row for row in delivered["artifacts"] if row["kind"] == "output"]
         self.assertEqual(len(outputs), 2)
         first_output, final_output = outputs[-1], outputs[0]
-        # A record for the older output cannot stand in for the final artifact.
-        self.integrate(board, delivered, first_output, not_required=True, command_id="integration-old",
-                       reason="older output")
+        # Acceptance binds the exact current final artifact; an older output is
+        # refused instead of standing in for it.
         with self.assertRaises(BoardError) as raised:
-            self.acknowledge(board, delivered, final_output)
-        self.assertEqual(raised.exception.code, "INTEGRATION_REQUIRED")
+            self.accept(board, delivered, first_output, not_required=True, reason="older output")
+        self.assertEqual(raised.exception.code, "CONFLICT")
         current = self.view(board, run_id)
-        self.integrate(board, current, final_output, not_required=True, command_id="integration-final",
-                       reason="final output")
-        accepted = self.acknowledge(board, current, final_output)
+        accepted = self.accept(board, current, final_output, not_required=True, reason="final output")
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["finalArtifactId"], final_output["artifactId"])
 
@@ -235,7 +240,26 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board)
         target = self.target_with_artifact(artifact)
-        recorded = self.integrate(board, view, artifact, target=target, reason="merged the sealed patch")
+        # Before any acceptance, a target that never received the artifact is
+        # refused with the differing paths, and a wrong repository identity is a
+        # change refusal; the Host's own adjustments need adjusted:true and a note.
+        blank = self.directory / "blank"
+        git(self.directory, "clone", "-q", str(self.repo), str(blank))
+        with self.assertRaises(BoardError) as raised:
+            self.accept(board, view, artifact, target={"path": blank, "before": None})
+        self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
+        self.assertIn("tracked.txt", raised.exception.details["paths"])
+        with self.assertRaises(BoardError) as raised:
+            self.accept(board, view, artifact,
+                        target={"path": target["path"], "repositoryId": "0" * 64, "before": target["before"]})
+        self.assertEqual(raised.exception.code, "WORKSPACE_CHANGED")
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_accept", {
+                "runId": view["runId"], "artifactId": "art-not-real", "note": "x",
+                "notRequired": "unknown", **self.control(view),
+            })
+        self.assertEqual(raised.exception.code, "NOT_FOUND")
+        recorded = self.accept(board, view, artifact, target=target, reason="merged the sealed patch")
         integration = recorded["integration"]
         self.assertEqual(integration["state"], "verified")
         self.assertEqual(integration["target"]["path"], str(Path(target["path"]).resolve()))
@@ -247,38 +271,18 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(integration["sourceCommit"], artifact["outputCommit"])
         self.assertEqual(integration["verification"]["matchingPaths"], ["tracked.txt"])
         self.assertEqual(integration["verification"]["missingPaths"], [])
-        accepted = self.acknowledge(board, recorded, artifact)
-        self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["state"], "verified")
-        # A target that never received the artifact is never recorded as verified.
-        current = self.view(board, recorded["runId"])
-        blank = self.directory / "blank"
-        git(self.directory, "clone", "-q", str(self.repo), str(blank))
-        blank_before = git(blank, "rev-parse", "HEAD").strip()
+        self.assertEqual(recorded["state"], "accepted")
+        # After the acceptance, any changed payload conflicts against the recorded
+        # review instead of relabelling it.
+        current = self.view(board, submitted["runId"])
         with self.assertRaises(BoardError) as raised:
-            board.store.workflow.integration_record({
-                "runId": current["runId"], "commandId": "integration-blank", "expectedRevision": current["revision"],
-                "artifactId": artifact["artifactId"], "strategy": "patch", "beforeCommit": blank_before,
-                "target": {"path": str(blank), "ref": "HEAD"}, **self.control(current),
+            board.call("workflow_accept", {
+                "runId": current["runId"], "artifactId": artifact["artifactId"],
+                "note": "a different review",
+                "target": {"path": str(target["path"]), "ref": "HEAD"},
+                "beforeCommit": target["before"], **self.control(current),
             })
-        self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
-        self.assertIn("tracked.txt", [item["path"] for item in raised.exception.details["verification"]["differingPaths"]])
-        with self.assertRaises(BoardError) as raised:
-            board.store.workflow.integration_record({
-                "runId": current["runId"], "commandId": "integration-wrong-repo",
-                "expectedRevision": current["revision"], "artifactId": artifact["artifactId"], "strategy": "patch",
-                "beforeCommit": target["before"],
-                "target": {"path": str(target["path"]), "ref": "HEAD", "repositoryId": "0" * 64},
-                **self.control(current),
-            })
-        self.assertEqual(raised.exception.code, "WORKSPACE_CHANGED")
-        with self.assertRaises(BoardError) as raised:
-            board.store.workflow.integration_record({
-                "runId": current["runId"], "commandId": "integration-missing-artifact",
-                "expectedRevision": current["revision"], "artifactId": "art-not-real", "notRequired": True,
-                "reason": "unknown", **self.control(current),
-            })
-        self.assertEqual(raised.exception.code, "NOT_FOUND")
+        self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_retained_output_without_path_summary_uses_fixed_git_objects(self):
         board = self.board()
@@ -297,19 +301,21 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             retained["snapshotSha256"] = workspace_module._sha(workspace_module._json(retained["snapshot"]))
             connection.execute("UPDATE workflow_artifacts SET manifest_json=?,manifest_sha256=? WHERE artifact_id=?",
                                (canonical_json(retained), retained["snapshotSha256"], artifact["artifactId"]))
-        recorded = self.integrate(board, view, artifact, target=target)
+        recorded = self.accept(board, view, artifact, target=target, keepCheckout=True)
         self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["tracked.txt"])
-        accepted = self.acknowledge(board, recorded, artifact)
-        self.assertEqual(accepted["state"], "accepted")
-        planned = self.plan(board, self.view(board, submitted["runId"]))
-        self.assertEqual(planned["plan"]["state"], "planned")
+        self.assertEqual(recorded["state"], "accepted")
         (checkout / "tracked.txt").write_text("unsealed edit\n")
         inspected = workspace_module.cleanup_inspect(self.directory, manifest, sealed=retained, retained=[manifest])
         self.assertIn("unsealed-changes", inspected["reasons"])
         with self.assertRaises(BoardError) as raised:
-            self.apply(board, planned, planned["plan"], command_id="old-path-summary-dirty")
+            self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("unsealed-changes", raised.exception.details["reasons"])
         self.assertTrue(checkout.exists())
+        # Returning the site to the sealed state makes the same workspace eligible.
+        (checkout / "tracked.txt").write_text("sealed output\n")
+        applied = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(applied["removed"])
 
     def test_missing_or_spoofed_source_objects_cannot_verify(self):
         board = self.board()
@@ -325,11 +331,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             )
         with mock.patch.object(workspace_module, "OUTPUT_ENTRY_LIMIT", 0):
             with self.assertRaises(BoardError) as oversized:
-                self.integrate(board, view, artifact, target=target, command_id="object-binding-oversized")
+                self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
         self.assertEqual(oversized.exception.code, "WORKSPACE_UNSUPPORTED")
         git(self.repo, "update-ref", "-d", manifest["snapshot"]["inputRef"])
         with self.assertRaises(BoardError) as raised:
-            self.integrate(board, view, artifact, target=target)
+            self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
         self.assertEqual(raised.exception.code, "WORKSPACE_REF_INVALID")
 
     def test_final_noop_continuation_still_requires_earlier_goal_change(self):
@@ -354,16 +360,26 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         git(self.directory, "clone", "-q", str(self.repo), str(blank))
         before = git(blank, "rev-parse", "HEAD").strip()
         with self.assertRaises(BoardError) as raised:
-            self.integrate(board, delivered, final, target={"path": blank, "before": before})
+            self.accept(board, delivered, final, target={"path": blank, "before": before})
         self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
-        self.assertIn("tracked.txt", [row["path"] for row in raised.exception.details["verification"]["differingPaths"]])
+        self.assertIn("tracked.txt", raised.exception.details["paths"])
+        # A Host adjustment is bound to the acceptance note: without it there is no
+        # adjusted acceptance at all.
         with self.assertRaises(BoardError) as unreasoned:
-            self.integrate(board, delivered, final, target={"path": blank, "before": before},
-                           command_id="noop-unreasoned-adjustment", adjustedPaths=["tracked.txt"])
-        self.assertEqual(unreasoned.exception.code, "INVALID_WORKSPACE")
-        target = self.target_with_artifact(first, name="noop-integrated")
-        recorded = self.integrate(board, delivered, final, target=target, command_id="noop-correct")
-        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["tracked.txt"])
+            board.call("workflow_accept", {
+                "runId": delivered["runId"], "artifactId": final["artifactId"], "note": "",
+                "adjusted": True, "target": {"path": str(blank), "ref": "HEAD"},
+                **self.control(delivered),
+            })
+        self.assertEqual(unreasoned.exception.code, "INVALID_ARGUMENT")
+        # Confirming the difference as its own adjustment accepts against the same
+        # blank target, with the exact adjusted paths recorded.
+        adjusted = self.accept(board, self.view(board, submitted["runId"]), final,
+                               target={"path": blank, "before": before}, adjusted=True,
+                               reason="the whole-goal change is already the Host's own edit")
+        self.assertEqual(adjusted["state"], "accepted")
+        self.assertEqual(adjusted["integration"]["verification"]["adjustments"], ["tracked.txt"])
+        self.assertEqual(adjusted["integration"]["verification"]["unrecordedPaths"], [])
 
     def test_deletion_and_mode_change_are_bound_to_final_tree(self):
         (self.repo / "mode.txt").write_text("executable content\n")
@@ -388,7 +404,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         view = self.view(board, submitted["runId"])
         artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(artifact, name="delete-mode-target")
-        recorded = self.integrate(board, view, artifact, target=target)
+        recorded = self.accept(board, view, artifact, target=target)
+        self.assertEqual(recorded["state"], "accepted")
         self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["mode.txt", "tracked.txt"])
         self.assertEqual(git(target["path"], "ls-tree", "HEAD", "mode.txt").split()[0], "100755")
         self.assertEqual(git(target["path"], "ls-tree", "HEAD", "tracked.txt"), "")
@@ -399,8 +416,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board, request_id=request_id)
         target = self.target_with_artifact(artifact)
-        self.integrate(board, view, artifact, target=target, reason="verified before cleanup")
-        accepted = self.acknowledge(board, view, artifact)
+        accepted = self.accept(board, view, artifact, target=target, reason="verified before cleanup",
+                               keepCheckout=True)
         self.assertEqual(accepted["state"], "accepted")
         return board, submitted, manifest, checkout, artifact, self.view(board, submitted["runId"])
 
@@ -474,9 +491,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(delivered["state"], "delivered")
         final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(final, previous=(first_artifact,))
-        self.integrate(board, delivered, final, target=target, command_id=f"{request_id}-integration",
-                       reason="verified the sealed second stage")
-        accepted = self.acknowledge(board, delivered, final)
+        accepted = self.accept(board, delivered, final, target=target,
+                               reason="verified the sealed second stage", keepCheckout=True)
         self.assertEqual(accepted["state"], "accepted")
         return board, submitted, first_manifest, second_manifest, final, self.view(board, run_id)
 
@@ -487,29 +503,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         (private_goal / 'session.json').write_text('private native binding')
         account = private_dirs.ensure_private_dir(private_dirs.account_root(board.directory, 'codex'))
         (account / 'account.json').write_text('protected account fixture')
-        planned = self.plan(board, view)
-        plan = planned["plan"]
-        self.assertEqual(plan["state"], "planned")
-        self.assertTrue(plan["eligible"])
-        self.assertEqual(plan["path"], manifest["checkoutRoot"])
-        self.assertEqual(plan["workspaceId"], manifest["workspaceId"])
-        self.assertEqual(plan["checkoutId"], manifest["checkoutId"])
-        self.assertEqual(plan["kind"], "worktree")
-        self.assertTrue(plan["retention"]["artifactIds"])
-        self.assertIn(str(Path(self.directory) / "workspaces" / manifest["workspaceId"]),
-                      plan["retention"]["workspaceDirectory"])
-        # A different confirmPath is never a deletion authorization.
-        with self.assertRaises(BoardError) as raised:
-            self.apply(board, planned, plan, confirm_path=str(self.repo))
-        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertTrue(checkout.exists())
-        # Repeated planning returns the same live plan instead of a second one.
-        again = self.plan(board, planned, command_id="clean-2")
-        self.assertTrue(again["duplicate"])
-        self.assertEqual(again["plan"]["planId"], plan["planId"])
-        applied = self.apply(board, again, plan)
+        applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
-        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertEqual(applied["path"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
         self.assertFalse(private_goal.exists())
         self.assertEqual((account / 'account.json').read_text(), 'protected account fixture')
@@ -521,30 +517,29 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIn("outputs", refs)
         still = self.view(board, run_id)
         self.assertEqual(still["cleanup"]["state"], "applied")
-        repeat = self.apply(board, still, plan, command_id="clean-apply-2")
-        self.assertTrue(repeat["duplicate"])
-        self.assertEqual(repeat["plan"]["planId"], plan["planId"])
+        self.assertTrue(still["cleanup"]["retention"]["artifactIds"])
+        self.assertIn(str(Path(self.directory) / "workspaces" / manifest["workspaceId"]),
+                      still["cleanup"]["retention"]["workspaceDirectory"])
+        # Reclaiming an already removed allocation is the same achieved outcome.
+        repeat = self.reclaim(board, still)
+        self.assertTrue(repeat["removed"])
+        self.assertTrue(repeat["alreadyRemoved"])
 
-    def test_cleanup_apply_reports_a_checkout_that_vanished_before_the_delete(self):
+    def test_reclaim_reports_a_checkout_that_vanished_before_the_delete(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanished")
-        planned = self.plan(board, view)
-        plan = planned["plan"]
-        self.assertEqual(plan["state"], "planned")
         shutil.rmtree(checkout)
         self.assertFalse(checkout.exists())
-        applied = self.apply(board, planned, plan, command_id="clean-apply-vanished")
+        applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
-        self.assertEqual(applied["plan"]["state"], "applied")
-        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertTrue(applied["alreadyRemoved"])
         # The retained manifest, not the vanished cwd, still answers compact/get.
         after = self.view(board, submitted["runId"], includeAudit=True)
-        self.assertEqual(after["cleanup"]["state"], "applied")
         self.assertEqual(after["workspace"]["path"], manifest["path"])
         self.assertTrue(after["audit"]["turns"])
-        # The original commandId still replays its own recorded request.
-        replay = self.apply(board, planned, plan, command_id="clean-apply-vanished")
-        self.assertTrue(replay["duplicate"])
-        self.assertEqual(replay["plan"]["planId"], plan["planId"])
+        # Reclaiming again is the same achieved outcome, not a second deletion.
+        replay = self.reclaim(board, after)
+        self.assertTrue(replay["removed"])
+        self.assertTrue(replay["alreadyRemoved"])
 
     def test_cleanup_remove_is_idempotent_for_an_already_removed_allocation(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-twice")
@@ -559,13 +554,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(second["alreadyRemoved"])
         self.assertEqual(second["workspaceId"], manifest["workspaceId"])
 
-    def test_cleanup_apply_does_not_report_a_dangling_symlink_as_removed(self):
+    def test_reclaim_does_not_report_a_dangling_symlink_as_removed(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id='cleanup-dangling')
-        planned = self.plan(board, view)
         workspace_module.cleanup_remove(self.directory, manifest)
         checkout.symlink_to(self.directory / 'absent-target', target_is_directory=True)
-        with self.assertRaises(BoardError):
-            self.apply(board, planned, planned['plan'])
+        with self.assertRaises(BoardError) as raised:
+            self.reclaim(board, view)
+        self.assertEqual(raised.exception.code, "NOT_READY")
         self.assertTrue(checkout.is_symlink())
         self.assertNotEqual(self.view(board, submitted['runId'])['cleanup']['state'], 'applied')
 
@@ -584,10 +579,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(raised.exception.code, "WORKSPACE_GIT_ERROR")
         self.assertTrue(checkout.exists(), "a refused removal must never be reported as achieved")
 
-    def test_cleanup_apply_converges_when_another_owner_finishes_the_removal(self):
+    def test_reclaim_converges_when_another_owner_finishes_the_removal(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-race")
-        planned = self.plan(board, view)
-        plan = planned["plan"]
         real_remove = workspace_module.cleanup_remove
         real_record = workspace_module._worktree_record
         state = {"removing": False, "raced": False}
@@ -612,12 +605,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
         with mock.patch.object(workspace_module, "_worktree_record", racing_record), \
                 mock.patch.object(workspace_module, "cleanup_remove", racing_remove):
-            applied = self.apply(board, planned, plan, command_id="clean-race-apply")
+            applied = self.reclaim(board, view)
         self.assertTrue(state["raced"])
         self.assertFalse(checkout.exists())
         self.assertTrue(applied["removed"])
-        self.assertEqual(applied["plan"]["state"], "applied")
-        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertTrue(applied["alreadyRemoved"])
         # The event stream records the achieved deletion once, with its real cause.
         with board.store.db.read() as connection:
             events = connection.execute(
@@ -626,10 +618,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             ).fetchall()
         self.assertEqual([json.loads(row["payload_json"])["alreadyRemoved"] for row in events], [True])
 
-    def test_cleanup_apply_converges_when_the_checkout_vanishes_during_the_proof(self):
+    def test_reclaim_converges_when_the_checkout_vanishes_during_the_proof(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanish-proof")
-        planned = self.plan(board, view)
-        plan = planned["plan"]
         real_refs = workspace_module._allocation_refs
 
         def vanishing_refs(repository, allocation_id, target_manifest, retained):
@@ -640,39 +630,38 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             return refs
 
         with mock.patch.object(workspace_module, "_allocation_refs", vanishing_refs):
-            applied = self.apply(board, planned, plan, command_id="clean-vanish-proof")
+            applied = self.reclaim(board, view)
         self.assertFalse(checkout.exists())
         self.assertTrue(applied["removed"])
-        self.assertEqual(applied["plan"]["state"], "applied")
-        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertTrue(applied["alreadyRemoved"])
 
-    def test_delivered_output_without_integration_yields_a_blocked_cleanup_plan(self):
+    def test_delivered_output_without_integration_blocks_the_reclaim(self):
         board = self.board()
         self.register(board)
         _submitted, _claim, _manifest, checkout, _seal, view, _artifact = self.run_worktree(board)
-        planned = self.plan(board, view)
-        self.assertEqual(planned["plan"]["state"], "blocked")
-        self.assertIn("not-accepted", planned["plan"]["reasons"])
-        self.assertIn("integration-missing", planned["plan"]["reasons"])
+        with self.assertRaises(BoardError) as raised:
+            self.reclaim(board, view)
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("not-accepted", raised.exception.details["reasons"])
+        self.assertIn("integration-missing", raised.exception.details["reasons"])
         self.assertTrue(checkout.exists())
 
     def test_cleanup_is_blocked_by_unsealed_changes(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-dirty")
         (checkout / "tracked.txt").write_text("edited after the seal\n")
-        planned = self.plan(board, view)
-        self.assertEqual(planned["plan"]["state"], "blocked")
-        self.assertIn("unsealed-changes", planned["plan"]["reasons"])
-        self.assertEqual(planned["plan"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         with self.assertRaises(BoardError) as raised:
-            self.apply(board, planned, planned["plan"])
+            self.reclaim(board, view)
         self.assertEqual(raised.exception.code, "NOT_READY")
         self.assertIn("unsealed-changes", raised.exception.details["reasons"])
+        blocked_view = self.view(board, submitted["runId"])
+        self.assertEqual(blocked_view["cleanup"]["state"], "blocked")
+        self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         self.assertTrue(checkout.exists())
         # Returning the site to the sealed state makes the same workspace eligible.
         (checkout / "tracked.txt").write_text("sealed output\n")
-        recovered = self.plan(board, planned, command_id="clean-recovered")
-        self.assertEqual(recovered["plan"]["state"], "planned")
-        self.assertTrue(recovered["plan"]["eligible"])
+        recovered = self.reclaim(board, blocked_view)
+        self.assertTrue(recovered["removed"])
+        self.assertFalse(checkout.exists())
 
     def test_cleanup_never_targets_a_source_checkout_or_foreign_path(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-foreign")
@@ -695,13 +684,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.finish_turn(board_existing, existing_claim, existing_seal, nonce="e" * 16, worker_id="w-existing")
         existing_view = self.view(board_existing, existing["runId"])
         existing_artifact = next(row for row in existing_view["artifacts"] if row["kind"] == "output")
-        self.integrate(board_existing, existing_view, existing_artifact, not_required=True,
-                       command_id="existing-integration", reason="read-only source checkout")
-        self.acknowledge(board_existing, existing_view, existing_artifact)
+        self.accept(board_existing, existing_view, existing_artifact, not_required=True,
+                    reason="read-only source checkout")
         existing_view = self.view(board_existing, existing["runId"])
-        planned = self.plan(board_existing, existing_view, command_id="clean-existing")
-        self.assertEqual(planned["plan"]["state"], "blocked")
-        self.assertIn("not-a-managed-worktree", planned["plan"]["reasons"])
+        with self.assertRaises(BoardError) as refused:
+            self.reclaim(board_existing, existing_view)
+        self.assertEqual(refused.exception.code, "NOT_READY")
+        self.assertIn("not-a-managed-worktree", refused.exception.details["reasons"])
         self.assertTrue((self.repo / "tracked.txt").exists())
         # A manifest redirected to the source checkout is preserved, never removed.
         tampered = {**manifest, "checkoutRoot": str(self.repo)}
@@ -714,12 +703,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 (canonical_json(tampered), submitted["runId"]),
             )
         foreign = self.view(board, submitted["runId"])
-        blocked = self.plan(board, foreign, command_id="clean-foreign")
-        self.assertEqual(blocked["plan"]["state"], "blocked")
-        self.assertIn("unsafe-path", blocked["plan"]["reasons"])
         with self.assertRaises(BoardError) as raised:
-            self.apply(board, blocked, blocked["plan"], command_id="clean-foreign-apply")
+            self.reclaim(board, foreign)
         self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("unsafe-path", raised.exception.details["reasons"])
         self.assertTrue((self.repo / "tracked.txt").exists())
         self.assertTrue(checkout.exists())
         with self.assertRaises(BoardError) as raised:
@@ -737,8 +724,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         shutil.rmtree(foreign)
         foreign_path = str(foreign.resolve())
         self.assertIn(foreign_path, git(self.repo, "worktree", "list", "--porcelain"))
-        planned = self.plan(board, view)
-        applied = self.apply(board, planned, planned["plan"])
+        applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         self.assertFalse(checkout.exists())
         self.assertIn(foreign_path, git(self.repo, "worktree", "list", "--porcelain"))
@@ -749,8 +735,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def test_a_new_writer_cannot_claim_the_checkout_across_the_remove_boundary(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
             request_id="cleanup-fence")
-        planned = self.plan(board, view)
-        plan = planned["plan"]
         early: list = []
         claims: list = []
         real_remove = workspace_module.cleanup_remove
@@ -778,13 +762,14 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             return real_remove(state_dir, target_manifest, **kwargs)
 
         with mock.patch.object(workspace_module, "cleanup_remove", racing_remove):
-            applied = self.apply(board, planned, plan)
+            applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         for attempts, label in ((early, "source capture"), (claims, "reservation admission")):
             self.assertEqual(len(attempts), 1)
             self.assertIsNotNone(attempts[0], f"a new writer claimed the checkout through {label}")
             self.assertEqual(attempts[0].code, "PREPARATION_CONFLICT")
-            self.assertEqual(attempts[0].details["planId"], plan["planId"])
+            # Both refusals name the reclaim's own applying plan for this checkout.
+            self.assertEqual(attempts[0].details["planId"], applied["planId"])
             self.assertEqual(attempts[0].details["checkoutId"], manifest["checkoutId"])
         self.assertFalse(checkout.exists())
         # No reservation survived either refused claim.
@@ -800,24 +785,21 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board, submitted, first, second, final, view = self.two_turn_worktree()
         checkout = Path(first["checkoutRoot"])
         run_id = submitted["runId"]
-        planned = self.plan(board, view)
-        plan = planned["plan"]
-        self.assertEqual(plan["state"], "planned", plan["reasons"])
-        self.assertTrue(plan["eligible"])
-        # The plan names the physical allocation that created the worktree, not the
-        # later turn's logical workspace id on the same checkout.
-        self.assertEqual(plan["workspaceId"], first["workspaceId"])
-        self.assertNotEqual(plan["workspaceId"], second["workspaceId"])
-        self.assertEqual(plan["kind"], "worktree")
-        self.assertEqual(plan["path"], first["checkoutRoot"])
-        self.assertEqual(plan["checkoutId"], first["checkoutId"])
-        self.assertEqual(plan["evidence"]["workspace"]["manifestWorkspaceId"], second["workspaceId"])
-        self.assertTrue(plan["retention"]["artifactIds"])
-        self.assertTrue(any("outputs" in ref for ref in plan["retention"]["fixedRefs"]))
-        applied = self.apply(board, planned, plan)
+        applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
-        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertEqual(applied["path"], first["checkoutRoot"])
         self.assertFalse(checkout.exists())
+        evidence = self.view(board, run_id)["cleanup"]
+        # The reclaim names the physical allocation that created the worktree, not
+        # the later turn's logical workspace id on the same checkout.
+        self.assertEqual(evidence["workspaceId"], first["workspaceId"])
+        self.assertNotEqual(evidence["workspaceId"], second["workspaceId"])
+        self.assertEqual(evidence["kind"], "worktree")
+        self.assertEqual(evidence["path"], first["checkoutRoot"])
+        self.assertEqual(evidence["checkoutId"], first["checkoutId"])
+        self.assertEqual(evidence["evidence"]["workspace"]["manifestWorkspaceId"], second["workspaceId"])
+        self.assertTrue(evidence["retention"]["artifactIds"])
+        self.assertTrue(any("outputs" in ref for ref in evidence["retention"]["fixedRefs"]))
         # Only the checkout is removed: both turns' manifests, patches and refs stay.
         self.assertTrue((Path(self.directory) / "workspaces" / first["workspaceId"] / "manifest.json").exists())
         self.assertTrue((Path(self.directory) / "workspaces" / second["workspaceId"] / "manifest.json").exists())
@@ -828,28 +810,27 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # The applied plan stays the one authorization; repeating it is a replay.
         repeat_view = self.view(board, run_id)
         self.assertEqual(repeat_view["cleanup"]["state"], "applied")
-        repeat = self.apply(board, repeat_view, plan, command_id="clean-continuation-apply-2")
-        self.assertTrue(repeat["duplicate"])
-        self.assertEqual(repeat["plan"]["planId"], plan["planId"])
+        repeat = self.reclaim(board, repeat_view)
+        self.assertTrue(repeat["removed"])
+        self.assertTrue(repeat["alreadyRemoved"])
 
     def test_continuation_cleanup_blocks_a_change_after_the_latest_seal(self):
         board, submitted, first, second, final, view = self.two_turn_worktree(request_id="continuation-dirty")
         checkout = Path(second["checkoutRoot"])
         (checkout / "tracked.txt").write_text("edited after the second seal\n")
-        planned = self.plan(board, view)
-        self.assertEqual(planned["plan"]["state"], "blocked")
-        self.assertIn("unsealed-changes", planned["plan"]["reasons"])
+        with self.assertRaises(BoardError) as raised:
+            self.reclaim(board, view)
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("unsealed-changes", raised.exception.details["reasons"])
         # The delta is against the latest prepared input: the second stage's own
         # file is sealed, only the later edit is named.
-        self.assertEqual(planned["plan"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
-        with self.assertRaises(BoardError) as raised:
-            self.apply(board, planned, planned["plan"], command_id="clean-continuation-dirty-apply")
-        self.assertEqual(raised.exception.code, "NOT_READY")
+        blocked_view = self.view(board, submitted["runId"])
+        self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         self.assertTrue(checkout.exists())
         # Returning the site to the latest sealed state makes it eligible again.
         (checkout / "tracked.txt").write_text("first turn output\n")
-        recovered = self.plan(board, planned, command_id="clean-continuation-recovered")
-        self.assertEqual(recovered["plan"]["state"], "planned", recovered["plan"]["reasons"])
+        recovered = self.reclaim(board, blocked_view)
+        self.assertTrue(recovered["removed"], recovered)
 
     def test_a_borrowed_run_never_authorizes_its_own_cleanup(self):
         board, submitted, first, second, final, view = self.two_turn_worktree(request_id="borrow-owner")
@@ -871,17 +852,16 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotEqual(borrowed_manifest["workspaceId"], first["workspaceId"])
         # A live holder keeps the allocation owner from removing the checkout.
         owner_view = self.view(board, submitted["runId"])
-        blocked = self.plan(board, owner_view, command_id="clean-owner-blocked")
-        self.assertEqual(blocked["plan"]["state"], "blocked")
-        self.assertIn("workspace-dependency", blocked["plan"]["reasons"])
+        with self.assertRaises(BoardError) as blocked:
+            self.reclaim(board, owner_view)
+        self.assertEqual(blocked.exception.code, "NOT_READY")
+        self.assertIn("workspace-dependency", blocked.exception.details["reasons"])
         # The borrowed run has no worktree manifest of its own: it can never delete it.
         borrowed_view = self.view(board, borrowed["runId"])
-        planned = self.plan(board, borrowed_view, command_id="clean-borrower")
-        self.assertEqual(planned["plan"]["state"], "blocked")
-        self.assertIn("not-a-managed-worktree", planned["plan"]["reasons"])
         with self.assertRaises(BoardError) as raised:
-            self.apply(board, planned, planned["plan"], command_id="clean-borrower-apply")
+            self.reclaim(board, borrowed_view)
         self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("not-a-managed-worktree", raised.exception.details["reasons"])
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, borrowed_manifest)
         self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
@@ -891,9 +871,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             "runId": borrowed["runId"], "commandId": "borrowed-cancel",
             **self.control(self.view(board, borrowed["runId"])),
         })
-        released = self.plan(board, self.view(board, submitted["runId"]), command_id="clean-owner-released")
-        self.assertEqual(released["plan"]["state"], "planned", released["plan"]["reasons"])
-        applied = self.apply(board, released, released["plan"], command_id="clean-owner-released-apply")
+        applied = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(applied["removed"])
         self.assertFalse(checkout.exists())
 
@@ -923,20 +901,21 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotEqual(helper_manifest["workspaceId"], manifest["workspaceId"])
         # A helper run that only borrowed the parent's worktree has no allocation
         # provenance of its own, even though its cwd is under state/workspaces.
-        helper_view = self.view(board, helper_id)
-        planned = board.store.workflow.cleanup_plan({
-            "runId": helper_id, "commandId": "clean-helper", "expectedRevision": helper_view["revision"],
-        }, console_authority={"sessionId": "console-test"})
-        self.assertEqual(planned["plan"]["state"], "blocked")
-        self.assertIn("not-a-managed-worktree", planned["plan"]["reasons"])
+        owner_view = self.view(board, run_id)
+        # Reclaim always carries the controlling root's Host control, even when it
+        # only proves that a borrowed run owns nothing disposable.
+        with self.assertRaises(BoardError) as raised:
+            self.reclaim(board, owner_view, targetRunId=helper_id)
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("not-a-managed-worktree", raised.exception.details["reasons"])
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, helper_manifest)
         self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
         # The owner's own allocation cannot be removed while the helper holds it.
-        owner_view = self.view(board, run_id)
-        blocked = self.plan(board, owner_view, command_id="clean-helper-owner")
-        self.assertEqual(blocked["plan"]["state"], "blocked")
-        self.assertIn("workspace-dependency", blocked["plan"]["reasons"])
+        with self.assertRaises(BoardError) as blocked:
+            self.reclaim(board, owner_view)
+        self.assertEqual(blocked.exception.code, "NOT_READY")
+        self.assertIn("workspace-dependency", blocked.exception.details["reasons"])
         self.assertTrue(checkout.exists())
 
     # -- Host control over an independently allocated helper ------------------
@@ -990,56 +969,69 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
         root_view, artifact = flow["rootView"], flow["artifact"]
         target = self.target_with_artifact(artifact)
-        recorded = board.store.workflow.integration_record({
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-integration",
-            "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
-            "strategy": "patch", "beforeCommit": target["before"],
+        accepted = board.call("workflow_accept", {
+            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+            "note": "reviewed the helper output",
             "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "reason": "verified the helper worktree output", **self.control(root_view),
+            "beforeCommit": target["before"], "keepCheckout": True, **self.control(root_view),
         })
-        self.assertEqual(recorded["targetRunId"], helper_id)
-        self.assertEqual(recorded["integration"]["state"], "verified")
-        self.assertGreater(recorded["targetRevision"], flow["helperView"]["revision"])
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["targetRunId"], helper_id)
+        self.assertEqual(accepted["integration"]["state"], "verified")
+        self.assertEqual(self.view(board, helper_id)["state"], "accepted")
         with board.store.db.read() as connection:
             integration_run = connection.execute(
                 "SELECT run_id FROM workflow_integrations WHERE integration_id=?",
-                (recorded["integrationId"],),
+                (accepted["integrationId"],),
             ).fetchone()["run_id"]
         self.assertEqual(integration_run, helper_id)
         # A sibling or foreign target is never reachable through the root capability.
         with self.assertRaises(BoardError) as raised:
-            board.store.workflow.integration_record({
-                "runId": run_id, "targetRunId": "run-not-owned", "commandId": "helper-integration-sibling",
-                "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
-                "notRequired": True, "reason": "wrong target", **self.control(root_view),
+            board.call("workflow_accept", {
+                "runId": run_id, "targetRunId": "run-not-owned", "artifactId": artifact["artifactId"],
+                "note": "wrong target", "notRequired": "wrong target", **self.control(root_view),
             })
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
-        accepted = board.call("workflow_acknowledge", {
-            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-            "commandId": "helper-ack", "expectedRevision": root_view["revision"],
-            "note": "reviewed the helper output", "verdict": "accepted", **self.control(root_view),
-        })
-        self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["targetRunId"], helper_id)
-        self.assertGreater(accepted["targetRevision"], recorded["targetRevision"])
-        self.assertEqual(self.view(board, helper_id)["state"], "accepted")
-        planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-clean-plan",
-            "expectedRevision": root_view["revision"], **self.control(root_view),
-        })
-        plan = planned["plan"]
-        self.assertEqual(plan["state"], "planned", plan["reasons"])
-        self.assertEqual(plan["workspaceId"], flow["helperManifest"]["workspaceId"])
-        self.assertEqual(plan["path"], flow["helperManifest"]["checkoutRoot"])
-        self.assertEqual(planned["targetRunId"], helper_id)
-        applied = board.store.workflow.cleanup_apply({
-            "runId": run_id, "targetRunId": helper_id, "planId": plan["planId"], "commandId": "helper-clean-apply",
-            "expectedRevision": root_view["revision"], "confirmPath": plan["path"], **self.control(root_view),
+        # The kept helper checkout is reclaimed through the root capability alone.
+        self.assertTrue(flow["helperCheckout"].exists())
+        applied = board.call("workflow_reclaim", {
+            "runId": run_id, "targetRunId": helper_id, **self.control(root_view),
         })
         self.assertTrue(applied["removed"])
+        self.assertFalse(applied["alreadyRemoved"])
         self.assertEqual(applied["targetRunId"], helper_id)
         self.assertFalse(flow["helperCheckout"].exists())
         # The root's own worktree is not the helper target and stays in place.
+        self.assertTrue(flow["checkout"].exists())
+
+    def test_reclaim_helper_uses_the_control_roots_revision(self):
+        flow = self.root_with_helper_worktree(request_id="helper-root-revision")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        artifact = flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        accepted = board.call("workflow_accept", {
+            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+            "note": "helper reviewed before the control root changes", "keepCheckout": True,
+            "target": {"path": str(target["path"]), "ref": "HEAD"}, **self.control(flow["rootView"]),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        # Only the controlling root advances; the helper keeps its own revision.
+        for index in range(2):
+            root = self.view(board, run_id)
+            taken = board.call("workflow_takeover", {
+                "runId": run_id, "commandId": f"revision-takeover-{index}",
+                "expectedOwnerGeneration": root["ownerGeneration"],
+                "newHostId": f"host-revision-{index}", **self.control(root),
+            })
+            self.controls[run_id] = dict(taken["control"])
+        root = self.view(board, run_id)
+        helper = self.view(board, helper_id)
+        self.assertNotEqual(root["revision"], helper["revision"] + 1)
+        reclaimed = board.call("workflow_reclaim", {
+            "runId": run_id, "targetRunId": helper_id, **self.control(root),
+        })
+        self.assertTrue(reclaimed["removed"])
+        self.assertFalse(flow["helperCheckout"].exists())
         self.assertTrue(flow["checkout"].exists())
 
     def test_an_accepted_helper_allocation_cleans_after_the_parent_is_accepted(self):
@@ -1047,17 +1039,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
         root_view, artifact = flow["rootView"], flow["artifact"]
         target = self.target_with_artifact(artifact)
-        board.store.workflow.integration_record({
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-before-parent-int",
-            "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
-            "strategy": "patch", "beforeCommit": target["before"],
-            "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "reason": "helper output verified", **self.control(root_view),
-        })
-        accepted = board.call("workflow_acknowledge", {
+        accepted = board.call("workflow_accept", {
             "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-            "commandId": "helper-before-parent-ack", "note": "helper reviewed", "verdict": "accepted",
-            **self.control(root_view),
+            "note": "helper reviewed", "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "beforeCommit": target["before"], **self.control(root_view),
         })
         self.assertEqual(accepted["state"], "accepted")
         # Deliver and accept the parent without cleaning the helper first. The
@@ -1077,29 +1062,16 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         first_parent_artifact = next(row for row in flow["rootView"]["artifacts"] if row["kind"] == "output")
         parent_target = self.target_with_artifact(parent_artifact, name="parent-target",
                                                   previous=(first_parent_artifact,))
-        board.store.workflow.integration_record({
-            "runId": run_id, "commandId": "parent-int", "expectedRevision": root_view["revision"],
-            "artifactId": parent_artifact["artifactId"], "strategy": "patch", "beforeCommit": parent_target["before"],
-            "target": {"path": str(parent_target["path"]), "ref": "HEAD"}, "reason": "parent output verified",
-            **self.control(root_view),
-        })
-        root_view = self.view(board, run_id)
-        parent_accepted = board.call("workflow_acknowledge", {
-            "runId": run_id, "artifactId": parent_artifact["artifactId"], "commandId": "parent-ack",
-            "note": "parent reviewed", "verdict": "accepted", **self.control(root_view),
+        parent_accepted = board.call("workflow_accept", {
+            "runId": run_id, "artifactId": parent_artifact["artifactId"], "note": "parent reviewed",
+            "target": {"path": str(parent_target["path"]), "ref": "HEAD"},
+            "beforeCommit": parent_target["before"], "keepCheckout": True, **self.control(root_view),
         })
         self.assertEqual(parent_accepted["state"], "accepted")
         # The accepted helper allocation is still owned and still removable.
         root_view = self.view(board, run_id)
-        planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-after-parent-clean",
-            "expectedRevision": root_view["revision"], **self.control(root_view),
-        })
-        self.assertEqual(planned["plan"]["state"], "planned", planned["plan"]["reasons"])
-        applied = board.store.workflow.cleanup_apply({
-            "runId": run_id, "targetRunId": helper_id, "planId": planned["plan"]["planId"],
-            "commandId": "helper-after-parent-apply", "expectedRevision": root_view["revision"],
-            "confirmPath": planned["plan"]["path"], **self.control(root_view),
+        applied = board.call("workflow_reclaim", {
+            "runId": run_id, "targetRunId": helper_id, **self.control(root_view),
         })
         self.assertTrue(applied["removed"])
         self.assertFalse(flow["helperCheckout"].exists())
@@ -1116,15 +1088,15 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
         self.assertEqual(taken["ownerGeneration"], root_view["ownerGeneration"] + 1)
         params = {
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-stale-integration",
-            "expectedRevision": taken["revision"], "artifactId": artifact["artifactId"], "strategy": "patch",
-            "beforeCommit": target["before"], "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "reason": "a stale owner must be fenced",
+            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+            "note": "a stale owner must be fenced",
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "beforeCommit": target["before"],
         }
         with self.assertRaises(BoardError) as raised:
-            board.store.workflow.integration_record({**params, **self.control(root_view)})
+            board.call("workflow_accept", {**params, **self.control(root_view)})
         self.assertEqual(raised.exception.code, "STALE_GENERATION")
-        recorded = board.store.workflow.integration_record({**params, **dict(taken["control"])})
+        recorded = board.call("workflow_accept", {**params, **dict(taken["control"])})
         self.assertEqual(recorded["targetRunId"], helper_id)
         self.assertEqual(recorded["integration"]["state"], "verified")
 
@@ -1145,12 +1117,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
         with mock.patch.object(workspace_module, "integration_verify", detaching_verify):
             with self.assertRaises(BoardError) as raised:
-                board.store.workflow.integration_record({
-                    "runId": run_id, "targetRunId": helper_id, "commandId": "helper-detach-integration",
-                    "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
-                    "strategy": "patch", "beforeCommit": target["before"],
+                board.call("workflow_accept", {
+                    "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+                    "note": "detached mid-flight",
                     "target": {"path": str(target["path"]), "ref": "HEAD"},
-                    "reason": "detached mid-flight", **self.control(root_view),
+                    "beforeCommit": target["before"], **self.control(root_view),
                 })
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
         with board.store.db.read() as connection:
@@ -1162,49 +1133,275 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIsNone(parent)
         self.assertTrue(flow["helperCheckout"].exists())
 
-    def test_acknowledge_command_id_binds_the_claimed_integration(self):
+    def test_acceptance_payload_binds_the_recorded_review(self):
         board = self.board()
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
             board, request_id="ack-key")
-        first = self.integrate(board, view, artifact, not_required=True, reason="first claim",
-                               command_id="ack-int-1")
-        second = self.integrate(board, first, artifact, not_required=True, reason="second claim",
-                                command_id="ack-int-2")
-        accepted = board.call("workflow_acknowledge", {
-            "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-once",
-            "integrationId": first["integration"]["integrationId"], "note": "reviewed the first claim",
-            "verdict": "accepted", **self.control(second),
+        accepted = board.call("workflow_accept", {
+            "runId": submitted["runId"], "artifactId": artifact["artifactId"],
+            "note": "reviewed the first claim", "notRequired": "no separate target",
+            **self.control(view),
         })
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["integrationId"], first["integration"]["integrationId"])
-        replay = board.call("workflow_acknowledge", {
-            "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-once",
-            "integrationId": first["integration"]["integrationId"], "note": "reviewed the first claim",
-            "verdict": "accepted", **self.control(second),
+        self.assertEqual(accepted["integration"]["state"], "not-required")
+        replay = board.call("workflow_accept", {
+            "runId": submitted["runId"], "artifactId": artifact["artifactId"],
+            "note": "reviewed the first claim", "notRequired": "no separate target",
+            **self.control(view),
         })
         self.assertTrue(replay["duplicate"])
-        # The same commandId with a changed claimed integration is a different
-        # command and conflicts instead of replaying the stored verdict.
+        # A changed payload derives a different command and conflicts against the
+        # recorded acceptance instead of relabelling the reviewed outcome.
         with self.assertRaises(BoardError) as raised:
-            board.call("workflow_acknowledge", {
-                "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-once",
-                "integrationId": second["integration"]["integrationId"], "note": "reviewed the first claim",
-                "verdict": "accepted", **self.control(second),
+            board.call("workflow_accept", {
+                "runId": submitted["runId"], "artifactId": artifact["artifactId"],
+                "note": "a different claim", "notRequired": "no separate target",
+                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
-        self.assertEqual(raised.exception.details["commandId"], "ack-once")
-        # A different commandId that tries to relabel an accepted outcome with
-        # another integration record conflicts against the recorded verdict.
         with self.assertRaises(BoardError) as raised:
-            board.call("workflow_acknowledge", {
-                "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-relabel",
-                "integrationId": second["integration"]["integrationId"], "note": "reviewed the first claim",
-                "verdict": "accepted", **self.control(second),
+            board.call("workflow_accept", {
+                "runId": submitted["runId"], "artifactId": artifact["artifactId"],
+                "note": "reviewed the first claim",
+                "target": {"path": str(self.directory / "blank-ack"), "ref": "HEAD"},
+                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
-        self.assertEqual(raised.exception.details["recordedIntegrationId"],
-                         first["integration"]["integrationId"])
+
+    def test_reclaim_after_adopt_counts_the_adopted_paths(self):
+        """An adopted out-of-scope conflict no longer blocks the delivered reclaim."""
+        board = self.board()
+        self.register(board)
+        submitted = board.call("workflow_submit", {
+            **CONFIGURATION, "requestId": "adopt-reclaim", "hostId": "host-1",
+            "task": "scoped run whose only failure is the refused seal",
+            "cwd": str(self.repo), "submissionToken": "t" * 32,
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
+        })
+        self.controls[submitted["runId"]] = submitted["control"]
+        claimed = self.claim(board, submitted["runId"], request_id="adopt-reclaim-claim")
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        (checkout / "src" / "feature.py").parent.mkdir(parents=True, exist_ok=True)
+        (checkout / "src" / "feature.py").write_text("value = 2\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
+        (checkout / "outside.txt").write_text("untracked outside\n")
+        with self.assertRaises(BoardError) as raised:
+            workspace_module.seal(self.directory, manifest, submitted["runId"],
+                                  claimed["claim"]["attempt"]["attemptId"])
+        self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
+        # A scope-only failure keeps the attempt's own native completed outcome.
+        claim = claimed["claim"]
+        seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
+        board.call("worker_result", {
+            "workerId": self.worker, "attemptId": claim["attempt"]["attemptId"],
+            "generation": claim["attempt"]["generation"], "nonce": "n" * 16, "status": "failed",
+            "result": {"status": "failed", "processState": {"shutdownConfirmed": True},
+                       "workspaceSealError": seal_error, "turnResultPath": "/tmp/turn-result.json",
+                       "turn": self.turn_record(claim, disposition="completed")},
+            "shutdownConfirmed": True, "exitCode": 1, "error": seal_error,
+        })
+        view = self.view(board, submitted["runId"])
+        conflict = view["workspaceConflicts"][0]
+        self.assertEqual(conflict["state"], "open")
+        adopted = board.store.workflow.workspace_resolve({
+            "runId": submitted["runId"], "commandId": "adopt-site", "expectedRevision": view["revision"],
+            "conflictId": conflict["conflictId"], "action": "adopt",
+            "observedFingerprint": conflict["observedFingerprint"],
+            "reason": "the Host adopts this exact site as the delivered outcome", **self.control(view),
+        })
+        self.assertEqual(adopted["resolutionState"], "adopted")
+        self.assertTrue(adopted["delivered"])
+        self.assertIn("tracked.txt", adopted["adoptedPaths"])
+        delivered = self.view(board, submitted["runId"])
+        resolved = next(row for row in delivered["artifacts"] if row["kind"] == "resolved-output")
+        # The adopted site is exactly what acceptance retains: the automatic reclaim
+        # must count the adopted paths as authorized instead of reporting unsealed.
+        accepted = board.call("workflow_accept", {
+            "runId": submitted["runId"], "artifactId": resolved["artifactId"],
+            "note": "reviewed the adopted site", "notRequired": "the adopted site needs no separate target",
+            **self.control(delivered),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertTrue(accepted["reclaim"]["removed"], accepted["reclaim"])
+        self.assertFalse(checkout.exists())
+
+    def test_a_forged_adopt_record_authorizes_nothing_for_conclude(self):
+        """Only board-bound, Git-verified adoption records authorize out-of-scope paths."""
+        board = self.board()
+        self.register(board)
+        submitted = board.call("workflow_submit", {
+            **CONFIGURATION, "requestId": "adopt-forge", "hostId": "host-1",
+            "task": "scoped run whose only failure is the refused seal",
+            "cwd": str(self.repo), "submissionToken": "t" * 32,
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
+        })
+        self.controls[submitted["runId"]] = submitted["control"]
+        claimed = self.claim(board, submitted["runId"], request_id="adopt-forge-claim")
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        (checkout / "src" / "feature.py").parent.mkdir(parents=True, exist_ok=True)
+        (checkout / "src" / "feature.py").write_text("value = 2\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
+        with self.assertRaises(BoardError):
+            workspace_module.seal(self.directory, manifest, submitted["runId"],
+                                  claimed["claim"]["attempt"]["attemptId"])
+        claim = claimed["claim"]
+        seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
+        board.call("worker_result", {
+            "workerId": self.worker, "attemptId": claim["attempt"]["attemptId"],
+            "generation": claim["attempt"]["generation"], "nonce": "n" * 16, "status": "failed",
+            "result": {"status": "failed", "processState": {"shutdownConfirmed": True},
+                       "workspaceSealError": seal_error, "turnResultPath": "/tmp/turn-result.json",
+                       "turn": self.turn_record(claim, disposition="completed")},
+            "shutdownConfirmed": True, "exitCode": 1, "error": seal_error,
+        })
+        view = self.view(board, submitted["runId"])
+        conflict = view["workspaceConflicts"][0]
+        adopted = board.store.workflow.workspace_resolve({
+            "runId": submitted["runId"], "commandId": "adopt-site", "expectedRevision": view["revision"],
+            "conflictId": conflict["conflictId"], "action": "adopt",
+            "observedFingerprint": conflict["observedFingerprint"],
+            "reason": "adopt this exact site", **self.control(view),
+        })
+        self.assertTrue(adopted["delivered"])
+        # A Host change beyond both the scope and the adopted site, plus a forged
+        # adoption record that claims the Host already promoted exactly that path.
+        (checkout / "smuggled.txt").write_text("never authorized\n")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, source_task_id, kind,"
+                " manifest_json, manifest_sha256, created_at) VALUES('art-forged', ?, NULL, NULL, NULL,"
+                " 'resolved-output', ?, '0' * 64wait, '2020-01-01T00:00:00.000Z')"
+                .replace("'0' * 64wait", "'0'"),
+                (submitted["runId"], canonical_json({
+                    "kind": "resolution", "action": "adopt",
+                    "manifestSha256": manifest["manifestSha256"], "snapshotSha256": "0",
+                    "adoptedPaths": ["smuggled.txt"], "changedPaths": ["smuggled.txt"],
+                })),
+            )
+        params = {"runId": submitted["runId"], "note": "the forged record must not smuggle this path",
+                  **self.control(self.view(board, submitted["runId"]))}
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_conclude", params)
+        self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
+        self.assertEqual(raised.exception.details["paths"], ["smuggled.txt"])
+        self.assertTrue(checkout.exists())
+        # Without the forgery the same conclusion seals the real adopted site and
+        # the Host's in-scope work, then reclaims the checkout.
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM workflow_artifacts WHERE artifact_id='art-forged'")
+        (checkout / "smuggled.txt").unlink()
+        concluded = board.call("workflow_conclude", params)
+        self.assertEqual(concluded["state"], "delivered")
+        self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
+        self.assertFalse(checkout.exists())
+
+    def test_accept_refuses_a_detached_target_before_any_git_work(self):
+        flow = self.root_with_helper_worktree(request_id="accept-detach-early")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view, artifact = flow["rootView"], flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        real_verify = workspace_module.integration_verify
+        called: list[int] = []
+
+        def counting_verify(*args, **kwargs):
+            called.append(1)
+            return real_verify(*args, **kwargs)
+
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM workflow_children WHERE child_task_id=?", (helper_id,))
+        with mock.patch.object(workspace_module, "integration_verify", counting_verify):
+            with self.assertRaises(BoardError) as raised:
+                board.call("workflow_accept", {
+                    "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+                    "note": "a detached target is refused before any Git work",
+                    "target": {"path": str(target["path"]), "ref": "HEAD"},
+                    "beforeCommit": target["before"], **self.control(root_view),
+                })
+        self.assertEqual(raised.exception.code, "UNAUTHORIZED")
+        self.assertEqual(called, [], "Git verification must not run for an unauthorized target")
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_integrations WHERE run_id=?", (helper_id,)).fetchone()[0], 0)
+
+    def test_accept_refuses_an_unrelated_commit_interval(self):
+        board = self.board()
+        self.register(board)
+        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+            board, request_id="interval-refusal")
+        target = self.target_with_artifact(artifact)
+        before = git(target["path"], "rev-parse", "HEAD").strip()
+        # An unrelated root commit that exists in the target repository but is no
+        # ancestor of the integrated ref.
+        git(target["path"], "checkout", "-q", "--orphan", "unrelated")
+        git(target["path"], "commit", "-q", "--allow-empty", "-qm", "an unrelated root commit")
+        unrelated_commit = git(target["path"], "rev-parse", "HEAD").strip()
+        # The artifact content matches the target, but the named commit interval
+        # does not hold: the comparison proves nothing and is refused.
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_accept", {
+                "runId": view["runId"], "artifactId": artifact["artifactId"],
+                "note": "content matches but the interval does not",
+                "target": {"path": str(target["path"]), "ref": before},
+                "beforeCommit": unrelated_commit,
+                **self.control(view),
+            })
+        self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
+        self.assertFalse(raised.exception.details["verification"]["verified"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_integrations WHERE run_id=?", (submitted["runId"],)).fetchone()[0], 0)
+            self.assertIsNone(connection.execute(
+                "SELECT accepted_at FROM tasks WHERE task_id=?", (submitted["runId"],)).fetchone()[0])
+        # The real interval verifies and accepts (the orphan branch moved HEAD,
+        # so the integrated commit is named explicitly).
+        accepted = self.accept(board, self.view(board, submitted["runId"]), artifact,
+                               target={"path": target["path"], "before": before, "ref": target["after"]})
+        self.assertEqual(accepted["state"], "accepted")
+
+    def test_a_takeover_between_review_and_reclaim_blocks_only_the_removal(self):
+        board = self.board()
+        self.register(board)
+        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+            board, request_id="takeover-window")
+        real_plan = board.store.workflow.cleanup_plan
+        generation = {"done": False}
+        nonlocal_taken = {"control": None}
+
+        def taking_over_plan(coordinator, params, *, console_authority=None):
+            if not generation["done"]:
+                # Exactly the documented window: the acceptance is committed, the
+                # automatic reclaim has not planned its removal yet, and another
+                # Host takes over the controlling goal.
+                generation["done"] = True
+                current = self.view(board, submitted["runId"])
+                current_control = dict(self.control(current))
+                taken = board.call("workflow_takeover", {
+                    "runId": submitted["runId"], "commandId": "window-takeover",
+                    "expectedOwnerGeneration": current["ownerGeneration"], "newHostId": "host-2",
+                    **current_control,
+                })
+                nonlocal_taken["control"] = dict(taken["control"])
+            return real_plan(params)
+
+        with mock.patch.object(workflow_module.WorkflowCoordinator, "cleanup_plan", taking_over_plan):
+            accepted = self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertFalse(accepted["reclaim"]["removed"])
+        self.assertIn("STALE_GENERATION", accepted["reclaim"]["reasons"])
+        self.assertTrue(checkout.exists())
+        taken_control = nonlocal_taken["control"]
+        # The old owner cannot even retry; the new owner's reclaim completes it.
+        old_control = dict(self.controls[submitted["runId"]])
+        self.controls[submitted["runId"]] = dict(taken_control)
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_reclaim", {"runId": submitted["runId"], **old_control})
+        self.assertEqual(raised.exception.code, "STALE_GENERATION")
+        applied = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(applied["removed"])
+        self.assertFalse(checkout.exists())
 
     def test_root_control_amends_a_helper_scope(self):
         flow = self.root_with_helper_worktree(request_id="helper-amend")
@@ -1289,39 +1486,37 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return {"board": board, "runId": run_id, "helperId": helper_id, "helperManifest": helper_manifest,
                 "helperCheckout": helper_checkout, "conflict": conflict}
 
-    def test_cleanup_plan_expires_and_a_new_plan_is_required(self):
-        clock = FakeClock()
-        board = self.board(clock=clock)
+    def test_a_blocked_reclaim_needs_a_fresh_removal_for_the_same_exact_path(self):
+        board = self.board()
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board, request_id="expiry-1")
         target = self.target_with_artifact(artifact)
-        self.integrate(board, view, artifact, target=target, reason="verified before cleanup")
-        self.acknowledge(board, view, artifact)
+        accepted = self.accept(board, view, artifact, target=target, reason="verified before cleanup",
+                               keepCheckout=True)
+        self.assertEqual(accepted["state"], "accepted")
         view = self.view(board, submitted["runId"])
-        planned = self.plan(board, view)
-        plan = planned["plan"]
-        self.assertEqual(plan["state"], "planned")
-        clock.value = "2099-01-01T00:00:00.000Z"
+        (checkout / "tracked.txt").write_text("edited after the seal\n")
         with self.assertRaises(BoardError) as raised:
-            self.apply(board, planned, plan, command_id="clean-expired-apply")
-        self.assertEqual(raised.exception.code, "PLAN_EXPIRED")
+            self.reclaim(board, view)
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        blocked = self.view(board, submitted["runId"])["cleanup"]
+        self.assertEqual(blocked["state"], "blocked")
         self.assertTrue(checkout.exists())
-        # A fresh plan after expiry is a new authorization for the same exact path.
-        fresh = self.plan(board, planned, command_id="clean-fresh")
-        self.assertFalse(fresh["duplicate"])
-        self.assertNotEqual(fresh["plan"]["planId"], plan["planId"])
-        self.assertEqual(fresh["plan"]["state"], "planned")
-        self.assertEqual(fresh["plan"]["path"], manifest["checkoutRoot"])
+        # Removing the blocker runs one fresh removal authorization for the same
+        # exact registered path.
+        (checkout / "tracked.txt").write_text("sealed output\n")
+        applied = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(applied["removed"])
+        self.assertEqual(applied["path"], manifest["checkoutRoot"])
+        self.assertNotEqual(self.view(board, submitted["runId"])["cleanup"]["planId"], blocked["planId"])
+        self.assertFalse(checkout.exists())
 
-    def test_started_cleanup_recovers_after_plan_expiry_without_removing_twice(self):
+    def test_started_reclaim_recovers_after_interruption_without_removing_twice(self):
         clock = FakeClock()
         board = self.board(clock=clock)
         self.register(board)
         submitted, _claim, _manifest, checkout, _seal, view, artifact = self.run_worktree(board)
-        self.integrate(board, view, artifact, target=self.target_with_artifact(artifact))
-        self.acknowledge(board, view, artifact)
-        planned = self.plan(board, self.view(board, submitted["runId"]))
-        plan = planned["plan"]
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact), keepCheckout=True)
         remove = workspace_module.cleanup_remove
 
         def crash_after_removal(*args, **kwargs):
@@ -1329,16 +1524,21 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             raise RuntimeError("simulated loss before the completion transaction")
 
         with mock.patch.object(workspace_module, "cleanup_remove", side_effect=crash_after_removal):
-            with self.assertRaisesRegex(RuntimeError, "simulated loss"):
-                self.apply(board, planned, plan)
+            with self.assertRaises(Exception):
+                self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertFalse(checkout.exists())
         self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "applying")
+        # Even after the internal admission window has lapsed, an applying reclaim
+        # resumes to its recorded completion instead of deleting anything twice.
         clock.value = "2099-01-01T00:00:00.000Z"
         with mock.patch.object(workspace_module, "cleanup_remove", side_effect=AssertionError("second deletion")):
-            recovered = self.apply(board, planned, plan)
-            self.assertEqual(recovered["plan"]["state"], "applied")
-            replay = self.apply(board, recovered, plan, command_id="recheck-applied")
-        self.assertTrue(replay["duplicate"])
+            recovered = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(recovered["removed"])
+        self.assertTrue(recovered["alreadyRemoved"])
+        self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "applied")
+        replay = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(replay["removed"])
+        self.assertTrue(replay["alreadyRemoved"])
         self.assertTrue(Path(artifact["diffPath"]).is_file())
 
 

@@ -189,41 +189,15 @@ A fresh installation uses `~/.local/share/hey-my-buddy/state` as its board. An o
 
 Tests and previews always use separate private state and runtime roots. Never point a development run at the daily board, and never overwrite a live board with an archived copy.
 
-## Workspace bridge
+## DSH session privacy
 
-`workspace: false` is the DSH default and writes a session in the attempt-private area. Explicit `workspace: true` groups the session through a bundled host plugin; it controls session grouping only, while a governed task's `executionWorkspace` is a separate checkout/worktree ownership contract. Grouped runs require the bridge to be installed and its dsh profile running; there is no silent fallback to an ungrouped run. Run the installer from the plugin or repository root, the directory that contains `bin/buddy`.
-
-```sh
-node harnesses/dsh/scripts/install-workspace-bridge.mjs
-```
-
-- The installer defaults to `--profile web` and appends one entry to that profile's `cordis.patch.yml`, keeping existing text and writing a private backup first. Use `--home`, `--profile` or `--workspace-socket` for another existing long-lived profile.
-- The bridge serves an owner-private Unix socket, by default `$DSH_HOME/deepseek-delegate/workspace.sock` (`~/.dsh` when `DSH_HOME` is unset). There is no Web URL, browser token or HTTP dependency.
-- Long-lived profiles hot-reload the user patch; otherwise start `dsh web` normally.
-- Before a model run, the runner checks that the bridge answers and resolves the canonical cwd. If it is missing, unusable or misconfigured, the run fails with an explicit error (exit 2) instead of running ungrouped. Ordinary default execution uses the private session root and needs no bridge.
-- A stale socket left by an unclean exit is **refused, never replaced**. Verify the old host process has stopped, then remove that socket yourself and restart the profile.
-- The bridge never activates an Agent; it validates the run's persisted root session and cwd, calls the official workspace API inside the owning host, and verifies membership. Task outcome and grouping outcome stay separately visible.
-
-Recover binding without rerunning a task, using a `workspace.sessionId` from a failed binding or a known completed session:
-
-```sh
-node harnesses/dsh/scripts/run.mjs --cwd /path/to/project --attach-session SESSION_ID
-```
-
-This verifies the session exists before adopting it, runs no model, and does not scan or bulk-reassign history. The stored session cwd must equal the canonical workspace path.
+Every DSH execution writes its session rollout under an execution-private root through the runner's per-run patch overlay; the DSH home, credentials store and settings document stay with the owning harness. The product session-grouping feature — the submission `workspace` switch, the workspace bridge plugin and installer, the runner's grouping flags and `worker-sessions` DSH listing/archiving — is removed by [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md). A `workspace` field on a submission is rejected as unknown, and the grouping runner flags are usage errors. Sessions grouped before the removal stay wherever the native harness keeps them: archive them once in DSH itself if desired; this product no longer reads or writes them.
 
 ## Worker session history
 
-`buddy worker-sessions '{"adapter":"dsh"}'` and `buddy worker-sessions '{"adapter":"codex"}'` read only board-proven native identities; they do not open user harness stores or call a native harness. DSH includes only exact recorded workspace session bindings, and uncertain stop remains blocked. Codex labels user-store and goal-private Worker threads whose creation is proven by the governed native receipt; actual archive or deletion requires the user's separate confirmation and Codex's native interface.
+`buddy worker-sessions '{"adapter":"codex"}'` reads only board-proven native identities; it does not open user harness stores or call a native harness. It labels user-store and goal-private Worker threads whose creation is proven by the governed native receipt; actual archive or deletion requires the user's separate confirmation and Codex's native interface. A `dsh` adapter request is `UNSUPPORTED`: DSH sessions are execution-private and their grouped listing and archiving were removed with the grouping feature; only `action: "list"` exists.
 
-```sh
-buddy worker-sessions '{"adapter":"dsh","action":"plan"}'
-buddy worker-sessions '{"adapter":"dsh","action":"apply","planDigest":"<planDigest>","selectionDigest":"<selectionDigest>"}'
-```
-
-DSH `plan` reads the owning workspace bridge to verify native headers and membership without changing them; a real native check needs separate user approval before the Host invokes it. `apply` is the explicit cleanup request and needs no per-session confirmation. It rechecks board ownership, confirmed shutdown, native revision and membership, archives the exact Worker session through the native registry, and detaches it from its recorded group. The current DSH SDK supplies neither atomic creation provenance nor an atomic empty-group delete. This version retains the groups and reports why; it never guesses ownership or deletes a group that could acquire another session. Other sessions and mixed groups remain untouched. The result reports `sessionsArchived`, `groupsRemoved:0`, deduplicated `groupsRetained`, `groupRetention:[{workspaceId,reason}]`, failures and `nativeLogsRetained:true`; DSH's published persistence API has no physical log-deletion contract. Reuse the same plan and selection digests after a lost response so the durable journal can finish the exact operation. Ordinary replay receipts under `worker-session-cleanup/<64-hex>.json` are fsynced before native mutation and included in backup; links and undeclared journal entries are refused.
-
-This upgrade leaves native DSH groups and historical Codex threads in place. Historical cleanup is a separate explicit post-installation Host action. Ordinary old-layout private files still relocate only after verified backup under decision 11's existing journal, validation and rollback. Any future upgrade that reorganizes native DSH groups must run after `backup.verify`, retain exact reversible identities and validate rollback before claiming completion; merely changing a default cannot authorize native history changes.
+This upgrade leaves historical Codex threads in place. Historical cleanup is a separate explicit post-installation Host action. Ordinary old-layout private files still relocate only after verified backup under decision 11's existing journal, validation and rollback. Any future upgrade that reorganizes native history must run after `backup.verify`, retain exact reversible identities and validate rollback before claiming completion; merely changing a default cannot authorize native history changes.
 
 Ordinary Codex execution and eligible native continuation share a goal-private `CODEX_HOME`; the selected file-based login is linked only in that private area and removed after confirmed native and controller stop. Unknown stop retains it. The Worker-account consumption seam is described in [codex.md](codex.md); this slice does not create accounts or change login configuration.
 

@@ -176,6 +176,10 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
         migration = migrate_12_to_13(connection)
         migration = {**migration, "healthMigration": migrate_13_to_14(connection),
                      "hostWorkflowMigration": migrate_14_to_15(connection), "toSchema": SCHEMA_VERSION}
+        # This explicit preparation writes only its disposable destination copy.
+        # Include the pending source tables there; the schema-16 upgrade and daily
+        # data cleanup remain a separate L15 operation.
+        connection.executescript(SCHEMA)
         connection.execute("PRAGMA foreign_keys=ON")
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()

@@ -156,30 +156,17 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             activity_meta = (receipt.get("result") or {}).get("nativeActivity") or {}
             self.assertTrue(activity_meta.get("sidecarWritten"))
 
-            # The final acknowledgement is separate from execution and bound to the
-            # actual sealed artifact. The Host records its explicit integration
-            # decision through the same business method the public operation uses.
-            from buddy.store import BoardStore
-
+            # The final acceptance is separate from execution and bound to the
+            # actual sealed artifact, with its explicit integration decision.
             control = json.loads(control_path.read_text())
-            BoardStore(self.directory).workflow.integration_record({
-                "runId": run_id,
-                "commandId": "worker-integration-1",
-                "expectedRevision": delivered["revision"],
-                "artifactId": outputs[0]["artifactId"],
-                "notRequired": True,
-                "reason": "the mock turn is reviewed without a separate integration target",
-                "hostId": control["hostId"],
-                "ownerGeneration": control["ownerGeneration"],
-                "controlToken": control["controlToken"],
-            })
             code, acknowledged = self.cli(
-                "acknowledge",
+                "accept",
                 json.dumps(
                     {
                         "runId": run_id,
                         "artifactId": outputs[0]["artifactId"],
                         "note": "inspected the sealed output",
+                        "notRequired": "the mock turn is reviewed without a separate integration target",
                         "controlFile": str(control_path),
                     }
                 ),
@@ -373,9 +360,9 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
 
 
 class DshNativeStorageArgumentsTests(unittest.TestCase):
-    """Only the ungrouped session rollout moves; the DSH home and its credentials never do."""
+    """Only the session rollout moves; the DSH home and its credentials never do."""
 
-    def arguments(self, workspace: bool | None, *, governed: bool = False) -> list[str]:
+    def arguments(self, *, governed: bool = False) -> list[str]:
         import tempfile
         from unittest import mock
 
@@ -391,24 +378,18 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
                                                   "previousSessionId": None, "context": {}, "executionWorkspace": {}}}
         context = ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30,
-                  **({} if workspace is None else {"workspace": workspace})},
+            spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30},
             directory=directory, runtime={}, environment={**os.environ, "BUDDY_STATE_DIR": str(directory / "state")}, turn=turn,
         )
         with mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)}):
             return DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "a" * 64,
                                                     "resultsPath": "/tmp/inquiry.jsonl", "errorPath": "/tmp/inquiry.error.json"})
 
-    def test_grouped_runs_keep_the_owning_harness_session_store(self):
-        args = self.arguments(workspace=True)
-        self.assertIn("--workspace", args)
-        self.assertNotIn("--no-workspace", args)
-        self.assertFalse(any(arg.startswith("--session-root") for arg in args), args)
-        self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
-
-    def test_ungrouped_runs_move_only_the_attempt_private_session_root(self):
-        args = self.arguments(workspace=False)
-        self.assertIn("--no-workspace", args)
+    def test_every_run_moves_only_the_attempt_private_session_root(self):
+        args = self.arguments()
+        # The removed grouping flags never reach the runner; the session
+        # rollout always lands under the attempt's private root.
+        self.assertFalse(any(arg in ("--workspace", "--no-workspace") for arg in args), args)
         session_root = next((arg for arg in args if arg.startswith("--session-root=")), None)
         self.assertIsNotNone(session_root, args)
         self.assertTrue(session_root.endswith("/sessions"), session_root)
@@ -416,16 +397,10 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
         # home must never be moved or simulated again.
         self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
 
-    def test_missing_workspace_spec_stays_private(self):
-        args = self.arguments(workspace=None)
-        self.assertIn("--no-workspace", args)
-        self.assertNotIn("--workspace", args)
-        self.assertTrue(any(arg.startswith("--session-root=") for arg in args), args)
-
     def test_a_governed_turn_publishes_its_activity_sidecar_in_the_attempt_directory(self):
-        plain = self.arguments(workspace=True)
+        plain = self.arguments()
         self.assertFalse(any(arg.startswith("--activity-file") for arg in plain), plain)
-        args = self.arguments(workspace=True, governed=True)
+        args = self.arguments(governed=True)
         activity = next((arg for arg in args if arg.startswith("--activity-file=")), None)
         self.assertIsNotNone(activity, args)
         self.assertTrue(activity.endswith("/activity.json"), activity)

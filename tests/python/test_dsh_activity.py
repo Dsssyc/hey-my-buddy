@@ -171,7 +171,7 @@ class RunnerActivityFlagTests(unittest.TestCase):
             cwd.mkdir()
             task = Path(directory) / "task.md"
             task.write_text("do the bounded thing\n")
-            base = ["--cwd", str(cwd), "--task-file", str(task), "--no-workspace"]
+            base = ["--cwd", str(cwd), "--task-file", str(task)]
             return subprocess.run([shutil.which("node"), str(RUNNER), *base, *flags],
                                   capture_output=True, text=True, timeout=30)
 

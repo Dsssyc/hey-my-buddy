@@ -60,19 +60,18 @@ SUMMARIES: dict[str, str] = {
     "paths": "Skill, launcher, data and runtime locations; reads files only and starts nothing.",
     "storage-plan": "Read-only storage reclamation plan.",
     "storage-apply": "Apply one confirmed storage plan.",
-    "worker-sessions": "List Buddy Worker sessions or plan and archive exact DSH workspace sessions.",
+    "worker-sessions": "List board-proven Worker native sessions (Codex history, read-only).",
     "submit": "Admit one governed goal, prepare its execution workspace and route its execution configuration.",
     "get": "Compact owner view of one governed goal; includeAudit adds the immutable record.",
     "decide": "Record Host authority on the active request and authorize concrete helpers.",
     "continue": "Record new input for a governed goal and invalidate older unconsumed continuations.",
     "takeover": "Rotate the Host control capability and owner generation without restarting work.",
     "cancel": "Fence a governed goal and complete its owned descendant graph.",
-    "acknowledge": "Record Host review of the fixed final artifact, separately from execution.",
+    "accept": "Accept one delivered artifact: verify its integration, record acceptance and reclaim the checkout.",
+    "conclude": "End a failed, cancelled or delivered-unaccepted goal with an independent conclusion, then reclaim.",
+    "reclaim": "Reclaim this goal's own registered managed checkout after a blocked or kept removal.",
     "scope-amend": "Append one authorized write-scope version for the next stage.",
     "workspace-resolve": "Settle one recorded out-of-scope failure site by restore, adopt or abandon.",
-    "integration-record": "Bind the sealed artifact to a target checkout/commit relationship, or record not-required.",
-    "workspace-cleanup-plan": "Plan removal of this run's own registered managed checkout.",
-    "workspace-cleanup-apply": "Remove exactly the planned checkout after rechecking every eligibility rule.",
     "await": "Wait for one existing run without starting, resuming, retrying or cancelling work.",
     "suggest": "Record one bounded suggestion on the caller's own run.",
     "objective-list": "Bounded work-objective and standalone-delegation summaries by latest activity.",
@@ -151,6 +150,9 @@ METHOD_NOTES: dict[str, tuple[str, ...]] = {
     "adapters": ("the same C-Two operation as capabilities",),
     "upgrade": ("runs the same installer as install with the upgrade coordinator",),
     "quota-redetect": ("reuse requestId after a lost reply, even if the chance was consumed; changed inputs conflict; no model/balance query or recovery claim",),
+    "accept": ("keyed by run and artifact: the same payload replays its recorded response and any changed payload conflicts",),
+    "conclude": ("keyed by run: the same note replays and a changed note conflicts",),
+    "reclaim": ("blocked removals report their reasons and change nothing; retry when the blocker is gone",),
     "backup-preflight": ("reads directory entries only; no locks, files, database writes, service or runtime startup; samples are bounded to 20 paths per outcome",),
     "wait-capacity": ("takes no parameters",),
 }
@@ -168,12 +170,11 @@ _CONTROL_METHODS = frozenset(
         "continue",
         "takeover",
         "cancel",
-        "acknowledge",
+        "accept",
+        "conclude",
+        "reclaim",
         "scope-amend",
         "workspace-resolve",
-        "integration-record",
-        "workspace-cleanup-plan",
-        "workspace-cleanup-apply",
     }
 )
 
@@ -232,9 +233,16 @@ _HELPERS = frozenset(
 )
 
 #: Validation functions that return one nested sub-object of their first argument.
-#: Naming the nested key keeps ``helpers[].spec.*`` fields under ``helpers`` instead
-#: of leaking them to the top level.
-_NESTED_EXTRACTORS = {"_spec_fields": "nested_key"}
+#: Naming the nested key keeps sub-object fields under their parent instead of
+#: leaking them to the top level. ``_spec_fields`` no longer extracts a nested
+#: object: since ADR-021 decision 17 it is a flat restriction of its argument, so
+#: its result keeps the argument's own field identity (see ``_FLAT_RESTRICTIONS``).
+_NESTED_EXTRACTORS: dict[str, str] = {}
+
+#: Validation functions whose result is their first argument restricted to the
+#: ordinary submit fields. The result keeps the argument's tracked field identity,
+#: so the ordinary spec's bounds land where the fields are actually given.
+_FLAT_RESTRICTIONS = frozenset({"_spec_fields"})
 
 #: Prose notes attached when the reader follows one composite validator. The bounds
 #: themselves come from the function body; these sentences explain a relationship
@@ -799,6 +807,19 @@ class _Extractor:
                     if facts is not None:
                         facts.mirror_owners[nested[0]] = nested[1]
                     continue
+                if (isinstance(child.value, ast.Call) and isinstance(child.value.func, ast.Name)
+                        and child.value.func.id in _FLAT_RESTRICTIONS and child.value.args
+                        and isinstance(child.value.args[0], ast.Name)):
+                    first = child.value.args[0]
+                    # ``owner is None`` is the top level: the restriction keeps the
+                    # request object's own identity wherever the fields are given,
+                    # exactly like passing the object itself to the next validator.
+                    if first.id == params_var:
+                        tracked[name] = _TrackedValue(owner)
+                        continue
+                    if first.id in tracked:
+                        tracked[name] = _TrackedValue(tracked[first.id].field)
+                        continue
                 length = self._length_reference(child.value, tracked)
                 if length is not None:
                     tracked[name] = _TrackedValue(length[0], length[1])

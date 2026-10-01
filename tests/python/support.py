@@ -178,7 +178,18 @@ _INHERITED_CHILD_KEYS = {
     "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
     "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
     "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "BUDDY_ACCOUNT_SELECTION", "BUDDY_SUPERVISOR_START_ID",
 }
+
+
+def offline_facts_source(directory: Path) -> str:
+    """The offline model-facts source every test harness pins by default.
+
+    The path names a fixture that normally does not exist, so a facts refresh inside
+    a test fails its source read and retains the previous snapshot instead of
+    touching the network. A test that wants a real parse writes its fixture there.
+    """
+    return str(Path(directory) / "model-facts-fixture.json")
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
@@ -191,6 +202,9 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         # A test child never shares the console backend's fixed default port; the
         # operating system assigns a private one. Tests may override this explicitly.
         BUDDY_CONSOLE_PORT="0",
+        # Model-facts refreshes stay offline: the pinned source is a private fixture
+        # path, and a missing one is a retained snapshot, never a network request.
+        BUDDY_MODEL_FACTS_FILE=str(directory / "model-facts-fixture.json"),
     )
     environment.update(overrides or {})
     # Test-supplied paths may vary within the fixture, but must not redirect its
@@ -203,11 +217,24 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
 
 @contextmanager
 def private_state_dir(prefix: str = "buddy-test-"):
-    directory = Path(tempfile.mkdtemp(prefix=prefix))
+    # The resolved form keeps one path identity for the whole board: macOS's
+    # per-user /var/folders alias and its /private/var target must never be two
+    # different roots inside one test (storage boundaries and Git both resolve).
+    directory = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     os.chmod(directory, 0o700)
+    previous = os.environ.get("BUDDY_MODEL_FACTS_FILE")
+    os.environ["BUDDY_MODEL_FACTS_FILE"] = offline_facts_source(directory)
+
+    def restore_facts_source() -> None:
+        if previous is None:
+            os.environ.pop("BUDDY_MODEL_FACTS_FILE", None)
+        else:
+            os.environ["BUDDY_MODEL_FACTS_FILE"] = previous
+
     try:
         yield directory
     finally:
+        restore_facts_source()
         stop_private_service(directory)
         stop_private_workers(directory)
         shutil.rmtree(directory)
@@ -303,9 +330,21 @@ class InProcessBoard:
 class BoardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._stack = []
-        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-"))
+        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
+        # In-process boards read the source hook from this process environment; pin
+        # the same offline fixture path the child environments get, so enabling a
+        # model in any test cannot reach the network.
+        previous = os.environ.get("BUDDY_MODEL_FACTS_FILE")
+        os.environ["BUDDY_MODEL_FACTS_FILE"] = offline_facts_source(self.directory)
+        self.addCleanup(self._restore_facts_source, previous)
         self.addCleanup(self._cleanup)
+
+    def _restore_facts_source(self, previous: str | None) -> None:
+        if previous is None:
+            os.environ.pop("BUDDY_MODEL_FACTS_FILE", None)
+        else:
+            os.environ["BUDDY_MODEL_FACTS_FILE"] = previous
 
     def _cleanup(self) -> None:
         stop_private_service(self.directory)

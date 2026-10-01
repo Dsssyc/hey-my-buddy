@@ -399,8 +399,14 @@ class BoardClient:
     def workflow_cancel(self, **params: Any) -> dict:
         return self.call("workflow_cancel", params)
 
-    def workflow_acknowledge(self, **params: Any) -> dict:
-        return self.call("workflow_acknowledge", params)
+    def workflow_accept(self, **params: Any) -> dict:
+        return self.call("workflow_accept", params)
+
+    def workflow_conclude(self, **params: Any) -> dict:
+        return self.call("workflow_conclude", params)
+
+    def workflow_reclaim(self, **params: Any) -> dict:
+        return self.call("workflow_reclaim", params)
 
     def workflow_suggest(self, run_id: str, body: str) -> dict:
         return self.call("workflow_suggest", {"runId": run_id, "body": body})

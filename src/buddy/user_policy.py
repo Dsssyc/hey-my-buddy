@@ -148,6 +148,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     family_preferences = _family_changes(params, 'familyPreferenceChanges', {*FAMILY_FIELDS, 'mode', 'reason'})
     annotations = _family_changes(params, 'familyAnnotationChanges', {*FAMILY_FIELDS, 'text'})
     model_limits = _model_concurrency_changes(params)
+    enabled_families: list[tuple[str, str, str]] = []
     profiles = {}
     for entry in settings + preferences:
         profile_id = entry['profileId']
@@ -157,6 +158,14 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
                 raise BoardError('NOT_FOUND', 'Unknown profileId', profileId=profile_id)
             profiles[profile_id] = dict(row)
             profiles[profile_id]['available'] = bool(row['available']) and read_health(connection, row['adapter'])['available']
+    touched_families = {tuple(profiles[entry["profileId"]][name] for name in FAMILY_FIELDS) for entry in settings}
+    initially_enabled = {
+        family: connection.execute(
+            "SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
+            family,
+        ).fetchone() is not None
+        for family in touched_families
+    }
     for entry in settings:
         if type(entry.get('enabled')) is not bool:
             raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean')
@@ -165,6 +174,14 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
             raise BoardError('CONFIGURATION_UNAVAILABLE', 'This configuration is not currently available', profileId=entry['profileId'])
         profile['enabled'] = int(entry['enabled'])
         connection.execute('UPDATE evaluation_profiles SET enabled=?, updated_revision=? WHERE profile_id=?', (profile['enabled'], revision, entry['profileId']))
+    # Compare the whole publication's before/after state. Moving the enabled
+    # effort within one model must not make a transient disable trigger a fetch.
+    for family in sorted(touched_families):
+        if not initially_enabled[family] and connection.execute(
+            "SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
+            family,
+        ).fetchone() is not None:
+            enabled_families.append(family)
     families = {}
     for entry in family_preferences + annotations:
         family = _family(entry)
@@ -260,4 +277,8 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     }
     connection.execute('INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)', (revision, 'human', writer['writer_id'], writer['writer_id'], canonical_json(counts), now))
     connection.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
-    return {'revision': revision, 'configurationRevision': configuration_revision, 'counts': counts}
+    # ``enabledFamilies`` is an internal caller value, never a published response
+    # field: the facts refresh runs after the publication transaction commits and is
+    # not part of the idempotent receipt.
+    return {'revision': revision, 'configurationRevision': configuration_revision, 'counts': counts,
+            'enabledFamilies': enabled_families}

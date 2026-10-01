@@ -1084,7 +1084,6 @@ class WorkflowCoordinator:
     def _routing_view(self, connection, run) -> dict:
         from .router import routing_facts, selection_source
         goal = json.loads(run["goal_json"])
-        preferences = goal.get("routingPreferences", [])
         if not run["current_routing_id"]:
             request = self._open_boundary(connection, run)
             needs_host = request is not None and json.loads(request["payload_json"]).get("source") == "routing"
@@ -1101,7 +1100,7 @@ class WorkflowCoordinator:
                          and connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state='queued'"
                                                 " AND workspace_manifest_json IS NULL LIMIT 1", (run["run_id"],)).fetchone() is not None)
             return {"status": "needs-host" if needs_host else "queued" if preparing else "explicit", "decisionId": None, "taskId": None,
-                    "constraints": schemas.configuration_constraints(goal), "routingPreferences": preferences,
+                    "constraints": schemas.configuration_constraints(goal),
                     "source": None if preparing else source}
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (run["current_routing_id"],)).fetchone()
         decision = self.board.decisions._row(connection, run["current_routing_id"])
@@ -1116,12 +1115,10 @@ class WorkflowCoordinator:
             "tableRevision": decision["table_revision"], "configurationRevision": decision["configuration_revision"],
             "reason": link["reason"] or decision["reason"],
             "constraints": requested.get("constraints", schemas.configuration_constraints(goal)),
-            "requiredCapabilities": requested.get("requiredCapabilities", []), "routingPreferences": preferences,
+            "requiredCapabilities": requested.get("requiredCapabilities", []),
             "source": selection_source(requested),
             **routing_facts(requested),
             "routingBasis": requested.get("routingBasis"),
-            "preferenceOutcome": (json.loads(decision["selected_json"]).get("routingPreference")
-                                  if decision["selected_json"] else None),
         }
 
     def _start_routing(self, connection, run_id: str, now: str) -> None:
@@ -1147,8 +1144,7 @@ class WorkflowCoordinator:
         connection.execute("UPDATE tasks SET adapter='unresolved', queue_reason='awaiting-model-selection' WHERE task_id=?", (run_id,))
         self.board._append_event(connection, "workflow.routing_requested", task_id=run_id,
                                  payload={"decisionId": decision_id, "routingTaskId": response["runId"],
-                                          "ownerGeneration": run["owner_generation"],
-                                          "routingPreferences": json.loads(run["goal_json"]).get("routingPreferences", [])})
+                                          "ownerGeneration": run["owner_generation"]})
         self.routing_settled(connection, decision_id=decision_id, now=now)
 
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
@@ -1186,8 +1182,7 @@ class WorkflowCoordinator:
                                          payload={"decisionId": decision_id, "configuration": configuration,
                                                   "profileId": decision["profile_id"], "tableRevision": decision["table_revision"],
                                                   "configurationRevision": decision["configuration_revision"],
-                                                  "source": selection_source(json.loads(decision["requested_json"])),
-                                                  "preferenceOutcome": selected.get("routingPreference")})
+                                                  "source": selection_source(json.loads(decision["requested_json"]))})
                 return
         self._routing_attention(connection, run, now,
                                 decision["error"] or decision["reason"] or "No legal coding configuration was selected")
@@ -1364,8 +1359,7 @@ class WorkflowCoordinator:
                                (canonical_json(executionConfiguration), run_id))
             self.board._append_event(connection, "workflow.configuration_selected", task_id=run_id,
                                      payload={"source": "original-explicit", "configuration": executionConfiguration,
-                                              "configurationRevision": 1,
-                                              "routingPreferences": spec.get("routingPreferences", [])})
+                                              "configurationRevision": 1})
         return run_id
 
     def submit(self, params: dict) -> dict:
@@ -1612,8 +1606,6 @@ class WorkflowCoordinator:
                     "taskId": row["decision_task_id"],
                     "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
                     "source": selection_source(requested),
-                    "preferenceOutcome": (json.loads(row["selected_json"]).get("routingPreference")
-                                          if row["selected_json"] else None),
                     "tableRevision": int(row["table_revision"]),
                     "configurationRevision": int(row["configuration_revision"]),
                     "reason": row["reason"] or row["decision_reason"],
@@ -1734,7 +1726,11 @@ class WorkflowCoordinator:
             raise BoardError("INVALID_ARGUMENT", "decision must be 'approve' or 'decline'")
         reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
-        helpers = schemas.normalize_helpers(params)
+        with self.db.read() as connection:
+            owner = self._run_row(connection, run_id)
+            self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
+            submitting_host = owner["host_id"]
+        helpers = schemas.normalize_helpers(params, host_id=submitting_host)
         request_key = {
             "runId": run_id,
             "requestId": request_id,
@@ -1748,7 +1744,6 @@ class WorkflowCoordinator:
                     "spec": item["spec"],
                     "executionWorkspace": item["executionWorkspace"],
                     "integrator": item["integrator"],
-                    "inheritRoutingPreferences": item["inheritRoutingPreferences"],
                 }
                 for item in helpers
             ],
@@ -1766,11 +1761,7 @@ class WorkflowCoordinator:
         # losing preparation leaves its owned artifact on disk, keyed by requestId.
         prepared: list[dict] = []
         if decision == "approve":
-            with self.db.read() as connection:
-                parent_preferences = json.loads(self._run_row(connection, run_id)["goal_json"]).get("routingPreferences", [])
             for helper in helpers:
-                if helper["inheritRoutingPreferences"]:
-                    helper = {**helper, "spec": {**helper["spec"], "routingPreferences": parent_preferences}}
                 configuration = self._validated_configuration(helper["spec"])
                 self._cleanup_fence(
                     helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
@@ -2248,8 +2239,7 @@ class WorkflowCoordinator:
                                    (canonical_json(item["executionConfiguration"]), helper_task_id))
                 self.board._append_event(connection, "workflow.configuration_selected", task_id=helper_task_id,
                                          payload={"source": "original-explicit", "configuration": item["executionConfiguration"],
-                                                  "configurationRevision": 1,
-                                                  "routingPreferences": item["spec"].get("routingPreferences", [])})
+                                                  "configurationRevision": 1})
             children.append(
                 {
                     "taskId": helper_task_id,
@@ -2504,6 +2494,22 @@ class WorkflowCoordinator:
             )
             for request in open_requests:
                 self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
+            if run_row["state"] == "delivered" and run_row["final_artifact_id"]:
+                # Ending a delivered outcome without acceptance records the negative
+                # review and the Host's opinion next to the immutable artifact; the
+                # artifact itself and every earlier review stay in history.
+                rejection_note = reason or _head(input_text, 512)
+                connection.execute(
+                    "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='rejected',"
+                    " updated_at=? WHERE task_id=?",
+                    (now, rejection_note, now, run_id),
+                )
+                self.board._append_event(
+                    connection, "workflow.review_rejected", task_id=run_id,
+                    attempt_id=run_row["final_attempt_id"], revision=run_row["revision"] + 1,
+                    payload={"artifactId": run_row["final_artifact_id"], "verdict": "rejected",
+                             "actor": actor, "reason": reason, "opinion": _head(input_text, 512)},
+                )
             continuation_id = str(uuid.uuid4())
             connection.execute(
                 "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by,"
@@ -2542,8 +2548,7 @@ class WorkflowCoordinator:
                     connection, "workflow.configuration_overridden", task_id=run_id,
                     payload={"source": "host-override", "actor": actor, "reason": reason,
                              "configuration": configuration,
-                             "configurationRevision": updated_run["execution_configuration_revision"],
-                             "routingPreferences": json.loads(updated_run["goal_json"]).get("routingPreferences", [])},
+                             "configurationRevision": updated_run["execution_configuration_revision"]},
                 )
             elif reroute:
                 # The durable continuation event below records the intent. No Router
@@ -3275,287 +3280,903 @@ class WorkflowCoordinator:
         value = payload.get("integrationId") if isinstance(payload, dict) else None
         return value if isinstance(value, str) and value else None
 
-    def acknowledge(self, params: dict, *, console_authority: dict | None = None) -> dict:
+    def accept(self, params: dict, *, console_authority: dict | None = None) -> dict:
+        """Accept one delivered artifact: verify its integration, record, reclaim.
+
+        The Host binds the exact ``artifactId`` and either the real integration
+        ``target`` (checkout path plus ref) or a reasoned ``notRequired`` string.
+        The service derives the integration itself: the target identity, commits
+        and trees are resolved from the repository, and every path the artifact
+        changed must already carry that content in the target tree. Differing
+        paths are refused with their names first; the Host confirms they are its
+        own adjustments with ``adjusted: true`` (the note is the reason) instead
+        of listing paths. Optional ``hostPaths`` with ``beforeCommit`` still
+        verify real Host additions outside the artifact's paths. Without
+        ``keepCheckout`` the registered managed checkout is reclaimed after the
+        acceptance is durable; a blocked reclaim keeps the acceptance and reports
+        its reasons, and a later ``reclaim`` retries. The same run/artifact
+        payload replays its recorded response; a changed payload is a conflict.
+        """
         schemas.reject_unknown(
             params,
             {
-                "runId",
-                "targetRunId",
-                "commandId",
-                "expectedRevision",
-                "artifactId",
-                "integrationId",
-                "note",
-                "verdict",
-                "evidence",
-                "acknowledgedBy",
-                *schemas.CONTROL_FIELDS,
+                "runId", "targetRunId", "artifactId", "note", "target", "notRequired", "adjusted",
+                "hostPaths", "beforeCommit", "keepCheckout", *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
             },
-            "workflow.acknowledge",
+            "workflow.accept",
         )
         schemas.reject_untrusted_override(params)
-        verdict = schemas.optional_string(params, "verdict") or "accepted"
-        if verdict not in ("accepted", "rejected", "recorded"):
-            raise BoardError("INVALID_ARGUMENT", "verdict must be accepted, rejected or recorded")
-        if verdict == "recorded":
-            return host_conclusions.record(self, params, console_authority=console_authority)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
-        command_id = schemas.optional_string(params, "commandId", max_length=128)
-        artifact_id = schemas.optional_string(params, "artifactId", max_length=128)
-        integration_id = schemas.optional_string(params, "integrationId", max_length=128)
+        artifact_id = schemas.required_string(params, "artifactId", max_length=128)
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
-        evidence = schemas.string_list(params, "evidence", limit=32)
-        # A retry with the same commandId but a different claimed integration or
-        # evidence is a different command, never a silent replay of the old claim.
-        request_key = {"runId": run_id, "targetRunId": target_id, "artifactId": artifact_id, "note": note,
-                       "verdict": verdict, "integrationId": integration_id, "evidence": evidence}
+        not_required = params.get("notRequired")
+        if not_required is not None and (not isinstance(not_required, str) or not not_required.strip()):
+            raise BoardError("INVALID_ARGUMENT", "notRequired must be a nonempty reason string")
+        not_required = not_required.strip() if isinstance(not_required, str) else None
+        adjusted = schemas.optional_bool(params, "adjusted", False)
+        host_paths = schemas.string_list(params, "hostPaths", limit=256)
+        before_commit = schemas.optional_string(params, "beforeCommit", max_length=128)
+        keep_checkout = schemas.optional_bool(params, "keepCheckout", False)
+        target = None
+        if not_required is not None:
+            if params.get("target") is not None:
+                raise BoardError("INVALID_ARGUMENT", "A not-required acceptance cannot name an integration target")
+            if adjusted or host_paths or before_commit:
+                raise BoardError("INVALID_ARGUMENT", "A not-required acceptance cannot carry adjustment evidence")
+            if host_paths and not before_commit:
+                raise BoardError("INVALID_ARGUMENT", "hostPaths verification requires the beforeCommit baseline")
+        else:
+            if host_paths and not before_commit:
+                raise BoardError("INVALID_ARGUMENT", "hostPaths verification requires the beforeCommit baseline")
+            target = schemas.require_object(params.get("target"), "target")
+            schemas.reject_unknown(target, {"path", "ref", "repositoryId", "checkoutId"}, "integration target")
+            target_path = schemas.required_string(target, "path", max_length=4096)
+            if not target_path.startswith("/"):
+                raise BoardError("INVALID_ARGUMENT", "target.path must be an absolute checkout path")
+            schemas.required_string(target, "ref", max_length=512)
+        normalized_target = ({key: target.get(key) for key in ("path", "ref", "repositoryId", "checkoutId")}
+                             if target is not None else None)
+        # Acceptance is keyed by run and artifact: the derived receipt replays the
+        # same request without a Host-chosen command number, and any changed
+        # payload derives a different key that conflicts against the recorded
+        # acceptance instead of relabelling it.
+        request_key = {"runId": owner_run_id, "targetRunId": target_id, "artifactId": artifact_id, "note": note,
+                       "notRequired": not_required, "target": normalized_target, "adjusted": adjusted,
+                       "hostPaths": sorted(host_paths), "beforeCommit": before_commit,
+                       "keepCheckout": keep_checkout}
+        command_id = "accept-" + sha256_text(canonical_json(request_key))[:32]
+        verification_inputs = None
+        duplicate = None
+        with self.db.read() as connection:
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
+            receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
+            if receipt is not None:
+                duplicate = {**receipt, "duplicate": True}
+            else:
+                # Ownership first: an illegal or detached targetRunId is refused
+                # before any Git verification work runs.
+                self._target_run(connection, owner, target_id)
+            if duplicate is None and not_required is None:
+                # The Git comparison runs outside every transaction; the write below
+                # re-checks ownership, state and artifact identity before recording.
+                # Its refusals (unknown artifact, unverifiable target) come before a
+                # recorded-acceptance conflict so the Host always sees the concrete
+                # integration reason first.
+                verification_inputs = self._accept_verification_inputs(connection, target_id, artifact_id)
+                if self._accept_conflicts_with_recorded(connection, target_id, artifact_id, note,
+                                                        not_required, normalized_target):
+                    raise BoardError(
+                        "CONFLICT",
+                        "This run already has a different recorded acceptance; a reviewed outcome is not relabelled",
+                        runId=target_id,
+                    )
+            elif self._accept_conflicts_with_recorded(connection, target_id, artifact_id, note,
+                                                      not_required, normalized_target):
+                raise BoardError(
+                    "CONFLICT",
+                    "This run already has a different recorded acceptance; a reviewed outcome is not relabelled",
+                    runId=target_id,
+                )
+        verification: dict = {}
+        if duplicate is None and not_required is None:
+            original_manifest, final_manifest, manifest = verification_inputs
+            verification = self._accept_verify(
+                manifest, original_input=original_manifest, final_input=final_manifest,
+                target=target, host_paths=host_paths, before_commit=before_commit,
+                adjusted=adjusted, reason=note)
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(
-                connection, owner, params, console_authority=console_authority, action="Acknowledgement"
-            )
-            if command_id:
-                receipt = self.board._receipt(connection, command_id, "workflow.acknowledge", request_key)
-                if receipt is not None:
-                    return {**receipt, "duplicate": True}
-            if params.get("expectedRevision") is not None:
-                self._expect_revision(owner, schemas.require_expected_revision(params))
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
+            receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
+            if receipt is not None:
+                duplicate = {**receipt, "duplicate": True}
             run_row = self._target_run(connection, owner, target_id)
             run_id = target_id
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            # Acceptance is bound to the current delivered goal, never to a Host
-            # decision boundary, an active helper, or an older attempt's output.
-            host_completion = run_row["state"] == "awaiting-host" and verdict == "accepted"
-            if run_row["state"] not in ("delivered", "accepted") and not host_completion:
-                raise BoardError(
-                    "NOT_READY",
-                    "Only a delivered goal can be acknowledged; a Host decision boundary or a running turn is "
-                    "not a final artifact",
-                    runId=run_id,
-                    state=run_row["state"],
-                )
-            if host_completion:
-                if not artifact_id:
-                    raise BoardError("NOT_READY", "Host completion requires the exact current artifactId")
-                self._lineage_stop_evidence(connection, run_row, "Host completion")
-                if self._open_conflict(connection, run_id) is not None:
-                    raise BoardError("CONFLICT", "Resolve the workspace conflict before Host completion")
-                if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued') LIMIT 1", (run_id,)).fetchone():
-                    raise BoardError("CONFLICT", "A continuation is still pending")
-                if connection.execute("SELECT 1 FROM workflow_children WHERE parent_run_id=? AND state IN ('active','attention') LIMIT 1", (run_id,)).fetchone():
-                    raise BoardError("CONFLICT", "Settle owned helpers before Host completion")
-            active_helpers = int(
-                connection.execute(
-                    "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state='active'",
-                    (run_id,),
-                ).fetchone()["count"]
-            )
-            if active_helpers:
-                raise BoardError(
-                    "CONFLICT",
-                    "Owned helpers are still running; settle or cancel them before final acknowledgement",
-                    runId=run_id,
-                    activeHelpers=active_helpers,
-                )
-            attempt = self.board._selected_attempt(connection, task)
-            if attempt is None or attempt["result_json"] is None:
-                raise BoardError("NOT_READY", "Inspect a persisted final result before acknowledging")
-            if not attempt["shutdown_confirmed"]:
-                raise BoardError(
-                    "SHUTDOWN_UNCONFIRMED",
-                    "Execution shutdown must be confirmed before acknowledgement; a surviving process is unknown",
-                    attemptId=attempt["attempt_id"],
-                )
-            if not host_completion and run_row["final_attempt_id"] != attempt["attempt_id"]:
-                raise BoardError(
-                    "CONFLICT",
-                    "The selected attempt is not the current final attempt of this goal",
-                    attemptId=attempt["attempt_id"],
-                    finalAttemptId=run_row["final_attempt_id"],
-                )
-            final_artifact = None
-            if not host_completion and run_row["final_artifact_id"]:
-                final_artifact = connection.execute(
-                    "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?"
-                    " AND kind IN ('output','resolved-output')",
-                    (run_row["final_artifact_id"], run_id),
-                ).fetchone()
-            if final_artifact is None:
-                final_artifact = connection.execute(
-                    "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' AND attempt_id=?"
-                    " ORDER BY created_at DESC LIMIT 1",
-                    (run_id, attempt["attempt_id"]),
-                ).fetchone()
-            if final_artifact is None:
-                raise BoardError(
-                    "NOT_READY",
-                    "The current final attempt produced no sealed output artifact to accept",
-                    attemptId=attempt["attempt_id"],
-                )
-            if final_artifact["attempt_id"] != attempt["attempt_id"]:
-                raise BoardError(
-                    "CONFLICT",
-                    "The recorded final artifact was not produced by the current final attempt",
-                    artifactId=final_artifact["artifact_id"],
-                    artifactAttemptId=final_artifact["attempt_id"],
-                    attemptId=attempt["attempt_id"],
-                )
-            if artifact_id and artifact_id != final_artifact["artifact_id"]:
-                other = connection.execute(
-                    "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?", (artifact_id, run_id)
-                ).fetchone()
-                if other is None:
-                    raise BoardError("NOT_FOUND", "Unknown pinned artifact for this run", artifactId=artifact_id)
-                raise BoardError(
-                    "CONFLICT",
-                    "Acknowledgement must bind the current final output artifact, not another artifact of this run",
-                    artifactId=artifact_id,
-                    finalArtifactId=final_artifact["artifact_id"],
-                    artifactKind=other["kind"],
-                )
-            artifact = final_artifact
-            # A normal delivery concludes a completed turn. A Host-resolution delivery
-            # is the one alternative: the failed attempt's own native completed outcome
-            # is preserved in its immutable result, recorded separately on the
-            # conflict, and revalidated here. The failed turn row itself stays failed.
-            resolution = None
-            previous_host_completion = connection.execute(
-                "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='workflow.host_completed' ORDER BY seq DESC LIMIT 1",
-                (run_id, attempt["attempt_id"]),
-            ).fetchone()
-            host_proof = (previous_host_completion is not None and json.loads(previous_host_completion[0]).get("artifactId") == artifact["artifact_id"])
-            if host_completion:
-                current = connection.execute("SELECT * FROM workflow_turns WHERE turn_id=? AND attempt_id=?", (run_row["current_turn_id"], attempt["attempt_id"])).fetchone()
-                if current is None or current["state"] != "concluded" or current["disposition"] not in ("assistance", "attention", "completed"):
-                    raise BoardError("NOT_READY", "Host completion requires the current stopped and sealed turn")
-            if not (host_completion or host_proof) and connection.execute(
-                "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='concluded' AND disposition='completed'",
-                (attempt["attempt_id"],),
-            ).fetchone() is None:
-                resolution = self._resolution_delivery(connection, run_row, attempt, artifact)
-                if resolution is None:
-                    raise BoardError(
-                        "NOT_READY",
-                        "The current final attempt has no concluded completed turn to accept",
-                        attemptId=attempt["attempt_id"],
-                    )
-            integration = (
-                self._require_integration(connection, run_id, artifact["artifact_id"], integration_id)
-                if verdict == "accepted" else None
-            )
-            reconsidering = bool(host_completion and task["accepted_at"] and task["acceptance_verdict"] == "rejected")
-            if reconsidering:
-                if not command_id or params.get("expectedRevision") is None:
-                    raise BoardError("INVALID_ARGUMENT", "A new Host review requires commandId and expectedRevision")
-                self.board._append_event(connection, "task.review_archived", task_id=run_id, attempt_id=attempt["attempt_id"],
-                    payload={"acceptedAt": task["accepted_at"], "verdict": task["acceptance_verdict"],
-                             "note": task["acceptance_note"], "artifactId": artifact["artifact_id"]})
-            if task["accepted_at"] and not reconsidering:
-                if (
-                    task["acceptance_note"] != note
-                    or task["acceptance_verdict"] != verdict
-                    or run_row["final_artifact_id"] != artifact["artifact_id"]
-                ):
-                    raise BoardError(
-                        "CONFLICT",
-                        "This run already has a different recorded acknowledgement; a reviewed outcome is not relabelled",
-                        acceptedAt=task["accepted_at"],
-                        verdict=task["acceptance_verdict"],
-                    )
-                expected_integration = self._recorded_acceptance_integration(connection, run_id)
-                if (integration_id is not None and expected_integration is not None
-                        and integration_id != expected_integration):
-                    raise BoardError(
-                        "CONFLICT",
-                        "This goal was already acknowledged with a different integration record; "
-                        "the recorded verdict is not relabelled by a changed claim",
-                        acceptedAt=task["accepted_at"],
-                        integrationId=integration_id,
-                        recordedIntegrationId=expected_integration,
-                    )
-                response = {**self.compact(connection, run_row, task), "duplicate": True,
-                            "targetRunId": run_id, "targetRevision": run_row["revision"]}
-                if resolution is not None:
-                    response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
-                return response
-            connection.execute(
-                "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict=?, updated_at=?,"
-                " revision=revision+1 WHERE task_id=?",
-                (now, note, verdict, now, run_id),
-            )
-            if verdict == "accepted":
-                if host_completion:
-                    connection.execute("UPDATE tasks SET state='completed',queue_reason=NULL WHERE task_id=?", (run_id,))
-                    open_requests = connection.execute("SELECT request_id FROM workflow_requests WHERE run_id=? AND state='open'", (run_id,)).fetchall()
-                    connection.execute("UPDATE workflow_requests SET state='superseded',updated_at=? WHERE run_id=? AND state='open'", (now, run_id))
-                    for request in open_requests:
-                        self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
-                    connection.execute("UPDATE workflow_runs SET active_request_id=NULL WHERE run_id=?", (run_id,))
-                    self.board._append_event(connection, "workflow.host_completed", task_id=run_id, attempt_id=attempt["attempt_id"],
-                                             payload={"artifactId": artifact["artifact_id"], "integrationId": integration["integration_id"], "actor": actor})
-                connection.execute(
-                    "UPDATE workflow_runs SET state='accepted', final_artifact_id=?, final_attempt_id=?, updated_at=?,"
-                    " revision=revision+1 WHERE run_id=? AND revision=?",
-                    (
-                        artifact["artifact_id"] if artifact is not None else None,
-                        attempt["attempt_id"],
-                        now,
-                        run_id,
-                        run_row["revision"],
-                    ),
-                )
-                if not host_completion:
-                    self._release_reservations(connection, run_id, now)
+            if duplicate is None:
+                response, artifact, integration = self._accept_record(
+                    connection, owner_run_id=owner_run_id, run_row=run_row, task=task, actor=actor, now=now,
+                    artifact_id=artifact_id, note=note, command_id=command_id, request_key=request_key,
+                    verification=verification, not_required=not_required)
             else:
-                # A rejection is a reviewed outcome, not a terminal goal: the Host may
-                # continue, which archives this review before the next acceptance.
-                connection.execute(
-                    "UPDATE workflow_runs SET state='awaiting-host', final_attempt_id=?, updated_at=?,"
-                    " revision=revision+1 WHERE run_id=? AND revision=?",
-                    (attempt["attempt_id"], now, run_id, run_row["revision"]),
-                )
-            self.board._append_event(
-                connection,
-                "workflow.acknowledged",
-                task_id=run_id,
-                attempt_id=attempt["attempt_id"],
-                revision=run_row["revision"] + 1,
-                payload={
-                    "verdict": verdict,
-                    "actor": actor,
-                    "artifactId": artifact["artifact_id"] if artifact is not None else None,
-                    "integrationId": integration["integration_id"] if integration is not None else None,
-                    "resolutionDelivery": (self._resolution_delivery_result(resolution)
-                                           if resolution is not None else None),
-                    "evidence": evidence,
-                    "noteBytes": len(note.encode()),
-                },
-            )
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            if host_completion:
-                self.child_settled(connection, task=task, attempt=attempt, payload=None, task_state="completed", now=now)
-            run_row = self._run_row(connection, run_id)
-            view = self.compact(connection, run_row, task)
-            # An accepted attempt counts as one reviewed sample, exactly like the
-            # infrastructure acknowledgement path; the verdict is never inherited implicitly.
-            self.board.evaluation.refresh_task_evidence(connection, task, now)
-            response = {**view, "verdict": verdict, "duplicate": False,
-                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
-            if integration is not None:
-                response["integration"] = self._integration_view(integration)
-            if resolution is not None:
-                response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
-            if command_id:
-                self.board._store_receipt(
-                    connection, command_id, "workflow.acknowledge", request_key, response, task_id=run_id,
-                    attempt_id=attempt["attempt_id"],
-                )
+                response = duplicate
+                artifact = None
+                integration = None
             head = self.board._head_of(connection)
         self.board._notify(head)
+        response = dict(response)
+        if duplicate is not None:
+            # A replay returns the recorded outcome and never repeats the removal;
+            # a lost reclaim retry goes through the dedicated reclaim operation.
+            response.setdefault("reclaim", {"removed": False, "reasons": ["replayed"], "retry": "reclaim"})
+        elif not keep_checkout:
+            response["reclaim"] = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=run_id,
+                                                         purpose="accept", control=params)
+        # The reclaim journals its removal under fresh run revisions; the returned
+        # view must match the board a caller sees after this call.
+        with self.db.read() as connection:
+            run_row = self._run_row(connection, run_id)
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            response.update(self.compact(connection, run_row, task))
+            response["targetRevision"] = run_row["revision"]
         return response
+
+    def _accept_conflicts_with_recorded(self, connection, run_id: str, artifact_id: str, note: str,
+                                        not_required: str | None, target: dict | None) -> bool:
+        """Whether an already recorded acceptance contradicts this request.
+
+        Checked before any Git work: a changed payload against a reviewed outcome
+        is a conflict, never a relabel, and never a second integration attempt.
+        """
+        if connection.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone() is None:
+            return False
+        task = connection.execute("SELECT accepted_at, acceptance_verdict, acceptance_note FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        if not task["accepted_at"] or task["acceptance_verdict"] != "accepted":
+            return False
+        if task["acceptance_note"] != note:
+            return True
+        run_row = self._run_row(connection, run_id)
+        if run_row["final_artifact_id"] != artifact_id:
+            return True
+        recorded = self._find_integration(connection, run_id, artifact_id)
+        if recorded is None:
+            return True
+        if not_required is not None:
+            return recorded["state"] != "not-required" or (recorded["reason"] or "") != not_required
+        if recorded["state"] != "verified":
+            return True
+        # The recorded path is the repository-resolved identity; compare the
+        # request in the same normalized form so a path alias is not a new claim.
+        recorded_target = Path(recorded["target_path"]).resolve()
+        requested_target = Path(target.get("path") or "").resolve()
+        return (recorded_target != requested_target
+                or recorded["target_ref"] != target.get("ref"))
+
+    def _accept_verification_inputs(self, connection, run_id: str, artifact_id: str):
+        """Pin the exact manifests one verified acceptance compares, before any Git work."""
+        artifact = connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=? AND kind IN ('output','resolved-output','partial-output')",
+            (artifact_id, run_id),
+        ).fetchone()
+        if artifact is None:
+            raise BoardError("NOT_FOUND", "No sealed output artifact of this run has that identity",
+                             artifactId=artifact_id)
+        manifest = json.loads(artifact["manifest_json"])
+        if manifest.get("snapshotSha256") != artifact["manifest_sha256"]:
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The retained output identity changed")
+        original = connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        turn = connection.execute(
+            "SELECT * FROM workflow_turns WHERE run_id=? AND turn_id=? AND attempt_id=?",
+            (run_id, artifact["turn_id"], artifact["attempt_id"]),
+        ).fetchone()
+        if (original is None or turn is None
+                or (turn["input_sha256"] is not None
+                    and sha256_text(turn["input_json"]) != turn["input_sha256"])):
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output has no proven input manifest")
+        original_manifest = json.loads(original["manifest_json"])
+        final_manifest = json.loads(turn["input_json"]).get("executionWorkspace")
+        if not isinstance(final_manifest, dict):
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final turn has no execution workspace")
+        if (original_manifest.get("manifestSha256") != original["manifest_sha256"]
+                or final_manifest.get("manifestSha256") != manifest.get("manifestSha256")):
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A retained input manifest identity changed")
+        return original_manifest, final_manifest, manifest
+
+    def _accept_verify(self, manifest: dict, *, original_input: dict, final_input: dict,
+                       target: dict, host_paths: list[str], before_commit: str | None,
+                       adjusted: bool, reason: str) -> dict:
+        """Compare the immutable artifact with the real target and name every difference.
+
+        The first pass refuses listing the differing paths; with ``adjusted`` the
+        same comparison reruns with those exact paths recorded as Host adjustments
+        bound to the acceptance note.
+        """
+        module = workspace_module()
+        verification = module.integration_verify(
+            manifest, original_input=original_input, final_input=final_input,
+            path=target["path"], ref=target["ref"], strategy="patch", before_commit=before_commit,
+            repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
+            host_paths=host_paths, reason=reason,
+        )
+        unrecorded = sorted({item["path"] for item in verification.get("differingPaths") or []}
+                            | set(verification.get("missingPaths") or []))
+        if not verification.get("verified") and not unrecorded:
+            # Content matched but the claimed commit interval does not hold (for
+            # example a beforeCommit unrelated to the target ref): the comparison
+            # proves nothing and must never be recorded as a verified integration.
+            raise BoardError(
+                "INTEGRATION_UNVERIFIED",
+                "The target comparison does not hold; the artifact content matched but the named commit interval "
+                "does not, so no integration was recorded",
+                paths=[],
+                verification=verification,
+            )
+        if not unrecorded:
+            verification["strategy"] = "merge" if verification.get("artifactAncestor") else "patch"
+            verification["summary"] = ""
+            return verification
+        if not adjusted:
+            raise BoardError(
+                "INTEGRATION_UNVERIFIED",
+                "The target does not contain the artifact as delivered; confirm these are your own adjustments "
+                "with adjusted:true instead of listing paths",
+                paths=unrecorded,
+                verification=verification,
+            )
+        verification = module.integration_verify(
+            manifest, original_input=original_input, final_input=final_input,
+            path=target["path"], ref=target["ref"], strategy="patch", before_commit=before_commit,
+            repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
+            adjusted_paths=unrecorded, host_paths=host_paths, reason=reason,
+        )
+        if not verification.get("verified"):
+            raise BoardError(
+                "INTEGRATION_UNVERIFIED",
+                "Even with the Host's confirmed adjustments the target comparison does not hold; no integration "
+                "was recorded",
+                paths=unrecorded,
+                verification=verification,
+            )
+        verification["strategy"] = "merge" if verification.get("artifactAncestor") else "patch"
+        verification["summary"] = ""
+        return verification
+
+    def _accept_record(self, connection, *, owner_run_id: str, run_row, task, actor: str, now: str,
+                       artifact_id: str, note: str, command_id: str, request_key: dict,
+                       verification: dict, not_required: str | None):
+        """Record one acceptance, its integration binding and the events, in one transaction."""
+        run_id = run_row["run_id"]
+        # Acceptance is bound to the current delivered goal, never to a Host
+        # decision boundary, an active helper, or an older attempt's output.
+        host_completion = run_row["state"] == "awaiting-host"
+        if run_row["state"] not in ("delivered", "accepted") and not host_completion:
+            raise BoardError(
+                "NOT_READY",
+                "Only a delivered goal can be accepted; a Host decision boundary or a running turn is "
+                "not a final artifact",
+                runId=run_id,
+                state=run_row["state"],
+            )
+        if host_conclusions.current(connection, run_row, task) is not None:
+            raise BoardError("CONFLICT", "This goal already has a recorded conclusion; it is closed without acceptance",
+                             runId=run_id)
+        if host_completion:
+            self._lineage_stop_evidence(connection, run_row, "Host completion")
+            if self._open_conflict(connection, run_id) is not None:
+                raise BoardError("CONFLICT", "Resolve the workspace conflict before Host completion")
+            if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued') LIMIT 1", (run_id,)).fetchone():
+                raise BoardError("CONFLICT", "A continuation is still pending")
+            if connection.execute("SELECT 1 FROM workflow_children WHERE parent_run_id=? AND state IN ('active','attention') LIMIT 1", (run_id,)).fetchone():
+                raise BoardError("CONFLICT", "Settle owned helpers before Host completion")
+        active_helpers = int(
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state='active'",
+                (run_id,),
+            ).fetchone()["count"]
+        )
+        if active_helpers:
+            raise BoardError(
+                "CONFLICT",
+                "Owned helpers are still running; settle or cancel them before accepting",
+                runId=run_id,
+                activeHelpers=active_helpers,
+            )
+        attempt = self.board._selected_attempt(connection, task)
+        if attempt is None or attempt["result_json"] is None:
+            raise BoardError("NOT_READY", "Inspect a persisted final result before accepting")
+        if not attempt["shutdown_confirmed"]:
+            raise BoardError(
+                "SHUTDOWN_UNCONFIRMED",
+                "Execution shutdown must be confirmed before accepting; a surviving process is unknown",
+                attemptId=attempt["attempt_id"],
+            )
+        if not host_completion and run_row["final_attempt_id"] != attempt["attempt_id"]:
+            raise BoardError(
+                "CONFLICT",
+                "The selected attempt is not the current final attempt of this goal",
+                attemptId=attempt["attempt_id"],
+                finalAttemptId=run_row["final_attempt_id"],
+            )
+        final_artifact = None
+        if not host_completion and run_row["final_artifact_id"]:
+            final_artifact = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?"
+                " AND kind IN ('output','resolved-output')",
+                (run_row["final_artifact_id"], run_id),
+            ).fetchone()
+        if final_artifact is None:
+            final_artifact = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' AND attempt_id=?"
+                " ORDER BY created_at DESC LIMIT 1",
+                (run_id, attempt["attempt_id"]),
+            ).fetchone()
+        if final_artifact is None:
+            raise BoardError(
+                "NOT_READY",
+                "The current final attempt produced no sealed output artifact to accept",
+                attemptId=attempt["attempt_id"],
+            )
+        if final_artifact["attempt_id"] != attempt["attempt_id"]:
+            raise BoardError(
+                "CONFLICT",
+                "The recorded final artifact was not produced by the current final attempt",
+                artifactId=final_artifact["artifact_id"],
+                artifactAttemptId=final_artifact["attempt_id"],
+                attemptId=attempt["attempt_id"],
+            )
+        if artifact_id != final_artifact["artifact_id"]:
+            other = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?", (artifact_id, run_id)
+            ).fetchone()
+            if other is None:
+                raise BoardError("NOT_FOUND", "Unknown pinned artifact for this run", artifactId=artifact_id)
+            raise BoardError(
+                "CONFLICT",
+                "Acceptance must bind the current final output artifact, not another artifact of this run",
+                artifactId=artifact_id,
+                finalArtifactId=final_artifact["artifact_id"],
+                artifactKind=other["kind"],
+            )
+        artifact = final_artifact
+        # A normal delivery concludes a completed turn. A Host-resolution delivery
+        # is the one alternative: the failed attempt's own native completed outcome
+        # is preserved in its immutable result, recorded separately on the
+        # conflict, and revalidated here. The failed turn row itself stays failed.
+        resolution = None
+        previous_host_completion = connection.execute(
+            "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='workflow.host_completed' ORDER BY seq DESC LIMIT 1",
+            (run_id, attempt["attempt_id"]),
+        ).fetchone()
+        host_proof = (previous_host_completion is not None and json.loads(previous_host_completion[0]).get("artifactId") == artifact["artifact_id"])
+        if host_completion:
+            current = connection.execute("SELECT * FROM workflow_turns WHERE turn_id=? AND attempt_id=?", (run_row["current_turn_id"], attempt["attempt_id"])).fetchone()
+            if current is None or current["state"] != "concluded" or current["disposition"] not in ("assistance", "attention", "completed"):
+                raise BoardError("NOT_READY", "Host completion requires the current stopped and sealed turn")
+        if not (host_completion or host_proof) and connection.execute(
+            "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='concluded' AND disposition='completed'",
+            (attempt["attempt_id"],),
+        ).fetchone() is None:
+            resolution = self._resolution_delivery(connection, run_row, attempt, artifact)
+            if resolution is None:
+                raise BoardError(
+                    "NOT_READY",
+                    "The current final attempt has no concluded completed turn to accept",
+                    attemptId=attempt["attempt_id"],
+                )
+        if task["accepted_at"] and task["acceptance_verdict"] == "rejected":
+            # The rejection this acceptance supersedes stays in history as the older
+            # attempt's own archived review.
+            self.board._append_event(connection, "task.review_archived", task_id=run_id,
+                attempt_id=attempt["attempt_id"],
+                payload={"acceptedAt": task["accepted_at"], "verdict": task["acceptance_verdict"],
+                         "note": task["acceptance_note"], "artifactId": run_row["final_artifact_id"]})
+        elif task["accepted_at"]:
+            if (
+                task["acceptance_note"] != note
+                or run_row["final_artifact_id"] != artifact["artifact_id"]
+            ):
+                raise BoardError(
+                    "CONFLICT",
+                    "This run already has a different recorded acceptance; a reviewed outcome is not relabelled",
+                    acceptedAt=task["accepted_at"],
+                    verdict=task["acceptance_verdict"],
+                )
+            response = {**self.compact(connection, run_row, task), "verdict": "accepted", "duplicate": True,
+                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
+            if resolution is not None:
+                response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
+            return response, artifact, None
+        # The integration binding is content-addressed: repeating the same verified
+        # comparison finds the existing record instead of minting a second one.
+        manifest = json.loads(artifact["manifest_json"])
+        binding = {"runId": run_id, "artifactId": artifact_id,
+                   "strategy": "not-required" if not_required is not None else verification["strategy"],
+                   "sourceCommit": manifest.get("commit"), "sourceTree": manifest.get("tree")}
+        if not_required is not None:
+            binding["reason"] = not_required
+        else:
+            binding.update(beforeCommit=verification.get("beforeCommit"), afterCommit=verification.get("afterCommit"),
+                           targetPath=verification["target"]["path"], targetRef=verification["target"]["ref"])
+        binding["hostPaths"] = sorted(request_key["hostPaths"])
+        binding_sha = sha256_text(canonical_json(binding))
+        existing = connection.execute(
+            "SELECT * FROM workflow_integrations WHERE binding_sha256=?", (binding_sha,)
+        ).fetchone()
+        if existing is None:
+            integration_id = f"int-{uuid.uuid4()}"
+            connection.execute(
+                "INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, attempt_id, state, strategy,"
+                " binding_sha256, target_kind, target_path, target_ref, target_repository_id, target_checkout_id,"
+                " source_commit, source_tree, before_commit, after_commit, before_tree, after_tree, verification_json,"
+                " reason, command_id, actor, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    integration_id, run_id, artifact_id, artifact["attempt_id"],
+                    "not-required" if not_required is not None else "verified",
+                    "not-required" if not_required is not None else verification["strategy"], binding_sha,
+                    "not-required" if not_required is not None else "checkout",
+                    "" if not_required is not None else verification["target"]["path"],
+                    "" if not_required is not None else verification["target"]["ref"],
+                    None if not_required is not None else verification["target"]["repositoryId"],
+                    None if not_required is not None else verification["target"]["checkoutId"],
+                    verification.get("sourceCommit"), verification.get("sourceTree"),
+                    None if not_required is not None else verification.get("beforeCommit"),
+                    None if not_required is not None else verification.get("afterCommit"),
+                    None if not_required is not None else verification.get("beforeTree"),
+                    None if not_required is not None else verification.get("afterTree"),
+                    canonical_json(verification), not_required or "", command_id, actor, now,
+                ),
+            )
+            self.board._append_event(
+                connection,
+                "workflow.integration_recorded",
+                task_id=run_id,
+                attempt_id=artifact["attempt_id"],
+                revision=run_row["revision"] + 1,
+                payload={"integrationId": integration_id, "artifactId": artifact_id,
+                         "state": "not-required" if not_required is not None else "verified",
+                         "strategy": binding["strategy"], "afterCommit": verification.get("afterCommit")},
+            )
+            integration = connection.execute(
+                "SELECT * FROM workflow_integrations WHERE integration_id=?", (integration_id,)
+            ).fetchone()
+        else:
+            if existing["run_id"] != run_id or existing["artifact_id"] != artifact_id:
+                raise BoardError("CONFLICT", "This integration binding already belongs to another artifact",
+                                 integrationId=existing["integration_id"])
+            integration = existing
+        updated = connection.execute(
+            "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='accepted', updated_at=?,"
+            " revision=revision+1 WHERE task_id=?",
+            (now, note, now, run_id),
+        )
+        if updated.rowcount != 1:
+            raise BoardError("REVISION_CONFLICT", "The goal changed concurrently; re-read it and retry")
+        if host_completion:
+            connection.execute("UPDATE tasks SET state='completed',queue_reason=NULL WHERE task_id=?", (run_id,))
+            open_requests = connection.execute("SELECT request_id FROM workflow_requests WHERE run_id=? AND state='open'", (run_id,)).fetchall()
+            connection.execute("UPDATE workflow_requests SET state='superseded',updated_at=? WHERE run_id=? AND state='open'", (now, run_id))
+            for request in open_requests:
+                self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
+            connection.execute("UPDATE workflow_runs SET active_request_id=NULL WHERE run_id=?", (run_id,))
+            self.board._append_event(connection, "workflow.host_completed", task_id=run_id, attempt_id=attempt["attempt_id"],
+                                     payload={"artifactId": artifact["artifact_id"], "integrationId": integration["integration_id"], "actor": actor})
+        updated = connection.execute(
+            "UPDATE workflow_runs SET state='accepted', final_artifact_id=?, final_attempt_id=?, updated_at=?,"
+            " revision=revision+1 WHERE run_id=? AND revision=?",
+            (
+                artifact["artifact_id"],
+                attempt["attempt_id"],
+                now,
+                run_id,
+                run_row["revision"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise BoardError("REVISION_CONFLICT", "The governed run changed concurrently; re-read it and retry")
+        if not host_completion:
+            # Logical ownership ends with the recorded acceptance exactly as before;
+            # keepCheckout keeps the checkout directory, not the writer exclusion.
+            self._release_reservations(connection, run_id, now)
+        else:
+            updated_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            self.child_settled(connection, task=updated_task, attempt=attempt, payload=None, task_state="completed", now=now)
+        self.board._append_event(
+            connection,
+            "workflow.acknowledged",
+            task_id=run_id,
+            attempt_id=attempt["attempt_id"],
+            revision=run_row["revision"] + 1,
+            payload={
+                "verdict": "accepted",
+                "actor": actor,
+                "artifactId": artifact["artifact_id"],
+                "integrationId": integration["integration_id"],
+                "resolutionDelivery": (self._resolution_delivery_result(resolution)
+                                       if resolution is not None else None),
+                "noteBytes": len(note.encode()),
+            },
+        )
+        run_row = self._run_row(connection, run_id)
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        view = self.compact(connection, run_row, task)
+        # An accepted attempt counts as one reviewed sample, exactly like the
+        # infrastructure acknowledgement path; the verdict is never inherited implicitly.
+        self.board.evaluation.refresh_task_evidence(connection, task, now)
+        response = {**view, "verdict": "accepted", "duplicate": False,
+                    "targetRunId": run_id, "targetRevision": run_row["revision"],
+                    "integrationId": integration["integration_id"]}
+        if integration is not None:
+            response["integration"] = self._integration_view(integration)
+        if resolution is not None:
+            response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
+        self.board._store_receipt(
+            connection, command_id, "workflow.accept", request_key, response, task_id=run_id,
+            attempt_id=attempt["attempt_id"],
+        )
+        return response, artifact, integration
+
+    def _adopted_board_paths(self, connection, run_id: str, manifest: dict) -> list[str]:
+        """The exact adopted paths proven by board-bound adoption artifacts.
+
+        Only pinned `resolved-output` records bound to this manifest and verified
+        against their fixed Git objects authorize out-of-scope paths; local files
+        alone never do. The named paths must sit inside the record's provably
+        changed set, so a forged or drifted local record authorizes nothing.
+        """
+        if not manifest.get("manifestSha256"):
+            return []
+        module = workspace_module()
+        adopted: set[str] = set()
+        for row in connection.execute(
+            "SELECT manifest_json, manifest_sha256 FROM workflow_artifacts WHERE run_id=? AND kind='resolved-output'",
+            (run_id,),
+        ).fetchall():
+            try:
+                record = json.loads(row["manifest_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(record, dict) or record.get("kind") != "resolution" or record.get("action") != "adopt":
+                continue
+            if (record.get("snapshotSha256") != row["manifest_sha256"]
+                    or record.get("manifestSha256") != manifest["manifestSha256"]):
+                continue
+            try:
+                module.verify_sealed_output(manifest, manifest, record)
+            except BoardError:
+                continue
+            values = record.get("adoptedPaths")
+            if not isinstance(values, list):
+                snapshot = record.get("snapshot")
+                values = snapshot.get("adoptedPaths") if isinstance(snapshot, dict) else None
+            if not isinstance(values, list):
+                continue
+            candidates = {value for value in values if isinstance(value, str) and value}
+            if candidates and candidates <= set(record.get("changedPaths") or []):
+                adopted |= candidates
+        return sorted(adopted)
+
+    def _board_adopted_paths(self, run_id: str, manifest: dict) -> list[str]:
+        with self.db.read() as connection:
+            return self._adopted_board_paths(connection, run_id, manifest)
+
+    def conclude(self, params: dict, *, console_authority: dict | None = None) -> dict:
+        """End one goal that will not be accepted, then reclaim its checkout.
+
+        A failed, cancelled or delivered-but-unaccepted goal receives one
+        independent Host conclusion next to the real execution result; an
+        accepted goal is already closed. After the stop evidence holds, managed
+        changes that no fixed output has sealed yet become an independent Host
+        partial output (never overwriting an earlier partial of the same
+        attempt), the conclusion and that seal commit together, and the
+        registered checkout is reclaimed. An unresolved workspace conflict, a
+        pending continuation or a live helper refuses the conclusion instead of
+        being bypassed by it. The same note replays; a changed note conflicts.
+        """
+        schemas.reject_unknown(
+            params,
+            {"runId", "targetRunId", "note", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
+            "workflow.conclude",
+        )
+        schemas.reject_untrusted_override(params)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
+        note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
+        # One conclusion per reviewed execution: the derived key binds the current
+        # attempt, so the same note replays that execution's conclusion while a
+        # later execution of the same goal records its own.
+        seal_work = None
+        duplicate = None
+        with self.db.read() as connection:
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
+            target_snapshot = self._target_run(connection, owner, target_id)
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
+            request_key = {"runId": owner_run_id, "targetRunId": target_id, "note": note,
+                           "attemptId": task["selected_attempt_id"]}
+            command_id = "conclude-" + sha256_text(canonical_json(request_key))[:32]
+            receipt = self.board._receipt(connection, command_id, "workflow.conclude", request_key)
+            if receipt is not None:
+                duplicate = {**receipt, "duplicate": True}
+            else:
+                task = self._conclude_precheck(connection, target_snapshot, task)
+                seal_work = self._conclude_seal_work(connection, target_snapshot, task)
+        sealed_record = None
+        if seal_work is not None:
+            manifest, allowed, attempt_id = seal_work
+            try:
+                sealed_record = workspace_module().host_seal(
+                    self.board.directory, manifest, target_id, attempt_id, allowed_paths=allowed,
+                )
+            except BoardError as error:
+                if error.code == "WORKSPACE_SCOPE_VIOLATION":
+                    raise BoardError(
+                        "WORKSPACE_SCOPE_VIOLATION",
+                        "The checkout holds changes outside the authorized write scope; conclude cannot seal "
+                        "them as a partial output",
+                        paths=error.details.get("paths"),
+                    ) from error
+                raise
+        now = self.now()
+        with self.db.write() as connection:
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
+            receipt = self.board._receipt(connection, command_id, "workflow.conclude", request_key)
+            if receipt is not None:
+                duplicate = {**receipt, "duplicate": True}
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = run_row["run_id"]
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            if duplicate is None:
+                # The receipt, seal and conclusion must describe one execution.
+                # A concurrent continuation can finish a later attempt while the
+                # Git seal runs; it cannot inherit this earlier Host review.
+                self._expect_revision(run_row, target_snapshot["revision"])
+                if (task["selected_attempt_id"] != request_key["attemptId"]
+                        or run_row["workspace_manifest_json"] != target_snapshot["workspace_manifest_json"]):
+                    raise BoardError("REVISION_CONFLICT", "The execution or workspace changed while concluding; re-read it and retry")
+                response = self._conclude_record(
+                    connection, run_row=run_row, task=task, actor=actor, now=now, note=note,
+                    command_id=command_id, request_key=request_key, sealed_record=sealed_record)
+            else:
+                response = duplicate
+            head = self.board._head_of(connection)
+        self.board._notify(head)
+        response = dict(response)
+        if duplicate is not None:
+            response.setdefault("reclaim", {"removed": False, "reasons": ["replayed"], "retry": "reclaim"})
+        else:
+            response["reclaim"] = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=run_id,
+                                                         purpose="conclude", control=params)
+        with self.db.read() as connection:
+            run_row = self._run_row(connection, run_id)
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            response.update(self.compact(connection, run_row, task))
+            response["targetRevision"] = run_row["revision"]
+        return response
+
+    def _conclude_precheck(self, connection, run_row, task) -> dict:
+        """Everything that must hold before one goal may be concluded."""
+        run_id = run_row["run_id"]
+        if run_row["state"] not in ("failed", "cancelled", "delivered"):
+            raise BoardError(
+                "NOT_READY",
+                "Only a failed, cancelled or delivered goal can be concluded; a running turn or a Host decision "
+                "boundary is not an execution result",
+                runId=run_id,
+                state=run_row["state"],
+            )
+        task = task or connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        if task["accepted_at"]:
+            raise BoardError("CONFLICT", "An accepted goal is closed by its acceptance, not a conclusion", runId=run_id)
+        self._require_routing_stopped(connection, run_id)
+        self._lineage_stop_evidence(connection, run_row, "A Host conclusion")
+        conflict = self._open_conflict(connection, run_id)
+        if conflict is not None:
+            raise BoardError(
+                "CONFLICT",
+                "Resolve the workspace conflict before concluding; an unresolved out-of-scope site is never "
+                "sealed by a conclusion",
+                conflictId=conflict["conflict_id"],
+                paths=json.loads(conflict["blocking_paths_json"]),
+            )
+        if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued') LIMIT 1", (run_id,)).fetchone():
+            raise BoardError("CONFLICT", "A continuation is still pending")
+        if connection.execute("SELECT 1 FROM workflow_children WHERE parent_run_id=? AND state IN ('active','attention') LIMIT 1", (run_id,)).fetchone():
+            raise BoardError("CONFLICT", "Settle owned helpers before concluding")
+        return task
+
+    def _conclude_seal_work(self, connection, run_row, task):
+        """The manifest, allowed paths and attempt of one Host partial seal, or None.
+
+        ``None`` means there is no prepared workspace whose managed changes could
+        be unsealed; a cancelled-before-preparation goal concludes without a seal.
+        """
+        manifest_value = run_row["workspace_manifest_json"]
+        if not manifest_value:
+            return None
+        manifest = json.loads(manifest_value)
+        if not manifest.get("manifestSha256"):
+            return None
+        if not task["selected_attempt_id"]:
+            # No execution attempt ever ran on this checkout; there is nothing that
+            # could be unsealed, and a partial output needs an attempt identity.
+            return None
+        allowed = self._board_adopted_paths(run_row["run_id"], manifest)
+        return manifest, allowed, task["selected_attempt_id"]
+
+    def _conclude_record(self, connection, *, run_row, task, actor: str, now: str, note: str,
+                         command_id: str, request_key: dict, sealed_record: dict | None) -> dict:
+        """Insert the conclusion row, the Host partial artifact and the events atomically."""
+        run_id = run_row["run_id"]
+        task = self._conclude_precheck(connection, run_row, task)
+        existing = connection.execute(
+            "SELECT * FROM workflow_host_conclusions WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if existing is not None and host_conclusions.current(connection, run_row, task) is not None:
+            raise BoardError(
+                "CONFLICT",
+                "This goal already has a recorded conclusion with a different note; a reviewed outcome is not "
+                "relabelled",
+                conclusionId=existing["conclusion_id"],
+            )
+        attempt_id = task["selected_attempt_id"]
+        turn = connection.execute(
+            "SELECT * FROM workflow_turns WHERE run_id=? AND attempt_id=? ORDER BY turn_index DESC LIMIT 1",
+            (run_id, attempt_id),
+        ).fetchone()
+        partial_artifact_id = None
+        if sealed_record is not None:
+            partial_artifact_id = self._pin_artifact(
+                connection, run_id=run_id, kind="partial-output", manifest=sealed_record,
+                attempt_id=attempt_id, turn_id=turn["turn_id"] if turn is not None else None,
+                source_task_id=run_id, now=now,
+            )
+        identifier = "conclusion-" + str(uuid.uuid4())
+        connection.execute(
+            "INSERT INTO workflow_host_conclusions(conclusion_id,run_id,attempt_id,run_revision,owner_generation,"
+            "execution_status,note,evidence_json,artifact_id,integration_id,actor,command_id,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (identifier, run_id, attempt_id, run_row["revision"] + 1, run_row["owner_generation"], run_row["state"],
+             note, canonical_json({"references": [], "artifactSetSha256": host_conclusions.artifact_digest(connection, run_id)}),
+             partial_artifact_id, None, actor, command_id, now),
+        )
+        if sealed_record is not None:
+            self.board._append_event(
+                connection, "workflow.partial_output_preserved", task_id=run_id, attempt_id=attempt_id,
+                payload={"partial": True, "verified": True, "final": False, "artifactId": partial_artifact_id,
+                         "actor": actor},
+            )
+        self.board._append_event(
+            connection, "workflow.host_concluded", task_id=run_id,
+            attempt_id=attempt_id, revision=run_row["revision"] + 1,
+            payload={"conclusionId": identifier, "executionStatus": run_row["state"], "actor": actor,
+                     "partialArtifactId": partial_artifact_id},
+        )
+        run_row = self._bump_run(connection, run_row, now)
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        view = self.compact(connection, run_row, task)
+        response = {
+            **view,
+            "verdict": "concluded",
+            "conclusion": host_conclusions.view(connection.execute(
+                "SELECT * FROM workflow_host_conclusions WHERE conclusion_id=?", (identifier,)).fetchone()),
+            "partialArtifactId": partial_artifact_id,
+            "duplicate": False,
+            "targetRunId": run_id,
+            "targetRevision": run_row["revision"],
+        }
+        self.board._store_receipt(connection, command_id, "workflow.conclude", request_key, response,
+                                  task_id=run_id, attempt_id=attempt_id)
+        return response
+
+    def reclaim(self, params: dict, *, console_authority: dict | None = None) -> dict:
+        """Reclaim this goal's own registered managed checkout.
+
+        Used after an acceptance that kept the checkout, or after a reclaim that
+        was blocked and whose blocker is now gone. Only the checkout this run
+        registered is ever a deletion target; the same eligibility proof,
+        convergence and interruption recovery as the internal reclaim apply. A
+        blocked removal reports its concrete reasons and changes nothing.
+        """
+        schemas.reject_unknown(
+            params,
+            {"runId", "targetRunId", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
+            "workflow.reclaim",
+        )
+        schemas.reject_untrusted_override(params)
+        run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
+        with self.db.read() as connection:
+            owner = self._run_row(connection, run_id)
+            self._authorize(connection, owner, params, console_authority=console_authority, action="A checkout reclaim")
+            run_row = self._target_run(connection, owner, target_id)
+            target_id = run_row["run_id"]
+        result = self._reclaim_checkout(owner_run_id=run_id, run_id=target_id, purpose="reclaim", control=params)
+        with self.db.read() as connection:
+            run_row = self._run_row(connection, target_id)
+            response = {**self.compact(connection, run_row), "targetRunId": target_id,
+                        "targetRevision": run_row["revision"], **result}
+        if not result.get("removed"):
+            raise BoardError("NOT_READY", "This checkout is not eligible for reclaim", reasons=result.get("reasons"),
+                             runId=run_id, reclaim=result)
+        return response
+
+    def _reclaim_checkout(self, *, owner_run_id: str, run_id: str, purpose: str, control: dict) -> dict:
+        """Reclaim one owned checkout through the guarded internal removal journal.
+
+        The two internal steps reuse the expiring plan only as the durable journal
+        of one exact deletion: an applying plan fences concurrent capture and
+        writer claims on that checkout, the removal converges when another owner
+        completes it first, and an interrupted apply resumes. They are authorized
+        by the originating Host's exact control triple against the controlling
+        root, so a takeover between the recorded review and the removal only
+        blocks the removal (the review stays recorded) until the new owner
+        retries; no synthetic authority plans a deletion. No Host-visible
+        two-step path exists. A blocked removal keeps every recorded acceptance
+        or conclusion and reports the concrete reasons.
+        """
+        with self.db.read() as connection:
+            run_row = self._run_optional(connection, run_id)
+            if run_row is None or not run_row["workspace_manifest_json"]:
+                return {"removed": False, "reasons": ["workspace-not-prepared"]}
+            revision = self._run_row(connection, owner_run_id)["revision"]
+        command = f"reclaim-{purpose}-" + uuid.uuid4().hex
+        control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if control.get(key) is not None}
+        params = {"runId": owner_run_id, "targetRunId": run_id, "expectedRevision": revision,
+                  "commandId": command, **control_triple}
+        try:
+            planned = self.cleanup_plan(params)
+        except BoardError as error:
+            return {"removed": False, "reasons": [error.code], "detail": error.message}
+        plan = planned["plan"]
+        if plan["state"] == "applied":
+            result = (plan.get("result") or {})
+            path = Path(plan["path"]) if plan.get("path") else None
+            gone = path is not None and not (path.exists() or path.is_symlink())
+            return {"removed": True, "alreadyRemoved": bool(result.get("alreadyRemoved")) or gone,
+                    "path": plan["path"], "planId": plan["planId"]}
+        if plan["state"] == "blocked" and plan.get("path"):
+            # Convergence: with every run-level reason satisfied, a checkout that is
+            # factically gone (another owner finished, or it vanished) leaves nothing
+            # to delete; anything still occupying the path keeps its reasons.
+            path = Path(plan["path"])
+            reasons = plan.get("reasons") or []
+            if not (path.exists() or path.is_symlink()) and set(reasons) <= {"checkout-missing"}:
+                return {"removed": True, "alreadyRemoved": True, "path": plan["path"],
+                        "planId": plan["planId"]}
+        if plan["state"] not in ("planned", "applying"):
+            # An applying plan is not re-admitted here: cleanup_apply resumes it.
+            return {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
+                    "path": plan["path"]}
+        try:
+            # Planning advances the target only. An independently allocated
+            # helper's revision cannot stand in for its controlling root's.
+            apply_revision = planned["targetRevision"] if owner_run_id == run_id else revision
+            applied = self.cleanup_apply(
+                {**params, "commandId": command + "-apply", "expectedRevision": apply_revision,
+                 "planId": plan["planId"], "confirmPath": plan["path"]},
+            )
+        except BoardError as error:
+            if error.code == "NOT_READY":
+                return {"removed": False, "reasons": error.details.get("reasons") or [error.code],
+                        "planId": plan["planId"], "path": plan["path"]}
+            return {"removed": False, "reasons": [error.code], "detail": error.message,
+                    "planId": plan["planId"], "path": plan["path"]}
+        now = self.now()
+        with self.db.write() as connection:
+            self._release_reservations(connection, run_id, now)
+            head = self.board._head_of(connection)
+        self.board._notify(head)
+        return {"removed": True, "alreadyRemoved": bool(applied.get("plan", {}).get("result", {}).get("alreadyRemoved")),
+                "path": plan["path"], "planId": plan["planId"], "retention": applied.get("retention")}
 
     # -- workspace lifecycle (Host-owned) ------------------------------------
     def _bump_run(self, connection, run_row, now: str):
@@ -3568,18 +4189,13 @@ class WorkflowCoordinator:
             raise BoardError("REVISION_CONFLICT", "The governed run changed concurrently; re-read it and retry")
         return self._run_row(connection, run_row["run_id"])
 
-    def _find_integration(self, connection, run_id: str, artifact_id: str, integration_id: str | None):
+    def _find_integration(self, connection, run_id: str, artifact_id: str):
         """The newest verified integration record (or explicit not-required) of one artifact."""
         rows = connection.execute(
             "SELECT * FROM workflow_integrations WHERE run_id=? AND artifact_id=?"
             " AND state IN ('verified','not-required') ORDER BY created_at DESC, rowid DESC",
             (run_id, artifact_id),
         ).fetchall()
-        if integration_id is not None:
-            rows = [row for row in rows if row["integration_id"] == integration_id]
-            if not rows:
-                raise BoardError("NOT_FOUND", "This artifact has no matching verified integration record",
-                                 artifactId=artifact_id, integrationId=integration_id)
         if not rows:
             return None
         record = rows[0]
@@ -3588,18 +4204,6 @@ class WorkflowCoordinator:
         if record["source_commit"] and manifest.get("commit") and record["source_commit"] != manifest.get("commit"):
             raise BoardError("CONFLICT", "The integration record was verified against a different artifact",
                              integrationId=record["integration_id"], artifactCommit=manifest.get("commit"))
-        return record
-
-    def _require_integration(self, connection, run_id: str, artifact_id: str, integration_id: str | None):
-        record = self._find_integration(connection, run_id, artifact_id, integration_id)
-        if record is None:
-            raise BoardError(
-                "INTEGRATION_REQUIRED",
-                "An accepted goal must hold a verified integration record or an explicit not-required record for its "
-                "final artifact; a delivered worker result alone is not integration evidence",
-                runId=run_id,
-                artifactId=artifact_id,
-            )
         return record
 
     def _lineage_stop_evidence(self, connection, run_row, action: str) -> dict:
@@ -4112,202 +4716,6 @@ class WorkflowCoordinator:
             "targetRevision": run_row["revision"],
         }
 
-    def integration_record(self, params: dict, *, console_authority: dict | None = None) -> dict:
-        """Bind one immutable output artifact to the actual integration target.
-
-        A verified record resolves the target checkout identity, the ``ref`` commit
-        and both trees from the repository itself and compares the artifact's
-        per-path blob identities with the target tree. ``notRequired`` records an
-        explicit decision with a reason and performs no Git work.
-        """
-        schemas.reject_unknown(
-            params,
-            {
-                "runId", "targetRunId", "commandId", "expectedRevision", "artifactId", "target", "strategy",
-                "notRequired", "reason", "verification", "adjustedPaths", "hostPaths", "beforeCommit", *schemas.CONTROL_FIELDS,
-                schemas.CONSOLE_AUTHORITY_FIELD,
-            },
-            "workflow.integration_record",
-        )
-        schemas.reject_untrusted_override(params)
-        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
-        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
-        command_id = schemas.required_string(params, "commandId", max_length=128)
-        expected = schemas.require_expected_revision(params)
-        artifact_id = schemas.required_string(params, "artifactId", max_length=128)
-        strategy = schemas.optional_string(params, "strategy") or ""
-        not_required = schemas.optional_bool(params, "notRequired", False)
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES)
-        adjusted = schemas.string_list(params, "adjustedPaths", limit=256)
-        host_paths = schemas.string_list(params, "hostPaths", limit=256)
-        verification_text = ""
-        if "verification" in params and params.get("verification") is not None:
-            verification_text, _size = schemas.bounded_text(params, "verification", max_bytes=schemas.MAX_NOTE_BYTES,
-                                                            allow_empty=True)
-        target = None
-        if not_required:
-            if strategy not in ("", "not-required"):
-                raise BoardError("INVALID_ARGUMENT", "A not-required record cannot name an integration strategy")
-            if params.get("target") is not None:
-                raise BoardError("INVALID_ARGUMENT", "A not-required record cannot name an integration target")
-            if not reason:
-                raise BoardError("INVALID_ARGUMENT", "A not-required record requires an explicit reason")
-            if adjusted or host_paths:
-                raise BoardError("INVALID_ARGUMENT", "A not-required record cannot carry adjusted paths")
-            strategy = "not-required"
-        else:
-            if strategy not in INTEGRATION_STRATEGIES:
-                raise BoardError("INVALID_ARGUMENT", "strategy must be patch, cherry-pick or merge")
-            target = schemas.require_object(params.get("target"), "target")
-            schemas.reject_unknown(target, {"path", "ref", "repositoryId", "checkoutId"}, "integration target")
-            target_path = schemas.required_string(target, "path", max_length=4096)
-            if not target_path.startswith("/"):
-                raise BoardError("INVALID_ARGUMENT", "target.path must be an absolute checkout path")
-            schemas.required_string(target, "ref", max_length=512)
-        before_commit = schemas.optional_string(params, "beforeCommit", max_length=128)
-        request_key = {"runId": run_id, "targetRunId": target_id, "artifactId": artifact_id, "strategy": strategy,
-                       "notRequired": not_required,
-                       "reason": reason, "verification": verification_text, "adjustedPaths": adjusted, "hostPaths": host_paths,
-                       "expectedRevision": expected, "beforeCommit": before_commit,
-                       "target": ({key: target.get(key) for key in ("path", "ref", "repositoryId", "checkoutId")}
-                                  if target is not None else None)}
-        with self.db.read() as connection:
-            owner = self._run_row(connection, run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An integration record")
-            receipt = self.board._receipt(connection, command_id, "workflow.integration_record", request_key)
-            if receipt is not None:
-                return {**receipt, "duplicate": True}
-            self._expect_revision(owner, expected)
-            target_snapshot = self._target_run(connection, owner, target_id)
-            run_id = target_id
-            artifact = connection.execute(
-                "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=? AND kind IN ('output','resolved-output','partial-output')",
-                (artifact_id, run_id),
-            ).fetchone()
-            if artifact is None:
-                raise BoardError("NOT_FOUND", "No sealed output artifact of this run has that identity",
-                                 artifactId=artifact_id)
-            manifest = json.loads(artifact["manifest_json"])
-            if manifest.get("snapshotSha256") != artifact["manifest_sha256"]:
-                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The retained output identity changed")
-            original = connection.execute(
-                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
-                (run_id,),
-            ).fetchone()
-            turn = connection.execute(
-                "SELECT * FROM workflow_turns WHERE run_id=? AND turn_id=? AND attempt_id=?",
-                (run_id, artifact["turn_id"], artifact["attempt_id"]),
-            ).fetchone()
-            if (original is None or turn is None
-                    or (turn["input_sha256"] is not None
-                        and sha256_text(turn["input_json"]) != turn["input_sha256"])):
-                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output has no proven input manifest")
-            original_manifest = json.loads(original["manifest_json"])
-            final_manifest = json.loads(turn["input_json"]).get("executionWorkspace")
-            if not isinstance(final_manifest, dict):
-                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final turn has no execution workspace")
-            if (original_manifest.get("manifestSha256") != original["manifest_sha256"]
-                    or final_manifest.get("manifestSha256") != manifest.get("manifestSha256")):
-                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A retained input manifest identity changed")
-        verification: dict = {}
-        binding: dict = {"runId": run_id, "artifactId": artifact_id, "strategy": strategy,
-                         "sourceCommit": manifest.get("commit"), "sourceTree": manifest.get("tree")}
-        if not_required:
-            verification = {"verified": False, "notRequired": True, "reason": reason, "summary": verification_text}
-            binding["reason"] = reason
-        else:
-            if not before_commit:
-                raise BoardError("INVALID_ARGUMENT", "beforeCommit is required for a verified integration")
-            verification = workspace_module().integration_verify(
-                manifest, original_input=original_manifest, final_input=final_manifest,
-                path=target["path"], ref=target["ref"], strategy=strategy, before_commit=before_commit,
-                repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
-                adjusted_paths=adjusted, host_paths=host_paths, reason=reason,
-            )
-            verification["summary"] = verification_text
-            if not verification["verified"]:
-                raise BoardError("INTEGRATION_UNVERIFIED",
-                                 "The artifact is not present in the target as claimed; the record was not created",
-                                 artifactId=artifact_id, verification=verification)
-            binding.update(beforeCommit=verification["beforeCommit"], afterCommit=verification["afterCommit"],
-                           targetPath=verification["target"]["path"], targetRef=target["ref"])
-        binding["hostPaths"] = sorted(host_paths)
-        binding_sha = sha256_text(canonical_json(binding))
-        now = self.now()
-        with self.db.write() as connection:
-            owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An integration record")
-            receipt = self.board._receipt(connection, command_id, "workflow.integration_record", request_key)
-            if receipt is not None:
-                return {**receipt, "duplicate": True}
-            self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id)
-            run_id = run_row["run_id"]
-            self._expect_revision(run_row, target_snapshot["revision"])
-            existing = connection.execute(
-                "SELECT * FROM workflow_integrations WHERE binding_sha256=?", (binding_sha,)
-            ).fetchone()
-            if existing is None:
-                integration_id = f"int-{uuid.uuid4()}"
-                connection.execute(
-                    "INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, attempt_id, state, strategy,"
-                    " binding_sha256, target_kind, target_path, target_ref, target_repository_id, target_checkout_id,"
-                    " source_commit, source_tree, before_commit, after_commit, before_tree, after_tree, verification_json,"
-                    " reason, command_id, actor, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        integration_id, run_id, artifact_id, artifact["attempt_id"],
-                        "not-required" if not_required else "verified", strategy, binding_sha,
-                        "not-required" if not_required else "checkout",
-                        "" if not_required else verification["target"]["path"],
-                        "" if not_required else target["ref"],
-                        None if not_required else verification["target"]["repositoryId"],
-                        None if not_required else verification["target"]["checkoutId"],
-                        manifest.get("commit"), manifest.get("tree"),
-                        None if not_required else verification["beforeCommit"],
-                        None if not_required else verification["afterCommit"],
-                        None if not_required else verification["beforeTree"],
-                        None if not_required else verification["afterTree"],
-                        canonical_json(verification), reason, command_id, actor, now,
-                    ),
-                )
-                self.board._append_event(
-                    connection,
-                    "workflow.integration_recorded",
-                    task_id=run_id,
-                    attempt_id=artifact["attempt_id"],
-                    revision=run_row["revision"] + 1,
-                    payload={"integrationId": integration_id, "artifactId": artifact_id,
-                             "state": "not-required" if not_required else "verified",
-                             "strategy": strategy, "afterCommit": verification.get("afterCommit")},
-                )
-                run_row = self._bump_run(connection, run_row, now)
-                response = {
-                    **self.compact(connection, run_row),
-                    "duplicate": False,
-                    "integrationId": integration_id,
-                    "integration": self._integration_view(connection.execute(
-                        "SELECT * FROM workflow_integrations WHERE integration_id=?", (integration_id,)).fetchone()),
-                    "targetRunId": run_id,
-                    "targetRevision": run_row["revision"],
-                }
-            else:
-                if existing["run_id"] != run_id or existing["artifact_id"] != artifact_id:
-                    raise BoardError("CONFLICT", "This integration binding already belongs to another artifact",
-                                     integrationId=existing["integration_id"])
-                response = {
-                    **self.compact(connection, run_row),
-                    "duplicate": True,
-                    "integrationId": existing["integration_id"],
-                    "integration": self._integration_view(existing),
-                    "targetRunId": run_id,
-                    "targetRevision": run_row["revision"],
-                }
-            self.board._store_receipt(connection, command_id, "workflow.integration_record", request_key, response,
-                                      task_id=run_id, attempt_id=artifact["attempt_id"])
-            head = self.board._head_of(connection)
-        self.board._notify(head)
-        return response
-
     @staticmethod
     def _allocation_provenance(connection, run_row) -> list[dict]:
         """Authoritative retained manifests that can prove one run's physical allocation.
@@ -4360,7 +4768,7 @@ class WorkflowCoordinator:
                 "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?",
                 (run_row["final_artifact_id"], run_row["run_id"]),
             ).fetchone()
-        integration = (self._find_integration(connection, run_row["run_id"], final_artifact["artifact_id"], None)
+        integration = (self._find_integration(connection, run_row["run_id"], final_artifact["artifact_id"])
                        if final_artifact is not None else None)
         if final_artifact is None and conclusion is None:
             reasons.append("final-artifact-missing")
@@ -4477,7 +4885,8 @@ class WorkflowCoordinator:
             reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
             sealed = self._latest_handoff(connection, run_row, manifest)
         module = workspace_module()
-        inspection = module.cleanup_inspect(self.board.directory, manifest, sealed=sealed, retained=retained)
+        inspection = module.cleanup_inspect(self.board.directory, manifest, sealed=sealed, retained=retained,
+                                            allowed=self._board_adopted_paths(run_id, manifest))
         if inspection["allocation"] is not None:
             retention["workspaceDirectory"] = str(self.board.directory / "workspaces"
                                                   / inspection["allocation"]["workspaceId"])
@@ -4604,7 +5013,8 @@ class WorkflowCoordinator:
         inspection = None
         if path.exists() or path.is_symlink():
             inspection = workspace_module().cleanup_inspect(self.board.directory, manifest, sealed=sealed,
-                                                           retained=retained)
+                                                           retained=retained,
+                                                           allowed=self._board_adopted_paths(run_id, manifest))
             # The registered owner of this allocation may complete the same removal
             # while the eligibility is proven, or the checkout may already have been
             # deleted out of band. A path that is factually gone leaves nothing to
@@ -6057,7 +6467,7 @@ class WorkflowCoordinator:
         command, native_operation = {
             "task_cancel": ("cancel", "workflow_cancel"),
             "task_retry": ("continue", "workflow_continue"),
-            "task_acknowledge": ("acknowledge", "workflow_acknowledge"),
+            "task_acknowledge": ("accept", "workflow_accept"),
         }[operation]
         raise BoardError("GOVERNED_REQUIRED", f"Use {command} ({native_operation}) for this governed Goal", runId=run_row["run_id"])
 
