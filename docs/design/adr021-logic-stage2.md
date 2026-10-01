@@ -109,7 +109,7 @@ Python controller 消费 ReadOnlyStructuredRequest，模型前用免费 dump-con
 | L4-F 设置存取与发布 | router 的 configuration/初始化、evaluation/user_policy 的字段补丁、修订、快照和 fixtures | 不改路由 request/claim/发布，不迁移、不改前端 | 权限/revision、字段省略/null、模式资格、原子拒绝、旧板 upgrade-required 零写入、不阻塞无关设置 | A/B 合入后 |
 | L4-G1 请求解析、冻结与 Host 边界 | router.resolve/profile_problem、DecisionCoordinator 请求创建和冻结、最小 workflow 边界呈现，删除 request 时 fallback | 不改 claim/答案发布、设置 writer、原生 runner | 多/零/唯一候选、完整 buddy、不可用具体原因、同一请求幂等和冻结设置、无自动第二个 Router | F 合入后；交付固定请求输入契约供 G2 |
 | L4-G2 认领复核与答案发布 | DecisionCoordinator 的 selector_family/claim/complete/publish、DecisionAdapter 收集；删除 claim/preflight fallback | 不改请求 admission、设置发布、原生运行方式或工具分类；统一工具证据留 L5 | 认领前健康/额度/资格/设置变化、家族容量、gate、预算/冻结副本/stop、取消/takeover/迟到答案、无重排 | G1 后；沿用现有工具检查，L5 接单一证据判定 |
-| L4-H 删除付费审阅验证 | CLI/help/transport/contracts/service/console/worker/store/scheduling/health 的 review-check 入口和专用资源；测试迁移 | 不重写历史状态，不动普通执行/账户/停止，不改 skill | 所有旧入口拒绝、包/registry 无证书或 review-check；通用防护有测试去向 | G2 后；按引用清单机械删除 |
+| L4-H 删除付费审阅验证 | CLI/help/transport/contracts/service/console/worker/store/scheduling/health 的 review-check 入口和专用资源；测试迁移 | 不重写历史状态，不动普通执行/账户/停止，不改 skill | 所有旧入口拒绝、包/registry 无证书或 review-check；通用防护有测试去向 | B/F/G1 后可与 G2 并行；不写 G2 的方法与文件，按引用清单机械删除 |
 | L4-I 控制台最小适配 | 现有类型/parser、单 Router 表单接线、删除证书控件/验证入口、preview fixtures | 不做界面设计，不加维护/画像/探索，不改后台策略 | 设置请求、实际 parser/preview、受影响 Vitest、typecheck/build | B/F 后，可与 G1/J 并行；仅 apps/console，H 完成后才做模块完整检查，Host 验收资源生成 |
 | L4-J Router 健康诊断 | DecisionCoordinator.health_summary 与独立健康统计测试；必要时终结事件保存机器错误码 | 不改请求/claim/原生运行、共享设置或自动熔断，不追加到 G1/G2 | 四次超时计为四次失败与连续失败、三次连续有效 Router 失败即 available=false、错误原因明确；成功恢复，取消/stale/程序唯一候选不能伪造恢复；预算/越界/输入变动计数仍独立 | 用户新增，和 G1 并行独立 worktree；仅自己的方法区 |
 | L5-0A 统一证据契约与黑板判定 | 新 tool_evidence.py 分类/完整性结构、DecisionCoordinator 的唯一判定函数与格式校验 | 不改四个 harness 的运行/工具，不自造原生数据、不接 L7 | 同一矩阵：fast 零工具；sandbox 允许 read/search/execute；无 sandbox 仅 read/search；修改/联网/other/不完整/坏绑定作废 | L4 验收之后，L5 的第一项 |
@@ -180,3 +180,5 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 用户于 2026-10-02 确认 Router 失败来自 DeepSeek 官方 API 性能下降，授权当前 Host 边界和恢复前的新委派使用完整合法 buddy 四元组绕过 Router；恢复后回默认路由，不改共享设置。G1 使用 codex/openai/gpt-6.1-sol/high 继续同一 run；已完成的 A/B 不重复执行。另增 L4-J：预算耗尽仍保留专门计数，也进入 failureCount/consecutiveFailures；健康诊断以现有前端连续三次失败提示为阈值，明确 available=false 和机器原因码，不增加新的持久熔断或自动重试。
 
 L4-I 只消费 B/F 已提交的确定接口，删除失效的前端控件无需等待 H 删除后台方法。因此将 I 的开工依赖由 H 改为 B/F，允许独立检出并行实现，模块验收仍等待 G2/H/I/J 全部集成。
+
+L4-H 的入口、registry、Worker 专用分支和证书资源与 G2 的 decision/发布方法区独立；调整为 G1 后并行。H 不编辑 decision.py、adapters/decision.py、evaluation.py 或 G2 测试文件，通用流/停止防护仍保留。
