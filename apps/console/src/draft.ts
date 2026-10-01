@@ -320,7 +320,7 @@ export type UserPolicyPublication = {
   familyPreferenceChanges?: FamilyPreferenceChangePatch[];
   preferenceChanges?: PreferenceChangePatch[];
   familyAnnotationChanges?: FamilyAnnotationChangePatch[];
-  configuration?: Partial<Pick<Configuration, "fastRouterProfileId" | "reviewRouterProfileId" | "defaultRoutingMode" | "routingBudget">>;
+  configuration?: Partial<Pick<Configuration, "routerProfileId" | "defaultRoutingMode" | "routingBudget">>;
   /** Per-family limit patches; the board refuses any `active` occupancy here. */
   modelConcurrency?: ModelConcurrencySetting[];
 };
@@ -412,14 +412,14 @@ export function familyAnnotationChanges(
   return changed.sort(byFamily);
 }
 
-export const ROUTER_FIELDS = ["fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode"] as const;
+export const ROUTER_FIELDS = ["routerProfileId", "defaultRoutingMode"] as const;
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
-  return baseline.configuration[field] !== draft.configuration[field];
+  return !!baseline.configuration && !!draft.configuration && baseline.configuration[field] !== draft.configuration[field];
 }
 
 export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
-  return (baseline.configuration.routingBudget ?? "standard") !== (draft.configuration.routingBudget ?? "standard");
+  return !!baseline.configuration && !!draft.configuration && baseline.configuration.routingBudget !== draft.configuration.routingBudget;
 }
 
 export function configurationChanged(baseline: Draft, draft: Draft): boolean {
@@ -457,8 +457,8 @@ export function publication(
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
           ...Object.fromEntries(ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field))
-            .map(field => [field, draft.configuration[field]])),
-          ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration.routingBudget ?? "standard" } : {}),
+            .map(field => [field, draft.configuration![field]])),
+          ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration!.routingBudget ?? "standard" } : {}),
         } }
       : {}),
   };
@@ -485,12 +485,11 @@ function fingerprint(draft: UserEditable): string {
       .filter((a) => a.text)
       .map((a) => ({ key: familyKey(a), text: a.text }))
       .sort((a, b) => a.key.localeCompare(b.key)),
-    configuration: {
-      fastRouterProfileId: draft.configuration.fastRouterProfileId,
-      reviewRouterProfileId: draft.configuration.reviewRouterProfileId,
+    configuration: draft.configuration ? {
+      routerProfileId: draft.configuration.routerProfileId,
       defaultRoutingMode: draft.configuration.defaultRoutingMode,
-      routingBudget: draft.configuration.routingBudget ?? "standard",
-    },
+      routingBudget: draft.configuration.routingBudget,
+    } : null,
     modelConcurrency: [...draft.modelConcurrency]
       .map(({ adapter, provider, model, limit }) => ({ key: familyKey({ adapter, provider, model }), limit }))
       .sort((a, b) => a.key.localeCompare(b.key)),
@@ -699,24 +698,19 @@ export function rebaseDraft(
     else fail("changed", "familyAnnotation", familyText(change));
   }
 
-  const mergedRouting = { ...nextBaseline.configuration };
-  for (const field of ROUTER_FIELDS) {
-    if (!routerFieldChanged(baseline, draft, field)) continue;
-    const old = baseline.configuration[field];
-    const wanted = draft.configuration[field];
-    const fresh = nextBaseline.configuration[field];
-    if (fresh === old || fresh === wanted) {
-      // Each field is independently fenced by the configuration revision.
-      Object.assign(mergedRouting, { [field]: wanted });
-    } else fail("changed", field === "defaultRoutingMode" ? "defaultRoutingMode" : "configuration", String(wanted ?? ""));
-  }
-
-  let routingBudget = nextBaseline.configuration.routingBudget ?? "standard";
-  if (routingBudgetChanged(baseline, draft)) {
-    const old = baseline.configuration.routingBudget ?? "standard";
-    const wanted = draft.configuration.routingBudget ?? "standard";
-    if (routingBudget === old || routingBudget === wanted) routingBudget = wanted;
-    else fail("changed", "routingBudget", "", `（现为 ${routingBudget}）`);
+  let mergedRouting = nextBaseline.configuration;
+  if (baseline.configuration && draft.configuration && nextBaseline.configuration) {
+    mergedRouting = { ...nextBaseline.configuration };
+    for (const field of [...ROUTER_FIELDS, "routingBudget"] as const) {
+      if (baseline.configuration[field] === draft.configuration[field]) continue;
+      const old = baseline.configuration[field];
+      const wanted = draft.configuration[field];
+      const fresh = nextBaseline.configuration[field];
+      if (fresh === old || fresh === wanted) Object.assign(mergedRouting, { [field]: wanted });
+      else fail("changed", field === "routerProfileId" ? "configuration" : field, String(wanted ?? ""));
+    }
+  } else if (configurationChanged(baseline, draft)) {
+    fail("changed", "configuration", "", "（设置需升级）");
   }
 
   // Family concurrency limits: the key is the exact adapter/provider/model
@@ -774,7 +768,7 @@ export function rebaseDraft(
       familyPreferences,
       preferenceOverrides,
       familyAnnotations,
-      configuration: { ...mergedRouting, routingBudget },
+      configuration: mergedRouting,
       modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
         mergedConcurrency.get(familyKey(entry)) ?? entry),
     },

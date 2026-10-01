@@ -5,7 +5,7 @@ import type { RoutingHistory, Workflow } from "./workflow-types";
 import { configurationText, DecisionDetails } from "./DecisionDetails";
 import { decisionStatus } from "./decision-types";
 import { formatDate } from "./ui";
-import { fallbackDescription, recordedRoutingMode, routingBasisSummary, selectionSourceText } from "./routing-display";
+import { recordedRoutingMode, routingBasisSummary, selectionSourceText } from "./routing-display";
 
 export function RoutingDetails({ value, api, csrfToken, active, initialDecisionId }: {
   value: Workflow; api: ConsoleApi; csrfToken: string; active: boolean; initialDecisionId?: string | null;
@@ -57,9 +57,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
       <dl className="facts"><dt>配置版本</dt><dd>{value.executionConfigurationRevision == null ? "未记录" : `V${value.executionConfigurationRevision}`}</dd>
         <dt>路由状态</dt><dd>{value.routing ? decisionStatus[value.routing.status] || value.routing.status : "未记录"}</dd>
         {sourceText && <><dt>选择方式</dt><dd>{sourceText}</dd></>}
-        {value.routing && (value.routing.status !== "explicit" || value.routing.routingMode || value.routing.requestedRoutingMode) && <><dt>请求模式</dt><dd>{recordedRoutingMode(value.routing.requestedRoutingMode)}</dd>
-          <dt>实际模式</dt><dd>{value.routing.source === "single-candidate" || value.routing.source === "no-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd>
-          <dt>模式降级</dt><dd>{fallbackDescription(value.routing.fallback)}</dd></>}</dl>
+        {value.routing && (value.routing.status !== "explicit" || value.routing.routingMode) && <><dt>实际模式</dt><dd>{value.routing.source === "single-candidate" || value.routing.source === "no-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd></>}</dl>
       {!currentId && <p className="read-text">{value.routing?.status === "explicit"
         ? "Host 指定" : value.routing?.reason || value.activeRequest?.summary || "路由决策未记录"}</p>}
       {currentId && value.routing?.reason && ["needs-host", "fenced", "failed"].includes(value.routing.status) &&
@@ -81,7 +79,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
       {!busy && page?.entries.length === 0 && <p className="muted">没有智能路由历史。</p>}
       <ul className="history-list" aria-busy={busy}>{page?.entries.map(d => <li key={d.decisionId}>
         <button className="history-choice" aria-pressed={d.decisionId === chosenId} disabled={busy} onClick={() => inspect(d.decisionId)}>
-          <span>{formatDate(d.createdAt)} · {recordedRoutingMode(d.routingMode)} · {d.fallback ? "已降级 · " : ""}{d.selectedProfile ? configurationText(d.selectedProfile) : "未选定配置"}</span>
+          <span>{formatDate(d.createdAt)} · {recordedRoutingMode(d.routingMode)} · {d.selectedProfile ? configurationText(d.selectedProfile) : "未选定配置"}</span>
           <span>{decisionStatus[d.status] || d.status}{d.current ? " · 当前" : ""}</span>
         </button></li>)}</ul>
       <div className="actions history-pagination">

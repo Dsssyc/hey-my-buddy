@@ -74,7 +74,7 @@ function effective(state: Snapshot): Preference[] {
   });
 }
 
-type Options = { familyPreferences?: FamilyPreference[]; preferenceOverrides?: PreferenceOverride[] };
+type Options = { configurationUnavailable?: boolean; routerProfileId?: string | null; familyPreferences?: FamilyPreference[]; preferenceOverrides?: PreferenceOverride[] };
 
 /**
  * The snapshot's harness health (ADR-017 §15): the Claude harness used by the
@@ -101,7 +101,8 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: mediumId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: options.configurationUnavailable ? null : { revision: 1, routerProfileId: options.routerProfileId === undefined ? mediumId : options.routerProfileId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置", revision: 1 } : null,
     profiles: profiles(),
     preferences: [],
     familyPreferences: options.familyPreferences ?? [],
@@ -130,7 +131,7 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     familyPreferences: [...state.familyPreferences],
     preferenceOverrides: [...state.preferenceOverrides],
     familyAnnotations: [...state.familyAnnotations],
-    configuration: { ...state.configuration, ...(params.configuration ?? {}) },
+    configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
   for (const setting of params.profileSettings ?? []) {
     next.profiles = next.profiles.map(entry => entry.profileId === setting.profileId ? { ...entry, enabled: setting.enabled } : entry);
@@ -441,18 +442,34 @@ describe("effort tags and preference overrides", () => {
 });
 
 describe("the Router menu", () => {
-  it("assigns the fast slot independently through the enabled effort menu", async () => {
-    const f = fixture();
+  it("assigns the single Router through the enabled effort menu", async () => {
+    const f = fixture({ routerProfileId: null });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     await selectFamily(user, "Claude Sonnet 5");
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    await user.click(within(menu).getByRole("button", { name: "设为快速 Router" }));
-    expect(screen.getByRole("region", { name: "全局状态" }).textContent).toContain("快速 Router：可用");
+    await user.click(within(menu).getByRole("button", { name: "设为 Router" }));
+    expect(screen.getByRole("region", { name: "全局状态" }).textContent).toContain("Router：可用");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
-    expect(f.published[0].configuration).toEqual({ fastRouterProfileId: mediumId });
+    expect(f.published[0].configuration).toEqual({ routerProfileId: mediumId });
+  });
+  it("disables only Router setting actions when configuration requires upgrade", async () => {
+    const f = fixture({ configurationUnavailable: true });
+    const user = userEvent.setup();
+    await openBuddy(f.api, user);
+    await selectFamily(user, "Claude Sonnet 5");
+    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
+    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
+    expect(within(menu).getByRole("button", { name: "设为 Router" })).toHaveProperty("disabled", true);
+    expect(within(menu).getByText("Router 设置升级不可用")).toBeTruthy();
+    expect(within(menu).getByRole("radio", { name: "优先" })).toHaveProperty("disabled", false);
+    await user.click(within(menu).getByRole("radio", { name: "优先" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("已发布新版本");
+    expect(f.published[0]).not.toHaveProperty("configuration");
+    expect(f.published[0].preferenceChanges).toEqual([{ profileId: mediumId, mode: "prefer", reason: "" }]);
   });
   it("closes an effort menu when its main tab becomes hidden, without reopening on return", async () => {
     const f = fixture();
@@ -477,14 +494,14 @@ describe("the Router menu", () => {
     await selectFamily(user, "Claude Sonnet 5");
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByText("当前审阅 Router")).toBeTruthy();
-    expect(within(menu).queryByRole("button", { name: "设为审阅 Router" })).toBeNull();
+    expect(within(menu).getByText("当前 Router")).toBeTruthy();
+    expect(within(menu).queryByRole("button", { name: "设为 Router" })).toBeNull();
     expect(within(menu).getAllByRole("radio")).toHaveLength(5);
     const mediumEvaluation = screen.getByText("medium", { selector: ".effort-evaluation summary strong" }).closest(".effort-evaluation")!;
     const capabilityName = [...mediumEvaluation.querySelectorAll("dt")].find(item => item.textContent === "能力")!;
     const capabilityText = capabilityName.nextElementSibling!.textContent!;
     expect(capabilityText).toContain("支持无工具路由调用");
-    expect(capabilityText).toContain("当前 Harness 版本已验证只读路由调用");
+    expect(capabilityText).toContain("具备本地只读路由资格");
     expect(capabilityText).not.toMatch(/routing:fast|\bdecision\b/);
     const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     expect(styles).toMatch(/\.effort-menu \.menu-radio input\[type="radio"\] \{[^}]*width: auto/);
@@ -497,13 +514,13 @@ describe("the Router menu", () => {
     await selectFamily(user, "GPT-6 Sol");
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" });
-    const action = within(menu).getByRole("button", { name: "设为审阅 Router" });
+    const action = within(menu).getByRole("button", { name: "设为 Router" });
     expect((action as HTMLButtonElement).disabled).toBe(true);
-    expect(within(menu).getByText("当前 Harness 版本尚未验证只读路由调用")).toBeTruthy();
+    expect(within(menu).getByText("所属 Harness 尚不具备本地只读路由资格")).toBeTruthy();
     await user.click(action);
     action.focus();
     expect(document.activeElement).not.toBe(action);
-    expect(screen.queryByRole("dialog", { name: "替换审阅 Router" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "替换 Router" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeTruthy();
     expect(f.published).toHaveLength(0);
   });
@@ -515,7 +532,7 @@ describe("the Router menu", () => {
     await selectFamily(user, "Claude Sonnet 5");
     await user.click(screen.getByRole("button", { name: "high 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · high 档位设置" });
-    const action = within(menu).getByRole("button", { name: "设为审阅 Router" });
+    const action = within(menu).getByRole("button", { name: "设为 Router" });
     expect((action as HTMLButtonElement).disabled).toBe(true);
     expect(within(menu).getByText("该档位未启用：先打开它的开关")).toBeTruthy();
   });

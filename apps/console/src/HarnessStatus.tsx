@@ -49,7 +49,6 @@ const HARNESS_REASON_LABEL: Record<string, string> = {
   permission_denied: "没有执行权限",
   handshake_failed: "握手失败",
   login_required: "需要登录",
-  version_unverified: "版本未验证",
 };
 const HARNESS_CANDIDATE_STATUS_LABEL: Record<string, string> = {
   ready: "可用",
@@ -254,7 +253,6 @@ export function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sess
         return <li key={row.adapter} id={`harness-${row.adapter}`} tabIndex={-1} className={"harness-status-row harness-" + row.status}>
           <div className="harness-status-rowline">
             <span className="harness-name">{name}</span>
-            {row.adapter === 'codex' && row.reviewVerification?.status === 'new-version' && <span className="small muted">新版本待验证</span>}
             <Badge tone={harnessStatusTone(row.status)}>{harnessStatusText(row.status)}</Badge>
             {quota?.alert && <Badge tone={quota.stale ? "neutral" : "amber"}>
               {quota.limitReported ? "原生记录报告额度限制" : quota.windows.some(window => window.atLimit) ? "额度已到上限" : "额度接近上限"}
@@ -303,7 +301,7 @@ export function HarnessStatus({ snapshot, api, refresh, mutationsAvailable, sess
             </dl>
             <HarnessAccount row={row} name={name} api={api} csrfToken={snapshot.csrfToken} canWrite={canWrite}
               title={writableTitle} onRefreshed={reloadSnapshot} />
-            <HarnessReview row={row} snapshot={snapshot} api={api} canWrite={canWrite} onRefresh={reloadSnapshot} />
+            <HarnessReview row={row} />
             <QuotaRecovery row={row} api={api} csrfToken={snapshot.csrfToken} canWrite={canWrite}
               title={writableTitle} onRefreshed={reloadSnapshot} />
             {remedy && <p className="small harness-remedy">{remedy}</p>}

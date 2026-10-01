@@ -62,7 +62,7 @@ function snapshot(options: { harnesses?: HarnessHealth[] } = {}): HarnessSnapsho
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: mediumId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: { revision: 1, routerProfileId: mediumId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: [
       profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
         enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
@@ -164,6 +164,20 @@ afterEach(() => {
 });
 
 describe("the harness status strip", () => {
+  it("shows local qualification and no retired verification entry even with stale certificate data", async () => {
+    const stale = harness({ adapter: "codex", status: "ready", version: "0.159.0",
+      readOnlyStructured: { eligible: true, systemSandbox: true, reason: null, reasonCode: null, sameAttemptContinuation: true } });
+    Object.assign(stale, { reviewVerification: { status: "new-version", verified: false } });
+    const f = fixture({ harnesses: [stale] });
+    await openBuddy(f);
+    await userEvent.click(screen.getByRole("button", { name: "Codex 检测详情" }));
+    expect(screen.getByText("审阅资格：符合本地检查")).toBeTruthy();
+    expect(screen.queryByText("新版本待验证")).toBeNull();
+    expect(screen.queryByRole("button", { name: /验证审阅|核对本次验证/ })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "审阅验证配置" })).toBeNull();
+    expect(f.command).not.toHaveBeenCalled();
+  });
+
   it("shows each harness's recorded state, attempted locations and remedy without calling anything", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -374,6 +388,30 @@ describe("the harness wire contract", () => {
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     await expect(commandApi({}).api.harnessSet("codex", "/opt/bin/codex", 4, "csrf"))
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+
+  it("parses free local qualification from snapshots and command replies without retaining certificates", async () => {
+    const readOnlyStructured = { eligible: true, systemSandbox: true, reason: null, reasonCode: null, sameAttemptContinuation: true };
+    const raw = { ...codexRow, systemSandbox: true, readOnlyStructured: { ...readOnlyStructured, verified: true },
+      reviewVerification: { verified: true }, verified: true };
+    const parsed = snapshotHarnesses({ harnesses: [raw] } as unknown as Snapshot)[0];
+    expect(parsed.readOnlyStructured).toEqual(readOnlyStructured);
+    expect(parsed.systemSandbox).toBe(true);
+    expect(parsed).not.toHaveProperty("reviewVerification");
+    expect(parsed).not.toHaveProperty("verified");
+    await expect(commandApi({ harnesses: [raw] }).api.harnessRefresh("csrf", "codex")).resolves.toEqual([parsed]);
+    await expect(commandApi({ harness: raw }).api.harnessSet("codex", null, 4, "csrf")).resolves.toEqual(parsed);
+  });
+
+  it("keeps discovery health but treats malformed local qualification as unknown", () => {
+    const valid = { eligible: true, systemSandbox: true, reason: null, reasonCode: null, sameAttemptContinuation: true };
+    for (const readOnlyStructured of [null, {}, { eligible: true }, { ...valid, systemSandbox: "true" },
+      { ...valid, sameAttemptContinuation: 1 }, { ...valid, reasonCode: "readonly-resource-missing" },
+      { ...valid, reason: undefined }, { verified: true }]) {
+      const parsed = snapshotHarnesses({ harnesses: [{ ...codexRow, readOnlyStructured }] } as unknown as Snapshot)[0];
+      expect(parsed.status).toBe("ready");
+      expect(parsed).not.toHaveProperty("readOnlyStructured");
+    }
   });
 
   it("reads the snapshot's harness rows in the fixed order and treats an absent field as none", () => {

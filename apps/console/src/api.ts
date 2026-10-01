@@ -1,4 +1,4 @@
-import type { Configuration, ConsoleAccess, ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
@@ -74,16 +74,44 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
 }
 
 
-/** Contract 0.20.0 / schema 14: settings use two Router slots and one default mode. */
+/** Current L4 settings: one Router, mode and review budget; retired slots are refused. */
 export function validRoutingConfiguration(value: unknown): value is Configuration {
   const config = value as Partial<Configuration> | null;
   return !!config && typeof config === "object" && !Array.isArray(config)
-    && !("decisionProfileId" in config)
+    && !["decisionProfileId", "fastRouterProfileId", "reviewRouterProfileId"].some(key => key in config)
     && Number.isInteger(config.revision)
-    && (config.fastRouterProfileId === null || typeof config.fastRouterProfileId === "string")
-    && (config.reviewRouterProfileId === null || typeof config.reviewRouterProfileId === "string")
+    && (config.routerProfileId === null || (typeof config.routerProfileId === "string" && config.routerProfileId.trim().length > 0))
     && (config.defaultRoutingMode === "fast" || config.defaultRoutingMode === "review")
     && (config.routingBudget === "brief" || config.routingBudget === "standard" || config.routingBudget === "deep");
+}
+
+function validConfigurationState(data: Snapshot): boolean {
+  const error = data.configurationError;
+  if (data.configuration !== null) return validRoutingConfiguration(data.configuration) && error == null;
+  return !!error && typeof error === "object" && !Array.isArray(error)
+    && error.code === "router-settings-upgrade-required"
+    && typeof error.message === "string" && error.message.trim().length > 0
+    && Number.isSafeInteger(error.revision) && error.revision >= 0;
+}
+
+/** Optional health observations are never inferred from a failure count. */
+export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
+  const health = value as RoutingHealth | null;
+  if (!health || typeof health !== "object" || Array.isArray(health)) return undefined;
+  const counts = [health.windowSize, health.sampleCount, health.failureCount, health.consecutiveFailures,
+    health.abstentionCount, health.cancelledCount, health.staleCount];
+  if (counts.some(count => !Number.isSafeInteger(count) || count < 0)
+    || [health.budgetExhaustedCount, health.boundsRejectedCount, health.inputChangedCount]
+      .some(count => count !== undefined && (!Number.isSafeInteger(count) || count < 0))
+    || (health.available !== undefined && typeof health.available !== "boolean")
+    || (health.reasonCode !== undefined && health.reasonCode !== null && typeof health.reasonCode !== "string")
+    || !(health.lastSuccessAt === null || typeof health.lastSuccessAt === "string")
+    || !(health.lastSuccessDecisionId === null || typeof health.lastSuccessDecisionId === "string")
+    || !Array.isArray(health.recentFailures)
+    || health.recentFailures.some(failure => !failure || typeof failure.decisionId !== "string"
+      || !(failure.runId === null || typeof failure.runId === "string")
+      || typeof failure.at !== "string" || typeof failure.code !== "string")) return undefined;
+  return health;
 }
 
 export function errorText(error: unknown): string {
@@ -240,6 +268,23 @@ function parseQuotaRouting(value: unknown): QuotaRoutingRecord[] | undefined {
   return records.every(record => record !== null) ? records as QuotaRoutingRecord[] : undefined;
 }
 
+/** A boolean declaration or retired certificate cannot stand in for local eligibility. */
+export function parseReadOnlyStructured(value: unknown): NonNullable<HarnessHealth["readOnlyStructured"]> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.eligible !== "boolean" || typeof record.systemSandbox !== "boolean"
+    || typeof record.sameAttemptContinuation !== "boolean") return null;
+  for (const key of ["reasonCode", "reason"] as const) {
+    if (!(record[key] === null || typeof record[key] === "string")) return null;
+  }
+  if (record.eligible && (record.reasonCode !== null || record.reason !== null)) return null;
+  if (record.implemented !== undefined && typeof record.implemented !== "boolean") return null;
+  return { eligible: record.eligible, systemSandbox: record.systemSandbox,
+    reasonCode: record.reasonCode as string | null, reason: record.reason as string | null,
+    sameAttemptContinuation: record.sameAttemptContinuation,
+    ...(typeof record.implemented === "boolean" ? { implemented: record.implemented } : {}) };
+}
+
 /**
  * Strict parse of one harness row. A malformed row is dropped as unknown rather
  * than presented as health; an absent snapshot field is not invented either.
@@ -262,11 +307,15 @@ function harnessRow(value: unknown): HarnessHealth | null {
   // ADR-018 §23: a malformed quota observation is dropped as unknown instead of
   // blanking the page or being presented as a recorded 0%. An observation that
   // was not recorded adds no key at all.
-  const { quota: rawQuota, quotaRouting: rawRouting, ...rest } = row;
+  const { quota: rawQuota, quotaRouting: rawRouting, readOnlyStructured: rawReadOnly, systemSandbox: rawSandbox,
+    reviewVerification: _retiredCertificate, verified: _retiredVerified, ...rest } = row as HarnessHealth & { reviewVerification?: unknown; verified?: unknown };
   const quota = parseQuota(rawQuota);
   const quotaRouting = parseQuotaRouting(rawRouting);
+  const readOnlyStructured = parseReadOnlyStructured(rawReadOnly);
   return { ...rest, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null,
-    ...(quota ? { quota } : {}), ...(quotaRouting ? { quotaRouting } : {}) };
+    ...(quota ? { quota } : {}), ...(quotaRouting ? { quotaRouting } : {}),
+    ...(readOnlyStructured ? { readOnlyStructured } : {}),
+    ...(typeof rawSandbox === "boolean" ? { systemSandbox: rawSandbox } : {}) };
 }
 
 /** Known harnesses first in their fixed order; anything else keeps its own order. */
@@ -329,7 +378,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       if (
         !data ||
         !Number.isInteger(data.tableRevision) ||
-        !validRoutingConfiguration(data.configuration) ||
+        !validConfigurationState(data) ||
         !data.gate ||
         !Array.isArray(data.profiles) ||
         !Array.isArray(data.cards) ||
@@ -348,7 +397,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       }
       // A valid session descriptor is required; a missing or malformed one is
       // never read as write access.
-      return { ...data, consoleSession: parseConsoleSession(data.consoleSession),
+      return { ...data, routingHealth: parseRoutingHealth(data.routingHealth), consoleSession: parseConsoleSession(data.consoleSession),
         ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }) };
     },
     async command<T = unknown>(

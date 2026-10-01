@@ -75,7 +75,7 @@ export function executionCandidates(profiles: Profile[]): Profile[] {
  */
 export function routerRefusal(profile: Profile, mode: "fast" | "review" = "review"): string | null {
   if (mode === "fast" && !hasFastRoutingCapability(profile)) return "所属 Harness 尚不支持无工具路由调用";
-  if (mode === "review" && !hasDecisionCapability(profile)) return "当前 Harness 版本尚未验证只读路由调用";
+  if (mode === "review" && !hasDecisionCapability(profile)) return "所属 Harness 尚不具备本地只读路由资格";
   if (!profile.available) return "该档位当前不可用";
   if (!profile.enabled) return "该档位未启用：先打开它的开关";
   return null;
@@ -185,48 +185,32 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       });
     }
   }
-  for (const [mode, field] of [["fast", "fastRouterProfileId"], ["review", "reviewRouterProfileId"]] as const) {
-    if (!routerFieldChanged(baseline, draft, field)) continue;
-    const target = draft.configuration[field];
+  if (draft.configuration && (routerFieldChanged(baseline, draft, "routerProfileId")
+    || routerFieldChanged(baseline, draft, "defaultRoutingMode"))) {
+    const target = draft.configuration.routerProfileId;
+    const mode = draft.configuration.defaultRoutingMode;
     if (target) {
       const profile = profiles.get(target);
       const refusal = profile ? routerRefusal(profile, mode) : "已不在当前目录中";
-      if (refusal) {
-        issues.push({
-          profileId: target,
-          label: labelOf(profile, target),
-          message: `${labelOf(profile, target)} ${refusal}；无法担任${mode === "fast" ? "快速" : "审阅"} Router，请换档位。`,
-        });
-      }
+      if (refusal) issues.push({ profileId: target, label: labelOf(profile, target),
+        message: `${labelOf(profile, target)} ${refusal}；无法担任 Router，请换档位或模式。` });
     }
   }
   return issues;
 }
 
-/** The action every stale-Router warning offers. */
-const routerAction = (mode: "fast" | "review") => `在${mode === "fast" ? "支持无工具路由调用" : "当前 Harness 版本已验证只读路由调用"}的档位菜单中选择“设为${mode === "fast" ? "快速" : "审阅"} Router”`;
-
-/**
- * The Router is program-checked before every routing run. A stale one is
- * reported as needing attention, with the action that resolves it, never as a
- * reason to refuse an unrelated user patch.
- */
-export function routerAttention(source: Pick<Draft, "configuration" | "profiles">, mode: "fast" | "review"): PolicyIssue | null {
-  const id = source.configuration[mode === "fast" ? "fastRouterProfileId" : "reviewRouterProfileId"];
-  if (!id) return null;
+/** The Router is checked again by the service before each routing run. */
+export function routerAttention(source: Pick<Draft, "configuration" | "profiles">, mode = source.configuration?.defaultRoutingMode): PolicyIssue | null {
+  const id = source.configuration?.routerProfileId;
+  if (!id || !mode) return null;
   const profile = source.profiles.find(p => p.profileId === id);
   const refusal = profile ? routerRefusal(profile, mode) : "已不在目录中";
-  return refusal ? {
-    profileId: id, router: true, label: labelOf(profile, id),
-    message: mode === 'review' && profile?.adapter === 'codex' && profile.available && profile.enabled && !profile.capabilities.includes('decision')
-      ? '审阅 Router 待验证，请展开 Codex 详情重新验证。'
-      : `当前${mode === "fast" ? "快速" : "审阅"} Router ${labelOf(profile, id)} ${refusal}：请${routerAction(mode)}。`,
-  } : null;
+  return refusal ? { profileId: id, router: true, label: labelOf(profile, id),
+    message: `当前 Router ${labelOf(profile, id)} ${refusal}：请在合格的档位菜单中选择“设为 Router”，或更改模式。` } : null;
 }
 
-/** Retained name for review-only callers; new UI asks for each mode explicitly. */
 export function decisionAttention(source: Pick<Draft, "configuration" | "profiles">): PolicyIssue | null {
-  return routerAttention(source, "review");
+  return routerAttention(source);
 }
 
 /**
@@ -241,10 +225,8 @@ export function attentionIssues(
 ): PolicyIssue[] {
   const profiles = new Map(source.profiles.map((p) => [p.profileId, p]));
   const issues: PolicyIssue[] = [];
-  for (const mode of ["fast", "review"] as const) {
-    const attention = routerAttention(source, mode);
-    if (attention) issues.push(attention);
-  }
+  const attention = routerAttention(source);
+  if (attention) issues.push(attention);
   const effective = effectivePreferences(source);
   for (const override of source.preferenceOverrides) {
     if (override.mode !== "pin") continue;

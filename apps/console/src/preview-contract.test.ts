@@ -16,11 +16,12 @@ import type { Snapshot } from "./types";
  * defect: the preview snapshot lagged behind the schema and the new console
  * refused to load it).
  *
- * This test consumes the exact JSON bytes emitted by
+ * This test consumes the synthetic scenario tree emitted by
  * `tests/probes/objective_console_preview.py --emit-fixtures` through the real
  * console parsers — `createApi(...).snapshot()`, `.objectives()`,
  * `.objectiveTimeline()`, the `workflow_get` command path and
- * `parseWorkflowReply` — and never through a hand-written fixture. A future
+ * `parseWorkflowReply`. Only synthetic Router settings and eligibility are
+ * re-authored for L4 at the test boundary below. A future
  * snapshot shape the frontend refuses, or preview data that stops matching the
  * parser, fails here; `tests/python/test_host_preview.py` additionally asserts
  * the resulting report and proves the emitted tree is deterministic, so the
@@ -60,8 +61,12 @@ function resolveFixtures(): { directory: string; generated: boolean } {
   if (configured) return { directory: resolve(configured), generated: false };
   const python = process.env.BUDDY_PREVIEW_PYTHON ?? "python3";
   const directory = mkdtempSync(join(tmpdir(), "buddy-preview-"));
+  const previewEnvironment = { ...process.env };
+  for (const key of ["BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
+    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
+    "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"]) delete previewEnvironment[key];
   const result = spawnSync(python, [previewScript, "--emit-fixtures", directory], {
-    cwd: repositoryRoot, encoding: "utf8",
+    cwd: repositoryRoot, encoding: "utf8", env: previewEnvironment,
   });
   if (result.status !== 0) {
     throw new Error(`could not emit the preview fixtures with ${python}: ${result.stdout ?? ""}${result.stderr ?? ""}`);
@@ -87,9 +92,37 @@ function bodyFor(entry: ManifestEntry): unknown {
   return value;
 }
 
+/**
+ * L4-I owns only the frontend. Re-author this synthetic fixture's settings at
+ * the test boundary until the Host updates the Python preview generator; this
+ * is never a live parser fallback. All scenarios and malformed mutations stay
+ * in the tree. The retired single selector is deliberately left malformed.
+ */
+function currentSnapshotFixture(value: unknown): unknown {
+  if (!value || typeof value !== "object" || !("configuration" in value)) return value;
+  const snapshot = value as Record<string, unknown>;
+  const config = snapshot.configuration as Record<string, unknown> | null;
+  if (!config || "decisionProfileId" in config || "routerProfileId" in config) return value;
+  const { fastRouterProfileId, reviewRouterProfileId, ...settings } = config;
+  if (!("fastRouterProfileId" in config) || !("reviewRouterProfileId" in config)) return value;
+  const harnesses = Array.isArray(snapshot.harnesses) ? snapshot.harnesses.map(row => {
+    const { reviewVerification: _retired, ...health } = row;
+    const systemSandbox = health.adapter === "codex" || health.adapter === "claude";
+    return { ...health, systemSandbox, readOnlyStructured: { eligible: systemSandbox, systemSandbox,
+      reason: systemSandbox ? null : "原生只读入口尚未实现", reasonCode: systemSandbox ? null : "read-only-not-implemented",
+      sameAttemptContinuation: health.adapter === "codex" } };
+  }) : snapshot.harnesses;
+  return { ...snapshot, configuration: { ...settings,
+    routerProfileId: settings.defaultRoutingMode === "review" ? reviewRouterProfileId : fastRouterProfileId },
+    configurationError: null, harnesses,
+    ...(snapshot.routingHealth && typeof snapshot.routingHealth === "object"
+      ? { routingHealth: { ...snapshot.routingHealth, available: true, reasonCode: null } } : {}) };
+}
+
 /** The real `createApi` request path against one fixed fixture response. */
 function apiFor(entry: ManifestEntry) {
-  const body = JSON.stringify(bodyFor(entry));
+  const original = bodyFor(entry);
+  const body = JSON.stringify(entry.kind === "console-snapshot" ? currentSnapshotFixture(original) : original);
   const fetcher = (async () => new Response(body, {
     status: entry.httpStatus,
     headers: { "Content-Type": "application/json" },
@@ -235,11 +268,11 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(snapshots).toHaveLength(1);
     expect(workflows.length).toBeGreaterThanOrEqual(3);
 
-    // A preview snapshot must carry the two Router slots and the family note
+    // A preview snapshot must carry the single Router and the family note
     // schema the current console requires (the original schema-13 defect).
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
-      fastRouterProfileId: expect.any(String), reviewRouterProfileId: expect.any(String),
+      routerProfileId: expect.any(String),
       defaultRoutingMode: "fast", routingBudget: "standard",
     });
     expect("decisionProfileId" in snapshotFacts.configuration).toBe(false);

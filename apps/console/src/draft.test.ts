@@ -83,7 +83,7 @@ const snapshot = {
   familyAnnotations: [],
   configuration: {
     revision: 2,
-    fastRouterProfileId: null, reviewRouterProfileId: "flash-off", defaultRoutingMode: "review" as const, routingBudget: "standard",
+    routerProfileId: "flash-off", defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
   sampleCounts: { "flash-off": 7 },
   modelConcurrency: [
@@ -183,7 +183,7 @@ describe("editing a published snapshot", () => {
       ...snapshot,
       profiles: [flash, retired],
       preferenceOverrides: [{ profileId: "retired", mode: "pin", reason: "以前固定" }],
-      configuration: { revision: 3, fastRouterProfileId: null, reviewRouterProfileId: "retired" , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { revision: 3, routerProfileId: "retired" , defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
     expect(publication(baseline, draft, grant(), "c")).not.toHaveProperty("preferenceChanges");
@@ -233,7 +233,7 @@ describe("editing a published snapshot", () => {
     expect(configurationChanged(baseline, disabled)).toBe(false);
     const reconfigured: typeof disabled = {
       ...disabled,
-      configuration: { ...disabled.configuration, reviewRouterProfileId: "other"},
+      configuration: { ...disabled.configuration!, routerProfileId: "other"},
     };
     expect(configurationChanged(baseline, reconfigured)).toBe(true);
     expect(changeCount(baseline, reconfigured)).toBe(2);
@@ -454,23 +454,23 @@ describe("field-level three-way rebase", () => {
     const baseline = {
       ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
       profiles: [flash, retiredEnabled],
-      configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: "flash-off", defaultRoutingMode: "review" as const, routingBudget: "standard" as const },
+      configuration: { revision: 1, routerProfileId: "flash-off", defaultRoutingMode: "review" as const, routingBudget: "standard" as const },
     };
     const draft = {
       ...baseline,
-      configuration: { ...baseline.configuration, reviewRouterProfileId: "retired"},
+      configuration: { ...baseline.configuration!, routerProfileId: "retired"},
     };
     const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
     const clean = rebaseDraft(draft, baseline, discovered);
     expect(clean.conflicts).toEqual([]);
-    expect(clean.draft.configuration.reviewRouterProfileId).toBe("retired");
+    expect(clean.draft.configuration!.routerProfileId).toBe("retired");
     // Another writer changed the Router first: the old revision is retained.
     const conflicted = rebaseDraft(draft, baseline, {
       ...discovered,
-      configuration: { revision: 2, fastRouterProfileId: null, reviewRouterProfileId: "gone:model:off" , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { revision: 2, routerProfileId: "gone:model:off" , defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     expect(conflicted.conflicts[0]).toMatchObject({ kind: "changed", field: "configuration" });
-    expect(conflicted.draft.configuration.reviewRouterProfileId).toBe("retired");
+    expect(conflicted.draft.configuration!.routerProfileId).toBe("retired");
     expect(conflicted.draft.tableRevision).toBe(1);
   });
 
@@ -688,21 +688,21 @@ describe("private same-origin API", () => {
 });
 
 describe("independent Router and budget fields", () => {
-  it("publishes only changed slots, default mode and review budget", () => {
+  it("publishes only the changed Router, default mode and review budget", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration,
-      fastRouterProfileId: "fast", reviewRouterProfileId: "review", defaultRoutingMode: "fast" as const,
+    const draft = { ...baseline, configuration: { ...baseline.configuration!,
+      routerProfileId: "review", defaultRoutingMode: "fast" as const,
       routingBudget: "brief" as const } };
     expect(publication(baseline, draft, grant(), "dual").configuration).toEqual({
-      fastRouterProfileId: "fast", reviewRouterProfileId: "review", defaultRoutingMode: "fast", routingBudget: "brief",
+      routerProfileId: "review", defaultRoutingMode: "fast", routingBudget: "brief",
     });
-    expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(4);
+    expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
   });
-  it("defaults absent budgets to standard and publishes budget alone with a stale Router", () => {
-    const baseline = makeDraft({ ...snapshot, profiles: [], configuration: { revision: 2, fastRouterProfileId: null, reviewRouterProfileId: "retired" , defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
-    const equivalent = { ...baseline, configuration: { ...baseline.configuration, routingBudget: "standard" as const } };
+  it("keeps an unchanged standard budget and publishes budget alone with a stale Router", () => {
+    const baseline = makeDraft({ ...snapshot, profiles: [], configuration: { revision: 2, routerProfileId: "retired" , defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
+    const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const } };
     expect(draftDiffers(baseline, equivalent)).toBe(false);
-    const draft = { ...equivalent, configuration: { ...equivalent.configuration, routingBudget: "brief" as const } };
+    const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const } };
     expect(draftDiffers(baseline, draft)).toBe(true);
     expect(configurationChanged(baseline, draft)).toBe(true);
     expect(publication(baseline, draft, grant(), "budget").configuration).toEqual({ routingBudget: "brief" });
@@ -711,21 +711,56 @@ describe("independent Router and budget fields", () => {
 
   it("rebases Router and budget independently and preserves the original draft on budget conflict", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration, routingBudget: "brief" as const } };
-    const fresh = { ...snapshot, tableRevision: 4, configuration: { revision: 3, fastRouterProfileId: null, reviewRouterProfileId: "new-model", defaultRoutingMode: "review" as const, routingBudget: "standard" as const } };
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const } };
+    const fresh = { ...snapshot, tableRevision: 4, configuration: { revision: 3, routerProfileId: "new-model", defaultRoutingMode: "review" as const, routingBudget: "standard" as const } };
     const merged = rebaseDraft(draft, baseline, fresh);
     expect(merged.conflicts).toEqual([]);
-    expect(merged.draft.configuration).toMatchObject({ fastRouterProfileId: null, reviewRouterProfileId: "new-model", defaultRoutingMode: "review" as const, routingBudget: "brief" });
+    expect(merged.draft.configuration).toMatchObject({ routerProfileId: "new-model", defaultRoutingMode: "review" as const, routingBudget: "brief" });
     expect(publication(merged.baseline, merged.draft, grant(), "budget")).toMatchObject({ expectedRevision: 4, configuration: { routingBudget: "brief" } });
-    const conflicted = rebaseDraft(draft, baseline, { ...fresh, configuration: { ...fresh.configuration, routingBudget: "deep" } });
+    const conflicted = rebaseDraft(draft, baseline, { ...fresh, configuration: { ...fresh.configuration!, routingBudget: "deep" } });
     expect(conflicted.conflicts[0].field).toBe("routingBudget");
     expect(conflicted.draft).toBe(draft);
     expect(conflicted.baseline).toBe(baseline);
     expect(conflicted.draft.tableRevision).toBe(3);
-    const modelDraft = { ...baseline, configuration: { ...baseline.configuration, reviewRouterProfileId: "another-model"} };
-    const modelMerge = rebaseDraft(modelDraft, baseline, { ...snapshot, tableRevision: 4, configuration: { ...snapshot.configuration, routingBudget: "deep" } });
+    const modelDraft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileId: "another-model"} };
+    const modelMerge = rebaseDraft(modelDraft, baseline, { ...snapshot, tableRevision: 4, configuration: { ...snapshot.configuration!, routingBudget: "deep" } });
     expect(modelMerge.conflicts).toEqual([]);
-    expect(modelMerge.draft.configuration.routingBudget).toBe("deep");
-    expect(publication(modelMerge.baseline, modelMerge.draft, grant(), "model").configuration).toEqual({ reviewRouterProfileId: "another-model" });
+    expect(modelMerge.draft.configuration!.routingBudget).toBe("deep");
+    expect(publication(modelMerge.baseline, modelMerge.draft, grant(), "model").configuration).toEqual({ routerProfileId: "another-model" });
+  });
+});
+
+
+describe("unavailable Router settings in the editor", () => {
+  const unavailable = { ...snapshot, configuration: null,
+    configurationError: { code: "router-settings-upgrade-required", message: "Router 设置需升级", revision: 4 } } as Snapshot;
+  it("publishes unrelated changes while leaving upgrade-only settings null", () => {
+    const baseline = makeDraft(unavailable);
+    const draft = setFamilyAnnotation(baseline, flash, "仍可保存备注");
+    expect(blockingIssues(baseline, draft)).toEqual([]);
+    expect(publication(baseline, draft, grant(), "note")).not.toHaveProperty("configuration");
+    const merged = rebaseDraft(draft, baseline, { ...unavailable, tableRevision: 4 });
+    expect(merged.conflicts).toEqual([]);
+    expect(merged.draft.configuration).toBeNull();
+    expect(familyAnnotationText(merged.draft, flash)).toBe("仍可保存备注");
+  });
+  it("keeps a dirty Router intent as a conflict when refreshed settings need upgrade", () => {
+    const baseline = makeDraft(snapshot);
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const } };
+    const merged = rebaseDraft(draft, baseline, unavailable);
+    expect(merged.conflicts).toMatchObject([{ field: "configuration", kind: "changed" }]);
+    expect(merged.draft).toBe(draft);
+  });
+  it("sends only the single Router, mode and budget through the form publication request", async () => {
+    const baseline = makeDraft(snapshot);
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileId: "chosen",
+      defaultRoutingMode: "fast" as const, routingBudget: "deep" as const } };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: { tableRevision: 4 } })));
+    const patch = publication(baseline, draft, grant(), "single-router");
+    await createApi("", fetcher as typeof fetch).command("user_policy_publish", patch, "csrf");
+    const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
+    expect(body.params.configuration).toEqual({ routerProfileId: "chosen", defaultRoutingMode: "fast", routingBudget: "deep" });
+    expect(body.params.configuration).not.toHaveProperty("fastRouterProfileId");
+    expect(body.params.configuration).not.toHaveProperty("reviewRouterProfileId");
   });
 });

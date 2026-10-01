@@ -33,23 +33,19 @@ export type HarnessHealth = {
   quota?: HarnessQuota | null;
   /** Persisted exhaustion records with their recovery state; absent means none recorded. */
   quotaRouting?: QuotaRoutingRecord[];
-  reviewVerification?: ReviewVerification;
+  readOnlyStructured?: ReadOnlyStructured;
+  systemSandbox?: boolean;
   billingByProvider?: Record<string, BillingFact>;
   account?: import("./harness-account").HarnessAccount;
 };
 
-export type ReviewVerification = {
-  adapter: string;
-  version: string | null;
-  platform: string;
-  status: "verified" | "new-version" | "unverified" | "queued" | "running" | "stopping" | "unconfirmed" | "failed";
-  implemented: boolean;
-  verified: boolean;
-  runId?: string;
-  reasonCode?: string | null;
-  nativeReasonCode?: string;
-  failedChecks?: string[];
-  checks?: Record<string, boolean>;
+export type ReadOnlyStructured = {
+  eligible: boolean;
+  systemSandbox: boolean;
+  reasonCode: string | null;
+  reason: string | null;
+  sameAttemptContinuation: boolean;
+  implemented?: boolean;
 };
 
 export type BillingFact = {
@@ -203,9 +199,7 @@ export type Decision = {
   createdAt: string;
   error?: string | null;
   updatedAt?: string;
-  routingMode?: RoutingMode;
-  requestedRoutingMode?: RoutingMode;
-  fallback?: RoutingFallback | null;
+  routingMode?: RoutingMode | null;
 };
 export type Delegation = {
   kind: "goal" | "helper" | "decision" | "execution";
@@ -341,18 +335,18 @@ export type ModelConcurrencySetting = ModelFamily & { limit: number };
  */
 export type ModelConcurrencyEntry = ModelConcurrencySetting & { active: number };
 export type RoutingMode = "fast" | "review";
-export type RoutingFallback = { from: "review"; to: "fast"; code: string; reason: string };
 export type RoutingBudget = "brief" | "standard" | "deep";
 export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
 export type Configuration = {
   revision: number;
-  fastRouterProfileId: string | null;
-  reviewRouterProfileId: string | null;
+  routerProfileId: string | null;
   defaultRoutingMode: RoutingMode;
   routingBudget: RoutingBudget;
   routingBudgetLimits?: RoutingBudgetLimits;
 };
 export type RoutingHealth = {
+  available?: boolean;
+  reasonCode?: string | null;
   windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
   abstentionCount: number; cancelledCount: number; staleCount: number;
   budgetExhaustedCount?: number; boundsRejectedCount?: number; inputChangedCount?: number;
@@ -397,7 +391,8 @@ export type Snapshot = {
   consoleAccess?: ConsoleAccess;
   tableRevision: number;
   gate: Gate;
-  configuration: Configuration;
+  configuration: Configuration | null;
+  configurationError?: { code: string; message: string; revision: number } | null;
   profiles: Profile[];
   /** Effective preferences (read-only view); `source` names where each came from. */
   preferences: Preference[];

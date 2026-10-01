@@ -1,5 +1,5 @@
 import type { Shutdown, Task, TokenUsage } from "./types";
-import type { RoutingMode, RoutingFallback } from "./types";
+import type { RoutingMode } from "./types";
 
 export type ExecutionConfiguration = {
   adapter: string;
@@ -29,9 +29,7 @@ export type RoutingBasis = {
 
 export type RoutingRecord = {
   status: string;
-  routingMode?: RoutingMode;
-  requestedRoutingMode?: RoutingMode;
-  fallback?: RoutingFallback | null;
+  routingMode?: RoutingMode | null;
   decisionId?: string | null;
   taskId?: string | null;
   tableRevision?: number | null;

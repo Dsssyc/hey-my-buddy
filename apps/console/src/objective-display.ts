@@ -679,5 +679,5 @@ export function buildChronology(
 /** Describe the selected target, never the Router's own configuration. */
 export function routingSpanLabel(span: TimelineSpan, profiles?: readonly FriendlyProfile[] | null): string {
   const selected = span.routing?.selectedProfile;
-  return `${recordedRoutingMode(span.routing?.routingMode)}路由${span.routing?.fallback ? ` · 从审阅降级为快速：${span.routing.fallback.reason || span.routing.fallback.code}` : ""} · 已选 ${selected ? configurationLabel(selected, profiles) : "未记录"} · ${outcomeLabel(span, spanOutcome(span))}`;
+  return `${recordedRoutingMode(span.routing?.routingMode)}路由 · 已选 ${selected ? configurationLabel(selected, profiles) : "未记录"} · ${outcomeLabel(span, spanOutcome(span))}`;
 }
