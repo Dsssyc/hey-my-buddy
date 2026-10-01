@@ -1,0 +1,64 @@
+# ADR-023：接入 harness 的原则
+
+## 状态
+
+已接受：用户于 2026-10-02 决定，把讨论 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 第 4 条时得出的做法定为今后的原则，由 Claude Code Host 起草。六条原则来自用户确认过的讨论；"接入新 harness 时"一节是起草时按这些原则整理的清单，用户于同日确认。本文不改变任何已实现的行为：第 3 条所说的统一事件词汇与统一判定由 ADR-021 的 L5 实现，目前尚未实现。本文延续 [ADR-007](007-neutral-core-and-single-current-contract.md) 的两项要求（每个 harness 声明自己支持的功能；只在 harness 需要时使用小的原生桥接），把它们扩展到多个 harness 共有的行为上，不修改 ADR-007。
+
+## 背景
+
+同一个角色可以由不同的 harness 担任，所以同一个问题会反复出现：一项行为要在几个 harness 上都成立，例如只读查看代码、不用工具作答、受限联网、有序收尾，而各 harness 的原生能力并不相同。此前两次处理都走偏了：
+
+- [ADR-014](014-router-buddy-and-read-only-routing.md) 与 [ADR-018](018-routing-modes-and-host-workflow.md) 要求审阅路由必须由 harness 原生强制只读与禁网，并按版本逐次付费验证。结果只有 Codex 通过过，证书在每次升级后作废，DSH 与 ZCode 无法担任；而这两个 harness 担任 Worker 时本来就在真实检出中写代码、运行命令。权限更小的用法，要求反而更严。
+- ADR-021 第二阶段实现计划的初稿提出，为四个 harness 接入同一套自己实现的三个只读工具，为此要重做 Codex 与 Claude Code 已有的原生沙盒做法，并依赖 Codex 的一个实验性接口。
+
+用户据此要求调研开源的多 harness 聚合平台如何处理同一问题。
+
+### 调研（2026-10-02）
+
+以下依据各项目当日的公开文档，未做实测。
+
+| 项目 | 做法 |
+| --- | --- |
+| [Vibe Kanban](https://vibekanban.com/docs/configuration-customisation/agent-configurations) | 每个代理只用自己的原生参数：Claude Code 是计划模式与跳过权限，Codex 是三档沙盒与审批策略，Gemini 是免确认开关。没有跨代理通用的只读模式 |
+| [Omnigent](https://github.com/omnigent-ai/omnigent) | 策略分服务器、代理、会话三级。统一强制靠在代理进程外套 bwrap 或 seatbelt，再加出口代理。维护一张能力矩阵，并用测试台核对矩阵与实际行为。自述 Windows 上只约束进程树，不隔离文件系统与网络 |
+| [Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent) | 统一的是 HTTP 接口与事件格式；隔离交给外层沙盒，自己不做限制 |
+| [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/tool-calls) | 为工具调用规定统一的类别：read、edit、delete、move、search、execute、think、fetch、switch_mode、other。类别由代理上报，用于展示与权限提示，协议不强制 |
+| [Anthropic sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) | 可以包裹任意进程的系统沙盒：写入与网络默认拒绝，按白名单放行。支持 macOS 与 Linux，Windows 为 alpha |
+
+各 harness 自带的沙盒也不齐全。按[一份 2026 年 5 月的汇总](https://gist.github.com/wincent/2752d8d97727577050c043e4ff9e386e)，Codex 在 macOS、Linux 与 Windows 上都有，Claude Code 只有 macOS 与 Linux，Cursor 没有。
+
+结论：没有一家靠"给每个 harness 换上同一套工具"来保证一致。它们统一的是三样东西：通用设置到各 harness 原生开关的映射，差异记入能力矩阵；进程之外的系统级隔离；事件的词汇。
+
+## 决定
+
+适用于三种情况：接入新的 harness；定义一项要由多个 harness 共同具备的行为；规定某个角色或模式对 harness 的要求。
+
+1. **用 harness 自带的能力，不为了整齐重做它的工具。** 沙盒、工具限制、联网搜索、结构化输出、会话续接等，使用各 harness 公开提供的原生机制。不编写并维护一套自己的工具去替换 harness 的工具，也不把厂商标为实验性的接口当作一项能力成立的前提。
+2. **差异是事实，如实记录，按能力分档。** 每个 harness 在本机实际可用的能力由适配器声明并记入黑板。一个角色或模式写明它需要哪些能力，可以按能力分成几档，各档允许的范围不同。缺少所需能力的 harness 不担任该角色，并如实显示为不可用，不用模拟来补齐。
+3. **一致性放在证据上，由黑板统一判定。** 适配器把原生事件归入同一套词汇后上报，不自行下结论；黑板作为事实权威，在一处按一条规则判定并留下记录。证据取自 harness 的原生事件，不采纳模型自己的说法；事件不完整或归不了类的，按不允许处理。工具事件的词汇沿用 Agent Client Protocol 的类别。
+4. **资格用不调用模型的本地检查确认；权限更小的用法，要求不比权限更大的用法更严。** 一个角色对 harness 的信任要求，以该 harness 担任 Worker 时已被接受的要求为上限，不设按版本逐次付费的认证。需要调用模型的原生检查属于开发时的验证，逐次经用户授权，结果记入验收记录，不是用户使用功能的前提。
+5. **判定不是阻止，边界要写明。** 阻止只来自系统沙盒或原生的工具限制；黑板的判定发生在事后，并且只覆盖 harness 上报的事件。在没有强制手段的 harness 上，剩余的风险写进数据流向说明与文档，不把判定描述成保护。
+6. **需要系统级的统一强制时，在进程之外加沙盒。** 这是同类平台的通行做法，与 harness 无关，不需要改动任何 harness 的工具。目前不采用：要引入新的依赖，Windows 上也不完整。
+
+### 接入新 harness 时
+
+接入前回答下面几项，写进该 harness 的参考文档与验收记录：
+
+- **原生能力。** 有没有系统沙盒，覆盖哪些平台；能否限制或关闭工具集；有没有联网搜索，能否单独开关；能否给出结构化结果；能否续接会话；停止后能给出什么证据。
+- **事件。** 能否完整取得工具事件并归入统一词汇。取不到完整事件的，不声明依赖这些事件的能力。
+- **资格。** 每项能力在本机用哪一项不调用模型的检查确认。
+- **验证边界。** 哪些只能靠需要授权的原生检查证明，哪些平台未验证，照实写明。
+
+## 考虑过的方案
+
+- **统一工具集。** 为每个 harness 接入同一套自己实现的工具。行为与证据格式最整齐，单次读取的大小也能设上限；但要为已有原生机制的 harness 重做一遍，要依赖实验性接口，前提变多使功能更容易不可用，在同类平台里也找不到先例。
+- **只接受有原生强制的 harness。** 即 ADR-014 与 ADR-018 的做法，保护最强；但排除了多数 harness，并对权限更小的用法提出更严的要求。
+- **现在就用外层沙盒做统一强制。** 见第 6 条，留作以后的途径。
+- **各 harness 各自判定。** 即目前的实现：每个适配器自己得出结论再上报，规则分散，新增 harness 时没有可对照的标准。
+
+## 影响
+
+- **已有决定。** ADR-021 第 4 条（审阅资格）是本文的第一次应用。ADR-021 第 14 条（受限的联网运行）与 [ADR-022](022-expected-duration-and-graceful-stop.md)（有序收尾）中涉及多个 harness 的部分，同样按本文处理。
+- **文档。** `AGENTS.md` 的不变量一节指向本文；[架构](../reference/architecture.md)与 [Worker 与适配器](../reference/workers.md)两份参考的适配器部分指向本文。
+- **与现有实现的差距。** 能力声明已由适配器注册表负责，第 2 条不需要新的机制。第 3 条尚未实现：快速路由的零工具证据目前由各适配器自己得出结论，黑板只核对这个结论；审阅运行的工具流核对只为 Codex 编写。统一的事件词汇与黑板判定随 ADR-021 的 L5 实现。
+- **验证边界。** 调研内容来自公开文档，未实测。各 harness 原生沙盒的平台覆盖以其自身文档为准；本产品只在 macOS 上验证过 Codex 的只读回合，其余平台与 harness 未验证。
