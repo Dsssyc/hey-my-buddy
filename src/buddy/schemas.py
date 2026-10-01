@@ -536,7 +536,7 @@ def normalize_workflow_submit(params: dict) -> dict:
     # ordinary spec's cwd is the only source spelling, and the integrator is
     # attribution owned by the submitting Host.
     workspace_intent["cwd"] = spec["cwd"]
-    workspace_intent["integrator"] = spec_params.get("owner") or f"host:{host_id}"
+    workspace_intent["integrator"] = f"host:{host_id}"
     return {
         "requestId": request_id,
         "hostId": host_id,
@@ -600,7 +600,7 @@ def normalize_configuration(value: Any) -> dict:
     return result
 
 
-def normalize_helpers(params: dict) -> list[dict]:
+def normalize_helpers(params: dict, *, host_id: str | None = None) -> list[dict]:
     """Validate the explicit helper specifications of one approval."""
     raw = params.get("helpers", [])
     if raw is None:
@@ -625,7 +625,7 @@ def normalize_helpers(params: dict) -> list[dict]:
         # Same derivation as the parent submission: the helper's own ordinary
         # spec cwd is the source, and the integrator is the approving Host.
         workspace_intent["cwd"] = spec["cwd"]
-        workspace_intent["integrator"] = spec_params.get("owner") or "host"
+        workspace_intent["integrator"] = f"host:{host_id}" if host_id is not None else "host"
         integrator = optional_bool(entry, "integrator", False)
         role = optional_string(entry, "role") or "helper"
         if role not in ("helper", "integrator"):

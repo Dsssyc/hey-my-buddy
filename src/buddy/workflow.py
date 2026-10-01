@@ -1726,7 +1726,11 @@ class WorkflowCoordinator:
             raise BoardError("INVALID_ARGUMENT", "decision must be 'approve' or 'decline'")
         reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
-        helpers = schemas.normalize_helpers(params)
+        with self.db.read() as connection:
+            owner = self._run_row(connection, run_id)
+            self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
+            submitting_host = owner["host_id"]
+        helpers = schemas.normalize_helpers(params, host_id=submitting_host)
         request_key = {
             "runId": run_id,
             "requestId": request_id,

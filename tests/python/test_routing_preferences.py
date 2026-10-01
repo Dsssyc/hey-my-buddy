@@ -70,12 +70,26 @@ class RetiredSubmissionInputTests(unittest.TestCase):
             self.assertEqual(normalized["executionWorkspace"]["cwd"], str(Path(root).resolve()))
             self.assertEqual(normalized["executionWorkspace"]["integrator"], "host:host-1")
             owned = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "named-owner"})
-            self.assertEqual(owned["executionWorkspace"]["integrator"], "named-owner")
+            self.assertEqual(owned["executionWorkspace"]["integrator"], "host:host-1")
             helper = schemas.normalize_helpers({"helpers": [{
                 "requestId": "helper", "task": "Check a dependency", "cwd": root,
                 "executionWorkspace": {"kind": "existing", "access": "write"}}]})[0]
             self.assertEqual(helper["executionWorkspace"]["cwd"], str(Path(root).resolve()))
             self.assertEqual(helper["executionWorkspace"]["integrator"], "host")
+
+    def test_owner_attribution_never_changes_the_host_or_submission_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            first = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "first-label"})
+            second = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "second-label"})
+            fingerprints = [schemas.workflow_request_fingerprint(
+                item["spec"], item["executionWorkspace"], item["hostId"]
+            ) for item in (first, second)]
+            self.assertEqual(fingerprints[0], fingerprints[1])
+            helper = schemas.normalize_helpers({"helpers": [{
+                "requestId": "helper", "task": "Inspect a dependency", "cwd": root,
+                "owner": "display-only", "executionWorkspace": {"kind": "existing"}
+            }]}, host_id="actual-host")[0]
+            self.assertEqual(helper["executionWorkspace"]["integrator"], "host:actual-host")
 
     def test_retired_routing_inputs_are_rejected_with_the_three_expressions(self):
         retired = {
