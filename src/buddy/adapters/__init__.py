@@ -64,8 +64,7 @@ def capability_report() -> dict:
             "executedBy": "built-in-worker",
             "readOnlyStructured": {
                 "implemented": instance.read_only_structured,
-                "verified": instance.read_only_structured_verified,
-                "sameAttemptContinuation": instance.read_only_structured_resume,
+                **instance.local_read_only_check(),
             },
             "noToolStructured": {"implemented": instance.no_tool_structured},
         }

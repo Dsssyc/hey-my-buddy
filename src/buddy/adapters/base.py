@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,7 +148,32 @@ class Adapter:
     # Mock coverage is not native verification. Enable only after an approved probe.
     read_only_structured_verified = False
     read_only_structured_resume = False
+    system_sandbox_platforms: tuple[str, ...] = ()
+    read_only_tool_categories: tuple[str, ...] = ()
     no_tool_structured = False
+
+    def local_read_only_check(self) -> dict:
+        """Check the shipped mechanism without native calls or certificates.
+
+        Availability, account/quota and effective native policy are separate
+        facts checked by the blackboard and the existing execution controller.
+        """
+        sandbox = sys.platform in self.system_sandbox_platforms
+        result = {"eligible": False, "reasonCode": "readonly-not-implemented",
+                  "reason": "No implemented native read-only structured call",
+                  "systemSandbox": sandbox, "sameAttemptContinuation": self.read_only_structured_resume}
+        if not self.read_only_structured or type(self).start_read_only_structured is Adapter.start_read_only_structured:
+            return result
+        if self.system_sandbox_platforms and not sandbox:
+            return {**result, "reasonCode": "readonly-platform-unsupported",
+                    "reason": "The native read-only sandbox is unsupported on this platform"}
+        if not sandbox and (not self.read_only_tool_categories or
+                            set(self.read_only_tool_categories) - {"read", "search"}):
+            return {**result, "reasonCode": "readonly-tools-unrestricted",
+                    "reason": "A harness without a system sandbox must restrict tools to read and search"}
+        if not all(Path(__file__).with_name(name).is_file() for name in ("read_only.py", f"{self.name}_runner.py")):
+            return {**result, "reasonCode": "readonly-resource-missing", "reason": "The native read-only controller is missing"}
+        return {**result, "eligible": True, "reasonCode": None, "reason": None}
 
     def start_no_tool_structured(self, context: ExecutionContext,
                                  request: NoToolStructuredRequest) -> "ProcessHandle":

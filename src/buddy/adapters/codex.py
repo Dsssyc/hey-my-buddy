@@ -27,6 +27,7 @@ class CodexAdapter(Adapter):
     native_resume = True
     model_discovery = True
     read_only_structured = True
+    system_sandbox_platforms = ("darwin", "linux", "win32")
     read_only_structured_resume = True
     no_tool_structured = True
 

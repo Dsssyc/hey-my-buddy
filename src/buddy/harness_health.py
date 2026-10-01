@@ -37,17 +37,20 @@ def _name(name):
 
 
 def read_health(connection, adapter):
-    from .harness_review import verification_view
+    from .adapters import adapter as executor
     from .accounts import view as account_view, identity
+    eligibility = executor(adapter).local_read_only_check()
     account = account_view(connection, adapter)
     row = connection.execute('SELECT * FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
     if row is None:
         record = {'adapter': adapter, 'status': 'unknown', 'available': False, 'revision': 0,
                 'manualPath': None, 'reasonCode': 'HARNESS_NOT_CHECKED', 'remedy': 'Run buddy adapters with refresh:true'}
-        return {**record, 'account': account, 'reviewVerification': verification_view(connection, adapter, record)}
+        return {**record, 'account': account, 'systemSandbox': eligibility['systemSandbox'],
+                'readOnlyStructured': eligibility}
     from .native_observations import quota_view, latest_quota
     from .quota_routing import routing_facts
     record = json.loads(row['record_json'])
+    record.pop('reviewVerification', None)
     observed_account = record.get('account') or {'source': 'native', 'credentialRevision': 0}
     matching = identity(observed_account) == identity(account)
     billing = record.get("billingByProvider") if isinstance(record.get("billingByProvider"), dict) else {}
@@ -69,7 +72,7 @@ def read_health(connection, adapter):
             "quotaRouting": routing_facts(connection, adapter), 'adapter': adapter,
             'available': status == 'ready' and account['status'] == 'ready', 'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
-    return {**record, 'reviewVerification': verification_view(connection, adapter, record)}
+    return {**record, 'systemSandbox': eligibility['systemSandbox'], 'readOnlyStructured': eligibility}
 
 
 class HarnessHealth:
@@ -196,10 +199,11 @@ class HarnessHealth:
             except Exception:
                 record = {'adapter': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run buddy adapters with refresh:true'}
-            retained = {key: old[key] for key in ("reviewVerification", "billingByProvider", "quotaCheckedAt") if key in old}
+            retained = {key: old[key] for key in ("billingByProvider", "quotaCheckedAt") if key in old}
             if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
                 retained.pop("billingByProvider", None)
-            record = {**retained, **record, 'locationFingerprint': signature, 'account': identity(old['account'])}
+            record = {**retained, **record, 'locationFingerprint': signature, 'account': identity(old['account']),
+                      'systemSandbox': old['systemSandbox']}
             status = record.get('status')
             if status not in ('ready', 'missing', 'login-required', 'unhealthy'):
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery returned an invalid health status')
