@@ -4,7 +4,7 @@ This page owns the Claude Code Host's way of waiting on a governed goal: the bac
 
 ## One background `await` per running goal
 
-The user chose this Claude Code Host flow on 2026-09-26. Claude Code runs each wait as its own background command and keeps working:
+Claude Code runs each wait as its own background command and keeps working:
 
 1. `submit` the goal and keep `runId` and `controlFile`.
 2. Run `"$BUDDY" await '{"runId":"<runId>"}'` with the Bash tool's `run_in_background: true`. Start one background wait per running goal; concurrent goals each have their own.
