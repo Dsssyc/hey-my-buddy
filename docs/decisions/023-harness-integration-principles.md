@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：用户于 2026-10-02 决定，把讨论 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 第 4 条时得出的做法定为今后的原则，由 Claude Code Host 起草。六条原则来自用户确认过的讨论；"接入新 harness 时"一节是起草时按这些原则整理的清单，待用户确认。本文不改变任何已实现的行为：第 3 条所说的统一事件词汇与统一判定由 ADR-021 的 L5 实现，目前尚未实现。本文延续 [ADR-007](007-neutral-core-and-single-current-contract.md) 的两项要求（每个 harness 声明自己支持的功能；只在 harness 需要时使用小的原生桥接），把它们扩展到多个 harness 共有的行为上，不修改 ADR-007。
+已接受：用户于 2026-10-02 决定，把讨论 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 第 4 条时得出的做法定为今后的原则，由 Claude Code Host 起草。六条原则来自用户确认过的讨论；"接入新 harness 时"一节是起草时按这些原则整理的清单，用户于同日确认。本文不改变任何已实现的行为：第 3 条所说的统一事件词汇与统一判定由 ADR-021 的 L5 实现，目前尚未实现。本文延续 [ADR-007](007-neutral-core-and-single-current-contract.md) 的两项要求（每个 harness 声明自己支持的功能；只在 harness 需要时使用小的原生桥接），把它们扩展到多个 harness 共有的行为上，不修改 ADR-007。
 
 ## 背景
 
