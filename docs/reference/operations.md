@@ -283,7 +283,7 @@ ADR-018 adds only `meta` values: `router_fast_profile_id`, `router_review_profil
 
 ## Routing diagnostics and quota recovery (0.25.0)
 
-A review-check result advertises `logPaths.reviewEvidence`, the retained ordinary `review-evidence.json` under its attempt. It contains sanitized native policy controls, correlated event summaries and nine check bases; it is part of the backup evidence whitelist. The private native/controller traces are recycled only after confirmed stop and successful evidence publication. A failed diagnostic publication retains the private trace and refuses certification.
+Paid review-check evidence is retired with its executor. Ordinary Router results retain their native policy/tool stream, usage, frozen-input verification and actual stop evidence under the existing private attempt lifecycle; no review certificate is read or issued. Old certificate data is left for explicit upgrade cleanup.
 
 For native exhaustion with no reset time, use `buddy quota-redetect '{"requestId":"quota-check-1","adapter":"dsh","provider":"deepseek-official"}'` to allow one later selected call to retry now. Reuse the requestId after a lost reply; a fresh request intentionally opens a new chance after consumption. The command performs no native query or model call and does not assert that the balance recovered. Otherwise one chance opens after an hour; only its selected configuration consumes it. Known reset times, explicit Host choices and newer available/unknown observation rules retain their existing behavior.
 

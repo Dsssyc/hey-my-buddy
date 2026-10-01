@@ -113,7 +113,11 @@ Python controller 消费 ReadOnlyStructuredRequest，模型前用免费 dump-con
 | L4-I 控制台最小适配 | 现有类型/parser、单 Router 表单接线、删除证书控件/验证入口、preview fixtures | 不做界面设计，不加维护/画像/探索，不改后台策略 | 设置请求、实际 parser/preview、受影响 Vitest、typecheck/build | B/F 后，可与 G1/J 并行；仅 apps/console，H 完成后才做模块完整检查，Host 验收资源生成 |
 | L4-J Router 健康诊断 | DecisionCoordinator.health_summary 与独立健康统计测试；必要时终结事件保存机器错误码 | 不改请求/claim/原生运行、共享设置或自动熔断，不追加到 G1/G2 | 四次超时计为四次失败与连续失败、三次连续有效 Router 失败即 available=false、错误原因明确；成功恢复，取消/stale/程序唯一候选不能伪造恢复；预算/越界/输入变动计数仍独立 | 用户新增，和 G1 并行独立 worktree；仅自己的方法区 |
 | L5-0A 统一证据契约与黑板判定 | 新 tool_evidence.py 分类/完整性结构、DecisionCoordinator 的唯一判定函数与格式校验 | 不改四个 harness 的运行/工具，不自造原生数据、不接 L7 | 同一矩阵：fast 零工具；sandbox 允许 read/search/execute；无 sandbox 仅 read/search；修改/联网/other/不完整/坏绑定作废 | L4 验收之后，L5 的第一项 |
-| L5-0B 四个适配器的事件投影 | controller 原生事件分类与 call 关联、toolEvidence 输出、DecisionAdapter 透传，fake protocol fixtures | 不重做 Codex/Claude 运行；适配器不自判允许/违规；不改统一规则 | 四种真实事件形状、raw/high-level 去重、foreign/子调用/late/截断、不伪造计数；黑板统一发布检查 | 0A 合入后；完成后 L5-A/L6-A 才接同一契约 |
+| L5-0B-Codex 原生投影 | codex_runner/no_tool 的事实采集与专用夹具 | 不改沙盒、工具、执行/纠正方式或黑板判定 | raw/high-level、子/foreign/late、去重与完整性，Codex 回归 | 0A 后独立 worktree |
+| L5-0B-Claude 原生投影 | claude_runner 的事实采集与专用夹具 | 不改原生允许工具、沙盒或普通 Worker | 原生 tool_use/result/stream、身份与完整结束，Claude 回归 | 0A 后，与 Codex 可并行 |
+| L5-0B-DSH 快速证据 | dsh_runner/no-tool 原生事实收集 | 不提前接只读工具、重做原生工具或循环 | 原生无工具回执/失败/纠正绑定，不伪造工具事件 | 0A 后独立 worktree |
+| L5-0B-ZCode 快速证据 | zcode_runner 无工具分支的事实投影 | 不提前实现审阅、不改普通 Worker/MCP | 工具/foreign/子/late/断流事实、无工具回归 | 0A 后独立 worktree |
+| L5-0B-Host 合并接线 | DecisionAdapter 透传、发布处替换旧零工具判定、模拟回执迁移 | 不改四个原生运行方式或纯证据规则 | 四种投影加同一发布矩阵；保留原测试场景 | 四个投影合入后；再开始 L5-A/L6-A |
 | L5-A DSH 只读原生插件 | 新 Node 原生 Agent/ToolRuntime 桥接、原生 API 夹具、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | 原生 read/glob/grep、scope/视图限制、call/result/flush、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0B 后；与 L6-A 可并行，各自 worktree |
 | L5-B DSH controller 接线 | adapter/start、独立 Python controller、私有 profile preflight、夹具与包装 | 不改分类/判定、不修改日常配置、不跑真实模型 | dump-config、身份、纠正、owned stop、timeout/cancel、黑板四防护；DSH/no-tool 回归 | L5-A 合入后；Host 写记录并完整检查 |
 | L6-A ZCode 受限协议 | zcode_read_only.py 的 session 参数与结构化回合，mock app-server、使用 L5 证据 | 不改普通 runner 调度、设置或 MCP/Worker，不跑真实模型 | 严格参数/配置回报、工具事件/序号/身份、完整流、纠正/预算、close/cancel，不虚构工具回显 | L4 与 L5-0B 验收后，可与 L5-A 并行 |
@@ -184,3 +188,7 @@ L4-I 只消费 B/F 已提交的确定接口，删除失效的前端控件无需�
 L4-H 的入口、registry、Worker 专用分支和证书资源与 G2 的 decision/发布方法区独立；调整为 G1 后并行。H 不编辑 decision.py、adapters/decision.py、evaluation.py 或 G2 测试文件，通用流/停止防护仍保留。
 
 L4 集成审查补齐 catalog 的免费资格投影，并迁移外围测试的双位置设置、证书属性和手写原生回执；保留原场景的历史绑定、偏好审计、停止证据、账户节流等断言。删除仅由已退役验证器引用的挑战分支与历史 replay 夹具。完整检查冻结 Host worktree，L5 尚未开工。
+
+L4 完整检查前细化 L5-0B：四个原生事件面拆成独立 Codex、Claude、DSH-fast、ZCode-fast 任务，Host 最后接唯一发布判定与外围模拟回执。0A 先交付纯接口与黑板包装方法，不提前替换旧发布调用点；0B-Host 一次接入强制证据，避免中间提交靠兼容 fallback 通过。这样每件成果可单独验证与审查，不让一个 Worker 承担四种协议。
+
+补足公共证据精确类型：ToolEventEvidence(binding) 的 binding 只来自 Python 控制文件；normalize_tool_event 接受 controller 已提取的原生工具事实字段并按适配器原生工具名/类型分类，不遍历任意模型输出。finish 的 nativeIdentity 是本次调用的可信根身份列表（每个字典只保留原生实际提供的 sessionId/turnId/inputId/callId 等字符串），来自根 session/turn 创建回报；格式纠正的根回合逐项加入，不从所有收到的事件反推允许身份。事件的 nativeIdentity 必须精确匹配列表中的本次根身份，foreign/子/旧回合仍保留并使完整性失败；call 去重键是身份加 callId，raw/high-level 同 ID 同事实去重，确证不同原生调用分别计数，无法关联或矛盾则不完整。缺证据/坏绑定/不完整返回 router-tool-evidence-unverified，明确不允许的类别返回 router-tools-forbidden；快速零调用规则由同一函数判定。系统沙盒事实在 claim 事务由 read_health 的本地程序事实写入本 attempt 的冻结输入 toolPolicy.systemSandbox，发布时不采信答案自报；旧未绑定的结果不能发布。

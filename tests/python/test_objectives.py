@@ -349,7 +349,7 @@ class RoutingSpanTests(WorkflowTestCase):
         self.decision(board, task_id, output=output, selected=selected)
         before = self.spans(board, task_id)[0]
         self.assertEqual(before['decisionId'], 'recorded-decision')
-        self.assertEqual(before['routing'], {'routingMode': 'review', 'requestedRoutingMode': 'review', 'fallback': None,
+        self.assertEqual(before['routing'], {'routerProfileId': None, 'routerProfile': None, 'routerProblem': None, 'routingMode': None,
                          'selectedProfile': selected, 'reason': 'frozen reason',
                          'policyCheck': output['policyCheck'], 'budget': output['budget'], 'usage': output['usage']})
         # Changing the owner's current execution configuration cannot rewrite this history.
@@ -369,7 +369,7 @@ class RoutingSpanTests(WorkflowTestCase):
         board, task_id = self.recorded_task()
         before = self.spans(board, task_id)[0]
         self.assertIsNone(before['decisionId'])
-        self.assertEqual(before['routing'], {'routingMode': 'review', 'requestedRoutingMode': 'review', 'fallback': None,
+        self.assertEqual(before['routing'], {'routerProfileId': None, 'routerProfile': None, 'routerProblem': None, 'routingMode': None,
                          'selectedProfile': None, 'reason': None, 'policyCheck': None,
                          'budget': None, 'usage': {'elapsedMs': None, 'toolCalls': None, 'bytesRead': None}})
         self.decision(board, task_id)

@@ -1280,7 +1280,7 @@ def harness_rows() -> list[dict]:
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'systemSandbox': True,
-         'readOnlyEligibility': {'eligible': True, 'reasonCode': None, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
+         'readOnlyStructured': {'eligible': True, 'reasonCode': None, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
         {"adapter": "claude", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",

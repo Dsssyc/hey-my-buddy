@@ -1,6 +1,6 @@
 # Local harness discovery
 
-The service stores one authoritative `harness_health` record per native harness and independent quota observations. Discovery readiness, `readOnlyEligibility` and `systemSandbox` are separate facts. Local eligibility calls no model or account endpoint; it checks the shipped read-only entry and confinement mechanism, with declared sandbox platforms exposed explicitly.
+The service stores one authoritative `harness_health` record per native harness and independent quota observations. Discovery readiness, `readOnlyStructured` and `systemSandbox` are separate facts. Local eligibility calls no model or account endpoint; it checks the shipped read-only entry and confinement mechanism, with declared sandbox platforms exposed explicitly.
 
 ## Discovery and environment
 
@@ -42,7 +42,7 @@ An exhaustion without a recorded reset would exclude its provider/limit forever:
 
 ## Read-only eligibility and native account observations
 
-The paid review verifier and all admission/console/registry entry points are removed by ADR-021. Codex and Claude Code retain their native sandbox implementations, effective-policy readback and tool-flow checks. A local `readOnlyEligibility` record contains `eligible`, `reasonCode`, `reason`, `systemSandbox` and `sameAttemptContinuation`; it does not certify a live native run. DSH/ZCode restricted native-tool implementation and paid verification are separate stages, and each paid check requires explicit approval.
+The paid review verifier and all admission/console/registry entry points are removed by ADR-021. Codex and Claude Code retain their native sandbox implementations, effective-policy readback and tool-flow checks. A local `readOnlyStructured` record contains `eligible`, `reasonCode`, `reason`, `systemSandbox` and `sameAttemptContinuation`; it does not certify a live native run. DSH/ZCode restricted native-tool implementation and paid verification are separate stages, and each paid check requires explicit approval.
 
 `billingByProvider` records `{kind:subscription|metered|unknown,source,observedAt}` from native account/provider metadata; profile reads project it as `billing`. Codex uses read-only `account/read` and `account/rateLimits/read`, Claude uses native auth-status metadata, ZCode uses native provider access types, and DSH’s official DeepSeek API provider establishes metered access. Codex account queries borrow on-demand health refresh and are limited to one per 180 seconds, including forced refresh; there is no periodic scanner and no model turn. Failed reads keep quota unknown or retain previous evidence, without logging raw account responses. Billing labels never filter routing.
 
