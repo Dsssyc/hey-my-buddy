@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import sqlite3
@@ -226,6 +227,17 @@ def preflight_entries(state: Path):
     yield from _scan(state / 'attempts', attempt_depth=2)
     for name in ('controls', 'submissions'):
         yield from _scan(state / name)
+    # Retired DSH archive receipts remain ordinary historical evidence. A linked
+    # journal root or an undeclared name must never enter a verified backup.
+    session_journals = state / 'worker-session-cleanup'
+    if _linked(session_journals) or session_journals.exists() and not session_journals.is_dir():
+        yield 'rejected', session_journals, 'linked-path' if _linked(session_journals) else 'non-directory-path'
+    elif session_journals.exists():
+        for journal in sorted(session_journals.iterdir()):
+            if re.fullmatch(r'[0-9a-f]{64}\.json', journal.name):
+                yield from _single(journal)
+            else:
+                yield 'rejected', journal, 'undeclared-journal-entry'
     workers = state / 'workers'
     if _linked(workers) or workers.exists() and not workers.is_dir():
         yield 'rejected', workers, 'linked-path' if _linked(workers) else 'non-directory-path'
@@ -335,6 +347,8 @@ def _verify(directory: Path) -> dict:
             parts = Path(relative).parts
             if parts[:2] == ('state', 'attempts') and (len(parts) < 5 or not attempt_evidence.is_evidence(Path(*parts[4:]).as_posix())):
                 raise BoardError('BACKUP_INVALID', 'Backup contains undeclared attempt evidence', file=relative)
+            if parts[:2] == ('state', 'worker-session-cleanup') and (len(parts) != 3 or re.fullmatch(r'[0-9a-f]{64}\.json', parts[2]) is None):
+                raise BoardError('BACKUP_INVALID', 'Backup contains undeclared Worker session journal', file=relative)
     actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p != directory / 'manifest.json'}
     if actual != set(manifest['files']):
         raise BoardError('BACKUP_INVALID', 'Backup inventory mismatch')

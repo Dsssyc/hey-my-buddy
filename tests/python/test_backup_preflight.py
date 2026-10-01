@@ -25,6 +25,26 @@ class BackupPreflightTests(BoardTestCase):
         (root / 'review-evidence.json').symlink_to(self.directory)
         self.assertIn('attempts/run/attempt/review-evidence.json', backup.preflight(board.directory)['rejected']['paths'])
 
+    def test_retired_dsh_archive_receipts_remain_in_verified_backups(self):
+        board = self.board()
+        root = board.directory / "worker-session-cleanup"
+        root.mkdir()
+        receipt = root / ("a" * 64 + ".json")
+        receipt.write_text('{"state":"archived"}')
+        result = backup.create(board.store)
+        manifest = backup.verify(Path(result["path"]))
+        relative = "state/worker-session-cleanup/" + receipt.name
+        self.assertIn(relative, manifest["files"])
+        self.assertEqual((Path(result["path"]) / relative).read_bytes(), receipt.read_bytes())
+        receipt.unlink()
+        receipt.symlink_to(self.directory)
+        report = backup.preflight(board.directory)
+        self.assertIn("worker-session-cleanup/" + receipt.name, report["rejected"]["paths"])
+        receipt.unlink()
+        (root / "notes.json").write_text("undeclared")
+        report = backup.preflight(board.directory)
+        self.assertIn("worker-session-cleanup/notes.json", report["rejected"]["paths"])
+
     def files(self, *names):
         board = self.board()
         root = board.directory / 'attempts/run/attempt'
