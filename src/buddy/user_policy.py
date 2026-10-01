@@ -249,16 +249,13 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     if 'configuration' in provided:
         configuration = evaluation._validate_configuration(params['configuration'])
         from . import router
-        for key, mode in (("fastRouterProfileId", "fast"), ("reviewRouterProfileId", "review")):
-            if key not in configuration or configuration[key] is None:
-                continue
-            profile, code, reason = router.profile_problem(connection, configuration[key], mode)
+        current = router.configuration(connection)
+        merged = {**current, **configuration}
+        if merged["routerProfileId"] is not None and ({"routerProfileId", "defaultRoutingMode"} & configuration.keys()):
+            profile, code, reason = router.profile_problem(connection, merged["routerProfileId"], merged["defaultRoutingMode"])
             if profile is None:
-                raise BoardError('UNSUPPORTED' if code in ('router-no-tool-unsupported', 'router-review-unverified')
+                raise BoardError('UNSUPPORTED' if code in ('router-no-tool-unsupported', 'router-review-unsupported')
                                  else 'CONFIGURATION_UNAVAILABLE', reason)
-        # Materialize the legacy mapping before applying a field patch; omitted
-        # slots and the default mode retain their recorded values.
-        router.initialize_configuration(connection)
         for key, value in configuration.items():
             connection.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                (router.CONFIG_KEYS[key], value or ""))

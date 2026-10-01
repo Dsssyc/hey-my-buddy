@@ -20,8 +20,7 @@ DEFAULT_PRESET = "standard"
 MODES = ("fast", "review")
 FAST_BUDGET = {"timeoutSeconds": 60}
 CONFIG_KEYS = {
-    "fastRouterProfileId": "router_fast_profile_id",
-    "reviewRouterProfileId": "router_review_profile_id",
+    "routerProfileId": "router_profile_id",
     "defaultRoutingMode": "router_default_mode",
     "routingBudget": "router_budget_preset",
 }
@@ -127,7 +126,7 @@ def render_prompt(document: dict) -> str:
 def configured_budget(connection) -> dict:
     row = connection.execute("SELECT value FROM meta WHERE key='router_budget_preset'").fetchone()
     preset = row["value"] if row else DEFAULT_PRESET
-    return budget("brief" if preset == "quick" else preset)
+    return budget(preset)
 
 
 def profile_problem(connection, profile_id: str | None, routing_mode: str) -> tuple[object | None, str | None, str | None]:
@@ -152,40 +151,37 @@ def profile_problem(connection, profile_id: str | None, routing_mode: str) -> tu
         with bound([health]):
             native = adapter(row["adapter"])
             eligible = (getattr(native, "no_tool_structured", False) if routing_mode == "fast" else
-                        native.read_only_structured and native.read_only_structured_verified)
+                        native.local_read_only_check()["eligible"])
     except BoardError:
         eligible = False
     if not eligible:
-        code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unverified"
-        return None, code, f"The {routing_mode} Router lacks {'a no-tool structured capability' if routing_mode == 'fast' else 'verified read-only capability for the current harness version and platform'}"
+        code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
+        return None, code, f"The {routing_mode} Router lacks {'a no-tool structured capability' if routing_mode == 'fast' else 'an implemented local read-only mechanism'}"
     return row, None, None
 
 
 def configuration(connection) -> dict:
-    """Read current keys, or project the legacy setting until an explicit upgrade."""
+    """Read current settings only; old slots wait for the explicit L15 upgrade."""
+    from .router_settings import RouterSettings, validate_router_settings_patch
     values = {row[0]: row[1] for row in connection.execute("SELECT key,value FROM meta WHERE key LIKE 'router_%'")}
-    if "router_configuration_version" in values:
-        return {name: values.get(key) or None for name, key in CONFIG_KEYS.items()}
-    state = connection.execute("SELECT decision_profile_id FROM evaluation_state WHERE id=1").fetchone()
-    legacy = state[0] if state else None
-    fast = review = None
-    if legacy:
-        if profile_problem(connection, legacy, "review")[0] is not None:
-            review = legacy
-        elif profile_problem(connection, legacy, "fast")[0] is not None:
-            fast = legacy
-    return {"fastRouterProfileId": fast, "reviewRouterProfileId": review,
-            "defaultRoutingMode": "review" if review else "fast",
-            "routingBudget": configured_budget(connection)["preset"]}
+    if values.get("router_configuration_version") != "2":
+        raise BoardError("router-settings-upgrade-required", "Router settings require an explicit upgrade")
+    defaults = RouterSettings().as_dict()
+    result = {name: values.get(key, defaults[name]) for name, key in CONFIG_KEYS.items()}
+    result["routerProfileId"] = result["routerProfileId"] or None
+    return validate_router_settings_patch(result)
 
 
 def initialize_configuration(connection) -> dict:
-    """Called only for a fresh board or in the backed-up upgrade transaction."""
-    settings = configuration(connection)
+    """Initialize a fresh board; never reinterpret an existing setting version."""
+    from .router_settings import RouterSettings
+    marker = connection.execute("SELECT value FROM meta WHERE key='router_configuration_version'").fetchone()
+    if marker:
+        return configuration(connection)
+    settings = RouterSettings().as_dict()
     for name, key in CONFIG_KEYS.items():
-        connection.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                           (key, settings[name] or ""))
-    connection.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('router_configuration_version','1')")
+        connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, settings[name] or ""))
+    connection.execute("INSERT INTO meta(key,value) VALUES('router_configuration_version','2')")
     return settings
 
 

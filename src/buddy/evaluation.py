@@ -105,7 +105,7 @@ CARD_FIELDS = frozenset({"profileId", "summary", "strengths", "limitations", "ri
 #: The published configuration carries only the fixed decision profile. There is no
 #: automatic-maintenance or scheduler setting: maintenance synthesis is performed by
 #: an external Harness through ``evaluation_prepare`` and the ordinary writer gate.
-CONFIGURATION_FIELDS = frozenset({"fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode", "routingBudget"})
+CONFIGURATION_FIELDS = frozenset({"routerProfileId", "defaultRoutingMode", "routingBudget"})
 #: The Harness-owned maintenance reads. ``evaluation.prepare`` is a bounded,
 #: deterministic fact collection with no model call and no writer lease;
 #: ``evaluation.history`` is a bounded read of the existing publication log.
@@ -341,7 +341,7 @@ class EvaluationStore:
         schemas.reject_unknown(entry, CONFIGURATION_FIELDS, "configuration")
         from . import router
         result = {}
-        for key in ("fastRouterProfileId", "reviewRouterProfileId"):
+        for key in ("routerProfileId",):
             if key not in entry:
                 continue
             profile_id = entry[key]
@@ -651,16 +651,22 @@ class EvaluationStore:
             state = self._state(connection)
             table_revision = int(state["table_revision"])
             from . import router
-            settings = router.configuration(connection)
-            routing_budget = router.configured_budget(connection)
+            configuration_error = None
+            try:
+                settings = router.configuration(connection)
+                routing_budget = router.configured_budget(connection)
+            except BoardError as error:
+                settings, routing_budget = None, None
+                configuration_error = {"code": error.code, "message": str(error),
+                                       "revision": int(state["configuration_revision"])}
             profiles = [
                 self._profile_view(row)
                 for row in connection.execute(
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
                     "LEFT JOIN harness_health h ON h.adapter=p.adapter "
                     "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
-                    "WHERE (p.available=1 AND h.status='ready') OR p.profile_id IN (?,?) ORDER BY p.rowid LIMIT 202",
-                    (settings["fastRouterProfileId"], settings["reviewRouterProfileId"])
+                    "WHERE (p.available=1 AND h.status='ready') OR p.profile_id=? ORDER BY p.rowid LIMIT 202",
+                    ((settings or {}).get("routerProfileId"),)
                 )
             ]
             from .billing import for_provider
@@ -715,11 +721,12 @@ class EvaluationStore:
             "csrfToken": "",
             "tableRevision": table_revision,
             "gate": gate,
-            "configuration": {
+            "configuration": ({
                 "revision": int(state["configuration_revision"]),
                 **settings,
                 "routingBudgetLimits": routing_budget,
-            },
+            } if settings is not None else None),
+            "configurationError": configuration_error,
             "profiles": profiles,
             "modelConcurrency": model_concurrency,
             "unavailableProfileCount": unavailable_count,
