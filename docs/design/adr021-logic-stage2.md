@@ -48,11 +48,11 @@ Python 黑板仍是权威状态的唯一写入者；Worker 运行时仍拥有原
 
 统一工具证据放在 L5 开头实现，L6 复用。新增 `tool_evidence.py` 定义纯数据的标准化事件与完整性记录；分类由各原生 controller 按下面的固定规则产生，适配器不判断允许或违规，黑板在答案发布时统一判定。标准化事件携带原生 session/turn/call ID、开始/结束阶段、工具名与只读操作种类，不保存文件内容、任意工具参数、提示词或推理。工具开始即计一次调用，以 call ID 去重；缺失身份、重复但不一致、完成无开始、结束时仍有未完成调用、未知事件、流截断或关闭后还有工具事件都不能产生有效证据。检查发生在原生 session/turn 过滤之前，子会话、MCP 或旧回合的非法调用不能因过滤而被漏掉；合法调用还必须绑定本次回合。
 
-统一分类固定为 `read`（读取/列目录）、`search`（仓库搜索）、`execute`（执行命令，包括原生 shell/code-mode）、`modify`（编辑/写入/删除/移动）、`network`（联网搜索/抓取）与 `other`（子代理、交互、未知或无法识别的工具）。原生事件先分类再做 session/turn 绑定，不能把 foreign/子会话中的调用过滤掉。未识别事件明确上报 other 或完整性不足，不静默忽略；工具参数与返回正文不进入普通记录。
+按新合入的 ADR-023，统一分类沿用 ACP：read、edit、delete、move、search、execute、think、fetch、switch_mode、other。读取/列目录归 read，仓库搜索归 search，原生 shell/code-mode 归 execute，写入/修改按实际操作归 edit/delete/move，联网归 fetch，未知或无法识别归 other；模型 reasoning 文本不是工具事件。原生事件先分类再做 session/turn 绑定，不能把 foreign/子会话中的调用过滤掉。未识别事件明确上报 other 或完整性不足，不静默忽略；工具参数与返回正文不进入普通记录。
 
 `DecisionCoordinator` 的现有快速零工具检查处成为唯一判定点：fast 必须有完整事件证据且零调用；review 且原生系统沙盒事实为 true 时仅允许 read/search/execute；无系统沙盒时仅允许 read/search；任一不允许类别或流不完整使答案作废。原生系统沙盒事实由黑板 harness 状态与冻结 attempt 绑定给出，不接受模型或结果临时声称。控制器仍执行原生策略核对、deadline/预算与 owned-process 取消，工具事件本身不导致适配器生成“合格/违规”的 Router 结论。
 
-DSH 新工具仍采用 `read_file({path, offset?, limit?})`、`list_directory({path?})`、`search_files({pattern, path?})`；读取/列目录归 read，字面量文件搜索归 search。这些 Node 工具只操作冻结副本内的相对路径，拒绝绝对路径、..、NUL、逃逸链接和特殊文件，响应有界：64 KiB、读取至多 2000 行、目录/搜索至多 1000 条、遍历至多 10000 文件。工具拒绝返回有界错误，不调用 shell；不新增 Python 的 read_only_files.py，也不改变 Codex/Claude 的原生工具。
+DSH 沿用原生 read、glob、grep 工具，不实现自己的 read_file/list_directory/search_files 或文件处理器。原生 read 归 read，glob/grep 归 search；Node 桥接只负责限制原生工具视图、提交原生 Agent 回合与采集事件。Codex/Claude/ZCode 也保留各自的原生工具，不追求统一工具名称或参数。
 
 预算保持现有数值：brief 为 60 秒/8 次工具，standard 为 300 秒/24 次，deep 为 600 秒/64 次；快速模式固定 60 秒。一次格式纠正与此前工具调用共用同一 attempt 的绝对 deadline 与累计工具预算，不重置计数；越界候选不纠正，Claude 保持现有一次调用。现有 `bytesRead` 未能可靠测量时仍为 null，131072/524288/2097152 的既有读字节值继续明确为记录的预算参数，不新声称已实施跨 harness 的字节硬上限；新处理器的单次响应界限另外验证。
 
@@ -80,13 +80,13 @@ L5 的公共接口为 `normalize_tool_event(adapter, native_event)`、`ToolEvent
 
 ## L5 的接口设计
 
-DSH 增加独立的 `read-only-structured.mjs` 插件和只读工具处理器，使用现有 DSH `llm.prepareCall`/`prepared.stream` 的原生结构化调用路径，实现有界工具循环；不借用可写 Agent、普通 Worker runner、completion/inquiry 插件或全局工具注册表。与现有 no-tool 插件一样，私有 headless profile 禁用原 headless-runner、标题模型与额外动态工作流，只注册上述三个工具。工具定义、模型发出的 tool call block、真实执行结果与 finish 组成原生证据；不得从最终 prose 或自报计数推断成功。
+DSH 的 read-only-structured.mjs 是小的原生桥接，不实现工具或 LLM 工具循环。使用已安装的公开 AgentRegistry.create 接口，在 setup(agentCtx, agent) 中调用原生 agentCtx.tools.restrict({allow:[read,glob,grep]}) 与 agentCtx.tools.presentAs(native)；原生 ToolRuntime 的限制同时作用于继承工具的可见性和执行。通过原生 registerGuard 追加不可被后续 allow 覆盖的三工具执行限制，并在每次原生 pre-step 前核对 schemas 的名称只有这三项，阻止 scoped registrations 或 PTC run_code 增大工具面；不自行重新实现任何 handler。
 
-每轮只允许 text/reasoning/usage、三个工具的完整 call block 与合法 finish；工具 arguments 必须在完整 block 结束后解析并校验，非法名立即拒绝，不先执行。批量工具调用按每一个 call 计数，先检查剩余额度再执行，输出只允许本次 call ID 的有界结果。每轮完成后再向原生 stream 提交工具结果，直到得到最终答案或绝对 deadline/累计工具上限；schema 格式纠正至多一次，复用全部预算。原生 usage 已知项累计、未知保持 null，DSH 的 observed 身份继续为 null，不伪造 provider attestation。
+根 Agent 的 meta.cwd 是冻结副本；agentOptions 使用本 attempt 的 provider/model/effort。私有 profile 禁用 headless-runner、标题模型和额外动态工作流，由桥接创建且只驱动一个根 Agent；不提供完成/inquiry/黑板凭据工具，不复用普通 Worker runner。原生 session 的 tool/call、tool/result、模型 step/turn 结束与 flush/stop 作为事实，分类由 runtime 上报，是否允许只由黑板判定。非法工具请求由原生 restriction/guard 拒绝，其类别仍如实记录，不能从日志消失。
 
-Python 的 DSH 只读控制器消费既有 `ReadOnlyStructuredRequest`，启动方式复用当前私有 profile/owned child 模式，但不修改日常 DSH 设置、不增加全局插件。Node 请求固定为 `{callId, prompt, spec, cwd, budget}`，spec 只含 provider/model/effort；插件结果固定为 `{status, code?, modelStarted, rawAnswer?, resolved?, observed: null, nativeIdentity, usage, toolEvidence}`，Python 按原始控制文件和 attempt 绑定检查，不接受多余的模型可写字段。模型输入前用免费 `--dump-config` 核对普通 runner 已关闭且唯一只读插件启用；本地资格检查只核对已安装的公共实现/资源，不运行模型。控制文件没有黑板凭据，toolEvidence 从插件的原生 stream 和 call/result 分类产生，不自判合格；controller 与 native process 都停止后才产生 `shutdownConfirmed`。
+Python controller 消费 ReadOnlyStructuredRequest，模型前用免费 dump-config 核对私有 profile 与桥接，记录真实 request/root session/turn 绑定；readOnlyResource 检查确认公共 Agent/ToolRuntime API 和注册名称可用，不读凭据、不跑模型。控制数据只含 task/attempt/generation、prompt/schema/budget、cwd 和所选 spec；Node 回执只含 status/code、modelStarted、rawAnswer、resolved/observed、nativeIdentity、usage、toolEvidence，binding 由 Python 补入并核对。原生 call 数与绝对期限跨格式纠正累计，至多一次纠正，越界选择不纠正；controller 与 native group 都停止才能确认 shutdown。
 
-DSH 假 stream、假可执行程序和 Node 文件夹具覆盖合法读/列/搜、恶意工具名、半截 block、伪造 call ID、原生错误、模型身份不符、格式纠正、预算 N/N+1、超时、取消与停止未知；再通过 DecisionAdapter 夹具验证改动副本必作废及失败不能引起降级。本地/模拟验证后记录“原生未验证”。
+模拟原生 Agent/ToolRuntime 夹具验证 setup 在发布/首个模型步骤前安装限制、原生工具被复用、run_code/scoped 工具不能扩大视图、read/glob/grep 正常调用、非法工具事实保留、call/result/turn/flush 完整性、N/N+1、取消/超时/停止未知；普通 DSH/no-tool 回归继续覆盖，单独的开发 probe 默认为 prepare-only。原生验证仍只获批一次后执行，否则记录“原生未验证”。
 
 ## L6 的接口设计
 
@@ -113,7 +113,7 @@ DSH 假 stream、假可执行程序和 Node 文件夹具覆盖合法读/列/搜�
 | L4-I 控制台最小适配 | 现有类型/parser、单 Router 表单接线、删除证书控件/验证入口、preview fixtures | 不做界面设计，不加维护/画像/探索，不改后台策略 | 设置请求、实际 parser/preview、受影响 Vitest、typecheck/build | H 后；仅 apps/console，Host 验收资源生成 |
 | L5-0A 统一证据契约与黑板判定 | 新 tool_evidence.py 分类/完整性结构、DecisionCoordinator 的唯一判定函数与格式校验 | 不改四个 harness 的运行/工具，不自造原生数据、不接 L7 | 同一矩阵：fast 零工具；sandbox 允许 read/search/execute；无 sandbox 仅 read/search；修改/联网/other/不完整/坏绑定作废 | L4 验收之后，L5 的第一项 |
 | L5-0B 四个适配器的事件投影 | controller 原生事件分类与 call 关联、toolEvidence 输出、DecisionAdapter 透传，fake protocol fixtures | 不重做 Codex/Claude 运行；适配器不自判允许/违规；不改统一规则 | 四种真实事件形状、raw/high-level 去重、foreign/子调用/late/截断、不伪造计数；黑板统一发布检查 | 0A 合入后；完成后 L5-A/L6-A 才接同一契约 |
-| L5-A DSH 只读原生插件 | 新 Node 只读插件/工具处理器、假 stream、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | read/search、block/call/result、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0B 后；与 L6-A 可并行，各自 worktree |
+| L5-A DSH 只读原生插件 | 新 Node 原生 Agent/ToolRuntime 桥接、原生 API 夹具、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | 原生 read/glob/grep、scope/视图限制、call/result/flush、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0B 后；与 L6-A 可并行，各自 worktree |
 | L5-B DSH controller 接线 | adapter/start、独立 Python controller、私有 profile preflight、夹具与包装 | 不改分类/判定、不修改日常配置、不跑真实模型 | dump-config、身份、纠正、owned stop、timeout/cancel、黑板四防护；DSH/no-tool 回归 | L5-A 合入后；Host 写记录并完整检查 |
 | L6-A ZCode 受限协议 | zcode_read_only.py 的 session 参数与结构化回合，mock app-server、使用 L5 证据 | 不改普通 runner 调度、设置或 MCP/Worker，不跑真实模型 | 严格参数/配置回报、工具事件/序号/身份、完整流、纠正/预算、close/cancel，不虚构工具回显 | L4 与 L5-0B 验收后，可与 L5-A 并行 |
 | L6-B ZCode controller 接线 | adapter、runner 独立 readOnlyRequest 分支、资格启用和集成测试 | 不改分类/判定、普通 Worker/no-tool/账户，不跑真实模型 | 身份/模型/强度、生命周期/stop、四防护、不可用边界；ZCode/no-tool 回归 | L6-A 合入后；Host 写记录并完整检查 |
@@ -172,4 +172,6 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 
 已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。当前尚无实现或委派；完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
 
-首次 L4-A 提交在 admission 前被 INVALID_WORKSPACE 拒绝：安装版 includeUntracked 只允许已有未跟踪输入，不允许未来输出路径。未创建有效委派；调整提交模板为新输出仅列 writeScope，复用原 requestId，不改任务契约或日常数据。
+首次 L4-A 提交在 admission 前被 INVALID_WORKSPACE 拒绝：安装版 includeUntracked 只允许已有未跟踪输入，不允许未来输出路径。未创建有效委派；调整提交模板为新输出仅列 writeScope，原 intent 已形成不可变准备记录，修改输入后改用新 requestId，不删除旧证据，不改任务契约或日常数据。
+
+2026-10-02 第二次 core 合入带来 ADR-023（core 7e86bb6）：统一词汇改为 ACP 原始类别，DSH 改为公开原生 AgentRegistry/ToolRuntime 的 scoped restriction 和 native presentation，不再自己实现文件工具或 LLM 工具循环。L4-A/B 两个委派在 Router 预算边界失败，A 同一委派重路由一次仍失败；均已取消、记录结论并回收。这两项由 Host 按原接口实现，后续委派使用更短任务描述再尝试；不改日常 Router 或运行时。
