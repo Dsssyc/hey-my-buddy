@@ -48,7 +48,9 @@ class TestWorkflowRouting(WorkflowTestCase):
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
             "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
-                       "inputVerification": {"unchanged": True, "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
+                       "stopEvidence": {"shutdownConfirmed": shutdown, "native": {"shutdownConfirmed": shutdown}},
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
@@ -323,12 +325,12 @@ class TestWorkflowRouting(WorkflowTestCase):
         board.console_call("user_policy_publish", {
             "commandId": "changed", "writerId": grant["writerId"], "generation": grant["generation"],
             "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
-            "configuration": {"reviewRouterProfileId": SECOND_PROFILE_ID},
+            "configuration": {"routerProfileId": SECOND_PROFILE_ID},
         })
         claimed = self.router_claim(board, submitted, claim_id="after-writer")
         self.assertIsNone(claimed["claim"])
         old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
-        self.assertEqual(old["status"], "stale")
+        self.assertEqual(old["status"], "needs-host")
         self.assertEqual(old["input"]["profile"]["model"], PROFILE["model"])
         self.assertEqual(old["input"]["tableRevision"], revision)
         current = board.call("workflow_get", {"runId": submitted["runId"]})

@@ -36,7 +36,7 @@ def verify_input(manifest, root, expected):
 
 
 def install(testcase, *, path=None, **options):
-    """Inject verified native capability only within this test process."""
+    """Inject locally eligible native capability only within this test process."""
     from buddy.adapters.dsh import DshAdapter
 
     testcase._readonly_fixture = Path(path) if path is not None else Path(__file__).resolve()
@@ -52,8 +52,10 @@ def install(testcase, *, path=None, **options):
         side_effect=lambda _native, context, request: start(
             context, request, testcase._readonly_fixture, testcase._readonly_options),
     ))
-    for flag in ("read_only_structured", "read_only_structured_verified"):
-        testcase.enterContext(patch.object(DshAdapter, flag, True))
+    testcase.enterContext(patch.object(DshAdapter, "read_only_structured", True))
+    # The retired Worker preflight gate belongs to L4-H. Keep that fixture flag
+    # until H removes the gate; G2 adapter tests separately prove it is unused.
+    testcase.enterContext(patch.object(DshAdapter, "read_only_structured_verified", True))
     testcase.enterContext(patch.object(DshAdapter, "local_read_only_check", return_value={
         "eligible": True, "reasonCode": None, "reason": None,
         "systemSandbox": False,

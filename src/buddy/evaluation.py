@@ -2606,7 +2606,7 @@ class EvaluationStore:
         from .adapters import adapters
         native = adapters().get(row["adapter"])
         capabilities = json.loads(row["capabilities_json"])
-        if not (native and native.read_only_structured and native.read_only_structured_verified):
+        if not (native and native.local_read_only_check()["eligible"]):
             capabilities = [item for item in capabilities if item != "decision"]
         elif 'decision' not in capabilities:
             capabilities.append('decision')

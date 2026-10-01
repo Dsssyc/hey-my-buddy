@@ -155,10 +155,9 @@ class DecisionCoordinator:
         """
         descriptor = decision_spec(spec or {})
         row = self._row(connection, descriptor["decisionId"]) if descriptor else None
-        if row is not None:
-            profile_row, _reason = self._refresh_route(connection, row)
-        else:
-            profile_row, _facts, _reason = router.resolve(connection, None)
+        if row is None or row["status"] != "queued":
+            return None
+        profile_row, _problem = self._refresh_route(connection, row)
         if profile_row is None:
             return None
         return (profile_row["adapter"], profile_row["provider"], profile_row["model"])
@@ -169,54 +168,10 @@ class DecisionCoordinator:
         return profile, problem["reason"] if problem else None
 
     def _refresh_route(self, connection, row):
-        """Recheck cached eligibility before quota admission, preserving frozen candidates."""
+        """Recheck only the admission snapshot; never change Router or mode."""
         request = json.loads(row["requested_json"])
-        actual = request.get("routingMode", "review")
-        profile, facts, reason = router.resolve(connection, actual, request.get("allowRoutingFallback", True))
-        if actual == "review" and facts["routingMode"] == "fast":
-            self._record_fallback(connection, row, profile, facts)
-        return profile, reason
-
-    def _record_fallback(self, connection, row, profile, facts):
-        request = json.loads(row["requested_json"])
-        request.update(facts)
-        request["budget"] = dict(router.FAST_BUDGET)
-        request["timeoutSeconds"] = 60
-        document = json.loads(row["input_json"]) if row["input_json"] else None
-        if document:
-            document.update(facts, budget=request["budget"])
-            document.pop("executionWorkspace", None)
-            document.pop("evidence", None)
-            document["outputSchema"] = router.answer_schema([p["profileId"] for p in document["profiles"]], "fast")
-            if profile is not None:
-                document["profile"] = {key: profile[key] for key in schemas.CONFIGURATION_FIELDS}
-        connection.execute("UPDATE decision_requests SET requested_json=?,input_json=?,input_sha256=? WHERE decision_id=?",
-                           (canonical_json(request), canonical_json(document) if document else None,
-                            sha256_text(canonical_json(document)) if document else None, row["decision_id"]))
-        self._append_event(connection, "decision.fallback", row["decision_id"], facts)
-
-    def _fallback_after_preflight(self, connection, row, task, output, now):
-        """Retry only a proven pre-model review failure, after confirmed shutdown."""
-        request = json.loads(row["requested_json"])
-        if request.get("routingMode", "review") != "review" or not request.get("allowRoutingFallback", True):
-            return False
-        settings = router.configuration(connection)
-        profile, _code, _reason = router.profile_problem(connection, settings["fastRouterProfileId"], "fast")
-        if profile is None:
-            return False
-        facts = {"requestedRoutingMode": "review", "routingMode": "fast", "fallback": {
-            "from": "review", "to": "fast", "code": output.get("reasonCode") or "router-review-unavailable",
-            "reason": output.get("reason") or "The review harness became unavailable before model execution"}}
-        self._release_reader(connection, row, now)
-        self._record_fallback(connection, row, profile, facts)
-        connection.execute("UPDATE decision_requests SET reader_id=NULL,attempt_id=NULL,generation=NULL,updated_at=? WHERE decision_id=?", (now, row["decision_id"]))
-        connection.execute("UPDATE evaluation_decisions SET status='queued',reason=?,error=NULL WHERE decision_id=?",
-                           (facts["fallback"]["reason"], row["decision_id"]))
-        self.board._transition_task(connection, task, "queued")
-        connection.execute("UPDATE tasks SET queue_reason='awaiting-worker' WHERE task_id=?", (task["task_id"],))
-        self.board._append_event(connection, "task.requeued", task_id=task["task_id"],
-                                 payload={"reason": "review unavailable before model execution", **facts})
-        return True
+        profile, _facts, problem = router.resolve(connection, frozen=request)
+        return profile, problem
 
     @staticmethod
     def _candidate_bounds(*, required_capabilities, constraints, coding_only: bool = True) -> tuple[list[str], list[Any]]:
@@ -942,13 +897,11 @@ class DecisionCoordinator:
         ).fetchone()
         if int(waiting["count"]):
             return "evaluation-writer-pending", None
-        profile_row, profile_reason = self._refresh_route(connection, row)
-        row = self._row(connection, decision_id)
-        request = json.loads(row["requested_json"])
-        timeout = request.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS
+        profile_row, problem = self._refresh_route(connection, row)
         if profile_row is None:
-            self._finish(connection, row, status="needs-host", reason=profile_reason, now=now)
-            self._cancel_queued_task(connection, task, now, "the decision had no compatible decision profile")
+            self._finish(connection, row, status="needs-host", reason=problem["reason"],
+                         error=problem["code"], output={"status": "error", **problem}, now=now)
+            self._cancel_queued_task(connection, task, now, problem["reason"])
             return "decision-closed", None
         document = json.loads(row["input_json"]) if row["input_json"] else None
         if not document:
@@ -968,6 +921,12 @@ class DecisionCoordinator:
             self._cancel_queued_task(connection, task, now, "Router configuration changed")
             return "decision-closed", None
         table_revision = int(document["tableRevision"])
+        if table_revision != int(self._state(connection)["table_revision"]):
+            self._finish(connection, row, status="needs-host", now=now,
+                         reason="Router 不可用：admission 后评价表 revision 已变化；请由 Host 显式 reroute",
+                         error="router-table-changed", output={"status": "error", "code": "router-table-changed"})
+            self._cancel_queued_task(connection, task, now, "Frozen routing table changed")
+            return "decision-closed", None
         reader_id = self._admit_reader(connection, now, timeout_seconds=timeout)
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation, reader_id=reader_id,
@@ -1161,6 +1120,10 @@ class DecisionCoordinator:
     def _complete(self, connection: sqlite3.Connection, *, row: sqlite3.Row, task: sqlite3.Row, attempt: sqlite3.Row, status: str, result: Any, shutdown_confirmed: bool, error: str | None, now: str) -> dict[str, Any]:
         summary: dict[str, Any] = {"decisionId": row["decision_id"], "kind": row["kind"], "status": row["status"]}
         output = result if isinstance(result, dict) else None
+        if (row["decision_attempt_id"] != attempt["attempt_id"]
+                or row["decision_generation"] != attempt["generation"]):
+            summary["late"] = True
+            return summary
         if row["status"] in TERMINAL_DECISION_STATUSES:
             # A late or superseded result is retained for audit and never published.
             if output is not None:
@@ -1171,11 +1134,9 @@ class DecisionCoordinator:
             summary["late"] = True
             summary["status"] = row["status"]
             return summary
-        if row["decision_attempt_id"] != attempt["attempt_id"]:
-            return summary
         helper_ok = (
             status == "ok"
-            and shutdown_confirmed
+            and shutdown_confirmed is True
             and isinstance(output, dict)
             and output.get("status") == "ok"
         )
@@ -1187,16 +1148,15 @@ class DecisionCoordinator:
             and (output.get("code").startswith("router-") or output.get("code") in ANSWER_VALIDATION_CODES)
             else None
         )
-        if (status == "failed" and shutdown_confirmed and task["state"] == "failed"
-                and output and output.get("code") == "router-review-unavailable"
-                and output.get("modelStarted") is False
-                and self._fallback_after_preflight(connection, row, task, output, now)):
-            return {**summary, "status": "queued", "routingMode": "fast", "preflightFallback": True}
         if status == "cancelled" or task["state"] == "cancelling":
             self._finish(
                 connection, row, status="cancelled", output=output, now=now,
                 reason="the decision run was cancelled; no recommendation is published",
             )
+        elif shutdown_confirmed is not True:
+            self._finish(connection, row, status="failed", output=output, now=now,
+                         reason="The Router stop is unconfirmed; no recommendation is published",
+                         error=error or "router-stop-unconfirmed")
         elif validation_code is not None:
             # The helper has already consumed its one bounded correction chance.
             # Publication does not restart the model or create another attempt.
@@ -1272,17 +1232,49 @@ class DecisionCoordinator:
         still fence adoption; publication itself never starts a retry.
         """
         document = json.loads(row["input_json"]) if row["input_json"] else {}
+        request = json.loads(row["requested_json"])
+        profile, problem = self._refresh_route(connection, row)
+        if profile is None:
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": problem["code"]},
+                         error=problem["code"], reason=problem["reason"])
+            return
+        stop = output.get("stopEvidence")
+        if (not isinstance(stop, dict) or stop.get("shutdownConfirmed") is not True
+                or not isinstance(stop.get("native"), dict)
+                or stop["native"].get("shutdownConfirmed") is not True):
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": "router-stop-unconfirmed"}, error="router-stop-unconfirmed",
+                         reason="Router publication requires native and controller stop evidence")
+            return
+        usage = output.get("usage")
+        budget = document.get("budget") or {}
         if document.get("routingMode") == "fast":
-            usage = output.get("usage") or {}
-            if output.get("zeroToolVerified") is not True or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0:
+            if (not isinstance(usage, dict) or output.get("zeroToolVerified") is not True
+                    or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0):
                 self._finish(connection, row, status="needs-host", now=now,
                              output={**output, "code": "router-tools-forbidden"}, error="router-tools-forbidden",
                              reason="Fast routing requires a complete zero-tool native receipt")
                 return
+        if (not isinstance(usage, dict) or type(usage.get("elapsedMs")) is not int
+                or usage["elapsedMs"] < 0 or type(usage.get("toolCalls")) is not int
+                or usage["toolCalls"] < 0):
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": "router-tool-evidence-unverified"}, error="router-tool-evidence-unverified",
+                         reason="Router publication requires elapsed time and native tool count evidence")
+            return
+        if (usage["elapsedMs"] > budget["timeoutSeconds"] * 1000
+                or (document.get("routingMode") == "review" and usage["toolCalls"] > budget["toolCalls"])):
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": "router-budget-exhausted"}, error="router-budget-exhausted",
+                         reason="Router publication exceeds the frozen time or cumulative tool budget")
+            return
         manifest = document.get("executionWorkspace")
         verification = output.get("inputVerification")
-        if manifest and (not isinstance(verification, dict) or verification.get("unchanged") is not True
-                         or verification.get("manifestSha256") != manifest.get("manifestSha256")):
+        if document.get("routingMode") == "review" and (
+                not isinstance(verification, dict) or verification.get("unchanged") is not True
+                or not verification.get("snapshotSha256")
+                or verification.get("manifestSha256") != (manifest or {}).get("manifestSha256")):
             self._finish(connection, row, status="needs-host", now=now,
                          output={**output, "code": "router-input-changed"}, error="router-input-changed",
                          reason="Router input verification is missing or differs from the frozen manifest")
@@ -1301,7 +1293,6 @@ class DecisionCoordinator:
             self._finish(connection, row, status="needs-host", output={**output, "policyCheck": None},
                          now=now, reason=reason, evidence_ids=evidence_ids)
             return
-        request = json.loads(row["requested_json"])
         # Bounds re-check without claiming: a no-reset exhaustion whose retry this
         # very decision consumed stays legal for its own frozen answer, and a
         # window that opened after the freeze is legal but never burned here.
@@ -1323,7 +1314,8 @@ class DecisionCoordinator:
             hard_constraints=request.get("constraints") or {})
         policy_check = selection_policy.expected_policy_check(expected_facts, profile_id)
         output = {**output, "decision": decision, "policyCheck": policy_check}
-        if not self._reader_open(connection, row, now):
+        if (not self._reader_open(connection, row, now)
+                or int(self._state(connection)["table_revision"]) != int(row["expected_revision"])):
             self._finish(
                 connection, row, status="stale", output=output, now=now,
                 reason=(

@@ -72,7 +72,8 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         # program has more than one candidate to compare.
         multi = self.request(board, request_id="pick-multi-no-router")
         self.assertEqual(multi["status"], "needs-host")
-        self.assertIn("Router is not configured", self.decision(board, multi["decisionId"])["reason"])
+        self.assertIn("尚未设置 Router", self.decision(board, multi["decisionId"])["reason"])
+        self.assertEqual(self.decision(board, multi["decisionId"])["routerProblem"]["code"], "router-not-configured")
 
     def test_selection_source_reads_only_recorded_frozen_facts(self):
         from buddy.router import selection_source
@@ -275,7 +276,9 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             "status": "ok", "shutdownConfirmed": True,
             "result": {"status": "ok", "operation": "select",
                        "tableRevision": claim["decisionInput"]["tableRevision"],
-                       "inputVerification": {"unchanged": True,
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
                                              "manifestSha256": claim["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
         })
@@ -347,7 +350,9 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             "status": "ok", "shutdownConfirmed": True,
             "result": {"status": "ok", "operation": "select",
                        "tableRevision": claim["decisionInput"]["tableRevision"],
-                       "inputVerification": {"unchanged": True,
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
                                              "manifestSha256": claim["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
         })

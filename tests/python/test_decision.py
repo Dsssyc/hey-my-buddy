@@ -408,7 +408,8 @@ class SelectionRequestTests(DecisionTestCase):
                 decision = self.decision(board, request["decisionId"])
                 self.assertEqual(decision["input"], frozen)
                 self.assertEqual(decision["status"], "needs-host")
-                self.assertEqual(decision["output"]["code"], "router-out-of-bounds")
+                self.assertEqual(decision["output"]["code"], "router-table-changed")
+                self.assertIsNone(decision["attemptId"])
                 self.assertIsNone(decision["selectedProfile"])
 
     def test_fixed_fields_and_capabilities_are_rechecked_at_adoption(self):
@@ -540,7 +541,9 @@ class DecisionGateTests(DecisionTestCase):
         )
         self.run_worker(board, worker_id="w-after")
         decision = self.decision(board, request["decisionId"])
-        self.assertEqual(decision["status"], "completed")
+        self.assertEqual(decision["status"], "needs-host")
+        self.assertEqual(decision["output"]["code"], "router-table-changed")
+        self.assertIsNone(decision["attemptId"])
         self.assertEqual(decision["expectedRevision"], revision)
         self.assertEqual(decision["input"]["tableRevision"], revision)
         self.assertEqual([card["profileId"] for card in decision["input"]["cards"]], [])
@@ -583,7 +586,9 @@ class DecisionGateTests(DecisionTestCase):
         self.assertEqual(published["revision"], revision + 1)
         worker.run_once()
         selected = self.decision(board, selection["decisionId"])
-        self.assertEqual(selected["status"], "completed")
+        self.assertEqual(selected["status"], "needs-host")
+        self.assertEqual(selected["output"]["code"], "router-table-changed")
+        self.assertIsNone(selected["attemptId"])
         self.assertEqual(selected["expectedRevision"], revision)
         self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 0)
 
@@ -677,7 +682,13 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         with patch('buddy.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
             decision = self.outcome(board, 'select_first')
-        self.assertEqual(decision['status'], 'needs-host')
+        # The generic Worker crossed start(), so an exception without a handle
+        # carries unknown shutdown even though the fixture never spawned native work.
+        self.assertEqual(decision['status'], 'failed')
+        self.assertEqual(decision['output']['code'], 'router-input-changed')
+        task = board.call('task_get', {'runId': decision['runId']})['task']
+        self.assertFalse(task['shutdownConfirmed'])
+        self.assertEqual(task['attemptState'], 'uncertain')
         self.assertEqual(board.store.decisions.health_summary()['inputChangedCount'], 1)
         self.readonly_start.assert_not_called()
 
@@ -809,9 +820,9 @@ class DecisionFailureTests(DecisionTestCase):
         report = board.call("health", {})["routingHealth"]
         self.assertEqual(report["budgetExhaustedCount"], 2)
         self.assertEqual(report["inputChangedCount"], 1)
-        self.assertEqual(report["failureCount"], 0)
+        self.assertEqual(report["failureCount"], 2)
         self.assertEqual(report["abstentionCount"], 0)
-        self.assertEqual(report["consecutiveFailures"], 0)
+        self.assertEqual(report["consecutiveFailures"], 2)
 
     def test_missing_native_result_keeps_infrastructure_failure_semantics(self):
         board = self.board()
@@ -927,7 +938,8 @@ class DecisionFailureTests(DecisionTestCase):
             "resolved": None,
             "observed": None,
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
-            "stopEvidence": {"shutdownConfirmed": True},
+            "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+            "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
             "decision": self.valid_decision(claim["decisionInput"], PROFILE_ID, reason="too late"),
         }
         restarted.client().submit_result(
@@ -959,7 +971,8 @@ class DecisionFailureTests(DecisionTestCase):
             "resolved": None,
             "observed": None,
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
-            "stopEvidence": {"shutdownConfirmed": True},
+            "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+            "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
             "decision": self.valid_decision(document, PROFILE_ID, reason="replayed once"),
         }
         report = {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0}
@@ -1061,7 +1074,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["selectedProfile"]["effort"], SECOND_PROFILE["effort"])
         self.assertEqual(compact["selectedProfile"]["adapter"], "dsh")
         self.assertEqual(compact["decisionModel"]["requested"]["model"], PROFILE["model"])
-        self.assertLess(len(json.dumps(compact)), 2200, "the default read includes the frozen Router identity but stays small")
+        self.assertLess(len(json.dumps(compact)), 2400, "the default read includes frozen Router settings and bounded receipts but stays small")
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")
         self.assertEqual(audit["requested"]["task"], "fix the failing parser test")
