@@ -62,7 +62,7 @@ class ContractCheckTests(unittest.TestCase):
         return path
 
     def environment(self, cli):
-        return {"BUDDY_ZCODE_CLI": str(cli), "BUDDY_NODE": sys.executable}
+        return {"BUDDY_DEV_SOURCE": "1", "BUDDY_ZCODE_CLI": str(cli), "BUDDY_NODE": sys.executable}
 
     def test_a_qualifying_public_bundle_passes_without_any_process(self):
         cli = self.bundle()
@@ -175,7 +175,7 @@ class StartRecheckTests(unittest.TestCase):
             "task-ro-1", "attempt-ro-1", 2,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
              "cwd": str(self.root), "timeoutSeconds": 5},
-            self.root / "attempt", {}, {"BUDDY_ZCODE_CLI": str(self.good), "BUDDY_NODE": sys.executable,
+            self.root / "attempt", {}, {"BUDDY_DEV_SOURCE": "1", "BUDDY_ZCODE_CLI": str(self.good), "BUDDY_NODE": sys.executable,
                                         "BUDDY_STATE_DIR": str(self.root / "state")})
         self.request = ReadOnlyStructuredRequest(str(self.root), "Choose a profile", SCHEMA,
                                                   budget={"timeoutSeconds": 5, "toolCalls": 4})
@@ -188,7 +188,7 @@ class StartRecheckTests(unittest.TestCase):
 
     def test_an_unqualified_environment_is_refused_before_any_start(self):
         context = mock.MagicMock(spec=ExecutionContext)
-        context.environment = {"BUDDY_ZCODE_CLI": str(self.bad), "BUDDY_NODE": sys.executable}
+        context.environment = {"BUDDY_DEV_SOURCE": "1", "BUDDY_ZCODE_CLI": str(self.bad), "BUDDY_NODE": sys.executable}
         with dev_source(), mock.patch("buddy.adapters.read_only.start") as start:
             with self.assertRaises(BoardError) as caught:
                 ZcodeAdapter().start_read_only_structured(context, self.request)
@@ -203,7 +203,7 @@ class StartRecheckTests(unittest.TestCase):
                                           "BUDDY_NODE": sys.executable}), \
                 mock.patch("buddy.adapters.read_only.start") as start:
             context = mock.MagicMock(spec=ExecutionContext)
-            context.environment = {"BUDDY_ZCODE_CLI": str(FIXTURE)}
+            context.environment = {"BUDDY_DEV_SOURCE": "1", "BUDDY_ZCODE_CLI": str(FIXTURE)}
             with self.assertRaises(BoardError) as caught:
                 ZcodeAdapter().start_read_only_structured(context, self.request)
             start.assert_not_called()

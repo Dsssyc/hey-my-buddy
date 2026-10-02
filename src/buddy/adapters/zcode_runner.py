@@ -897,6 +897,41 @@ def _no_tool_call(connection: NativeConnection, control: dict, result: dict, wor
     return session_id
 
 
+def _drain_structured(connection, result: dict, tools: ZcodeToolFacts, channel: str) -> bool:
+    """Keep every stopped stream frame, even after an earlier failure."""
+    complete = True
+
+    def failed(error):
+        nonlocal complete
+        complete = False
+        if result["status"] == "ok":
+            result.update(status="error", code=error.code, error=str(error))
+        if error.code == "no-tool-violation":
+            tools.violation = True
+
+    while True:
+        try:
+            message = connection.messages.get(timeout=1)
+        except queue.Empty:
+            failed(NativeError("invalid-protocol", f"{channel} native stream ended without EOF"))
+            return False
+        if message is None:
+            return complete
+        if isinstance(message, NativeError):
+            failed(message)
+            continue
+        try:
+            # Projection precedes rejection, and an observer failure never
+            # prevents the following frames from being projected too.
+            connection.observe(message, 0)
+            if "id" in message and "method" in message:
+                raise NativeError("no-tool-violation", f"native interaction after {channel} settlement")
+            if "id" in message:
+                raise NativeError("invalid-protocol", f"unclaimed native response after {channel} settlement")
+        except NativeError as error:
+            failed(error)
+
+
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     started_at = time.monotonic()
     deadline = execution_deadline(control["timeoutSeconds"])
@@ -1188,32 +1223,14 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
         result["processState"] = {"shutdownConfirmed": shutdown, "nativeExitCode": process.returncode}
         eof = False
-        if structured and result["status"] == "ok" and shutdown:
+        if structured and shutdown and connection is not None and tools is not None:
             # The native server has exited. Read through its terminal EOF so an
             # event queued after settlement cannot hide behind close/ack. A late
             # tool frame keeps its projected fact and marks the stream
             # incomplete; whether any recorded call was allowed is judged only
             # by the blackboard, never here.
             channel = "no-tool" if control.get("noToolRequest") else "read-only"
-            try:
-                while True:
-                    message = connection.messages.get(timeout=1)
-                    if message is None:
-                        break
-                    if isinstance(message, NativeError):
-                        raise message
-                    if "id" in message and "method" in message:
-                        raise NativeError("no-tool-violation", f"native interaction after {channel} settlement")
-                    if "id" in message:
-                        raise NativeError("invalid-protocol", f"unclaimed native response after {channel} settlement")
-                    connection.observe(message, 0)
-                eof = True
-            except queue.Empty:
-                result.update(status="error", code="invalid-protocol", error=f"{channel} native stream ended without EOF")
-            except NativeError as error:
-                result.update(status="error", code=error.code, error=str(error))
-                if error.code == "no-tool-violation" and tools is not None:
-                    tools.violation = True
+            eof = _drain_structured(connection, result, tools, channel)
             if (result["status"] == "ok" and isinstance(control.get("noToolRequest"), dict)
                     and control["noToolRequest"].get("captureEvidence")):
                 result["nativeEvidence"] = {"eventCount": result.get("nativeEventCount"),
@@ -1237,7 +1254,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 # Only the no-tool channel claims zero tools; a read-only call's
                 # allowance is judged by the blackboard from the recorded facts.
                 result["zeroToolVerified"] = calls == 0
-            result["toolEvidence"] = tools.finish(bool(eof and shutdown and not tools.close_pending))
+            result["toolEvidence"] = tools.finish(bool(result["status"] == "ok" and eof and shutdown and not tools.close_pending))
         process.stdout.close()
     if cancelled.is_set():
         result.update(status="cancelled", code="cancelled", error="the owned ZCode execution was cancelled")

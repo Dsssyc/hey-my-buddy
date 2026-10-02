@@ -104,12 +104,20 @@ class ZcodeAdapter(Adapter):
         """
         env = os.environ if environment is None else environment
         try:
-            if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_ZCODE_CLI")):
+            if env.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_ZCODE_CLI"):
+                path = Path(env["BUDDY_ZCODE_CLI"]).expanduser().resolve()
+                if not path.is_file():
+                    raise NativeError("adapter-unavailable", "ZCode CLI is missing")
+                command = [str(path)]
+            else:
                 from ..harness_runtime import selected
-                if selected("zcode", env) is None:
+                record = selected("zcode", env)
+                if record is None:
                     return ("the ZCode CLI selection is not resolvable without a native probe; "
                             "the public read-only bundle was not checked")
-            command = cli_command(env)
+                if record.get("status") != "ready" or not record.get("command"):
+                    return "the selected ZCode CLI is not ready for a public bundle check"
+                command = list(record["command"])
         except (NativeError, BoardError) as error:
             detail = (str(error) or "the CLI selection is unavailable")[:200]
             return f"the public ZCode CLI bundle could not be located for the read-only contract check: {detail}"
@@ -130,7 +138,18 @@ class ZcodeAdapter(Adapter):
             _NATIVE_CONTRACT_CACHE.move_to_end(key)
             return _NATIVE_CONTRACT_CACHE[key]
         try:
-            text = resolved.read_text(errors="replace")
+            with resolved.open("rb") as stream:
+                before = os.fstat(stream.fileno())
+                content = stream.read(_MAX_PUBLIC_BUNDLE_BYTES + 1)
+                after = os.fstat(stream.fileno())
+            if len(content) > _MAX_PUBLIC_BUNDLE_BYTES:
+                return "the public ZCode CLI bundle exceeds the 32 MiB read-only contract bound"
+            latest = resolved.stat()
+            identities = [(item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+                          for item in (info, before, after, latest)]
+            if len(set(identities)) != 1:
+                return "the public ZCode CLI bundle changed during the read-only contract check"
+            text = content.decode("utf-8", errors="replace")
         except (OSError, UnicodeError):
             return "the public ZCode CLI bundle could not be read"
         from .zcode_read_only import native_contract_problem
