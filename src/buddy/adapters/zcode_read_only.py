@@ -114,7 +114,7 @@ class ReadOnlyEvidence:
     session; exceeding it fails the call with ``readonly-budget-exhausted``.
     """
 
-    MODEL_EVENTS = NoToolEvidence.MODEL_EVENTS
+    MODEL_EVENTS = {*NoToolEvidence.MODEL_EVENTS, "checkpoint.created"}
     SESSION_EVENTS = NoToolEvidence.SESSION_EVENTS
     OPERATION_EVENTS = {*NoToolEvidence.OPERATION_EVENTS, "tool-scheduled", "tool-started"}
     TELEMETRY_EVENTS = {*NoToolEvidence.TELEMETRY_EVENTS, "tool.lifecycle"}
@@ -192,7 +192,8 @@ class ReadOnlyEvidence:
                 raise NativeError("invalid-protocol", "unknown native tool or agent frame in a read-only call")
             if kind not in {"turn.started", "turn.completed", "turn.failed",
                             *self.MODEL_EVENTS, *self.SESSION_EVENTS}:
-                raise NativeError("invalid-protocol", "unknown read-only native event")
+                label = kind if isinstance(kind, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", kind) else "invalid"
+                raise NativeError("invalid-protocol", "unknown read-only native event: " + label)
             if params.get("sessionId") != self.session_id:
                 raise NativeError("invalid-protocol", "foreign session event in a read-only call")
             seq = params.get("seq")

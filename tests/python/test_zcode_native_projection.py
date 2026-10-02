@@ -139,6 +139,19 @@ class NativeProjectionTests(unittest.TestCase):
         with self.assertRaises(NativeError):
             self.metadata("started", turn="foreign-turn")
 
+    def test_native_checkpoint_metadata_is_ordered_and_cannot_settle_the_turn(self):
+        self.scheduled()
+        self.result()
+        self.canonical("checkpoint.created", {"kind": "tool-result-artifact"})
+        self.assertFalse(self.protocol.completed)
+        self.assertFalse(self.protocol.settled)
+        self.assertIsNone(self.judge())
+        for identity in ({"turnId": "foreign"}, {"sessionId": "foreign"}):
+            with self.subTest(identity=identity), self.assertRaises(NativeError):
+                self.canonical("checkpoint.created", {}, **identity)
+        with self.assertRaisesRegex(NativeError, 'unknown read-only native event: future.event'):
+            self.canonical("future.event", {"secret": "not included in error"})
+
     def test_late_metadata_and_conflicting_terminal_facts_remain_incomplete(self):
         self.scheduled()
         self.result()

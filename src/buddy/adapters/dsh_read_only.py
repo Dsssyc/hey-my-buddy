@@ -153,12 +153,17 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                     evidence.observe(event)
 
     def failed(code: str, *, started: bool, exit_code: int | None, complete: bool,
-               native_turn_end=None, failure_stage=None) -> tuple[dict, int]:
+               native_turn_end=None, failure_stage=None, failure_kind=None, failure_site=None) -> tuple[dict, int]:
         result = problem(code, started=started or model_started, stopped=code != "stop-unknown", exit_code=exit_code)
         if isinstance(native_turn_end, str) and 0 < len(native_turn_end) <= 100:
             result["nativeTurnEnd"] = native_turn_end
         if failure_stage in ("provider-registration", "agent-create", "native-turn"):
             result["failureStage"] = failure_stage
+        if failure_kind in ("Error", "TypeError", "RangeError", "SyntaxError", "other"):
+            result["failureKind"] = failure_kind
+        if (isinstance(failure_site, dict) and set(failure_site) == {"line", "column"}
+                and all(type(value) is int and 0 < value <= 1_000_000 for value in failure_site.values())):
+            result["failureSite"] = dict(failure_site)
         result["toolEvidence"] = evidence.finish(roots, complete)
         result["usage"] = {**totals, "toolCalls": evidence.tool_calls, "bytesRead": None,
                            "elapsedMs": round((time.monotonic() - started_at) * 1000)}
@@ -279,7 +284,8 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 code_name = "readonly-budget-exhausted"
             return failed(code_name, started=native.get("modelStarted") is True, exit_code=code,
                           complete=turn_complete, native_turn_end=native.get("nativeTurnEnd"),
-                          failure_stage=native.get("failureStage"))
+                          failure_stage=native.get("failureStage"), failure_kind=native.get("failureKind"),
+                          failure_site=native.get("failureSite"))
         usage = native.get("usage")
         if (code != 0 or native.get("streamComplete") is not True or truncated
                 or native.get("modelStarted") is not True

@@ -347,6 +347,17 @@ test('startup waits for native provider registration and the Agent factory servi
   assert.equal(failed.failureStage, 'agent-create');
   assert.equal(failed.modelStarted, false);
   assert.ok(!JSON.stringify(failed).includes('private detail'));
+  assert.equal(failed.failureKind, 'Error');
+
+  const constructor = fixture([{ header: {} }, { assistant: { text: '{"choice":"a"}' } }]);
+  let factoryRegistered = false;
+  const create = constructor.ctx.agents.create.bind(constructor.ctx.agents);
+  constructor.ctx.agents.create = (options) => {
+    if (!factoryRegistered) throw new Error('no agent factory registered (load an agent-loop plugin)');
+    return create(options);
+  };
+  queueMicrotask(() => { factoryRegistered = true; });
+  assert.equal((await callReadOnly(constructor.ctx, readOnlyRequest(), new AbortController().signal)).status, 'ok');
 });
 
 test('provider waiting obeys cancellation and the original deadline without creating an Agent', async () => {

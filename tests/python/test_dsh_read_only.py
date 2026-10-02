@@ -294,6 +294,20 @@ class DshReadOnlyTests(unittest.TestCase):
                     self.assertNotIn('failureStage', outcome.result)
                     self.assertNotIn('private', str(outcome.result))
 
+    def test_failure_diagnostics_keep_only_class_and_integer_bridge_positions(self):
+        for case in ('valid', 'boolean', 'fraction', 'negative', 'extra'):
+            with self.subTest(case=case):
+                outcome = self.execute('failure-diagnostics-' + case)
+                self.assertFalse(outcome.result['modelStarted'])
+                self.assertTrue(outcome.shutdown_confirmed)
+                if case == 'valid':
+                    self.assertEqual(outcome.result['failureKind'], 'TypeError')
+                    self.assertEqual(outcome.result['failureSite'], {'line': 400, 'column': 5})
+                else:
+                    self.assertNotIn('failureKind', outcome.result)
+                    self.assertNotIn('failureSite', outcome.result)
+                    self.assertNotIn('private detail', str(outcome.result))
+
     def test_untrusted_receipts_fail_before_publishing_an_answer(self):
         for case, calls in (("usage-mismatch", 1), ("resolved-provider", 0), ("resolved-model", 0),
                             ("resolved-effort", 0), ("identity-invalid", 0)):

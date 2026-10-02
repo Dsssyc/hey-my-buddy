@@ -108,6 +108,14 @@ elif case == 'provider-missing':
 elif case.startswith('provider-stage-'):
     ok = refusal('configuration-unavailable')
     ok['failureStage'] = case.removeprefix('provider-stage-') if case != 'provider-stage-invalid' else ['private detail']
+elif case.startswith('failure-diagnostics-'):
+    ok = refusal('configuration-unavailable')
+    ok['failureStage'] = 'agent-create'
+    ok['failureKind'] = 'TypeError' if case == 'failure-diagnostics-valid' else 'private detail'
+    ok['failureSite'] = {'line': 400, 'column': 5} if case == 'failure-diagnostics-valid' else {
+        'boolean': {'line': True, 'column': 5}, 'fraction': {'line': 2.5, 'column': 5},
+        'negative': {'line': -1, 'column': 5}, 'extra': {'line': 400, 'column': 5, 'path': 'private detail'},
+    }[case.removeprefix('failure-diagnostics-')]
 elif case == 'tools-unavailable':
     ok = refusal('read-only-tools-unavailable')
 elif case == 'resolved-provider':

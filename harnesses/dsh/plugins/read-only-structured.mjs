@@ -316,6 +316,10 @@ export async function callReadOnly(ctx, request, signal) {
   } catch {
     return refusal('configuration-unavailable', 'provider-registration');
   }
+  // Cordis publishes agentLoop in super() before its synchronous constructor
+  // registers the factory. Yield once; never inspect private factory state or
+  // retry creation after it has acquired a Session.
+  await Promise.resolve();
   if (signal?.aborted || Date.now() >= deadline) return refusal('deadline', 'provider-registration');
   const sessionId = sessionIdFor(request.callId);
   const state = {
@@ -342,6 +346,8 @@ export async function callReadOnly(ctx, request, signal) {
   let timer = null;
   let code;
   let failureStage;
+  let failureKind;
+  let failureSite;
   try {
     detach = ctx.on('session/event', recorder);
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -389,13 +395,18 @@ export async function callReadOnly(ctx, request, signal) {
     });
     state.published = true;
     code = await drive(handle, state);
-  } catch {
+  } catch (error) {
     // Setup, commit and creation failures roll the unpublished Agent back.
     code = state.restrictFailed ? 'read-only-tools-unavailable'
       : state.commitFailed ? 'tool-surface-expanded'
         : state.published ? 'invalid-native-result'
           : signal?.aborted ? 'deadline' : 'configuration-unavailable';
     failureStage = state.published ? 'native-turn' : 'agent-create';
+    failureKind = ['Error', 'TypeError', 'RangeError', 'SyntaxError'].includes(error?.name) ? error.name : 'other';
+    const site = typeof error?.stack === 'string'
+      ? error.stack.split('\n').slice(1).map((line) => line.match(/read-only-structured\.mjs:(\d+):(\d+)/)).find(Boolean)
+      : undefined;
+    if (site) failureSite = { line: Number(site[1]), column: Number(site[2]) };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
@@ -423,7 +434,8 @@ export async function callReadOnly(ctx, request, signal) {
   // still observed as late facts.
   detach?.();
   if (code === null && (state.incomplete || state.truncated)) code = 'stream-incomplete';
-  return { ...assemble(state, code), ...(failureStage && { failureStage }) };
+  return { ...assemble(state, code), ...(failureStage && { failureStage, failureKind }),
+    ...(failureSite && { failureSite }) };
 }
 
 function writeResult(file, value) {
