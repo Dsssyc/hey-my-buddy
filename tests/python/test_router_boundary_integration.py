@@ -158,6 +158,28 @@ class BoundaryReadingTests(RouterDispatchTestCase):
                          ["2026-01-01T00:20:00Z", "2026-01-01T00:25:00Z"])
         self.assertEqual(self.tasks(), [])
 
+    def test_queued_dispatch_preflight_failure_keeps_its_own_outcome_and_recovery(self):
+        from buddy.quota_routing import record
+        request = self.request()
+        with self.board_.store.db.write() as db:
+            record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "alpha"},
+                "observedAt": T0, "ordinaryUsageAllowed": False, "reachedType": "quota-exceeded",
+                "resetsAt": "2026-01-01T00:20:00.000Z"}, now=T0)
+        with patch("buddy.quota_routing.utc_now", return_value=T0):
+            first = self.claim("preflight", task_id=request["runId"])
+        self.assertIsNone(first["claim"])
+        second = self.next_claim(request)
+        self.report(second, self.failure(second), status="failed")
+        trial = self.boundary(request["decisionId"])["routerTrials"][0]
+        self.assertEqual(trial["taskId"], request["runId"])
+        self.assertIsNone(trial["attemptId"])
+        self.assertEqual(trial["phase"], "preflight")
+        self.assertEqual(trial["outcome"], "no_answer")
+        self.assertEqual(trial["code"], "router-quota-exhausted")
+        self.assertEqual(trial["retryAt"], "2026-01-01T00:20:00Z")
+        self.assertTrue(trial["shutdownConfirmed"])
+        self.assertIsNone(trial["usage"])
+
     def test_freeze_retains_additional_host_packet_without_rewriting_other_snapshot_fields(self):
         self.set_settings(ids=[])
         request = self.request()

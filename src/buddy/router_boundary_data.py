@@ -87,6 +87,21 @@ def _quota_recovery(connection, profile, now):
     return True, resets[max(range(len(resets)), key=lambda index: parsed[index])]
 
 
+def _preflight_no_answer(connection, item, event, state, now):
+    """Project a recorded qualification failure, including after a dispatch queued."""
+    item.update(outcome="no_answer", phase=event["payload"].get("phase"),
+                code=event["payload"].get("code"), retryAt=None)
+    profile = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?",
+                                 (item["profileId"],)).fetchone()
+    if profile is not None and item["code"] == "router-quota-exhausted":
+        _, item["retryAt"] = _quota_recovery(connection, profile, now)
+        if (item["retryAt"] and state.get("inSkipWindow")
+                and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"])):
+            item["retryAt"] = state["retryAt"]
+    if item["retryAt"] is None:
+        item["reason"] = (item["reason"] or "Cached Router qualification, health or quota is unavailable") + "; no recovery time is recorded"
+
+
 def router_trials(connection, row, *, now):
     """Every observed/dispatch item, with its own receipt; unknown stays null."""
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
@@ -168,6 +183,11 @@ def router_trials(connection, row, *, now):
             if attempts:
                 item.update(outcome="unknown", code="router-dispatch-unverified",
                             reason="The attempt has no matching immutable dispatch binding")
+            elif (no_answer := next((event for event in reversed(matching)
+                    if event["kind"] == "router.no_answer" and event["payload"].get("phase") == "preflight"
+                    and event["payload"].get("taskId") in (None, task_id)
+                    and event["payload"].get("attemptId") is None), None)) is not None:
+                _preflight_no_answer(connection, item, no_answer, state, now)
             elif row["decision_task_id"] == task_id and row["status"] in ("cancelled", "stale", "needs-host", "failed"):
                 item.update(outcome="cancelled" if row["status"] == "cancelled" else "changed" if row["status"] == "stale" or row["error"] in _CHANGED_CODES else "skipped",
                             phase="preflight", code=row["error"], reason=row["reason"])
