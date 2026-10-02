@@ -14,6 +14,7 @@ const TOOL_NAMES = ['glob', 'grep', 'read'];
 const ROOT_PREFIX = 'buddy-read-only-';
 const MAX_OUTPUT_TOKENS = 4_096;
 const MAX_TOOL_EVENTS = 128;
+const MAX_ANSWER_BYTES = 65_536;
 const USAGE_FIELDS = ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens',
   'cacheWriteTokens', 'reasoningTokens'];
 // Session log vocabulary this bridge understands; anything else on an observed
@@ -78,11 +79,12 @@ function createRecorder(state, initiateStop) {
     const config = data.header?.config;
     const configOk = config && config.provider === state.spec.provider &&
       config.model === state.spec.model && config.reasoningEffort === state.spec.effort;
-    if (configOk && surfaceNames(data.header?.tools)) return;
+    if (configOk && surfaceNames(data.header?.tools)) return true;
     state.configMismatch = true;
     // The header is appended after prepareCall and before the stream: refuse
     // the mismatched request synchronously rather than letting it continue.
     initiateStop({ kind: 'hook', reason: 'request header does not match the read-only request' });
+    return false;
   };
   const accumulateUsage = (usage) => {
     if (!usage || typeof usage !== 'object') return;
@@ -190,8 +192,7 @@ function createRecorder(state, initiateStop) {
           state.openSteps.delete(`${data.turn}:${data.step}`);
           break;
         case 'request/header':
-          state.modelStarted = true;
-          checkHeader(data);
+          if (checkHeader(data)) state.modelStarted = true;
           break;
         case 'assistant/message':
           state.modelStarted = true;
@@ -270,6 +271,7 @@ async function drive(handle, state) {
   }
   const rawAnswer = rawAnswerFrom(state.assistantMessages);
   if (typeof rawAnswer !== 'string' || !rawAnswer.trim()) return 'native-turn-failed';
+  if (Buffer.byteLength(rawAnswer, 'utf8') > MAX_ANSWER_BYTES) return 'answer-too-large';
   state.rawAnswer = rawAnswer;
   try {
     if (await state.ctx.sessions.flush(agent.session) !== true) return 'flush-failed';

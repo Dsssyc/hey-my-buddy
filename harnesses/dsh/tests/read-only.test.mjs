@@ -394,7 +394,7 @@ test('request headers must carry the requested config and exactly three tools', 
     const { ctx, order } = fixture([{ header }, { assistant: { text: 'x' } }]);
     const result = await callReadOnly(ctx, readOnlyRequest(), new AbortController().signal);
     assert.equal(result.code, 'configuration-mismatch', JSON.stringify(header));
-    assert.equal(result.modelStarted, true);
+    assert.equal(result.modelStarted, false);
     assert.equal(result.streamComplete, false);
     // The refusal is synchronous: cancel lands inside the header append.
     assert.equal(order[order.indexOf('request/header') + 1], 'cancel');
@@ -623,4 +623,21 @@ test('format correction can spend zero remaining tools without resetting the bud
   assert.equal(result.status, 'ok');
   assert.equal(result.usage.toolCalls, 0);
   assert.equal(result.streamComplete, true);
+});
+
+
+test('native answers are bounded by UTF-8 bytes before retention', async () => {
+  for (const [text, expected] of [['界'.repeat(21845), 'ok'], ['界'.repeat(21846), 'error']]) {
+    const { ctx, registry } = fixture([{ header: {} }, { assistant: { text } },
+      { turnEnd: { kind: 'completed' } }]);
+    const result = await callReadOnly(ctx, readOnlyRequest(), new AbortController().signal);
+    assert.equal(result.status, expected);
+    assert.equal(registry.disposeCount, 1);
+    if (expected === 'ok') assert.equal(result.rawAnswer, text);
+    else {
+      assert.equal(result.code, 'answer-too-large');
+      assert.equal(result.rawAnswer, undefined);
+      assert.equal(result.streamComplete, false);
+    }
+  }
 });
