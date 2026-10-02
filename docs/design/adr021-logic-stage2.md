@@ -80,7 +80,7 @@ L5 的公共接口为 `normalize_tool_event(adapter, native_event)`、`ToolEvent
 
 ## L5 的接口设计
 
-DSH 的 read-only-structured.mjs 是小的原生桥接，不实现工具或 LLM 工具循环。使用已安装的公开 AgentRegistry.create 接口，在 setup(agentCtx, agent) 中调用原生 agentCtx.tools.restrict({allow:[read,glob,grep]}) 与 agentCtx.tools.presentAs(native)；原生 ToolRuntime 的限制同时作用于继承工具的可见性和执行。通过原生 registerGuard 追加不可被后续 allow 覆盖的三工具执行限制，并在每次原生 pre-step 前核对 schemas 的名称只有这三项，阻止 scoped registrations 或 PTC run_code 增大工具面；不自行重新实现任何 handler。
+DSH 的 read-only-structured.mjs 是小的原生桥接，不实现工具或 LLM 工具循环。使用已安装的公开 AgentRegistry.create 接口，在 setup(agentCtx, agent) 中调用原生 agentCtx.tools.restrict({allow:[read,glob,grep]}) 与 agentCtx.tools.presentAs(native)；原生 ToolRuntime 的限制同时作用于继承工具的可见性和执行。通过原生 ToolRuntime.guard 追加不可被后续 allow 覆盖的三工具执行限制，并在每次原生 pre-step 前核对 schemas 的名称只有这三项，阻止 scoped registrations 或 PTC run_code 增大工具面；不自行重新实现任何 handler。
 
 根 Agent 的 meta.cwd 是冻结副本；agentOptions 使用本 attempt 的 provider/model/effort。私有 profile 禁用 headless-runner、标题模型和额外动态工作流，由桥接创建且只驱动一个根 Agent；不提供完成/inquiry/黑板凭据工具，不复用普通 Worker runner。原生 session 的 tool/call、tool/result、模型 step/turn 结束与 flush/stop 作为事实，分类由 runtime 上报，是否允许只由黑板判定。非法工具请求由原生 restriction/guard 拒绝，其类别仍如实记录，不能从日志消失。
 
@@ -192,3 +192,5 @@ L4 集成审查补齐 catalog 的免费资格投影，并迁移外围测试的�
 L4 完整检查前细化 L5-0B：四个原生事件面拆成独立 Codex、Claude、DSH-fast、ZCode-fast 任务，Host 最后接唯一发布判定与外围模拟回执。0A 先交付纯接口与黑板包装方法，不提前替换旧发布调用点；0B-Host 一次接入强制证据，避免中间提交靠兼容 fallback 通过。这样每件成果可单独验证与审查，不让一个 Worker 承担四种协议。
 
 补足公共证据精确类型：ToolEventEvidence(binding) 的 binding 只来自 Python 控制文件；normalize_tool_event 接受 controller 已提取的原生工具事实字段并按适配器原生工具名/类型分类，不遍历任意模型输出。finish 的 nativeIdentity 是本次调用的可信根身份列表（每个字典只保留原生实际提供的 sessionId/turnId/inputId/callId 等字符串），来自根 session/turn 创建回报；格式纠正的根回合逐项加入，不从所有收到的事件反推允许身份。事件的 nativeIdentity 必须精确匹配列表中的本次根身份，foreign/子/旧回合仍保留并使完整性失败；call 去重键是身份加 callId，raw/high-level 同 ID 同事实去重，确证不同原生调用分别计数，无法关联或矛盾则不完整。缺证据/坏绑定/不完整返回 router-tool-evidence-unverified，明确不允许的类别返回 router-tools-forbidden；快速零调用规则由同一函数判定。系统沙盒事实在 claim 事务由 read_health 的本地程序事实写入本 attempt 的冻结输入 toolPolicy.systemSandbox，发布时不采信答案自报；旧未绑定的结果不能发布。
+
+静态核对当前 DSH 公共类型后修正方法拼写：单调拒绝接口是 agentCtx.tools.guard(callback)，并非 registerGuard；其语义仍是在原生 pre-execute 扩展之后追加不可强制放行的 guard。驱动采用原生 Agent.followup/whenIdle 与 SessionRegistry.flush，工具回合由原生 Agent loop 执行；setup 安装 restrict/presentAs/guard，返回 commit 时再次核对精确三工具集合。此修订不影响正在执行的 0A，也不新增模型调用。
