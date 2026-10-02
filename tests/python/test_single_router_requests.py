@@ -93,10 +93,11 @@ class SingleRouterRequestTests(BoardTestCase):
         view = self.audit(board, self.request(board, timeoutSeconds=77))
         self.assertEqual(view["budget"], {**router.budget(), "timeoutSeconds": 77})
         with board.store.db.read() as connection:
-            profile, facts, problem = router.resolve(connection, frozen=view["requested"])
-        self.assertEqual(profile["profile_id"], PROFILE_ID)
-        self.assertIsNone(problem)
-        self.assertEqual(facts["budget"]["timeoutSeconds"], 77)
+            resolution = router.current_router(connection, frozen=view["requested"])
+        self.assertEqual(resolution.profile_id, PROFILE_ID)
+        self.assertIsNone(resolution.problem)
+        self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 77)
+        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 77)
 
     def test_replay_after_setting_and_candidate_changes_keeps_every_snapshot(self):
         board = self.board()
@@ -106,7 +107,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
                                 preferenceChanges=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "later bound"}])
-        with patch("buddy.router.resolve", side_effect=AssertionError("replay must not resolve")):
+        with patch("buddy.router.current_router", side_effect=AssertionError("replay must not resolve")):
             replay = self.request(board)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(replay["decisionId"], first["decisionId"])
@@ -176,7 +177,7 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.legacy(board)
-        with patch("buddy.router.resolve", side_effect=AssertionError("direct path must not resolve")):
+        with patch("buddy.router.current_router", side_effect=AssertionError("direct path must not resolve")):
             view = self.audit(board, self.request(board, requiredCapabilities=["input:image"]))
         self.assertEqual(view["status"], "completed")
         self.assertEqual(view["profileId"], PROFILE_ID)
@@ -189,7 +190,7 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.legacy(board)
-        with patch("buddy.router.resolve", side_effect=AssertionError("empty bounds must not resolve")):
+        with patch("buddy.router.current_router", side_effect=AssertionError("empty bounds must not resolve")):
             view = self.audit(board, self.request(board, requiredCapabilities=["not-present"]))
         self.assertEqual(view["status"], "needs-host")
         self.assertIn("legal candidate", view["reason"])
@@ -236,30 +237,34 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(code, "router-not-published")
             self.assertIn("未发布", reason)
 
-    def test_frozen_resolve_rejects_settings_changes_without_refreshing_facts(self):
+    def test_frozen_current_router_keeps_snapshot_after_settings_changes(self):
         board = self.board()
         self.seed(board)
         snapshot = self.audit(board, self.request(board))["requested"]
         self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
         with board.store.db.read() as connection:
-            profile, facts, problem = router.resolve(connection, frozen=snapshot)
-        self.assertIsNone(profile)
-        self.assertEqual(problem["code"], "router-configuration-changed")
-        self.assertEqual(facts, {key: snapshot[key] for key in ("routerProfileId", "routingMode", "configurationRevision", "budget")})
+            resolution = router.current_router(connection, frozen=snapshot)
+        self.assertEqual(resolution.profile_id, PROFILE_ID)
+        self.assertIsNone(resolution.problem)
+        self.assertEqual(resolution.facts, {key: snapshot[key] for key in (
+            "routerProfileIds", "routerIdentities", "routingMode", "routingBudget",
+            "routerRetryIntervalSeconds", "configurationRevision", "budget")})
+        # The claim layer, covered by the settings-drift claim test, refuses
+        # execution after this change. The shared resolver reads frozen facts.
 
-    def test_frozen_resolve_rejects_changed_identity_and_rechecks_health(self):
+    def test_frozen_current_router_rejects_changed_identity_and_rechecks_health(self):
         board = self.board()
         self.seed(board)
         snapshot = self.audit(board, self.request(board))["requested"]
         with board.store.db.write() as connection:
             connection.execute("UPDATE evaluation_profiles SET effort='high' WHERE profile_id=?", (PROFILE_ID,))
-            profile, facts, problem = router.resolve(connection, frozen=snapshot)
-            self.assertIsNone(profile)
-            self.assertEqual(problem["code"], "router-profile-changed")
-            self.assertEqual(facts["routerProfileId"], PROFILE_ID)
+            resolution = router.current_router(connection, frozen=snapshot)
+            self.assertIsNone(resolution.profile)
+            self.assertEqual(resolution.problem["code"], "router-profile-changed")
+            self.assertEqual(resolution.facts["routerProfileIds"], [PROFILE_ID])
             connection.execute("UPDATE evaluation_profiles SET effort='off',enabled=0 WHERE profile_id=?", (PROFILE_ID,))
-            _, _, problem = router.resolve(connection, frozen=snapshot)
-            self.assertEqual(problem["code"], "router-unavailable")
+            resolution = router.current_router(connection, frozen=snapshot)
+            self.assertEqual(resolution.inspections[0]["code"], "router-unavailable")
 
     def test_historical_fallback_is_retained_only_in_audit(self):
         board = self.board()
@@ -361,7 +366,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             connection.execute("UPDATE meta SET value='1' WHERE key='router_configuration_version'")
-        with patch("buddy.router.resolve", side_effect=AssertionError("complete buddy must not resolve")):
+        with patch("buddy.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
             view = self.submit(board)
         self.assertEqual(view["routing"]["status"], "explicit")
         self.assertEqual(view["executionConfiguration"], CONFIGURATION)
