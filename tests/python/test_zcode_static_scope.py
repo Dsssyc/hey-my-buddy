@@ -300,10 +300,16 @@ class ScopeMapTests(unittest.TestCase):
             ("braced-single", "const g=fT=>{fT()};"),
             ("unbraced-single", "const g=fT=>fT();"),
             ("braced-parenthesized", "const g=(a,fT)=>{fT()};"),
-            ("arrow-in-for-header", "for(const s of [1])(fT)=>{fT()}(s);"),
         ):
             with self.subTest(label=label):
                 self.assertIn("fT", self.bindings_at(text, "fT("))
+        text = "for(const s of [1])(fT)=>{fT()}(s);"
+        # Its body is outside the statement subset, so the inherited fuzzy
+        # loop blocks qualification. Still retain the original regression:
+        # the arrow's own parameter must be present rather than dropped.
+        scopes = _Bundle(text).scopes()
+        self.assertIsNone(scopes.bindings_at(text.index("fT(")))
+        self.assertTrue(any(node[2] == "arrow" and "fT" in node[3] for node in scopes.nodes))
 
     def test_unreadable_binding_contexts_report_no_bindings(self):
         text = "function a(){for(let fT of [])x+=1,fT();}"

@@ -788,7 +788,7 @@ def _group_open_back(text: str, close: int, spans=()) -> int | None:
     """
     depth = 1
     j = close - 1
-    k = len(spans) - 1
+    k = bisect.bisect_right(spans, (close, len(text) + 1)) - 1
     limit = max(0, close - _MAX_GROUP_WINDOW)
     while j >= limit:
         while k >= 0 and j < spans[k][0]:
@@ -854,6 +854,7 @@ class _ScopeMap:
         self._for_headers = []     # (start, end) groups whose keywords self-handle
         self._for_header_starts = []  # the same intervals' starts, for bisect
         self._order = None         # node indices sorted by start, built lazily
+        self._virtual_scopes = []  # non-braced scopes whose children still inherit
         self._parse()
 
     # -- construction ------------------------------------------------------
@@ -865,12 +866,15 @@ class _ScopeMap:
         pending = []   # (node index, claim end, header start) claims, innermost last
 
         def parent_at(pos):
-            if stack:
-                return stack[-1]
+            candidates = stack[-1:] if stack else []
             for claim in reversed(pending):
                 if claim[2] <= pos < claim[1]:
-                    return claim[0]
-            return -1
+                    candidates.append(claim[0])
+            if self._virtual_scopes:
+                self._virtual_scopes[:] = [index for index in self._virtual_scopes
+                                           if pos < nodes[index][1]]
+                candidates.extend(index for index in self._virtual_scopes if nodes[index][0] <= pos)
+            return max(candidates, key=lambda index: nodes[index][0]) if candidates else -1
 
         for m in _SCOPE_SCAN.finditer(text):
             if not regions.is_code(m.start()):
@@ -911,7 +915,7 @@ class _ScopeMap:
                 elif keyword == "class":
                     name = self._name_after(m.end())
                     if name is not None and self._statement_position(m.start()):
-                        self._bind_in_function(parent, name)
+                        self._bind("let", parent, name)
                 elif keyword in ("var", "let", "const"):
                     k = bisect.bisect_right(self._for_header_starts, m.start()) - 1
                     inside_for = (k >= 0 and m.start() < self._for_headers[k][1])
@@ -943,12 +947,13 @@ class _ScopeMap:
                 return "arrow", {self.text[back + 1:group_close + 1]}, back + 1
             return "arrow", set(), pos
         if kind == "op" and value == ")":
-            group_start = self._group_open_back(pos - 1)
+            group_close = self._skip_ws_back(pos)
+            group_start = self._group_open_back(group_close)
             if group_start is None:
                 return "fuzzy", set(), pos
             head = self._token_before(group_start)
             if head is not None and head[0] == "ident":
-                return ("method", set(self._group_names(group_start, pos - 1)), group_start)
+                return ("method", set(self._group_names(group_start, group_close)), group_start)
             return "block", set(), group_start
         if kind == "op" and value == "]":
             return "fuzzy", set(), pos  # a computed-key method: parameters unreadable
@@ -961,9 +966,10 @@ class _ScopeMap:
         start = arrow_start
         if before is not None:
             if before[0] == "op" and before[1] == ")":
-                group_start = self._group_open_back(arrow_start - 1)
+                group_close = self._skip_ws_back(arrow_start)
+                group_start = self._group_open_back(group_close)
                 if group_start is not None:
-                    params = self._group_names(group_start, arrow_start - 1)
+                    params = self._group_names(group_start, group_close)
                     start = group_start
             elif before[0] == "ident":
                 # A single unparenthesized parameter is a binding too; the
@@ -993,7 +999,8 @@ class _ScopeMap:
             elif c in ";," and depth == 0:
                 stop = pos
                 break
-        self.nodes.append([arrow_start, stop, "arrow", set(params), parent])
+        self._virtual_scopes.append(len(self.nodes))
+        self.nodes.append([start, stop, "arrow", set(params), parent])
         return None
 
     def _function_header(self, keyword_start, keyword_end, stack, parent: int):
@@ -1042,6 +1049,7 @@ class _ScopeMap:
             # statement; an unreadable one keeps the bindings over a fuzzy
             # span, so references it affects fail closed.
             body_end, supported = self._statement_span(close + 1)
+            self._virtual_scopes.append(len(self.nodes))
             self.nodes.append([i, body_end, "for" if supported else "fuzzy",
                                set(names), parent])
             return None

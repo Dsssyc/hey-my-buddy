@@ -42,6 +42,8 @@ class ProofDependencyTests(unittest.TestCase):
         for tail in ('var x=0;x+++Qm;', 'var x=0;x---Qm;', 'var x=0;x++ + Qm;'):
             with self.subTest(tail=tail):
                 self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE + tail))
+        self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE + '{class Set{}}'))
+        self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE + 'function other(){class Set{}}'))
 
 
 class RealMemberTests(unittest.TestCase):
