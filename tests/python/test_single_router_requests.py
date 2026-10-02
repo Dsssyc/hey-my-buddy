@@ -47,21 +47,23 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(response["status"], "queued")
         identity = {key: PROFILE[key] for key in schemas.CONFIGURATION_FIELDS}
         for document in (view, view["requested"], view["input"]):
-            self.assertEqual(document["routerProfileId"], PROFILE_ID)
-            self.assertEqual(document["routerProfile"], identity)
+            self.assertEqual(document["routerProfileIds"], [PROFILE_ID])
+            self.assertEqual(document["routerIdentities"], [identity])
             self.assertEqual(document["routingMode"], "review")
             self.assertEqual(document["budget"], router.budget("deep"))
             self.assertEqual(document["configurationRevision"], view["configurationRevision"])
             self.assertNotIn("fallback", document)
             self.assertNotIn("requestedRoutingMode", document)
         self.assertEqual(view["input"]["profile"], identity)
+        self.assertEqual(view["routerProfileId"], PROFILE_ID)
+        self.assertEqual(view["routerProfile"], identity)
         self.assertEqual(view["inputSha256"], sha256_text(canonical_json(view["input"])))
         self.readonly_start.assert_not_called()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
             event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='decision.requested'").fetchone()[0])
-        self.assertEqual(event["routerProfile"], identity)
+        self.assertEqual(event["routerIdentities"], [identity])
         self.assertEqual(event["budget"], router.budget("deep"))
 
     def test_fast_uses_same_router_and_sixty_second_repo_free_input(self):
@@ -156,9 +158,12 @@ class SingleRouterRequestTests(BoardTestCase):
             view = self.audit(board, self.request(board))
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["routingMode"], "review")
-        self.assertEqual(view["routerProfileId"], PROFILE_ID)
-        self.assertEqual(view["routerProblem"]["code"], "router-review-unsupported")
-        self.assertIn("fixture tools unrestricted", view["reason"])
+        self.assertIsNone(view["routerProfileId"])
+        self.assertEqual(view["routerProfileIds"], [PROFILE_ID])
+        self.assertEqual(view["routerProblem"]["code"], "router-unavailable")
+        with board.store.db.read() as connection:
+            record = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'").fetchone()[0])
+        self.assertEqual(record["code"], "router-review-unsupported")
         self.assertIsNone(view["runId"])
         self.assertNotIn("fallback", view)
 
@@ -293,7 +298,8 @@ class SingleRouterRequestTests(BoardTestCase):
             response = self.request(board, requestId="bounded-packet")
         view = self.audit(board, response)
         self.assertEqual(view["status"], "needs-host")
-        self.assertIn("complete frozen routing input", view["reason"])
+        self.assertEqual(view["error"], "router-input-too-large")
+        self.assertIn("nothing was truncated or sent to a model", view["reason"])
         self.assertIsNone(view["input"])
         self.assertIsNone(view["runId"])
 

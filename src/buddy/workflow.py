@@ -1643,6 +1643,7 @@ class WorkflowCoordinator:
         no task prompt, model input/output or table payload is embedded.
         """
         from .router import routing_facts, selection_source
+        from .router_sequence import dispatch
         run_id = run_row["run_id"]
         total = int(
             connection.execute(
@@ -1689,7 +1690,7 @@ class WorkflowCoordinator:
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),
                     "current": bool(current_id) and row["decision_id"] == current_id,
-                    **routing_facts(requested),
+                    **routing_facts(requested, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
                 }
             )
         next_cursor = None

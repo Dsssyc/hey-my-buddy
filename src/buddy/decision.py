@@ -1939,9 +1939,10 @@ class DecisionCoordinator:
                              and output.get("modelStarted") is not False
                              and isinstance(decision, dict) and decision.get("profileId", False) is None
                              and set(decision) == {"profileId", "reason", "evidence"})
-                special = row["kind"] in ("decision.failed", "decision.needs_host") and code in special_counts
+                diagnostic_code = output.get("code") if output.get("code") in special_counts else code
+                special = row["kind"] in ("decision.failed", "decision.needs_host") and diagnostic_code in special_counts
                 if special:
-                    special_counts[code] += 1
+                    special_counts[diagnostic_code] += 1
                 # Bounds and input changes remain independent diagnostic counters.
                 # Budget exhaustion also means the Router failed to return an answer.
                 is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (row["kind"] == "decision.failed" or

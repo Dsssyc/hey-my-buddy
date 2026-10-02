@@ -48,15 +48,25 @@ class SingleRouterClaimTests(DecisionTestCase):
         response = self.claim_route(board, request)
         self.assertIsNone(response['claim'])
         view = self.decision(board, request['decisionId'])
-        self.assertEqual(view['status'], 'needs-host')
-        self.assertEqual(view['output']['code'], code)
+        changed_identity = code in ('router-not-published', 'router-incomplete')
+        unavailable = code in ('router-no-tool-unsupported', 'router-review-unsupported', 'router-quota-exhausted')
+        expected_code = 'router-profile-changed' if changed_identity else 'router-unavailable' if unavailable else code
+        expected_status = 'stale' if code == 'router-configuration-changed' else 'needs-host'
+        self.assertEqual(view['status'], expected_status)
+        self.assertEqual(view['output']['code'], expected_code)
         self.assertEqual(view['input'], frozen['input'])
         self.assertEqual(view['requested'], frozen['requested'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers').fetchone()[0], 0)
-            event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='decision.needs_host'").fetchone()[0])
-            self.assertEqual(event['errorCode'], code)
+            event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind=?",
+                                                  ('decision.stale' if expected_status == 'stale' else 'decision.needs_host',)).fetchone()[0])
+            self.assertEqual(event['errorCode'], expected_code)
+            failures = [json.loads(row[0]) for row in connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'")]
+            if unavailable:
+                self.assertEqual([entry['code'] for entry in failures], [code])
+            elif changed_identity or code == 'router-configuration-changed':
+                self.assertEqual(failures, [])
         self.readonly_start.assert_not_called()
 
     def test_setting_revision_identity_mode_and_budget_changes_never_refresh_claim(self):
@@ -332,7 +342,7 @@ class SingleRouterClaimTests(DecisionTestCase):
             self.assertIsNotNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers WHERE released_at IS NULL').fetchone()[0], 0)
 
-    def test_frozen_router_is_rechecked_before_publication(self):
+    def test_cached_qualification_loss_does_not_invalidate_an_effectively_valid_answer(self):
         board = self.board()
         self.seed(board)
         request = self.request(board)
@@ -342,7 +352,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             self.report(board, claim, stopped_answer(claim))
         decision = self.decision(board, request['decisionId'])
-        self.assertEqual(decision['status'], 'needs-host')
-        self.assertEqual(decision['output']['code'], 'router-review-unsupported')
+        self.assertEqual(decision['status'], 'completed')
+        self.assertEqual(decision['profileId'], PROFILE_ID)
         self.assertEqual(decision['input'], claim['decisionInput'])
         self.assertIsNone(self.claim_route(board, request, command='no-replacement')['claim'])

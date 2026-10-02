@@ -331,7 +331,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         claimed = self.router_claim(board, submitted, claim_id="after-writer")
         self.assertIsNone(claimed["claim"])
         old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
-        self.assertEqual(old["status"], "needs-host")
+        self.assertEqual(old["status"], "stale")
         self.assertEqual(old["input"]["profile"]["model"], PROFILE["model"])
         self.assertEqual(old["input"]["tableRevision"], revision)
         current = board.call("workflow_get", {"runId": submitted["runId"]})

@@ -5,7 +5,7 @@ from unittest.mock import patch
 from buddy import router, schemas
 from buddy.errors import BoardError
 from fixtures.router_tool_receipt import claim_tool_receipt
-from support import BoardTestCase
+from support import BoardTestCase, FakeClock
 from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
 
 
@@ -117,9 +117,12 @@ class RoutingModesTests(BoardTestCase):
         self.assertIsNone(claim)
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(decision['status'], 'needs-host')
-        self.assertEqual(decision['output']['code'], 'router-review-unsupported')
+        self.assertEqual(decision['output']['code'], 'router-unavailable')
         self.assertEqual(decision['routingMode'], 'review')
         with board.store.db.read() as connection:
+            import json
+            fact = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'").fetchone()[0])
+            self.assertEqual(fact['code'], 'router-review-unsupported')
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers').fetchone()[0], 0)
 
@@ -156,7 +159,8 @@ class RoutingModesTests(BoardTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.fallback'").fetchone()[0], 0)
 
     def test_fast_receipt_requires_zero_tool_evidence_at_publication(self):
-        board = self.board()
+        clock = FakeClock()
+        board = self.board(clock=clock)
         self.seed(board)
         self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode='fast')
         nonce = 'nonce-abcdefghijklmnop'
@@ -165,6 +169,7 @@ class RoutingModesTests(BoardTestCase):
                 (None, 0, 'needs-host', 'router-tool-evidence-unverified'),
                 (True, 1, 'needs-host', 'router-tools-forbidden'),
                 (True, False, 'needs-host', 'router-tool-evidence-unverified'))):
+            clock.advance(601)
             result = board.call('selection_request', {'requestId': f'proof-{index}', 'task': 'choose'})
             worker = f'router-{index}'
             board.call('worker_register', {'workerId': worker, 'adapter': 'decision', 'capabilities': ['decision']})

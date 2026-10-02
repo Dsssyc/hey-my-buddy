@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, FakeClock, wait_for
 from test_evaluation import EvaluationTestCase as EvaluationFixtures
 
 from buddy.errors import BoardError
@@ -627,7 +627,13 @@ class DecisionGateTests(DecisionTestCase):
             "the reader never spawned a helper",
             evidence={"spawnIntentWritten": False},
         )
-        self.assertEqual(self.decision(board, selection["decisionId"])["status"], "failed")
+        released_decision = self.decision(board, selection["decisionId"])
+        self.assertEqual(released_decision["status"], "needs-host")
+        self.assertEqual(released_decision["output"]["code"], "router-unavailable")
+        with board.store.db.read() as connection:
+            released = connection.execute("SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?",
+                                          (reader_claim["attempt"]["attemptId"],)).fetchone()
+        self.assertEqual(tuple(released), ("finished", 1))
         self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
         self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "writing")
         # The writer is granted once the reader settled, and its card-only patch commits.
@@ -668,6 +674,12 @@ class DecisionGateTests(DecisionTestCase):
 
 
 class DecisionFailureTests(DecisionTestCase):
+    def own_receipt(self, board, decision):
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT result_json FROM attempts WHERE attempt_id=? AND task_id=?",
+                                     (decision["attemptId"], decision["runId"])).fetchone()
+        return json.loads(row[0])
+
     def outcome(self, board, mode: str, *, request_id: str = "pick-x") -> dict:
         if mode == "foreign_evidence":
             self.use_helper(evidence="foreign")
@@ -686,7 +698,8 @@ class DecisionFailureTests(DecisionTestCase):
         # The generic Worker crossed start(), so an exception without a handle
         # carries unknown shutdown even though the fixture never spawned native work.
         self.assertEqual(decision['status'], 'failed')
-        self.assertEqual(decision['output']['code'], 'router-input-changed')
+        self.assertEqual(decision['output']['code'], 'router-stop-unconfirmed')
+        self.assertEqual(self.own_receipt(board, decision)['result']['code'], 'router-input-changed')
         task = board.call('task_get', {'runId': decision['runId']})['task']
         self.assertFalse(task['shutdownConfirmed'])
         self.assertEqual(task['attemptState'], 'uncertain')
@@ -698,14 +711,16 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "malformed")
         self.assertEqual(decision["status"], "failed")
-        self.assertEqual(decision["output"]["code"], "invalid-native-result")
+        self.assertEqual(decision["output"]["code"], "router-stop-unconfirmed")
+        self.assertEqual(self.own_receipt(board, decision)["result"]["code"], "invalid-native-result")
+        self.assertFalse(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_native_error_envelope_fails_honestly(self):
         board = self.board()
         self.seed(board)
         decision = self.outcome(board, "error")
-        self.assertEqual(decision["status"], "failed")
+        self.assertEqual(decision["status"], "needs-host")
         self.assertIn("call-timeout", decision["error"])
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
@@ -779,10 +794,12 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["input"]["annotations"], [])
 
     def test_answer_shape_json_and_path_boundaries_keep_one_attempt_each(self):
-        board = self.board()
+        clock = FakeClock()
+        board = self.board(clock=clock)
         self.seed(board)
         for mode, code in (("answer_error", "answer-invalid-json"), ("answer_extra", "answer-shape"),
                            ("answer_bad_evidence", "answer-shape"), ("answer_escape", "answer-shape")):
+            clock.advance(601)
             with self.subTest(mode=mode):
                 decision = self.outcome(board, mode, request_id=mode)
                 self.assertEqual(decision["status"], "needs-host")
@@ -805,10 +822,12 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
     def test_budget_and_input_changed_are_separate_from_failures_and_abstentions(self):
-        board = self.board()
+        clock = FakeClock()
+        board = self.board(clock=clock)
         self.seed(board)
         for mode, code in (("budget", "router-budget-exhausted"), ("deadline", "router-budget-exhausted"),
                            ("input_changed", "router-input-changed")):
+            clock.advance(601)
             decision = self.outcome(board, mode, request_id=mode)
             self.assertEqual(decision["status"], "needs-host")
             self.assertEqual(decision["output"]["code"], code)
@@ -829,8 +848,10 @@ class DecisionFailureTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         decision = self.outcome(board, "protocol_error")
-        self.assertEqual(decision["status"], "failed")
+        self.assertEqual(decision["status"], "needs-host")
         self.assertEqual(decision["output"]["code"], "invalid-native-result")
+        self.assertEqual(self.own_receipt(board, decision)["result"]["code"], "invalid-native-result")
+        self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
 
     def test_routing_health_distinguishes_failure_abstention_and_success_without_writes(self):
         board = self.board()
@@ -954,7 +975,11 @@ class DecisionFailureTests(DecisionTestCase):
         late = self.decision(restarted, first["decisionId"])
         self.assertEqual(late["status"], "stale")
         self.assertIsNone(late["profileId"])
-        self.assertEqual(late["output"]["decision"]["reason"], "too late")
+        self.assertIsNone(late["output"])
+        with restarted.store.db.read() as connection:
+            receipt = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                                    (claim["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["decision"]["reason"], "too late")
         self.assertEqual(restarted.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_a_lost_reply_replays_without_re_executing_or_republishing(self):
@@ -1063,6 +1088,7 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "constraints", "requiredCapabilities",
                 "routerCalled",
                 "routingMode", "routerProfileId", "routerProfile", "routerProblem", "configurationRevision",
+                "routerProfileIds", "routerIdentities", "routerRetryIntervalSeconds", "routingBudget", "routerIndex", "routerTrials",
                 "usage",
                 "nativeIdentity",
                 "stopEvidence",
@@ -1077,7 +1103,10 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["selectedProfile"]["effort"], SECOND_PROFILE["effort"])
         self.assertEqual(compact["selectedProfile"]["adapter"], "dsh")
         self.assertEqual(compact["decisionModel"]["requested"]["model"], PROFILE["model"])
-        self.assertLess(len(json.dumps(compact)), 2400, "the default read includes frozen Router settings and bounded receipts but stays small")
+        # The ordered list and each dispatch's compact trial add explicit facts;
+        # the summary still omits the frozen model packet and raw tool stream.
+        self.assertLess(len(json.dumps(compact)), 3600, "the default read includes frozen Router settings and bounded receipts but stays small")
+        self.assertTrue({"input", "output", "requested", "toolEvidence"}.isdisjoint(compact))
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")
         self.assertEqual(audit["requested"]["task"], "fix the failing parser test")
