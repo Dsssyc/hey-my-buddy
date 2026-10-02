@@ -175,6 +175,7 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
     evidence = directory / invocation_name
     control = {
         "directory": str(invocation), "nativeRoot": str(invocation / "native"), "evidenceRoot": str(evidence),
+        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "account": context.runtime.get('account'),
         "cwd": str(cwd.resolve()), "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},

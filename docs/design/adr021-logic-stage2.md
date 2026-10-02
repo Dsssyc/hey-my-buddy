@@ -198,3 +198,5 @@ L4 完整检查前细化 L5-0B：四个原生事件面拆成独立 Codex、Claud
 0A 成果审查确认沙盒事实存 attempt 专属 meta，由 _attempt_tool_policy 读取并临时交给发布包装；这比改写 admission 的 input_json 更符合请求字节与 hash 冻结的不变量，Host 据此调整原计划。Host 补强 named reasoning/两个未知标识不能隐去真实调用、end-before-start 不得后来补成完整、零工具也需非空根身份；新增 tool_calls 只读计数供运行时累计预算、observe_incomplete(adapter,facts) 保留缺失 ID 的分类事实并置不完整，不捏造标识。原生非工具 reasoning 类型可省略工具标识；真实工具名 reasoning/thinking 归 other。普通 nativeIdentity 只允许实际 sessionId/threadId/turnId/inputId/callId 字符串字段；DSH 原生数值 turn/step 在桥接的关联检查中核对，未提供 turnId 时不合成。
 
 0B 的原生投影须先于旧过滤/拒绝路径观察事件；保留原生权限/有效策略、协议身份、预算、停止机制。既有 zeroToolVerified 可作为兼容名称的零调用事实保留，但不自行给允许类别结论；read_only.collect 和 DecisionAdapter 的重复工具政策门槛由 0B-Host 移至黑板唯一判定。只有协议/身份/原生执行无法继续时才报告实际控制器失败，分类事实仍保留；缺失 ID 用 observe_incomplete。Claude 缺逐帧 session_id 的根帧可由已确认 system/init 的单根流与 parent_tool_use_id 关联，子流不得继承根身份；Codex 缺 turnId 且无法证明当前根回合时作不完整，不能用后到事件猜测。
+
+0B 开工前核对发现快速入口的私有 control 还没有 taskId/attemptId/generation；Host 补入这三个已有程序身份，给证据 binding 使用，不传给模型 prompt/schema，不增加 Router 权限。四个投影任务只消费已经提交的同一接口。
