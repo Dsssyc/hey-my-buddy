@@ -604,6 +604,16 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(answer["profileId"], "legal")
         self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertFalse(context.turn_output_file().exists())
+        # The unified receipt: a quiet tool-free stream still binds the frozen
+        # attempt identity to a complete zero-tool evidence package.
+        control = json.loads((context.directory / "readonly-control.json").read_text())
+        evidence = result.result["toolEvidence"]
+        self.assertEqual(evidence["binding"], {"adapter": "claude", "taskId": "goal-1",
+                                               "attemptId": "attempt-1", "generation": 1})
+        self.assertEqual(evidence["nativeIdentity"], [{"sessionId": control["sessionId"]}])
+        self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (0, 0))
+        self.assertEqual(evidence["events"], [])
+        self.assertTrue(evidence["streamComplete"])
 
 
 if __name__ == "__main__":
