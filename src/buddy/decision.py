@@ -1265,7 +1265,7 @@ class DecisionCoordinator:
             return {"code": unverified, "reason": "Router publication requires unified tool evidence"}
         reported = output.get("nativeIdentity") if isinstance(output, dict) else None
         reported = reported if isinstance(reported, list) else ([reported] if isinstance(reported, dict) else None)
-        if reported is None:
+        if not reported:
             return {"code": unverified, "reason": "The receipt reports no native root identity"}
         expected_binding = {
             "adapter": (document.get("profile") or {}).get("adapter"),

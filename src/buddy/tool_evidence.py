@@ -74,12 +74,13 @@ NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
 }
 #: Model reasoning text is not a tool event in any harness.
 NON_TOOL_NAMES = frozenset({"reasoning", "thinking"})
+NATIVE_ID_FIELDS = frozenset({"sessionId", "threadId", "turnId", "inputId", "callId"})
 
 
 def _identity(value: Any, label: str = "nativeIdentity") -> dict:
     """One native-provided identity: only real string fields, never fabricated ones."""
-    if (not isinstance(value, dict) or not value
-            or any(not isinstance(key, str) or not key or not isinstance(item, str) or not item
+    if (not isinstance(value, dict) or not value or set(value) - NATIVE_ID_FIELDS
+            or any(not isinstance(item, str) or not item or len(item) > 512
                    for key, item in value.items())):
         raise BoardError("INVALID_ARGUMENT", f"{label} must be a nonempty object of native-provided string fields")
     return dict(value)
@@ -105,9 +106,9 @@ def _event(value: Any) -> dict:
         )
     identity = _identity(value.get("nativeIdentity"))
     call_id, tool_name = value.get("callId"), value.get("toolName")
-    if not isinstance(call_id, str) or not call_id:
+    if not isinstance(call_id, str) or not call_id or len(call_id) > 512:
         raise BoardError("INVALID_ARGUMENT", "callId must be a nonempty string")
-    if not isinstance(tool_name, str) or not tool_name:
+    if not isinstance(tool_name, str) or not tool_name or len(tool_name) > 512:
         raise BoardError("INVALID_ARGUMENT", "toolName must be a nonempty string")
     if value.get("category") not in ACP_CATEGORIES:
         raise BoardError("INVALID_ARGUMENT", "category must be an ACP tool-call category")
@@ -127,11 +128,10 @@ def _classify(table: dict[str, str], name: Any, native_type: Any) -> str | None:
     named = [value for value in (name, native_type) if isinstance(value, str) and value]
     if not named:
         raise BoardError("INVALID_ARGUMENT", "a tool event must carry its native toolName or type")
-    if all(value in NON_TOOL_NAMES for value in named):
-        return None
     if len(named) == 1:
         return table.get(named[0], "other")
-    return table.get(named[0]) if table.get(named[0]) == table.get(named[1]) else "other"
+    first, second = (table.get(value, "other") for value in named)
+    return first if first == second else "other"
 
 
 def normalize_tool_event(adapter: Any, native_event: Any) -> dict | None:
@@ -149,6 +149,10 @@ def normalize_tool_event(adapter: Any, native_event: Any) -> dict | None:
         raise BoardError("UNSUPPORTED_ADAPTER", f"No fixed tool classification for adapter {adapter!r}")
     if not isinstance(native_event, dict):
         raise BoardError("INVALID_ARGUMENT", "native_event must be an object")
+    # A named call is still a call, even if its name is "reasoning". Only
+    # native reasoning item types, with no tool name, describe non-tool text.
+    if not native_event.get("toolName") and native_event.get("type") in NON_TOOL_NAMES:
+        return None
     identity = _identity(native_event.get("nativeIdentity"))
     call_id = native_event.get("callId")
     if not isinstance(call_id, str) or not call_id:
@@ -190,6 +194,38 @@ class ToolEventEvidence:
         self._finished = False
         self._late = False
         self._truncated = False
+        self._incomplete = False
+
+    @property
+    def tool_calls(self) -> int:
+        """Observed unique starts, available while enforcing cumulative budgets."""
+        return sum(1 for call in self._calls.values()
+                   if any(phase == "start" for _fact, phase in call["pairs"]))
+
+    def observe_incomplete(self, adapter: str, native_event: dict) -> None:
+        """Keep a broken native tool fact without inventing its missing IDs.
+
+        Controllers call this after normalization cannot form a complete event.
+        Retained fields are bounded facts; invalid IDs remain absent and the
+        stream cannot pass judgment, even if it subsequently closes normally.
+        """
+        self._incomplete = True
+        if self._finished:
+            self._late = True
+        native_event = native_event if isinstance(native_event, dict) else {}
+        def bounded(value):
+            return value if isinstance(value, str) and 0 < len(value) <= 512 else None
+        identity = native_event.get("nativeIdentity")
+        identity = {key: bounded(value) for key, value in identity.items()
+                    if key in NATIVE_ID_FIELDS and bounded(value)} if isinstance(identity, dict) else {}
+        name, native_type = bounded(native_event.get("toolName")), bounded(native_event.get("type"))
+        try:
+            category = _classify(NATIVE_TOOL_CATEGORIES.get(adapter, {}), name, native_type)
+        except BoardError:
+            category = "other"
+        self._retain({"nativeIdentity": identity, "callId": bounded(native_event.get("callId")),
+                      "toolName": name or native_type, "category": category or "other",
+                      "phase": native_event.get("phase") if native_event.get("phase") in TOOL_EVENT_PHASES else None})
 
     def observe(self, event: dict) -> None:
         """Record one normalized event; identical projections collapse, conflicts stay."""
@@ -233,15 +269,15 @@ class ToolEventEvidence:
         return self._package()
 
     def _package(self) -> dict:
-        started = sum(1 for call in self._calls.values() if any(phase == "start" for _fact, phase in call["pairs"]))
+        started = self.tool_calls
         unsettled = sum(1 for call in self._calls.values()
                         if {phase for _fact, phase in call["pairs"]} == {"start"})
         return {
             "version": TOOL_EVIDENCE_VERSION,
             "binding": dict(self.binding),
             "nativeIdentity": [dict(identity) for identity in self._root_identities],
-            "streamComplete": bool(self._stream_reported) and not self._late,
-            "events": [dict(event) for event in self._events],
+            "streamComplete": bool(self._stream_reported) and not self._late and not self._incomplete,
+            "events": [{**event, "nativeIdentity": dict(event["nativeIdentity"])} for event in self._events],
             "toolCalls": started,
             "unsettledToolCalls": unsettled,
             "truncated": self._truncated,
@@ -262,7 +298,7 @@ def _structural_problem(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
     if (type(evidence["toolCalls"]) is not int or evidence["toolCalls"] < 0
             or type(evidence["unsettledToolCalls"]) is not int or evidence["unsettledToolCalls"] < 0
             or type(evidence["streamComplete"]) is not bool or type(evidence["truncated"]) is not bool
-            or not isinstance(identities, list) or not isinstance(events, list)):
+            or not isinstance(identities, list) or not identities or not isinstance(events, list)):
         return "the tool evidence summary fields have the wrong types"
     try:
         _binding(evidence["binding"])
@@ -291,8 +327,15 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
     allowed = (SANDBOXED_REVIEW_CATEGORIES if has_system_sandbox else UNSANDBOXED_REVIEW_CATEGORIES) \
         if mode == "review" else frozenset()
     calls: dict[tuple[str, str], dict] = {}
+    opened = set()
+    end_before_start = False
     for event in evidence["events"]:
-        call = calls.setdefault((canonical_json(event["nativeIdentity"]), event["callId"]),
+        key = (canonical_json(event["nativeIdentity"]), event["callId"])
+        if event["phase"] == "start":
+            opened.add(key)
+        elif key not in opened:
+            end_before_start = True
+        call = calls.setdefault(key,
                                 {"facts": set(), "phases": set()})
         call["facts"].add((event["toolName"], event["category"]))
         call["phases"].add(event["phase"])
@@ -307,7 +350,7 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
         for call in calls.values():
             if len(call["facts"]) == 1 and next(iter(call["facts"]))[1] not in allowed:
                 return TOOLS_FORBIDDEN
-    if evidence["truncated"] or not evidence["streamComplete"]:
+    if evidence["truncated"] or not evidence["streamComplete"] or end_before_start:
         return TOOL_EVIDENCE_UNVERIFIED
     for event in evidence["events"]:
         if not any(event["nativeIdentity"] == root for root in evidence["nativeIdentity"]):

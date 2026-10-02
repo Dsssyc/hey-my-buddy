@@ -76,10 +76,18 @@ class NormalizeToolEventTests(unittest.TestCase):
                     self.assertEqual(event["category"], "other")
 
     def test_reasoning_text_is_not_a_tool_event(self):
-        for fact in (native_fact("reasoning"), native_fact("thinking"),
+        for fact in ({"type": "reasoning"}, {"type": "thinking"},
                      {"nativeIdentity": dict(IDENTITY), "callId": "call-1", "type": "reasoning", "phase": "start"}):
             with self.subTest(fact=fact):
                 self.assertIsNone(tool_evidence.normalize_tool_event("codex", fact))
+
+    def test_named_calls_cannot_hide_as_reasoning_or_two_unknown_identifiers(self):
+        for fact in (native_fact("reasoning"), native_fact("thinking"),
+                     native_fact("unknown", type="another-unknown")):
+            event = tool_evidence.normalize_tool_event("codex", fact)
+            self.assertEqual(event["category"], "other")
+            self.assertEqual(tool_evidence.judge_tool_evidence(collect([event]), "fast", True),
+                             tool_evidence.TOOLS_FORBIDDEN)
 
     def test_name_and_type_disagreement_settles_as_other(self):
         disagreements = (
@@ -128,6 +136,34 @@ class NormalizeToolEventTests(unittest.TestCase):
 
 
 class ToolEventEvidenceTests(unittest.TestCase):
+    def test_missing_native_ids_are_retained_without_inventing_a_call(self):
+        tracker = tool_evidence.ToolEventEvidence(BINDING)
+        tracker.observe_incomplete("codex", {"toolName": "shell", "phase": "start",
+                                             "arguments": {"text": "private body"}})
+        package = tracker.finish([IDENTITY], True)
+        self.assertEqual(package["events"], [{"nativeIdentity": {}, "callId": None,
+                         "toolName": "shell", "category": "execute", "phase": "start"}])
+        self.assertFalse(package["streamComplete"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_live_start_count_and_returned_snapshot_do_not_change_stored_facts(self):
+        tracker = tool_evidence.ToolEventEvidence(BINDING)
+        start, end = settled_events("read")
+        tracker.observe(start)
+        self.assertEqual(tracker.tool_calls, 1)
+        tracker.observe(start)
+        self.assertEqual(tracker.tool_calls, 1)
+        tracker.observe(end)
+        package = tracker.finish([IDENTITY], True)
+        package["events"][0]["nativeIdentity"]["sessionId"] = "changed-by-caller"
+        self.assertEqual(tracker.finish([IDENTITY], True)["events"][0]["nativeIdentity"], IDENTITY)
+
+    def test_an_end_before_its_start_never_becomes_complete(self):
+        package = collect(list(reversed(settled_events("read"))))
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
     def test_package_carries_exactly_the_fixed_fields(self):
         package = collect(settled_events("read"))
         self.assertEqual(set(package), tool_evidence.PACKAGE_FIELDS)
@@ -327,7 +363,8 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         package = collect(settled_events("read"), roots=[])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(collect([], roots=[]), "fast", False))
+        self.assertEqual(tool_evidence.judge_tool_evidence(collect([], roots=[]), "fast", False),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -170,6 +170,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         result, claim = self.request_route(board, "missing")
         package = self.package_for(claim, result, settled("read", "call-1", tool="read"))
         for output in ({"nativeIdentity": ROOT}, {"toolEvidence": package},
+                       {"nativeIdentity": [], "toolEvidence": package},
                        {"nativeIdentity": [SECOND_ROOT], "toolEvidence": package}):
             with self.subTest(output=output):
                 problem = self.problem(board, result["decisionId"], output)
