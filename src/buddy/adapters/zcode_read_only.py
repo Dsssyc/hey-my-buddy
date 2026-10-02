@@ -28,7 +28,7 @@ import secrets
 from .read_only import correction_code, no_tool_prompt, valid_answer
 from .zcode_protocol import NativeConnection, NativeError
 from .zcode_runner import NoToolEvidence, configure_session
-from .zcode_static_contract import allowlist_chain_problem, lexical_regions
+from .zcode_static_contract import allowlist_chain_problem, metadata_contract_problem
 from .zcode_tool_evidence import ZcodeToolFacts
 
 #: The exact restricted tool set; the native registry filters registrations to
@@ -96,58 +96,9 @@ def native_contract_problem(source_text) -> str | None:
     # The schema, mode-enum and tool-registration discoveries share the same
     # outer code context as the allowlist chain: nothing found inside a
     # string, comment, template or regex literal proves a mechanism.
-    regions = lexical_regions(source_text)
-    schema = _strict_session_schema(source_text, regions)
-    if schema is None:
-        return "the public bundle has no strict session/create schema carrying the restriction fields"
-    problem = _schema_mode_problem(source_text, schema, regions)
-    if problem is not None:
-        return problem
-    return allowlist_chain_problem(source_text) or _registration_problem(source_text, regions)
+    return (metadata_contract_problem(source_text, _SCHEMA_FIELDS, READ_ONLY_TOOLS)
+            or allowlist_chain_problem(source_text))
 
-
-def _strict_session_schema(text: str, regions) -> str | None:
-    """One ``m.object`` schema carrying every restriction field, closed strict."""
-    for marker in regions.code_matches(re.compile("titleGenerationEnabled")):
-        start = text.rfind("m.object({", max(0, marker.start() - 800), marker.start())
-        if start < 0 or not regions.is_code(start):
-            continue
-        end = text.find("}).strict()", marker.end())
-        if end < 0 or not regions.is_code(end) or end - start > 1600:
-            continue
-        body = text[start:end]
-        if all(re.search(r"(?<![A-Za-z0-9_])" + re.escape(field) + r"\s*:", body)
-               for field in _SCHEMA_FIELDS):
-            return body
-    return None
-
-
-def _schema_mode_problem(text: str, schema: str, regions) -> str | None:
-    member = re.search(r"(?<![A-Za-z0-9_])mode\s*:\s*([\w$]+)\.optional\(\)", schema)
-    if member is None:
-        return "the session/create schema binds mode to no named enum schema"
-    for enum in regions.code_matches(
-            re.compile(re.escape(member.group(1)) + r"\s*=\s*m\.enum\(\[([^\]]*)\]\)")):
-        if re.search(r'"plan"', enum.group(1)):
-            return None
-        return "the session/create mode enum does not offer plan"
-    return "the session/create mode is not bound to an enum in the public bundle"
-
-
-def _registration_problem(text: str, regions) -> str | None:
-    for name in READ_ONLY_TOOLS:
-        # The span stops at the metadata object's first closing brace, so the
-        # read-only flag is judged within this registration alone.
-        registered = None
-        for match in regions.code_matches(
-                re.compile(r'metadata\s*:\s*\{\s*name\s*:\s*"' + name + r'"[^{}]{0,400}')):
-            registered = match
-            break
-        if registered is None:
-            return f"the {name} built-in tool is not registered in the public bundle"
-        if not re.search(r"readOnly\s*:\s*!0", registered.group(0)):
-            return f"the {name} built-in tool is not registered as read-only in the public bundle"
-    return None
 
 
 class ReadOnlyEvidence:

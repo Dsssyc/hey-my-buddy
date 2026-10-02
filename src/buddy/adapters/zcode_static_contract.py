@@ -1400,6 +1400,7 @@ class _Bundle:
         self._scopes = None
         self._writes = {}
         self._write_index = None
+        self.proof_names = set()
 
     def scopes(self):
         if self._scopes is None:
@@ -1423,6 +1424,7 @@ class _Bundle:
         rather than a missing function. A name with no definition or several
         located definitions is ambiguous and fails closed at the caller.
         """
+        self.proof_names.add(name)
         if name not in self._sites:
             found = []
             pattern = re.compile(r"(?<![\w$])function\s+" + re.escape(name) + r"\s*\(")
@@ -1495,6 +1497,34 @@ class _Bundle:
                 index.setdefault(match.group(1), []).append(match.start(1))
             for match in self.regions.code_matches(self._WRITE_PREFIX):
                 index.setdefault(match.group(1), []).append(match.start(1))
+            # Assignment patterns are writes even without a declaration keyword.
+            # ScopeMap parses binding targets; its lexical regions exclude keys,
+            # comments and literal contents from that target walk.
+            stack = []
+            self._pattern_writes = set()
+            for position, char in self.regions.events(0):
+                if char in "[{":
+                    stack.append((position, char))
+                elif char in "]}" and stack:
+                    start, opener = stack.pop()
+                    if (opener, char) not in (("[", "]"), ("{", "}")):
+                        continue
+                    following = self._skip_write_ws(position + 1)
+                    if (self.text[following:following + 1] == "="
+                            and self.text[following + 1:following + 2] not in ("=", ">")):
+                        # Collect targets conservatively. Object property keys
+                        # are excluded; unreadable defaults cannot establish
+                        # that a proof dependency stayed untouched.
+                        try:
+                            tokens = list(_token_iter(self.text, start + 1, position))
+                        except _ParseError:
+                            tokens = []
+                        for offset, token in enumerate(tokens):
+                            if token[0] != "id" or (offset + 1 < len(tokens) and tokens[offset + 1][1] == ":"):
+                                continue
+                            name = token[1]
+                            index.setdefault(name, []).append(start)
+                            self._pattern_writes.add((name, start))
             self._write_index = index
         return self._write_index
 
@@ -1510,8 +1540,10 @@ class _Bundle:
         """
         if name in self._writes:
             return self._writes[name]
-        events = [(position, self._classify_write(name, position))
-                  for position in self.write_index().get(name, ())]
+        candidates = self.write_index().get(name, ())
+        events = [(position, "destructure" if (name, position) in self._pattern_writes
+                   else self._classify_write(name, position))
+                  for position in candidates]
         scopes = self.scopes()
         for position in scopes.for_writes.get(name, ()):
             events.append((position, "update"))
@@ -1576,6 +1608,10 @@ class _Bundle:
                     for width in (4, 3, 2):
                         if self.text[j:j + width] in _COMPOUND_PUNCT:
                             return "compound"
+                    if self.text[j:j + 1] == "(":
+                        # A computed method can mutate a proved Set/array; its
+                        # dynamic key cannot establish a read-only operation.
+                        return "mutate"
                     return "read"
             i += 1
         return "compound"  # the index could not be resolved: fail closed
@@ -1638,30 +1674,35 @@ class _Bundle:
         if following is not None and not (following[0] == "punct"
                                           and following[1] in _RHS_TERMININATORS):
             return None
-        return self._constant_of_node(node, depth)
+        env = self.chain_bindings(position)
+        return None if env is None else self._constant_of_node(node, depth, env)
 
-    def _constant_of_node(self, node, depth: int):
+    def _constant_of_node(self, node, depth: int, env=frozenset()):
         if node[0] in ("str", "num"):
             return (node[0], node[1])
         if node[0] == "array":
-            return self._constant_list(node, depth)
+            return self._constant_list(node, depth, env)
         if node[0] == "new" and node[1] == ("id", "Set") and len(node[2]) == 1:
+            if "Set" in env:
+                return None
             argument = node[2][0]
-            inner = (self._constant_list(argument, depth) if argument[0] == "array"
-                     else self.constant(argument[1], depth + 1) if argument[0] == "id" else None)
+            inner = (self._constant_list(argument, depth, env) if argument[0] == "array"
+                     else self.constant(argument[1], depth + 1) if argument[0] == "id" and argument[1] not in env else None)
             if inner is None or inner[0] != "list":
                 return None
             return ("set", frozenset(inner[1]))
         if node[0] == "id":
-            return self.constant(node[1], depth + 1)
+            return None if node[1] in env else self.constant(node[1], depth + 1)
         return None
 
-    def _constant_list(self, node, depth: int):
+    def _constant_list(self, node, depth: int, env=frozenset()):
         elements = []
         for element in node[1]:
             if element[0] == "str":
                 elements.append(element[1])
             elif element[0] == "id":
+                if element[1] in env:
+                    return None
                 inner = self.constant(element[1], depth + 1)
                 if inner is None or inner[0] != "str":
                     return None
@@ -2547,6 +2588,91 @@ def allowlist_chain_problem(text: str) -> str | None:
     problem = _resolver_problem(bundle, resolver)
     if problem is not None:
         return problem
-    if bundle.name_writes(register) or bundle.name_writes(resolver):
+    if bundle.sites("Set") or any(bundle.name_writes(name) for name in bundle.proof_names | {"Set"}):
         return _REASSIGNED
     return _wiring_problem(bundle, register, resolver, context)
+
+
+def _object_members(node):
+    """A complete ordinary object with unique, known keys, or no proof."""
+    if node[0] != "object" or any(key is None for key, _ in node[1]):
+        return None
+    members = dict(node[1])
+    return members if len(members) == len(node[1]) else None
+
+
+def _optional_value(node):
+    if node[0] == "call" and node[2] == () and node[1][0] == "member" and node[1][2:] == ("optional", False):
+        return node[1][1]
+    return None
+
+
+def _expression_at(text, start, limit=4096):
+    try:
+        return _Parser(_token_iter(text, start, min(len(text), start + limit))).parse_ternary()
+    except _ParseError:
+        return None
+
+
+def metadata_contract_problem(text: str, schema_fields, tool_names, *, regions=None) -> str | None:
+    """Verify real strict schema members, enum literals and tool metadata tokens."""
+    regions = regions or lexical_regions(text)
+    schema = None
+    builder = None
+    for match in regions.code_matches(re.compile(r"(?<![\w$.])([\w$]+)\.object\s*\(")):
+        node = _expression_at(text, match.start(), 2048)
+        if (node is None or node[0] != "call" or node[2] != ()
+                or node[1][0] != "member" or node[1][2:] != ("strict", False)):
+            continue
+        object_call = node[1][1]
+        candidate_builder = match.group(1)
+        if (object_call[0] != "call" or object_call[1] != _member(("id", candidate_builder), "object")
+                or len(object_call[2]) != 1):
+            continue
+        members = _object_members(object_call[2][0])
+        if members is None or not set(schema_fields) <= set(members):
+            continue
+        booleans = ("titleGenerationEnabled", "offPeakToolEnabled", "dynamicWorkflowEnabled")
+        arrays = ("mcpServers", "toolAllowlist", "toolDenylist")
+        if any(_optional_value(members[key]) != ("call", _member(("id", candidate_builder), "boolean"), ()) for key in booleans):
+            continue
+        array_values = [_optional_value(members[key]) for key in arrays]
+        if any(value is None or value[0] != "call"
+               or value[1] != _member(("id", candidate_builder), "array")
+               or len(value[2]) != 1 or value[2][0][0] != "id" for value in array_values):
+            continue
+        schema, builder = members, candidate_builder
+        break
+    if schema is None:
+        return "the public bundle has no strict session/create schema carrying the restriction fields"
+    mode = _optional_value(schema["mode"])
+    if mode is None or mode[0] != "id":
+        return "the session/create schema binds mode to no named enum schema"
+    found_enum = False
+    enum_pattern = re.compile(r"(?<![\w$.])" + re.escape(mode[1]) + r"\s*=\s*")
+    for match in regions.code_matches(enum_pattern):
+        node = _expression_at(text, match.end())
+        if (node is None or node[0] != "call" or node[1] != _member(("id", builder), "enum")
+                or len(node[2]) != 1 or node[2][0][0] != "array"
+                or any(value[0] != "str" for value in node[2][0][1])):
+            return "the session/create mode is not bound to an enum in the public bundle"
+        if "plan" not in {value[1] for value in node[2][0][1]}:
+            return "the session/create mode enum does not offer plan"
+        found_enum = True
+    if not found_enum:
+        return "the session/create mode is not bound to an enum in the public bundle"
+    tools = {name: [] for name in tool_names}
+    for match in regions.code_matches(re.compile(r"(?<![\w$.])metadata\s*:\s*")):
+        node = _expression_at(text, match.end(), 1024)
+        members = _object_members(node) if node is not None else None
+        if members is None:
+            continue
+        name = members.get("name")
+        if name is not None and name[0] == "str" and name[1] in tools:
+            tools[name[1]].append(members.get("readOnly") in (("unary", "!", ("num", "0")), ("lit", "true")))
+    for name, flags in tools.items():
+        if not flags:
+            return f"the {name} built-in tool is not registered in the public bundle"
+        if not all(flags):
+            return f"the {name} built-in tool is not registered as read-only in the public bundle"
+    return None
