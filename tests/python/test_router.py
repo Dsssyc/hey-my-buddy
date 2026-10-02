@@ -5,6 +5,7 @@ import json
 from buddy import router
 from buddy.adapters.dsh import DshAdapter
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 
 
 class RouterContractTests(unittest.TestCase):
@@ -77,7 +78,7 @@ class RouterPublicationTests(WorkflowTestCase):
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
         board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
-        result = {'status': 'error' if code else 'ok', 'operation': 'select',
+        result = {**claim_tool_receipt(claim), 'status': 'error' if code else 'ok', 'operation': 'select',
                   'tableRevision': claim['decisionInput']['tableRevision'],
                   'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},

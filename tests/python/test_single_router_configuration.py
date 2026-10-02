@@ -1,4 +1,5 @@
 """Human settings patches and upgrade-required reads on private boards."""
+from unittest.mock import patch
 from buddy.errors import BoardError
 from support import BoardTestCase
 
@@ -46,7 +47,10 @@ class SingleRouterConfigurationTests(BoardTestCase):
     def test_mode_patch_checks_the_merged_router_and_rolls_back(self):
         self.configure({'routerProfileId': PROFILE}, enable=True)
         before = self.settings()
-        with self.assertRaises(BoardError) as caught:
+        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+                'eligible': False, 'reasonCode': 'readonly-tools-unrestricted',
+                'reason': 'fixture lost its restriction', 'systemSandbox': False,
+                'sameAttemptContinuation': False}), self.assertRaises(BoardError) as caught:
             self.configure({'defaultRoutingMode': 'review'})
         self.assertEqual(caught.exception.code, 'UNSUPPORTED')
         self.assertEqual(self.settings(), before)
