@@ -159,7 +159,7 @@ Host 自己承担计划与模块记录、参考文档、`accept`/`conclude` 帮�
 
 委派只跑其表内的独立检查和受影响回归，所有 Python 检查经 `uv run --frozen` 使用本 checkout 与 test harness，复用 `buddy.checks.test_environment` 清除继承的 runtime/Worker/账户/代理环境；不手工给测试指向日常目录。重点回归文件包括 `test_routing_modes.py`、`test_router.py`、`test_decision.py`、`test_workflow_routing.py`、`test_user_policy.py`、`test_selection_policy.py`、`test_cli.py`、`test_no_tool_{dsh,zcode,codex}.py` 及各 harness 的现有 controller/protocol/私有目录测试；准确新增测试文件由任务产物固定，测试运行命令与结果保存在各任务日志中。
 
-被改写的 `test_routing_modes` 旧用例需一一对照：两个位置的补丁保留改为单一设置中省略字段保留；旧按证书分槽改为纯转换保留原默认位置；审阅不可用时 fallback 改为同一 Host 边界且没有 Router/Worker 启动；claim 改派家族改为失效时不产生其他家族的 attempt；preflight 重排改为确认停止后边界且无第二个 attempt；回放冻结、零工具证据、预算和 schema 不变继续保留。`test_harness_review`/review probe 中仅验证证书授权的情形随功能退役，以入口拒绝和无自动 paid work 替代；原生流完整性、政策回报、工具越界、身份、预算、停止、目录/日志留存与敏感信息剔除迁移到新运行校验。每个被删除或改名的测试在 L4 验收中给出原 ID、新 ID 或退役依据，不能只列数量。
+被改写的旧用例仍逐一对照：省略补丁保留、严格设置、无模型资格、回放冻结、输入 hash、零工具/统一证据、预算、schema、容量/停止/generation 防护保留；纯转换改为两个位置都留下并检查默认位置在前。旧单项不可用/preflight 无第二 attempt 的情形改为单元素列表仍无替代；新增多元素列表时相同模式后移、确认停止后独立 task 和实际家族冻结。有效无法选择/输入变动/取消/停止未知仍证明没有第二执行，冻结外回答与后来候选失效分别覆盖。已退役证书授权情形的入口拒绝与无自动 paid work 不恢复。每个被删除或改名的测试在 L4 补充验收中给出原 ID、新 ID 或退役依据，不能只列数量。
 
 Host 验收每个委派时，读取固定 artifact 的 diff 与风险 hunk，确认改动范围，亲自跑相应测试；不能只读 Worker 的成功总结。迁移了防护的测试，选取代表性故障使其确实失败（例如去掉工具白名单、取消输入 digest 检查、放回 fallback），在隔离的测试副本/补丁中验证，再恢复固定产物；不写只复制实现分支的测试。所有旧情形仍须有覆盖或明确的功能退役理由。
 
