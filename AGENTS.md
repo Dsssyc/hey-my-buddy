@@ -8,7 +8,7 @@ Read [architecture](docs/reference/architecture.md) and [ADR-007](docs/decisions
 
 The Python service owns authoritative SQLite state. Workers own child handles and durable receipts over named C-Two operations. Preserve task/attempt identity, idempotency, transaction/event atomicity, owner fencing, fixed artifact bindings and actual shutdown evidence. Unknown never means stopped. Host and Worker edits require explicit workspace ownership; independent writers use isolated worktrees.
 
-Read [ADR-023](docs/decisions/023-harness-integration-principles.md) before adding a harness, making several harnesses share a behavior, or setting what a role requires of a harness. It requires using each harness's native mechanisms instead of rebuilding its tools, recording differences as declared capabilities, and keeping consistency in normalized evidence that the service judges.
+Read [ADR-023](docs/decisions/023-harness-integration-principles.md) before adding a harness, making several harnesses share a behavior, or setting what a role requires of a harness. It requires using each harness's native mechanisms instead of rebuilding its tools, recording differences as declared capabilities, keeping consistency in normalized evidence that the service judges, reusing an execution path the harness already runs instead of building a second one for a role, and limiting eligibility checks to confirming that a capability exists.
 
 The shared `buddy` skill is the only distribution ([ADR-015](docs/decisions/015-shared-agent-skill-distribution.md)). The source carries no compatibility facades for retired plugin paths, CLI aliases, legacy Node records, fingerprints or socket guards, or historical schema conversions.
 
