@@ -1,14 +1,20 @@
 # ADR-021 逻辑第二阶段收尾
 
-分支 socu/adr021-logic-stage2，仅在 Host 独立 worktree 工作；未推送，未修改 main、socu/buddy-core 或其他会话的检出，未开始 L7 及以后。执行计划 [adr021-logic-stage2.md](../design/adr021-logic-stage2.md)，模块记录 [L4](l4-adr021.md)、[L5](l5-adr021.md)、[L6](l6-adr021.md)。
+分支 socu/adr021-logic-stage2，Host 独立 worktree；未推送，未修改 main、socu/buddy-core 或其他会话检出，未开始新 L6、L7 及以后。合入最新 core 26f9dd0 的方向与术语决定。执行计划 [adr021-logic-stage2.md](../design/adr021-logic-stage2.md)，模块记录 [L4](l4-adr021.md)、[L5](l5-adr021.md)、[移出的 L6](l6-adr021.md)。备查分支 socu/adr021-review-carrier-reference 固定在 15be750，保留旧通道、静态证明及全部历史专属检查，没有创建运行服务或安装它。
 
-L4 有序列表与 shared current_router、同请求停后切换、分 Router 健康和 Host 四类边界信息已完成；L5 四适配器公共事实/黑板判定与 DSH 原生工具桥已完成；L6 受限原生协议与 controller 接线、免费资格已完成模拟和 Source 验证。DSH 原生未验证，待单次批准；ZCode 一次付费模型回合的验收失败，后续免费修正没有再调用模型，完整原生通过证据仍缺。
+实际交付是 L4 全部与 L5 统一工具证据及四个 harness 已验收的事件投影。DSH/ZCode 的专用只读 Node 桥、Python controller、ZCode 受限协议和静态证明及专属测试已移出，真实审阅资格返回 readonly-worker-carrier-unimplemented。普通 Worker、fast、公共投影与黑板唯一判定保留。最新 ADR 改为复用 Worker 载体，另起阶段先设计；本阶段不再原生检查或静态核对。停止时没有原生进程运行，新准备的 DSH 第三包/ZCode 第五包未执行。
 
-最近一次完整检查（补原生生命周期前）通过 2456 Python（skip 1，164/164 文件）、125 Node；Console 659 项、typecheck/build 通过。原生生命周期免费修正后的最终结果将在检查退出后填录；运行期间 worktree 冻结。原始日志 tmp/adr021-stage2/。
+移除后 101 项资格/公共投影/fast/发布回归通过；223 项 Router/打包首轮只有 12 个 review 切换场景依赖已撤下的真实资格而失败，改为全测试期间使用私有 capability shim 后 90 项切换回归通过，原断言和故障情形未删。免费资格/健康 7 项再次通过。最终完整结果待冻结检查退出后填录；此前 2456 Python/125 Node 是移出前的事实，不作为本次完整通过。Console 最小适配已有 659 项、typecheck/build 通过，此次不改前端；原始日志 tmp/adr021-stage2/。
 
-委派时长取黑板 durable turn 的创建至实际停止结果跨度，含其准备；不以 Host 等待或 monitor 运行时长代替。所有已终结的检出已按验收/失败结论回收，失败或取消不标为验收。
+当前原生证据：Codex 本阶段一次通过（16.289 秒，2 个 execute 调用）；Claude Code 一次完成真实读取和结构化回合，但 StructuredOutput 被分类为 other，且未回传随机 marker，检查失败（13.048 秒）。DSH 两次在模型前失败，ZCode 四个已执行包一包模型前失败、三包进入模型但未完整通过；最后一包已经有 Read start/end。所有已执行包的输入未改、实际停止/框架回收确认，读取字节与未提供的 applied-effort/served-model 证明保持未知。失败不改写为验收，也不为通过滤掉事件或改变 ADR。
 
-| 委派 | 时长 | 结果 |
+主要模块提交：L4 基础 98a9716/94f25cd/dc2c047/cdfc1b3/a841dad，加 2019db0 的 note 帮助；有序列表 9be9aa1/9d2d64b/7195fdf/3e836e0/2855666/f408fa2/3b41076/20ad8ba/8df231e/d595e30/e41a932/a8886d8。L5 公共事实与四投影 0fe9491/e3dd4ea/621ae33/55f0302/a867ffe/e184e2a，发布接线 4a2da11，后续投影 9755ab7/9ef733b/f421c46。移出的 DSH 通道 7e5e765/70e1fd4/639163b/df8c222，ZCode/静态从 8a436df 至 4b46316 的相关实现及 15be750；完整保存在备查分支。方向合入 503190d、收尾计划 7471bb5、移除与资格/回归 87f042b；8aabc08 只补四 harness 探针与 Claude 的真实零纠正事实，未重做原生工具或沙盒。下面的完整列表包含过程提交；已移出的代码不算最终交付。
+
+设计选择和中途修订：单个 Router 改为有序列表与默认 600 秒重试，旧两位置均保留；current_router 共用一个入口，跳过从不可变记录推出，不新增熔断状态；同请求每项独立 dispatch，实际停止确认后推进，全局模式/预算不降级；G 拆请求边界与认领/发布，R4 拆纯分类与推进，R5 拆纯模板与读取；四种适配器只记录事实，黑板唯一判定。早先给 DSH/ZCode 建专用通道和厂商代码静态证明的选择已被用户新决定撤下，后续复用 Worker。只改变人类用词为宏任务/微任务，接口/存储重命名留 L14，SKILL/Host 指南/README 留 L16，界面设计留 U1/U6。未做日常迁移、登录/退出、密钥修改或凭据文件检查。
+
+微任务时长取黑板 durable Worker turn 的创建至实际停止结果跨度，含准备；不以 Router、Host 审查或 monitor 等待时长代替，没有 Worker 回合为 0。所有本宏任务已终结的受管检出按验收/失败结论回收，子分支删除；不碰其他宏任务的检出。收尾 R8A–R8E 由 Host 单写，没有新增 Worker 微任务。只读审查使用用户允许的 Codex subagent；它们不承担写入或原生检查。
+
+| 微任务 | 时长 | 结果 |
 | --- | ---: | --- |
 | L4-A | 0 分 0 秒 | 失败/拒绝结论记录并回收 |
 | L4-B | 0 分 0 秒 | 失败/拒绝结论记录并回收 |
@@ -37,10 +43,13 @@ L4 有序列表与 shared current_router、同请求停后切换、分 Router �
 | L6-A5 | 55 分 1 秒 | 验收并回收 |
 | L6-B | 33 分 12 秒 | 失败/拒绝结论记录并回收 |
 
-提交清单采用本分支 first-parent 顺序；core merge 只合到 Host 分支。L4 基础实现从 98a9716 至 d450a11，列表补充从 9be9aa1 起含 R2/R3/R4/R5/R6 与 e41a932/a8886d8；L5 从 0fe9491 至 f766887 的公共事实、四投影与 DSH 实现（其中穿插 L6 设计/core merge）；L6 为 8a436df/d0cf78b/9975af8/04b778a 的保留输入、A5/A6 后续修正，以及 4cae8a4/e73979f/6eac76a/4b46316/9755ab7 的协议/controller，未把早先拒绝的委派误写为已验收。下面保留全部计划、实现、测试、记录提交，模块以标题和相应记录为准。
+提交清单按本分支 first-parent 顺序，core 合并只发生在 Host 分支；验收填录数字的最后提交另见最终报告。
 
 | 提交 | 内容 |
 | --- | --- |
+| 89a498b | docs: design ADR-021 logic stage two execution plan |
+| e63cdc5 | Merge branch 'socu/buddy-core' into socu/adr021-logic-stage2 |
+| b51406f | docs: align stage-two plan with sandbox tiers and central evidence judgement |
 | 2c79165 | docs: clarify installed workspace input selection for delegations |
 | d633fd8 | Merge branch 'socu/buddy-core' into socu/adr021-logic-stage2 |
 | 98a9716 | feat: define single Router settings and explicit upgrade conversion |
@@ -142,3 +151,17 @@ L4 有序列表与 shared current_router、同请求停后切换、分 Router �
 | fbccd32 | docs: record ZCode controller acceptance and pre-model probe failure |
 | e1f5a40 | docs: record paid ZCode failure and native tool lifecycle projection gap |
 | 9755ab7 | fix: project native ZCode tool lifecycle and correlated intermediate frames |
+| 87c9db4 | docs: record native ZCode failure and complete stage 2 commit and delegation ledger |
+| 55ee226 | docs: design bounded native startup and lifecycle follow-up repairs |
+| 767a7a0 | docs: record authorized native repair and verification scope |
+| df8c222 | fix: wait for native DSH factory and provider startup within the review deadline |
+| 9ef733b | fix: correlate ZCode native tool telemetry and completed batch acknowledgments |
+| 3ce68a4 | test: isolate native batch counters and ambiguous optional turn association |
+| 2f4c6dd | docs: design authorized native checks for existing sandbox harnesses |
+| f421c46 | fix: preserve conflicting canonical ZCode tool outcomes in evidence |
+| 569602f | docs: bound native constructor readiness and persistence metadata fixes |
+| 8aabc08 | test: verify four native review harnesses with frozen sandbox-class evidence |
+| 15be750 | fix: await native constructor completion and retain bounded failure diagnostics |
+| 503190d | Merge branch 'socu/buddy-core' into socu/adr021-logic-stage2 |
+| 7471bb5 | docs: close stage 2 around Router and tool evidence and defer Worker-carrier review |
+| 87f042b | refactor: remove dedicated DSH and ZCode review channels and defer Worker-carrier review |
