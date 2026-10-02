@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 import queue
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from unittest.mock import Mock
 
 from buddy.adapters.zcode import ZcodeAdapter, _NATIVE_CONTRACT_CACHE
 from buddy.adapters.zcode_runner import _drain_structured
@@ -117,6 +119,38 @@ class HostContractTests(unittest.TestCase):
 
 
 class ErrorDrainTests(unittest.TestCase):
+    def test_cancellation_at_stdout_close_precedes_receipt_finalization(self):
+        from buddy.adapters import zcode_runner
+        with tempfile.TemporaryDirectory(prefix='private-zcode-cancel-tail-') as temporary:
+            root = Path(temporary)
+            cancelled = threading.Event()
+            process = Mock(returncode=0)
+            process.stdout.close.side_effect = cancelled.set
+            handle = Mock()
+            handle.shutdown_confirmed.return_value = True
+            connection = Mock()
+            connection.messages = queue.Queue()
+            connection.messages.put(None)
+            control = {'timeoutSeconds': 8, 'directory': str(root / 'attempt'), 'nativeRoot': str(root / 'native'),
+                       'cwd': str(root), 'taskId': 'task', 'attemptId': 'attempt', 'generation': 1,
+                       'spec': {}, 'readOnlyRequest': {'budget': {'toolCalls': 8}}}
+            env = {'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE': str(root / 'builtin'),
+                   'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE': str(root / 'personal')}
+            def call(conn, control, result, workspace, access, tools):
+                tools.roots.append({'sessionId': 'session', 'turnId': 'turn'})
+                return 'session'
+            with patch.object(zcode_runner, 'cli_command', return_value=['fake']), \
+                    patch.object(zcode_runner, 'snapshot_provider_files', return_value=(env, {})), \
+                    patch.object(zcode_runner.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=b'fixture')), \
+                    patch.object(zcode_runner, 'owned_popen', return_value=process), \
+                    patch.object(zcode_runner, 'ProcessHandle', return_value=handle), \
+                    patch.object(zcode_runner, 'NativeConnection', return_value=connection), \
+                    patch('buddy.adapters.zcode_read_only.read_only_call', side_effect=call):
+                result, code = zcode_runner.run(control, cancelled)
+            self.assertEqual(result['status'], 'cancelled')
+            self.assertEqual(code, 1)
+            self.assertFalse(result['toolEvidence']['streamComplete'])
+
     def test_malformed_tool_kind_stays_incomplete_and_later_facts_survive(self):
         from buddy.adapters.zcode_tool_evidence import ZcodeToolFacts
         from test_zcode_tool_evidence import frame

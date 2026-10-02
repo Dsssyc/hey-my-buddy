@@ -1260,8 +1260,6 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 # Only the no-tool channel claims zero tools; a read-only call's
                 # allowance is judged by the blackboard from the recorded facts.
                 result["zeroToolVerified"] = calls == 0
-            result["toolEvidence"] = tools.finish(bool(result["status"] == "ok" and not cancelled.is_set()
-                                                      and eof and shutdown and not tools.close_pending))
         process.stdout.close()
     if cancelled.is_set():
         result.update(status="cancelled", code="cancelled", error="the owned ZCode execution was cancelled")
@@ -1271,6 +1269,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         record = None
     if result["status"] != "ok":
         result.pop("zeroToolVerified", None)
+    if tools is not None:
+        result["toolEvidence"] = tools.finish(bool(result["status"] == "ok"
+                                                  and eof and shutdown and not tools.close_pending))
     if record is not None:
         private_json(Path(control["outputFile"]), record, exclusive=True)
         result["nativeTurnId"] = record["provenance"]["nativeTurnId"]
