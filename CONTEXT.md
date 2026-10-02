@@ -32,7 +32,7 @@ A buddy that executes turns of a governed goal with attempt-scoped authority; it
 _Avoid_: a Buddy, coding Buddy
 
 **Router 伙伴 / Router buddy**:
-The buddy the user appoints to act with routing authority. It works in three planes: it chooses the Worker buddy for a governed goal within the routing bounds, it maintains evaluations from recorded outcomes, and it builds model profiles from public sources. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
+The buddy acting with routing authority. The user lists one or more buddies for the role in order, and the first available one holds it. It works in three planes: it chooses the Worker buddy for a governed goal within the routing bounds, it maintains evaluations from recorded outcomes, and it builds model profiles from public sources. When the role passes to the next buddy in the list, all three planes pass with it. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
 _Avoid_: decision Buddy, selector (for the buddy)
 
 **路由边界 / routing bounds**:
