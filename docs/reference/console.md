@@ -60,7 +60,7 @@ A failed routing fragment gets a red stroke and a thin-line × drawn inside it, 
 
 A program selection of the sole legal candidate says `唯一合法候选，未调用 Router`; its actual-mode display says no Router was called. The current routing summary and decision details show the request’s frozen configuration constraints, required capabilities, candidate count and user-excluded configurations with reasons. They never reconstruct this evidence from current preferences; old records without it show no invented basis.
 
-The effort menu offers one `设为 Router` action, qualified for the selected mode, and publishes `configuration.routerProfileId`. The existing mode/budget controls use authenticated writer/revision rules. Local mechanism eligibility, health and enablement replace paid certificates. Fast sends the task packet; review adds the frozen copy. DSH/ZCode have no system sandbox, and daily reads never convert old settings.
+The effort menu offers `设为 Router`, replacing the first `configuration.routerProfileIds` item and preserving the tail order without duplicates. Clearing the first choice publishes `[]`. Existing mode/budget controls and the retry-seconds input use authenticated writer/revision rules. The status uses recorded `routingHealth.currentRouterProfileId`, including an explicit null, rather than assuming the first configured item is available. Local eligibility and native safeguards replace paid certificates; daily reads never convert old settings. List editing and presentation design belong to U1.
 
 ## Host workflow and native observations
 
@@ -78,7 +78,7 @@ Explanation copy follows the numbered [227-item audit](../acceptance/console-cop
 
 Buddy configuration displays native billing and local `readOnlyStructured`/`systemSandbox` facts. Paid review certificates, the verification picker and reverify action are removed. Native checks remain explicitly authorized development probes; this panel starts none.
 
-Harness rows keep the existing account controls and ordinary detection help. Verification controls are removed; the logic stage only adapts the single Router form/parser and keeps the existing layout.
+Harness rows keep the existing account controls and ordinary detection help. Verification controls are removed; this logic stage adapts the ordered Router data, existing first-choice control and strict parser, with presentation design left to U1.
 
 ## Harness accounts (0.26.0)
 
