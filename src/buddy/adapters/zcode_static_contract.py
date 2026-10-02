@@ -1496,8 +1496,10 @@ class _Bundle:
             index = {}
             for match in self.regions.code_matches(self._WRITE_CANDIDATE):
                 index.setdefault(match.group(1), []).append(match.start(1))
+            self._prefix_writes = set()
             for match in self.regions.code_matches(self._WRITE_PREFIX):
                 index.setdefault(match.group(1), []).append(match.start(1))
+                self._prefix_writes.add((match.group(1), match.start(1)))
             # Assignment patterns are writes even without a declaration keyword.
             # ScopeMap parses binding targets; its lexical regions exclude keys,
             # comments and literal contents from that target walk.
@@ -1548,6 +1550,7 @@ class _Bundle:
             return self._writes[name]
         candidates = self.write_index().get(name, ())
         events = [(position, "destructure" if (name, position) in self._pattern_writes
+                   else "update" if (name, position) in self._prefix_writes
                    else self._classify_write(name, position))
                   for position in candidates]
         scopes = self.scopes()
@@ -1685,6 +1688,8 @@ class _Bundle:
             node = parser.parse_ternary()
             following = parser.peek()
         except _ParseError:
+            return None
+        if following is None and limit < len(self.text):
             return None
         if following is not None and not (following[0] == "punct"
                                           and following[1] in _RHS_TERMININATORS):
@@ -2605,7 +2610,8 @@ def allowlist_chain_problem(text: str, *, _bundle=None) -> str | None:
     problem = _resolver_problem(bundle, resolver)
     if problem is not None:
         return problem
-    if bundle.sites("Set") or any(bundle.name_writes(name) for name in bundle.proof_names | {"Set"}):
+    if ("Set" in bundle.scopes().top_names or bundle.sites("Set")
+            or any(bundle.name_writes(name) for name in bundle.proof_names | {"Set"})):
         return _REASSIGNED
     return _wiring_problem(bundle, register, resolver, context)
 
@@ -2626,9 +2632,12 @@ def _optional_value(node):
 
 def _expression_at(text, start, limit=4096):
     try:
-        parser = _Parser(_token_iter(text, start, min(len(text), start + limit)))
+        end = min(len(text), start + limit)
+        parser = _Parser(_token_iter(text, start, end))
         node = parser.parse_ternary()
         following = parser.peek()
+        if following is None and end < len(text):
+            return None
         if following is not None and not (following[0] == "punct" and following[1] in _RHS_TERMININATORS):
             return None
         return node

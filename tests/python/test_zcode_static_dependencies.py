@@ -15,6 +15,7 @@ class ProofDependencyTests(unittest.TestCase):
             'var url="x//u";fO=(e,t)=>bR({});\n[0];',
             'function FakeSet(names){this.has=name=>true}var Set=FakeSet;',
             'function Set(names){this.has=name=>true}',
+            'class Set{has(name){return true}}',
         ):
             with self.subTest(tail=tail):
                 self.assertIsNotNone(native_contract_problem(GOOD_IF_BUNDLE + tail))
@@ -41,6 +42,24 @@ class ProofDependencyTests(unittest.TestCase):
 
 
 class RealMemberTests(unittest.TestCase):
+    def test_expression_window_end_never_substitutes_for_real_eof(self):
+        enum = 'm.enum(["build","plan","edit","yolo","auto"])'
+        for old, new in (
+            (enum, enum + ' ' * 4096 + '+0'),
+            (enum, enum + '/*' + 'x' * 4096 + '*/+0'),
+            ('}).strict();', '}).strict()' + ' ' * 2048 + '+0;'),
+            ('metadata:{name:"Read",readOnly:!0}', 'metadata:{name:"Read",readOnly:!0}' + ' ' * 1024 + '+0'),
+            ('sK="submit_result"', 'sK="Re"' + ' ' * 4096 + '+"ad"'),
+        ):
+            with self.subTest(old=old):
+                self.assertIsNotNone(native_contract_problem(GOOD_IF_BUNDLE.replace(old, new)))
+
+    def test_prefix_updates_preserve_their_write_kind(self):
+        for update in ('++Qm', '++/*c*/Qm', '--//c\nQm'):
+            text = GOOD_IF_BUNDLE.replace(']),kR=m.object(', ']);' + update + ';var kR=m.object(', 1)
+            with self.subTest(update=update):
+                self.assertIsNotNone(native_contract_problem(text))
+
     def test_mode_enum_binding_and_every_write_are_proved(self):
         from test_zcode_static_contract import BUNDLE_SCHEMA
         local = BUNDLE_SCHEMA[BUNDLE_SCHEMA.index('kR=m.object('):].removeprefix('kR=').removesuffix(';')
