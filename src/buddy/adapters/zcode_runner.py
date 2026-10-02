@@ -1196,7 +1196,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             # Every structured receipt carries the attempt's toolEvidence: the
             # stream is complete only when it drained to EOF, each root session
             # closed with an acknowledged close and the owned process stopped.
-            calls = max(tools.tool_calls, 1) if tools.violation else tools.tool_calls
+            calls = tools.tool_calls
             result["usage"] = {**(result.get("usage") or {}), "toolCalls": calls}
             if result["status"] == "ok":
                 result["zeroToolVerified"] = calls == 0

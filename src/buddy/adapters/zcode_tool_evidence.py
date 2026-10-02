@@ -84,6 +84,11 @@ class ZcodeToolFacts:
         if not isinstance(message, dict) or message.get("method") != "session/event":
             return
         params = message.get("params")
+        if isinstance(params, dict) and params.get("type") == "turn.completed":
+            identity = _identity_of(params)
+            if identity in self.roots:
+                self.evidence.close_root(identity)
+            return
         if not isinstance(params, dict) or params.get("type") != "tool.updated":
             return
         payload = params.get("payload")

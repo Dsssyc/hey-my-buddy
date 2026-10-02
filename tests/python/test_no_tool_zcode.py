@@ -106,7 +106,9 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
                 self.assertEqual(outcome.result["code"], code)
                 self.assertNotIn("zeroToolVerified", outcome.result)
                 if code == "no-tool-violation":
-                    self.assertGreater(outcome.result["usage"]["toolCalls"], 0)
+                    self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
+                    self.assertFalse(outcome.result["toolEvidence"]["streamComplete"])
+                    self.assertTrue(outcome.result["toolEvidence"]["events"])
 
     def test_deadline(self):
         outcome = self.execute("timeout", timeout=1)

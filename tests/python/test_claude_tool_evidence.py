@@ -202,7 +202,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 1))
         self.assertEqual([event["callId"] for event in package["events"]],
                          ["toolu_1", "toolu_1", "toolu_2"])
-        self.assertTrue(package["streamComplete"])
+        self.assertFalse(package["streamComplete"])
 
     def test_the_event_bound_reports_truncation(self):
         frames = [init_frame()]
@@ -321,13 +321,12 @@ class RunnerReceiptTests(unittest.TestCase):
         context, outcome = self.run_read_only("late")
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        # The call that starts after the result frame is in the package because
-        # the collector finished after the observed stream end, not from the
-        # final result JSON; it stays unsettled.
+        # A call after the native result remains visible and taints the stream,
+        # even if a later tool-result were to settle it before EOF.
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (2, 1))
         self.assertEqual([event["callId"] for event in evidence["events"]],
                          ["toolu_1", "toolu_1", "toolu_2"])
-        self.assertTrue(evidence["streamComplete"])
+        self.assertFalse(evidence["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "review", True),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 

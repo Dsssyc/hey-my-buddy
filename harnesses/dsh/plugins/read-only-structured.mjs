@@ -53,7 +53,7 @@ function requestProblem(request) {
   if (!outputSchema || typeof outputSchema !== 'object' || Array.isArray(outputSchema)) return true;
   if (!budget || typeof budget !== 'object') return true;
   if (!Number.isSafeInteger(budget.timeoutSeconds) || budget.timeoutSeconds < 1) return true;
-  if (!Number.isSafeInteger(budget.toolCalls) || budget.toolCalls < 1) return true;
+  if (!Number.isSafeInteger(budget.toolCalls) || budget.toolCalls < 0) return true;
   return false;
 }
 
@@ -393,11 +393,11 @@ export async function callReadOnly(ctx, request, signal) {
   // Guard-denied executions whose call never reached the session log stay
   // recorded as facts; the unpaired start also leaves the stream incomplete.
   for (const denied of state.deniedFacts) {
-    if (denied.callId && !state.startedCallIds.has(denied.callId)) {
+    if (!denied.callId || !state.startedCallIds.has(denied.callId)) {
       state.incomplete = true;
       if (state.events.length >= MAX_TOOL_EVENTS) state.truncated = true;
       else {
-        state.events.push({ nativeIdentity: { sessionId }, callId: denied.callId,
+        state.events.push({ nativeIdentity: { sessionId }, ...(denied.callId && { callId: denied.callId }),
           ...(denied.toolName ? { toolName: denied.toolName } : { type: 'tool/call' }), phase: 'start' });
       }
     }

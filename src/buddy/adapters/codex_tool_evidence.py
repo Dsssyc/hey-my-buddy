@@ -99,6 +99,12 @@ class CodexToolEventProjector:
             return
         method = message.get("method")
         params = message.get("params")
+        if method == "turn/completed" and isinstance(params, dict):
+            turn = params.get("turn") or {}
+            identity = self._identity({**params, "turnId": params.get("turnId") or turn.get("id")})
+            if identity in self.roots:
+                self.evidence.close_root(identity)
+            return
         if method in ("item/started", "item/updated", "item/completed"):
             self._typed(method, params)
         elif isinstance(method, str) and method.startswith("rawResponseItem/"):

@@ -195,6 +195,11 @@ class ToolEventEvidence:
         self._late = False
         self._truncated = False
         self._incomplete = False
+        self._closed_roots: set[str] = set()
+
+    def close_root(self, native_identity: dict) -> None:
+        """Record an actual native turn end before transport drain finishes."""
+        self._closed_roots.add(canonical_json(_identity(native_identity)))
 
     @property
     def tool_calls(self) -> int:
@@ -230,7 +235,7 @@ class ToolEventEvidence:
     def observe(self, event: dict) -> None:
         """Record one normalized event; identical projections collapse, conflicts stay."""
         record = _event(event)
-        if self._finished:
+        if self._finished or canonical_json(record["nativeIdentity"]) in self._closed_roots:
             self._late = True
         key = (canonical_json(record["nativeIdentity"]), record["callId"])
         call = self._calls.setdefault(key, {"pairs": set()})

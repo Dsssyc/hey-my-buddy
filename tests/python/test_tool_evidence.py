@@ -136,6 +136,17 @@ class NormalizeToolEventTests(unittest.TestCase):
 
 
 class ToolEventEvidenceTests(unittest.TestCase):
+    def test_settled_calls_after_a_native_turn_end_remain_late(self):
+        tracker = tool_evidence.ToolEventEvidence(BINDING)
+        tracker.close_root(IDENTITY)
+        for event in settled_events("read"):
+            tracker.observe(event)
+        package = tracker.finish([IDENTITY], True)
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        self.assertFalse(package["streamComplete"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
     def test_missing_native_ids_are_retained_without_inventing_a_call(self):
         tracker = tool_evidence.ToolEventEvidence(BINDING)
         tracker.observe_incomplete("codex", {"toolName": "shell", "phase": "start",

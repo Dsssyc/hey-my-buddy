@@ -614,3 +614,13 @@ test('the request-file driver only runs with an explicit configuration', async (
   assert.equal(apply(null, undefined), undefined);
   assert.equal(apply({}, { requestFile: '/nonexistent' }), undefined);
 });
+
+test('format correction can spend zero remaining tools without resetting the budget', async () => {
+  const { ctx } = fixture([{ header: {} }, { assistant: { text: '{"choice":"a"}' } },
+                          { turnEnd: { kind: 'completed' } }]);
+  const result = await callReadOnly(ctx, readOnlyRequest({ budget: { timeoutSeconds: 60, toolCalls: 0 } }),
+                                  new AbortController().signal);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.usage.toolCalls, 0);
+  assert.equal(result.streamComplete, true);
+});

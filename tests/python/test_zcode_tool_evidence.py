@@ -440,13 +440,13 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertNotIn("zeroToolVerified", outcome.result)
         package = outcome.result["toolEvidence"]
         # The fixture's frame carries no toolCallId: the fact is kept unnamed
-        # and the projected count stays zero while the refusal still counts one.
+        # and the observed count stays unknown rather than inventing one call.
         self.assertEqual(package["events"], [
             {"nativeIdentity": {"sessionId": "s-1", "turnId": "t-1"}, "callId": None,
              "toolName": "shell", "category": "other", "phase": "start"}])
         self.assertEqual(package["toolCalls"], 0)
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(outcome.result["usage"]["toolCalls"], 1)
+        self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "fast", False),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
@@ -468,7 +468,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(len(package["events"]), 1)
         self.assertFalse(package["streamComplete"])
-        self.assertGreaterEqual(outcome.result["usage"]["toolCalls"], 1)
+        self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
 
     def test_close_failure_keeps_the_facts_and_reports_the_actual_error(self):
         outcome = self.execute("close-fail")

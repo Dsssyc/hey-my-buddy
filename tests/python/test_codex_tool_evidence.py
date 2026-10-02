@@ -345,7 +345,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                   "callId": "item-stale", "toolName": "commandExecution",
                                   "category": "execute", "phase": "start"}])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 3)
-        self.assertTrue(evidence["streamComplete"])
+        self.assertFalse(evidence["streamComplete"])
 
     def test_failure_before_any_turn_still_carries_an_incomplete_package(self):
         outcome, context = self.run_review("readonly-policy-mismatch", index=6)

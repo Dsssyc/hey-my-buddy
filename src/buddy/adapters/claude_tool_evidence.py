@@ -61,6 +61,9 @@ class ReadOnlyToolEvidence:
             return
         parent = _native_id(frame.get("parent_tool_use_id"))
         identity, provable = self._identity(frame, parent)
+        if frame.get("type") == "result" and parent is None and identity in self._roots:
+            self._evidence.close_root(identity)
+            return
         for call_id, name, phase in self._facts(frame):
             self._record(identity, provable, call_id, name, phase)
 
