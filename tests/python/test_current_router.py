@@ -344,6 +344,34 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         self.assertEqual(resolution.problem["routerIndex"], 1)
         self.assertEqual(resolution.problem["profileId"], B)
 
+    def test_frozen_review_deadline_override_survives_next_router_resolution(self):
+        facts = self.prepare()
+        self.set_settings(mode="review")
+        with self.board_.store.db.read() as db:
+            facts = router.current_router(db, now=T0).facts
+        facts["budget"]["timeoutSeconds"] = 77
+        with self.board_.store.db.read() as db:
+            resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
+        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.facts["budget"], facts["budget"])
+        resolution.facts["budget"]["timeoutSeconds"] = 88
+        self.assertEqual(facts["budget"]["timeoutSeconds"], 77)
+
+    def test_frozen_budget_cannot_change_fast_deadline_or_preset_tool_limits(self):
+        facts = self.prepare()
+        cases = [{**facts, "budget": {"timeoutSeconds": 77}},
+                 {**facts, "budget": None}]
+        self.set_settings(mode="review")
+        with self.board_.store.db.read() as db:
+            facts = router.current_router(db, now=T0).facts
+        for patch in ({"timeoutSeconds": True}, {"timeoutSeconds": 0}, {"toolCalls": 24.0},
+                      {"toolCalls": 25}, {"bytesRead": 0}, {"preset": "brief"}, {"extra": True}):
+            cases.append({**facts, "budget": {**facts["budget"], **patch}})
+        for frozen in cases:
+            with self.subTest(frozen=frozen), self.assertRaises(BoardError):
+                with self.board_.store.db.read() as db:
+                    router.current_router(db, frozen=frozen, now=T0)
+
     def test_frozen_snapshot_shape_is_validated(self):
         facts = self.prepare()
         for broken in (42, {}, {**facts, "routerProfileIds": "solo"},

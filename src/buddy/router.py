@@ -312,6 +312,18 @@ def _frozen_facts(frozen: object) -> dict:
         raise BoardError("INVALID_ARGUMENT", "frozen routerRetryIntervalSeconds is invalid")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         raise BoardError("INVALID_ARGUMENT", "frozen configurationRevision is invalid")
+    # A standalone request may freeze its own deadline. Continuing the list
+    # preserves it instead of silently reverting to the global preset.
+    limits = _expanded_budget(mode, preset)
+    if "budget" in frozen:
+        supplied = frozen["budget"]
+        if (not isinstance(supplied, dict) or set(supplied) != set(limits)
+                or type(supplied.get("timeoutSeconds")) is not int or supplied["timeoutSeconds"] <= 0
+                or any(type(supplied[key]) is not type(value) or supplied[key] != value
+                       for key, value in limits.items() if key != "timeoutSeconds")
+                or (mode == "fast" and supplied["timeoutSeconds"] != FAST_BUDGET["timeoutSeconds"])):
+            raise BoardError("INVALID_ARGUMENT", "frozen Router budget is inconsistent with its mode or preset")
+        limits = dict(supplied)
     return {
         "routerProfileIds": list(ids),
         "routerIdentities": [dict(value) if isinstance(value, dict) else None for value in identities],
@@ -319,7 +331,7 @@ def _frozen_facts(frozen: object) -> dict:
         "routingBudget": preset,
         "routerRetryIntervalSeconds": interval,
         "configurationRevision": revision,
-        "budget": _expanded_budget(mode, preset),
+        "budget": limits,
     }
 
 

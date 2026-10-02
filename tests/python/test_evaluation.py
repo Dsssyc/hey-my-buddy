@@ -345,7 +345,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(self.snapshot(board)["configuration"]["routingBudget"], "standard")
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
                              configuration={"routerProfileIds": [PROFILE_ID], "autoMaintain": True})
-        self.refused_publish(board, "CONFIGURATION_UNAVAILABLE", request_id="w4", command_id="c4",
+        self.refused_publish(board, "NOT_FOUND", request_id="w4", command_id="c4",
                              configuration={"routerProfileIds": ["dsh:nope:nope:off"]})
         self.assertEqual(self.snapshot(board)["tableRevision"], published["revision"])
 
