@@ -92,37 +92,10 @@ function bodyFor(entry: ManifestEntry): unknown {
   return value;
 }
 
-/**
- * L4-I owns only the frontend. Re-author this synthetic fixture's settings at
- * the test boundary until the Host updates the Python preview generator; this
- * is never a live parser fallback. All scenarios and malformed mutations stay
- * in the tree. The retired single selector is deliberately left malformed.
- */
-function currentSnapshotFixture(value: unknown): unknown {
-  if (!value || typeof value !== "object" || !("configuration" in value)) return value;
-  const snapshot = value as Record<string, unknown>;
-  const config = snapshot.configuration as Record<string, unknown> | null;
-  if (!config || "decisionProfileId" in config || "routerProfileId" in config) return value;
-  const { fastRouterProfileId, reviewRouterProfileId, ...settings } = config;
-  if (!("fastRouterProfileId" in config) || !("reviewRouterProfileId" in config)) return value;
-  const harnesses = Array.isArray(snapshot.harnesses) ? snapshot.harnesses.map(row => {
-    const { reviewVerification: _retired, ...health } = row;
-    const systemSandbox = health.adapter === "codex" || health.adapter === "claude";
-    return { ...health, systemSandbox, readOnlyStructured: { eligible: systemSandbox, systemSandbox,
-      reason: systemSandbox ? null : "原生只读入口尚未实现", reasonCode: systemSandbox ? null : "read-only-not-implemented",
-      sameAttemptContinuation: health.adapter === "codex" } };
-  }) : snapshot.harnesses;
-  return { ...snapshot, configuration: { ...settings,
-    routerProfileId: settings.defaultRoutingMode === "review" ? reviewRouterProfileId : fastRouterProfileId },
-    configurationError: null, harnesses,
-    ...(snapshot.routingHealth && typeof snapshot.routingHealth === "object"
-      ? { routingHealth: { ...snapshot.routingHealth, available: true, reasonCode: null } } : {}) };
-}
-
 /** The real `createApi` request path against one fixed fixture response. */
 function apiFor(entry: ManifestEntry) {
   const original = bodyFor(entry);
-  const body = JSON.stringify(entry.kind === "console-snapshot" ? currentSnapshotFixture(original) : original);
+  const body = JSON.stringify(original);
   const fetcher = (async () => new Response(body, {
     status: entry.httpStatus,
     headers: { "Content-Type": "application/json" },
