@@ -1488,7 +1488,7 @@ class _Bundle:
         r"(?:=(?![=>])|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|>>>=|\*\*=|&&=|\|\|=|\?\?="
         r"|\+\+|--|\[|\?\." + _GAP + r"\[|(?:\.|\?\.)" + _GAP + r"(?:add|delete|clear|push|pop|shift|unshift|splice|sort"
         r"|reverse|fill|copyWithin)" + _GAP + r"(?:\?\." + _GAP + r")?\())")
-    _WRITE_PREFIX = re.compile(r"(?<![\w$.])(?:\+\+|--)(?=" + _GAP + r"([A-Za-z_$][A-Za-z0-9_$]*))")
+    _WRITE_PREFIX = re.compile(r"(?<![+-])(?:\+\+|--)(?=" + _GAP + r"([A-Za-z_$][A-Za-z0-9_$]*))")
 
     def write_index(self):
         """Every write-shaped position of every name, keyed by name, once."""

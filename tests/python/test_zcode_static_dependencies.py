@@ -39,6 +39,9 @@ class ProofDependencyTests(unittest.TestCase):
         self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE))
         self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE + 'function other(aM){aM=()=>"Bash"}'))
         self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE.replace('readOnly:!0', 'readOnly:true')))
+        for tail in ('var x=0;x+++Qm;', 'var x=0;x---Qm;', 'var x=0;x++ + Qm;'):
+            with self.subTest(tail=tail):
+                self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE + tail))
 
 
 class RealMemberTests(unittest.TestCase):
@@ -59,6 +62,7 @@ class RealMemberTests(unittest.TestCase):
             text = GOOD_IF_BUNDLE.replace(']),kR=m.object(', ']);' + update + ';var kR=m.object(', 1)
             with self.subTest(update=update):
                 self.assertIsNotNone(native_contract_problem(text))
+        self.assertIsNotNone(native_contract_problem(GOOD_IF_BUNDLE + 'function change(){return++Qm}change();'))
 
     def test_mode_enum_binding_and_every_write_are_proved(self):
         from test_zcode_static_contract import BUNDLE_SCHEMA
