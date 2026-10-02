@@ -94,7 +94,8 @@ class ZcodeToolFacts:
         payload = params.get("payload")
         payload = payload if isinstance(payload, dict) else {}
         kind = payload.get("kind")
-        phase = "start" if kind in _START_KINDS else "end" if kind in _END_KINDS else None
+        phase = ("start" if isinstance(kind, str) and kind in _START_KINDS
+                 else "end" if isinstance(kind, str) and kind in _END_KINDS else None)
         call_id = payload.get("toolCallId")
         call_id = call_id if isinstance(call_id, str) and call_id else None
         identity = _identity_of(params)

@@ -460,7 +460,9 @@ class ReadOnlyControllerTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "native-shutdown-failed")
         self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
         self.assertEqual(outcome.result["processState"]["nativeExitCode"], 3)
-        self.assertTrue(outcome.result["toolEvidence"]["streamComplete"])
+        self.assertFalse(outcome.result["toolEvidence"]["streamComplete"])
+        self.assertTrue(outcome.result["toolEvidence"]["nativeIdentity"])
+        self.assertEqual(outcome.result["toolEvidence"]["toolCalls"], 0)
         # A killed controller leader can prove nothing about the native group it
         # owned: no result, no fabricated evidence and no stop confirmation.
         outcome, _ = self.execute("sleep", timeout=10, kill_leader=True)

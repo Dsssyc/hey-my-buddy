@@ -33,6 +33,34 @@ class HostContractTests(unittest.TestCase):
         with patch.dict(os.environ, {'BUDDY_DEV_SOURCE': '0'}), patch('buddy.harness_runtime.selected', return_value=record):
             self.assertIsNone(ZcodeAdapter()._native_contract_check({'BUDDY_DEV_SOURCE': '1', 'BUDDY_ZCODE_CLI': str(good)}))
 
+    def test_relative_cli_is_refused_before_reading_or_starting(self):
+        with patch('subprocess.Popen', side_effect=AssertionError('no process')):
+            result = ZcodeAdapter()._native_contract_check({'BUDDY_DEV_SOURCE': '1', 'BUDDY_ZCODE_CLI': 'cli.cjs'})
+        self.assertIn('must be absolute', result)
+
+    def test_cache_uses_inode_as_well_as_times_and_size(self):
+        path = self.root / 'replaced.cjs'
+        path.write_text(GOOD_BUNDLE)
+        actual_stat = Path.stat
+        current_inode = [None]
+        reads = []
+        original_open = Path.open
+        def inode(target, *args, **kwargs):
+            actual = actual_stat(target, *args, **kwargs)
+            if target != path or current_inode[0] is None: return actual
+            return SimpleNamespace(st_mode=actual.st_mode, st_dev=actual.st_dev, st_ino=current_inode[0],
+                st_size=actual.st_size, st_mtime_ns=actual.st_mtime_ns, st_ctime_ns=actual.st_ctime_ns)
+        def opened(target, *args, **kwargs):
+            if target == path: reads.append(target)
+            return original_open(target, *args, **kwargs)
+        env = {'BUDDY_DEV_SOURCE': '1', 'BUDDY_ZCODE_CLI': str(path)}
+        with patch.object(Path, 'stat', inode), patch.object(Path, 'open', opened):
+            self.assertIsNone(ZcodeAdapter()._native_contract_check(env))
+            current_inode[0] = actual_stat(path).st_ino + 1
+            result = ZcodeAdapter()._native_contract_check(env)
+        self.assertEqual(len(reads), 2)
+        self.assertIn('changed during', result)
+
     def test_growth_after_stat_is_still_a_bounded_read(self):
         path = self.root / 'growing.cjs'
         path.write_bytes(b'small')
@@ -89,6 +117,22 @@ class HostContractTests(unittest.TestCase):
 
 
 class ErrorDrainTests(unittest.TestCase):
+    def test_malformed_tool_kind_stays_incomplete_and_later_facts_survive(self):
+        from buddy.adapters.zcode_tool_evidence import ZcodeToolFacts
+        from test_zcode_tool_evidence import frame
+        tools = ZcodeToolFacts({'adapter': 'zcode', 'taskId': 'task', 'attemptId': 'attempt', 'generation': 1})
+        messages = queue.Queue()
+        messages.put(frame({'kind': [], 'toolCallId': 'broken'}))
+        messages.put(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}, seq=3))
+        messages.put(None)
+        result = {'status': 'error', 'code': 'readonly-budget-exhausted'}
+        _drain_structured(SimpleNamespace(messages=messages, observe=tools.observe_with(lambda *args: None)), result, tools, 'read-only')
+        package = tools.finish(False)
+        self.assertEqual(len(package['events']), 2)
+        self.assertFalse(package['streamComplete'])
+        self.assertEqual(result['code'], 'readonly-budget-exhausted')
+        self.assertTrue(messages.empty())
+
     def drain(self, status, messages, *, observer_error=False):
         observed = []
         def observe(message, ordinal):

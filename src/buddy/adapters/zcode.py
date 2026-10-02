@@ -32,7 +32,7 @@ _NATIVE_CONTRACT_CACHE_LIMIT = 8
 #: Keyed by resolved path and full stat identity; the value is the contract
 #: problem (``None`` qualified). Every read stats first, so a changed or missing
 #: file can never borrow an older positive.
-_NATIVE_CONTRACT_CACHE: OrderedDict[tuple[str, int, int, int], str | None] = OrderedDict()
+_NATIVE_CONTRACT_CACHE: OrderedDict[tuple[str, int, int, int, int, int], str | None] = OrderedDict()
 
 
 class ZcodeAdapter(Adapter):
@@ -105,7 +105,10 @@ class ZcodeAdapter(Adapter):
         env = os.environ if environment is None else environment
         try:
             if env.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_ZCODE_CLI"):
-                path = Path(env["BUDDY_ZCODE_CLI"]).expanduser().resolve()
+                path = Path(env["BUDDY_ZCODE_CLI"]).expanduser()
+                if not path.is_absolute():
+                    return "the public ZCode CLI path must be absolute for a read-only contract check"
+                path = path.resolve()
                 if not path.is_file():
                     raise NativeError("adapter-unavailable", "ZCode CLI is missing")
                 command = [str(path)]
@@ -122,6 +125,8 @@ class ZcodeAdapter(Adapter):
             detail = (str(error) or "the CLI selection is unavailable")[:200]
             return f"the public ZCode CLI bundle could not be located for the read-only contract check: {detail}"
         cli = Path(command[-1]).expanduser()
+        if not cli.is_absolute():
+            return "the selected public ZCode CLI path must be absolute for a read-only contract check"
         if cli.suffix not in (".js", ".cjs", ".mjs"):
             return "the located ZCode CLI is not a public JS/CJS/MJS bundle to check"
         try:
@@ -133,7 +138,7 @@ class ZcodeAdapter(Adapter):
                 return "the public ZCode CLI bundle exceeds the 32 MiB read-only contract bound"
         except OSError:
             return "the public ZCode CLI bundle could not be examined"
-        key = (str(resolved), info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        key = (str(resolved), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
         if key in _NATIVE_CONTRACT_CACHE:
             _NATIVE_CONTRACT_CACHE.move_to_end(key)
             return _NATIVE_CONTRACT_CACHE[key]

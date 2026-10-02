@@ -930,6 +930,9 @@ def _drain_structured(connection, result: dict, tools: ZcodeToolFacts, channel: 
                 raise NativeError("invalid-protocol", f"unclaimed native response after {channel} settlement")
         except NativeError as error:
             failed(error)
+        except (TypeError, ValueError, KeyError, AttributeError, RecursionError, BoardError):
+            tools.evidence.observe_incomplete("zcode", {})
+            failed(NativeError("invalid-protocol", f"{channel} native frame could not be recorded"))
 
 
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
@@ -1222,6 +1225,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             handle.terminate(grace_seconds=1.0)
         shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
         result["processState"] = {"shutdownConfirmed": shutdown, "nativeExitCode": process.returncode}
+        if result["status"] == "ok" and (not shutdown or process.returncode != 0):
+            result.update(status="error", code="native-shutdown-failed", error="the native app server did not exit normally with confirmed group shutdown")
+            record = None
         eof = False
         if structured and shutdown and connection is not None and tools is not None:
             # The native server has exited. Read through its terminal EOF so an
@@ -1254,7 +1260,8 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 # Only the no-tool channel claims zero tools; a read-only call's
                 # allowance is judged by the blackboard from the recorded facts.
                 result["zeroToolVerified"] = calls == 0
-            result["toolEvidence"] = tools.finish(bool(result["status"] == "ok" and eof and shutdown and not tools.close_pending))
+            result["toolEvidence"] = tools.finish(bool(result["status"] == "ok" and not cancelled.is_set()
+                                                      and eof and shutdown and not tools.close_pending))
         process.stdout.close()
     if cancelled.is_set():
         result.update(status="cancelled", code="cancelled", error="the owned ZCode execution was cancelled")
