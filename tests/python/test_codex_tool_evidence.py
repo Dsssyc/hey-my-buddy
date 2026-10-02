@@ -47,6 +47,45 @@ class CodexToolEventProjectionTests(unittest.TestCase):
     def observe_root(self, projector):
         projector.observe_root("thread-1", "turn-1")
 
+    def test_typed_execution_and_raw_native_call_join_by_actual_call_id(self):
+        from buddy.tool_evidence import judge_tool_evidence
+        for name in ('shell', 'shell_command', 'exec_command', 'write_stdin'):
+            with self.subTest(name=name):
+                projector = new_projector()
+                self.observe_root(projector)
+                projector.observe_notification(raw({'type': 'function_call', 'name': name,
+                                                    'call_id': 'call-1', 'namespace': 'functions'}))
+                projector.observe_notification(frame('item/started', {'type': 'commandExecution', 'id': 'call-1'}))
+                projector.observe_notification(frame('item/completed', {'type': 'commandExecution', 'id': 'call-1'}))
+                package = projector.finish(True)
+                self.assertEqual(package['toolCalls'], 1)
+                self.assertEqual({event['toolName'] for event in package['events']}, {name, 'commandExecution'})
+                self.assertIsNone(judge_tool_evidence(package, 'review', True))
+
+    def test_mcp_namespace_cannot_borrow_builtin_execution_classification(self):
+        from buddy.tool_evidence import judge_tool_evidence
+        projector = new_projector()
+        self.observe_root(projector)
+        projector.observe_notification(raw({'type': 'function_call', 'name': 'exec_command',
+                                            'namespace': 'mcp__server', 'call_id': 'mcp-1'}))
+        projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'mcp-1'}))
+        package = projector.finish(True)
+        self.assertEqual({event['category'] for event in package['events']}, {'other'})
+        self.assertEqual(judge_tool_evidence(package, 'review', True), 'router-tools-forbidden')
+
+    def test_two_raw_names_or_conflicting_categories_are_not_execution_aliases(self):
+        from buddy.tool_evidence import judge_tool_evidence
+        for names in (('shell', 'exec_command'), ('shell', 'fileChange')):
+            with self.subTest(names=names):
+                projector = new_projector()
+                self.observe_root(projector)
+                for number, name in enumerate(names):
+                    projector.observe_notification(raw({'type': 'function_call', 'name': name, 'call_id': 'call-1'}))
+                    projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'call-1'}))
+                package = projector.finish(True)
+                self.assertEqual(package['toolCalls'], 1)
+                self.assertEqual(judge_tool_evidence(package, 'review', True), 'router-tool-evidence-unverified')
+
     def test_typed_call_projects_start_and_end_over_the_real_identity(self):
         projector = new_projector()
         self.observe_root(projector)
@@ -114,7 +153,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(raw({"type": "function_call", "call_id": "r-1", "name": "reasoning"}))
         package = projector.finish(True)
         categories = {event["callId"]: event["category"] for event in package["events"]}
-        self.assertEqual(categories, {"w-1": "fetch", "s-1": "other", "m-1": "other",
+        self.assertEqual(categories, {"w-1": "fetch", "s-1": "execute", "m-1": "other",
                                       "d-1": "other", "r-1": "other"})
         self.assertEqual({event["toolName"] for event in package["events"] if event["callId"] == "r-1"},
                          {"reasoning"})
@@ -300,7 +339,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         # The prior bounded capture keeps its raw replayed frame unchanged.
         self.assertEqual(len(outcome.result["nativeRawToolEvents"]), 3)
 
-    def test_conflicting_projections_of_one_call_stay_recorded(self):
+    def test_equivalent_typed_and_raw_names_of_one_call_stay_recorded(self):
         outcome, _context = self.run_review("readonly-conflict", index=2)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
@@ -308,6 +347,8 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         facts = {(event["toolName"], event["phase"]) for event in evidence["events"] if event["callId"] == "call-1"}
         self.assertEqual(facts, {("commandExecution", "start"), ("commandExecution", "end"),
                                  ("shell", "start"), ("shell", "end")})
+        from buddy.tool_evidence import judge_tool_evidence
+        self.assertIsNone(judge_tool_evidence(evidence, 'review', True))
 
     def test_foreign_and_old_turn_facts_are_kept_with_their_real_identity(self):
         outcome, _context = self.run_review("readonly-foreign", index=3)

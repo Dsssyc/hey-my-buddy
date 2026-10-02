@@ -71,7 +71,7 @@ class CodexToolEventProjector:
     def __init__(self, binding: dict):
         self.evidence = ToolEventEvidence(binding)
         self.roots: list[dict] = []
-        self._started: dict[tuple[str, str], str] = {}
+        self._started: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     @property
     def tool_calls(self) -> int:
@@ -136,7 +136,8 @@ class CodexToolEventProjector:
                 return
             self._observe(params, phase="start",
                           tool_name=name if name is not None else raw_type,
-                          call_id=item.get("call_id") or item.get("id"))
+                          call_id=item.get("call_id") or item.get("id"),
+                          native_type="mcpToolCall" if item.get("namespace") not in (None, "functions") else None)
         elif raw_type in RAW_TOOL_OUTPUTS:
             call_id = item.get("call_id") or item.get("id")
             identity = self._identity(params)
@@ -145,15 +146,16 @@ class CodexToolEventProjector:
                 correlated = self._started.get((canonical_json(identity), call_id))
             # The end fact repeats the correlated start's operation; without a
             # proven association only the frame's own type is reported.
-            self._observe(params, phase="end", tool_name=correlated or raw_type, call_id=call_id)
+            self._observe(params, phase="end", tool_name=correlated[0] if correlated else raw_type,
+                          native_type=correlated[1] if correlated else None, call_id=call_id)
         else:
             # An unrecognized raw item shape has no provable phase.
             self._incomplete(params, tool_name=None, phase=None)
 
-    def _observe(self, params, *, phase: str, tool_name, call_id) -> None:
+    def _observe(self, params, *, phase: str, tool_name, call_id, native_type=None) -> None:
         identity = self._identity(params)
         fact = {"nativeIdentity": identity or {}, "callId": call_id,
-                "toolName": tool_name, "phase": phase}
+                "toolName": tool_name, "phase": phase, **({"type": native_type} if native_type else {})}
         if (identity is None or "sessionId" not in identity or "turnId" not in identity
                 or not isinstance(call_id, str) or not call_id or len(call_id) > 512):
             # A frame without a provable session/turn pair cannot be bound to
@@ -167,7 +169,7 @@ class CodexToolEventProjector:
             return
         self.evidence.observe(event)
         if phase == "start":
-            self._started[(canonical_json(identity), call_id)] = tool_name
+            self._started[(canonical_json(identity), call_id)] = (tool_name, native_type)
 
     def _incomplete(self, params, *, tool_name, phase) -> None:
         self.evidence.observe_incomplete(ADAPTER, {"nativeIdentity": self._identity(params) or {},

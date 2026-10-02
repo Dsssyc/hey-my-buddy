@@ -22,6 +22,8 @@ CLASSIFICATION = {
     },
     "codex": {
         "shell": "execute", "code-mode": "execute", "exec": "execute", "commandExecution": "execute",
+        "exec_command": "execute", "shell_command": "execute", "write_stdin": "execute",
+        "local_shell_call": "execute",
         "fileChange": "edit", "web_search_call": "fetch",
     },
     "zcode": {

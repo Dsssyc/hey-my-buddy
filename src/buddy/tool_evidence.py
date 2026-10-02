@@ -61,6 +61,8 @@ NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
     },
     "codex": {
         "shell": "execute", "code-mode": "execute", "exec": "execute", "commandExecution": "execute",
+        "exec_command": "execute", "shell_command": "execute", "write_stdin": "execute",
+        "local_shell_call": "execute",
         "fileChange": "edit",
         "web_search_call": "fetch",
     },
@@ -316,6 +318,17 @@ def _structural_problem(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
     return None
 
 
+def _consistent_call_facts(adapter: str, facts: set) -> bool:
+    if len(facts) == 1:
+        return True
+    # Codex exposes the same call through a typed commandExecution item and
+    # its raw native tool name. Keep both facts and join only by the real ID.
+    if adapter != "codex" or len(facts) != 2 or ("commandExecution", "execute") not in facts:
+        return False
+    return all(category == "execute" and NATIVE_TOOL_CATEGORIES["codex"].get(name) == category
+               for name, category in facts)
+
+
 def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> str | None:
     """The single publication matrix over one ``toolEvidence`` package.
 
@@ -353,7 +366,8 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
             return TOOLS_FORBIDDEN
     else:
         for call in calls.values():
-            if len(call["facts"]) == 1 and next(iter(call["facts"]))[1] not in allowed:
+            if (_consistent_call_facts(evidence["binding"]["adapter"], call["facts"])
+                    and next(iter(call["facts"]))[1] not in allowed):
                 return TOOLS_FORBIDDEN
     if evidence["truncated"] or not evidence["streamComplete"] or end_before_start:
         return TOOL_EVIDENCE_UNVERIFIED
@@ -364,7 +378,7 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
             return TOOL_EVIDENCE_UNVERIFIED
     started = unsettled = 0
     for call in calls.values():
-        if len(call["facts"]) > 1:
+        if not _consistent_call_facts(evidence["binding"]["adapter"], call["facts"]):
             return TOOL_EVIDENCE_UNVERIFIED
         has_start, has_end = "start" in call["phases"], "end" in call["phases"]
         if has_end and not has_start:
