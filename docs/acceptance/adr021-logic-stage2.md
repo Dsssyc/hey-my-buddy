@@ -4,7 +4,7 @@
 
 实际交付是 L4 全部与 L5 统一工具证据及四个 harness 已验收的事件投影。DSH/ZCode 的专用只读 Node 桥、Python controller、ZCode 受限协议和静态证明及专属测试已移出，真实审阅资格返回 readonly-worker-carrier-unimplemented。普通 Worker、fast、公共投影与黑板唯一判定保留。最新 ADR 改为复用 Worker 载体，另起阶段先设计；本阶段不再原生检查或静态核对。停止时没有原生进程运行，新准备的 DSH 第三包/ZCode 第五包未执行。
 
-移除后 101 项资格/公共投影/fast/发布回归通过；223 项 Router/打包首轮只有 12 个 review 切换场景依赖已撤下的真实资格而失败，改为全测试期间使用私有 capability shim 后 90 项切换回归通过，原断言和故障情形未删。免费资格/健康 7 项再次通过。移除后首轮完整检查只有 test_current_router 的 3 个旧资格依赖失败，其余 157/158 Python 文件和 110 Node 通过；32 个解析场景保留，私有资格夹具迁移后与真实不可用防护合计 42 项复查通过。最终完整结果待再次冻结检查退出后填录；此前 2456 Python/125 Node 是移出前的事实，不作为本次完整通过。Console 最小适配已有 659 项、typecheck/build 通过，此次不改前端；原始日志 tmp/adr021-stage2/。
+移除后 101 项资格/公共投影/fast/发布回归通过；223 项 Router/打包首轮只有 12 个 review 切换场景依赖已撤下的真实资格而失败，改为全测试期间使用私有 capability shim 后 90 项切换回归通过，原断言和故障情形未删。免费资格/健康 7 项再次通过。移除后首轮完整检查只有 test_current_router 的 3 个旧资格依赖失败，其余 157/158 Python 文件和 110 Node 通过；32 个解析场景保留，私有资格夹具迁移后与真实不可用防护合计 42 项复查通过。最终完整检查通过：2316 Python（skip 1，158/158 文件）、110 Node，测试私有根回收成功；命令 uv run --frozen python -m buddy.checks，Node 24、两并发，检查期间 worktree 冻结。日志 tmp/adr021-stage2/removal-full-check-2.log。Console 最小适配已有 659 项、typecheck/build 通过，此次不改前端；原始日志 tmp/adr021-stage2/。
 
 当前原生证据：Codex 本阶段一次通过（16.289 秒，2 个 execute 调用）；Claude Code 一次完成真实读取和结构化回合，但 StructuredOutput 被分类为 other，且未回传随机 marker，检查失败（13.048 秒）。DSH 两次在模型前失败，ZCode 四个已执行包一包模型前失败、三包进入模型但未完整通过；最后一包已经有 Read start/end。所有已执行包的输入未改、实际停止/框架回收确认，读取字节与未提供的 applied-effort/served-model 证明保持未知。失败不改写为验收，也不为通过滤掉事件或改变 ADR。
 
@@ -165,3 +165,5 @@
 | 503190d | Merge branch 'socu/buddy-core' into socu/adr021-logic-stage2 |
 | 7471bb5 | docs: close stage 2 around Router and tool evidence and defer Worker-carrier review |
 | 87f042b | refactor: remove dedicated DSH and ZCode review channels and defer Worker-carrier review |
+| 83ab39f | docs: record retained stage 2 work and archived review channels with micro-task ledger |
+| 378cd05 | test: preserve current Router review scenarios with private deferred-carrier capability |
