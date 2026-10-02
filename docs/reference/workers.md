@@ -4,11 +4,11 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 
 ## Adapters
 
-`buddy capabilities` (also `buddy adapters`) reports each adapter with `available`, `reason`, `capabilities` and `executedBy`, plus `localCapabilities`, the named operations, wait admission, an honest `limitations` map and a `readOnlyStructured` block carrying `implemented`, `verified` and `sameAttemptContinuation` for the review mode; the tool-free structured capability of fast routing is advertised as `routing:fast` in each adapter's `capabilities`. A new adapter, or a behavior that several adapters share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
+`buddy capabilities` (also `buddy adapters`) reports each adapter with `available`, `reason`, `capabilities` and `executedBy`, plus `localCapabilities`, the named operations, wait admission, an honest `limitations` map and a `readOnlyStructured` block carrying `implemented`, `eligible`, `reasonCode`, `reason`, `systemSandbox` and `sameAttemptContinuation` for the review mode; the tool-free structured capability of fast routing is advertised as `routing:fast` in each adapter's `capabilities`. A new adapter, or a behavior that several adapters share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
 
 | Adapter | `executedBy` | Capabilities | Requirements |
 | --- | --- | --- | --- |
-| `dsh` | `built-in-worker` | `dsh`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery (no read-only structured capability) | Node.js and the `dsh.runner` resource; otherwise `ADAPTER_UNAVAILABLE` |
+| `dsh` | `built-in-worker` | `dsh`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery and locally eligible restricted read-only structured calls | Node.js and the `dsh.runner` resource; otherwise `ADAPTER_UNAVAILABLE` |
 | `zcode` | `built-in-worker` | `zcode`, `observe`, `inquiry`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed ZCode CLI and an API-key provider; OAuth account providers are unavailable |
 | `codex` | `built-in-worker` | `codex`, `workspace`, `cancel`, `artifacts`, `deadline`, `native-session`; model discovery | The installed Codex App Server and an existing native account-plan login; API-key accounts are refused |
 | `claude` | `built-in-worker` | `claude`, `workspace`, `cancel`, `artifacts`, `deadline`; model discovery (0.11.0 candidate, no `native-session` or `inquiry`) | The installed Claude Code CLI with first-party Anthropic authentication; third-party provider overrides are refused, and execution is gated on an explicit `BUDDY_CLAUDE_SETTINGS_POLICY` — see [claude.md](claude.md) |
