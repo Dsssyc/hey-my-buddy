@@ -280,3 +280,5 @@ L6-B 以私有 `_native_contract_check(environment=None)` 同时支撑无参 loc
 A5 固定成果通过 99 项，但独立审查仍复现括号 arrow 在参数后留空格/注释时漏绑定，以及无花括号 for 的嵌套 if/for 块漏父 scope。Host 验收修正先取实际前一个代码位置匹配参数括号，不用 arrow_start-1；无花括号 for 和表达式 arrow 的虚拟 scope 参与之后 parent_at，按当前位置仍有效且起点最近的 stack/pending/virtual 范围决定父节点，结束后移除，不能给后续独立语句继承。class 用块绑定；控制语句的块不冒充 method 参数。新增原反例、nested for/arrow 和普通块的正常对照，保留 A5 全部原例。公开 14.8 MiB bundle 的检查在 A5 后从约 17 秒增到约 190 秒；反向括号匹配每次从全 spans 的末尾开始造成反复扫描，改为按 close 位置二分定位初始 span，不改变词法语义或资格范围。合并静态/协议矩阵、同一公开文本与独立复核通过后再接受 A5、立即回收并发 B。
 
 A5 已按固定 73a4c5 与 Host 修正 9e054c5 验收并立即回收：99 固定测试、110 合并静态/协议测试、Astra high 的 26 项 scope 与 24754 次反向匹配等价复核通过，箭头参数移除变异抓到 4 个断言。A6 的本地静态修正随本次合并验证通过。旧 arrow-in-for 场景完整保留，未知循环体现在正确继承 fuzzy 而不合格，同时仍核对自身 arrow 参数存在；不是删除原参数丢失情形。L6-B 按已提交的有界入口设计发出。L4 列表补充与当前静态/协议的第二次完整检查为 2426 Python（skip 1）/125 Node，通过且私有根回收；最终 B 合入后再完整检查。
+
+用户已逐次批准冻结摘要 ef670448…d32d80 的 ZCode 一次原生检查（GLM-5.3-Flash/max，brief 60 秒/8 工具/最多一次纠正），controller 验收前仍不执行。探针的 prepared packet 不改；执行时改用 checks.create_private_root 创建私有 state/runtime/attempt 和 TMPDIR，实际停止后只保留 controller 三种日志，框架 teardown 验证再回收，停止未知保留根并失败。准备、digest、独占一次执行与原生事实判定 5 项模拟仍通过；DSH 原批准请求尚无答复，不执行。

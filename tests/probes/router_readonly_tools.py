@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shutil
 import time
 import uuid
 
@@ -121,13 +122,14 @@ def run(args):
     with (root / 'execution.started').open('x') as stream:
         os.chmod(stream.fileno(), 0o600)
         stream.write(datetime.now(timezone.utc).isoformat() + '\n')
-    from buddy.checks import SANITIZED_VARIABLES
+    from buddy.checks import SANITIZED_VARIABLES, create_private_root, teardown_private_root
+    private = create_private_root(directory=root)
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
-    environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(root / 'state'),
-                       BUDDY_RUNTIME_ROOT=str(root / 'runtime'))
+    environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(private / 'state'),
+                       BUDDY_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
     context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
         generation=packet['binding']['generation'], spec={**configuration, 'cwd': str(root / 'frozen')},
-        directory=root / 'attempt', runtime={}, environment=environment)
+        directory=private / 'attempt', runtime={}, environment=environment)
     request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
         'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
         'budget': packet['request']['budget'], 'capture_evidence': False})
@@ -153,6 +155,22 @@ def run(args):
             report['ownedGroupShutdownConfirmed'] = handle.shutdown_confirmed()
             if not report['ownedGroupShutdownConfirmed']:
                 report['status'] = 'failed'
+        # Retain only the controller logs, never native credentials/provider
+        # snapshots. The test framework owns and verifies runtime/state cleanup.
+        if handle is None or report.get('ownedGroupShutdownConfirmed') is True:
+            logs = root / 'logs'
+            logs.mkdir(mode=0o700, exist_ok=True)
+            for name in ('stdout.log', 'stderr.log', 'native.stderr.log'):
+                source = context.directory / name
+                if source.is_file():
+                    shutil.copyfile(source, logs / name)
+                    (logs / name).chmod(0o600)
+            cleanup = teardown_private_root(private)
+            report['privateRootCleanupConfirmed'] = not bool(cleanup)
+            if cleanup:
+                report['status'] = 'failed'
+        else:
+            report['privateRootCleanupConfirmed'] = False
         private_json(root / 'report.json', report)
     return report
 

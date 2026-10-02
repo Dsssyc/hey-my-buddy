@@ -64,6 +64,10 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         self.assertIsNone(context.agent_credential)
         self.assertIsNone(context.turn)
         self.assertEqual(request.budget['timeoutSeconds'], 60)
+        self.assertTrue(Path(context.environment['BUDDY_STATE_DIR']).parent.name.startswith('buddy-checks-'))
+        self.assertEqual(Path(context.environment['BUDDY_RUNTIME_ROOT']).parent,
+                         Path(context.environment['BUDDY_STATE_DIR']).parent)
+        self.assertFalse(Path(context.environment['BUDDY_STATE_DIR']).parent.exists())
 
     def test_changed_input_or_configuration_cannot_reuse_approval(self):
         self.prepared()
