@@ -120,6 +120,8 @@ def _account_environment(name: str, context: ExecutionContext, *, purpose: str) 
 
 
 def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
+    if name in ("dsh", "zcode"):
+        raise BoardError("UNSUPPORTED_ADAPTER", "Review on the Worker carrier is not implemented", adapter=name)
     native_environment = _account_environment(name, context, purpose='review')
     ensure_private_dir(context.directory)
     control = {

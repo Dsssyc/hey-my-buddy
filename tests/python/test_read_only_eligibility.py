@@ -28,14 +28,16 @@ class LocalEligibilityTests(unittest.TestCase):
                     self.assertIsNone(result['reasonCode'])
 
     def test_unimplemented_non_sandbox_adapters_stay_ineligible(self):
-        for item in (Adapter(), ZcodeAdapter()):
-            with self.subTest(adapter=item.name):
-                result = item.local_read_only_check()
-                self.assertFalse(result['eligible'])
-                self.assertFalse(result['systemSandbox'])
-        result = DshAdapter().local_read_only_check()
-        self.assertTrue(result['eligible'])
-        self.assertFalse(result['systemSandbox'])
+        with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
+             patch('subprocess.run', side_effect=AssertionError('native process')):
+            for item in (Adapter(), DshAdapter(), ZcodeAdapter()):
+                with self.subTest(adapter=item.name):
+                    result = item.local_read_only_check()
+                    self.assertFalse(result['eligible'])
+                    self.assertFalse(result['systemSandbox'])
+                    if item.name in ('dsh', 'zcode'):
+                        self.assertEqual(result['reasonCode'], 'readonly-worker-carrier-unimplemented')
+                        self.assertIn('Worker carrier', result['reason'])
 
     def test_a_declaration_without_a_handler_is_ineligible(self):
         class Declared(Adapter):
@@ -66,6 +68,19 @@ class LocalEligibilityTests(unittest.TestCase):
 
 
 class HealthEligibilityTests(BoardTestCase):
+    def test_deferred_review_health_is_unavailable_without_launching_or_writing(self):
+        board = self.board()
+        with board.store.db.read() as db, patch('subprocess.Popen', side_effect=AssertionError('native process')), \
+             patch('subprocess.run', side_effect=AssertionError('native process')):
+            before = db.total_changes
+            for adapter in ('dsh', 'zcode'):
+                result = read_health(db, adapter)
+                capability = result['readOnlyStructured']
+                self.assertFalse(capability['eligible'])
+                self.assertFalse(capability['systemSandbox'])
+                self.assertEqual(capability['reasonCode'], 'readonly-worker-carrier-unimplemented')
+            self.assertEqual(db.total_changes, before)
+
     def test_health_reads_ignore_old_certificates_and_do_not_write_state(self):
         board = self.board()
         with board.store.db.write() as db:

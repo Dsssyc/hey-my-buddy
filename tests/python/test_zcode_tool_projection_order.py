@@ -4,8 +4,6 @@ from __future__ import annotations
 import unittest
 
 from buddy import tool_evidence
-from buddy.adapters.zcode_protocol import NativeError
-from buddy.adapters.zcode_read_only import ReadOnlyEvidence
 from buddy.adapters.zcode_tool_evidence import ZcodeToolFacts
 
 
@@ -16,7 +14,7 @@ ROOT = {"sessionId": "session", "turnId": "turn"}
 class NativeProjectionTests(unittest.TestCase):
     def setUp(self):
         self.facts = ZcodeToolFacts(BINDING)
-        self.protocol = ReadOnlyEvidence("session", "input", self.facts, 8)
+        self.facts.add_root("session", "turn")
         self.seq = 0
         self.telemetry_seq = 0
         self.operation_seq = 0
@@ -24,8 +22,8 @@ class NativeProjectionTests(unittest.TestCase):
 
     def canonical(self, kind, payload, **identity):
         self.seq += 1
-        self.protocol.observe({"method": "session/event", "params": {
-            **ROOT, **identity, "seq": self.seq, "type": kind, "payload": payload}}, self.seq)
+        self.facts.observe({"method": "session/event", "params": {
+            **ROOT, **identity, "seq": self.seq, "type": kind, "payload": payload}})
 
     def metadata(self, phase, call="read", name="Read", *, turn="turn", **extra):
         self.telemetry_seq += 1
@@ -35,7 +33,7 @@ class NativeProjectionTests(unittest.TestCase):
             params["turnId"] = turn
         if name is not None:
             params["toolName"] = name
-        self.protocol.observe({"method": "v4/telemetry/event", "params": params}, self.telemetry_seq)
+        self.facts.observe({"method": "v4/telemetry/event", "params": params})
 
     def operation(self, phase, call="read", name="Read", *, turn="turn"):
         self.operation_seq += 1
@@ -45,7 +43,7 @@ class NativeProjectionTests(unittest.TestCase):
             params["turnId"] = turn
         if name is not None:
             params["toolName"] = name
-        self.protocol.observe({"method": "computer-use/operation-event", "params": params}, self.operation_seq)
+        self.facts.observe({"method": "computer-use/operation-event", "params": params})
 
     def scheduled(self, call="read", name="Read"):
         self.operation("scheduled", call, name)
@@ -73,7 +71,6 @@ class NativeProjectionTests(unittest.TestCase):
         package = self.facts.finish(True)
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
-        self.assertFalse(self.protocol.completed)
 
     def test_metadata_terminal_cannot_replace_canonical_result(self):
         self.scheduled()
@@ -119,38 +116,15 @@ class NativeProjectionTests(unittest.TestCase):
                 self.scheduled()
                 params = {"kind": "tool.lifecycle", **ROOT, "eventSeq": 2,
                           "phase": "started", "toolCallId": "read", "toolName": "Read", **extra}
-                self.protocol.observe({"method": "v4/telemetry/event", "params": params}, 2)
+                self.facts.observe({"method": "v4/telemetry/event", "params": params})
                 self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
                 self.assertIsNotNone(self.judge())
         self.setUp()
-        with self.assertRaises(NativeError):
-            self.protocol.observe({"method": "v4/telemetry/event", "params": {
-                "kind": "tool.lifecycle", "sessionId": "foreign", "turnId": "foreign-turn",
-                "eventSeq": 1, "phase": "scheduled", "toolCallId": "read", "toolName": "Bash"}}, 1)
+        self.facts.observe({"method": "v4/telemetry/event", "params": {
+            "kind": "tool.lifecycle", "sessionId": "foreign", "turnId": "foreign-turn",
+            "eventSeq": 1, "phase": "scheduled", "toolCallId": "read", "toolName": "Bash"}})
         self.assertTrue(self.facts.finish(False)["events"])
-
-    def test_metadata_sequence_and_wrong_turn_are_still_rejected(self):
-        self.scheduled()
-        for seq in (1, 0, True):
-            with self.subTest(seq=seq), self.assertRaises(NativeError):
-                self.protocol.observe_metadata("v4/telemetry/event", {
-                    "kind": "tool.lifecycle", **ROOT, "eventSeq": seq,
-                    "phase": "started", "toolCallId": "read"})
-        with self.assertRaises(NativeError):
-            self.metadata("started", turn="foreign-turn")
-
-    def test_native_checkpoint_metadata_is_ordered_and_cannot_settle_the_turn(self):
-        self.scheduled()
-        self.result()
-        self.canonical("checkpoint.created", {"kind": "tool-result-artifact"})
-        self.assertFalse(self.protocol.completed)
-        self.assertFalse(self.protocol.settled)
-        self.assertIsNone(self.judge())
-        for identity in ({"turnId": "foreign"}, {"sessionId": "foreign"}):
-            with self.subTest(identity=identity), self.assertRaises(NativeError):
-                self.canonical("checkpoint.created", {}, **identity)
-        with self.assertRaisesRegex(NativeError, 'unknown read-only native event: future.event'):
-            self.canonical("future.event", {"secret": "not included in error"})
+        self.assertIsNotNone(self.judge())
 
     def test_late_metadata_and_conflicting_terminal_facts_remain_incomplete(self):
         self.scheduled()

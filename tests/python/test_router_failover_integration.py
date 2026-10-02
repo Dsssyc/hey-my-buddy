@@ -31,6 +31,11 @@ class FailoverTests(RouterDispatchTestCase):
             self.set_settings(ids=[A, B, C])
         if review:
             self.set_settings(mode="review")
+            # Review failover tests provide their own private capability for
+            # every dispatch; the real DSH review carrier is deferred.
+            self.enterContext(patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+                "eligible": True, "reasonCode": None, "reason": "private fixture",
+                "systemSandbox": False, "sameAttemptContinuation": True}))
         with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "private fixture",
                 "systemSandbox": False, "sameAttemptContinuation": True}):

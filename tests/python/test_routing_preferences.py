@@ -171,9 +171,9 @@ class DecisionCapabilityTests(unittest.TestCase):
             with self.subTest(native=native.name):
                 self.assertFalse(hasattr(native(), 'read_only_structured_verified'))
         self.assertFalse(Adapter().local_read_only_check()['eligible'])
-        self.assertTrue(DshAdapter().local_read_only_check()['eligible'])
+        self.assertFalse(DshAdapter().local_read_only_check()['eligible'])
         self.assertFalse(ZcodeAdapter().local_read_only_check()['eligible'])
-        self.assertTrue(DshAdapter.read_only_structured)
+        self.assertFalse(DshAdapter.read_only_structured)
         self.assertTrue(CodexAdapter.read_only_structured)
         self.assertTrue(ClaudeAdapter.read_only_structured)
         self.assertTrue(DshAdapter.no_tool_structured)

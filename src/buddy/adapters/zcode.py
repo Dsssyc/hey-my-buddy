@@ -1,13 +1,11 @@
 """ZCode coding adapter using its native app-server and a private finish MCP."""
 from __future__ import annotations
 
-from collections import OrderedDict
 import hashlib
 import json
 import math
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -17,23 +15,11 @@ from pathlib import Path
 from ..errors import BoardError
 from ..private_dirs import context_root, native_root, ensure_private_dir
 from .. import usage
-from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, ReadOnlyStructuredRequest, open_logs
+from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from .windows_process import owned_popen
 from . import turn_io
 from .zcode_config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths
 from .zcode_protocol import NativeError, decode_json
-
-#: The public CLI bundle text the free read-only check ever reads (plan L6).
-_MAX_PUBLIC_BUNDLE_BYTES = 32 * 1024 * 1024
-#: The free check's in-process cache bound: it only saves rescanning large
-#: public bundles and never persists, so a small bound covers the real set of
-#: installed CLIs without growing with the host's filesystem.
-_NATIVE_CONTRACT_CACHE_LIMIT = 8
-#: Keyed by resolved path and full stat identity; the value is the contract
-#: problem (``None`` qualified). Every read stats first, so a changed or missing
-#: file can never borrow an older positive.
-_NATIVE_CONTRACT_CACHE: OrderedDict[tuple[str, int, int, int, int, int], str | None] = OrderedDict()
-
 
 class ZcodeAdapter(Adapter):
     name = "zcode"
@@ -50,119 +36,17 @@ class ZcodeAdapter(Adapter):
     native_resume = True
     model_discovery = True
     no_tool_structured = True
-    # The review entry starts one restricted root native session per answer
-    # round through the accepted L6-A protocol helper: native ``mode: plan``, a
-    # Read/Glob/Grep tool allowlist, no MCP servers, no off-peak or dynamic
-    # workflow tools and no title generation. ZCode has no native OS sandbox,
-    # so none is claimed; the blackboard alone judges the recorded tool facts.
-    read_only_structured = True
-    read_only_structured_resume = True
-    read_only_tool_categories = ("read", "search")
-
     def start_no_tool_structured(self, context, request):
         from .read_only import start_no_tool
         return start_no_tool(self.name, context, request)
 
-    def start_read_only_structured(self, context: ExecutionContext,
-                                   request: ReadOnlyStructuredRequest) -> ProcessHandle:
-        """Start the restricted review controller after re-verifying its contract.
-
-        The free check runs against ``context.environment`` — the CLI selection
-        this attempt will actually start — so a qualified default installation
-        can never endorse a different command.
-        """
-        problem = self._native_contract_check(context.environment)
-        if problem is not None:
-            raise BoardError("UNSUPPORTED_ADAPTER", problem, adapter=self.name)
-        from .read_only import start
-        return start(self.name, context, request)
-
     def local_read_only_check(self) -> dict:
+        """Report the deferred Worker-carrier review without inspecting an SDK."""
         result = super().local_read_only_check()
-        if not result["eligible"]:
-            return result
-        problem = self._native_contract_check()
-        if problem is not None:
-            return {**result, "eligible": False, "reasonCode": "readonly-native-contract-unverified",
-                    "reason": problem}
+        if not self.read_only_structured:
+            return {**result, "reasonCode": "readonly-worker-carrier-unimplemented",
+                    "reason": "ZCode review on the Worker carrier is not implemented; its separate read-only channel was removed from stage 2"}
         return result
-
-    def _native_contract_check(self, environment: dict | None = None) -> str | None:
-        """The first read-only contract problem in the public CLI bundle text.
-
-        Locating the bundle uses only the CLI selection the runner itself would
-        start — the explicit dev-source path or an already selected harness
-        record — so this check is pure filesystem: it never runs ``--version``,
-        an app-server or a session, and it never reads provider configuration
-        or credentials. A CLI that is missing, not a public JS/CJS/MJS bundle,
-        unreadable, over 32 MiB or without the restricted mechanisms returns
-        its problem string; ``None`` only means the installed public text
-        carries the mechanisms — the runtime still verifies the actual native
-        session, model and mode reports. Results are cached per resolved path
-        and stat identity; a changed or missing file never borrows an older
-        positive, and the cache never decides by version or hash.
-        """
-        env = os.environ if environment is None else environment
-        try:
-            if env.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_ZCODE_CLI"):
-                path = Path(env["BUDDY_ZCODE_CLI"]).expanduser()
-                if not path.is_absolute():
-                    return "the public ZCode CLI path must be absolute for a read-only contract check"
-                path = path.resolve()
-                if not path.is_file():
-                    raise NativeError("adapter-unavailable", "ZCode CLI is missing")
-                command = [str(path)]
-            else:
-                from ..harness_runtime import selected
-                record = selected("zcode", env)
-                if record is None:
-                    return ("the ZCode CLI selection is not resolvable without a native probe; "
-                            "the public read-only bundle was not checked")
-                if record.get("status") != "ready" or not record.get("command"):
-                    return "the selected ZCode CLI is not ready for a public bundle check"
-                command = list(record["command"])
-        except (NativeError, BoardError) as error:
-            detail = (str(error) or "the CLI selection is unavailable")[:200]
-            return f"the public ZCode CLI bundle could not be located for the read-only contract check: {detail}"
-        cli = Path(command[-1]).expanduser()
-        if not cli.is_absolute():
-            return "the selected public ZCode CLI path must be absolute for a read-only contract check"
-        if cli.suffix not in (".js", ".cjs", ".mjs"):
-            return "the located ZCode CLI is not a public JS/CJS/MJS bundle to check"
-        try:
-            resolved = cli.resolve()
-            info = resolved.stat()
-            if not stat.S_ISREG(info.st_mode):
-                return "the located ZCode CLI bundle is not a regular public file"
-            if info.st_size > _MAX_PUBLIC_BUNDLE_BYTES:
-                return "the public ZCode CLI bundle exceeds the 32 MiB read-only contract bound"
-        except OSError:
-            return "the public ZCode CLI bundle could not be examined"
-        key = (str(resolved), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        if key in _NATIVE_CONTRACT_CACHE:
-            _NATIVE_CONTRACT_CACHE.move_to_end(key)
-            return _NATIVE_CONTRACT_CACHE[key]
-        try:
-            with resolved.open("rb") as stream:
-                before = os.fstat(stream.fileno())
-                content = stream.read(_MAX_PUBLIC_BUNDLE_BYTES + 1)
-                after = os.fstat(stream.fileno())
-            if len(content) > _MAX_PUBLIC_BUNDLE_BYTES:
-                return "the public ZCode CLI bundle exceeds the 32 MiB read-only contract bound"
-            latest = resolved.stat()
-            identities = [(item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
-                          for item in (info, before, after, latest)]
-            if len(set(identities)) != 1:
-                return "the public ZCode CLI bundle changed during the read-only contract check"
-            text = content.decode("utf-8", errors="replace")
-        except (OSError, UnicodeError):
-            return "the public ZCode CLI bundle could not be read"
-        from .zcode_read_only import native_contract_problem
-        problem = native_contract_problem(text)
-        _NATIVE_CONTRACT_CACHE[key] = problem
-        while len(_NATIVE_CONTRACT_CACHE) > _NATIVE_CONTRACT_CACHE_LIMIT:
-            _NATIVE_CONTRACT_CACHE.popitem(last=False)
-        return problem
 
     def available(self) -> tuple[bool, str | None]:
         from ..harness_runtime import selected

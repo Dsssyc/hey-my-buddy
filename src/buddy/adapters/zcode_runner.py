@@ -936,6 +936,9 @@ def _drain_structured(connection, result: dict, tools: ZcodeToolFacts, channel: 
 
 
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
+    if "readOnlyRequest" in control:
+        return {"status": "error", "code": "readonly-worker-carrier-unimplemented", "modelStarted": False,
+                "processState": {"shutdownConfirmed": True}}, 1
     started_at = time.monotonic()
     deadline = execution_deadline(control["timeoutSeconds"])
     directory = Path(control["directory"])
@@ -983,10 +986,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     handle = ProcessHandle(process, own_group=True, log_paths={})
     result = {"status": "error", "mode": "zcode", "harnessVersion": version,
               "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
-    # Both structured entries — the no-tool call and the restricted read-only
-    # review — share this controller's fact discipline: one collector before
+    # The fast structured entry keeps one fact collector before
     # the native handshake, no MCP finish bridge, no governed turn authority.
-    structured = bool(control.get("noToolRequest") or control.get("readOnlyRequest"))
+    structured = bool(control.get("noToolRequest"))
     record = None
     session_id = None
     connection = None
@@ -999,14 +1001,10 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             # The collector's binding is the control file's own program
             # identity; the projection spans every correction session and is
             # installed before the runtime handshake so no native tool fact is
-            # lost. The read-only admission filter keeps tool.updated facts.
+            # lost. Refused tool.updated calls remain in the evidence.
             tools = ZcodeToolFacts({"adapter": "zcode", "taskId": control["taskId"],
                                     "attemptId": control["attemptId"], "generation": control["generation"]})
-            if control.get("noToolRequest"):
-                connection.observe = tools.observe_with(_no_tool_preflight)
-            else:
-                from .zcode_read_only import _read_only_preflight
-                connection.observe = tools.observe_with(_read_only_preflight)
+            connection.observe = tools.observe_with(_no_tool_preflight)
         connection.call("runtime/capabilities", {})
         workspace = {"workspacePath": control["cwd"], "workspaceKey": control["cwd"]}
         if control.get("discover"):
@@ -1015,16 +1013,6 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             result = {**result, "status": "ok", "catalog": catalog(snapshot, access, version)}
         elif control.get("noToolRequest"):
             session_id = _no_tool_call(connection, control, result, workspace, access, tools)
-            result.update(status="ok")
-        elif control.get("readOnlyRequest"):
-            # The restricted review loop — the root session parameters, the
-            # subscription handshake, the Read/Glob/Grep allowance, the single
-            # format correction and every round's close — is the accepted L6-A
-            # helper. This controller owns only the process, the deadline and
-            # the structured finish below; it never proves the native group
-            # stopped and never judges the recorded tool categories.
-            from .zcode_read_only import read_only_call
-            session_id = read_only_call(connection, control, result, workspace, access, tools)
             result.update(status="ok")
         else:
             turn_input = decode_json(Path(control["inputFile"]).read_bytes())
@@ -1242,11 +1230,6 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 result["nativeEvidence"] = {"eventCount": result.get("nativeEventCount"),
                                             "toolAllowlist": [], "titleGenerationEnabled": False,
                                             "streamEof": True}
-            if (result["status"] == "ok" and isinstance(control.get("readOnlyRequest"), dict)
-                    and control["readOnlyRequest"].get("captureEvidence")):
-                # Only facts this controller actually observed: the native
-                # protocol reports no allowlist echo, and none is invented.
-                result["nativeEvidence"] = {"streamEof": bool(eof)}
         if tools is not None:
             # Every structured receipt carries the attempt's toolEvidence: the
             # stream is complete only when it drained to EOF, each root session

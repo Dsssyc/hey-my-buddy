@@ -305,8 +305,7 @@ def main() -> int:
     try:
         control = json.loads(Path(args.control).read_text())
         if "readOnlyRequest" in control:
-            from .dsh_read_only import run as run_read_only
-            result, code = run_read_only(control, cancelled)
+            result, code = problem("readonly-worker-carrier-unimplemented"), 1
         else:
             result, code = run(control, cancelled)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

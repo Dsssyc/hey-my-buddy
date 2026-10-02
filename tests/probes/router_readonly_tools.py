@@ -23,7 +23,7 @@ from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
 from buddy.adapters.turn_io import private_json
 from buddy.db import canonical_json, sha256_text
 
-ADAPTERS = ('codex', 'claude', 'dsh', 'zcode')
+ADAPTERS = ('codex', 'claude')
 CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-sol:high')
 
 
