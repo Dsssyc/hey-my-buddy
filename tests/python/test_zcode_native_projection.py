@@ -101,6 +101,16 @@ class NativeProjectionTests(unittest.TestCase):
         self.assertIsNotNone(self.judge())
         self.assertEqual(self.facts.finish(True)["events"][0]["nativeIdentity"], {"sessionId": "session"})
 
+    def test_optional_turn_requires_a_unique_known_native_call(self):
+        self.scheduled()
+        self.facts.add_root("session", "second-turn")
+        self.facts.observe({"method": "session/event", "params": {
+            "sessionId": "session", "turnId": "second-turn", "type": "tool.updated", "seq": 3,
+            "payload": {"kind": "scheduled", "toolCallId": "read", "toolName": "Read"}}})
+        self.metadata("started", turn=None)
+        self.assertFalse(self.facts.finish(True)["streamComplete"])
+        self.assertEqual(self.facts.finish(True)["events"][-1]["nativeIdentity"], {"sessionId": "session"})
+
     def test_names_scope_and_foreign_metadata_remain_incomplete(self):
         for extra in ({"toolName": "Bash"}, {"childSessionId": "child"}, {"background": True},
                       {"parentToolCallId": "parent"}, {"phase": "future"}):
@@ -141,16 +151,16 @@ class NativeProjectionTests(unittest.TestCase):
         self.assertIsNotNone(self.judge())
 
     def test_batch_cannot_complete_or_hide_unknown_calls(self):
-        for payload in (
-                {"toolCallIds": ["read"], "successCount": 1, "errorCount": 0},
-                {"toolCallIds": ["missing"], "successCount": 1, "errorCount": 0},
-                {"toolCallIds": ["read", "read"], "successCount": 2, "errorCount": 0},
-                {"toolCallIds": ["read"], "successCount": True, "errorCount": 0},
-                {"toolCallIds": ["read"], "successCount": 0, "errorCount": 1}):
+        for ended, payload in (
+                (False, {"toolCallIds": ["read"], "successCount": 1, "errorCount": 0}),
+                (True, {"toolCallIds": ["missing"], "successCount": 1, "errorCount": 0}),
+                (True, {"toolCallIds": ["read", "read"], "successCount": 2, "errorCount": 0}),
+                (True, {"toolCallIds": ["read"], "successCount": True, "errorCount": 0}),
+                (True, {"toolCallIds": ["read"], "successCount": 0, "errorCount": 1})):
             with self.subTest(payload=payload):
                 self.setUp()
                 self.scheduled()
-                if payload["toolCallIds"] != ["read"] or payload["successCount"] != 1:
+                if ended:
                     self.result()
                 self.canonical("tool.updated", {"kind": "batch", **payload})
                 self.assertIsNotNone(self.judge())
