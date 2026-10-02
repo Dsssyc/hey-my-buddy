@@ -118,7 +118,7 @@ Python controller 消费 ReadOnlyStructuredRequest，模型前用免费 dump-con
 | L5-0B-DSH 快速证据 | dsh_runner/no-tool 原生事实收集 | 不提前接只读工具、重做原生工具或循环 | 原生无工具回执/失败/纠正绑定，不伪造工具事件 | 0A 后独立 worktree |
 | L5-0B-ZCode 快速证据 | zcode_runner 无工具分支的事实投影 | 不提前实现审阅、不改普通 Worker/MCP | 工具/foreign/子/late/断流事实、无工具回归 | 0A 后独立 worktree |
 | L5-0B-Host 合并接线 | DecisionAdapter 透传、read_only.collect 去重复政策判断、发布处替换旧零工具判定、模拟回执迁移 | 不改四个原生运行方式或纯证据规则 | 四种投影加同一发布矩阵；保留原测试场景 | 四个投影合入后；再开始 L5-A/L6-A |
-| L5-A DSH 只读原生插件 | 新 Node 原生 Agent/ToolRuntime 桥接、原生 API 夹具、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | 原生 read/glob/grep、scope/视图限制、call/result/flush、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0B 后；与 L6-A 可并行，各自 worktree |
+| L5-A DSH 只读原生插件 | 新 Node 原生 Agent/ToolRuntime 桥接、原生 API 夹具、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | 原生 read/glob/grep、scope/视图限制、call/result/flush、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0A 后；Node 原生桥接只消费稳定事实 DTO，与四个 0B 投影独立；B 接线仍等全部 0B |
 | L5-B DSH controller 接线 | adapter/start、独立 Python controller、私有 profile preflight、夹具与包装 | 不改分类/判定、不修改日常配置、不跑真实模型 | dump-config、身份、纠正、owned stop、timeout/cancel、黑板四防护；DSH/no-tool 回归 | L5-A 合入后；Host 写记录并完整检查 |
 | L6-A ZCode 受限协议 | zcode_read_only.py 的 session 参数与结构化回合，mock app-server、使用 L5 证据 | 不改普通 runner 调度、设置或 MCP/Worker，不跑真实模型 | 严格参数/配置回报、工具事件/序号/身份、完整流、纠正/预算、close/cancel，不虚构工具回显 | L4 与 L5-0B 验收后，可与 L5-A 并行 |
 | L6-B ZCode controller 接线 | adapter、runner 独立 readOnlyRequest 分支、资格启用和集成测试 | 不改分类/判定、普通 Worker/no-tool/账户，不跑真实模型 | 身份/模型/强度、生命周期/stop、四防护、不可用边界；ZCode/no-tool 回归 | L6-A 合入后；Host 写记录并完整检查 |
@@ -200,3 +200,7 @@ L4 完整检查前细化 L5-0B：四个原生事件面拆成独立 Codex、Claud
 0B 的原生投影须先于旧过滤/拒绝路径观察事件；保留原生权限/有效策略、协议身份、预算、停止机制。既有 zeroToolVerified 可作为兼容名称的零调用事实保留，但不自行给允许类别结论；read_only.collect 和 DecisionAdapter 的重复工具政策门槛由 0B-Host 移至黑板唯一判定。只有协议/身份/原生执行无法继续时才报告实际控制器失败，分类事实仍保留；缺失 ID 用 observe_incomplete。Claude 缺逐帧 session_id 的根帧可由已确认 system/init 的单根流与 parent_tool_use_id 关联，子流不得继承根身份；Codex 缺 turnId 且无法证明当前根回合时作不完整，不能用后到事件猜测。
 
 0B 开工前核对发现快速入口的私有 control 还没有 taskId/attemptId/generation；Host 补入这三个已有程序身份，给证据 binding 使用，不传给模型 prompt/schema，不增加 Router 权限。四个投影任务只消费已经提交的同一接口。
+
+静态核对后解除 L5-A 对四个投影的过强依赖：Node 原生桥接只需要 0A 已固定的事实 DTO，改动仅新 Node 插件和其 native API 夹具，与四个 0B 的文件和运行独立，可先并行。L5-B 的 Python 接线、启用资格和模块验收仍等待 0B 全部合入；L6 保持原依赖。监控容量不足时仅临时前台 await 同一 Node run，空位出现后再建立一个监控，不增第二个 run。
+
+L5-A 的桥接输入固定为 callId/cwd/spec/prompt/outputSchema/budget（timeoutSeconds/toolCalls；Python 已扣除之前纠正耗用），只读 profile 的 Node config 另含 timeoutMs。输出 status/code/modelStarted/rawAnswer/resolved/observed/nativeIdentity/usage/nativeToolEvents/nativeToolEventsTruncated/streamComplete；nativeToolEvents 仅含 nativeIdentity/callId/toolName-or-type/phase，Python 控制器用公共收集器补 binding 与完整 toolEvidence。原生 Agent.options 与每次 request/header.header.config、header.tools 都需核对请求身份与精确三工具集合；header 在原生 prepareCall 后、stream 前由 Session.append 产生，发现不符同步 cancel 并拒绝后续模型输入。session/event 的 turn/start、tool/call、tool/result、assistant/message、turn/end 和 SessionRegistry.flush 是完整性依据，纯文本自称完成不算。消息使用 Agent.followup/whenIdle，成功 turn/end.reason.kind 必须 completed，flush 成功后先保留结果再 dispose；异常/预算/取消统一 dispose，未能确认则留下明确停止未知。
