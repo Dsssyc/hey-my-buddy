@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 from . import schemas, user_policy
-from . import selection_policy, router
+from . import selection_policy, router, tool_evidence
 from .db import canonical_json, sha256_text
 from .errors import BoardError
 
@@ -927,6 +927,19 @@ class DecisionCoordinator:
                          error="router-table-changed", output={"status": "error", "code": "router-table-changed"})
             self._cancel_queued_task(connection, task, now, "Frozen routing table changed")
             return "decision-closed", None
+        # Freeze the local system-sandbox program fact for this attempt inside
+        # the claim transaction (ADR-021 §4): publication judges tool evidence
+        # against the board's own read_health fact captured here, never a value
+        # the answer claims. The fact lives in this attempt's durable row, beside
+        # the claim-frozen account binding, so the frozen model-input document
+        # itself stays byte-identical from admission to publication.
+        from .harness_health import read_health
+        connection.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("attempt-tool-policy:" + attempt_id,
+             canonical_json({"systemSandbox": bool(read_health(connection, profile_row["adapter"])["systemSandbox"])})),
+        )
         reader_id = self._admit_reader(connection, now, timeout_seconds=timeout)
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation, reader_id=reader_id,
@@ -1223,6 +1236,63 @@ class DecisionCoordinator:
         row = connection.execute('SELECT value FROM meta WHERE key=?', ('attempt-routing-accounts:' + attempt['attempt_id'],)).fetchone()
         bindings = json.loads(row[0]) if row else {}
         return any(account != identity(selection(connection, name)) for name, account in bindings.items())
+
+    @staticmethod
+    def _attempt_tool_policy(connection: sqlite3.Connection, attempt_id: str) -> dict | None:
+        """The toolPolicy this attempt froze at claim, or ``None`` for older attempts."""
+        row = connection.execute("SELECT value FROM meta WHERE key=?", ("attempt-tool-policy:" + attempt_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def _tool_evidence_problem(self, row: sqlite3.Row, document: dict, output: dict) -> dict | None:
+        """The blackboard wrapper over the unified tool-evidence judgment.
+
+        Not wired into publication yet: the existing per-mode checks stay in
+        force until the Host switches them over in one step, and the retired
+        ``zeroToolVerified`` receipt never serves as review evidence. This
+        wrapper binds a receipt's ``toolEvidence`` to the frozen attempt before
+        the pure judge runs: the binding must equal the frozen
+        adapter/task/attempt/generation, every root identity the receipt reports
+        must be one the evidence trusts, and the claim-frozen
+        ``toolPolicy.systemSandbox`` boolean — never a receipt claim — selects
+        the review category matrix. The document carries that boolean because
+        the publication caller grafts :meth:`_attempt_tool_policy` onto the
+        frozen input; a document from an attempt that froze no policy — an old
+        or unbound result — cannot publish.
+        """
+        unverified = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
+        evidence = output.get("toolEvidence") if isinstance(output, dict) else None
+        if evidence is None:
+            return {"code": unverified, "reason": "Router publication requires unified tool evidence"}
+        reported = output.get("nativeIdentity") if isinstance(output, dict) else None
+        reported = reported if isinstance(reported, list) else ([reported] if isinstance(reported, dict) else None)
+        if reported is None:
+            return {"code": unverified, "reason": "The receipt reports no native root identity"}
+        expected_binding = {
+            "adapter": (document.get("profile") or {}).get("adapter"),
+            "taskId": row["decision_task_id"],
+            "attemptId": row["decision_attempt_id"],
+            "generation": row["decision_generation"],
+        }
+        if not isinstance(evidence, dict) or evidence.get("binding") != expected_binding:
+            return {"code": unverified, "reason": "The tool evidence binding does not equal this attempt's frozen binding"}
+        roots = evidence.get("nativeIdentity")
+        if not isinstance(roots, list) or any(identity not in roots for identity in reported):
+            return {"code": unverified, "reason": "The tool evidence does not cover the receipt's root identities"}
+        policy = document.get("toolPolicy")
+        sandbox = policy.get("systemSandbox") if isinstance(policy, dict) else None
+        if not isinstance(sandbox, bool):
+            # A result from before this attempt froze its tool policy — or from a
+            # foreign attempt's document — has no board-owned sandbox fact to judge by.
+            return {"code": unverified, "reason": "No claim-frozen systemSandbox fact exists for this attempt"}
+        judged = tool_evidence.judge_tool_evidence(evidence, document.get("routingMode"), sandbox)
+        if judged is None:
+            return None
+        reason = (
+            "Router tool evidence is incomplete, inconsistent or malformed"
+            if judged == unverified
+            else "Router tool evidence records a call outside the frozen tool policy"
+        )
+        return {"code": judged, "reason": reason}
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> None:
         """Validate one select recommendation against the frozen candidate set.
