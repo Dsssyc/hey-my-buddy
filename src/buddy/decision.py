@@ -1633,7 +1633,8 @@ class DecisionCoordinator:
             return refuse("router-stop-unconfirmed", "Router publication requires native and controller stop evidence")
         if output.get("status") != "ok":
             code = output.get("code")
-            code = code if isinstance(code, str) and code and len(code) <= 128 and not any(ord(c) < 32 for c in code) else "router-no-answer"
+            code = code if (isinstance(code, str) and code.strip() and len(code) <= 128
+                            and not any(ord(c) < 32 or ord(c) == 127 for c in code)) else "router-no-answer"
             return refuse(code, str(output.get("reason") or output.get("error") or "The bounded Router call produced no usable answer")[:MAX_DECISION_REASON])
         if review and (not isinstance(verification, dict) or verification.get("unchanged") is not True
                        or not isinstance(verification.get("snapshotSha256"), str) or not verification["snapshotSha256"]

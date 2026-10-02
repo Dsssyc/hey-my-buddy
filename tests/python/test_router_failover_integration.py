@@ -123,6 +123,7 @@ class FailoverTests(RouterDispatchTestCase):
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 2)
+
         self.assertEqual([e[1]["profileId"] for e in self.outcomes()], [A, B])
         self.assertEqual(self.snapshot_of(request["decisionId"]), frozen)
         self.assertEqual(self.dispatch_of(request["runId"]), before)
@@ -137,6 +138,16 @@ class FailoverTests(RouterDispatchTestCase):
                 self.assertEqual(payload["result"], expected)
         self.assertIsNone(self.claim("after-final")["claim"])
         self.assertEqual(len(self.tasks()), 2)
+
+    def test_del_in_native_error_code_is_normalized_without_losing_failover(self):
+        request, first = self.start()
+        self.assert_switch(request, first, self.failure(first, "provider-error\u007f"), status="failed")
+        self.assertEqual(self.outcomes()[0][1]["code"], "router-no-answer")
+
+    def test_blank_native_error_code_is_normalized_without_losing_failover(self):
+        request, first = self.start()
+        self.assert_switch(request, first, self.failure(first, "   "), status="failed")
+        self.assertEqual(self.outcomes()[0][1]["code"], "router-no-answer")
 
     def test_three_items_stop_at_first_valid_answer_and_keep_parent_pending_between(self):
         request, first = self.start(three=True, governed=True)
