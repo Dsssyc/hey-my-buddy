@@ -11,13 +11,15 @@ from buddy.adapters.dsh import DshAdapter
 from buddy.errors import BoardError
 from support import InProcessBoard
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE_ID
+from fixtures.router_tool_receipt import claim_tool_receipt
 
 NONCE = 'g' * 32
 
 
-def stopped_answer(document, *, profile_id=PROFILE_ID):
+def stopped_answer(claim, *, profile_id=PROFILE_ID):
     """A deterministic native receipt, with each required fact explicit."""
-    return {'status': 'ok', 'operation': 'select', 'tableRevision': document['tableRevision'],
+    document = claim['decisionInput']
+    return {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'tableRevision': document['tableRevision'],
             'requested': document['profile'], 'usage': {'elapsedMs': 100, 'toolCalls': 0},
             'zeroToolVerified': True,
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
@@ -136,7 +138,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertIsNone(blocked['claim'])
         self.assertEqual(blocked['reason'], 'model-capacity')
         self.assertEqual(self.decision(board, second['decisionId'])['status'], 'queued')
-        self.report(board, claim, stopped_answer(claim['decisionInput']), shutdown=False)
+        self.report(board, claim, stopped_answer(claim), shutdown=False)
         blocked = self.claim_route(board, second, worker='other', command='unknown-stop')
         self.assertIsNone(blocked['claim'])
         self.assertEqual(blocked['reason'], 'model-capacity')
@@ -155,7 +157,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
         claim = self.claim_route(board, first)['claim']
-        self.report(board, claim, stopped_answer(claim['decisionInput']))
+        self.report(board, claim, stopped_answer(claim))
         self.assertEqual(self.decision(board, first['decisionId'])['status'], 'completed')
         next_claim = self.claim_route(board, second, worker='other', command='next')['claim']
         self.assertIsNotNone(next_claim)
@@ -178,7 +180,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 self.seed(board)
                 request = self.request(board)
                 claim = self.claim_route(board, request)['claim']
-                answer = stopped_answer(claim['decisionInput'])
+                answer = stopped_answer(claim)
                 answer[field] = replacement
                 self.report(board, claim, answer)
                 decision = self.decision(board, request['decisionId'])
@@ -194,8 +196,9 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
-        answer = stopped_answer(claim['decisionInput'])
+        answer = stopped_answer(claim)
         answer['usage'] = {'elapsedMs': 300000, 'toolCalls': 24, 'bytesRead': None}
+        answer.update(claim_tool_receipt(claim, 24))
         self.report(board, claim, answer)
         self.assertEqual(self.decision(board, request['decisionId'])['status'], 'completed')
 
@@ -218,7 +221,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
-        output = stopped_answer(claim['decisionInput'])
+        output = stopped_answer(claim)
         with board.store.db.write() as connection:
             task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (request['runId'],)).fetchone()
             attempt = dict(connection.execute('SELECT * FROM attempts').fetchone())
@@ -318,7 +321,7 @@ class SingleRouterClaimTests(DecisionTestCase):
             if kwargs['status'] == 'completed':
                 raise BoardError('fixture-failure', 'fail after choice and event publication')
         with patch.object(board.store.decisions, '_finish', side_effect=failed_finish):
-            response = self.report(board, claim, stopped_answer(claim['decisionInput']))
+            response = self.report(board, claim, stopped_answer(claim))
         self.assertTrue(response['committed'])
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'needs-host')
@@ -337,7 +340,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-resource-missing', 'reason': 'removed controller',
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
-            self.report(board, claim, stopped_answer(claim['decisionInput']))
+            self.report(board, claim, stopped_answer(claim))
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'needs-host')
         self.assertEqual(decision['output']['code'], 'router-review-unsupported')

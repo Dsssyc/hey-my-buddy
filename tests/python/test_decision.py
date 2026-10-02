@@ -21,6 +21,7 @@ from test_evaluation import EvaluationTestCase as EvaluationFixtures
 from buddy.errors import BoardError
 from buddy import router
 from fixtures import mock_readonly
+from fixtures.router_tool_receipt import claim_tool_receipt
 from buddy.worker.worker import Worker
 
 PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -931,6 +932,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(restarted.call("console_snapshot", {})["gate"]["readers"], 0)
 
         envelope = {
+            **claim_tool_receipt(claim),
             "status": "ok",
             "operation": "select",
             "tableRevision": decision["expectedRevision"],
@@ -964,6 +966,7 @@ class DecisionFailureTests(DecisionTestCase):
         claim = client.claim("w-replay", "claim-replay", "n" * 32, task_id=request["runId"])["claim"]
         document = claim["decisionInput"]
         envelope = {
+            **claim_tool_receipt(claim),
             "status": "ok",
             "operation": "select",
             "tableRevision": document["tableRevision"],

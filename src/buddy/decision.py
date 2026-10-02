@@ -1246,9 +1246,7 @@ class DecisionCoordinator:
     def _tool_evidence_problem(self, row: sqlite3.Row, document: dict, output: dict) -> dict | None:
         """The blackboard wrapper over the unified tool-evidence judgment.
 
-        Not wired into publication yet: the existing per-mode checks stay in
-        force until the Host switches them over in one step, and the retired
-        ``zeroToolVerified`` receipt never serves as review evidence. This
+        ``zeroToolVerified`` never substitutes for the event stream. This
         wrapper binds a receipt's ``toolEvidence`` to the frozen attempt before
         the pure judge runs: the binding must equal the frozen
         adapter/task/attempt/generation, every root identity the receipt reports
@@ -1319,13 +1317,6 @@ class DecisionCoordinator:
             return
         usage = output.get("usage")
         budget = document.get("budget") or {}
-        if document.get("routingMode") == "fast":
-            if (not isinstance(usage, dict) or output.get("zeroToolVerified") is not True
-                    or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0):
-                self._finish(connection, row, status="needs-host", now=now,
-                             output={**output, "code": "router-tools-forbidden"}, error="router-tools-forbidden",
-                             reason="Fast routing requires a complete zero-tool native receipt")
-                return
         if (not isinstance(usage, dict) or type(usage.get("elapsedMs")) is not int
                 or usage["elapsedMs"] < 0 or type(usage.get("toolCalls")) is not int
                 or usage["toolCalls"] < 0):
@@ -1338,6 +1329,17 @@ class DecisionCoordinator:
             self._finish(connection, row, status="needs-host", now=now,
                          output={**output, "code": "router-budget-exhausted"}, error="router-budget-exhausted",
                          reason="Router publication exceeds the frozen time or cumulative tool budget")
+            return
+        policy = self._attempt_tool_policy(connection, row["decision_attempt_id"])
+        evidence_document = {**document, "toolPolicy": policy}
+        problem = self._tool_evidence_problem(row, evidence_document, output)
+        if problem is None and usage["toolCalls"] != output["toolEvidence"]["toolCalls"]:
+            problem = {"code": "router-tool-evidence-unverified",
+                       "reason": "The receipt's tool count differs from its native events"}
+        if problem is not None:
+            self._finish(connection, row, status="needs-host", now=now,
+                         output={**output, "code": problem["code"]},
+                         error=problem["code"], reason=problem["reason"])
             return
         manifest = document.get("executionWorkspace")
         verification = output.get("inputVerification")

@@ -252,12 +252,6 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
         pass
     if not isinstance(payload, dict):
         payload = {"status": "error", "code": "invalid-native-result"}
-    if getattr(handle, "no_tool", False) is True and payload.get("status") == "ok" and (
-            payload.get("zeroToolVerified") is not True or
-            type((payload.get("usage") or {}).get("toolCalls")) is not int or
-            (payload.get("usage") or {}).get("toolCalls") != 0):
-        payload = {"status": "error", "code": "invalid-native-result",
-                   "processState": payload.get("processState", {})}
     stopped = (payload.get("processState", {}).get("shutdownConfirmed") is True
                and handle.shutdown_confirmed() is True)
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from buddy.db import SCHEMA_VERSION
 from buddy.decision import MAX_DECISION_TASK_BYTES
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 from buddy.worker.worker import Worker
 from test_decision import (DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
                              SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID)
@@ -47,7 +48,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
-            "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
                        "stopEvidence": {"shutdownConfirmed": shutdown, "native": {"shutdownConfirmed": shutdown}},
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},

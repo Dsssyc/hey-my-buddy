@@ -27,6 +27,7 @@ from buddy.adapters.claude import ClaudeAdapter
 from buddy.adapters.zcode import ZcodeAdapter
 from buddy import router
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
 from test_evaluation import family_key
 from test_workflow import CONFIGURATION, WorkflowTestCase
@@ -345,7 +346,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+            "result": {**claim_tool_receipt(owned["claim"]), "status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
@@ -382,7 +383,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+            "result": {**claim_tool_receipt(owned["claim"]), "status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},

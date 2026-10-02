@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from buddy import router, schemas
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 from support import BoardTestCase
 from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
 
@@ -159,21 +160,28 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         self.configure(board, routerProfileId=PROFILE_ID, defaultRoutingMode='fast')
         nonce = 'nonce-abcdefghijklmnop'
-        for index, (proof, count, expected) in enumerate(((True, 0, 'completed'), (None, 0, 'needs-host'), (True, 1, 'needs-host'), (True, False, 'needs-host'))):
+        for index, (proof, count, expected, code) in enumerate((
+                (True, 0, 'completed', None),
+                (None, 0, 'needs-host', 'router-tool-evidence-unverified'),
+                (True, 1, 'needs-host', 'router-tools-forbidden'),
+                (True, False, 'needs-host', 'router-tool-evidence-unverified'))):
             result = board.call('selection_request', {'requestId': f'proof-{index}', 'task': 'choose'})
             worker = f'router-{index}'
             board.call('worker_register', {'workerId': worker, 'adapter': 'decision', 'capabilities': ['decision']})
             claim = board.client().claim(worker, f'proof-claim-{index}', nonce, task_id=result['runId'])['claim']
+            facts = claim_tool_receipt(claim, count if type(count) is int else 0)
+            if proof is None:
+                facts.pop('toolEvidence')
             board.call('worker_result', {'workerId': worker, 'attemptId': claim['attempt']['attemptId'],
                 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True,
-                'result': {'status': 'ok', 'operation': 'select', 'tableRevision': claim['decisionInput']['tableRevision'],
+                'result': {**facts, 'status': 'ok', 'operation': 'select', 'tableRevision': claim['decisionInput']['tableRevision'],
                     'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                     'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count},
                     'decision': {'profileId': PROFILE_ID, 'reason': 'card match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':
-                self.assertEqual(decision['error'], 'router-tools-forbidden')
+                self.assertEqual(decision['error'], code)
 
     def test_conversion_is_pure_and_does_not_migrate_board_or_schema(self):
         from buddy.router_settings import convert_legacy_router_settings

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from buddy.decision import SOLE_CANDIDATE_REASON
+from fixtures.router_tool_receipt import claim_tool_receipt
 from test_decision import (
     DecisionTestCase,
     PROFILE,
@@ -274,7 +275,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
             "generation": claim["attempt"]["generation"], "nonce": "n" * 16,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "operation": "select",
+            "result": {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
                        "tableRevision": claim["decisionInput"]["tableRevision"],
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
@@ -348,7 +349,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
             "generation": claim["attempt"]["generation"], "nonce": "n" * 16,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "operation": "select",
+            "result": {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
                        "tableRevision": claim["decisionInput"]["tableRevision"],
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},

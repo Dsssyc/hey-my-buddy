@@ -96,6 +96,7 @@ class DecisionAdapter(Adapter):
             "resolved": native_result.get("resolved"), "observed": native_result.get("observed"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
+            "toolEvidence": native_result.get("toolEvidence"),
             "harnessVersion": native_result.get("harnessVersion"),
             "nativeEvidence": native_result.get("nativeEvidence"),
             "nativeFailure": native_result.get("nativeFailure"),
@@ -116,9 +117,6 @@ class DecisionAdapter(Adapter):
         if code == "readonly-policy-unverified":
             code = "router-review-unavailable"
             result.update(reason="The native review permission policy could not be verified")
-        if document.get("routingMode") == "fast" and outcome.status == "ok":
-            if native_result.get("zeroToolVerified") is not True or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0:
-                code = "router-tools-forbidden"
         if verification is not None and not verification["unchanged"]:
             code = "router-input-changed"
         if code is None and outcome.status == "ok":

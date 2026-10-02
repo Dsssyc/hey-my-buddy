@@ -5,8 +5,8 @@ private state directory (no model call): the claim path freezes the local
 system-sandbox program fact into this attempt's durable row, and
 ``DecisionCoordinator._tool_evidence_problem`` binds a receipt's ``toolEvidence``
 to that frozen attempt before the single judge runs, judging by the toolPolicy
-the wiring grafts onto the frozen input document. The wrapper stays unwired in
-L5-0A; these tests exercise it directly.
+the publication transaction grafts onto the frozen input document. The suite
+checks the pure wrapper and the real publication boundary.
 """
 import json
 import unittest
@@ -15,6 +15,8 @@ from unittest.mock import patch
 from test_decision import DecisionTestCase, PROFILE_ID
 
 from buddy import tool_evidence
+from support import InProcessBoard
+from test_single_router_claims import stopped_answer
 
 NONCE = "nonce-abcdefghijklmnop"
 ROOT = {"sessionId": "session-1", "turnId": "turn-1"}
@@ -30,6 +32,70 @@ def settled(category, call_id, identity=None, tool="native-tool"):
 
 
 class RouterToolEvidenceTests(DecisionTestCase):
+    def test_publication_uses_one_matrix_and_the_claim_policy(self):
+        cases = (
+            ('fast', False, None, True, None),
+            ('fast', True, 'read', True, 'router-tools-forbidden'),
+            ('review', True, 'execute', True, None),
+            ('review', False, 'read', True, None),
+            ('review', False, 'search', True, None),
+            ('review', False, 'execute', True, 'router-tools-forbidden'),
+            ('review', True, 'edit', True, 'router-tools-forbidden'),
+            ('review', True, 'fetch', True, 'router-tools-forbidden'),
+            ('review', True, 'other', True, 'router-tools-forbidden'),
+            ('review', False, 'read', False, 'router-tool-evidence-unverified'),
+        )
+        for number, (mode, sandbox, category, complete, expected) in enumerate(cases):
+            with self.subTest(mode=mode, sandbox=sandbox, category=category, complete=complete):
+                board = InProcessBoard(self.directory / f'publication-{number}')
+                self._stack.append(board)
+                self.seed(board)
+                self.configure(board, defaultRoutingMode=mode)
+                with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+                        'eligible': True, 'reasonCode': None, 'reason': None,
+                        'systemSandbox': sandbox, 'sameAttemptContinuation': False}):
+                    requested, claim = self.request_route(board, f'matrix-{number}')
+                events = settled(category, 'call-1') if category else []
+                package = self.package_for(claim, requested, events, stream_complete=complete)
+                output = {**stopped_answer(claim), 'nativeIdentity': ROOT, 'toolEvidence': package,
+                          'toolPolicy': {'systemSandbox': True}, 'zeroToolVerified': False,
+                          'usage': {'elapsedMs': 100, 'toolCalls': 1 if category else 0}}
+                board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
+                           'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok',
+                           'shutdownConfirmed': True, 'result': output})
+                view = self.decision(board, requested['decisionId'])
+                self.assertEqual(view['status'], 'needs-host' if expected else 'completed')
+                self.assertEqual(view.get('error'), expected)
+                self.assertEqual(view['selectedProfile'] is None, expected is not None)
+                with board.store.db.read() as connection:
+                    self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
+                board.close()
+                self._stack.remove(board)
+
+    def test_publication_rejects_usage_mismatch_and_unbound_old_attempts(self):
+        for number, missing_policy in enumerate((False, True)):
+            with self.subTest(missing_policy=missing_policy):
+                board = InProcessBoard(self.directory / f'unbound-{number}')
+                self._stack.append(board)
+                self.seed(board)
+                requested, claim = self.request_route(board, f'bad-evidence-{number}')
+                output = stopped_answer(claim)
+                if missing_policy:
+                    with board.store.db.write() as connection:
+                        connection.execute('DELETE FROM meta WHERE key=?',
+                                           ('attempt-tool-policy:' + claim['attempt']['attemptId'],))
+                else:
+                    output['usage']['toolCalls'] = 1
+                board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
+                           'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok',
+                           'shutdownConfirmed': True, 'result': output})
+                view = self.decision(board, requested['decisionId'])
+                self.assertEqual(view['status'], 'needs-host')
+                self.assertEqual(view['error'], 'router-tool-evidence-unverified')
+                self.assertIsNone(view['selectedProfile'])
+                board.close()
+                self._stack.remove(board)
+
     def setUp(self):
         super().setUp()
         self.catalog_fixture()

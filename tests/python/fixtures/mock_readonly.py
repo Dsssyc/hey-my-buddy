@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from unittest.mock import patch
+from fixtures.router_tool_receipt import tool_receipt
 
 
 def prepare_input(manifest, directory):
@@ -73,7 +74,10 @@ def start(context, request, fixture, options):
     control = context.directory / "mock-readonly.json"
     control.write_text(json.dumps({"document": context.decision_input, "cwd": request.cwd,
                                   "prompt": request.prompt, "schema": request.output_schema,
-                                  "budget": request.budget, "options": options}))
+                                  "budget": request.budget, "options": options,
+                                  "binding": {"adapter": context.decision_input["profile"]["adapter"],
+                                              "taskId": context.task_id, "attemptId": context.attempt_id,
+                                              "generation": context.generation}}))
     control.chmod(0o600)
     stdout, stderr = open_logs(context.log_paths())
     # Never inherit a governed Worker credential into the stand-in child.
@@ -129,7 +133,7 @@ def main(control_path):
     envelope = {"status": "ok", "rawAnswer": json.dumps(answer) if mode == "json_answer" else answer,
                 "processState": {"shutdownConfirmed": shutdown}, "requested": document["profile"],
                 "resolved": {**document["profile"], "reasoningEffort": document["profile"]["effort"]},
-                "nativeIdentity": {"adapter": document["profile"]["adapter"], "sessionId": "mock-native"},
+                **tool_receipt(control["binding"], 1, native_identity={"sessionId": "mock-native"}),
                 "usage": {"elapsedMs": 200, "toolCalls": 1, "bytesRead": 33}}
     codes = {"error": "call-timeout", "protocol_error": "invalid-native-result",
              "budget": "readonly-budget-exhausted", "deadline": "deadline"}

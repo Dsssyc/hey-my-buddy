@@ -16,6 +16,7 @@ from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 
 ROUTING_TASK_TEXT = "Produce a verified implementation"
 
@@ -55,7 +56,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
-            "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
