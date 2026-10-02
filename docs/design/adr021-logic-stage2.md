@@ -117,7 +117,7 @@ Python controller 消费 ReadOnlyStructuredRequest，模型前用免费 dump-con
 | L5-0B-Claude 原生投影 | claude_runner 的事实采集与专用夹具 | 不改原生允许工具、沙盒或普通 Worker | 原生 tool_use/result/stream、身份与完整结束，Claude 回归 | 0A 后，与 Codex 可并行 |
 | L5-0B-DSH 快速证据 | dsh_runner/no-tool 原生事实收集 | 不提前接只读工具、重做原生工具或循环 | 原生无工具回执/失败/纠正绑定，不伪造工具事件 | 0A 后独立 worktree |
 | L5-0B-ZCode 快速证据 | zcode_runner 无工具分支的事实投影 | 不提前实现审阅、不改普通 Worker/MCP | 工具/foreign/子/late/断流事实、无工具回归 | 0A 后独立 worktree |
-| L5-0B-Host 合并接线 | DecisionAdapter 透传、发布处替换旧零工具判定、模拟回执迁移 | 不改四个原生运行方式或纯证据规则 | 四种投影加同一发布矩阵；保留原测试场景 | 四个投影合入后；再开始 L5-A/L6-A |
+| L5-0B-Host 合并接线 | DecisionAdapter 透传、read_only.collect 去重复政策判断、发布处替换旧零工具判定、模拟回执迁移 | 不改四个原生运行方式或纯证据规则 | 四种投影加同一发布矩阵；保留原测试场景 | 四个投影合入后；再开始 L5-A/L6-A |
 | L5-A DSH 只读原生插件 | 新 Node 原生 Agent/ToolRuntime 桥接、原生 API 夹具、Node tests | 不改 Python 路由/controller、普通 runner/no-tool/账户，不跑真实模型 | 原生 read/glob/grep、scope/视图限制、call/result/flush、非法工具原样记录/不执行、断流/预算/期限、无工具回归 | L5-0B 后；与 L6-A 可并行，各自 worktree |
 | L5-B DSH controller 接线 | adapter/start、独立 Python controller、私有 profile preflight、夹具与包装 | 不改分类/判定、不修改日常配置、不跑真实模型 | dump-config、身份、纠正、owned stop、timeout/cancel、黑板四防护；DSH/no-tool 回归 | L5-A 合入后；Host 写记录并完整检查 |
 | L6-A ZCode 受限协议 | zcode_read_only.py 的 session 参数与结构化回合，mock app-server、使用 L5 证据 | 不改普通 runner 调度、设置或 MCP/Worker，不跑真实模型 | 严格参数/配置回报、工具事件/序号/身份、完整流、纠正/预算、close/cancel，不虚构工具回显 | L4 与 L5-0B 验收后，可与 L5-A 并行 |
@@ -191,6 +191,10 @@ L4 集成审查补齐 catalog 的免费资格投影，并迁移外围测试的�
 
 L4 完整检查前细化 L5-0B：四个原生事件面拆成独立 Codex、Claude、DSH-fast、ZCode-fast 任务，Host 最后接唯一发布判定与外围模拟回执。0A 先交付纯接口与黑板包装方法，不提前替换旧发布调用点；0B-Host 一次接入强制证据，避免中间提交靠兼容 fallback 通过。这样每件成果可单独验证与审查，不让一个 Worker 承担四种协议。
 
-补足公共证据精确类型：ToolEventEvidence(binding) 的 binding 只来自 Python 控制文件；normalize_tool_event 接受 controller 已提取的原生工具事实字段并按适配器原生工具名/类型分类，不遍历任意模型输出。finish 的 nativeIdentity 是本次调用的可信根身份列表（每个字典只保留原生实际提供的 sessionId/turnId/inputId/callId 等字符串），来自根 session/turn 创建回报；格式纠正的根回合逐项加入，不从所有收到的事件反推允许身份。事件的 nativeIdentity 必须精确匹配列表中的本次根身份，foreign/子/旧回合仍保留并使完整性失败；call 去重键是身份加 callId，raw/high-level 同 ID 同事实去重，确证不同原生调用分别计数，无法关联或矛盾则不完整。缺证据/坏绑定/不完整返回 router-tool-evidence-unverified，明确不允许的类别返回 router-tools-forbidden；快速零调用规则由同一函数判定。系统沙盒事实在 claim 事务由 read_health 的本地程序事实写入本 attempt 的冻结输入 toolPolicy.systemSandbox，发布时不采信答案自报；旧未绑定的结果不能发布。
+补足公共证据精确类型：ToolEventEvidence(binding) 的 binding 只来自 Python 控制文件；normalize_tool_event 接受 controller 已提取的原生工具事实字段并按适配器原生工具名/类型分类，不遍历任意模型输出。finish 的 nativeIdentity 是本次调用的可信根身份列表（每个字典只保留原生实际提供的 sessionId/turnId/inputId/callId 等字符串），来自根 session/turn 创建回报；格式纠正的根回合逐项加入，不从所有收到的事件反推允许身份。事件的 nativeIdentity 必须精确匹配列表中的本次根身份，foreign/子/旧回合仍保留并使完整性失败；call 去重键是身份加 callId，raw/high-level 同 ID 同事实去重，确证不同原生调用分别计数，无法关联或矛盾则不完整。缺证据/坏绑定/不完整返回 router-tool-evidence-unverified，明确不允许的类别返回 router-tools-forbidden；快速零调用规则由同一函数判定。系统沙盒事实在 claim 事务由 read_health 的本地程序事实写入 attempt-tool-policy:<attemptId> 的专属 meta；发布包装只把它作为临时 toolPolicy.systemSandbox，发布时不采信答案自报；旧未绑定的结果不能发布。
 
 静态核对当前 DSH 公共类型后修正方法拼写：单调拒绝接口是 agentCtx.tools.guard(callback)，并非 registerGuard；其语义仍是在原生 pre-execute 扩展之后追加不可强制放行的 guard。驱动采用原生 Agent.followup/whenIdle 与 SessionRegistry.flush，工具回合由原生 Agent loop 执行；setup 安装 restrict/presentAs/guard，返回 commit 时再次核对精确三工具集合。此修订不影响正在执行的 0A，也不新增模型调用。
+
+0A 成果审查确认沙盒事实存 attempt 专属 meta，由 _attempt_tool_policy 读取并临时交给发布包装；这比改写 admission 的 input_json 更符合请求字节与 hash 冻结的不变量，Host 据此调整原计划。Host 补强 named reasoning/两个未知标识不能隐去真实调用、end-before-start 不得后来补成完整、零工具也需非空根身份；新增 tool_calls 只读计数供运行时累计预算、observe_incomplete(adapter,facts) 保留缺失 ID 的分类事实并置不完整，不捏造标识。原生非工具 reasoning 类型可省略工具标识；真实工具名 reasoning/thinking 归 other。普通 nativeIdentity 只允许实际 sessionId/threadId/turnId/inputId/callId 字符串字段；DSH 原生数值 turn/step 在桥接的关联检查中核对，未提供 turnId 时不合成。
+
+0B 的原生投影须先于旧过滤/拒绝路径观察事件；保留原生权限/有效策略、协议身份、预算、停止机制。既有 zeroToolVerified 可作为兼容名称的零调用事实保留，但不自行给允许类别结论；read_only.collect 和 DecisionAdapter 的重复工具政策门槛由 0B-Host 移至黑板唯一判定。只有协议/身份/原生执行无法继续时才报告实际控制器失败，分类事实仍保留；缺失 ID 用 observe_incomplete。Claude 缺逐帧 session_id 的根帧可由已确认 system/init 的单根流与 parent_tool_use_id 关联，子流不得继承根身份；Codex 缺 turnId 且无法证明当前根回合时作不完整，不能用后到事件猜测。
