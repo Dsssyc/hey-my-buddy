@@ -73,16 +73,17 @@ class RoutingHealthTests(BoardTestCase):
     def timeout(self):
         return self.settle(code="router-budget-exhausted", termination="deadline")
 
-    def test_four_timeouts_count_as_failures_and_become_unavailable_at_three(self):
+    def test_four_timeouts_count_as_failures_while_availability_uses_current_router(self):
         for count in range(1, 5):
             decision_id, now = self.timeout()
             with self.subTest(count=count):
                 health = self.coordinator.health_summary()
+                self.assertIsNone(health["currentRouterProfileId"])
                 self.assertEqual(health["budgetExhaustedCount"], count)
                 self.assertEqual(health["failureCount"], count)
                 self.assertEqual(health["consecutiveFailures"], count)
-                self.assertEqual(health["available"], count < 3)
-                self.assertEqual(health["reasonCode"], None if count < 3 else "router-consecutive-timeouts")
+                self.assertFalse(health["available"])
+                self.assertEqual(health["reasonCode"], "router-not-configured")
                 self.assertEqual(health["recentFailures"][0], {
                     "decisionId": decision_id, "runId": f"task-health-{count}",
                     "at": now, "code": "router-budget-exhausted"})
@@ -96,7 +97,7 @@ class RoutingHealthTests(BoardTestCase):
             "programSelection": {"code": "single-candidate", "profileId": "worker-fixture", "candidateCount": 1}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
-        self.assertEqual(health["reasonCode"], "router-consecutive-timeouts")
+        self.assertEqual(health["reasonCode"], "router-not-configured")
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["budgetExhaustedCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
@@ -107,8 +108,8 @@ class RoutingHealthTests(BoardTestCase):
         success_id, success_at = self.settle("completed", termination="completed")
         self.settle("completed", invoked=False, output={"programSelection": {"code": "single-candidate"}})
         recovered = self.coordinator.health_summary()
-        self.assertTrue(recovered["available"])
-        self.assertIsNone(recovered["reasonCode"])
+        self.assertFalse(recovered["available"])
+        self.assertEqual(recovered["reasonCode"], "router-not-configured")
         self.assertEqual(recovered["consecutiveFailures"], 0)
         self.assertEqual(recovered["failureCount"], 3)
         self.assertEqual(recovered["lastSuccessAt"], success_at)
@@ -122,7 +123,7 @@ class RoutingHealthTests(BoardTestCase):
         self.settle("failed", code="transport-error")
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
-        self.assertEqual(health["reasonCode"], "router-consecutive-failures")
+        self.assertEqual(health["reasonCode"], "router-not-configured")
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
         self.assertEqual(health["budgetExhaustedCount"], 1)
@@ -149,13 +150,20 @@ class RoutingHealthTests(BoardTestCase):
         health = self.coordinator.health_summary()
         self.assertEqual(health["budgetExhaustedCount"], 3)
         self.assertEqual(health["failureCount"], 3)
-        self.assertEqual(health["reasonCode"], "router-consecutive-failures")
+        self.assertEqual(health["reasonCode"], "router-not-configured")
+
+    def test_rejected_null_profile_cannot_hide_a_failed_answer_in_the_overview(self):
+        self.settle(output={"status": "ok", "operation": "select", "code": "router-tools-forbidden",
+                            "decision": {"profileId": None, "reason": "cannot choose", "evidence": []}})
+        health = self.coordinator.health_summary()
+        self.assertEqual(health["failureCount"], 1)
+        self.assertEqual(health["abstentionCount"], 0)
 
     def test_explicit_machine_timeout_codes_need_no_provider_prose(self):
         for code in ("timeout", "call-timeout", "deadline"):
             self.settle("failed", code=code)
         health = self.coordinator.health_summary()
-        self.assertEqual(health["reasonCode"], "router-consecutive-timeouts")
+        self.assertEqual(health["reasonCode"], "router-not-configured")
         self.assertEqual(health["budgetExhaustedCount"], 0)
 
     def test_bounded_event_error_code_and_generic_failure_fallback(self):
@@ -205,8 +213,8 @@ class RoutingHealthTests(BoardTestCase):
         with self.db.read() as connection:
             before = list(connection.iterdump())
         empty = self.coordinator.health_summary()
-        self.assertTrue(empty["available"])
-        self.assertIsNone(empty["reasonCode"])
+        self.assertFalse(empty["available"])
+        self.assertEqual(empty["reasonCode"], "router-not-configured")
         self.assertEqual(empty["sampleCount"], 0)
         self.assertIsNone(empty["lastSuccessAt"])
         self.assertEqual(self.coordinator.health_summary(), empty)

@@ -1305,7 +1305,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                            "reason": None if writable else "superseded"},
         "tableRevision": 7,
         "gate": {"phase": "open", "readers": 0, "waitingWriters": 0, "writer": None},
-        "configuration": {"revision": 1, "routerProfileId": profiles[0]["profileId"],
+        "configuration": {"revision": 1, "routerProfileIds": [profiles[0]["profileId"]], "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
@@ -1794,9 +1794,9 @@ def validate_fixtures() -> list[str]:
     page = objective_page({})
     timeline = objective_timeline({"objectiveId": OBJ_A}, "normal")
     configuration = console_snapshot("normal", True)["configuration"]
-    if not {"routerProfileId", "defaultRoutingMode", "routingBudget",
+    if not {"routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
             "routingBudgetLimits"} <= set(configuration) or "decisionProfileId" in configuration:
-        problems.append("snapshot must use the ADR-021 single Router configuration")
+        problems.append("snapshot must use the ADR-021 ordered Router configuration")
     for name, value, keys in (
             ("ObjectivePage", page, REQUIRED_KEYS["ObjectivePage"]),
             ("ObjectiveSummary", page["objectives"][0], REQUIRED_KEYS["ObjectiveSummary"]),
@@ -2169,13 +2169,13 @@ def emit_fixture_files() -> list[dict]:
     # dropped as unknown rather than blanking the page or reading as 0%.
     normal = console_snapshot("normal", assets_ready=False)
     legacy = clone(normal)
-    for key in ("routerProfileId", "defaultRoutingMode"):
+    for key in ("routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode"):
         legacy["configuration"].pop(key, None)
     legacy["configuration"]["decisionProfileId"] = profile_views()[0]["profileId"]
     add("incompatible", "snapshot-legacy-single-router.json", "console-snapshot", "GET /api/console", 200,
         "rejected", legacy, request={}, expected_code="INVALID_RESPONSE",
         mutation="configuration reverted to the retired schema-13 single-Router shape: decisionProfileId "
-                 "added while routerProfileId and defaultRoutingMode were removed")
+                 "added while routerProfileIds, routerRetryIntervalSeconds and defaultRoutingMode were removed")
     missing_session = clone(normal)
     missing_session.pop("consoleSession", None)
     add("incompatible", "snapshot-missing-session.json", "console-snapshot", "GET /api/console", 200,

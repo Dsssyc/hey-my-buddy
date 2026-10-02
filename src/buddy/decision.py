@@ -1906,6 +1906,9 @@ class DecisionCoordinator:
                     code = "needs-host" if row["kind"] == "decision.needs_host" else "call-failed"
                 decision = output.get("decision") or {}
                 abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
+                             and payload.get("errorCode") is None and output.get("code") is None
+                             and receipt.get("status") == "ok" and receipt.get("shutdownConfirmed") is True
+                             and output.get("modelStarted") is not False
                              and isinstance(decision, dict) and decision.get("profileId", False) is None
                              and set(decision) == {"profileId", "reason", "evidence"})
                 special = row["kind"] in ("decision.failed", "decision.needs_host") and code in special_counts

@@ -17,15 +17,16 @@ export function BuddyStatusBar({ data, snapshot, onNavigate }: { data: ConsoleVi
     {(() => {
       // The status names the current Router from the health projection; the
       // list head is only the fallback when no health facts exist.
-      const healthId = snapshot.routingHealth && "currentRouterProfileId" in snapshot.routingHealth
-        ? snapshot.routingHealth.currentRouterProfileId ?? null
-        : null;
-      const id = healthId ?? configuration?.routerProfileIds[0] ?? null;
+      const hasCurrent = snapshot.routingHealth && "currentRouterProfileId" in snapshot.routingHealth;
+      const id = hasCurrent ? snapshot.routingHealth!.currentRouterProfileId ?? null
+        : configuration?.routerProfileIds[0] ?? null;
       const mode = configuration?.defaultRoutingMode;
       const profile = data.profiles.find(p => p.profileId === id);
       const row = rows.find(item => item.adapter === profile?.adapter);
-      const usable = !!configuration && (mode === "fast" ? isFastRouterCandidate(profile) : isDecisionCandidate(profile));
-      const text = !configuration ? "升级不可用" : !id ? "未指定" : usable ? "可用" : "需处理";
+      const usable = !!configuration && snapshot.routingHealth?.available !== false
+        && (mode === "fast" ? isFastRouterCandidate(profile) : isDecisionCandidate(profile));
+      const text = !configuration ? "升级不可用" : !id && !configuration.routerProfileIds.length ? "未指定"
+        : usable ? "可用" : "需处理";
       const location = row && row.status !== "ready" ? { section: "harness" as const, target: row.adapter }
         : profile && !usable ? { section: "models" as const, target: profile.profileId }
           : { section: "router" as const, target: "current" };

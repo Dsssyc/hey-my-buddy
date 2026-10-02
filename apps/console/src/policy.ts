@@ -193,17 +193,16 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       message: "重试间隔须为 1–2147483647 的整数秒；请修改。",
     });
   }
-  if (draft.configuration && (routerFieldChanged(baseline, draft, "routerProfileIds")
-    || routerFieldChanged(baseline, draft, "defaultRoutingMode"))) {
-    // Only the replaced head needs current legality: a tail buddy may stay in
-    // the list while temporarily unavailable, per the board's list settings.
-    const target = draft.configuration.routerProfileIds[0] ?? null;
-    const mode = draft.configuration.defaultRoutingMode;
-    if (target) {
+  if (draft.configuration && routerFieldChanged(baseline, draft, "routerProfileIds")) {
+    // Settings name published complete identities. Runtime eligibility and
+    // temporary availability belong to the shared current Router resolver.
+    for (const target of draft.configuration.routerProfileIds) {
       const profile = profiles.get(target);
-      const refusal = profile ? routerRefusal(profile, mode) : "已不在当前目录中";
+      const refusal = !profile ? "已不在当前目录中"
+        : [profile.adapter, profile.provider, profile.model, profile.effort].some(value => !value?.trim())
+          ? "buddy 身份不完整" : null;
       if (refusal) issues.push({ profileId: target, label: labelOf(profile, target),
-        message: `${labelOf(profile, target)} ${refusal}；无法担任 Router，请换档位或模式。` });
+        message: `${labelOf(profile, target)} ${refusal}；无法保存 Router 列表。` });
     }
   }
   return issues;

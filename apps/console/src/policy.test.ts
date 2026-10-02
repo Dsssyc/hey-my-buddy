@@ -91,8 +91,8 @@ describe("decision capability", () => {
     expect(routerRefusal(worker, "fast")).toContain("所属 Harness 尚不支持无工具路由调用");
     const baseline = makeDraft(snapshot([worker, fast]));
     expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [fast.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" } })).toEqual([]);
-    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "fast" } })[0].message).toContain("不支持无工具路由调用");
-    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [fast.profileId], routerRetryIntervalSeconds: 600} })[0].message).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "fast" } })).toEqual([]);
+    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [fast.profileId], routerRetryIntervalSeconds: 600} })).toEqual([]);
   });
   it("accepts a declared decision capability and never infers it from coding ability", () => {
     expect(hasDecisionCapability(worker)).toBe(true);
@@ -247,20 +247,32 @@ describe("blocking new changes", () => {
     expect(blockingIssues(pinned, setFamilyPreference(pinned, worker, "pin", "新"))).toEqual([]);
   });
 
-  it("blocks a new Router unless it is available, enabled and decision-capable", () => {
+  it("allows published complete Router identities while runtime eligibility is temporarily missing", () => {
     const baseline = makeDraft(snapshot([worker, retired, disabled, coder]));
     const select = (profileId: string) => ({
       ...baseline,
       configuration: { ...baseline.configuration!, routerProfileIds: [profileId], routerRetryIntervalSeconds: 600},
     });
-    expect(blockingIssues(baseline, select(retired.profileId))[0].message).toContain("无法担任 Router");
-    expect(blockingIssues(baseline, select(disabled.profileId))[0].message).toContain("未启用");
-    expect(blockingIssues(baseline, select(coder.profileId))[0].message).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(blockingIssues(baseline, select(retired.profileId))).toEqual([]);
+    expect(blockingIssues(baseline, select(disabled.profileId))).toEqual([]);
+    expect(blockingIssues(baseline, select(coder.profileId))).toEqual([]);
     expect(blockingIssues(baseline, select(worker.profileId))).toEqual([]);
     expect(blockingIssues(baseline, {
       ...baseline,
       configuration: { ...baseline.configuration!, routerProfileIds: [] },
     })).toEqual([]);
+    expect(blockingIssues(baseline, select("unknown"))[0].message).toContain("已不在当前目录中");
+  });
+
+  it("saves review mode when the first item is fast-only and the next item supports review", () => {
+    const first = { ...coder, capabilities: ["routing:fast"] };
+    const baseline = makeDraft(snapshot([first, worker], { configuration: {
+      revision: 1, routerProfileIds: [first.profileId, worker.profileId], routerRetryIntervalSeconds: 600,
+      defaultRoutingMode: "fast", routingBudget: "standard",
+    } }));
+    const changed = { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "review" as const } };
+    expect(blockingIssues(baseline, changed)).toEqual([]);
+    expect(publication(baseline, changed, grant(), "mode").configuration).toEqual({ defaultRoutingMode: "review" });
   });
 });
 

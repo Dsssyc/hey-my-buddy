@@ -96,8 +96,8 @@ function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHar
   return { ...base, harnesses: harnesses() };
 }
 
-function fixture(routerProfileId: string | null = solMediumId) {
-  let state = snapshot(routerProfileId);
+function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Snapshot> = {}) {
+  let state = { ...snapshot(routerProfileId), ...extra };
   const command = vi.fn(async (operation: string, _params: Record<string, any>, _csrfToken?: string) => {
     if (operation === "model_profiles") {
       // Only the checked 显示不可用配置 asks for this page; the fixture keeps
@@ -127,6 +127,21 @@ function renderBuddy(hash: string, f: ReturnType<typeof fixture>) {
 const sectionsNav = () => screen.getByRole("navigation", { name: "Buddy 配置分区" });
 const sectionLink = (name: string) => within(sectionsNav()).getByRole("link", { name });
 const statusStrip = () => screen.getByRole("region", { name: "全局状态" });
+
+describe("current Router health", () => {
+  it("keeps an explicit null current Router unavailable even when the configured head is eligible", async () => {
+    const f = fixture(mediumId, { routingHealth: {
+      available: false, currentRouterProfileId: null, reasonCode: "router-unavailable",
+      windowSize: 20, sampleCount: 2, failureCount: 2, consecutiveFailures: 2,
+      abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+      lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
+    } });
+    renderBuddy("#buddy", f);
+    await screen.findByRole("heading", { name: "模型 3" });
+    expect(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" })).toBeTruthy();
+    expect(statusStrip().textContent).not.toContain("Router：可用");
+  });
+});
 const currentSection = () =>
   within(sectionsNav()).getAllByRole("link").filter(link => link.getAttribute("aria-current") === "page")
     .map(link => link.textContent);
