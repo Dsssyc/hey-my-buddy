@@ -1939,7 +1939,8 @@ class DecisionCoordinator:
                              and output.get("modelStarted") is not False
                              and isinstance(decision, dict) and decision.get("profileId", False) is None
                              and set(decision) == {"profileId", "reason", "evidence"})
-                diagnostic_code = output.get("code") if output.get("code") in special_counts else code
+                original_code = output.get("code")
+                diagnostic_code = original_code if isinstance(original_code, str) and original_code in special_counts else code
                 special = row["kind"] in ("decision.failed", "decision.needs_host") and diagnostic_code in special_counts
                 if special:
                     special_counts[diagnostic_code] += 1
