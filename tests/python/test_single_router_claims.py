@@ -60,7 +60,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.readonly_start.assert_not_called()
 
     def test_setting_revision_identity_mode_and_budget_changes_never_refresh_claim(self):
-        for settings in ({'routerProfileId': SECOND_PROFILE_ID}, {'defaultRoutingMode': 'fast'},
+        for settings in ({'routerProfileIds': [SECOND_PROFILE_ID]}, {'defaultRoutingMode': 'fast'},
                          {'routingBudget': 'brief'}):
             with self.subTest(settings=settings):
                 board = self.case_board()

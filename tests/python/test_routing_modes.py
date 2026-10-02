@@ -31,12 +31,12 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         fresh = board.call('console_snapshot', {})['configuration']
         self.assertEqual(fresh['defaultRoutingMode'], 'fast')
-        self.assertIsNone(fresh['routerProfileId'])
+        self.assertEqual(fresh['routerProfileIds'], [])
         self.seed(board)
-        self.configure(board, routerProfileId=SECOND_PROFILE_ID, defaultRoutingMode='fast')
+        self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode='fast')
         self.configure(board, routingBudget='brief')
         settings = board.call('console_snapshot', {})['configuration']
-        self.assertEqual(settings['routerProfileId'], SECOND_PROFILE_ID)
+        self.assertEqual(settings['routerProfileIds'], [SECOND_PROFILE_ID])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
         self.assertEqual(settings['routingBudget'], 'brief')
         from buddy.db import SCHEMA_VERSION
@@ -50,9 +50,9 @@ class RoutingModesTests(BoardTestCase):
         converted = convert_legacy_router_settings(legacy)
         self.assertEqual(converted, convert_legacy_router_settings(legacy))
         self.assertEqual(legacy, before)
-        self.assertEqual(converted.settings.as_dict(), {'routerProfileId': PROFILE_ID,
-                         'defaultRoutingMode': 'review', 'routingBudget': 'brief'})
-        self.assertEqual(converted.discarded_profile_id, SECOND_PROFILE_ID)
+        self.assertEqual(converted.settings.as_dict(), {'routerProfileIds': [PROFILE_ID, SECOND_PROFILE_ID],
+                         'routerRetryIntervalSeconds': 600, 'defaultRoutingMode': 'review', 'routingBudget': 'brief'})
+        self.assertEqual(converted.source_slots, (SECOND_PROFILE_ID, PROFILE_ID))
 
     def test_pure_conversion_keeps_missing_or_unavailable_default_slot(self):
         from buddy.router_settings import convert_legacy_router_settings
@@ -60,15 +60,15 @@ class RoutingModesTests(BoardTestCase):
             with self.subTest(chosen=chosen), patch('buddy.router.profile_problem', side_effect=AssertionError('no eligibility reads')):
                 converted = convert_legacy_router_settings({'fastRouterProfileId': PROFILE_ID,
                     'reviewRouterProfileId': chosen, 'defaultRoutingMode': 'review'})
-            self.assertEqual(converted.settings.router_profile_id, chosen)
+            self.assertEqual(converted.settings.router_profile_ids, (chosen, PROFILE_ID) if chosen else (PROFILE_ID,))
             self.assertEqual(converted.settings.default_routing_mode, 'review')
-            self.assertEqual(converted.discarded_profile_id, PROFILE_ID)
+            self.assertEqual(converted.source_slots, (PROFILE_ID, chosen))
 
     def test_fast_input_is_repo_free_and_fixed_at_sixty_seconds(self):
         board = self.board()
         self.seed(board)
         # The mode comes from the Router setting; the submission no longer carries it.
-        self.configure(board, routerProfileId=PROFILE_ID, defaultRoutingMode='fast')
+        self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode='fast')
         result = board.call('selection_request', {'requestId': 'fast', 'task': 'choose a tiny edit', 'timeoutSeconds': 500})
         view = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(view['routingMode'], 'fast')
@@ -80,7 +80,7 @@ class RoutingModesTests(BoardTestCase):
     def test_review_unconfigured_stops_host_without_using_available_fast_buddy(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routerProfileId=None, defaultRoutingMode='review')
+        self.configure(board, routerProfileIds=[], defaultRoutingMode='review')
         result = board.call('selection_request', {'requestId': 'no-fallback', 'task': 'choose'})
         self.assertEqual(result['status'], 'needs-host')
         self.assertIsNone(result['runId'])
@@ -91,19 +91,19 @@ class RoutingModesTests(BoardTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
 
-    def test_resolve_has_no_internal_fallback_switch(self):
+    def test_current_router_has_no_internal_mode_fallback(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routerProfileId=None)
+        self.configure(board, routerProfileIds=[])
         with board.store.db.read() as connection:
-            profile, facts, problem = router.resolve(connection)
+            resolution = router.current_router(connection)
             with self.assertRaises(TypeError):
-                router.resolve(connection, 'review', False)
-        self.assertIsNone(profile)
-        self.assertEqual(facts['routingMode'], 'review')
-        self.assertNotIn('fallback', facts)
-        self.assertEqual(problem['code'], 'router-not-configured')
-        self.assertTrue(problem['reason'].startswith('Router 不可用：'))
+                router.current_router(connection, 'review', False)
+        self.assertIsNone(resolution.profile)
+        self.assertEqual(resolution.facts['routingMode'], 'review')
+        self.assertNotIn('fallback', resolution.facts)
+        self.assertEqual(resolution.problem['code'], 'router-not-configured')
+        self.assertTrue(resolution.problem['reason'].startswith('Router 不可用：'))
 
     def test_claim_rechecks_review_without_charging_another_family(self):
         board = self.board()
@@ -128,7 +128,7 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         params = {'requestId': 'frozen-mode', 'task': 'choose'}
         original = board.call('selection_request', params)
-        self.configure(board, defaultRoutingMode='fast', routerProfileId=PROFILE_ID)
+        self.configure(board, defaultRoutingMode='fast', routerProfileIds=[PROFILE_ID])
         replay = board.call('selection_request', params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(original['decisionId'], replay['decisionId'])
@@ -158,7 +158,7 @@ class RoutingModesTests(BoardTestCase):
     def test_fast_receipt_requires_zero_tool_evidence_at_publication(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routerProfileId=PROFILE_ID, defaultRoutingMode='fast')
+        self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode='fast')
         nonce = 'nonce-abcdefghijklmnop'
         for index, (proof, count, expected, code) in enumerate((
                 (True, 0, 'completed', None),
@@ -195,7 +195,7 @@ class RoutingModesTests(BoardTestCase):
                   'defaultRoutingMode': 'review', 'routingBudget': 'quick'}
         with patch('buddy.router.configuration', side_effect=AssertionError('conversion must not read state')):
             settings = convert_legacy_router_settings(legacy).settings.as_dict()
-        self.assertEqual(settings['routerProfileId'], PROFILE_ID)
+        self.assertEqual(settings['routerProfileIds'], [PROFILE_ID, SECOND_PROFILE_ID])
         self.assertEqual(settings['routingBudget'], 'brief')
         with board.store.db.read() as connection:
             self.assertEqual([tuple(row) for row in before], [tuple(row) for row in connection.execute('SELECT key,value FROM meta ORDER BY key')])

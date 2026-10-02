@@ -98,7 +98,7 @@ class DecisionTestCase(BoardTestCase):
                 "expectedRevision": grant["tableRevision"],
                 "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
                 "preferenceChanges": preferences or [],
-                "configuration": {"defaultRoutingMode": "review", "routerProfileId": decision_profile},
+                "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [decision_profile] if decision_profile else []},
             },
         )
         if cards:

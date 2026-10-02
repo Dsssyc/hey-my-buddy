@@ -26,10 +26,10 @@ class SingleRouterConfigurationTests(BoardTestCase):
     def settings(self):
         return self.board_.call('console_snapshot', {})['configuration']
 
-    def test_fresh_defaults_have_exactly_one_router(self):
+    def test_fresh_defaults_have_an_empty_router_list(self):
         snapshot = self.board_.call('console_snapshot', {})
         settings = snapshot['configuration']
-        self.assertIsNone(settings['routerProfileId'])
+        self.assertEqual(settings['routerProfileIds'], [])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
         self.assertEqual(settings['routingBudget'], 'standard')
         self.assertNotIn('fastRouterProfileId', settings)
@@ -37,32 +37,36 @@ class SingleRouterConfigurationTests(BoardTestCase):
         self.assertIsNone(snapshot['configurationError'])
 
     def test_budget_patch_and_clear_preserve_other_settings(self):
-        self.configure({'routerProfileId': PROFILE}, enable=True)
+        self.configure({'routerProfileIds': [PROFILE]}, enable=True)
         self.configure({'routingBudget': 'brief'})
-        self.assertEqual(self.settings()['routerProfileId'], PROFILE)
-        self.configure({'routerProfileId': None})
-        self.assertIsNone(self.settings()['routerProfileId'])
+        self.assertEqual(self.settings()['routerProfileIds'], [PROFILE])
+        self.configure({'routerProfileIds': []})
+        self.assertEqual(self.settings()['routerProfileIds'], [])
         self.assertEqual(self.settings()['routingBudget'], 'brief')
 
-    def test_mode_patch_checks_the_merged_router_and_rolls_back(self):
-        self.configure({'routerProfileId': PROFILE}, enable=True)
-        before = self.settings()
+    def test_mode_patch_preserves_temporarily_ineligible_router_and_reports_qualification(self):
+        self.configure({'routerProfileIds': [PROFILE]}, enable=True)
         with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-tools-unrestricted',
                 'reason': 'fixture lost its restriction', 'systemSandbox': False,
-                'sameAttemptContinuation': False}), self.assertRaises(BoardError) as caught:
+                'sameAttemptContinuation': False}):
             self.configure({'defaultRoutingMode': 'review'})
-        self.assertEqual(caught.exception.code, 'UNSUPPORTED')
-        self.assertEqual(self.settings(), before)
+            from buddy import router
+            with self.board_.store.db.read() as db:
+                resolution = router.current_router(db)
+            self.assertIsNone(resolution.profile)
+            self.assertEqual(resolution.inspections[0]['code'], 'router-review-unsupported')
+        self.assertEqual(self.settings()['defaultRoutingMode'], 'review')
+        self.assertEqual(self.settings()['routerProfileIds'], [PROFILE])
 
     def test_unavailable_existing_router_does_not_block_budget_or_clear(self):
-        self.configure({'routerProfileId': PROFILE}, enable=True)
+        self.configure({'routerProfileIds': [PROFILE]}, enable=True)
         with self.board_.store.db.write() as db:
             db.execute('UPDATE evaluation_profiles SET available=0 WHERE profile_id=?', (PROFILE,))
         self.configure({'routingBudget': 'deep'})
-        self.assertEqual(self.settings()['routerProfileId'], PROFILE)
-        self.configure({'routerProfileId': None, 'defaultRoutingMode': 'review'})
-        self.assertIsNone(self.settings()['routerProfileId'])
+        self.assertEqual(self.settings()['routerProfileIds'], [PROFILE])
+        self.configure({'routerProfileIds': [], 'defaultRoutingMode': 'review'})
+        self.assertEqual(self.settings()['routerProfileIds'], [])
         self.assertEqual(self.settings()['defaultRoutingMode'], 'review')
 
     def test_old_settings_are_reported_without_conversion_or_write(self):

@@ -150,7 +150,7 @@ class PreviewFixtureTest(unittest.TestCase):
         normal = outcomes["normal/console.json"]["facts"]
         configuration = normal["configuration"]
         self.assertNotIn("decisionProfileId", configuration)
-        for key in ("routerProfileId", "defaultRoutingMode", "routingBudget"):
+        for key in ("routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"):
             self.assertIn(key, configuration)
         self.assertTrue(normal["taskCount"] > 0)
 

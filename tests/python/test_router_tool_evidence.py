@@ -298,7 +298,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         self.enterContext(patch("buddy.adapters.dsh.DshAdapter.no_tool_structured", True, create=True))
-        self.configure(board, routerProfileId=PROFILE_ID, defaultRoutingMode="fast")
+        self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode="fast")
         result, claim = self.request_route(board, "fast-zero")
         self.assertEqual(claim["decisionInput"]["routingMode"], "fast")
         empty = self.package_for(claim, result, [])

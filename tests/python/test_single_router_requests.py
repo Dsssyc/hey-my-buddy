@@ -103,7 +103,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         first = self.request(board)
         original = self.audit(board, first)
-        self.configure(board, routerProfileId=SECOND_PROFILE_ID, defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
                                 preferenceChanges=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "later bound"}])
         with patch("buddy.router.resolve", side_effect=AssertionError("replay must not resolve")):
@@ -139,7 +139,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertIsNone(first["runId"])
         self.assertEqual(view["routerProblem"]["code"], "router-not-configured")
         self.assertTrue(view["reason"].startswith("Router 不可用："))
-        self.configure(board, routerProfileId=PROFILE_ID)
+        self.configure(board, routerProfileIds=[PROFILE_ID])
         self.assertEqual(self.audit(board, self.request(board)), view)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
@@ -240,7 +240,7 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         snapshot = self.audit(board, self.request(board))["requested"]
-        self.configure(board, routerProfileId=SECOND_PROFILE_ID, defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
         with board.store.db.read() as connection:
             profile, facts, problem = router.resolve(connection, frozen=snapshot)
         self.assertIsNone(profile)
@@ -346,7 +346,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board)
         original = self.routed(board)
         self.publish_user_patch(board, request_id="new-router", command_id="new-router",
-                                configuration={"routerProfileId": SECOND_PROFILE_ID, "defaultRoutingMode": "fast", "routingBudget": "brief"})
+                                configuration={"routerProfileIds": [SECOND_PROFILE_ID], "defaultRoutingMode": "fast", "routingBudget": "brief"})
         replay = self.routed(board)
         self.assertEqual(replay["routing"], original["routing"])
         history = board.call("workflow_get", {"runId": original["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
@@ -372,7 +372,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         board = self.board()
         self.seed(board, decision_profile=None)
         first = self.routed(board)
-        self.publish_user_patch(board, request_id="choose-router", command_id="choose-router", configuration={"routerProfileId": PROFILE_ID})
+        self.publish_user_patch(board, request_id="choose-router", command_id="choose-router", configuration={"routerProfileIds": [PROFILE_ID]})
         pending = self.continue_run(board, first, reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         fresh = board.call("workflow_get", {"runId": first["runId"]})

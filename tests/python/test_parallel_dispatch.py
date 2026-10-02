@@ -137,7 +137,7 @@ class CapacityTestCase(BoardTestCase):
             "expectedRevision": grant["tableRevision"],
             "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
                                 {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
-            "configuration": {"defaultRoutingMode": "review", "routerProfileId": PROFILE_ID},
+            "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
         }
         if model_limit is not None:
             params["modelConcurrency"] = [{**PROFILE_FAMILY, "limit": model_limit}]
@@ -990,7 +990,7 @@ class DaemonPoolTests(CapacityTestCase):
                 # slot; a sole legal candidate is now resolved synchronously.
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
                                     {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
-                "configuration": {"defaultRoutingMode": "review", "routerProfileId": PROFILE_ID},
+                "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
                 "modelConcurrency": [{**PROFILE_FAMILY, "limit": 2}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
