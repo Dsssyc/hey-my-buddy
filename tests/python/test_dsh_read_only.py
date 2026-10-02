@@ -38,8 +38,8 @@ SAFE_DUMP = ("- id: headless-runner\n  disabled: true\n"
              "- id: session-title-llm\n  disabled: true\n"
              "- id: session-telemetry-otel\n  disabled: true\n"
              "- id: workflow\n  disabled: true\n"
-             "- id: agent-core\n- id: tools\n- id: sessions\n"
-             "- id: fs-tools\n- id: search-tools\n"
+             "- id: agent\n- id: agent-default-model\n- id: agent-loop\n- id: tools\n- id: session\n"
+             "- id: tool-fs\n- id: tool-fs-search\n"
              "- id: buddy-read-only-structured\n  name: >-\n    file:///private/bridge.mjs\n")
 
 
@@ -53,7 +53,8 @@ class DshReadOnlyUnitTests(unittest.TestCase):
             SAFE_DUMP.replace("  disabled: true\n- id: session-title-llm", "- id: session-title-llm"),
             SAFE_DUMP.replace("- id: headless-runner\n  disabled: true", "- id: headless-runner"),
             SAFE_DUMP.replace("- id: workflow\n  disabled: true", "- id: workflow"),
-            SAFE_DUMP.replace("- id: fs-tools\n", ""),
+            SAFE_DUMP.replace("- id: tool-fs\n", ""),
+            SAFE_DUMP.replace("- id: agent\n", "- id: fake-agent\n"),
             SAFE_DUMP.replace("- id: buddy-read-only-structured", "- id: buddy-other-bridge"),
             SAFE_DUMP + "- id: buddy-read-only-structured\n  name: file:///private/other.mjs\n",
             SAFE_DUMP + "- id: buddy-read-only-structured\n  name: file:///private/bridge.mjs\n",
@@ -134,6 +135,7 @@ class DshReadOnlyTests(unittest.TestCase):
         if outcome.status == "failed" and outcome.result.get("code") not in (
                 "invalid-native-result", "stream-incomplete", "native-turn-failed", "stop-unknown",
                 "configuration-unavailable", "read-only-tools-unavailable", "deadline",
+                "readonly-budget-exhausted", "answer-too-large",
                 "read-only-profile-unsafe", "read-only-profile-unverified"):
             self.fail(f"controller stderr: {Path(handle.log_paths['stderr']).read_text()}")
         return outcome
@@ -175,12 +177,29 @@ class DshReadOnlyTests(unittest.TestCase):
         self.assertIsNone(judge_tool_evidence(package, "review", False))
         self.assertNotIn(PROMPT, json.dumps(package))
 
+    def test_incomplete_native_dto_is_never_a_zero_tool_receipt(self):
+        for case in ('events-missing', 'truncated-missing', 'model-not-started'):
+            with self.subTest(case=case):
+                outcome = self.execute(case)
+                self.assertEqual(outcome.status, 'failed')
+                self.assertEqual(outcome.result['code'], 'invalid-native-result')
+                self.assertEqual(outcome.result['usage']['toolCalls'], 0)
+
+    def test_native_tool_budget_failure_remains_a_budget_failure(self):
+        outcome = self.execute('tool-budget-exhausted')
+        self.assertEqual(outcome.status, 'failed')
+        self.assertEqual(outcome.result['code'], 'readonly-budget-exhausted')
+        self.assertTrue(outcome.shutdown_confirmed)
+
     def test_legal_native_read_and_search_loop_is_not_a_correction(self):
         outcome = self.execute("tools-ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         result = outcome.result
         self.assertEqual(result["correctionCount"], 0)
-        self.assertEqual(result["usage"], {"inputTokens": 30, "outputTokens": 9, "toolCalls": 2})
+        self.assertEqual({key: result['usage'][key] for key in ('inputTokens', 'outputTokens', 'toolCalls')},
+                         {"inputTokens": 30, "outputTokens": 9, "toolCalls": 2})
+        self.assertIsNone(result['usage']['bytesRead'])
+        self.assertGreaterEqual(result['usage']['elapsedMs'], 0)
         package = result["toolEvidence"]
         self.assertEqual([(event["toolName"], event["category"], event["phase"]) for event in package["events"]],
                          [("read", "read", "start"), ("read", "read", "end"),
@@ -206,7 +225,9 @@ class DshReadOnlyTests(unittest.TestCase):
         self.assertEqual(len(package["nativeIdentity"]), 2)
         self.assertNotEqual(package["nativeIdentity"][0], package["nativeIdentity"][1])
         self.assertEqual(package["toolCalls"], 3)
-        self.assertEqual(result["usage"], {"inputTokens": 61, "outputTokens": 18, "toolCalls": 3})
+        self.assertEqual({key: result['usage'][key] for key in ('inputTokens', 'outputTokens', 'toolCalls')},
+                         {"inputTokens": 61, "outputTokens": 18, "toolCalls": 3})
+        self.assertIsNone(result['usage']['bytesRead'])
         self.assertTrue(package["streamComplete"])
         self.assertIsNone(judge_tool_evidence(package, "review", False))
 
@@ -268,7 +289,9 @@ class DshReadOnlyTests(unittest.TestCase):
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertEqual(outcome.result["code"], "invalid-native-result")
                 self.assertNotIn("rawAnswer", outcome.result)
-                self.assertNotIn("usage", outcome.result)
+                self.assertEqual(outcome.result['usage']['toolCalls'],
+                                 1 if case == 'usage-mismatch' else 0)
+                self.assertEqual(outcome.result['usage']['toolCalls'], outcome.result['toolEvidence']['toolCalls'])
                 package = outcome.result["toolEvidence"]
                 # The tool-event stream itself was real and complete; the answer
                 # envelope around it is what failed the readback.
@@ -279,8 +302,8 @@ class DshReadOnlyTests(unittest.TestCase):
         outcome = self.execute("stop-unknown")
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result["code"], "stop-unknown")
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
+        self.assertFalse(outcome.shutdown_confirmed)
+        self.assertFalse(outcome.result["processState"]["shutdownConfirmed"])
         self.assertNotIn("rawAnswer", outcome.result)
 
     def test_deadline_and_cancel_stop_the_owned_group(self):

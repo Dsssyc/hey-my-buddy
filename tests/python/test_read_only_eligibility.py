@@ -28,11 +28,14 @@ class LocalEligibilityTests(unittest.TestCase):
                     self.assertIsNone(result['reasonCode'])
 
     def test_unimplemented_non_sandbox_adapters_stay_ineligible(self):
-        for item in (Adapter(), DshAdapter(), ZcodeAdapter()):
+        for item in (Adapter(), ZcodeAdapter()):
             with self.subTest(adapter=item.name):
                 result = item.local_read_only_check()
                 self.assertFalse(result['eligible'])
                 self.assertFalse(result['systemSandbox'])
+        result = DshAdapter().local_read_only_check()
+        self.assertTrue(result['eligible'])
+        self.assertFalse(result['systemSandbox'])
 
     def test_a_declaration_without_a_handler_is_ineligible(self):
         class Declared(Adapter):

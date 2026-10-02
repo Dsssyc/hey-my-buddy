@@ -20,8 +20,9 @@ plugin = next(row for row in patch if 'insert' in row)['insert'][0]
 config = plugin['config']
 case = (Path(__file__).parent / 'case').read_text().strip()
 
-SAFE_ROWS = [('agents', True), ('tools', True), ('sessions', True), ('fs-tools', True),
-             ('search-tools', True), ('llm', True), ('credentials', True),
+SAFE_ROWS = [('agent', True), ('agent-default-model', True), ('agent-loop', True),
+             ('tools', True), ('session', True), ('tool-fs', True),
+             ('tool-fs-search', True), ('llm', True), ('credentials', True),
              ('session-persistence-jsonl', True), ('workflow', False),
              ('headless-runner', False), ('session-title-llm', False),
              ('session-telemetry-otel', False)]
@@ -36,7 +37,7 @@ if '--dump-config' in args:
     elif case == 'dump-workflow':
         rows = [('workflow', True) if row[0] == 'workflow' else row for row in rows]
     elif case == 'dump-stack':
-        rows = [row for row in rows if row[0] != 'fs-tools']
+        rows = [row for row in rows if row[0] != 'tool-fs']
     elif case == 'unsafe':
         rows = [('headless-runner', True) if row[0] == 'headless-runner' else row for row in rows]
     for entry, enabled in rows:
@@ -117,6 +118,14 @@ elif case == 'usage-mismatch':
     ok['nativeToolEvents'] = call('read', 'call-1')
 elif case == 'identity-invalid':
     ok['nativeIdentity'] = {'sessionId': ''}
+elif case == 'events-missing':
+    ok.pop('nativeToolEvents')
+elif case == 'truncated-missing':
+    ok.pop('nativeToolEventsTruncated')
+elif case == 'model-not-started':
+    ok['modelStarted'] = False
+elif case == 'tool-budget-exhausted':
+    ok.update(status='error', code='tool-budget-exhausted', streamComplete=False)
 
 Path(config['outputFile']).write_text(json.dumps(ok))
 sys.exit(0 if ok['status'] == 'ok' else 1)

@@ -39,14 +39,15 @@ _DISABLED_IDS = ("headless-runner", "session-title-llm", "session-telemetry-otel
 _DYNAMIC_WORKFLOW_MARK = "workflow"
 #: Enabled rows of the official stack the bridge drives; a dump missing any of
 #: these marks cannot run the restricted Agent turn and fails before the model.
-_STACK_MARKS = ("agent", "tool", "session", "fs", "search")
+_STACK_IDS = ("agent", "agent-default-model", "agent-loop", "tools", "session", "tool-fs", "tool-fs-search")
+_DYNAMIC_IDS = ("workflow-worker-thread", "tool-workflow")
 #: Native failure codes the bridge reports; anything else is a protocol
 #: violation, never a native verdict of its own.
 _NATIVE_CODES = frozenset((
     "read-only-profile-unsafe", "invalid-configuration", "configuration-unavailable",
     "configuration-mismatch", "read-only-tools-unavailable", "tool-surface-expanded",
     "tool-budget-exhausted", "deadline", "stream-incomplete", "native-turn-failed",
-    "flush-failed", "stop-unknown", "invalid-native-result"))
+    "flush-failed", "stop-unknown", "invalid-native-result", "answer-too-large"))
 
 
 def bridge_plugin() -> Path:
@@ -100,7 +101,7 @@ def read_only_composed(raw: str, plugin: Path) -> bool:
                if values.get("disabled") != "true"]
     if any(_DYNAMIC_WORKFLOW_MARK in row_id for row_id in enabled):
         return False
-    return all(any(mark in row_id for row_id in enabled) for mark in _STACK_MARKS)
+    return all(entry in enabled for entry in _STACK_IDS)
 
 
 def _root_identity(value) -> dict | None:
@@ -113,7 +114,8 @@ def _root_identity(value) -> dict | None:
 
 
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
-    deadline = time.monotonic() + control["timeoutSeconds"]
+    started_at = time.monotonic()
+    deadline = started_at + control["timeoutSeconds"]
     directory = Path(control["directory"])
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     # The binding is the private Python control identity, never model data. This
@@ -123,18 +125,24 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                                   "attemptId": control["attemptId"], "generation": control["generation"]})
     roots: list[dict] = []
     totals: dict[str, int] = {}
+    model_started = False
 
     def settled(code: str, *, started: bool = False, stopped: bool = True,
                 exit_code: int | None = None, complete: bool = False) -> tuple[dict, int]:
-        payload = problem(code, started=started, stopped=stopped, exit_code=exit_code)
+        payload = problem(code, started=started or model_started, stopped=stopped, exit_code=exit_code)
         payload["toolEvidence"] = evidence.finish(roots, complete)
+        payload["usage"] = {**totals, "toolCalls": evidence.tool_calls, "bytesRead": None,
+                            "elapsedMs": round((time.monotonic() - started_at) * 1000)}
         return payload, 1
 
     def projected(native: dict) -> None:
         """Observe every native fact before any acceptance filtering."""
         events = native.get("nativeToolEvents")
         if not isinstance(events, list):
+            evidence.observe_incomplete("dsh", {})
             return
+        if type(native.get("nativeToolEventsTruncated")) is not bool or type(native.get("streamComplete")) is not bool:
+            evidence.observe_incomplete("dsh", {})
         for fact in events:
             try:
                 event = normalize_tool_event("dsh", fact)
@@ -146,10 +154,12 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
 
     def failed(code: str, *, started: bool, exit_code: int | None, complete: bool,
                native_turn_end=None) -> tuple[dict, int]:
-        result = problem(code, started=started, exit_code=exit_code)
+        result = problem(code, started=started or model_started, stopped=code != "stop-unknown", exit_code=exit_code)
         if isinstance(native_turn_end, str) and 0 < len(native_turn_end) <= 100:
             result["nativeTurnEnd"] = native_turn_end
         result["toolEvidence"] = evidence.finish(roots, complete)
+        result["usage"] = {**totals, "toolCalls": evidence.tool_calls, "bytesRead": None,
+                           "elapsedMs": round((time.monotonic() - started_at) * 1000)}
         return result, 1
 
     try:
@@ -207,6 +217,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             {"id": "headless-runner", "disabled": True},
             {"id": "session-telemetry-otel", "disabled": True},
             {"id": "session-title-llm", "disabled": True},
+            *({"id": entry, "disabled": True} for entry in _DYNAMIC_IDS),
             {"id": "session-persistence-jsonl", "config": {"root": str(call_dir / "sessions")}},
             {"insert": [{"id": _BRIDGE_ID, "name": str(plugin),
                          "config": {"requestFile": str(input_file), "outputFile": str(result_file),
@@ -248,6 +259,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         native = read_object(result_file)
         if native is None:
             return settled("invalid-native-result", started=True, exit_code=code)
+        model_started = model_started or native.get("modelStarted") is True
         projected(native)
         # The trusted root identity is the native root session the bridge
         # actually created, one correction turn at a time; it is never inferred
@@ -261,21 +273,27 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             code_name = native.get("code")
             if code_name not in _NATIVE_CODES:
                 code_name = "invalid-native-result"
+            if code_name == "tool-budget-exhausted":
+                code_name = "readonly-budget-exhausted"
             return failed(code_name, started=native.get("modelStarted") is True, exit_code=code,
                           complete=turn_complete, native_turn_end=native.get("nativeTurnEnd"))
         usage = native.get("usage")
         if (code != 0 or native.get("streamComplete") is not True or truncated
+                or native.get("modelStarted") is not True
+                or not isinstance(native.get("nativeToolEvents"), list)
+                or type(native.get("nativeToolEventsTruncated")) is not bool
                 or native.get("resolved") != spec or identity is None
                 or not isinstance(usage, dict)
                 or type(usage.get("toolCalls")) is not int or usage["toolCalls"] < 0
                 or usage["toolCalls"] != evidence.tool_calls - round_base
                 or not isinstance(native.get("rawAnswer"), str)
                 or len(native["rawAnswer"].encode()) > _MAX_RAW_ANSWER):
-            return failed("invalid-native-result", started=True, exit_code=code, complete=turn_complete)
+            return failed("invalid-native-result", started=model_started, exit_code=code, complete=turn_complete)
         for key, value in usage.items():
             if key in _USAGE_KEYS and type(value) is int and value >= 0:
                 totals[key] = totals.get(key, 0) + value
         raw = native["rawAnswer"]
+        evidence.close_root(identity)
         correction = correction_code(raw, request["outputSchema"])
         if correction is None or attempt:
             # finish runs once per attempt exit; observing never follows it, so
@@ -283,7 +301,8 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             package = evidence.finish(roots, turn_complete)
             result = {"status": "ok", "rawAnswer": raw, "resolved": spec,
                       "observed": None, "modelStarted": True, "nativeIdentity": identity,
-                      "usage": {**totals, "toolCalls": evidence.tool_calls},
+                      "usage": {**totals, "toolCalls": evidence.tool_calls, "bytesRead": None,
+                                "elapsedMs": round((time.monotonic() - started_at) * 1000)},
                       "answerValid": valid_answer(raw, request["outputSchema"]),
                       "correctionCount": attempt, "toolEvidence": package,
                       "processState": {"shutdownConfirmed": True, "nativeExitCode": code}}
