@@ -378,18 +378,18 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
                  "reason": f"Router 不可用：buddy {profile_id} 的完整身份与请求冻结值不一致",
                  "routerIndex": index, "profileId": profile_id})
         state = router_state(connection, profile_id=profile_id, interval_seconds=interval, now=now)
-        profile, code, reason = profile_problem(connection, profile_id, mode)
-        if profile is None:
-            inspections.append({"index": index, "profileId": profile_id, "identity": identity,
-                                "eligible": False, "code": code, "reason": reason,
-                                "skipUntil": state["skipUntil"], "retryAt": state["retryAt"],
-                                "consecutiveNoAnswers": state["consecutiveNoAnswers"],
-                                "retryInProgress": state["retryInProgress"], "selected": False})
-            continue
         if state["inSkipWindow"]:
             inspections.append({"index": index, "profileId": profile_id, "identity": identity,
                                 "eligible": False, "code": "router-skip-window",
                                 "reason": f"Router 不可用：在暂时跳过期内，{state['retryAt']} 后可再试",
+                                "skipUntil": state["skipUntil"], "retryAt": state["retryAt"],
+                                "consecutiveNoAnswers": state["consecutiveNoAnswers"],
+                                "retryInProgress": state["retryInProgress"], "selected": False})
+            continue
+        profile, code, reason = profile_problem(connection, profile_id, mode)
+        if profile is None:
+            inspections.append({"index": index, "profileId": profile_id, "identity": identity,
+                                "eligible": False, "code": code, "reason": reason,
                                 "skipUntil": state["skipUntil"], "retryAt": state["retryAt"],
                                 "consecutiveNoAnswers": state["consecutiveNoAnswers"],
                                 "retryInProgress": state["retryInProgress"], "selected": False})

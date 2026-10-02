@@ -182,7 +182,7 @@ def _valid_answer(receipt: dict | None, output: dict | None) -> bool:
     if receipt:
         result = receipt.get("result")
         return (receipt.get("status") == "ok" and isinstance(result, dict) and result.get("status") == "ok"
-                and bool(result.get("modelStarted")) and receipt.get("shutdownConfirmed") == 1)
+                and result.get("modelStarted") is not False and receipt.get("shutdownConfirmed") == 1)
     return isinstance(output, dict) and output.get("status") == "ok"
 
 
@@ -193,18 +193,22 @@ def _abstained(kind: str, output: dict) -> bool:
             and set(decision) == {"profileId", "reason", "evidence"})
 
 
-def _classify_record(kind: str, output: dict, receipt: dict | None) -> tuple[str, str | None]:
+def _classify_record(kind: str, output: dict, receipt: dict | None, event_payload: dict | None = None) -> tuple[str, str | None]:
     """One old record's effective outcome: answered, no_answer, changed, neutral or unknown."""
-    payload_code = output.get("errorCode") if isinstance(output, dict) else None
+    if isinstance(receipt, dict) and isinstance(receipt.get('result'), dict):
+        output = receipt['result']
+    payload_code = (event_payload or {}).get("errorCode")
     code = payload_code or (output.get("code") if isinstance(output, dict) else None)
     code = code if isinstance(code, str) and code else None
     if kind == "decision.completed":
         return ("answered", None) if _valid_answer(receipt, output) else ("unknown", code)
     if kind == "decision.needs_host":
-        if _abstained(kind, output):
-            return "answered", code
         if code == "router-input-changed":
             return "changed", code
+        if code:
+            return "no_answer", code
+        if _abstained(kind, output):
+            return "answered", None
         return "no_answer", code
     if kind == "decision.failed":
         if code == "router-input-changed":
@@ -279,7 +283,7 @@ def profile_timeline(connection, *, profile_id: str) -> list[dict]:
         row = entry["row"]
         if row["request_id"] in seen_requests or (row["attempt_id"] and row["attempt_id"] in seen_attempts):
             continue
-        outcome, code = _classify_record(row["kind"], entry["output"], entry["receipt"])
+        outcome, code = _classify_record(row["kind"], entry["output"], entry["receipt"], entry['eventPayload'])
         if outcome == "changed" or outcome == "neutral":
             continue
         phase = "preflight" if not row["attempt_id"] else "runtime"
@@ -301,7 +305,7 @@ def unattributed_records(connection) -> list[dict]:
     entries = []
     for entry in _record_rows(connection, None):
         row = entry["row"]
-        outcome, code = _classify_record(row["kind"], entry["output"], entry["receipt"])
+        outcome, code = _classify_record(row["kind"], entry["output"], entry["receipt"], entry['eventPayload'])
         entries.append({"source": "record", "seq": int(row["event_seq"]), "at": row["at"],
                         "outcome": outcome, "decisionId": row["decision_id"],
                         "requestId": row["request_id"], "taskId": row["task_id"],

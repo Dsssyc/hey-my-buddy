@@ -512,6 +512,18 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.assertEqual([entry["decisionId"] for entry in unattributed], ["dec-bad"])
         self.assertEqual(self.state(A)["noAnswerCount"], 1)
 
+    def test_immutable_terminal_facts_win_over_late_output(self):
+        receipt = {'status': 'ok', 'shutdownConfirmed': True, 'result': {'status': 'ok'}}
+        self.assertEqual(router_history._classify_record('decision.completed', {}, receipt), ('answered', None))
+        abstention = {'status': 'ok', 'decision': {'profileId': None, 'reason': 'cannot choose', 'evidence': []}}
+        for code in ('router-budget-exhausted', 'router-tool-evidence-unverified'):
+            with self.subTest(code=code):
+                self.assertEqual(router_history._classify_record('decision.needs_host', abstention, None,
+                                 {'errorCode': code}), ('no_answer', code))
+        old = {'status': 'failed', 'result': {'status': 'error', 'code': 'timeout'}}
+        self.assertEqual(router_history._classify_record('decision.failed',
+                         {'code': 'router-input-changed'}, old, {'errorCode': 'timeout'}), ('no_answer', 'timeout'))
+
     def test_per_profile_reads_use_the_partial_outcome_index(self):
         """Per-buddy reads must serve the partial index, not scan unrelated events.
 
@@ -528,6 +540,12 @@ class HistoryProjectionTests(CurrentRouterTestCase):
                                                                         (A,)).fetchall())
         self.assertIn("events_router_outcome_idx", plan)
         self.assertNotIn("SCAN event", plan)
+        with self.board_.store.db.read() as connection:
+            query = ("SELECT seq FROM events WHERE kind='router.claimed'"
+                     f" AND {router_history._PROFILE_EXPRESSION}=? ORDER BY seq")
+            claimed = " ".join(row['detail'] for row in connection.execute('EXPLAIN QUERY PLAN ' + query, (A,)))
+        self.assertIn('events_router_claimed_idx', claimed)
+        self.assertNotIn('SCAN e', claimed)
 
     def test_active_attempts_project_retry_in_progress(self):
         self.add_profile(A, model="alpha")

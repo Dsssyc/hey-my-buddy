@@ -216,6 +216,9 @@ CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
 CREATE INDEX IF NOT EXISTS events_router_outcome_idx
     ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
     WHERE kind IN ('router.answered','router.no_answer');
+CREATE INDEX IF NOT EXISTS events_router_claimed_idx
+    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
+    WHERE kind='router.claimed';
 
 CREATE TABLE IF NOT EXISTS commands (
     command_id      TEXT PRIMARY KEY,
