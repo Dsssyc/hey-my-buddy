@@ -279,6 +279,23 @@ class ReadOnlyEvidenceTests(unittest.TestCase):
         evidence.observe({"method": "state.updated", "params": {"sessionId": "s-1",
                           "reason": "prompt_completed"}}, 6)
 
+    def test_native_tool_lifecycle_metadata_is_checked_without_proving_an_answer(self):
+        evidence, _ = self.evidence()
+        self.start(evidence)
+        for seq, kind, turn in ((1, 'tool-scheduled', 't-1'), (2, 'tool-started', 't-1'),
+                                (3, 'tool-started', None)):
+            evidence.observe_metadata('computer-use/operation-event', {
+                'kind': kind, 'sequenceNumber': seq, 'sessionId': 's-1', 'turnId': turn,
+                'toolCallId': 'read', 'toolName': 'Read'})
+        self.assertFalse(evidence.completed)
+        self.assertFalse(evidence.settled)
+        with self.assertRaises(NativeError):
+            evidence.observe_metadata('computer-use/operation-event', {
+                'kind': 'tool-started', 'sequenceNumber': 3, 'sessionId': 's-1'})
+        with self.assertRaises(NativeError):
+            evidence.observe_metadata('computer-use/operation-event', {
+                'kind': 'tool-scheduled', 'sequenceNumber': 4, 'sessionId': 's-1', 'turnId': 'foreign'})
+
     def test_real_frames_pair_and_the_judge_accepts_the_review_facts(self):
         evidence, facts = self.evidence()
         self.start(evidence)

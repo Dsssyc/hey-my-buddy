@@ -54,6 +54,8 @@ class ZcodeToolFacts:
         self.close_pending = False
         self.violation = False
         self._names: dict[tuple[str, str, str], str] = {}
+        self._ended = set()
+        self._closed = set()
 
     # -- controller receipts ---------------------------------------------------
     def add_root(self, session_id: str, turn_id: str) -> None:
@@ -88,6 +90,7 @@ class ZcodeToolFacts:
             identity = _identity_of(params)
             if identity in self.roots:
                 self.evidence.close_root(identity)
+                self._closed.add((identity['sessionId'], identity['turnId']))
             return
         if not isinstance(params, dict) or params.get("type") != "tool.updated":
             return
@@ -100,15 +103,29 @@ class ZcodeToolFacts:
         call_id = call_id if isinstance(call_id, str) and call_id else None
         identity = _identity_of(params)
         name = None
+        if kind in ("started", "progress"):
+            key = (identity["sessionId"], identity["turnId"], call_id) if identity and call_id else None
+            known = self._names.get(key)
+            raw = payload.get("toolName")
+            if (known is not None and key not in self._ended and key[:2] not in self._closed
+                    and (raw is None or raw == known)):
+                if kind == "progress":
+                    return  # The known call's start/end remain its evidence.
+                phase, name = "start", known
+            else:
+                self._incomplete(params, identity, call_id, None, None)
+                return
         if phase == "start":
             # Only a scheduled record names the call; a title or a result body
             # is never promoted to a tool name.
             raw = payload.get("toolName")
-            name = raw if isinstance(raw, str) and raw else None
+            name = name or (raw if isinstance(raw, str) and raw else None)
             if identity is not None and call_id is not None and name is not None:
                 self._names.setdefault((identity["sessionId"], identity["turnId"], call_id), name)
         elif phase == "end" and identity is not None and call_id is not None:
-            name = self._names.get((identity["sessionId"], identity["turnId"], call_id))
+            key = (identity["sessionId"], identity["turnId"], call_id)
+            name = self._names.get(key)
+            self._ended.add(key)
         if identity is not None and phase is not None and call_id is not None and name is not None:
             # The envelope type is not an operation type and is never passed as
             # one; the shared table classifies the scheduled tool name alone.

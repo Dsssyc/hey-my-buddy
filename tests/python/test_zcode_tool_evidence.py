@@ -138,6 +138,37 @@ class ProjectionTests(unittest.TestCase):
         facts.add_root("s-1", "t-1")
         return facts
 
+    def test_native_started_and_progress_belong_to_the_existing_call(self):
+        facts = self.facts()
+        for seq, payload in enumerate((
+                {'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'},
+                {'kind': 'started', 'toolCallId': 'read'},
+                {'kind': 'progress', 'toolCallId': 'read'},
+                {'kind': 'result', 'toolCallId': 'read'}), 2):
+            facts.observe(frame(payload, seq=seq))
+        package = facts.finish(True)
+        self.assertEqual(package['toolCalls'], 1)
+        self.assertEqual([event['phase'] for event in package['events']], ['start', 'end'])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'review', False))
+
+    def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
+        for payload in ({'kind': 'started', 'toolCallId': 'foreign'},
+                        {'kind': 'progress', 'toolCallId': 'read', 'toolName': 'Bash'}):
+            facts = self.facts()
+            facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}))
+            facts.observe(frame(payload, seq=3))
+            self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'review', False))
+        facts = self.facts()
+        facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}))
+        facts.observe(frame({'kind': 'result', 'toolCallId': 'read'}, seq=3))
+        facts.observe(frame({'kind': 'progress', 'toolCallId': 'read'}, seq=4))
+        self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'review', False))
+        facts = self.facts()
+        facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}))
+        facts.observe({'method': 'session/event', 'params': {**ROOT, 'type': 'turn.completed'}})
+        facts.observe(frame({'kind': 'progress', 'toolCallId': 'read'}, seq=4))
+        self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'review', False))
+
     def test_settled_pair_keeps_the_scheduled_name_and_fixed_fields_only(self):
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read",
