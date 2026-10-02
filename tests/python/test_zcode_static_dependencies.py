@@ -21,6 +21,7 @@ class ProofDependencyTests(unittest.TestCase):
             'var otherKey="submit_result";function change(otherKey){sK=otherKey}change("Read");',
             'function change(){let otherKey="Read";sK=otherKey}change();',
             '([sK]=["Read"]);', '({x:sK}={x:"Read"});',
+            '([sK="\\x00"]=["Read"]);', 's\\u004b="Read";',
         ):
             with self.subTest(tail=tail):
                 self.assertIsNotNone(native_contract_problem(GOOD_IF_BUNDLE + tail))

@@ -1518,7 +1518,12 @@ class _Bundle:
                         try:
                             tokens = list(_token_iter(self.text, start + 1, position))
                         except _ParseError:
-                            tokens = []
+                            # A malformed/escaped default must not erase an
+                            # otherwise visible target before it. Conservatively
+                            # retain code identifiers; literals/comments stay out.
+                            tokens = [("id", match.group(0), match.start(), match.end())
+                                      for match in _IDENT_RE.finditer(self.text, start + 1, position)
+                                      if self.regions.is_code(match.start())]
                         for offset, token in enumerate(tokens):
                             if token[0] != "id" or (offset + 1 < len(tokens) and tokens[offset + 1][1] == ":"):
                                 continue
@@ -2570,6 +2575,8 @@ def allowlist_chain_problem(text: str) -> str | None:
     credential.
     """
     bundle = _Bundle(text)
+    if any(bundle.regions.code_matches(re.compile(r"\\[ux]"))):
+        return "the public bundle has an unrecognized escaped identifier in code"
     exported = _exported_names(bundle)
     registers = exported[_REGISTER_EXPORT]
     resolvers = exported[_RESOLVE_EXPORT]
