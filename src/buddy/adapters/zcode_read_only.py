@@ -117,7 +117,7 @@ class ReadOnlyEvidence:
     MODEL_EVENTS = NoToolEvidence.MODEL_EVENTS
     SESSION_EVENTS = NoToolEvidence.SESSION_EVENTS
     OPERATION_EVENTS = {*NoToolEvidence.OPERATION_EVENTS, "tool-scheduled", "tool-started"}
-    TELEMETRY_EVENTS = NoToolEvidence.TELEMETRY_EVENTS
+    TELEMETRY_EVENTS = {*NoToolEvidence.TELEMETRY_EVENTS, "tool.lifecycle"}
 
     def __init__(self, session_id: str, input_id: str, tools: ZcodeToolFacts, tool_budget: int):
         self.session_id, self.input_id = session_id, input_id
@@ -144,8 +144,8 @@ class ReadOnlyEvidence:
         if params["kind"] == "session-closed":
             return
         turn = params.get("turnId")
-        if params["kind"] == "tool-started" and turn is None:
-            return  # Native schema makes this projection's turn optional.
+        if params["kind"] in ("tool-started", "tool.lifecycle") and turn is None:
+            return  # Optional native turn; the fact collector checks call association.
         if (not isinstance(turn, str) or not turn
                 or self.turn_id is not None and turn != self.turn_id
                 or self.metadata_turn is not None and turn != self.metadata_turn):
