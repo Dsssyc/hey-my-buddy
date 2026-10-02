@@ -107,3 +107,26 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
             self.assertEqual(probe.evaluate(packet, bad, elapsed_ms=100, unchanged=True)['status'], 'failed')
         self.assertEqual(probe.evaluate(packet, good, elapsed_ms=60001, unchanged=True)['status'], 'failed')
         self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=False)['status'], 'failed')
+
+    def test_all_harness_packets_freeze_policy_without_selecting_a_native_adapter(self):
+        for adapter in probe.ADAPTERS:
+            with self.subTest(adapter=adapter), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')), \
+                 patch('subprocess.Popen', side_effect=AssertionError('no process')):
+                self.args.adapter = adapter
+                self.args.output_root = Path(self.temp.name) / adapter
+                packet = self.prepared()
+                self.assertIs(packet['systemSandbox'], probe.system_sandbox(adapter))
+
+    def test_native_command_reading_requires_the_frozen_system_sandbox_class(self):
+        for adapter in ('codex', 'dsh'):
+            with self.subTest(adapter=adapter):
+                self.args.adapter = adapter
+                self.args.output_root = Path(self.temp.name) / adapter
+                packet = self.prepared()
+                outcome = self.outcome(packet)
+                for event in outcome.result['toolEvidence']['events']:
+                    event.update(toolName='exec_command', category='execute')
+                report = probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)
+                self.assertEqual(report['status'], 'passed' if probe.system_sandbox(adapter) else 'failed')
+                packet['systemSandbox'] = not packet['systemSandbox']
+                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'failed')

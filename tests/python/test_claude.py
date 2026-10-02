@@ -603,6 +603,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         answer = json.loads(raw) if isinstance(raw, str) else raw
         self.assertEqual(answer["profileId"], "legal")
         self.assertIsNone(result.result["usage"]["bytesRead"])
+        self.assertEqual(result.result["correctionCount"], 0)
         self.assertFalse(context.turn_output_file().exists())
         # The unified receipt: a quiet tool-free stream still binds the frozen
         # attempt identity to a complete zero-tool evidence package.

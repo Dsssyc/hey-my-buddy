@@ -227,7 +227,7 @@ def _read_only_call(connection, control, result, catalog, early_messages, user_s
         raw = native_result.get("structured_output")
         result.update(status="ok", rawAnswer=raw, answerValid=valid_answer(raw, request["outputSchema"]),
                       resolved=dict(spec), nativeIdentity={"sessionId": session_id},
-                      usage={"toolCalls": collector.tool_calls, "bytesRead": None})
+                      usage={"toolCalls": collector.tool_calls, "bytesRead": None}, correctionCount=0)
         return evidence
     except BaseException:
         # A stream that never provably closed still reports the facts collected so far.

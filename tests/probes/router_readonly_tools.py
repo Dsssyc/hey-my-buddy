@@ -1,4 +1,4 @@
-"""One DSH/ZCode native tool probe; preparation calls no model.
+"""One native read-only tool probe; preparation calls no model.
 
 Each --execute invocation requires separate human approval. The prepared
 packet is immutable and an exclusive marker prevents a repeat invocation.
@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -22,8 +23,18 @@ from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
 from buddy.adapters.turn_io import private_json
 from buddy.db import canonical_json, sha256_text
 
-ADAPTERS = ('dsh', 'zcode')
+ADAPTERS = ('codex', 'claude', 'dsh', 'zcode')
 CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-sol:high')
+
+
+def system_sandbox(adapter):
+    # The same shipped platform declaration used by the free eligibility
+    # contract; native execution still checks the effective policy itself.
+    from buddy.adapters.codex import CodexAdapter
+    from buddy.adapters.claude import ClaudeAdapter
+    platforms = {'codex': CodexAdapter.system_sandbox_platforms,
+                 'claude': ClaudeAdapter.system_sandbox_platforms}
+    return sys.platform in platforms.get(adapter, ())
 
 
 def parser():
@@ -55,11 +66,13 @@ def _prepare(root, configuration):
     guide.chmod(0o600)
     packet = {
         'configuration': configuration,
+        'systemSandbox': system_sandbox(configuration['adapter']),
         'binding': {'adapter': configuration['adapter'], 'taskId': 'probe-' + uuid.uuid4().hex,
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
         'expected': {'profileId': CANDIDATES[1], 'marker': marker},
         'inputDigest': router_input.digest(frozen),
-        'request': {'prompt': 'Read selection-guide.txt using the native read tool. Follow its choice and marker instructions. '
+        'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if configuration['adapter'] == 'codex'
+                              else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
                               'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
                     'outputSchema': router.answer_schema(list(CANDIDATES), 'review'),
                     'budget': router.budget('brief')},
@@ -76,11 +89,12 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
     reported = reported if isinstance(reported, list) else [reported]
     usage = result.get('usage') or {}
     limits = packet['request']['budget']
+    sandbox = system_sandbox(packet['configuration']['adapter'])
     try:
         answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
     except Exception:
         answer = None
-    tool_problem = tool_evidence.judge_tool_evidence(evidence, 'review', False)
+    tool_problem = tool_evidence.judge_tool_evidence(evidence, 'review', sandbox)
     counts_match = (isinstance(evidence, dict) and type(usage.get('toolCalls')) is int
                     and usage['toolCalls'] == evidence.get('toolCalls'))
     checks = {
@@ -90,9 +104,13 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'configuration': all((result.get('resolved') or {}).get(key) == value
                              for key, value in packet['configuration'].items() if key != 'adapter'),
         'binding': isinstance(evidence, dict) and evidence.get('binding') == packet['binding'],
+        'policyClass': type(packet.get('systemSandbox', False)) is bool
+                       and packet.get('systemSandbox', False) is sandbox,
         'nativeIdentity': bool(reported) and all(isinstance(item, dict) and item in roots for item in reported),
         'toolEvidence': tool_problem is None,
-        'readCompleted': isinstance(evidence, dict) and any(event.get('category') == 'read' and event.get('phase') == 'end'
+        'readCompleted': isinstance(evidence, dict) and any((event.get('category') == 'read'
+                                                           or sandbox and event.get('category') == 'execute')
+                                                          and event.get('phase') == 'end'
                                                           for event in evidence.get('events', [])),
         'toolBudget': counts_match and 0 < usage['toolCalls'] <= limits['toolCalls'],
         'deadline': 0 <= elapsed_ms <= limits['timeoutSeconds'] * 1000,
@@ -103,7 +121,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
     }
     return {'status': 'passed' if all(checks.values()) else 'failed', 'checks': checks,
             'toolProblem': tool_problem, 'result': result, 'elapsedMs': elapsed_ms,
-            'bytesRead': usage.get('bytesRead'), 'systemSandbox': False}
+            'bytesRead': usage.get('bytesRead'), 'systemSandbox': sandbox}
 
 
 def run(args):
@@ -117,7 +135,8 @@ def run(args):
     if not args.execute:
         return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
                 'packet': str(root / 'prepared.json'), 'budget': packet['request']['budget'],
-                'maxAnswerRounds': 2, 'systemSandbox': False}
+                'maxAnswerRounds': 1 if configuration['adapter'] == 'claude' else 2,
+                'systemSandbox': system_sandbox(configuration['adapter'])}
     if getattr(args, 'expected_packet_sha256', None) != digest:
         raise ValueError('execution requires the exact prepared packet digest covered by approval')
     with (root / 'execution.started').open('x') as stream:
@@ -140,7 +159,7 @@ def run(args):
     handle = None
     started = time.monotonic()
     report = {'status': 'failed', 'packetSha256': digest, 'configuration': configuration,
-              'modelCalls': None, 'systemSandbox': False}
+              'modelCalls': None, 'systemSandbox': system_sandbox(configuration['adapter'])}
     try:
         handle = native.start_read_only_structured(context, request)
         if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:
