@@ -151,6 +151,8 @@ L5、L6 的正常任务都只做到模拟夹具、公开安装代码/协议元�
 
 真实 probe 的验收需要一条完整原生工具调用与完成证据、结构化选择、预算与停止回报、副本未改动和真实工具结果；只能看到最终 JSON、RPC 成功、模型的“只读”声称或没有调用工具的超时都不够。若策略/协议不符，先记录事实并修正计划或实现，再请求下一次授权，不在同一次许可下自动重试。
 
+Host 的 DSH/ZCode 小探针放在 tests/probes/router_readonly_tools.py，准备阶段只创建私有夹具、冻结请求和 hash，调用次数为 0。模型输入只给读取 selection-guide.txt 的指令；文件含随机 marker 与两个合法候选中的目标，最终 reason 必须返回该 marker，原生证据必须有完整 read start/end。使用 brief 的 60 秒/8 工具，最多一次格式纠正，直接调用本源码的适配器而不启动看板或服务。执行复用完全相同的已准备请求，并以独占 execution.started 文件阻止任何重复执行；证据规则、真实 stop、累计预算和输入 hash 全部通过才报告原生通过。它不尝试本实现无法提供的 OS 级目录/禁网拒绝，不把文件未变当作系统沙盒证明；旧 Codex/Claude 权限探针及其故障测试保留。
+
 ## 委派、集成与记录
 
 所有 buddy 提交省略 harness/provider/model/effort，不给部分四元组；任务需要的复杂度、推理和验证能力写入任务描述。一个议程用一个 objective，每行任务单独委派，固定 requestId，保存 runId/objectiveId/controlFile。并行写入使用 `executionWorkspace.kind=worktree` 的独立检出；includeUntracked 只列源检出中已存在的未跟踪输入，尚未创建的输出文件由 writeScope 声明并在 Worker 提交中跟踪，不能将未来路径放入 includeUntracked；Host 的分支只由 Host 合入已验收成果，不改 main、socu/buddy-core 或其他会话的 worktree，不推送。
