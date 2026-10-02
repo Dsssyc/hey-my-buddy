@@ -177,6 +177,23 @@ class NativeProjectionTests(unittest.TestCase):
         self.canonical("tool.updated", payload)
         self.canonical("tool.updated", payload)
         self.assertIsNotNone(self.judge())
+
+    def test_conflicting_canonical_ends_cannot_be_hidden_by_the_last_batch_count(self):
+        for first, second in ((True, False), (False, True), (None, True), (True, True)):
+            with self.subTest(first=first, second=second):
+                self.setUp()
+                self.scheduled()
+                self.canonical("tool.updated", {"kind": "result", "toolCallId": "read",
+                                                "result": {"success": first}})
+                self.canonical("tool.updated", {"kind": "error", "toolCallId": "read"}
+                               if second is False else {"kind": "result", "toolCallId": "read",
+                                                        "result": {"success": second}})
+                self.canonical("tool.updated", {"kind": "batch", "toolCallIds": ["read"],
+                                                "successCount": int(second), "errorCount": int(not second)})
+                if first is second:
+                    self.assertIsNone(self.judge())
+                else:
+                    self.assertIsNotNone(self.judge())
         self.setUp()
         self.scheduled()
         self.result()

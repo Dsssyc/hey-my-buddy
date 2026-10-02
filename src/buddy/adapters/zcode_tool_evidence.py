@@ -149,7 +149,10 @@ class ZcodeToolFacts:
             self._ended.add(key)
             result = payload.get("result")
             outcome = False if kind == "error" else result.get("success") if isinstance(result, dict) else None
-            self._outcomes[key] = outcome if type(outcome) is bool else None
+            outcome = outcome if type(outcome) is bool else None
+            if key in self._outcomes and self._outcomes[key] is not outcome:
+                self._incomplete(params, identity, call_id, phase, name)
+            self._outcomes.setdefault(key, outcome)
             if key in self._metadata_outcomes and self._metadata_outcomes[key] is not self._outcomes[key]:
                 self._incomplete(params, identity, call_id, phase, name)
         if identity is not None and phase is not None and call_id is not None and name is not None:
