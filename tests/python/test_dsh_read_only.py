@@ -281,6 +281,19 @@ class DshReadOnlyTests(unittest.TestCase):
                 self.assertFalse(outcome.result["modelStarted"])
                 self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
 
+    def test_only_fixed_failure_stages_leave_the_private_native_receipt(self):
+        for stage in ('provider-registration', 'agent-create', 'native-turn', 'invalid', 'private-detail'):
+            with self.subTest(stage=stage):
+                outcome = self.execute('provider-stage-' + stage)
+                self.assertEqual(outcome.result['code'], 'configuration-unavailable')
+                self.assertFalse(outcome.result['modelStarted'])
+                self.assertTrue(outcome.shutdown_confirmed)
+                if stage in ('provider-registration', 'agent-create', 'native-turn'):
+                    self.assertEqual(outcome.result['failureStage'], stage)
+                else:
+                    self.assertNotIn('failureStage', outcome.result)
+                    self.assertNotIn('private', str(outcome.result))
+
     def test_untrusted_receipts_fail_before_publishing_an_answer(self):
         for case, calls in (("usage-mismatch", 1), ("resolved-provider", 0), ("resolved-model", 0),
                             ("resolved-effort", 0), ("identity-invalid", 0)):

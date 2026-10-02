@@ -105,6 +105,9 @@ elif case == 'stop-unknown':
           'nativeToolEvents': [], 'nativeToolEventsTruncated': False, 'streamComplete': False}
 elif case == 'provider-missing':
     ok = refusal('configuration-unavailable')
+elif case.startswith('provider-stage-'):
+    ok = refusal('configuration-unavailable')
+    ok['failureStage'] = case.removeprefix('provider-stage-') if case != 'provider-stage-invalid' else ['private detail']
 elif case == 'tools-unavailable':
     ok = refusal('read-only-tools-unavailable')
 elif case == 'resolved-provider':

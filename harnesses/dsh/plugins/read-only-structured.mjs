@@ -8,7 +8,7 @@ export const name = 'buddy-read-only-structured';
 // The agent registry, session store and tool runtime must be live before the
 // bridge composes its Agent; the llm service additionally needs
 // credentials-local.loadInitial(), so Cordis activates us only after both.
-export const inject = ['agents', 'sessions', 'tools', 'llm', 'credentials'];
+export const inject = ['agents', 'agentLoop', 'sessions', 'tools', 'llm', 'credentials'];
 
 const TOOL_NAMES = ['glob', 'grep', 'read'];
 const ROOT_PREFIX = 'buddy-read-only-';
@@ -300,17 +300,23 @@ function assemble(state, code) {
 }
 
 export async function callReadOnly(ctx, request, signal) {
-  const refusal = (code) => ({ status: 'error', code, modelStarted: false,
+  const refusal = (code, failureStage) => ({ status: 'error', code, modelStarted: false,
+    ...(failureStage && { failureStage }),
     usage: { toolCalls: 0 }, nativeToolEvents: [], nativeToolEventsTruncated: false, streamComplete: false });
   if (!agentRunnerDisabled(ctx)) return refusal('read-only-profile-unsafe');
   if (requestProblem(request)) return refusal('invalid-configuration');
+  const deadline = Date.now() + request.budget.timeoutSeconds * 1_000;
+  const providerDeadline = Math.min(deadline, Date.now() + 20_000);
   try {
-    if (!ctx.llm.listProviders().some((entry) => entry?.id === request.spec.provider)) {
-      return refusal('configuration-unavailable');
+    while (!ctx.llm.listProviders().some((entry) => entry?.id === request.spec.provider)) {
+      if (signal?.aborted || Date.now() >= deadline) return refusal('deadline', 'provider-registration');
+      if (Date.now() >= providerDeadline) return refusal('configuration-unavailable', 'provider-registration');
+      await new Promise((resolve) => setTimeout(resolve, Math.min(25, providerDeadline - Date.now())));
     }
   } catch {
-    return refusal('configuration-unavailable');
+    return refusal('configuration-unavailable', 'provider-registration');
   }
+  if (signal?.aborted || Date.now() >= deadline) return refusal('deadline', 'provider-registration');
   const sessionId = sessionIdFor(request.callId);
   const state = {
     ctx, spec: request.spec, budget: request.budget, sessionId, published: false,
@@ -335,10 +341,11 @@ export async function callReadOnly(ctx, request, signal) {
   let detach = null;
   let timer = null;
   let code;
+  let failureStage;
   try {
     detach = ctx.on('session/event', recorder);
     signal?.addEventListener('abort', onAbort, { once: true });
-    timer = setTimeout(onDeadline, request.budget.timeoutSeconds * 1_000);
+    timer = setTimeout(onDeadline, Math.max(0, deadline - Date.now()));
     handle = await ctx.agents.create({
       sessionId,
       meta: { cwd: request.cwd },
@@ -388,6 +395,7 @@ export async function callReadOnly(ctx, request, signal) {
       : state.commitFailed ? 'tool-surface-expanded'
         : state.published ? 'invalid-native-result'
           : signal?.aborted ? 'deadline' : 'configuration-unavailable';
+    failureStage = state.published ? 'native-turn' : 'agent-create';
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
@@ -415,7 +423,7 @@ export async function callReadOnly(ctx, request, signal) {
   // still observed as late facts.
   detach?.();
   if (code === null && (state.incomplete || state.truncated)) code = 'stream-incomplete';
-  return assemble(state, code);
+  return { ...assemble(state, code), ...(failureStage && { failureStage }) };
 }
 
 function writeResult(file, value) {

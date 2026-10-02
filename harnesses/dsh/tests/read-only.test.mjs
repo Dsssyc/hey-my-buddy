@@ -3,7 +3,7 @@
  * and an event-sourced session log, all scripted per test. No model runs. */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { apply, callReadOnly } from '../plugins/read-only-structured.mjs';
+import { apply, callReadOnly, inject } from '../plugins/read-only-structured.mjs';
 
 const spec = { provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
 const OUTPUT_SCHEMA = { type: 'object', properties: { choice: { type: 'string' } }, required: ['choice'] };
@@ -328,6 +328,45 @@ test('a clean turn reuses the native tools and reports the full fact package', a
   assert.equal(sent.source.kind, 'user');
   assert.equal(sent.content[0].type, 'text');
   assert.equal(sent.content[0].text, expectedPrompt(request));
+});
+
+test('startup waits for native provider registration and the Agent factory service', async () => {
+  assert.ok(inject.includes('agentLoop'));
+  const ready = fixture([{ header: {} }, { assistant: { text: '{"choice":"a"}' } }]);
+  let registered = false;
+  ready.ctx.llm.listProviders = () => registered ? [{ id: spec.provider }] : [];
+  queueMicrotask(() => { registered = true; });
+  const result = await callReadOnly(ready.ctx, readOnlyRequest(), new AbortController().signal);
+  assert.equal(result.status, 'ok');
+  assert.equal(ready.registry.createCalls.length, 1);
+
+  const noFactory = fixture([]);
+  noFactory.ctx.agents.create = async () => { throw new Error('no agent factory registered: private detail'); };
+  const failed = await callReadOnly(noFactory.ctx, readOnlyRequest(), new AbortController().signal);
+  assert.equal(failed.code, 'configuration-unavailable');
+  assert.equal(failed.failureStage, 'agent-create');
+  assert.equal(failed.modelStarted, false);
+  assert.ok(!JSON.stringify(failed).includes('private detail'));
+});
+
+test('provider waiting obeys cancellation and the original deadline without creating an Agent', async () => {
+  const cancelled = fixture([], { providers: [] });
+  const abort = new AbortController();
+  const running = callReadOnly(cancelled.ctx, readOnlyRequest(), abort.signal);
+  queueMicrotask(() => abort.abort());
+  const result = await running;
+  assert.equal(result.code, 'deadline');
+  assert.equal(result.failureStage, 'provider-registration');
+  assert.equal(result.modelStarted, false);
+  assert.deepEqual(cancelled.registry.createCalls, []);
+
+  const expired = fixture([], { providers: [] });
+  const bounded = await callReadOnly(expired.ctx,
+    readOnlyRequest({ budget: { timeoutSeconds: 1, toolCalls: 8 } }), new AbortController().signal);
+  assert.equal(bounded.code, 'deadline');
+  assert.equal(bounded.failureStage, 'provider-registration');
+  assert.equal(bounded.modelStarted, false);
+  assert.deepEqual(expired.registry.createCalls, []);
 });
 
 test('a hallucinated tool is denied by the guard and stays a recorded fact', async () => {
