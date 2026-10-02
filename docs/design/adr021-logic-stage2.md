@@ -1,82 +1,72 @@
 # ADR-021 逻辑线第二阶段执行计划
 
-本文是 [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2、3、4 条在 L4、L5、L6 中的实现设计，基线为 `socu/buddy-core` 的 `cf371da`，工作分支为独立 worktree 中的 `socu/adr021-logic-stage2`。已读 `AGENTS.md`、`CONTEXT.md`、[第一阶段验收](../acceptance/adr021-logic-stage1.md)、[ADR-007](../decisions/007-neutral-core-and-single-current-contract.md) 与 [当前架构](../reference/architecture.md)。用户已批准按 2026-10-02 修订的第 4 条执行，本分支已合入 `socu/buddy-core` 的 `29883a8`（合并提交 `e63cdc5`）；修订计划提交后直接委派与实现；L4 集成并完成模块验收后，才开始 L5、L6；本阶段结束于 L6，不开始 L7 或后续模块。
+本文是 [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2、3、4、20 条在 L4、L5、L6 中的实现设计，基线为 `socu/buddy-core` 的 `cf371da`，工作分支为独立 worktree 中的 `socu/adr021-logic-stage2`。已读 `AGENTS.md`、`CONTEXT.md`、[第一阶段验收](../acceptance/adr021-logic-stage1.md)、[ADR-007](../decisions/007-neutral-core-and-single-current-contract.md) 与 [当前架构](../reference/architecture.md)。用户已批准按 2026-10-02 修订的第 4 条执行，本分支已合入 `socu/buddy-core` 的 `29883a8`（合并提交 `e63cdc5`）；修订计划提交后直接委派与实现；L4 集成并完成模块验收后，才开始 L5、L6；本阶段结束于 L6，不开始 L7 或后续模块。2026-10-02 再合入 `socu/buddy-core` 的 `5c87585`；该提交将第 2 条改为 Router 有序列表并增加第 20 条。本修订取代下文单个 Router 的旧目标设计；已发出的 L5-B/L6-A 保持原范围，新增工作以独立任务完成。
 
 ## 范围与交付边界
 
-实现一个 Router 设置、取消自动降级、改用不调用模型的审阅资格检查、实施审阅运行的四项防护、删除付费审阅验证的代码与入口，随后分别实现 DSH、ZCode 的只读工具回合。Host 自行修正 `accept`、`conclude` 的帮助，把 `note` 标为必填。
+实现一个含有序 Router 列表和重试间隔的设置、保留同模式的顺序切换、取消模式降级、改用不调用模型的审阅资格检查、实施审阅运行的四项防护、删除付费审阅验证的代码与入口，随后分别实现 DSH、ZCode 的只读工具回合。Host 自行修正 `accept`、`conclude` 的帮助，把 `note` 标为必填。
 
 Python 黑板仍是权威状态的唯一写入者；Worker 运行时仍拥有原生子进程、取消与停止回执。Router 没有黑板凭据、受管业务回合、完成工具或成果权限，结构化答案只经过程序的格式与路由边界检查，不增加 Host 验收。第 3 条的维护面与画像面只作为权限边界写进契约，本次不实现它们的触发、数据包、存储或工具。
 
-本阶段不改 ADR 决定，不做界面设计，不改通用 `configuration`、`profile` 等接口与存储字段的用语，不改 schema 版本，不做 L15 的升级或存量转换，不改 `SKILL.md`、Host 指南、README。新增单一 Router 字段并删除两个位置是 L4 的行为变更；其余名字保留给 L14。只修改各模块拥有的参考文档，对 `apps/console` 只做类型、解析、删除失效控件和必要的表单接线。
+本阶段不改 ADR 决定，不做界面设计，不改通用 `configuration`、`profile` 等接口与存储字段的用语，不改 schema 版本，不做 L15 的升级或存量转换，不改 `SKILL.md`、Host 指南、README。新增 Router 列表与重试间隔并删除两个位置是 L4 的行为变更；其余名字保留给 L14。只修改各模块拥有的参考文档，对 `apps/console` 只做类型、解析、删除失效控件和必要的表单接线。
 
 不安装、不升级日常运行时，不修改用户配置或日常数据，不登录、退出、更换密钥或读取凭据文件。委派使用已安装并运行的 `~/.agents/skills/buddy/scripts/buddy` 0.27.0；其固定运行时独立于本 worktree，不另起用于委派的私有或隐藏服务。测试与原生检查的隔离目录不构成另一套委派服务。
 
 ## L4 的接口设计
 
-### 单一设置与旧设置换算
+### 有序列表、设置与旧设置换算
 
-现行对外设置定为 `configuration.routerProfileId: string | null`、`configuration.defaultRoutingMode: fast | review`、`configuration.routingBudget: brief | standard | deep`，保留现有 `revision` 与只读 `routingBudgetLimits`。`routerProfileId` 引用已发布、具有完整四元组的现有 `evaluation_profiles` 行，不另存一份 buddy 身份。删除 `fastRouterProfileId`、`reviewRouterProfileId`，不恢复已经退役的 `decisionProfileId`。保留 `defaultRoutingMode`、`routingBudget`、`profileId` 等现有名字，避免把 L14 的术语改名混入本阶段。
+设置定为 `configuration.routerProfileIds: string[]`、`routerRetryIntervalSeconds: integer`、`defaultRoutingMode: fast | review`、`routingBudget: brief | standard | deep`，保留现有 revision 和 routingBudgetLimits。默认值为空列表、600 秒、fast、standard。列表不设项数上限，保留用户顺序；重复 ID 拒绝，空列表明确清空，null 拒绝。重试间隔为 1 到 2147483647 秒的整数，布尔值拒绝；上限保证时间运算和存储可表示，不增加产品上的天数档。列表中的 ID 必须引用已发布且身份完整的 buddy；已禁用、暂时不健康、额度耗尽或不满足当前模式的项可以留在列表中，由解析入口解释不可用原因，不能因第一项临时故障阻止用户保存整个列表。
 
-内部在 `router_settings.py` 定义不可变 `RouterSettings` 和设置补丁校验，使用 `meta.router_profile_id`、现有 `router_default_mode`、现有 `router_budget_preset` 与 `router_configuration_version=2`；不新增表，不改旧列名。全新测试看板初始化为 `{routerProfileId: null, defaultRoutingMode: fast, routingBudget: standard}`。设置仍只由认证控制台的人类写入授权发布，使用现有 writer grant、revision 比较与事务/事件原子性，Host 与 Worker 不能修改。
+RouterSettings 的字段固定为 router_profile_ids:tuple[str,...]、router_retry_interval_seconds:int、default_routing_mode:str、routing_budget:str，as_dict 输出上述公开字段。RouterConversion 的 source_slots:tuple[str|None,str|None] 固定按 fast/review 排列，settings 是 RouterSettings；不再返回 discarded_profile_id。二者是不可变值对象，validate_router_settings_patch 保持字段补丁语义，省略保留、未知字段拒绝；原 routerProfileId、fastRouterProfileId、reviewRouterProfileId 均不是现行设置别名。设置仍由认证控制台的人类 writer grant 发布，Host 与 Worker 不写共享设置。meta 使用 router_profile_ids（JSON 数组）、router_retry_interval_seconds、router_default_mode、router_budget_preset 和 router_configuration_version=3；现有业务表字段不改名。本阶段不改 schema_version、不新增表；新增运行事实使用现有 meta、tasks、attempts 与 events，必要的事件查询索引随源码交付，实际日常升级仍归 L15。
 
-发布是字段补丁：省略的字段保留，`routerProfileId: null` 明确取消选择，空补丁拒绝，未知字段和旧位置拒绝，公开 API 不接受 `quick`。检查合并后的有效设置；选择 buddy 或变更模式时，非空 Router 必须已发布、启用、可用、身份完整，并满足所选模式的本地资格。清空 Router 允许成功。仅改预算或无关用户设置时，不因原 Router 已变得不可用而阻止保存；不可用事实由状态读取与路由边界报告。Router 是用户直接指定的，不按 Worker 的优先、固定或排除偏好重新挑选。
+convert_legacy_router_settings(legacy) -> RouterConversion 仍是可调用的纯函数，不读取数据库、健康、账户或时钟，不调用模型、不写数据。转换后保留两个旧位置：默认 fast 时 fast 在前、review 在后，默认 review 时 review 在前、fast 在后；去除 null/缺失位置，同 ID 只保留第一次。另一位置不再被舍弃；即使 ID 不可用也原样保留。转换报告保留原 source_slots 的两个位置供 L15 审计。模式缺省 fast，预算缺省 standard，quick 换 brief，重试间隔缺省 600 秒；非法类型、模式、预算或 ID 拒绝。函数无生产调用点，版本 2 和更早设置读取为 router-settings-upgrade-required；不在启动、读取、发布或路由中日常转换。控制台继续返回 configuration:null/configurationError，并允许无关读写。
 
-新增纯函数 `convert_legacy_router_settings(legacy) -> RouterConversion`，返回新的 `RouterSettings` 与被舍弃的另一位置的 ID，用于 L15 的审计。输入仅是旧设置的值；函数不接收连接、状态目录、harness、账户或时钟，不查询健康与额度，不调用模型，不写数据。换算规则固定如下。
+### 当前 Router 与已有记录
 
-- 原 `defaultRoutingMode=fast`：取 `fastRouterProfileId`，保留 fast。
-- 原 `defaultRoutingMode=review`：取 `reviewRouterProfileId`，保留 review。
-- 所选位置缺失或为 null：新 Router 为 null，模式保持；另一位置即使存在、健康或更便宜，也不替换。所选 ID 不可用时仍保留该 ID，由正常资格检查说明原因。
-- 预算 `brief`、`standard`、`deep` 原样保留；历史 `quick` 换算为 `brief`；旧数据缺少模式或预算时分别采用原默认值 fast、standard。非法模式、预算、ID 类型拒绝，不猜测。
-- 两个位置相同与重复调用都产生相同输出；被舍弃的另一位置只进入转换报告，不成为备用 Router。函数不会修改输入对象，也不解析更早的 `decision_profile_id` 版本，后者属于 L15 的升级前置整理。
+唯一解析入口为 router.current_router(connection, *, frozen=None, after_index=-1, now=None) -> RouterResolution。RouterResolution 是不可变 dataclass，字段为 profile:dict|None、profile_id:str|None、router_index:int|None、facts:dict、inspections:tuple[dict,...] 和 problem:dict|None；ID、index 的公开投影分别是 profileId/routerIndex。它返回的 profile 是当前发布行的复制值，不暴露连接，不修改状态、不启动原生进程、不按 Worker 偏好挑选 Router。facts 包括有序 ID/完整身份快照、模式、预算、重试间隔与 configuration revision；inspections 按顺序给出此前各项的资格、跳过原因和 retryAt。无 frozen 时用于当前角色的只读投影；有 frozen 时只在同一请求的快照中继续，after_index 严格前进，不回绕、不重新冻结候选，不跟随后来用户对列表、模式或预算的改动。
 
-换算函数只供显式升级调用，本阶段没有生产调用点。当前设置读取、看板启动、路由和用户发布都不调用它，不把旧位置投影成现行设置。读到旧设置标记时 `configuration()` 抛出 `BoardError(router-settings-upgrade-required)`；resolve 将它变为 Host 路由边界，涉及 Router 的设置发布拒绝写入。控制台快照此时返回 `configuration: null` 与 `configurationError: {code, message, revision}`，其余读数据正常返回；现行设置下 `configurationError: null`。不伪造已选择的 Router，不阻塞无关设置操作。已有旧键与证书数据的物理清理交给 L15，L4 只停止读写它们。
+后续维护面与画像面直接使用这个入口，不各自找 Router、不缓存自己的当前人选。角色资格继续按全局所选模式核对；本阶段只提供共用的解析与结果记录接口，不实现维护或画像的模型执行。router_history.record_outcome(connection, *, profile_id, plane, request_id, task_id, attempt_id, outcome, code, phase, facts, now) 只追加幂等的 router.no_answer/router.answered 事实事件；plane 可为 work/maintenance/portrait，后两项仅供未来调用与纯夹具检验。读取角色不追加事件。事件幂等键由 plane/requestId/routerIndex/phase/taskId/attemptId/outcome 组成，使用已有 meta 的事实 receipt 防重；与事件在同一事务提交。新增事件索引按 routerProfileId/seq 查询。若老记录没有新事件，依据其自身冻结 input、不可变终态事件与对应 receipt 只读推导；有效回答使用当时黑板接受的事实，不以今天的新证据规则反审历史。不明归属/性质单独报 unknown，不猜给第一项；新旧投影按 attemptId 防止双计。
 
-### 不调用模型的资格检查
+跳过期由该 buddy 最后一次 router.no_answer 的时间加当前设置的重试间隔推出，后来有效 router.answered 消除它，包括有效的无法选择回答。先检查跳过期，处于期内的观察只记入该请求的尝试概览，不追加 no_answer、不滚动延长时间；过期后重新核对资格和再试。调用前仍不健康、耗尽或不合资格，记录一次 preflight no_answer 并取下一项。不同 buddy 的记录不混在一起，维护/画像未来的 no_answer 同样影响三个面的当前 Router。取消、输入/候选/设置变化、fencing 和停止未知不伪造 Router 的成功。停止未知可以记录真实的无答案故障，但不能推进该请求。
 
-适配器增加 `local_read_only_check() -> ReadOnlyEligibility`，结果含 `eligible`、`reasonCode`、`reason`、是否具有原生系统沙盒、所支持的审阅执行入口、是否支持同一 attempt 的格式纠正。它区分两档：Codex/Claude 沿用已有的原生只读/禁网运行；DSH/ZCode 必须有将工具集限制到读取/搜索的实现。它校验本地入口与限制方式；只有布尔声明或方法继承自基类不算实现。基类返回不支持。检查不启动模型或会话，不探测账户、不读取凭据、不联网、不写状态；native 版本与路径健康继续使用黑板已有的本地发现结果。没有可确认的工具限制方式就判定不合格，不把未知当作可用。
+“间隔后再试一次”采用已有活动 attempt 约束：一个曾无答案且尚未有有效回答的 Router 到期后，最多有一个再试执行；其他指向它的请求排队为 router-retry-in-progress，不因容量切换 Router。此约束由 router.claimed 事件与活动/停止未确认的 attempts 推出，没有 half-open 标志或新的熔断状态。再试失败后，等待请求在下次认领复核中按新跳过期向后走；成功后恢复正常并发。正常可用 Router 的容量满仍只排队。
 
-`read_only_structured`、`no_tool_structured` 和 `start_read_only_structured(context, request)` 的名称与现有请求字段保留；删除 `read_only_structured_verified` 的证书语义及其使用点。`capability_report` 与 harness health 不再给出 `reviewVerification` 或按版本的验证状态，改为 `readOnlyStructured` 下的本地资格结果，说明检查不调用模型、不能代表原生调用已经验证。`implemented` 与 `sameAttemptContinuation` 保留，付费证书相关的 `verified` 删除。更新版本可以更新发现结果，但不会因为缺少新版本证书而失去资格；每次运行仍检查原生协议和策略是否真的生效。
+### 免费资格和审阅防护
 
-`router.profile_problem` 保留统一入口，按设置标记、是否配置、已发布、完整身份、启用/可用、缓存的 harness 健康、额度耗尽、所选模式资格依次检查。快速模式沿用已实现的无工具结构化通道；审阅模式使用本地检查。错误分别保留可判断的 `router-*` 原因码，面向 Host 的说明统一以“Router 不可用：”开头并给出具体原因。容量满继续使用既有排队规则，不伪装成 Router 不可用；未确认停止继续占有容量。
+local_read_only_check() -> ReadOnlyEligibility 保留 eligible/reasonCode/reason/systemSandbox/sameAttemptContinuation。Codex/Claude 沿用已有原生沙盒、只读/禁网/冻结副本权限、生效策略回报和工具流检查；不重做运行、动态工具或 read_only_files.py。DSH/ZCode 必须具有原生读取/搜索工具的限制入口。只检查已打包机制和公开本地安装代码，不启动模型或会话、不探测账户、不读取凭据、不联网。只有布尔声明或继承基类空实现不算资格。付费证书、harness-verify、review-check 和控制台验证入口已退役，物理存量清理仍归 L15。
 
-资格检查与原生验收是不同事实。DSH、ZCode 在实现与本地检查完成后可按 ADR 的新规则取得资格，验收记录和能力说明同时标明“原生未验证”；不以未经批准的模型调用换取资格，也不新建原生验证证书。
+统一 toolEvidence 的 ACP 分类、实际根身份、task/attempt/generation 绑定、最多 128 个 start/end 事件、去重与完整性规则保持 L5-0A/0B 的接口。适配器只投影事实，黑板是唯一判定处：fast 完整且零工具；review 有系统沙盒允许 read/search/execute，无系统沙盒仅 read/search；不允许或不完整均作废答案。systemSandbox 从 claim 的 attempt-tool-policy meta 取，不能由答案自报。原生 unknown/foreign/child/MCP/late/缺 ID 事件不得过滤或补造。Codex 仅按本文末尾明确的 typed/raw 执行等价投影规则去重。程序仍核对原生策略、deadline、预算和 owned stop。
 
-### 只读工具与运行证据
+四项防护仍是冻结副本唯一输入、确认停止后核对副本及原 manifest、统一工具证据判定、预算。ReadOnlyStructuredRequest 的 cwd 由 router_input.prepare 从不可变 inputTree 生成；独立 selection-request 使用空副本，不借用 live checkout。每个 Router 执行使用同一预算档：brief 60 秒/8 工具，standard 300 秒/24 工具，deep 600 秒/64 工具；fast 固定 60 秒。该 Router 的一次格式纠正共用其 deadline 和累计工具预算；切换后的 Router 获得同档的独立预算，避免首项超时耗尽所有后续项的机会。记录每项用量及请求总和，不把总和说成单项预算。bytesRead 无可靠观测时仍为 null，不新增字节硬上限声明。
 
-保留 `ReadOnlyStructuredRequest(cwd, prompt, output_schema, budget, capture_evidence)`，删除仅为退役付费沙盒探针服务的 `native_probe` 与运行分支。`cwd` 只指向 `router_input.prepare` 从不可变 `manifest.inputTree` 生成的私有冻结副本；独立 `selection-request` 没有仓库时使用空副本。当前 materialize/verify/digest、Git replace 防护、链接逃逸与停止后回收规则继续有效。
+### 请求冻结、执行顺序与停止
 
-统一工具证据放在 L5 开头实现，L6 复用。新增 `tool_evidence.py` 定义纯数据的标准化事件与完整性记录；分类由各原生 controller 按下面的固定规则产生，适配器不判断允许或违规，黑板在答案发布时统一判定。标准化事件携带原生 session/turn/call ID、开始/结束阶段、工具名与只读操作种类，不保存文件内容、任意工具参数、提示词或推理。工具开始即计一次调用，以 call ID 去重；缺失身份、重复但不一致、完成无开始、结束时仍有未完成调用、未知事件、流截断或关闭后还有工具事件都不能产生有效证据。检查发生在原生 session/turn 过滤之前，子会话、MCP 或旧回合的非法调用不能因过滤而被漏掉；合法调用还必须绑定本次回合。
+一个 Host 请求、requestId、decisionId、governed goal 和候选包保持不变，每个实际 Router 使用独立的内部 decision task/attempt；不把终结的通用任务重新置为 queued。meta 的 router-request:<decisionId> 保存不可变的列表/完整身份/模式/预算/间隔/revision、候选/程序事实/账户绑定及 baseInput；router-dispatch:<taskId> 保存该项 index、完整 buddy、原生输入文档与 hash；attempt-router:<attemptId> 将 claim 绑定到该 dispatch。它们是请求与运行事实，不是熔断状态。旧 dispatch 的文档与 hash 永不重写，decision_requests 只指向当前内部 task/input，requested_json 与 input_fingerprint 仍保留原请求。router_sequence 的固定内部接口为 freeze_request(connection, decision_id, *, snapshot, now)、request_snapshot(connection, decision_id)、dispatch(connection, task_id)、reserve_dispatch(connection, *, decision_id, task_id, router_index, profile, document, now)、record_claim(connection, *, task_id, attempt_id, generation, now)。保存键已存在且内容不同即 CONFLICT，相同为幂等；reserve_dispatch 不启动进程。每次切换追加 router 运行事实，旧 tasks/attempts/receipts 保留。末次已完成者及全部尝试在当前 view 中显式投影。
 
-按新合入的 ADR-023，统一分类沿用 ACP：read、edit、delete、move、search、execute、think、fetch、switch_mode、other。读取/列目录归 read，仓库搜索归 search，原生 shell/code-mode 归 execute，写入/修改按实际操作归 edit/delete/move，联网归 fetch，未知或无法识别归 other；模型 reasoning 文本不是工具事件。原生事件先分类再做 session/turn 绑定，不能把 foreign/子会话中的调用过滤掉。未识别事件明确上报 other 或完整性不足，不静默忽略；工具参数与返回正文不进入普通记录。
+admission 先冻结完整公共包，随后通过唯一入口选择首个 Router；全部不可用或空列表也要留给 Host 同一候选/程序事实包。单一合法候选与显式完整 buddy 继续走 L1 的直接路径，没有 Router 调用；零候选保留独立的原因。pre-claim 准备步骤在 selector_family/capacity 计算之前复核当前 dispatch；若它已不可用，在同一事务证明没有已启动 attempt、关闭旧的 queued task、记录原因、建立下一项内部 task。store 在 selector_family 前调用 prepare_router_claim(connection, task, *, now)->reason|None；它可关闭确证未运行的旧 task 并排入新 task，此次 claim 跳过旧 task，下次调度取新 task，不造虚假的旧 attempt。容量忙不在此步换人。
 
-`DecisionCoordinator` 的现有快速零工具检查处成为唯一判定点：fast 必须有完整事件证据且零调用；review 且原生系统沙盒事实为 true 时仅允许 read/search/execute；无系统沙盒时仅允许 read/search；任一不允许类别或流不完整使答案作废。原生系统沙盒事实由黑板 harness 状态与冻结 attempt 绑定给出，不接受模型或结果临时声称。控制器仍执行原生策略核对、deadline/预算与 owned-process 取消，工具事件本身不导致适配器生成“合格/违规”的 Router 结论。
+统一的 _queue_router_dispatch(connection, row, *, resolution, now) 在请求初建、pre-claim 和完成后推进时复用；它返回新 task_id，初建在请求行已插入后调用；只使用冻结 baseInput，建立独立内部 task 和 immutable dispatch，并更新 workflow_routes 的内部 task 指针，保持 governed goal 等待路由，不打开业务 Worker turn。claim 冻结本次实际模型家族、账户、tool policy 与原生文档，所有公开结果按 task/attempt/generation 和 owner generation fencing。相同请求/receipt/event 重放不建重复任务、不重复计无答案；旧 attempt 的迟到回执不替换当前输入、结果或健康记录。
 
-DSH 沿用原生 read、glob、grep 工具，不实现自己的 read_file/list_directory/search_files 或文件处理器。原生 read 归 read，glob/grep 归 search；Node 桥接只负责限制原生工具视图、提交原生 Agent 回合与采集事件。Codex/Claude/ZCode 也保留各自的原生工具，不追求统一工具名称或参数。
+有已运行 attempt 时，仅确认停止后才能建立下一项；Worker 的 shutdownConfirmed 必须为 true，已报告的 native stop 也不得为 false/未知，正常原生运行的 native/controller stop 均须成立。模型前未启动的本地拒绝可使用 Worker 的真实 never-started 停止事实。未确认停止保留容量、私有目录与具体边界，不由 missing PID/租约到期推定停止，不修改不可变旧回执或新增停止证明操作。restart/owner takeover/reader fencing 沿用原规矩，先进入明确的变更/停止边界；显式 reroute 仍受原有停止前置条件约束。
 
-预算保持现有数值：brief 为 60 秒/8 次工具，standard 为 300 秒/24 次，deep 为 600 秒/64 次；快速模式固定 60 秒。一次格式纠正与此前工具调用共用同一 attempt 的绝对 deadline 与累计工具预算，不重置计数；越界候选不纠正，Claude 保持现有一次调用。现有 `bytesRead` 未能可靠测量时仍为 null，131072/524288/2097152 的既有读字节值继续明确为记录的预算参数，不新声称已实施跨 harness 的字节硬上限；新处理器的单次响应界限另外验证。
+### 切换政策与边界性质
 
-L5 的公共接口为 `normalize_tool_event(adapter, native_event)`、`ToolEventEvidence.observe(event)`、`finish(native_identity, stream_complete)`，以及只在黑板发布答案时调用的 `judge_tool_evidence(evidence, mode, has_system_sandbox)`。标准化事件字段固定为 nativeIdentity、callId、toolName、category、phase（start/end）；保持各 harness 的真实身份，不为原生未提供的 session/turn 捏造字段。原生 raw/high-level 对同一调用的重复投影要关联并去重，冲突或缺失关联必须上报完整性不足。finish 只汇总事实，不给 verified/allowed verdict。
+纯函数 router_failover.classify_outcome(*, stage, code, answer_valid, abstained, cancelled, circumstances_changed, shutdown_confirmed) 的 stage 为 preflight/runtime/publication，布尔参数拒绝非 bool，code 为字符串或 null；返回 answered/abstained/no-answer/changed/cancelled/stop-unconfirmed。answer_valid 只能由黑板完成结构、工具、预算和当前硬边界检查后给出；circumstances_changed 来自明确的上下文检查，不仅靠字符串错误码猜测。用户取消优先禁止切换；变更边界禁止切换；有效回答与有效无法选择禁止切换；其余无可用答案只有在停止证据成立时才能推进。
 
-证据包名为 `toolEvidence`，固定字段为 version:1、binding:{adapter,taskId,attemptId,generation}、nativeIdentity、streamComplete、events、toolCalls、unsettledToolCalls、truncated；最多保留 128 个 start/end 事件，按 call 去重，超出界限明确 truncated 并由黑板作废。binding 来自 Python 控制文件，不是模型数据。黑板核对绑定、事件/计数一致、完整结束和预算，再用唯一规则决定；不接受模型提交的证据或适配器的自判结论。快速旧的 zeroToolVerified 字段在接入统一证据时仍保留其既有名字，禁止从它推断 review 合格。
+必须切换的情形是模型前 harness 不健康、额度耗尽或模式资格不足，以及调用后的超时、provider/native 错误、空/无输出、坏 JSON/结构、工具违规或证据不完整、超工具/时间预算、回答引用非法证据或选择冻结候选之外的 ID。没有下一个合格项就停 Host 边界。不能切换的情形是有效选择、有效无法选择、原输入/副本改动、原冻结候选中选中项后来失去合法性、设置/模式/预算/revision 或账户/reader/owner fencing 变化、取消和停止未知。冻结外 ID 是 Router 没有可用答案；冻结内 ID 在发布前变得不合法是情况变化，尽管旧代码共用 router-out-of-bounds，新的调用上下文必须区分。
 
-四项防护是冻结副本唯一输入、确认停止后核对副本与原 manifest、黑板按原生工具事件判定、既有预算。输入改动、工具违规、证据不足和预算分别使用 router-input-changed、router-tools-forbidden、router-tool-evidence-unverified、router-budget-exhausted；未知停止沿用原边界并保留私有目录。L4 先保持现有收集/发布检查，统一工具证据在 L5-0A/0B 接入；本阶段不安装，因此中间提交不对日常看板生效。
+有效无法选择也记录 router.answered，由该 Router 完成这次路由，边界附其理由；它不是服务故障，不继续其他项。input-changed 和 cancelled 不追加 no_answer；工具违规、坏结构等只说明这次回答不可用，不审查模型判断。所有尝试一次走到末尾，不在同一请求中等待重试间隔、绕回第一项或自动扩大候选。reroute 是 Host 在同一 governed goal 上明确发起的新路由请求，恢复遵从原 owner/control/revision 与停止门槛。
 
-### 保留 Codex 与 Claude 审阅运行
+### 第 20 条的 Host 信息与最小控制台适配
 
-取消原计划 L4-D、L4-E，取消 Codex 动态工具、Python read_only_files.py、Claude 新 JSON 答案通道与 get_sandbox_dialog 新检查。Codex 沿用现有只对冻结副本只读、其余拒绝、禁网的权限配置和原生生效策略核对；Claude Code 沿用 Glob、Grep、LS、Read 和原生沙盒。L4 只去掉付费证书门槛，不重做运行方式、工具、schema、沙盒或控制协议。L5-0B 只为它们投影统一工具事件，保留现有策略核对、工具流检查与停止证据；不发起付费原生检查。
+routingBoundary 的固定字段是 kind、code、reason、routerTrials、candidates、facts、retryAt、commands、userAction。kind 区分 router-unavailable/routing-changed/router-abstained；无合法候选沿用单独 no-legal-candidates。routerTrials 给每项 profileId/完整四元组/index/phase/outcome/code/事实原因/taskId/attemptId/确认停止/连续无答案次数/下次再试时间，跳过和实际执行区分。candidates 与 facts 是冻结的完整合法候选和 Router 本来会得到的程序事实，不查询后来已改的目录来冒充冻结包，不发出虚构价钱、额度、画像或 L7/L9 字段。
 
-### 持久路由边界与入口删除
+commands 给同一 governed run 的 continue 与 reroute CLI 参数模板：continue 按仍可合法采用的冻结候选给出完整 configuration 四元组，reroute 的 reroute:true 带 notBefore=retryAt；持有者填自己已保留的 controlFile，服务不向公开 payload 泄露它的内容。需要该拥有者的 revision/command 参数由现有契约填入。全部无答案的 retryAt 是可再次评估列表的最早明确时间；没有可知的恢复时间则 null 并说明原因；停止未知或现有硬约束会阻止操作时给 blocked/reason，不给可绕过的命令。独立 selection-request 没有 governed goal，不伪造 continue 命令，说明其无业务委派上下文。前两类边界明确“取消后重新提交没有用”；只有改共享 Router 设置才需要用户，userAction 表达 settingsChangeOnly，Host 可以据事实自行继续，不要求等待用户。
 
-`router.resolve(connection, *, frozen=None)` 只解析一个设置，不再接受 requested mode 或 allow fallback；返回 `(profile | None, facts, problem | None)`，facts 固定含 `routerProfileId`、`routingMode`、`configurationRevision`、`budget`，problem 固定为 `{code, reason}`。frozen 是 admission 保存的设置、完整身份与 revision，只用于重核对，不重选。`DecisionCoordinator` 删除 `_record_fallback`、`_fallback_after_preflight` 与自动重排为 fast 的分支。多候选请求在 admission 时冻结 Router 的 profile ID、完整四元组、模式、预算与 configuration revision。请求重放返回同一决策与冻结值；claim 前重新核对该 Router 的健康、额度、本地资格、设置身份和现有表 revision/reader gate，变化时进入原委派的 Host 边界，不刷新候选、不换 Router、不换模式。取消、takeover 和迟到答案继续用 owner generation/attempt 进行 fencing。
+health.routingHealth 保留诊断总览，并增加 routers 的逐项统计和 currentRouterProfileId。每项显示资格/跳过/重试/活动再试、最后回答/无答案、连续无答案、窗口失败/预算/越界/输入改动计数及最后错误。统计用该 Router 的不可变事件和对应 attempt receipt，四次超时仍是四次失败；一个 Router 的成功不能清另一个的失败。available 根据当前解析入口与跳过期，不再依赖旧的三次故障诊断阈值。连续无答案以最近有效回答之后的真实记录计数，不受显示窗口 20 条截断。
 
-显式完整 buddy 与唯一合法候选的 L1 直接路径继续绕过 Router；零候选沿用独立的无合法候选原因。多候选但 Router 未设置、不健康、额度耗尽、模式资格不足或设置待升级时，记录 `needs-host` 和具体原因，原 governed goal 为 `awaiting-host`，不创建可执行 Worker 业务回合；claim 时才发现失效、或原生 preflight 失败时，在确认 Router attempt 停止后打开同一边界，不能把失败排入第二个 Router attempt。Host 可指定完整合法 buddy，或在用户重新设置之后显式 `reroute:true`；这不授权 Host 修改共享设置。
-
-新决策继续用 `routingMode` 记录所选模式，不再产生 `requestedRoutingMode`、`fallback` 或 `decision.fallback`。历史审计 JSON 和既有事件不重写，includeAudit 原样保留历史事实；正常现行 API/前端不从历史 fallback 字段推断新的运行方式。预算、越界、输入变动计数沿用现有独立分类，并为工具证据失败保留具体错误，不将失败或拒绝包装成正常 abstention。
-
-删除 `harness-verify`/`harness_verify` 的 CLI、help、transport、C-Two contract、service、console 白名单入口，删除 review-check adapter、调度/容量/Worker 专用分支、证书资源及其读取/发布、仅服务于付费证书的探针与回放代码。先以引用清单证明用途再删；一般的取消、停止、账户隔离、冻结副本、工具流与预算验证保留或迁移到公共运行检查，不能因旧证书功能退役而一起丢失。原生检查留在显式的开发 probe 中，不成为生产资格入口，不重新引入别名。
-
-控制台后端快照返回单一设置、本地资格、具体不可用原因和最少的数据流向说明：快速发送任务包，审阅还发送冻结代码；DSH/ZCode 没有系统级沙盒，不能保证阻止副本外读取或外传。前端只沿用现有控件将两个位置缩为一个、保留模式和预算绑定，删除审阅验证按钮/证书状态、修正解析及必要的旧测试；不加入维护、画像、探索等尚未实现的控件，不调整视觉设计、布局或时间轴样式。
+控制台仅改类型/parser/现有表单数据绑定和必要夹具/资源构建：现有选择控件操作列表第一项并保留其余顺序，清空选择明确清空列表，换首项时移除尾部重复项；加一个沿用既有样式的重试秒数输入，显示当前列表的简短文本。完整列表增删排序和每项的视觉状态归 U1。本阶段不设计布局、样式、维护/画像/探索控件；backend 返回逐项事实与边界数据，frontend 的其余适配以完整检查通过为界。
 
 ## L5 的接口设计
 
@@ -102,7 +92,7 @@ L6-A 的接口固定为 `session_parameters(workspace) -> dict`、`native_contra
 
 ## 委派划分与依赖
 
-下表每行是一件可独立实现、验证与审查的成果，模块验收仍由 Host 负责。先落地纯接口，再接消费者，避免适配器各自决定策略；中间的纯接口任务可以暂不替换旧调用点，但 L4 验收前所有旧路径必须删除。任务描述必须附本文对应契约、准确读写范围、预期产物与检查，不让 Worker 决定字段、转换、降级或权限策略。
+下表保留已经执行的原任务和正在执行的 L5-B/L6-A 范围；其中单个 Router 的旧验收结论是历史阶段事实，最终目标以上述列表设计为准。每行仍是可独立实现、验证与审查的成果，模块验收由 Host 负责。先落地纯接口，再接消费者，避免适配器各自决定策略；中间的纯接口任务可以暂不替换旧调用点，但 L4 验收前所有旧路径必须删除。任务描述必须附本文对应契约、准确读写范围、预期产物与检查，不让 Worker 决定字段、转换、降级或权限策略。
 
 | 任务 | 修改与产物 | 不修改 | 验证 | 依赖与次序 |
 | --- | --- | --- | --- | --- |
@@ -127,6 +117,40 @@ L6-A 的接口固定为 `session_parameters(workspace) -> dict`、`native_contra
 
 取消 L4-C/D/E：原 C 的一致性责任移到 L5-0A/0B，D/E 的运行重做取消。G 按用户要求分为请求边界 G1 与认领/发布 G2，互相不跨写各自的方法区；顺序集成避免共享文件冲突。若引用面超出表内范围，Host 先改计划再发新任务，不把新的设计/修复追加成漫长委派。
 
+## 2026-10-02 有序 Router 补充任务与顺序
+
+此补充在已发出的原生任务之后集成到本阶段，不取消、不打断、不追加 L5-B/L6-A。Host 先按原范围验收并立即回收 L5-B，完成 L5 的完整检查；新的纯契约任务可以同时在独立 worktree 实现。新 L4 接线与不相交的 L6 原生协议/入口任务可并行，最后在列表切换、Host 边界和 L6 都合入后冻结 worktree，做一次完整检查作为 L4 补充与 L6 的最终检查。付费原生检查仍只各一次且逐次批准，不用它验证设置或切换逻辑。
+
+| 任务 | 改什么 | 不改什么 | 独立验证 | 依赖与顺序 |
+| --- | --- | --- | --- | --- |
+| L4-R1 列表值契约 | router_settings.py 的不可变列表/间隔、严格补丁、保留双位置的纯转换与原位置审计；专用纯测试 | 不接数据库/当前 Router/调度/控制台，不迁移日常 | 全部类型/默认/顺序/重复/空/null/边界秒数/两个位置的顺序与去重、输入无突变 | 可立即独立实现；R2 消费前由 Host 固定接口 |
+| L4-R2 当前角色与设置后端 | router.py 的 version 3 读写与唯一 current_router、router_history.py 的事件查询/幂等事实记录/跳过与活动再试投影，user_policy/evaluation 的列表设置；必要事件索引 | 不推进执行、不改适配器，不实现维护/画像，不新增熔断状态 | 新设置发布/upgrade-required、本地不调用模型、顺序资格/跳过/到期/恢复、读取不改计时、跨 plane 使用同一入口、逐项索引查询 | R1 后；Host 负责外围旧字段测试迁移，R6 可随后并行 |
+| L4-R3 请求与认领 dispatch | router_sequence.py 的不可变请求/dispatch/attempt 事实；DecisionCoordinator 请求构包/建内部 task/claim/selector_family 和 store 的 pre-claim 接口；workflow 的 pending task 指针 | 不写完成后的切换政策，不修改 worker_result 的终结规矩或 Host 边界展示 | 原 request/候选/输入 hash 保留、模型前跳过、重放无新 task、实际家族/账户/tool policy、容量排队与活动再试唯一执行 | R2 后；API 固定为本文的 _queue_router_dispatch 与冻结记录，不留 Worker 决定 |
+| L4-R4 回执判定与顺序推进 | 新纯 classify_outcome、DecisionCoordinator._complete/_publish_select/released 的状态判定，确认停止后调用 R3 的 queue 接口，router outcome/usage/trials | 不重新设计 Router 解析/设置/原生控制器，不添加通用任务重试或停止证明操作 | 下表全部 switch/stop 情形，异常/nonce/generation/late/replay、无循环、父取消、unknown stop、原生/外层 stop；旧故障仍可抓到 | R3 后；与 R5 不共享方法，先 R4 后集成 R5 |
+| L4-R5 Host 边界信息 | router_boundary.py 的纯 payload/命令模板，workflow._routing_attention、selection/workflow view 与 CONFIGURATION_REQUIRED 说明 | 不代 Host 指定、不改共享设置、不发模型、不实现 L7/L9 事实 | 三类性质、完整冻结候选/事实、试过哪些/连续几次/retryAt、同 run 的完整四元组命令、不能绕过 stop、standalone 不造命令、无需等用户 | R3/R4 接口后；Host 审查命令契约与隐私字段 |
+| L4-R6 健康与 Console 最小适配 | health_summary 按 Router 归属、service snapshot、apps/console 类型/parser/既有首项选择与间隔绑定/夹具；构建资源由 Host 验收 | 不改调度、统计事实规则、CSS/布局或 U1 完整列表编辑器 | 每项四超时计四失败、成功独立恢复/abstention 恢复、窗口与连续数、读取无副作用、表单保留尾部与清空、Vitest/typecheck/build | R2 后可实现，R4 记录格式稳定后集成 |
+| L4-R7 Host 迁移与验收 | 外围 Python fixtures/旧单项断言与手写回执、参考文档、L4 补充记录、最终资源与完整检查 | 不删除仍有效的情形，不改 skill/入口/ADR，不作日常升级 | 新矩阵集成全检，代表性 guard 缺失变异，全部相关 Python/Node/Console 检查 | Host 自己做；所有代码稳定后再写最终结论 |
+
+R1、R2、R3、R4 是不同接口层，不把列表、调度、停止与 Host 信息交给一个“L4 模块”委派。共享 decision.py 只按上表的方法区依次集成，冲突由 Host 核对语义解决；每个子任务固定提交后单独审查、跑表内检查、登记集成、验收并立即回收，分支随后删除。
+
+| ADR 第 2 条情形 | 本请求动作 | 必须证明 |
+| --- | --- | --- |
+| 第一项不健康、额度耗尽、fast/review 不合资格、未发布/禁用 | 记录模型前 no-answer，取下一项 | 没有模型/已启动 attempt；身份顺序与模式不变 |
+| 已在跳过期 | 越过，不增加 no-answer 或延长计时 | 新请求、重复 get/health/当前角色读取不变更截止 |
+| 到期后首次再试与同时来的请求 | 一次再试，其余排队 | 只有已有活动 attempt 约束，无半开状态；失败后后移、成功后恢复 |
+| 超时/空输出/provider 或 native 错误/坏 JSON/坏结构 | 停止确认后下一项 | 同 request/decision/governed run，独立内部 task 与同档预算 |
+| 工具违规、不完整/缺绑定/foreign/child/late/截断、N+1 或超时限 | 停止确认后下一项 | 所有事实保留，不能以兼容 zeroToolVerified 放行 |
+| Router 选择冻结外 ID、非法证据 | 下一项 | 分类为无答案，不和后来候选失效混用 |
+| 有效选择 | 完成，不切换 | 当前选择与原硬边界合法，最后 Router 明确，前面原因可读 |
+| 有效回答无法选择 | Host 边界，不切换 | 原因来自 Router，记录有效 answered 并恢复该 Router |
+| 输入/副本改动；冻结内选中候选后来失效 | 变更边界，不切换 | 不污染 no-answer；取消后重提没有用，给冻结与当前差异 |
+| 列表/模式/预算/revision、账户、reader、owner fencing 变化 | 变更边界，不切换 | 不借新配置执行老请求，旧迟到回执不改变当前状态 |
+| 请求取消（模型前、执行中、结果竞争、推进前） | 取消，不切换 | 不创建下一 task 或业务 Worker，不归咎 Router |
+| Native/controller 任一停止未确认，租约过期或 missing PID | 停止边界，不切换 | 保留容量/目录，不能用推测启动下一项 |
+| 容量满、writer gate、再试已在执行 | 排队，不切换 | 没有 no-answer、没有备用 task 规避容量 |
+| 列表空或所有项无答案/跳过/不可用 | Router 不可用边界 | 第 20 条四项、真实每项次数与时间、两种 Host 命令 |
+| 请求/receipt/事件重放、旧 generation/attempt 的迟到答案、重启 | 不重复推进、不改已冻结事实 | 所有尝试/旧 receipts 与最终完成者仍能审计 |
+
 Host 自己承担计划与模块记录、参考文档、`accept`/`conclude` 帮助的小修、最后集成审查与检查，不把它们追加到正在运行的委派。小修只改 help 提取器对公共必填字符串校验的识别或已有 override；不改 runtime 的 note 校验、验收或回收实现，增加能直接断言两个 help 将 note 标为 required 的既有 CLI help 用例即可。
 
 ## 检查安排与测试去向
@@ -139,7 +163,7 @@ Host 自己承担计划与模块记录、参考文档、`accept`/`conclude` 帮�
 
 Host 验收每个委派时，读取固定 artifact 的 diff 与风险 hunk，确认改动范围，亲自跑相应测试；不能只读 Worker 的成功总结。迁移了防护的测试，选取代表性故障使其确实失败（例如去掉工具白名单、取消输入 digest 检查、放回 fallback），在隔离的测试副本/补丁中验证，再恢复固定产物；不写只复制实现分支的测试。所有旧情形仍须有覆盖或明确的功能退役理由。
 
-L4 的 I 与 Host 文档/帮助改动全部合入之后，冻结当前 worktree，运行 `uv run --frozen python -m buddy.checks`；L5 和 L6 各自合入并写完记录后各再运行一次完整检查。完整检查期间该 worktree 不做编辑、merge、提交、生成资源或委派写入；后台 delegate 只能写自己的 worktree。失败则先等检查退出，修阻塞项后重跑对应检查，最后得到一次完整通过。frontend 修改在 L4 额外运行受影响 Vitest、typecheck/build；必要的 build 资源与最后文档稳定之后才跑完整检查。
+原 L4 的 I 与 Host 文档/帮助改动已合入并全检通过；最终列表补充按 R7 再验收。冻结当前 worktree，运行 `uv run --frozen python -m buddy.checks`；L5 和 L6 各自合入并写完记录后各再运行一次完整检查。完整检查期间该 worktree 不做编辑、merge、提交、生成资源或委派写入；后台 delegate 只能写自己的 worktree。失败则先等检查退出，修阻塞项后重跑对应检查，最后得到一次完整通过。frontend 修改在 L4 额外运行受影响 Vitest、typecheck/build；必要的 build 资源与最后文档稳定之后才跑完整检查。
 
 外层检查命令清除 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`BUDDY_ACCOUNT_SELECTION`、`BUDDY_SUPERVISOR_START_ID`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`；子测试环境再使用 checks 的清理逻辑与未安装的原生 CLI sentinel，剔除继承的第三方 Claude 网关变量。测试框架创建私有 state/runtime/cwd，不依赖 `BUDDY_DEV_SOURCE=1` 覆盖已有 runtime pin。确定性的测试/打包长任务使用 command 方式，读取退出码、总数和失败摘要，原始日志放忽略的 `tmp/adr021-stage2/`。
 
