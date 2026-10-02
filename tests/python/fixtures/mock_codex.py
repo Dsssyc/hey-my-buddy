@@ -193,6 +193,53 @@ def main():
             if case == 'readonly-denied-budget':
                 send({'method': 'rawResponseItem/completed', 'params': {'threadId': thread_id, 'turnId': turn_id,
                       'item': {'type': 'function_call', 'call_id': 'denied-1', 'name': 'exec_command', 'arguments': '{"cmd":"denied"}'}}})
+            if case == 'readonly-evidence':
+                send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "item-1"}}})
+                send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "item-1", "exitCode": 0}}})
+                raw_call = {"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                            "item": {"type": "function_call", "call_id": "call-1", "name": "shell", "arguments": '{"cmd":"ls"}'}}}
+                send(raw_call)
+                # The native stream may repeat a raw item; a replay is not a second call.
+                send(raw_call)
+                send({"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "function_call_output", "call_id": "call-1", "output": "listing"}}})
+            if case == 'readonly-conflict':
+                # The same call id carries two contradicting native projections.
+                send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "call-1"}}})
+                send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "call-1"}}})
+                send({"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "function_call", "call_id": "call-1", "name": "shell", "arguments": "{}"}}})
+                send({"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "function_call_output", "call_id": "call-1", "output": "ok"}}})
+            if case == 'readonly-foreign':
+                send({"method": "item/started", "params": {"threadId": "thread-sub", "turnId": "sub-turn-1",
+                      "item": {"type": "commandExecution", "id": "sub-1"}}})
+                send({"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": "native-turn-99",
+                      "item": {"type": "web_search_call", "call_id": "web-1"}}})
+            if case == 'readonly-truncated':
+                for number in range(130):
+                    send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": {"type": "commandExecution", "id": f"item-{number}"}}})
+                    send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": {"type": "commandExecution", "id": f"item-{number}"}}})
+            if case == 'readonly-repair-evidence':
+                if turn_index == 0:
+                    send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": {"type": "commandExecution", "id": "item-1"}}})
+                    send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": {"type": "commandExecution", "id": "item-1"}}})
+                else:
+                    send({"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": {"type": "function_call", "call_id": "call-1", "name": "shell", "arguments": "{}"}}})
+                    send({"method": "rawResponseItem/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": {"type": "function_call_output", "call_id": "call-1", "output": "ok"}}})
+                    # A late duplicate of the previous root turn's item stays an old-turn fact.
+                    send({"method": "item/started", "params": {"threadId": thread_id, "turnId": "native-turn-1",
+                          "item": {"type": "commandExecution", "id": "item-stale"}}})
             if case in ("approval", "approval-failed"):
                 send({"id": 99, "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": thread_id, "turnId": turn_id, "itemId": "tool-1", "startedAtMs": 1}})
@@ -203,7 +250,7 @@ def main():
                     "text": json.dumps({"outcome": outcome(case)}) if case != "invalid-json" else "not json"}
             if "profileId" in params.get("outputSchema", {}).get("properties", {}):
                 item["text"] = json.dumps({"profileId": "foreign" if case == "readonly-outside" else "legal", "reason": "Read-only fixture", "evidence": []})
-                if case == "readonly-repair" and not state['threads'][thread_id]['turns']:
+                if case in ("readonly-repair", "readonly-repair-evidence") and not state['threads'][thread_id]['turns']:
                     item["text"] = "not-json"
             if case != "no-final":
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
