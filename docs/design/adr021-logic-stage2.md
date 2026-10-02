@@ -268,3 +268,9 @@ L6-A4 的固定成果通过 76 项检查，但独立审查复现八类误接受�
 R4B 以 attention 交付授权文件的固定成果：Codex 原生沙盒拒绝写检出外的 Git 元数据和 ps 枚举，service 已封存 output commit，Host 在自己的权限内完成固定提交、检查与 framework teardown，不要求再开 Worker 回合。独立审查发现 DEL/空白 native error code 可在 outcome 记录时触发异常而丢失后移；Host 将它们统一归 router-no-answer 并补两项反例，其他结构与 nonce/停止/变更矩阵保留。
 
 最终完整检查期间 worktree 文件冻结；退出后仅把实际测试总数、日志位置和时长填入验收记录，不改变实现或契约。若填录触及受检查的文档约束，跑相应文档/打包检查；若实现、资源或契约再变化，则重新冻结并完整检查。R7 已作代表性的零工具、冻结配置与 Native 停止防护移除变异，三个原回归都检出；完整模拟矩阵保留原情形，停止未知的主边界和原生失败原因分别从程序分类与不可变回执核对。
+
+L6-A6 的两轮固定补丁复核又补上注释间的写入、可选变异、enum 在 schema 位置的绑定与所有写入、完整 RHS 和人为窗口结束的区别、前置更新保留 write kind；公开 SDK 文本仍作正常对照。Host 的新静态反例全部保留，模型与 CLI 不执行。列表首次完整检查跑完 2366 Python/125 Node，只有旧 objective 摘要字段断言与 health 对 list 错误码的类型处理失败；修复及静态协议合计 136 项复查通过，退出后才编辑。
+
+L6-B 的入口设计补明确：ZcodeAdapter 声明只读结构化、一次纠正能力及 read/search 类别，systemSandbox=false；start_read_only_structured 先复核免费资格，再调用既有 read_only.start，Generic collector 仍由 DecisionAdapter 处理。local_read_only_check 只读 cli_command 定位的公开 JS/CJS/MJS bundle；找不到可检查的公开文件、超 32 MiB、读取失败或结构不支持都拒绝，不运行 --version、app-server 或 session，不读取 provider/credential 文件。采用进程内有界缓存，键为解析后的文件路径及 size/mtime_ns/ctime_ns，每次资格读取先 stat；缺失/变化必须重新失败或检查，新返回值不能修改缓存。该缓存只省去反复扫描公开大文件，不写持久证书，也不以版本/hash 决定资格。runtime 仍复核原生 session/model/模式等实际回报及完整事件，不把缓存结论当运行证明。
+
+L6-B 仅修改 zcode.py 的能力/资格/start 入口和 zcode_runner.py 的独立 readOnlyRequest 接线，新增专用私有集成测试与必要的私有 mock fixture。已有 noToolRequest/普通 Worker/discovery/账户/MCP/inquiry 路径保留；readOnlyRequest 不进入普通 Worker，不能拿 turn/agent/finish 权限。其工具 collector 在 native handshake 之前初始化，read_only_call 负责受限根与每轮 close；controller 的公共收尾在实际 owned-group 停止后 drain 到 EOF，保留迟到与不完整事实、实际 stop 和累计 usage，再生成 toolEvidence，不自行作允许类别结论。未知停止不借退出码判真；错误也保留已有事实，原生请求自动拒绝。测试用 fake app-server 与测试框架私有 roots，覆盖入口、免费检查无进程、参数/身份/顺序、Read/Search、禁止类别/EOF/late、纠正/预算/close/timeout/cancel、黑板发布，以及原 ZCode/no-tool 回归；不跑付费真实 session。与 A5/A6 不跨写，二者合入并验收后才发 B。
