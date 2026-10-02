@@ -175,7 +175,7 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 
 2026-10-02 按用户批准的四点修订：合入 core 的第 4 条更新；取消 Codex/Claude 运行重做及动态/Python 文件工具；一致性责任移到 L5 开头并由黑板统一判定；G 分成请求/冻结/Host 边界和认领/发布两个任务；付费检查只保留 DSH、ZCode 各一次、执行前逐次批准。原计划提交为 89a498b，本次修订单独提交后直接开工。
 
-已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。L4 的 A/B/F 由 Host 实现，G1/G2/H/I/J 已分别委派、审查、定向验证、合入并回收；当前进入 L4 完整检查。完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
+已完成独立分支、core 合入、规定文档/源码阅读和 Node 24.21.0 的 console 依赖准备。L4 的 A/B/F 由 Host 实现，G1/G2/H/I/J 已分别委派、审查、定向验证、合入并回收；L4 完整检查已通过（1922 Python/106 Node），当前开始 L5。完整检查在每个模块全部集成后运行。后续进度与委派时长写入各模块 acceptance 记录，原始日志留 tmp/。
 
 首次 L4-A 提交在 admission 前被 INVALID_WORKSPACE 拒绝：安装版 includeUntracked 只允许已有未跟踪输入，不允许未来输出路径。未创建有效委派；调整提交模板为新输出仅列 writeScope，原 intent 已形成不可变准备记录，修改输入后改用新 requestId，不删除旧证据，不改任务契约或日常数据。
 
