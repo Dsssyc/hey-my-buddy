@@ -1482,12 +1482,13 @@ class _Bundle:
 
     #: One scan shape for every plausible write of any name, so a bundle's
     #: whole write surface is collected once instead of once per name.
+    _GAP = r"(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*"
     _WRITE_CANDIDATE = re.compile(
-        r"(?<![\w$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*"
-        r"(?==(?![=>])|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|>>>=|\*\*=|&&=|\|\|=|\?\?="
-        r"|\+\+|--|\[|\.\s*(?:add|delete|clear|push|pop|shift|unshift|splice|sort"
-        r"|reverse|fill|copyWithin)\s*\()")
-    _WRITE_PREFIX = re.compile(r"(?<![\w$.])(?:\+\+|--)\s*([A-Za-z_$][A-Za-z0-9_$]*)")
+        r"(?<![\w$.])([A-Za-z_$][A-Za-z0-9_$]*)(?=" + _GAP +
+        r"(?:=(?![=>])|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|>>>=|\*\*=|&&=|\|\|=|\?\?="
+        r"|\+\+|--|\[|\?\." + _GAP + r"\[|(?:\.|\?\.)" + _GAP + r"(?:add|delete|clear|push|pop|shift|unshift|splice|sort"
+        r"|reverse|fill|copyWithin)" + _GAP + r"(?:\?\." + _GAP + r")?\())")
+    _WRITE_PREFIX = re.compile(r"(?<![\w$.])(?:\+\+|--)(?=" + _GAP + r"([A-Za-z_$][A-Za-z0-9_$]*))")
 
     def write_index(self):
         """Every write-shaped position of every name, keyed by name, once."""
@@ -1571,6 +1572,10 @@ class _Bundle:
         if i >= n:
             return "read"
         c = text[i]
+        optional_member = text[i:i + 2] == "?."
+        if optional_member:
+            i = self._skip_write_ws(i + 2)
+            c = text[i] if i < n else ""
         if c == "=":
             return "assign" if text[i + 1:i + 2] not in ("=", ">") else "read"
         if text[i:i + 2] in ("++", "--"):
@@ -1580,11 +1585,13 @@ class _Bundle:
                 return "compound"
         if c == "[":
             return self._index_write_kind(i)
-        if c == ".":
-            j = self._skip_write_ws(i + 1)
+        if c == "." or optional_member:
+            j = i if optional_member else self._skip_write_ws(i + 1)
             m = _IDENT_RE.match(text, j)
             if m is not None and m.group(0) in _MUTATION_METHODS:
                 k = self._skip_write_ws(m.end())
+                if text[k:k + 2] == "?.":
+                    k = self._skip_write_ws(k + 2)
                 return "mutate" if k < n and text[k] == "(" else "read"
             return "read"
         return "read"
@@ -1616,6 +1623,9 @@ class _Bundle:
                     if self.text[j:j + 1] == "(":
                         # A computed method can mutate a proved Set/array; its
                         # dynamic key cannot establish a read-only operation.
+                        return "mutate"
+                    if (self.text[j:j + 2] == "?."
+                            and self.text[self._skip_write_ws(j + 2):][:1] == "("):
                         return "mutate"
                     return "read"
             i += 1
@@ -2559,7 +2569,7 @@ def _wiring_problem(bundle: _Bundle, register: str, resolver: str, context) -> s
     return _NO_WIRING
 
 
-def allowlist_chain_problem(text: str) -> str | None:
+def allowlist_chain_problem(text: str, *, _bundle=None) -> str | None:
     """The first missing allowlist mechanism in the public CLI bundle text.
 
     This is the L6-A4 static core behind
@@ -2574,7 +2584,7 @@ def allowlist_chain_problem(text: str) -> str | None:
     bounded public bundle text; nothing here executes the bundle or reads any
     credential.
     """
-    bundle = _Bundle(text)
+    bundle = _bundle or _Bundle(text)
     if any(bundle.regions.code_matches(re.compile(r"\\[ux]"))):
         return "the public bundle has an unrecognized escaped identifier in code"
     exported = _exported_names(bundle)
@@ -2616,14 +2626,20 @@ def _optional_value(node):
 
 def _expression_at(text, start, limit=4096):
     try:
-        return _Parser(_token_iter(text, start, min(len(text), start + limit))).parse_ternary()
+        parser = _Parser(_token_iter(text, start, min(len(text), start + limit)))
+        node = parser.parse_ternary()
+        following = parser.peek()
+        if following is not None and not (following[0] == "punct" and following[1] in _RHS_TERMININATORS):
+            return None
+        return node
     except _ParseError:
         return None
 
 
-def metadata_contract_problem(text: str, schema_fields, tool_names, *, regions=None) -> str | None:
+def metadata_contract_problem(text: str, schema_fields, tool_names, *, _bundle=None) -> str | None:
     """Verify real strict schema members, enum literals and tool metadata tokens."""
-    regions = regions or lexical_regions(text)
+    bundle = _bundle or _Bundle(text)
+    regions = bundle.regions
     schema = None
     builder = None
     for match in regions.code_matches(re.compile(r"(?<![\w$.])([\w$]+)\.object\s*\(")):
@@ -2648,17 +2664,27 @@ def metadata_contract_problem(text: str, schema_fields, tool_names, *, regions=N
                or value[1] != _member(("id", candidate_builder), "array")
                or len(value[2]) != 1 or value[2][0][0] != "id" for value in array_values):
             continue
-        schema, builder = members, candidate_builder
+        bindings = bundle.chain_bindings(match.start())
+        if bindings is None or candidate_builder in bindings:
+            continue
+        schema, builder, schema_bindings = members, candidate_builder, bindings
         break
     if schema is None:
         return "the public bundle has no strict session/create schema carrying the restriction fields"
     mode = _optional_value(schema["mode"])
     if mode is None or mode[0] != "id":
         return "the session/create schema binds mode to no named enum schema"
+    if mode[1] in schema_bindings:
+        return "the session/create mode enum is shadowed in its schema scope"
     found_enum = False
-    enum_pattern = re.compile(r"(?<![\w$.])" + re.escape(mode[1]) + r"\s*=\s*")
-    for match in regions.code_matches(enum_pattern):
-        node = _expression_at(text, match.end())
+    for position, kind in bundle.name_writes(mode[1]):
+        if kind != "assign":
+            return "the session/create mode enum has an unrecognized write"
+        bindings = bundle.chain_bindings(position)
+        if bindings is None or builder in bindings:
+            return "the session/create mode enum builder is shadowed"
+        start = bundle._skip_write_ws(position + len(mode[1]))
+        node = _expression_at(text, bundle._skip_write_ws(start + 1))
         if (node is None or node[0] != "call" or node[1] != _member(("id", builder), "enum")
                 or len(node[2]) != 1 or node[2][0][0] != "array"
                 or any(value[0] != "str" for value in node[2][0][1])):
@@ -2683,3 +2709,10 @@ def metadata_contract_problem(text: str, schema_fields, tool_names, *, regions=N
         if not all(flags):
             return f"the {name} built-in tool is not registered as read-only in the public bundle"
     return None
+
+
+def read_only_contract_problem(text: str, schema_fields, tool_names) -> str | None:
+    """One shared lexical/binding context for both qualification mechanisms."""
+    bundle = _Bundle(text)
+    return (metadata_contract_problem(text, schema_fields, tool_names, _bundle=bundle)
+            or allowlist_chain_problem(text, _bundle=bundle))

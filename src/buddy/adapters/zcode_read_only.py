@@ -28,7 +28,7 @@ import secrets
 from .read_only import correction_code, no_tool_prompt, valid_answer
 from .zcode_protocol import NativeConnection, NativeError
 from .zcode_runner import NoToolEvidence, configure_session
-from .zcode_static_contract import allowlist_chain_problem, metadata_contract_problem
+from .zcode_static_contract import read_only_contract_problem
 from .zcode_tool_evidence import ZcodeToolFacts
 
 #: The exact restricted tool set; the native registry filters registrations to
@@ -96,8 +96,7 @@ def native_contract_problem(source_text) -> str | None:
     # The schema, mode-enum and tool-registration discoveries share the same
     # outer code context as the allowlist chain: nothing found inside a
     # string, comment, template or regex literal proves a mechanism.
-    return (metadata_contract_problem(source_text, _SCHEMA_FIELDS, READ_ONLY_TOOLS)
-            or allowlist_chain_problem(source_text))
+    return read_only_contract_problem(source_text, _SCHEMA_FIELDS, READ_ONLY_TOOLS)
 
 
 

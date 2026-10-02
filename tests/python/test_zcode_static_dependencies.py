@@ -10,6 +10,9 @@ class ProofDependencyTests(unittest.TestCase):
         for tail in (
             'fO=(e,t)=>bR({});', 'aM=v=>"Bash";', 'nL=e=>["Bash"];',
             'aC=(e,t)=>["Bash"];', 'fD=e=>({has:()=>false});',
+            'fO/*c*/=(e,t)=>bR({});', 'fO//c\n=(e,t)=>bR({});',
+            '([fO,x="\\n"]=[(e,t)=>bR({})]);',
+            'var url="x//u";fO=(e,t)=>bR({});\n[0];',
             'function FakeSet(names){this.has=name=>true}var Set=FakeSet;',
             'function Set(names){this.has=name=>true}',
         ):
@@ -25,7 +28,9 @@ class ProofDependencyTests(unittest.TestCase):
         ):
             with self.subTest(tail=tail):
                 self.assertIsNotNone(native_contract_problem(GOOD_IF_BUNDLE + tail))
-        for tail in ('wS["add"]("Read");', 'wS[methodName]("Read");'):
+        for tail in ('wS["add"]("Read");', 'wS[methodName]("Read");',
+                     'wS["add"]?.("Read");', 'wS/*c*/.add/*v*/("Read");',
+                     'wS.add?.("Read");', 'wS?.add("Read");', 'wS?.["add"]("Read");'):
             with self.subTest(tail=tail):
                 self.assertIsNotNone(native_contract_problem(GOOD_BUNDLE + tail))
 
@@ -36,6 +41,16 @@ class ProofDependencyTests(unittest.TestCase):
 
 
 class RealMemberTests(unittest.TestCase):
+    def test_mode_enum_binding_and_every_write_are_proved(self):
+        from test_zcode_static_contract import BUNDLE_SCHEMA
+        local = BUNDLE_SCHEMA[BUNDLE_SCHEMA.index('kR=m.object('):].removeprefix('kR=').removesuffix(';')
+        text = GOOD_IF_BUNDLE.replace(local, 'function buildSessionSchema(Qm){return ' + local + '}')
+        text += ';buildSessionSchema(m.enum(["build"]));'
+        self.assertIsNotNone(native_contract_problem(text))
+        text = GOOD_IF_BUNDLE.replace('kR=m.object(', '[Qm]=[m.enum(["build"])];var kR=m.object(')
+        self.assertIsNotNone(native_contract_problem(text))
+        self.assertIsNotNone(native_contract_problem(GOOD_IF_BUNDLE + 'Qm/*c*/=m.enum(["build"]);'))
+
     def test_comments_strings_and_duplicate_members_cannot_provide_schema_facts(self):
         for old, new in (
             ('toolAllowlist:m.array(Dn).optional(),', '/*toolAllowlist:m.array(Dn).optional(),*/'),
@@ -43,6 +58,8 @@ class RealMemberTests(unittest.TestCase):
             ('toolAllowlist:m.array(Dn).optional(),', 'toolAllowlist:m.string().optional(),'),
             ('toolAllowlist:m.array(Dn).optional(),', 'toolAllowlist:m.array(Dn).optional(),toolAllowlist:m.string().optional(),'),
             ('"plan",', '/*"plan",*/'), ('"plan",', '"/*plan*/",'),
+            ('m.enum(["build","plan","edit","yolo","auto"])', 'm.enum(["build","plan","edit","yolo","auto"])+0'),
+            ('}).strict();', '}).strict()+0;'),
             ('name:"Read",readOnly:!0', 'name:"Read",/*readOnly:!0*/readOnly:!1'),
             ('name:"Read",readOnly:!0', 'name:"Read",readOnly:!0,readOnly:!1'),
             ('name:"Read",readOnly:!0', 'name:"Read",decoy:"readOnly:!0",readOnly:!1'),
