@@ -195,7 +195,7 @@ Host 分别写 `docs/acceptance/l4-adr021.md`、`docs/acceptance/l5-adr021.md`�
 
 ## Host 在 ADR 留白处作出的选择
 
-单一字段采用新的 `routerProfileId`，其余现有字段保留；纯换算只取旧默认模式对应的位置，缺失时保留未设置；旧设置只在 L15 显式升级转换。选择理由是保留用户原意、取消备用位置并避免读操作成为迁移。
+现行设置采用 `routerProfileIds` 有序列表与 `routerRetryIntervalSeconds`，其余现有字段保留；纯换算将旧默认模式对应的位置排在前，另一个位置排在后，去空并稳定去重；旧设置只在 L15 显式升级转换。一个请求向后使用独立内部 task，下一项获得同档预算，前项必须确认停止。单字段、舍弃另一旧位置和禁止第二项执行是已被用户的新决定取代的历史选择。
 
 资格按有无系统沙盒分两档，Codex/Claude 保留已有运行；DSH/ZCode 限制工具为 read/search。统一证据放在 L5 开头，所有适配器只投影同一分类事实，黑板在现有快速零工具判定处统一决定；不在适配器或收集层另加 verdict。L4-G1 与 G2 分开请求边界和认领/发布，便于独立验证与审查。
 
@@ -238,3 +238,9 @@ L5-A 的桥接输入固定为 callId/cwd/spec/prompt/outputSchema/budget（timeo
 0B 合并审查补充 close_root(nativeIdentity)：在真实 turn/completed 或 Claude 根 result 时标记该根结束，随后即使新调用有完整 start/end 且早于 EOF，仍属迟到事实并不能发布。保留原错误/停止边界，ZCode 缺 callId 的事件不再伪造 usage.toolCalls=1。Node 桥接允许格式纠正的剩余工具预算为 0，N+1 仍禁止任何新工具，并保留 guard 拒绝时缺 ID 的事实。107 项投影相关复查通过，旧测试改为检查不完整证据与无虚构计数，未删除情形。
 
 Host 接线审查发现 Codex 的 typed commandExecution 与 raw 原生执行调用可共享 call ID，但工具名是不同原生投影，不能因名字差异拒绝同一次合法调用。根据 [原生执行工具声明](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/shell_spec.rs) 与 [raw namespace 类型](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/models.rs)，补入 exec_command/shell_command/write_stdin/local_shell_call 的 execute 分类；非默认 namespace 始终按 other 投影。黑板只允许同一绑定/根身份/call ID 中 commandExecution 与一个已知原生 execute 名称的等价投影，保留所有原名和事件，仍只计一次；两个不同 raw 名、类别冲突、不明关联仍作废。此修订只调整事实分类与唯一判定，不修改 Codex 运行、权限或沙盒。
+
+再次合入 core 的 `0239935`：新增第 21 条及 ADR-024 的控制台议题归后续 L17/展示任务；本阶段仍只实施第 2、3、4、20 条及 L4/L5/L6。L4-R2 验收时修正历史判定，优先采用不可变 terminal event 和 attempt receipt，拒绝带错误码的 abstention 被当作成功，并为 router.claimed 的逐项查询补索引；R3/R6 消费这一固定事实接口。
+
+L6-A2 的独立审查仍能用“丢弃成员测试后无条件注册”和“allowedTools 放在未被读取的第三参数”骗过静态资格检查，因此新增有界 L6-A3，仅修免费检查及其反例，不改协议运行或适配器。实现采用字符串/注释/括号感知的 token 与完整受支持模板匹配，不执行 JavaScript、不加入通用解释器，也不继续用局部正则证明控制流。完整消费 Set 声明与唯一 for-of 循环体；只接受完整正向 if 或顶层 OR 拒绝链，成员测试必须是链中的完整操作数，register 是最后的完整调用；禁止丢弃测试、逗号/赋值表达式、额外尾部和第二注册。register 的首参必须是同一循环变量，或经已核对 helper 保留 Read/Glob/Grep 身份的变换；options 从函数形参位置确定，调用的该位置必须是直接对象且唯一 allowedTools 的完整值为已核对 resolver(config)，拒绝错位、spread、重复键和嵌套诱饵。
+
+resolver 的完整返回链只接受直接返回 toolAllowlist、局部变量原样返回，或公开原生 bundle 中已识别的 alias-map/explore-filter/root-child 分支模板。每个 helper 都核对完整返回值与 Read/Glob/Grep 的保留，读取 allowlist 后返回 void、丢弃 map 结果、将 Read 映射成 Bash 或无条件扩大集合均拒绝。注册链其余拒绝项仅接受无副作用布尔/属性/比较表达式和已核对的纯名称谓词；不绑定 minified 名称、版本或 hash。静态结论只证明公开代码中存在识别出的限制机制，根 session 的实际工具面及执行仍须协议事实、统一工具证据和获批的原生检查，不能把源码模板核对声称为原生生效证明。A3 的测试保留 A/A2 全部有效情形，增加上述反例、字符串/注释诱饵、变量重命名与真实公开 bundle 的只读文本核对；Host 单独审查后再启用 L6-B。
