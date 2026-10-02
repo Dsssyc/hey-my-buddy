@@ -9,6 +9,7 @@ nature or attribution stays unknown; old and new records deduplicate.
 """
 import json
 import unittest
+from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
 from buddy import router, router_history
@@ -26,6 +27,11 @@ class CurrentRouterTestCase(BoardTestCase):
         super().setUp()
         self.clock = FakeClock(T0)
         self.board_ = self.board(clock=self.clock)
+        # Ordered-resolution scenarios supply a private review mechanism;
+        # production DSH review is intentionally unavailable in this stage.
+        self.enterContext(patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+            'eligible': True, 'reasonCode': None, 'reason': 'private fixture',
+            'systemSandbox': False, 'sameAttemptContinuation': True}))
 
     # -- fixtures ------------------------------------------------------------
     def add_profile(self, profile_id, *, adapter="dsh", provider="fixture", available=1, enabled=1, model=None):
