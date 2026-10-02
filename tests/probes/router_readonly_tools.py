@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import tempfile
 import time
 import uuid
 
@@ -123,7 +124,9 @@ def run(args):
         os.chmod(stream.fileno(), 0o600)
         stream.write(datetime.now(timezone.utc).isoformat() + '\n')
     from buddy.checks import SANITIZED_VARIABLES, create_private_root, teardown_private_root
-    private = create_private_root(directory=root)
+    # Native app servers put Unix sockets in TMPDIR; repository paths can
+    # exceed the socket-address limit before any model input is admitted.
+    private = create_private_root(directory=Path('/tmp') if os.name == 'posix' else Path(tempfile.gettempdir()))
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
     environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(private / 'state'),
                        BUDDY_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
