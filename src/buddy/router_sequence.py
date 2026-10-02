@@ -29,11 +29,16 @@ def _bounded_id(value: object, name: str) -> str:
     return value
 
 
-def _store(connection, key: str, payload: dict) -> tuple[dict, bool]:
+def _store(connection, key: str, payload: dict, *, clock_field: str | None = None) -> tuple[dict, bool]:
     """Insert one immutable meta document; identical content replays, any difference conflicts."""
     encoded = canonical_json(payload)
     stored = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     if stored is not None:
+        if clock_field:
+            previous = json.loads(stored[0])
+            # A retry's wall clock is not a new request or dispatch fact. Keep
+            # the first timestamp while comparing every semantic field.
+            encoded = canonical_json({**payload, clock_field: previous[clock_field]})
         if stored[0] != encoded:
             raise BoardError("CONFLICT", f"{key} is immutable and the recorded facts differ", key=key)
         return json.loads(stored[0]), False
@@ -60,7 +65,7 @@ def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) ->
         connection,
         REQUEST_KEY_PREFIX + decision_id,
         {"frozenAt": now, "facts": snapshot["facts"], "baseInput": snapshot["baseInput"],
-         "inspections": snapshot["inspections"]},
+         "inspections": snapshot["inspections"]}, clock_field="frozenAt",
     )
     return document
 
@@ -109,7 +114,7 @@ def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index
             "document": document,
             "inputSha256": sha256_text(encoded),
             "createdAt": now,
-        },
+        }, clock_field="createdAt",
     )
     return stored
 

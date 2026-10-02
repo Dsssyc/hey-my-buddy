@@ -690,6 +690,7 @@ class DecisionCoordinator:
                                                  request.get("timeoutSeconds") or facts["budget"]["timeoutSeconds"])
                     facts["budget"] = dict(facts["budget"])
                     facts["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
+                    request["budget"] = dict(facts["budget"])
                     base_input, problem = self._select_input(
                         connection, request_id=request_id, revision=expected_revision, profile_row=None,
                         task_text=task_text, candidates=candidates,
@@ -766,8 +767,15 @@ class DecisionCoordinator:
                 router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now)
                 self._record_preflight_walk(connection, request_id, resolution.inspections, now=now)
             if status == "queued" and resolution is not None and resolution.profile is not None:
-                task_id = self._queue_router_dispatch(
-                    connection, self._row(connection, decision_id), resolution=resolution, now=now)
+                try:
+                    task_id = self._queue_router_dispatch(
+                        connection, self._row(connection, decision_id), resolution=resolution, now=now)
+                except BoardError as failure:
+                    if failure.code != "router-input-too-large":
+                        raise
+                    status, reason, error = "needs-host", failure.message, failure.code
+                    connection.execute("UPDATE evaluation_decisions SET status=?,reason=?,error=? WHERE decision_id=?",
+                                       (status, reason, error, decision_id))
             self._append_event(
                 connection,
                 "decision.requested",
@@ -955,6 +963,11 @@ class DecisionCoordinator:
             "routerProfile": identity_map,
             "routerIndex": resolution.router_index,
         }
+        input_bytes = len(canonical_json(document).encode("utf-8"))
+        if input_bytes > MAX_DECISION_INPUT_BYTES:
+            raise BoardError("router-input-too-large",
+                             f"The complete frozen Router dispatch contains {input_bytes} UTF-8 bytes, above the "
+                             f"{MAX_DECISION_INPUT_BYTES}-byte input ceiling; nothing was truncated or sent to a model.")
         request = json.loads(row["requested_json"])
         timeout_seconds = int(request.get("timeoutSeconds") or snapshot["facts"]["budget"]["timeoutSeconds"])
         task_id = self._create_task(
@@ -983,6 +996,8 @@ class DecisionCoordinator:
             " output_json=NULL, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
             (task_id, canonical_json(document), digest, now, decision_id),
         )
+        connection.execute("UPDATE evaluation_decisions SET status='queued',profile_id=NULL,error=NULL,reason=? WHERE decision_id=?",
+                           ("queued for the next frozen Router dispatch", decision_id))
         self.board.workflow.routing_dispatched(connection, decision_id=decision_id, task_id=task_id, now=now)
         return task_id
 
@@ -1024,6 +1039,9 @@ class DecisionCoordinator:
         if router._identity(published) != dispatch["profile"]:
             return {"status": "needs-host", "code": "router-profile-changed",
                     "reason": "Router 不可用：buddy 的完整身份与请求冻结值不一致；这是情况变化，不能作为普通无答案切换"}
+        if int(self._state(connection)["table_revision"]) != int(snapshot["baseInput"]["tableRevision"]):
+            return {"status": "needs-host", "code": "router-table-changed",
+                    "reason": "请求冻结后评价表 revision 已变化；这是情况变化，不能记 Router 失败或切换"}
         if row["reader_id"]:
             reader = connection.execute(
                 "SELECT released_at FROM evaluation_readers WHERE reader_id=?", (row["reader_id"],)
@@ -1106,7 +1124,14 @@ class DecisionCoordinator:
                          reason=advance.problem["reason"], error=advance.problem["code"],
                          output={"status": "error", "code": advance.problem["code"]})
             return "decision-closed"
-        self._queue_router_dispatch(connection, row, resolution=advance, now=now)
+        try:
+            self._queue_router_dispatch(connection, row, resolution=advance, now=now)
+        except BoardError as failure:
+            if failure.code != "router-input-too-large":
+                raise
+            self._finish(connection, row, status="needs-host", now=now, reason=failure.message,
+                         error=failure.code, output={"status": "error", "code": failure.code})
+            return "decision-closed"
         return "decision-dispatch-advanced"
 
     # -- worker lifecycle hooks ---------------------------------------------

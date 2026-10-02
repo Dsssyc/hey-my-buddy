@@ -112,11 +112,10 @@ class FreezeRequestTests(RouterSequenceTestCase):
             with self.board_.store.db.write() as db:
                 router_sequence.freeze_request(db, "dec-1", snapshot=changed, now=T0)
         self.assertEqual(caught.exception.code, "CONFLICT")
-        # The freeze carries its own moment: a later timestamp is different content.
-        with self.assertRaises(BoardError) as caught:
-            with self.board_.store.db.write() as db:
-                router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T1)
-        self.assertEqual(caught.exception.code, "CONFLICT")
+        with self.board_.store.db.write() as db:
+            later = router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T1)
+        self.assertEqual(later, first)
+        self.assertEqual(later["frozenAt"], T0)
         with self.board_.store.db.read() as db:
             stored = router_sequence.request_snapshot(db, "dec-1")
         self.assertEqual(stored["facts"]["routerRetryIntervalSeconds"], 600)
@@ -177,11 +176,9 @@ class ReserveDispatchTests(RouterSequenceTestCase):
                 db, decision_id="dec-1", task_id="task-alpha", router_index=0,
                 profile=ALPHA, document=alpha_document(), now=T0)
         self.assertEqual(replay["createdAt"], T0)
-        # The record includes its own creation moment: a later timestamp is a
-        # different document and conflicts rather than rewriting the dispatch.
-        with self.assertRaises(BoardError) as caught:
-            self.reserved("task-alpha", now=T1)
-        self.assertEqual(caught.exception.code, "CONFLICT")
+        later = self.reserved("task-alpha", now=T1)
+        self.assertEqual(later, replay)
+        self.assertEqual(later["createdAt"], T0)
         with self.assertRaises(BoardError) as caught:
             self.reserved("task-alpha", document=bravo_document())
         self.assertEqual(caught.exception.code, "CONFLICT")

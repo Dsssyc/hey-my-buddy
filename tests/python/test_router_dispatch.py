@@ -12,6 +12,7 @@ never rewritten by a later dispatch of the same request.
 """
 import json
 import unittest
+from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
 from buddy import router, router_history, router_sequence
@@ -527,6 +528,63 @@ class WorkflowWiringTests(RouterDispatchTestCase):
                               (decision_id,)).fetchone()
         self.assertEqual(link["state"], "fenced")
         self.assertEqual(link["updated_at"], T0)
+
+
+class HostReviewRegressionTests(RouterDispatchTestCase):
+    def test_actor_graft_is_included_in_admission_byte_ceiling(self):
+        first = self.request(request_id="pick-1")
+        bound = len(canonical_json(self.snapshot_of(first["decisionId"])["baseInput"]).encode("utf-8"))
+        with patch("buddy.decision.MAX_DECISION_INPUT_BYTES", bound):
+            refused = self.request(request_id="pick-2")
+        self.assertEqual(refused["status"], "needs-host")
+        self.assertIsNone(refused["runId"])
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertIsNotNone(self.snapshot_of(refused["decisionId"]))
+        self.assertEqual(self.decision_row(refused["decisionId"])["error"], "router-input-too-large")
+
+    def test_next_actor_byte_ceiling_keeps_the_original_task_and_input(self):
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET model=? WHERE profile_id=?", ("b" * 40, B))
+        first = self.request()
+        original = self.dispatch_of(first["runId"])
+        bound = len(canonical_json(original["document"]).encode("utf-8"))
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+        with patch("buddy.decision.MAX_DECISION_INPUT_BYTES", bound):
+            response = self.claim("oversize")
+        self.assertIsNone(response["claim"])
+        self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")
+        self.assertEqual(self.decision_row(first["decisionId"])["error"], "router-input-too-large")
+        self.assertEqual(self.dispatch_of(first["runId"]), original)
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertEqual([event[1]["profileId"] for event in self.router_events("router.no_answer")], [A])
+
+    def test_table_drift_precedes_preflight_failure_and_does_not_poison_skip_history(self):
+        first = self.request()
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE evaluation_state SET table_revision=table_revision+1 WHERE id=1")
+            db.execute("UPDATE harness_health SET status='unhealthy' WHERE adapter='dsh'")
+        response = self.claim("changed")
+        self.assertIsNone(response["claim"])
+        self.assertEqual(self.decision_row(first["decisionId"])["error"], "router-table-changed")
+        self.assertEqual(self.router_events("router.no_answer"), [])
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertEqual(self.attempts(), [])
+
+    def test_request_snapshot_and_dispatch_preserve_the_same_deadline_override(self):
+        self.set_settings(mode="review")
+        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+                "eligible": True, "reasonCode": None, "reason": "fixture", "systemSandbox": False,
+                "sameAttemptContinuation": True}):
+            response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose",
+                                                               "timeoutSeconds": 77})
+        with self.board_.store.db.read() as db:
+            requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])
+        snapshot = self.snapshot_of(response["decisionId"])
+        dispatch = self.dispatch_of(response["runId"])
+        self.assertEqual(requested["budget"], snapshot["facts"]["budget"])
+        self.assertEqual(dispatch["document"]["budget"], requested["budget"])
+        self.assertEqual(requested["budget"]["timeoutSeconds"], 77)
 
 
 if __name__ == "__main__":
