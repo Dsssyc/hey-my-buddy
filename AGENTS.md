@@ -14,10 +14,16 @@ The shared `buddy` skill is the only distribution ([ADR-015](docs/decisions/015-
 
 ## Layout
 
-- `src/hey_my_buddy/`: public CLI, common service, workflow, evaluation and worker machinery; Python harness adapters under `buddy/harnesses/`.
-- `harnesses/dsh/`: DSH-specific Node scripts, plugins and tests.
+- `src/hey_my_buddy/`: the package, divided by the two sides of the system ([ADR-025](docs/decisions/025-harness-run-module.md) decision 12). Code that takes a database connection belongs to the blackboard side; code that starts or drives a harness process belongs to the buddy side.
+  - `blackboard/`: the service process and every mechanical rule. `store/` holds the database, schema validation, migrations and backup; `tasks/` the macro and micro task lifecycle, checkouts, inquiry, acceptance and storage; `routing/` routing requests, boundaries, the Router list and answer publication; `catalog/` the model catalog and accounts; `evaluation/` evaluations, model facts and preferences; `service/` the daemon.
+  - `buddy/`: what makes a buddy run. `runtime/` is the Worker runtime, `roles/` the Worker turn and the Router call, and `harnesses/` the shared registry and base with one package per harness (`codex/`, `claude/`, `zcode/`, `dsh/`).
+  - `protocol/`: the interface between the two sides: C-Two contracts, transport, client and the fact formats that cross the boundary.
+  - `cli/`: the public CLI and the check runner; `console/`: the console server and its built assets; `install/`: launcher, runtime materialization, install and upgrade.
+  - `errors.py`, `home.py`, `locking.py`, `private_dirs.py`: base modules both sides use.
+  - Imports that still cross the two sides are registered in `docs/acceptance/adr025-step-0-cross-imports.tsv`; the later ADR-025 steps remove them.
+- `harnesses/dsh/`: DSH-specific Node scripts, plugins and tests, removed in ADR-025 step four.
 - `apps/console/`: React/Vite frontend; built assets are packaged for users without npm.
-- `tests/python/`: Python and cross-component verification.
+- `tests/python/`: Python and cross-component verification, mirroring the package layout. Every test directory is a package; a test file outside one fails the check suite.
 - `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence.
 - `packaging/`: explicit runtime resources and the shared skill build.
 - `skills/buddy/`: the shared agent skill (`SKILL.md` and its `scripts/buddy` launcher).
