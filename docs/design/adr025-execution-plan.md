@@ -52,6 +52,8 @@
 | console server、sessions、已有构建资产 | `console/server.py`、`console_sessions.py`、`console/assets/` | 控制台只作构建输出和取资源路径适配 |
 | `harnesses/dsh/` | 原位 | 第四步核对通过后直接删除，避免搬两次 |
 
+用户已确认 [包初始化循环的两行修订](adr025-step0-import-cycle.md)：旧 `adapters/__init__.py` 整文件搬到 `buddy/harnesses/registry.py`，旧 `worker/__init__.py` 整文件搬到 `buddy/runtime/api.py`；两个新包的 `__init__.py` 为空。显式使用原注册表或 Worker 包 API 的调用方改导入这两个目标文件，其余子模块直接按表导入。不能以 `TYPE_CHECKING`、函数内延迟导入或兼容转发绕过目录调整引出的循环；函数体及原有导入执行位置保持。原源码/资产搬动数仍为 114，测试/fixture 为 178，另外两份空包入口作为新增文件登记。
+
 表中的目录均相对 `src/hey_my_buddy/`。测试按表进入 `tests/python/blackboard/`、`buddy/`、`protocol/`、`console/`、`install/`、`cli/` 的对应目录，单个交叉测试文件仍整体保留。为源包和被 unittest 递归发现的测试目录补空 `__init__.py`；不增加转发 import、旧模块别名或兼容包。fixture 根据使用的 harness 或权威数据归属搬动，并逐个更新所有调用点。
 
 第零步登记 protocol→任一侧、buddy→黑板、黑板→buddy 的实际跨边界导入，含文件、行号与目标；只登记，不修。第零步的整文件规则优先于彻底消除历史依赖。例如 `db.py` 同时定义存储和 JSON/时间小函数，`tool_evidence.py` 同时有事实收集和纯判定，`router.py` 同时有持久规则和 prompt；本步只按其持久职责或共用接口归属放置，跨包 import 按真实目的地改写，不拆成新实现。`protocol/tool_evidence.py` 的纯判定仍只由黑板发布路径调用。后续只抽 ADR-025 需要的角色/运行接缝；不趁机整顿全黑板。安装和 CLI 入口原有的离线数据库读取保留在其原调用路径，目录调整不授予新的状态所有权。
