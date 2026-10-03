@@ -91,6 +91,27 @@ class ScheduledModulesTests(unittest.TestCase):
         self.assertFalse([name for name in loaded["discovered"] if "_FailedTest" in name])
         self.assertIn(f"{Path(__file__).parent.stem}.{Path(__file__).stem}.{type(self).__name__}.{self._testMethodName}", loaded["perFile"])
 
+    def test_scheduling_covers_every_test_file_on_disk(self):
+        """The raw filesystem is the independent full set, not discovery itself.
+
+        Both ``unittest discover`` and ``python_test_modules`` descend into packages
+        only, so they miss the same file together when a directory between it and
+        ``tests/python`` lacks an ``__init__.py``. This guard compares discovery with
+        a plain walk of the whole tree instead, and names every missed file.
+        """
+        top = REPOSITORY / "tests" / "python"
+        on_disk: set[str] = set()
+        for directory, _, files in os.walk(top):
+            relative = Path(directory).relative_to(top)
+            for name in files:
+                if name.startswith("test") and name.endswith(".py"):
+                    on_disk.add(".".join((*relative.parts, name.removesuffix(".py"))))
+        scheduled = set(checks.python_test_modules(REPOSITORY))
+        missing = sorted(on_disk - scheduled)
+        self.assertFalse(missing, "test files on disk are never scheduled: " + ", ".join(missing))
+        unexpected = sorted(scheduled - on_disk)
+        self.assertFalse(unexpected, "scheduled modules that are not test files on disk: " + ", ".join(unexpected))
+
     def test_nested_packages_are_scheduled_exactly_as_discovery_descends(self):
         tests = self.directory / "tests" / "python"
         case = "import unittest\nclass Case(unittest.TestCase):\n    def test_runs(self):\n        pass\n"
