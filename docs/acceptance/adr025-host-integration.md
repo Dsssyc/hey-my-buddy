@@ -90,3 +90,13 @@ Host 为原 run 将 scope 从 1 增到 2，仅追加 `harnesses/dsh/tests/native
 Host 核对完整命令退出 0，Python 2,320（原有 skip 1，158 个模块）、Node 110；110 条 Node 编号 Counter 和集合与 0-A 相等，SHA-256 仍为 `90aae667edd078d385bb36a5ec579e933d3414572fc728b27efd291684cf3612`。Console 659/tsc 退出 0 的同代码证据保持，迁移 fixture 防护的故障注入 0→1→0 已读。必要原始材料 409 个文件另存到 `<evidence-worktree>/tmp/adr025-evidence-retained/0b2-complete/` 并逐文件记 SHA-256。整合 `int-63e89157-beaf-4c3e-ac21-4357a2064537` 后，Host 接受该微任务；不是整个第零步的验收。
 
 验收后 Host 用正常 revert 撤销文档延后提交，完整恢复六份批准文档，再合入用户恢复授权与清理规则记录。此过程只修改 Host 管理的公共文档，未代改微任务源码/测试。`fcf2947` 的 ADR 仍是用户上游原文；所有越界登记及撤回保留。后续按计划串行开始 0-C、0-D，整步完成后停下等 Claude Code Host 验收。
+
+## 0-C 固定交付验收
+
+0-C run `73dc5a3a-946b-4c0d-bf88-9638b5264408` 的固定 artifact 为 `1828a4e4-e258-4fbe-934d-c34502b88773`，output 为 `35067dde9193c67d3882297bc83dd0fd348cf080`；Host 将唯一新增的升级记录原样提交为 `a093a05307dc9129175936cc4f9c4c6b8c34d260`，确认整棵提交树与固定输出树相等，整合 `int-26ec13fe-3059-4145-8e1e-fee4d9ebc31a` 后接受该微任务。生产源码、测试与既有记录均未修改，Host 没有代改微任务的交付。
+
+Host 独立核对旧、新、故障 wheel/sdist 的 SHA-256、sourceCommit 和包布局：旧制品确来自 `2bdb497`，新制品确来自 `2b08c945`，新 wheel 无顶层 `buddy/`；故障制品只有私有 daemon 启动注入。实际旧布局安装升级成功，实际启动失败后自动回滚到旧布局；两条链保留的旧回执均逐字节相等，升级后和回滚后的合成 command 微任务均实际完成。六个安装相关测试模块共 90 例通过，无 skip；迁移定位防护的缺包、双包、缺资源、缺清单注入分别被发现，READY 绑定副本路径导致的验证限制已在交付中明示。
+
+私有 stop 回执没有未确认尝试；Host 再核对两链确切目录的进程参数、已登记 daemon PID 与两个私有监听端口，均无存活对象。原生 harness/model 调用为 0，只运行了四项合成 command 微任务；此计数不含路由与执行 buddy。Host 在验收前另存 148 个必要脚本、日志、构建制品与链条身份材料到 `<evidence-worktree>/tmp/adr025-evidence-retained/0c/`，逐文件 SHA-256 相符，未复制整个 home 或凭据目录，未删除材料。实施检出的完整私有链仍保留。
+
+0-C 接受仅解除 0-D 的依赖。0-D 必须运行最终 Python 与 Node 完整检查，核对编号集合、全量文件映射、跨边界导入及受保护文件；相同代码树的 Console、构建与真实升级证据可明确引用。第零步整体验收仍由 Claude Code Host 经用户转达，第一步与独立 ACP 客户端尚未开始。
