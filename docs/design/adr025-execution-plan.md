@@ -2,9 +2,7 @@
 
 状态：Claude Code Host 已审阅通过，用户于 2026-10-03 转达并补充执行决定。本分支 `socu/adr025-run-module` 从 `2bdb497` 建立，现已合入 `socu/buddy-core` 的 `dd8a9ab`。本次修订按用户决定提交后直接开始第零步、F-D1 接 F-D2、F-C1，无须再审计划；各步的 Host 验收仍是必经暂停点。未经核对的原生能力仍明确标为待核对。
 
-用户随后转达两项可行性核对均经 Claude Code Host 验收，正式记录及 ADR-025 第 11、13 条更新来自 `socu/buddy-core` 的 `fcf2947`（[Host 验收](../acceptance/adr025-feasibility-host-review.md)）。以下第四、五步要求据此修订；第零步继续，完成后仍须停下验收。DSH ACP 客户端中不碰公共文件的部分在第零步获验收后即可开始，不等第三步。
-
-宏任务是完成 [ADR-025](../decisions/025-harness-run-module.md)。步骤编号仍为第零步目录、第一步公共格式与外层、第二步 ZCode、第三步 Codex 与 Claude Code、第四步 DSH、第五步 C-Two 实时通道。依赖只有：第零步先完成并验收，第一步随后完成并验收，第五步切换等待所有 harness 抽取完成并验收。第一步之后四个 harness 在各自 worktree 并行；第零步获验收后，DSH ACP 客户端、C-Two 后端等不碰公共文件的新代码可早于 harness 全部抽取而独立开始。初始并行启动的是第零步、F-D1 接 F-D2、F-C1，两项核对现已验收。每条线完成后提交记录和完整检查结果、停下等 Host 验收，互不依赖的线可以继续。
+宏任务是完成 [ADR-025](../decisions/025-harness-run-module.md)。步骤编号仍为第零步目录、第一步公共格式与外层、第二步 ZCode、第三步 Codex 与 Claude Code、第四步 DSH、第五步 C-Two 实时通道。依赖只有：第零步先完成并验收，第一步随后完成并验收，第五步切换等待所有 harness 抽取完成并验收。第一步之后四个 harness 在各自 worktree 并行；DSH ACP 客户端、C-Two 后端等不碰公共文件的新代码可更早独立开始。现在并行启动第零步、F-D1 接 F-D2、F-C1。每条线完成后提交记录和完整检查结果、停下等 Host 验收，互不依赖的线可以继续。
 
 ## 1. 范围与当前源码复核
 
@@ -143,7 +141,7 @@ schemaStatus 记录该路径实际执行的检查及依据，不新增一套能�
 | Codex | 保留私有 no-tool config、模型工具字段、空 dynamicTools/environments、native config 层回读及快速的 EOF 完整性；不能静态扫描厂商实现证明它正确 | 保留原生 buddy-router 文件权限图、never 审批、禁网、原生工具及策略回读；可接受 execute 的判定仍由黑板根据系统沙盒事实决定 | 保留 Worker workspace-write、授权 cwd 为 writableRoots、never 审批、当前 networkAccess=false；不新增强回读或额外工具限制 |
 | Claude Code | 当前无可达实现，能力仍为 unavailable，调用前按当前规则拒绝；本次不新增快速路由或试用另一条 CLI 通道 | 复用当前 `execution_args`，Glob/Grep/LS/Read、原生拒绝表、default 权限和原生沙盒；Router 网络白名单为空；Worker 只读保留其注册表白名单差异 | 保留现有 WRITABLE_TOOLS、acceptEdits、stdio 权限请求一律 deny、受限沙盒与包注册表白名单；不改成 bypassPermissions |
 | ZCode | 复用 app-server、空 toolAllowlist/MCP、关闭 offPeak/dynamicWorkflow、no-tools runtime preferences；保留快速未知事件拒绝和 EOF/close 证据 | 当前 Worker 读范围没有原生只读强制；驱动如实报告 unrestricted，不能由工作区核对或 yolo 名字得出只读结论；Router 审阅继续 unavailable | 保留同一个 app-server 的 yolo 默认工具与会话私有完成/问询 MCP；原生权限 deny、用户交互 decline；源 provider 偏好不回写 |
-| DSH | 第四步前保持 direct-LLM；重做后用 ACP，启动时关闭已核对的工具行与 plan-mode，保留本次最终值交付机制。发现清单之外的新工具行时如实报告，不宣称已限制；角色与黑板仍按本次工具事实判定 | 启动时用公开 read-only 预设，controller 只回答升级权限请求；当前只验证写入工具与正向读取，4-D 必须补“用命令写文件”，补足前不宣称命令有原生只读强制；network 另记已知/未知，DSH 审阅资格不自动开放 | 保持原生 workspace-write 预设与工具；工作区内写入和命令通常不发权限请求，不能靠 controller 应答实现范围；只对实际升级权限请求按已确定策略应答 |
+| DSH | 第四步前保持当前 direct-LLM；重做后使用 ACP 代理会话，检查是否能原生关闭任务工具，否则报告 unrestricted，Router 按零工具证据判定；不再直接调模型 | ACP 是否能拒绝写/命令/联网必须逐项核对；未覆盖的范围报告 unrestricted；只有核对证据和上述授权范围支持时才声明相应能力 | ACP 运行原生代理与工具；controller 回答权限请求的策略按核对结论及已授权差异固定；不为了获得权限另建任务工具或外层沙盒 |
 
 上述 Codex 机制中的原生实验开关是现有事实，重构保持当前调用；不为新能力新增实验接口依赖。资格仅检查本地公开接口、设置/版本能力和本项目所需资源是否存在，不解析厂商安装包来证明限制；原生有效策略与事件来自本次运行。没有现成能力的 harness 如实报告未限制或不可用，角色保持当前资格判定；统一接口本身不扩展 ZCode 审阅或 Claude Code 快速能力。平台未核对的事实写进验收记录，当前方案不引入系统级统一沙盒。
 
@@ -162,7 +160,7 @@ class LiveChannel(Protocol):
     def close(self, *, reason: str) -> None: ...
 ```
 
-`LiveCapabilities` 分别声明 `activity`、`inquiryDelivery: realtime/cooperative-checkpoint/unsupported`、`finishNotice`、`sessionContent`。Codex 与 Claude Code 当前只接活动，问询返回 unsupported；ZCode 保留 cooperative-checkpoint；DSH 在第四步前保留当前实时送达，ACP 后使用已核对的 cooperative-checkpoint。ADR-022 的提醒收尾和 ADR-024 的会话视图只预留消息种类与能力位，本任务不实现其业务、采集隐藏推理或扩大实时内容。
+`LiveCapabilities` 分别声明 `activity`、`inquiryDelivery: realtime/cooperative-checkpoint/unsupported`、`finishNotice`、`sessionContent`。Codex 与 Claude Code 当前只接活动，问询返回 unsupported；ZCode 保留 cooperative-checkpoint；DSH 在第四步前保留当前实时送达，ACP 后以核对结果替换。ADR-022 的提醒收尾和 ADR-024 的会话视图只预留消息种类与能力位，本任务不实现其业务、采集隐藏推理或扩大实时内容。
 
 `LiveRequest` 为 `{formatVersion, identity, requestId, kind, payload}`，kind 为 inquiry/finish-notice；payload 的身份、问题/提醒字段使用闭集。`LiveReply` 为 `{identity, requestId, status, deliveryMode, nativeCorrelation, reasonCode}`，status 区分 queued/delivered/answered/unavailable/unsupported；queued 或插入缓冲不能升级成 delivered。`LiveSnapshot` 为 `{identity, sequence, activity, inquiries, events, unavailable, truncated}`，活动沿用现有闭集；会话事件仅承载上游已允许的事实类型。对同 requestId 同 payload 重放不重复送达，换 payload 为 conflict；传输认证材料由运行时的私有绑定持有，不进入模型或公共记录。
 
@@ -172,7 +170,7 @@ class LiveChannel(Protocol):
 
 ## 6. DSH 的核对门槛与差异确认
 
-用户已一并授权本计划中的原生核对、各步真实冒烟及为同一目的必需的重跑，不再逐次询问；每次保持最小，在验收记录列 harness 与运行次数。额度或登录导致不能运行时，记未验证并继续其他工作，不反复尝试、不改登录；计划外的付费运行仍先问。DSH 首选 Python 控制器驱动本机已安装命令的 `--profile acp`，不用 `deepseek-harness-sdk`，不下载内置 DSH、不寻找本项目用的 Node、不读凭据内容、不更改日常设置或目录。可行性核对在计划通过后作为 F-D1、F-D2 两个微任务进行；握手不得发送 prompt 或触发模型。空会话、私有存储覆盖和配置改变均限定在核对目录，若安装的接口不能保证隔离，停止该操作并记录未验证。任何启动 DSH 的代码和测试（包括 version/help/dump/发现与无模型握手）都必须先验证并显式设置本次私有 DSH 主目录；不得先启动再清理日常副作用，F-D1 的越界不能重演。
+用户已一并授权本计划中的原生核对、各步真实冒烟及为同一目的必需的重跑，不再逐次询问；每次保持最小，在验收记录列 harness 与运行次数。额度或登录导致不能运行时，记未验证并继续其他工作，不反复尝试、不改登录；计划外的付费运行仍先问。DSH 首选 Python 控制器驱动本机已安装命令的 `--profile acp`，不用 `deepseek-harness-sdk`，不下载内置 DSH、不寻找本项目用的 Node、不读凭据内容、不更改日常设置或目录。可行性核对在计划通过后作为 F-D1、F-D2 两个微任务进行；握手不得发送 prompt 或触发模型。空会话、私有存储覆盖和配置改变均限定在核对目录，若安装的接口不能保证隔离，停止该操作并记录未验证。
 
 | 第 11 条问题 | F-D1 不调用模型能取得的证据 | F-D2 已授权最小真实运行必须取得的证据与失败条件 |
 | --- | --- | --- |
@@ -185,9 +183,7 @@ class LiveChannel(Protocol):
 
 F-D2 在脚本、配置、私有任务和停止标准明确后直接运行，授权来自用户本次决定。一次运行不能覆盖所有问题则记录部分/未知；为同一核对目的必需的最小重跑已有授权，逐次登记原因和次数，不扩大为计划外实验。因额度或登录失败时不反复尝试，记未验证并继续。记录只保存筛选后的公开事实，原始日志放忽略的 `tmp/`，位置使用 `~` 或 `<probe-root>`。
 
-两项核对已验收，DSH ACP 可行，未用退路。已安装 DSH 的 `--profile sdk` 缺少权限回调、取消与关闭，比 ACP 弱，按更新后的 ADR 不再作为退路。今后 ACP 某能力做不到时，只按 ADR 列出“Python 控制器加最少的进程内插件”的确切缺口与差异并停止实施，交用户/Claude Code Host 确认；不自行写插件或把未核对项视为通过。
-
-第四步采用已验收事实：ACP 工具类别原始值均为 `other`，本项目按原生工具名映射到公共词汇，无法识别的仍为 `other`。实际模型和逐步 token 用量从本次私有会话记录作为可选来源获取；协议流的上下文占用不能当 token 用量。读取或格式/解码失败时保留未知，不影响原生事实的留存。压缩解码使用 Python 能力，不调用或新增依赖系统 `zstd` 命令；如需 Python 项目依赖，由 Host 在第四步统一锁定并记录。当前 DSH Worker 能报告 token 用量，改造后达不到同等程度属于行为差异，必须停下说明，不能用“可选”掩盖退步。关闭工具行的已核对清单绑定本机 DSH 版本，公开配置出现新工具行时报告新行及限制未知，不对厂商代码作静态证明。
+ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开接口能否补上，并登记 ACP 的失败项、SDK 能力与局限；不用 Python SDK 包。仍失败时，按 ADR 的“Python 控制器加最少的进程内插件”列出确切缺口和所需最小插件。此退路与 Python-only 目标及目录删除会有差异，必须停止实施，把修改后的边界交用户/Claude Code Host 确认；不自行写新 JavaScript 或把未核对项视为通过。
 
 第四步记录逐项列出下表的实际差异。ADR-025“影响”已写明的三项——问询可能只能在检查点送达、快速路由加入 DSH 系统提示词、原生续接可能成为新能力——按计划进行，无须再次确认。表中的其他项是核对事项，不代表用户同意扩大行为；若发现超出这三项及已明确批准的 DSH 重做/停止口径的行为差异，先停下说明。
 
@@ -196,24 +192,22 @@ F-D2 在脚本、配置、私有任务和停止标准明确后直接运行，授
 | Worker 载体 | headless + Node 运行器/进程内插件 | ACP 代理会话 + Python 控制器/Python MCP；完成/会话事件证明转换，仍保留 six-field outcome、身份与 seal |
 | 快速路由 | direct-LLM，不创建 Agent/Session，单条 user 消息 | 经代理运行时，有 DSH 自己的系统提示词、会话和原生开销；响应/用量可能不同；不向原生 prompt 加第二套本项目角色规则 |
 | 最终值机制 | Worker 完成插件 + awaited flush；fast 末条 stream 文本 | Worker Python MCP 签收并关联 ACP root/end；fast 选择经核对的完成机制，若 MCP 是必需则作为最终值交付服务，不开放任务工具 |
-| 工具与权限 | Worker 默认原生工具；fast tools=[]；review unavailable | 工具范围用公开启动配置，权限回调只处理升级请求；未核对或清单外的限制如实未知；4-D 补命令写入验证，增加 review 资格须另有逐项确认 |
+| 工具与权限 | Worker 默认原生工具；fast tools=[]；review unavailable | ACP 原生工具开关/权限应答覆盖以六问结果为准；不能强制的记 unrestricted；增加 review 资格须另有逐项确认 |
 | 模型/推理配置 | Worker 报 requested；fast 严格核对 prepareCall；有硬编码 Node 默认 | 统一冻结配置和会话回读，拒绝静默改用另一个 buddy；若改变既有配置失败语义且超出已批准差异，先停下说明 |
-| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 已核对为 cooperative-checkpoint；按实际签收/未答问题收尾逐项记录，不能模拟另一条运行通道 |
+| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 可能只能 cooperative-checkpoint；按实际送达模式和签收/未答问题收尾逐项记录，不能模拟另一条运行通道 |
 | 会话私有存储 | attempt 私有 JSONL；Python 快速配置了 JSONL 但没有 Session | ACP 私有会话存储；需要证明配置覆盖确实生效；原生 user store 不能作为替代 |
 | 续接 | reconstructed-new-session，不 native resume | 依六问事实实现或记录 ACP load/resume 能力；原生续接成为新能力已在授权范围，仍要求私有状态、来源绑定与停止证据，不扩大历史/账户迁移 |
 | 取消与停止 | Node 对未知组观察异常可能当作 gone | Python 统一 conservative 双组观察；ACP cancel ack 只是中断事实；权限/未知 OS 错误均不报 stopped |
-| 用量与额度 | Worker 当前能报 token 用量；Worker 与 fast 不同，fast 两次纠正未累计，部分字段缺失 | ACP 协议只给上下文占用；实际模型和逐步 token 用量可选读取本次私有记录，用 Python 解码，失败记未知。Worker 用量退步必须作为差异停下；额度/费用未观察到仍为空 |
-| 发现与依赖 | Node catalog helper，项目维护 DSH profile/plugin 资源 | 带私有 DSH 主目录的无 prompt ACP 元数据操作；删除项目的 runner、插件、目录脚本和 Node 测试/fixture；原生 DSH 的 Node 由 DSH 自己负责 |
+| 用量与额度 | Worker 与 fast 不同，fast 两次纠正未累计；部分缺失 | ACP 原生语义字段、跨纠正运行的实际累计及诚实完整性；额度未提供仍为空；每个字段差异需登记 |
+| 发现与依赖 | Node catalog helper，项目维护 DSH profile/plugin 资源 | 无 prompt 的 ACP/SDK 元数据操作；删除项目的 runner、插件、目录脚本和 Node 测试/fixture；原生 DSH 的 Node 由 DSH 自己负责 |
 
 ## 7. C-Two 本机核对与 Worker 转达选择
 
 选择 Worker 运行时自己注册临时 C-Two 端点接收服务的活请求。当前 lease renewal 至少 5 秒、取消读取间隔 2 秒，而问询传输默认超时为 1,500 ms；把问询塞进这些往返会改变延迟与 wait 行为，并把 live 交互与租约绑在一起。因此 lease/claim/renew 保持当前职责，服务通过 Worker 的独立具名操作转达。所有角色与 harness 共用这一组运行通道。
 
-F-C1 已与 DSH 核对并行完成并经 Claude Code Host 验收，记录的是以下范围：在独立私有根，用项目锁定的 C-Two 0.6.0 公开 API 核对每次运行一个临时端点的生命周期、注册重名、异常退出与端点不可达、再次创建，以及 `set_server`/`set_client` 设置是否进程全局和对多个端点的影响。用户作为 C-Two 作者已确认一个进程可以 `cc.register` 自己为服务并用 `cc.connect` 连接别的服务，这一点作为输入事实，不重复证明。只用合成事实，不启动 harness 或模型，不审阅 C-Two 内部去证明能力。关键项失败且需要改 ADR 时停止报告，不安装新版或改回自制 socket。
+F-C1 现在与第零步、DSH 核对并行：在独立私有根，用项目锁定的 C-Two 0.6.0 公开 API 核对每次运行一个临时端点的生命周期、注册重名、异常退出与端点不可达、再次创建，以及 `set_server`/`set_client` 设置是否进程全局和对多个端点的影响。用户作为 C-Two 作者已确认一个进程可以 `cc.register` 自己为服务并用 `cc.connect` 连接别的服务，这一点作为输入事实，不重复证明。只用合成事实，不启动 harness 或模型，不审阅 C-Two 内部去证明能力。关键项失败且需要改 ADR 时停止报告，不安装新版或改回自制 socket。
 
-控制器每次启动取一个随机人名作为显示名；路由只使用注册后由 `cc.server_address()` 回读的地址，不靠名字跨进程寻址，也不做“重名换名”重试。`set_server` 与 `set_client` 都在进程启动时、第一次连接或注册之前设置，包括 Worker 先连接黑板服务的路径。Worker 端点每个持有进程一个，按其内存句柄表转发，控制器端点每次运行一个。端点描述 `{address, name, instanceId}` 在私有启动/ready 材料里发布；认证 token 只存运行时私有绑定，另加完整执行身份与新 instanceId，使用 0600、无链接的发布方式。
-
-正常关闭注销自己的资源。被杀控制器可能在 `/tmp/c_two_ipc/` 留下套接字文件；持有它的 Worker 只有在确认该进程组消失后才清理本次记录的那个端点文件，并核对路径/文件身份仍属于这次端点。未知停止状态、路径或文件身份不符时不删除并记录原因。不得扫描并清理其他端点，文件年代与没有活跃连接都不等于归本次所有。端点不可达仍不能当作停止证据。
+控制器每次启动选随机人名作为 C-Two resource 名，使用短的进程私有地址，重名注册失败换另一个人名；名字不含 task ID，不充当身份。Worker 端点每个持有进程一个，按该 Worker 当前内存句柄表转发，控制器端点每次运行一个。端点描述 `{address, name, instanceId}` 在私有启动/ready 材料里发布；认证 token 只存运行时私有绑定，另加完整执行身份与新 instanceId，使用 0600、无链接的发布方式。退出只关闭自己持有的资源和原生句柄，不删除别人的端点。
 
 新增内部具名操作 `worker_live_attach`/`worker_live_detach`，以现有 attempt actor 的 workerId/attemptId/generation/nonce 加 workerInstance 核对当前持有者，在服务内存保存这次运行的 Worker 地址与服务到 Worker 的窄能力。它们不添加公开 CLI 命令、不修改现有 claim/renew 参数、数据库 schema 或历史行。Worker 到 controller 使用另一份仅对本次执行有效的 token；服务拿不到 controller 地址/token，也不能绕过 Worker。服务重启使映射失效，持有句柄的原 Worker 在成功 reconcile/renew 后重新 attach；单靠保存的 PID、地址或 instanceId 不恢复所有权。这两个操作是 C-Two 契约变化；第五步将 `CONTRACT_VERSION` 提高到届时当前契约的下一 minor 版本（当前 0.28.0 对应计划值 0.29.0），所有具名操作/客户端与私有运行时一致切换，不留旧协议兼容层。记录版本前后值、旧客户端/服务拒绝混用、私有打包与 idle cutover 的影响；公开 CLI 参数与黑板 schema 不变，日常安装仍不在授权内。若实施前基线版本改变，以整合记录锁定的新版本值为准。
 
@@ -278,29 +272,29 @@ F-C1 已与 DSH 核对并行完成并经 Claude Code Host 验收，记录的是�
 
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
-| F-D1 无模型握手 | 已完成，两项整体经 Host 验收；冻结记录保留原核对过程 | 按第六节完成六问的免费部分，列 actual/declared/unknown；空会话、私有状态、配置/MCP 与停止证据；失败项只读核对 SDK profile 退路并停止报告 |
-| F-D2 已授权的真实核对 | 已完成并经 Claude Code Host 验收；真实 prompt 共 5 次 | 一个明确脚本/配置/私有任务，记录六问需要实际运行的事实、真实 artifacts 和双组停止；形成行为差异逐项结论；已列三项按计划，超出范围才停止说明；F-D1/F-D2 线完成后提交记录等 Host |
+| F-D1 无模型握手 | 本计划获准；只用隔离核对材料，不改运行模块 | 按第六节完成六问的免费部分，列 actual/declared/unknown；空会话、私有状态、配置/MCP 与停止证据；失败项只读核对 SDK profile 退路并停止报告 |
+| F-D2 已授权的真实核对 | F-D1 经本 Host 核对；无需再次询问模型授权 | 一个明确脚本/配置/私有任务，记录六问需要实际运行的事实、真实 artifacts 和双组停止；形成行为差异逐项结论；已列三项按计划，超出范围才停止说明；F-D1/F-D2 线完成后提交记录等 Host |
 
 ### 第四步：DSH Python ACP 重做
 
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
-| 4-A ACP 控制与元数据 | DSH 核对已验收；不碰公共文件的 ACP 客户端可在第零步验收后开始，不等第三步；公共接线仍等第一步验收；Python DSH 模块 | 用已安装 `dsh --profile acp` 实现 stdio client、能力/会话配置/无 prompt 发现、私有存储与保守组停止；不采用 Python SDK、不安装 native runtime；模拟乱序/断帧/取消/失联验证 |
-| 4-B 结果与可选会话服务 | 4-A 验收；Python MCP、Worker/Router role 的 DSH 接线 | 同一 run 服务 Worker/fast/经确认的 read 范围；完成工具、问询/检查点、启动工具范围与升级权限应答、按原生工具名归类的事件、可选私有记录身份/用量转成公共事实；接 ExistingLiveChannel；保持 outcome 与 seal 外层职责 |
+| 4-A ACP 控制与元数据 | 第一步与 DSH 核对获 Host 验收；仅不碰公共文件的 ACP 客户端可在核对后提前写；Python DSH 模块 | 用已安装 `dsh --profile acp` 实现 stdio client、能力/会话配置/无 prompt 发现、私有存储与保守组停止；不采用 Python SDK、不安装 native runtime；模拟乱序/断帧/取消/失联验证 |
+| 4-B 结果与可选会话服务 | 4-A 验收；Python MCP、Worker/Router role 的 DSH 接线 | 同一 run 服务 Worker/fast/经确认的 read 范围；完成工具、问询/检查点、权限 deny/allow 的已确认策略、语义工具事件与用量转成公共事实；接 ExistingLiveChannel；保持 outcome 与 seal 外层职责 |
 | 4-C 删除项目 Node 集成 | 4-B 验收；DSH 老入口/目录、manifest/discovery/打包/checks、测试 fixture | 删除 `harnesses/dsh/` 的运行器/全部插件/目录脚本与 Node 测试，并删除 Python direct-LLM controller、旧入口、只供这些代码使用的 Node fixture/YAML bridge 资源；按逐测试意图表迁移 Node/Python 场景。更新打包资源、discovery/available 中本项目的 Node 要求和检查定位，DSH 命令只来自已安装 harness；只剩控制台开发需要 Node |
-| 4-D DSH 整步验收 | 4-C 验收；旧/新测试表、差异实现清单与真实核对 | 故障证明停止未知、配置不一致、completion/问询失配、权限/迟到工具事实仍被发现；完整检查与新分发包私有验证。实现后的最小真实冒烟已有授权，必须补只读预设下“用命令写文件”，在补足前不宣称命令原生只读强制，并验证 Worker token 用量没有退步；记录 harness 与次数，F-D2 不能代替实现验收 |
+| 4-D DSH 整步验收 | 4-C 验收；旧/新测试表、差异实现清单与真实核对 | 故障证明停止未知、配置不一致、completion/问询失配、权限/迟到工具事实仍被发现；完整检查与新分发包私有验证。实现后的最小真实冒烟已有授权，记录次数；F-D2 早期核对不能当作最终实现已验证 |
 
-Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧编号对应 Python 新编号或已授权行为差异/仅 Node 实现细节删除原因，未变的编号以集合相等证明。DSH 完整抽取依赖第一步及 DSH 核对验收，与其他 harness 并行。六问揭示需要改 ADR 的不可行项、超出已授权行为差异时停止；额度/登录导致未验证则如实记录，可继续无需这份证据的工作。ACP 不能满足时只列最小插件退路的明确输入、行为差异、删除范围与验证，并重新停下确认；SDK profile 已被核对排除。
+Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧编号对应 Python 新编号或已授权行为差异/仅 Node 实现细节删除原因，未变的编号以集合相等证明。DSH 完整抽取依赖第一步及 DSH 核对验收，与其他 harness 并行。六问揭示需要改 ADR 的不可行项、超出已授权行为差异时停止；额度/登录导致未验证则如实记录，可继续无需这份证据的工作。ACP 不能满足的退路先做审阅与批准，任何采用 SDK profile/最小插件的实施微任务必须补明确输入、行为差异、删除范围及验证后重新停下确认。
 
 ### 第五步：C-Two 实时通道
 
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
-| F-C1 无模型本机核对 | 已完成并经 Claude Code Host 验收；没有改生产通道 | 按第七节核对真实临时端点生命周期、碰撞/异常退出、set_server/set_client 进程全局设置；不重复证明作者确认的 client/server 共存；需要改 ADR 的失败项停止说明 |
-| 5-A 公共 C-Two 后端 | F-C1 已获 Host 验收；第零步验收后可提前实现独立后端；切换须所有 harness 验收；公共 live contract/后端与 controller | 替换 ExistingLiveChannel 背后的实现，随机人名的每运行端点、完整身份、窄 token、有界队列/帧、原生 owner loop 调用；用四 harness 的合成 session/活动/问询验证同一 contract |
+| F-C1 无模型本机核对 | 现在独立 worktree 并行开始；不得先改生产通道 | 按第七节核对真实临时端点生命周期、碰撞/异常退出、set_server/set_client 进程全局设置；不重复证明作者确认的 client/server 共存；需要改 ADR 的失败项停止说明 |
+| 5-A 公共 C-Two 后端 | F-C1 获 Host 验收后可提前实现独立后端；切换须所有 harness 验收；公共 live contract/后端与 controller | 替换 ExistingLiveChannel 背后的实现，随机人名的每运行端点、完整身份、窄 token、有界队列/帧、原生 owner loop 调用；用四 harness 的合成 session/活动/问询验证同一 contract |
 | 5-B Worker 持有与服务转达 | 5-A 验收、四个 harness 全部获 Host 验收；Worker/runtime 与 protocol/service/inquiry | 实现 Worker endpoint、内部 attach/detach、服务内存定位、reconcile 后重新登记；去掉服务到 controller 的活连接；不改 claim/lease/receipt/schema，服务事务外转达 |
 | 5-C 活动迁移与旧通道删除 | 5-B 验收；四 harness 的发布/观察、runtime 转报、问询桥/测试 | 活动经 C-Two snapshot 进入 Worker progress；删除两套 socket 和 activity 文件实时转报及相关路径预算，只保留持久证据。迁移旧问询/活动测试，删入口检查证明无双通道 |
-| 5-D 失联与整步验收 | 5-C 验收；故障场景、迁移表、原生脚本和分发验证 | 验证服务重启、Worker/控制器死亡、按地址区分同名进程、旧地址/旧 token/旧 attempt、消息重放/冲突、队列满/超时、两项设置在首次连接前生效、仅在已确认停止后删除本次残留套接字并保留其他文件、端点失联但原生仍活、取消与 lease 独立、持久回执恢复；完整检查。准备受影响 DSH/ZCode 的真实问询冒烟，按已有授权最小运行并分别记录次数 |
+| 5-D 失联与整步验收 | 5-C 验收；故障场景、迁移表、原生脚本和分发验证 | 验证服务重启、Worker/控制器死亡、同名/旧地址/旧 token/旧 attempt、消息重放/冲突、队列满/超时、端点失联但原生仍活、取消与 lease 独立、持久回执恢复；完整检查。准备受影响 DSH/ZCode 的真实问询冒烟，按已有授权最小运行并分别记录次数 |
 
 除第零步串行独占实施 worktree 外，尽可能并行。第一步验收后启动 ZCode、Codex、Claude Code、DSH 四个独立 worktree；若公共接口需先用 ZCode 校验，可只让其先完成一个小切片，随后铺开，不把整步 ZCode 验收变成其他 harness 的额外依赖。每个任务描述固定基线、唯一可写目录与公共文件整合归属。并行线只写自己的 harness 包和对应测试/证据；公共值、角色模块、注册表、公共实时接口由本 Host 统一修改。发现接口缺口先在交付中提出，本 Host 处理并提交公共变更后，对原微任务 continue；不得私改公共文件。共享接口调整在相关步骤记录写明字段变化及原因。
 
@@ -332,6 +326,4 @@ Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧�
 
 固定暂停点为每条线的步骤记录与完整检查结果提交后：第零步、第一步、ZCode、Codex、Claude Code、DSH、第五步，以及两项核对完成。等用户转达 Claude Code Host 验收后才启动依赖该步的工作；互不依赖的并行线继续。另在可行性核对不通过而需要改 ADR、DSH 行为差异超出已写明三项、改动明显超出计划时停止说明。额度/登录造成未验证按前述规则记录，不把未验证冒充验收通过。
 
-初始修订后已并行开始第零步、F-D1 接 F-D2、F-C1；两项可行性核对现经 Host 验收，后续实施遵守新增的门槛与验证项。日常安装、升级和最终发布仍不在本宏任务授权内；不改用户配置、凭据或日常数据，不读取凭据文件内容。
-
-所有临时根与端点只清理本次明确创建且仍由本次持有的对象；不能因目录较旧或没有进程引用，就删除其他会话的残留。超出此范围的动作必须停下记录事实，不能用事后清理掩盖。
+本次修订提交后直接并行开始第零步、F-D1 接 F-D2、F-C1，不再等待计划审阅。日常安装、升级和最终发布仍不在本宏任务授权内；不改用户配置、凭据或日常数据，不读取凭据文件内容。
