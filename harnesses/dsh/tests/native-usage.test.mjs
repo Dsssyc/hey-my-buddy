@@ -16,7 +16,7 @@ import { test } from 'node:test';
 import { apply, name } from '../plugins/usage.mjs';
 
 const FIXTURE = JSON.parse(readFileSync(
-  new URL('../../../tests/python/fixtures/native-usage-dsh.json', import.meta.url), 'utf8'));
+  new URL('../../../tests/python/buddy/harnesses/dsh/fixtures/native-usage-dsh.json', import.meta.url), 'utf8'));
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
