@@ -1,0 +1,76 @@
+{
+  "comment": "Desensitized Claude Code controller result payloads for the ADR-025 step 1-A value mapping. Field names and structure are copied unchanged from src/hey_my_buddy/buddy/harnesses/claude/runner.py result dicts; the read-only structured result carries exactly rawAnswer, answerValid and correctionCount, with no parsed value. Every identifier and text is synthetic. Claude Code has no fast entry today, so the success payload is the read-only structured review shape. No real harness or model was started.",
+  "harness": "claude",
+  "payloads": {
+    "reviewSuccess": {
+      "status": "ok",
+      "mode": "claude",
+      "harnessVersion": "2.1.282",
+      "requested": {"provider": "anthropic", "model": "fixture-model", "effort": "medium"},
+      "resolved": {"provider": "anthropic", "model": "fixture-model", "effort": "medium"},
+      "observed": null,
+      "modelStarted": true,
+      "sessionId": "2a000000-0000-4000-8000-000000000001",
+      "rawAnswer": "{\"verdict\": \"pass\", \"reason\": \"fixture review found no defects\"}",
+      "answerValid": true,
+      "correctionCount": 0,
+      "lastAssistantMessage": {"version": 1, "text": "fixture review found no defects",
+                               "source": "claude/stream-json-root-assistant-message",
+                               "sourceId": "msg-fixture-0001", "sourceBytes": 31,
+                               "sha256": "7aa8274670b718c993df68b2d80e9b13df9522117e166a9b46b1ef52a6039b9b",
+                               "truncated": false},
+      "tokenUsage": {"version": 1, "inputTokens": 12000, "cachedInputTokens": null, "outputTokens": 340,
+                     "inputBasis": "includes-cached", "source": "claude/stream-json-result-usage",
+                     "scope": "attempt", "completeness": "complete", "nativeRecords": 1},
+      "usage": {"toolCalls": 2, "bytesRead": null},
+      "toolEvidence": {"version": 1,
+                       "binding": {"adapter": "claude", "taskId": "task-fixture", "attemptId": "attempt-fixture",
+                                   "generation": 1},
+                       "nativeIdentity": [{"sessionId": "2a000000-0000-4000-8000-000000000001"}],
+                       "streamComplete": true,
+                       "events": [
+                         {"nativeIdentity": {"sessionId": "2a000000-0000-4000-8000-000000000001"},
+                          "callId": "tool-fixture-0001", "toolName": "Read", "category": "read", "phase": "start"},
+                         {"nativeIdentity": {"sessionId": "2a000000-0000-4000-8000-000000000001"},
+                          "callId": "tool-fixture-0001", "toolName": "Read", "category": "read", "phase": "end"}
+                       ],
+                       "toolCalls": 1, "unsettledToolCalls": 0, "truncated": false},
+      "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
+    },
+    "thirdPartyAuthRefusal": {
+      "status": "error",
+      "mode": "claude",
+      "harnessVersion": "unknown",
+      "code": "first-party-auth-required",
+      "requested": {"provider": "anthropic", "model": "fixture-model", "effort": "medium"},
+      "resolved": null,
+      "observed": null,
+      "modelStarted": false,
+      "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
+    },
+    "streamInterrupted": {
+      "status": "error",
+      "mode": "claude",
+      "harnessVersion": "2.1.282",
+      "code": "connection-closed",
+      "requested": {"provider": "anthropic", "model": "fixture-model", "effort": "medium"},
+      "resolved": null,
+      "observed": null,
+      "modelStarted": true,
+      "sessionId": "2a000000-0000-4000-8000-000000000002",
+      "nativeInterruptRequested": true,
+      "nativeInterruptAcknowledged": true,
+      "toolEvidence": {"version": 1,
+                       "binding": {"adapter": "claude", "taskId": "task-fixture", "attemptId": "attempt-fixture",
+                                   "generation": 1},
+                       "nativeIdentity": [{"sessionId": "2a000000-0000-4000-8000-000000000002"}],
+                       "streamComplete": false,
+                       "events": [
+                         {"nativeIdentity": {"sessionId": "2a000000-0000-4000-8000-000000000002"},
+                          "callId": "tool-fixture-0002", "toolName": "Grep", "category": "search", "phase": "start"}
+                       ],
+                       "toolCalls": 1, "unsettledToolCalls": 1, "truncated": false},
+      "processState": {"shutdownConfirmed": true, "nativeExitCode": 1}
+    }
+  }
+}
