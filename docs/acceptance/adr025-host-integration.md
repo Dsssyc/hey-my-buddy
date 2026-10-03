@@ -100,3 +100,15 @@ Host 独立核对旧、新、故障 wheel/sdist 的 SHA-256、sourceCommit 和�
 私有 stop 回执没有未确认尝试；Host 再核对两链确切目录的进程参数、已登记 daemon PID 与两个私有监听端口，均无存活对象。原生 harness/model 调用为 0，只运行了四项合成 command 微任务；此计数不含路由与执行 buddy。Host 在验收前另存 148 个必要脚本、日志、构建制品与链条身份材料到 `<evidence-worktree>/tmp/adr025-evidence-retained/0c/`，逐文件 SHA-256 相符，未复制整个 home 或凭据目录，未删除材料。实施检出的完整私有链仍保留。
 
 0-C 接受仅解除 0-D 的依赖。0-D 必须运行最终 Python 与 Node 完整检查，核对编号集合、全量文件映射、跨边界导入及受保护文件；相同代码树的 Console、构建与真实升级证据可明确引用。第零步整体验收仍由 Claude Code Host 经用户转达，第一步与独立 ACP 客户端尚未开始。
+
+## 0-D 固定交付验收与第零步停止
+
+0-D run `dc5dfbbf-d961-4b13-b98b-8dabf3643ab8` 的首份固定 artifact 为 `0439ced0-bc64-4fb1-ae81-943712f83b8c`、output `7691e348d54a438d626ffbaa7892c765fef6a60e`。Host 拒绝该交付并对同一 run 使用 continue：清理名单实际 45 项而记录写 44；删除的失败与重试、专用容器的归属依据和 Vitest 临时材料的位置偏离需要准确登记；原生调用 0 必须限定到 0-D，代码树相等证明必须限定路径。原微任务完成全部修订，Host 没有代改它的记录、源码或测试。
+
+更正后的清理登记保留两次 `rmdir` 因非空而失败的事实、随后逐项删除及成功收尾；45 项为 42 个测试日志目录、1 个设置目录与 2 个客户端目录，另行删除的 uv 锁文件不在这份名单内。首次 Vitest 的 JSON 与缓存临时落在 `<repo>/apps/`，偏离一次性材料须在 ignored tmp 的规则；本次对象已按确切路径删除，偏离没有写成遵守规则。独立删除日志未保存的部分明确为会话回写，不作为原始凭证。该更正回合没有追加测试、构建、服务启动或删除，也未恢复或追查 0-B2 已裁定的旧事件。
+
+最终 artifact 为 `1f1e8673-aa97-4beb-b505-1d4fd2a4c59d`，output 为 `751a37a1597d4c01d41d3f16bfea8be085004c9f`。Host 审查完整累积输出的两份文档（本回合的增量只改整步记录，跨边界 TSV 沿用首轮），提交为 `f08397039e1f6942609e3eb19b55a0c057a386b8`，确认整棵提交树与 seal 相等；整合 `int-1014a4a5-153d-4739-b7fd-5ade5614f7f8` 验证后，Host 接受 0-D。整步记录中的 HEAD 与两份文档差异证明指核对时的固定输入 `dfb8159`，后续交付提交增加验收记录，生产/打包/测试/Console 树继续相等。
+
+Host 独立验证原 2,316 条 Python 编号经 171 行模块表转换，加 4 条已登记回归后与当前 2,320 条的 Counter 和集合分别相等，无重复或删除；158 个测试模块与原位两模块的口径一致。Node 110、Vitest 659 的 Counter、集合及排序 SHA-256 均与 0-A 相等，无 skip。最终完整检查退出 0，Python 2,320（原项 skip 1）及 Node 110；当前 Console 659 与 tsc 通过，Vite 资产构建按代码树相等引用 0-B1。跨边界 54 条依赖经独立扫描确认，两处 `from package import module` 在 TSV 中精确登记到子模块；只登记，未修依赖。174 份构建文件/制品的摘要相符，新 wheel 的 310 个成员无顶层 `buddy/`，wheel/sdist 的 sourceCommit 为固定输入 `dfb8159`；0-C 实际私有升级与自动回滚证据保持有效。
+
+Host 在接受前将 404 份必要原始材料与回写整理保留到 `<evidence-worktree>/tmp/adr025-evidence-retained/0d/` 并核对逐文件 SHA-256；没有清理材料或复制私有 home/state。0-D 修订相对首份 seal 只改整步记录，源码、测试、既有验收记录与模块表不变。0-B2 越界登记和撤回保留。第零步实施与记录到此提交，停止等待 Claude Code Host 经用户转达整体验收；第一步、DSH ACP 客户端与 C-Two 后端均未开始。
