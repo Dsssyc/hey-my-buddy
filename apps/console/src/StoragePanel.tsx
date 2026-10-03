@@ -18,7 +18,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 const ALWAYS_PROTECTED = new Set(["backup", "durable"]);
 /**
  * Short Chinese for the backend's stable protection reason codes
- * (src/buddy/storage.py and workflow.py `_cleanup_reasons`); unknown codes
+ * (src/hey_my_buddy/blackboard/tasks/storage.py and workflow.py `_cleanup_reasons`); unknown codes
  * stay visible as-is.
  */
 const REASON_LABEL: Record<string, string> = {

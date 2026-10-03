@@ -13,7 +13,7 @@ export function effortText(effort: string | null | undefined): string {
 }
 
 /**
- * Catalog proposals (src/buddy/catalog.py) already carry " · <effort>" (U+00B7)
+ * Catalog proposals (src/hey_my_buddy/blackboard/catalog/catalog.py) already carry " · <effort>" (U+00B7)
  * inside the label, so drop that exact tail when the effort is rendered next to
  * the name. Custom labels, names that merely contain "off", and labels whose
  * tail does not match stay intact.

@@ -10,7 +10,7 @@ npm test
 npm run build
 ```
 
-The build uses a relative base and writes `index.html` and hashed assets into `src/buddy/console_assets/`. Do not put authored documents in that output directory. Commit the rebuilt assets together with source changes; the stable runtime content hash includes them. The private HTTP surface, session and CSRF boundary, and evaluation semantics are documented in the [evaluation reference](../../docs/reference/evaluation.md).
+The build uses a relative base and writes `index.html` and hashed assets into `src/hey_my_buddy/console/assets/`. Do not put authored documents in that output directory. Commit the rebuilt assets together with source changes; the stable runtime content hash includes them. The private HTTP surface, session and CSRF boundary, and evaluation semantics are documented in the [evaluation reference](../../docs/reference/evaluation.md).
 
 Read [console entry](../../docs/reference/console.md) before testing browser sessions. `console '{"browser":false}'` returns a single-use entry without launching a browser; redeem it once and use the redirected session URL with its cookie. A copied session URL alone authorizes nothing. Real HTTP/CLI tests must stay on private state, and fake snapshots must include a valid `consoleSession` descriptor.
 

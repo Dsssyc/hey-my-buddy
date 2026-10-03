@@ -18,7 +18,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from buddy.adapters.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 
 
 def run_probe(root: Path, cli: str) -> dict:

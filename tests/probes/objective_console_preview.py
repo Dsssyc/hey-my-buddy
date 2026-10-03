@@ -56,7 +56,7 @@ console snapshot adds four harness rows with retained ``quota`` observations.
 Absent or unknown values stay explicitly null.
 
 The asset directory is Host-supplied; the repository's current bundle lives at
-``src/buddy/console_assets``. The new objective UI ships later.
+``src/hey_my_buddy/console/assets``. The new objective UI ships later.
 """
 from __future__ import annotations
 
@@ -2376,7 +2376,7 @@ def smoke(assets: Path, scenario: str) -> int:
 
 def prepare_assets(value: str | None) -> Path:
     if not value:
-        raise SystemExit("--assets ABS_PATH is required (for example src/buddy/console_assets)")
+        raise SystemExit("--assets ABS_PATH is required (for example src/hey_my_buddy/console/assets)")
     assets = Path(value).resolve()
     if not assets.is_dir():
         raise SystemExit(f"assets directory does not exist: {assets}")

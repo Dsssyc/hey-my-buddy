@@ -14,7 +14,7 @@ import sys
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE_ROOT / "src"))
 
-from buddy.skill_package import build  # noqa: E402
+from hey_my_buddy.install.skill_package import build  # noqa: E402
 
 
 def main():

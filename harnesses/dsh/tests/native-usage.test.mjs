@@ -16,7 +16,7 @@ import { test } from 'node:test';
 import { apply, name } from '../plugins/usage.mjs';
 
 const FIXTURE = JSON.parse(readFileSync(
-  new URL('../../../tests/python/fixtures/native-usage-dsh.json', import.meta.url), 'utf8'));
+  new URL('../../../tests/python/buddy/harnesses/dsh/fixtures/native-usage-dsh.json', import.meta.url), 'utf8'));
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -62,7 +62,7 @@ test('the native observer projects the fixture turn into the canonical counters'
   assert.equal(native.lastAssistantMessage.sourceId, 'assistant-fixture-2');
   assert.equal(native.lastAssistantMessage.sha256, sha256(expected.lastAssistantText));
   assert.equal(native.lastAssistantMessage.truncated, false);
-  // The canonical input basis is applied by buddy.usage; the native file keeps
+  // The canonical input basis is applied by hey_my_buddy.protocol.usage; the native file keeps
   // the harness's own basis so the two can never be silently mixed up.
   assert.equal(native.tokenUsage.inputTokens, expected.unifiedInputTokens - expected.derivedCachedInputTokens);
   assert.equal(JSON.stringify(document).includes('Fixture task text.\n'), false, 'the prompt is never retained');

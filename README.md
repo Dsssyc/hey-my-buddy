@@ -102,7 +102,7 @@ Start with the [documentation index](docs/README.md) for commands, architecture,
 
 [MIT](LICENSE).
 
-Repository verification uses uv and a supported Node version (see `apps/console/package.json`). Prepare the console test dependencies with `npm --prefix apps/console ci`, then run `uv run --frozen python -m buddy.checks`; the complete check includes synthetic preview data consumed by the actual frontend parsers.
+Repository verification uses uv and a supported Node version (see `apps/console/package.json`). Prepare the console test dependencies with `npm --prefix apps/console ci`, then run `uv run --frozen python -m hey_my_buddy.cli.checks`; the complete check includes synthetic preview data consumed by the actual frontend parsers.
 
 B-stage source adds native billing labels, exhaustion-aware candidate eligibility and explicit current-version review verification in Buddy configuration or `harness-verify`; new versions fall back to fast routing until verified. Cancellation shows its recorded actor and reason, and console explanations are condensed. Independent Worker accounts and login follow the private-directory prerequisite. [Source and native-check evidence](docs/acceptance/worker-accounts-phase1-0.23.0.md) separates this candidate from installation.
 

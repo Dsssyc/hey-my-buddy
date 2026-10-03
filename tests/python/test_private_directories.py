@@ -8,8 +8,10 @@ import tempfile
 from types import SimpleNamespace
 from unittest import mock
 
-from buddy import backup, private_dirs, private_migration, upgrade
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import backup, private_migration
+from hey_my_buddy import private_dirs
+from hey_my_buddy.install import upgrade
+from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
@@ -64,7 +66,7 @@ class PrivateDirectoryTests(BoardTestCase):
             if Path(path) == temporary:
                 temporary.symlink_to(sentinel)
             return original(path, flags, *args, **kwargs)
-        with mock.patch('buddy.private_dirs.os.open', side_effect=raced_open):
+        with mock.patch('hey_my_buddy.private_dirs.os.open', side_effect=raced_open):
             with self.assertRaises(FileExistsError):
                 private_dirs.open_regular_fd(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
         self.assertTrue(temporary.is_symlink())

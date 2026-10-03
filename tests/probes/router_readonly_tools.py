@@ -17,11 +17,14 @@ import tempfile
 import time
 import uuid
 
-from buddy import router, router_input, tool_evidence
-from buddy.adapters import adapter as adapter_for, read_only
-from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
-from buddy.adapters.turn_io import private_json
-from buddy.db import canonical_json, sha256_text
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.roles import router_input
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.registry import adapter as adapter_for
+from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.roles.turn_io import private_json
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
 ADAPTERS = ('codex', 'claude')
 CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-sol:high')
@@ -30,8 +33,8 @@ CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-so
 def system_sandbox(adapter):
     # The same shipped platform declaration used by the free eligibility
     # contract; native execution still checks the effective policy itself.
-    from buddy.adapters.codex import CodexAdapter
-    from buddy.adapters.claude import ClaudeAdapter
+    from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+    from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
     platforms = {'codex': CodexAdapter.system_sandbox_platforms,
                  'claude': ClaudeAdapter.system_sandbox_platforms}
     return sys.platform in platforms.get(adapter, ())
@@ -142,7 +145,7 @@ def run(args):
     with (root / 'execution.started').open('x') as stream:
         os.chmod(stream.fileno(), 0o600)
         stream.write(datetime.now(timezone.utc).isoformat() + '\n')
-    from buddy.checks import SANITIZED_VARIABLES, create_private_root, teardown_private_root
+    from hey_my_buddy.cli.checks import SANITIZED_VARIABLES, create_private_root, teardown_private_root
     # Native app servers put Unix sockets in TMPDIR; repository paths can
     # exceed the socket-address limit before any model input is admitted.
     private = create_private_root(directory=Path('/tmp') if os.name == 'posix' else Path(tempfile.gettempdir()))

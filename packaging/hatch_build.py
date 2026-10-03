@@ -1,6 +1,6 @@
 """Embed the assembled skill in a release wheel without touching the source tree.
 
-The sdist additionally carries ``src/buddy/build-info.json`` with the source commit,
+The sdist additionally carries ``src/hey_my_buddy/build-info.json`` with the source commit,
 so a wheel built later from that sdist (where Git and the checkout are absent) keeps
 the same ``skill.json`` ``sourceCommit`` instead of reporting null.
 """
@@ -31,15 +31,15 @@ class CustomBuildHook(BuildHookInterface):
         # assemble only needs the frozen contract string. Importing contracts
         # would initialize the native C-Two transport inside the build backend.
         contract = re.search(r'^CONTRACT_VERSION = "([^"]+)"',
-                             (root / "src/buddy/contracts.py").read_text(), re.MULTILINE)
+                             (root / "src/hey_my_buddy/protocol/contracts.py").read_text(), re.MULTILINE)
         if contract is None:
             raise ValueError("Missing frozen contract version")
-        marker = types.ModuleType("buddy.contracts")
+        marker = types.ModuleType("hey_my_buddy.protocol.contracts")
         marker.CONTRACT_VERSION = contract.group(1)
-        previous = sys.modules.get("buddy.contracts")
-        sys.modules["buddy.contracts"] = marker
+        previous = sys.modules.get("hey_my_buddy.protocol.contracts")
+        sys.modules["hey_my_buddy.protocol.contracts"] = marker
         try:
-            from buddy.skill_package import assemble
+            from hey_my_buddy.install.skill_package import assemble
 
             staging = self._staging()
             skill = staging / "buddy"
@@ -50,26 +50,26 @@ class CustomBuildHook(BuildHookInterface):
                 raise
             for file in skill.rglob("*"):
                 if file.is_file():
-                    target = "buddy/_distribution/" + file.relative_to(skill).as_posix()
+                    target = "hey_my_buddy/_distribution/" + file.relative_to(skill).as_posix()
                     build_data["force_include"][str(file)] = target
         finally:
             if previous is None:
-                sys.modules.pop("buddy.contracts", None)
+                sys.modules.pop("hey_my_buddy.protocol.contracts", None)
             else:
-                sys.modules["buddy.contracts"] = previous
+                sys.modules["hey_my_buddy.protocol.contracts"] = previous
             sys.path.remove(str(root / "src"))
 
     def _build_info(self, staging: Path) -> dict[str, str]:
-        """Map a staged ``src/buddy/build-info.json`` into the sdist."""
+        """Map a staged ``src/hey_my_buddy/build-info.json`` into the sdist."""
         root = Path(self.root)
         sys.path.insert(0, str(root / "src"))
         try:
-            from buddy.skill_package import source_commit
+            from hey_my_buddy.install.skill_package import source_commit
 
             commit = source_commit(root)
         finally:
             sys.path.remove(str(root / "src"))
-        metadata = root / "src/buddy/build-info.json"
+        metadata = root / "src/hey_my_buddy/build-info.json"
         try:
             # Building again from an already-extracted sdist: its include list
             # already carries the identical file, so do not add a duplicate.
@@ -79,7 +79,7 @@ class CustomBuildHook(BuildHookInterface):
             pass
         path = staging / "build-info.json"
         path.write_text(json.dumps({"sourceCommit": commit}) + "\n")
-        return {str(path): "src/buddy/build-info.json"}
+        return {str(path): "src/hey_my_buddy/build-info.json"}
 
     def _staging(self) -> Path:
         """One private staging directory, removed by ``finalize`` after the build."""
