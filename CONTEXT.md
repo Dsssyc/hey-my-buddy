@@ -1,6 +1,6 @@
 # hey-my-buddy
 
-Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and owns it, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented.
+Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and owns it, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority, which are not implemented yet.
 
 ## Language
 
@@ -28,8 +28,15 @@ A buddy acting with Host authority: it owns the micro tasks it delegates or take
 _Avoid_: coordinator, orchestrator, manager
 
 **Worker 伙伴 / Worker buddy**:
-A buddy that executes turns of a micro task with attempt-scoped authority; it may finish, ask for assistance or raise attention, but cannot create micro tasks, authorize helpers or accept results. Its results reach the Host for acceptance. Short form: Worker.
+A buddy that executes turns of a micro task with attempt-scoped authority; it may finish, ask for assistance or raise attention, but cannot create micro tasks, authorize helpers or accept results. Its results reach the Host for acceptance. The one exception is a Lead. Short form: Worker.
 _Avoid_: a Buddy, coding Buddy
+
+**Lead 伙伴 / Lead buddy**:
+The buddy executing a micro task that carries delegation authority. Toward the Host that delegated that micro task it is a Worker: it reports only to that Host, which accepts its result, and it never talks to the user. Toward the micro tasks it creates it acts with Host authority: it delegates them, decides their boundaries, sends them back and accepts them. It is taken from the buddies the user lists for this purpose, and exists only when the user asks for it. Short form: Lead.
+_Avoid_: sub-Host, coordinator, orchestrator, manager, supervisor
+
+**委派权 / delegation authority**:
+The right to act as Host for the micro tasks created under one micro task. A Host grants it together with that micro task, only at the user's request. It covers no other micro task and no shared setting, and a Lead cannot grant it to anyone.
 
 **Router 伙伴 / Router buddy**:
 The buddy acting with routing authority. The user lists one or more buddies for the role in order, and the first available one holds it. It works in three planes: it chooses the Worker buddy for a micro task within the routing bounds, it maintains evaluations from recorded outcomes, and it builds model profiles from public sources. When the role passes to the next buddy in the list, all three planes pass with it. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
