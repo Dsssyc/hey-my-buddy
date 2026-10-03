@@ -36,3 +36,13 @@ run `2d37e630-01d8-4249-8550-2eb7f1f61feb` 以 `108a540` 为输入。首次固�
 黑板当前记录显示 F-D1、F-C1 各自有已经 applied 的 workspace cleanup，分别在 2026-10-03 06:29:34 UTC、06:30:28 UTC 移除了原 worktree；固定 artifact、Git ref、patch 和入库报告仍在。Host 在验收前已经读取相应原始材料，之后复查确认原 worktree 的忽略目录已不存在；本登记不推断是哪一个调用方发起清理，也未改变用户的清理配置。F-D2 因此按已提交的 F-D1 契约重建了私有启动包装和客户端。
 
 F-C1 原先写入短探测根的五组 raw 输出仍在，Host 已另行保留到 `<evidence-worktree>/tmp/adr025-evidence-retained/fc1/`，共 57 个文件；42 组停止观察保留在 `<implementation-worktree>/tmp/adr025-host/fc1-host-stop-observation.json`。原可复用脚本随旧 worktree 清理，未在这份 raw 副本中恢复。F-D2 的后续验收会先保留本次必要脚本和原始证据到 Host 的 worktree，再确认黑板验收，避免依赖随后可能被清理的工作区。
+
+## 0-B1 固定交付验收
+
+原微任务经同一 run 的 continue 修复后，最终 artifact 为 `268d5c0a-38a7-402f-98b6-ababe757fa2e`，output 为 `2cd21d8eb713f41da36d210b40b59c718e1b114c`；Host 确认实施 worktree、暂存树与固定输出树完全相等，提交为 `2fadf958295a5133fe9823d391f3f8eb88e08fb9`，整合 `int-b3e4f146-2f8c-4c4b-b55f-e8d88e9a3b82` 后验收本微任务。114 个源码/资产整文件移动、19 个空包入口及路径适配均由原微任务完成，Host 未代改源码或测试。
+
+固定审查还发现旧布局目标运行时的三处入口被硬编码为新包：升级探测的 client、回滚启动的 daemon、launcher 执行的 CLI。Host 拒绝并 continue 原微任务，以目标自身 `src/<package>` 定位入口；真实旧源码的一次性私有复现验证修复。首次新增回归依赖 Git 历史、外部 tar、额外 Python 和网络安装，Host 再次拒绝并 continue，改为标准库私有旧包夹具及当前 Python 的隔离子进程；保留同 4 条测试编号。Host 独立在清空环境与受限 PATH 下运行这 4 例，全部通过。
+
+Host 核对原 2,316 条 Python 编号全部保留且 Counter 无减少，恰新增 4 条旧布局入口回归，无重复；完整日志为 Python 2,320（skip 1，与基线同项）、Node 110。最终回合仅修测试夹具与记录，生产树与这次完整检查的固定树相等；Console 659、tsc、构建及 wheel/sdist/skill 的通过证据仍适用。Host 直接检查最新 wheel 的 310 个成员，顶层只有 `hey_my_buddy` 与 dist-info，没有顶层 `buddy/`。最终第零步完整检查仍由 0-D 重跑。
+
+Host 将 0-B1 必要脚本、日志、编号清单及最新 wheel/sdist 共 202 个文件另存到 `<evidence-worktree>/tmp/adr025-evidence-retained/0b1/` 并写 SHA-256 清单，再执行黑板验收。两份记录中对曾损坏 key 的引文是历史说明；恢复断言针对实际程序常量和构建内容。后续顺序为整合已批准的公共计划与核对记录、0-B2 测试目录搬动、0-C 私有安装升级、0-D 整步收尾；第零步尚未交给 Claude Code Host 验收。
