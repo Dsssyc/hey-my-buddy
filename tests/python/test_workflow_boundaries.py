@@ -1,5 +1,5 @@
 """Root Host decisions drain stable queues and follow owned proxy chains."""
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 from test_workflow import WorkflowTestCase
 from test_workflow_cancellation import private_environment
 

@@ -10,7 +10,7 @@ import unittest
 
 from support import BoardTestCase  # noqa: F401 - ensures the source tree is importable
 
-from buddy import scheduling
+from hey_my_buddy.blackboard.tasks import scheduling
 
 
 class ModelFamilyTests(unittest.TestCase):

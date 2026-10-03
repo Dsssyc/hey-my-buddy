@@ -15,14 +15,18 @@ import time
 import unittest
 from pathlib import Path
 
-from buddy import usage
-from buddy.adapters import claude as claude_module
-from buddy.adapters.base import ExecutionContext, ProcessHandle
-from buddy.adapters.claude import ClaudeAdapter
-from buddy.adapters.claude_protocol import QuotaRejected, TurnEvidence
-from buddy.adapters.zcode import ZcodeAdapter
-from buddy.adapters.zcode_protocol import (NativeError, ZcodeAttemptUsage, optional_native_call,
-                                           quota_native_code)
+from hey_my_buddy.protocol import usage
+from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
+from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected, TurnEvidence
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.harnesses.zcode.protocol import (
+    NativeError,
+    ZcodeAttemptUsage,
+    optional_native_call,
+    quota_native_code,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CLAUDE_NATIVE = json.loads((FIXTURES / "native-usage-claude.json").read_text())

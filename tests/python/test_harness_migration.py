@@ -5,7 +5,7 @@ import unittest
 
 from pathlib import Path
 SCHEMA = (Path(__file__).parent / "fixtures/schema-14.sql").read_text()
-from buddy.migrations import migrate_13_to_14, schema_version
+from hey_my_buddy.blackboard.store.migrations import migrate_13_to_14, schema_version
 from test_migrations import shape
 
 

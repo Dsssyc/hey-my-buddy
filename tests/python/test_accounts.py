@@ -6,12 +6,12 @@ import stat
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from buddy import accounts, catalog_store
-from buddy.db import canonical_json, utc_now
-from buddy.errors import BoardError
-from buddy.harness_health import read_health
-from buddy.native_observations import latest_quota, record_quota
-from buddy.private_dirs import account_root
+from hey_my_buddy.blackboard.catalog import accounts, catalog_store
+from hey_my_buddy.blackboard.store.db import canonical_json, utc_now
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.harness_health import read_health
+from hey_my_buddy.blackboard.evaluation.native_observations import latest_quota, record_quota
+from hey_my_buddy.private_dirs import account_root
 from test_workflow import WorkflowTestCase, NONCE, CONFIGURATION
 
 
@@ -37,8 +37,8 @@ class AccountServiceTests(WorkflowTestCase):
                    HOME=str(home), CODEX_HOME=str(home / 'codex'), DSH_HOME=str(home / 'dsh'),
                    BUDDY_DEV_SOURCE='1', PATH=str(cli) + os.pathsep + env.get('PATH', ''))
         self.enterContext(patch.dict(os.environ, env, clear=True))
-        self.enterContext(patch('buddy.harness_discovery.discover', side_effect=AssertionError('Native CLI forbidden')))
-        self.native_read = self.enterContext(patch('buddy.codex_account_probe.read', return_value=(None, None)))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.discovery.discover', side_effect=AssertionError('Native CLI forbidden')))
+        self.native_read = self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None)))
         self.catalog_fixture()
         self.executors['codex'] = SimpleNamespace(native_resume=True, validate_turn_provenance=lambda record: None)
 
@@ -87,10 +87,10 @@ class AccountServiceTests(WorkflowTestCase):
         self.assertEqual((switched['revision'], switched['credentialRevision']), (2, 0))
 
     def test_named_contract_and_cli_use_the_same_current_account_operations(self):
-        from buddy.contracts import BuddyControl, CONTRACT_VERSION
-        from buddy.cli import METHODS
-        from buddy.transport import METHOD_MAP
-        from buddy.cli_help import render
+        from hey_my_buddy.protocol.contracts import BuddyControl, CONTRACT_VERSION
+        from hey_my_buddy.cli.main import METHODS
+        from hey_my_buddy.protocol.transport import METHOD_MAP
+        from hey_my_buddy.cli.cli_help import render
         self.assertEqual(CONTRACT_VERSION, '0.28.0')
         for name in ('accounts', 'account-set'):
             operation = name.replace('-', '_')
@@ -205,13 +205,13 @@ class AccountServiceTests(WorkflowTestCase):
             accounts.secure_account_root(board.store.directory, 'dsh')
         self.assertEqual(refused.exception.code, 'PRIVATE_PATH_UNSAFE')
         link.unlink()
-        from buddy.backup import preflight, create
+        from hey_my_buddy.blackboard.store.backup import preflight, create
         self.assertNotIn('harnesses/dsh/accounts', json.dumps(preflight(board.store.directory)))
         created = create(board.store)
         self.assertNotIn('fixture-credential', json.dumps(created))
         backup_path = Path(created['path'])
         self.assertFalse(any(path.name == 'fixture-credential' for path in backup_path.rglob('*')))
-        from buddy import storage
+        from hey_my_buddy.blackboard.tasks import storage
         with patch.object(storage, 'process_inventory', return_value=([], [], True)):
             plan = storage.plan(board.store, {})
         protected = [entry for entry in plan['candidates'] if entry['path'] == str(root.parent)]
@@ -229,7 +229,7 @@ class AccountServiceTests(WorkflowTestCase):
         self.assertEqual(result['appliedAdapters'], [])
 
     def test_catalog_execution_uses_observation_account_before_source_switch(self):
-        from buddy.harness_runtime import selected
+        from hey_my_buddy.buddy.harnesses.runtime_selection import selected
         from support import FIXTURE_CATALOG
         board = self.board()
         begin = catalog_store.begin
@@ -244,7 +244,7 @@ class AccountServiceTests(WorkflowTestCase):
             self.assertEqual(kwargs['database'], board.store.db)
             return FIXTURE_CATALOG
 
-        with patch.object(catalog_store, 'begin', side_effect=switch_after_freeze), patch('buddy.catalog.discover', side_effect=discover):
+        with patch.object(catalog_store, 'begin', side_effect=switch_after_freeze), patch('hey_my_buddy.blackboard.catalog.catalog.discover', side_effect=discover):
             result = board.call('model_catalog_refresh', {'requestId': 'frozen-catalog-source'})
         self.assertEqual(result['staleAdapters'], ['dsh'])
         self.assertEqual(result['appliedAdapters'], [])
@@ -264,7 +264,7 @@ class AccountServiceTests(WorkflowTestCase):
     def test_exhausted_old_credentials_do_not_exclude_new_native_candidates(self):
         board = self.board()
         from support import enable_fixture_configuration
-        from buddy.decision import DecisionCoordinator
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
         enable_fixture_configuration(board.store, CONFIGURATION)
         with board.store.db.write() as db:
             record_quota(db, 'dsh', {'source': 'fixture', 'provider': CONFIGURATION['provider'],
@@ -280,7 +280,7 @@ class AccountServiceTests(WorkflowTestCase):
         board = self.board()
         self.ready(board, 'codex')
         health = board.service.harnesses
-        with patch('buddy.codex_account_probe.read', return_value=(None, None)) as read:
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None)) as read:
             health._codex_account_read(health.get('codex'))
             health._codex_account_read(health.get('codex'))
             self.assertEqual(read.call_count, 1)
@@ -297,7 +297,7 @@ class AccountServiceTests(WorkflowTestCase):
             return ({'kind': 'metered', 'source': 'fixture', 'observedAt': utc_now()},
                     {'source': 'fixture', 'observedAt': utc_now(), 'provider': 'openai', 'reachedType': 'insufficient_quota', 'windows': []})
         old = health.get('codex')['account']
-        with patch('buddy.codex_account_probe.read', side_effect=late):
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=late):
             health._codex_account_read(health.get('codex'))
         current = health.get('codex')
         self.assertFalse(current['available'])

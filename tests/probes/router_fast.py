@@ -15,11 +15,11 @@ from pathlib import Path
 import time
 import uuid
 
-from buddy import router, selection_policy
-from buddy.adapters.base import ExecutionContext
-from buddy.adapters.decision import DecisionAdapter
-from buddy.adapters.turn_io import private_json
-from buddy.db import canonical_json, sha256_text
+from hey_my_buddy.blackboard.routing import router, selection_policy
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.roles.turn_io import private_json
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
 
 def parser():
@@ -70,7 +70,7 @@ def run(args):
     with marker.open('x') as stream:
         os.chmod(marker, 0o600)
         stream.write(datetime.now(timezone.utc).isoformat())
-    from buddy.checks import SANITIZED_VARIABLES
+    from hey_my_buddy.cli.checks import SANITIZED_VARIABLES
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
     environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(root / 'state'),
                        BUDDY_RUNTIME_ROOT=str(root / 'runtime'))

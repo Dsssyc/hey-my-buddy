@@ -5,9 +5,9 @@ Only the native CLI is simulated. No installed harness or model is contacted.
 import json
 from pathlib import Path
 
-from buddy.adapters import adapter
-from buddy import schemas
-from buddy.adapters.claude_runner import _catalog
+from hey_my_buddy.buddy.harnesses.registry import adapter
+from hey_my_buddy.protocol import schemas
+from hey_my_buddy.buddy.harnesses.claude.runner import _catalog
 from support import wait_for
 from test_workflow_worker import GovernedWorkerTestCase
 
@@ -88,8 +88,8 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             self.assertEqual(set(result["quotaFailure"]), {"rateLimitType", "resetsAt"})
             # Exercise the actual shared evaluator with the persisted failure,
             # not a model's prose or a fabricated quota marker.
-            from buddy.evaluation import EvaluationStore
-            from buddy.store import BoardStore
+            from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+            from hey_my_buddy.blackboard.store.store import BoardStore
             evaluator = EvaluationStore(BoardStore(self.directory))
             counted, basis = evaluator._sample_basis({
                 "taskState": view["task"]["state"], "shutdownConfirmed": meta["shutdownConfirmed"],

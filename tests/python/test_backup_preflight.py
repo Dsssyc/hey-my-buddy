@@ -8,8 +8,10 @@ import sys
 from types import SimpleNamespace
 from unittest import mock
 
-from buddy import attempt_evidence, backup, private_dirs
-from buddy.errors import BoardError
+from hey_my_buddy.protocol import attempt_evidence
+from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy import private_dirs
+from hey_my_buddy.errors import BoardError
 from support import BoardTestCase, DELEGATE_ROOT, _child_environment
 
 
@@ -133,7 +135,7 @@ class BackupPreflightTests(BoardTestCase):
                     for base in (board.directory, runtime) for path in [base, *base.rglob('*')]}
         before = snapshot()
         environment = _child_environment(board.directory, {'BUDDY_RUNTIME_ROOT': str(runtime)})
-        result = subprocess.run([sys.executable, '-m', 'buddy.cli', 'backup-preflight', '{}'],
+        result = subprocess.run([sys.executable, '-m', 'hey_my_buddy.cli.main', 'backup-preflight', '{}'],
                                 cwd=DELEGATE_ROOT, env=environment, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(json.loads(result.stdout)['skipped']['count'], 1)
@@ -204,7 +206,7 @@ class BackupPreflightTests(BoardTestCase):
         for path in (leaf, parent / 'sentinel'):
             with self.subTest(path=path), \
                  mock.patch.object(Path, 'open', side_effect=AssertionError('External payload was opened')), \
-                 mock.patch('buddy.private_dirs.os.open', side_effect=AssertionError('External payload was opened')):
+                 mock.patch('hey_my_buddy.private_dirs.os.open', side_effect=AssertionError('External payload was opened')):
                 for action in (lambda: backup.digest(path),
                                lambda: backup._private_copy(path, self.directory / 'new-copy'),
                                lambda: backup._private_copy(source, path)):
@@ -232,7 +234,7 @@ class BackupPreflightTests(BoardTestCase):
                     return value
                 with mock.patch.object(Path, 'lstat', reparse), \
                      mock.patch.object(Path, 'open', side_effect=AssertionError('Reparse payload was opened')), \
-                     mock.patch('buddy.private_dirs.os.open', side_effect=AssertionError('Reparse payload was opened')):
+                     mock.patch('hey_my_buddy.private_dirs.os.open', side_effect=AssertionError('Reparse payload was opened')):
                     with self.assertRaises(BoardError) as caught:
                         backup._private_copy(source, destination)
                     self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')

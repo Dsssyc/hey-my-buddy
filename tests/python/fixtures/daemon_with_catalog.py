@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 import shutil
 
-from buddy.daemon import Daemon, main
-from buddy.harness_health import HARNESSES
+from hey_my_buddy.blackboard.service.daemon import Daemon, main
+from hey_my_buddy.blackboard.service.harness_health import HARNESSES
 
 original = Daemon.service
 

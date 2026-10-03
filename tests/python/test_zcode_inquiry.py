@@ -26,14 +26,21 @@ from pathlib import Path
 
 from test_zcode import ZcodeFixtureCase
 
-from buddy import activity as activity_module
-from buddy import inquiry as inquiry_module
-from buddy.private_dirs import context_root
-from buddy.adapters import turn_io
-from buddy.adapters.zcode_mcp import attention_requests, pending_inquiries, read_inquiry_entries, respond
-from buddy.adapters.zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES,
-                                            NativeError, verify_inquiry_receipt, verify_receipt, verify_tool_refusal)
-from buddy.adapters.zcode_runner import MAX_JOURNAL_BYTES, InquiryBridge
+from hey_my_buddy.protocol import activity as activity_module
+from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
+from hey_my_buddy.private_dirs import context_root
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.zcode.mcp import attention_requests, pending_inquiries, read_inquiry_entries, respond
+from hey_my_buddy.buddy.harnesses.zcode.protocol import (
+    COOPERATIVE_INQUIRY_NOTE,
+    MAX_ANSWER_BYTES,
+    MAX_INQUIRIES,
+    NativeError,
+    verify_inquiry_receipt,
+    verify_receipt,
+    verify_tool_refusal,
+)
+from hey_my_buddy.buddy.harnesses.zcode.runner import MAX_JOURNAL_BYTES, InquiryBridge
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -72,7 +79,7 @@ class BridgeHarness:
 
 
 def checkpoint_receipt(inquiries: list[dict], config: dict) -> str:
-    from buddy.adapters.zcode_protocol import sign_receipt
+    from hey_my_buddy.buddy.harnesses.zcode.protocol import sign_receipt
     receipt = {"version": 1, "kind": "inquiry-checkpoint", "identity": config["identity"],
                "inquiries": inquiries, "receiptId": "0" * 31 + "1"}
     receipt["signature"] = sign_receipt(receipt, config["key"])
@@ -80,7 +87,7 @@ def checkpoint_receipt(inquiries: list[dict], config: dict) -> str:
 
 
 def answer_receipt(inquiry_id: str, answer: str, config: dict, *, sha: str = "b" * 64) -> str:
-    from buddy.adapters.zcode_protocol import sign_receipt
+    from hey_my_buddy.buddy.harnesses.zcode.protocol import sign_receipt
     receipt = {"version": 1, "kind": "inquiry-answer", "identity": config["identity"],
                "inquiryId": inquiry_id, "questionSha256": sha, "answer": answer, "receiptId": "0" * 31 + "2"}
     receipt["signature"] = sign_receipt(receipt, config["key"])
@@ -373,14 +380,14 @@ class BridgeQueueTests(unittest.TestCase):
                                                       "method": "ask", "inquiryId": f"q-{failure}-probe",
                                                       "question": "durable?"})
                 elif failure == "raise":
-                    with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
                         asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
                         raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
                                                           "token": self.harness.credentials["token"],
                                                           "method": "ask", "inquiryId": f"q-{failure}-probe",
                                                           "question": "durable?"})
                 else:
-                    with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=flaky_write):
+                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=flaky_write):
                         asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
                         raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
                                                           "token": self.harness.credentials["token"],
@@ -420,7 +427,7 @@ class BridgeQueueTests(unittest.TestCase):
         delivery = verify_inquiry_receipt(checkpoint_receipt(
             [{"inquiryId": "q-flaky", "question": "delivered anyway?", "questionSha256": sha,
               "state": "queued", "askedAt": "t"}], config), config, "inquiry-checkpoint")
-        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
             bridge.deliver_inquiries(delivery, "root-ckpt")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "queued", "a failed append must not fabricate delivery")
         self.assertTrue(str(bridge.error).startswith("journal-unavailable"))
@@ -428,7 +435,7 @@ class BridgeQueueTests(unittest.TestCase):
         bridge.deliver_inquiries(delivery, "root-ckpt-2")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered")
         answer = verify_inquiry_receipt(answer_receipt("q-flaky", "still fine", config, sha=sha), config, "inquiry-answer")
-        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
             bridge.record_answer(answer, "root-answer")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered", "a failed append must not fabricate the answer")
         bridge.record_answer(answer, "root-answer-2")
@@ -436,7 +443,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(bridge.entries["q-flaky"]["answer"]["toolCallId"], "root-answer-2")
         # A discard that cannot be recorded refuses explicitly instead.
         self.ask("q-flaky-2", "another?")
-        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
             discarded = self.harness.request("discard", inquiryId="q-flaky-2")
         self.assertFalse(discarded["ok"])
         self.assertEqual(discarded["reason"], "bridge-refused")
@@ -448,7 +455,7 @@ class BridgeQueueTests(unittest.TestCase):
         # connection has no send_text or command surface for questions.
         self.assertFalse(hasattr(self.harness.bridge, "_inject"))
         self.assertFalse(hasattr(self.harness.bridge, "drain"))
-        from buddy.adapters.zcode_protocol import NativeConnection
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection
 
         self.assertFalse(hasattr(NativeConnection, "send_text"))
         self.assertNotIn("commandId", json.dumps(self.harness.records()))
@@ -473,7 +480,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(restarted.entries["q-merge"]["delivery"], committed["delivery"])
 
     def test_the_board_journal_importer_reads_the_real_records(self):
-        from buddy.adapters.zcode_protocol import sign_receipt
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import sign_receipt
 
         self.ask("q-import", "what next?")
         sha = self.harness.bridge.entries["q-import"]["questionSha256"]
@@ -554,7 +561,7 @@ class JournalBarrierTests(unittest.TestCase):
         fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("BUDDY_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        process = subprocess.Popen([sys.executable, "-m", "buddy.adapters.zcode_mcp", "--config", str(config_path)],
+        process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.zcode.mcp", "--config", str(config_path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=environment)
 
         def stop():
@@ -600,7 +607,7 @@ class JournalBarrierTests(unittest.TestCase):
         flaky_write.triggered = False
         record = {**bridge._identity_fields(), "inquiryId": "q-rollback", "state": "queued",
                   "question": "rolled back?", "questionSha256": "a" * 64, "askedAt": "t"}
-        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=flaky_write):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=flaky_write):
             self.assertFalse(bridge._journal(record))
         path = Path(harness.credentials["resultsPath"])
         self.assertEqual(path.read_bytes(), b"", "a failed append must leave no fragment behind")
@@ -943,7 +950,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
                     latest = current
                     break
             time.sleep(0.05)
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(10), "controller did not settle")
         self.assertEqual(self.adapter.collect(handle, context).status, "ok")
@@ -964,7 +971,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
         path = activity_module.sidecar_path(context.directory)
         self.assertTrue(path.is_file(), "the runner did not publish activity.json")
         payload = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
-        self.assertIsNotNone(payload, "the emitted sidecar must satisfy the real buddy.activity reader")
+        self.assertIsNotNone(payload, "the emitted sidecar must satisfy the real hey_my_buddy.protocol.activity reader")
         self.assertIn(payload["phase"], activity_module.PHASES)
         self.assertEqual(payload["nativeSessionId"], outcome.result["turn"]["sessionId"])
         self.assertGreaterEqual(payload["counts"]["toolCalls"], 0)
@@ -983,7 +990,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
         context = self.context(timeout=20)
         # The projection is what the controller publishes; the helper coalesces
         # same-phase receipts inside its window and always writes a phase change.
-        from buddy.adapters.zcode_protocol import ActivityProjection
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import ActivityProjection
 
         projection = ActivityProjection("sess")
         sidecar = activity_module.ActivitySidecar(context.directory, task_id="goal-1",
@@ -999,7 +1006,7 @@ class ActivitySidecarTests(ZcodeFixtureCase):
 class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
     def credentials(self, context, timeout=20):
         """Wait until the attempt mounted its bridge AND admitted the root turn."""
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         path = context_root(context, "zcode") / "inquiry.json"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -1018,7 +1025,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
     def native_log(self, context, name: str) -> str:
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         path = context_root(context, "zcode") / "native-logs" / name
         return path.read_text() if path.exists() else ""
 
@@ -1106,7 +1113,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": context.attempt_id,
                                             "generation": 1, "turnId": "turn-1"})
         self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
-        from buddy.adapters.zcode_runner import governed_prompt
+        from hey_my_buddy.buddy.harnesses.zcode.runner import governed_prompt
 
         prompt = governed_prompt("task", {"turn": 1}, "mcp__buddy_x__buddy_finish_turn",
                                  checkpoint_tool="mcp__buddy_x__buddy_checkpoint",

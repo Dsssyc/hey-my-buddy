@@ -2,8 +2,9 @@
 import unittest
 from unittest.mock import patch
 
-from buddy import router, schemas
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import schemas
+from hey_my_buddy.errors import BoardError
 from fixtures.router_tool_receipt import claim_tool_receipt
 from support import BoardTestCase, FakeClock
 from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
@@ -17,7 +18,7 @@ class RoutingModesTests(BoardTestCase):
         self.catalog_fixture()
         from fixtures import mock_readonly
         mock_readonly.install(self)
-        self.enterContext(patch('buddy.adapters.dsh.DshAdapter.no_tool_structured', True, create=True))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured', True, create=True))
 
     def configure(self, board, **settings):
         revision = board.call('console_snapshot', {})['tableRevision']
@@ -39,11 +40,11 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(settings['routerProfileIds'], [SECOND_PROFILE_ID])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
         self.assertEqual(settings['routingBudget'], 'brief')
-        from buddy.db import SCHEMA_VERSION
+        from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
     def test_pure_conversion_is_idempotent_and_retains_default_review_slot(self):
-        from buddy.router_settings import convert_legacy_router_settings
+        from hey_my_buddy.blackboard.routing.router_settings import convert_legacy_router_settings
         legacy = {'fastRouterProfileId': SECOND_PROFILE_ID, 'reviewRouterProfileId': PROFILE_ID,
                   'defaultRoutingMode': 'review', 'routingBudget': 'quick'}
         before = dict(legacy)
@@ -55,9 +56,9 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(converted.source_slots, (SECOND_PROFILE_ID, PROFILE_ID))
 
     def test_pure_conversion_keeps_missing_or_unavailable_default_slot(self):
-        from buddy.router_settings import convert_legacy_router_settings
+        from hey_my_buddy.blackboard.routing.router_settings import convert_legacy_router_settings
         for chosen in (None, 'unavailable-profile'):
-            with self.subTest(chosen=chosen), patch('buddy.router.profile_problem', side_effect=AssertionError('no eligibility reads')):
+            with self.subTest(chosen=chosen), patch('hey_my_buddy.blackboard.routing.router.profile_problem', side_effect=AssertionError('no eligibility reads')):
                 converted = convert_legacy_router_settings({'fastRouterProfileId': PROFILE_ID,
                     'reviewRouterProfileId': chosen, 'defaultRoutingMode': 'review'})
             self.assertEqual(converted.settings.router_profile_ids, (chosen, PROFILE_ID) if chosen else (PROFILE_ID,))
@@ -110,7 +111,7 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         result = board.call('selection_request', {'requestId': 'later-ineligible', 'task': 'choose'})
         board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
-        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'changed local resource',
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             claim = board.client().claim('router', 'mode-claim', 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
@@ -189,8 +190,8 @@ class RoutingModesTests(BoardTestCase):
                 self.assertEqual(decision['error'], code)
 
     def test_conversion_is_pure_and_does_not_migrate_board_or_schema(self):
-        from buddy.router_settings import convert_legacy_router_settings
-        from buddy.db import SCHEMA_VERSION
+        from hey_my_buddy.blackboard.routing.router_settings import convert_legacy_router_settings
+        from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         board = self.board()
         self.seed(board)
         with board.store.db.read() as connection:
@@ -198,7 +199,7 @@ class RoutingModesTests(BoardTestCase):
             revision = tuple(connection.execute('SELECT * FROM evaluation_state').fetchone())
         legacy = {'fastRouterProfileId': SECOND_PROFILE_ID, 'reviewRouterProfileId': PROFILE_ID,
                   'defaultRoutingMode': 'review', 'routingBudget': 'quick'}
-        with patch('buddy.router.configuration', side_effect=AssertionError('conversion must not read state')):
+        with patch('hey_my_buddy.blackboard.routing.router.configuration', side_effect=AssertionError('conversion must not read state')):
             settings = convert_legacy_router_settings(legacy).settings.as_dict()
         self.assertEqual(settings['routerProfileIds'], [PROFILE_ID, SECOND_PROFILE_ID])
         self.assertEqual(settings['routingBudget'], 'brief')

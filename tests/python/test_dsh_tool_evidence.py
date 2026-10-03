@@ -15,9 +15,9 @@ import shutil
 import tempfile
 import unittest
 
-from buddy.adapters.base import ExecutionContext, NoToolStructuredRequest
-from buddy.adapters.dsh import DshAdapter
-from buddy.tool_evidence import MAX_TOOL_EVENTS, PACKAGE_FIELDS, TOOLS_FORBIDDEN, judge_tool_evidence
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.protocol.tool_evidence import MAX_TOOL_EVENTS, PACKAGE_FIELDS, TOOLS_FORBIDDEN, judge_tool_evidence
 
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},

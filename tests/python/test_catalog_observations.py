@@ -1,6 +1,6 @@
 """Current native facts change without replacing user history or accepting late results."""
 from support import BoardTestCase
-from buddy import catalog_store
+from hey_my_buddy.blackboard.catalog import catalog_store
 
 
 def catalog(adapter='dsh', models=('alpha',), status='complete'):

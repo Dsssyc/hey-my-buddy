@@ -3,8 +3,8 @@ import json
 from unittest import mock
 from urllib.parse import urlsplit
 
-from buddy.console import Console
-from buddy.console_sessions import ENTRY_SECONDS
+from hey_my_buddy.console.server import Console
+from hey_my_buddy.console.console_sessions import ENTRY_SECONDS
 from test_console import Browser, ConsoleTestCase, PROFILE_ID, http_call
 
 
@@ -161,7 +161,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         board = self.board()
         _, browser = self.open_console(board)
         before = browser.bootstrap()
-        with mock.patch("buddy.launcher.write_private", side_effect=OSError("fixture disk error")):
+        with mock.patch("hey_my_buddy.install.launcher.write_private", side_effect=OSError("fixture disk error")):
             self.assertEqual(self.change(browser, True)[0], 500)
         after = browser.bootstrap()
         self.assertEqual(after["consoleAccess"], before["consoleAccess"])

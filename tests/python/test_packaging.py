@@ -52,7 +52,7 @@ class SingleEntrypointTests(unittest.TestCase):
         self.assertFalse((ROOT / "bin").exists())
         pyproject = (ROOT / "pyproject.toml").read_text()
         self.assertEqual(pyproject.count("[project.scripts]"), 1)
-        self.assertIn('hey-my-buddy = "buddy.package_install:main"', pyproject)
+        self.assertIn('hey-my-buddy = "hey_my_buddy.install.package_install:main"', pyproject)
         self.assertNotIn('\nbuddy =', pyproject)
 
     def test_the_only_agent_entrypoint_is_the_shared_skill_and_no_plugin_is_published(self):
@@ -62,7 +62,7 @@ class SingleEntrypointTests(unittest.TestCase):
             self.assertFalse((ROOT / retired).exists(), retired)
 
     def test_the_declared_runtime_manifest_is_current_and_complete(self):
-        from buddy import runtime
+        from hey_my_buddy.install import runtime
 
         declared = runtime.load_manifest(ROOT)
         self.assertEqual(set(declared["resources"]), REQUIRED_RESOURCES)
@@ -90,7 +90,7 @@ class CwdIndependentCliTests(unittest.TestCase):
         self.second_cwd.mkdir()
 
     def cleanup_private(self):
-        from buddy.checks import teardown_private_root
+        from hey_my_buddy.cli.checks import teardown_private_root
 
         # The last pool slots may still be starting when health returns. Keep
         # state until process observation AND lifetime locks prove every slot
@@ -141,7 +141,7 @@ class CheckHarnessTests(unittest.TestCase):
     """The check entrypoint points at this layout and never inherits a production pin."""
 
     def test_the_check_harness_sanitizes_inherited_runtime_and_worker_variables(self):
-        from buddy import checks
+        from hey_my_buddy.cli import checks
 
         inherited = {key: "/production" for key in checks.SANITIZED_VARIABLES}
         with patch.dict(os.environ, inherited, clear=False):
@@ -155,11 +155,11 @@ class CheckHarnessTests(unittest.TestCase):
 
     def test_the_check_harness_covers_the_python_dsh_and_node_suites(self):
         self.assertTrue((ROOT / "tests" / "python").is_dir())
-        self.assertTrue((ROOT / "src" / "buddy" / "checks.py").is_file())
+        self.assertTrue((ROOT / "src" / "hey_my_buddy" / "cli" / "checks.py").is_file())
         self.assertTrue(sorted((ROOT / "harnesses" / "dsh" / "tests").glob("*.test.mjs")))
 
     def test_unrelated_checks_cannot_inherit_a_real_claude_cli(self):
-        from buddy import checks
+        from hey_my_buddy.cli import checks
         with patch.dict(os.environ, {"BUDDY_CLAUDE_CLI": "/real-user-installation/claude"}):
             env = checks.test_environment(ROOT)
         self.assertNotEqual(env["BUDDY_CLAUDE_CLI"], "/real-user-installation/claude")
@@ -180,7 +180,7 @@ class SkillBuildTests(unittest.TestCase):
         shutil.rmtree(cls.base, ignore_errors=True)
 
     def test_layout_frontmatter_and_version_marker(self):
-        from buddy.contracts import CONTRACT_VERSION
+        from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
         self.assertEqual(sorted(path.name for path in self.skill.iterdir()),
                          ["SKILL.md", "package", "references", "scripts", "skill.json"])
         text = (self.skill / "SKILL.md").read_text()
@@ -202,17 +202,17 @@ class SkillBuildTests(unittest.TestCase):
                 self.assertTrue((document.parent / path).is_file(), f"{document.name}: {target}")
 
     def test_package_carries_runtime_assets_and_no_unsupported_content(self):
-        from buddy import runtime
+        from hey_my_buddy.install import runtime
         package = self.skill / "package"
         self.assertEqual(runtime.missing_resources(package), [])
         self.assertTrue((package / "LICENSE").is_file())
-        self.assertTrue((package / "src/buddy/build-info.json").is_file())
+        self.assertTrue((package / "src/hey_my_buddy/build-info.json").is_file())
         for path in self.skill.rglob("*"):
             parts = path.relative_to(self.skill).parts
             self.assertFalse({"tests", ".venv", "node_modules", "apps", "__pycache__"} & set(parts), path)
 
     def test_build_refuses_a_destination_not_named_buddy(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         with self.assertRaises(BoardError):
             load_build_skill().build(ROOT, self.base / "other")
 

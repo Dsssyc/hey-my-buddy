@@ -10,11 +10,11 @@ fi
 export BUDDY_SKILL_DIR
 case "${1:-}" in
   install|upgrade)
-    exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"
+    exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/hey_my_buddy/install/launcher.py" "$@"
     ;;
 esac
 if [ "${BUDDY_DEV_SOURCE:-}" = 1 ]; then
-  exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"
+  exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$BUDDY_PROJECT_DIR" python "$BUDDY_PROJECT_DIR/src/hey_my_buddy/install/launcher.py" "$@"
 fi
 if [ -z "${BUDDY_BOOTSTRAP_PYTHON:-}" ] && [ -f "$BUDDY_SKILL_DIR/.runtime-python" ]; then
   IFS= read -r BUDDY_BOOTSTRAP_PYTHON < "$BUDDY_SKILL_DIR/.runtime-python"
@@ -23,4 +23,4 @@ if ! command -v "${BUDDY_BOOTSTRAP_PYTHON:-python3}" >/dev/null 2>&1; then
   printf '%s\n' '{"contractVersion":"unknown","error":{"code":"ACTIVE_RUNTIME_UNAVAILABLE","message":"Run the fixed-version package install command to repair the runtime interpreter"}}'
   exit 1
 fi
-exec "${BUDDY_BOOTSTRAP_PYTHON:-python3}" "$BUDDY_PROJECT_DIR/src/buddy/launcher.py" "$@"
+exec "${BUDDY_BOOTSTRAP_PYTHON:-python3}" "$BUDDY_PROJECT_DIR/src/hey_my_buddy/install/launcher.py" "$@"

@@ -16,10 +16,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from buddy.adapters import turn_io
-from buddy.adapters.base import ExecutionContext, ProcessHandle
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.dsh import DshAdapter, native_usage_sidecar_path
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter, native_usage_sidecar_path
 
 FIXTURES = Path(__file__).parent / "fixtures"
 MOCK_CODEX = FIXTURES / "mock_codex.py"

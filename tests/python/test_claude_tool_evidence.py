@@ -14,12 +14,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from buddy import tool_evidence
-from buddy.adapters import claude as claude_module
-from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
-from buddy.adapters.claude import ClaudeAdapter
-from buddy.adapters.claude_tool_evidence import ReadOnlyToolEvidence
-from buddy.router import answer_schema
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+from hey_my_buddy.buddy.harnesses.claude.tool_evidence import ReadOnlyToolEvidence
+from hey_my_buddy.blackboard.routing.router import answer_schema
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
 BINDING = {"adapter": "claude", "taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
@@ -255,7 +255,7 @@ class RunnerReceiptTests(unittest.TestCase):
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
     def run_read_only(self, case, *, tool_calls=8):
-        from buddy.adapters.read_only import collect
+        from hey_my_buddy.buddy.roles.structured_call import collect
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
                                             {"timeoutSeconds": 20, "toolCalls": tool_calls})
         context = self.context(case)

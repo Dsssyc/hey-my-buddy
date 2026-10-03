@@ -13,8 +13,8 @@ from unittest import mock
 import urllib.request
 from urllib.parse import urlsplit
 
-from buddy.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENTRY_SECONDS
-from buddy.errors import BoardError
+from hey_my_buddy.console.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENTRY_SECONDS
+from hey_my_buddy.errors import BoardError
 from test_console import Browser, ConsoleTestCase, http_call
 from support import _child_environment
 
@@ -104,7 +104,7 @@ class ConsoleSessionTests(ConsoleTestCase):
 
     def test_sessions_persist_hashed_and_restart_reauthenticates_cookie(self):
         import os
-        from buddy.console import Console
+        from hey_my_buddy.console.server import Console
         board = self.board()
         _, browser = self.open_console(board)
         snapshot = browser.bootstrap()
@@ -123,7 +123,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(browser.command('evaluation_history', {}, csrf=restored['csrfToken'])[0], 200)
 
     def test_fixed_port_collision_is_explicit_and_nonloopback_is_refused(self):
-        from buddy.console import Console
+        from hey_my_buddy.console.server import Console
         board = self.board()
         _, browser = self.open_console(board)
         other = self.board()
@@ -166,7 +166,7 @@ class ConsoleSessionTests(ConsoleTestCase):
     def test_configured_port_survives_restart_without_environment_override(self):
         import os
         import socket
-        from buddy.console import Console
+        from hey_my_buddy.console.server import Console
         board=self.board()
         with socket.socket() as reserved:
             reserved.bind(('127.0.0.1',0))
@@ -253,7 +253,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 'argv': ['/bin/sleep', '30'], 'timeoutSeconds': 0,
             }))
             self.assertEqual(code, 0, task)
-            child = subprocess.Popen([sys.executable, '-m', 'buddy.cli', 'console',
+            child = subprocess.Popen([sys.executable, '-m', 'hey_my_buddy.cli.main', 'console',
                 '{"browser":false,"wait":true}'], env=_child_environment(self.directory),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, start_new_session=True)

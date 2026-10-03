@@ -13,8 +13,8 @@ import unittest
 
 from support import BoardTestCase, FakeClock
 
-from buddy import router, router_history
-from buddy.db import canonical_json
+from hey_my_buddy.blackboard.routing import router, router_history
+from hey_my_buddy.blackboard.store.db import canonical_json
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"

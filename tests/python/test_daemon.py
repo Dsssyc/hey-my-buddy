@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from support import BoardTestCase, PYTHON_ROOT
-from buddy.db import SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 
 #: Tests run inside a Buddy-managed process may inherit runtime, worker and agent
 #: credential variables. Every daemon construction here starts from a clean base so
@@ -42,7 +42,7 @@ def clean_buddy_env(**overrides):
 
 class DaemonCeilingTests(BoardTestCase):
     def make_daemon(self, name: str, **env):
-        from buddy.daemon import Daemon
+        from hey_my_buddy.blackboard.service.daemon import Daemon
 
         with clean_buddy_env(**env):
             return Daemon(self.directory / f"state-{name}")
@@ -74,7 +74,7 @@ class DaemonCeilingTests(BoardTestCase):
 
 class DaemonPoolLifecycleTests(BoardTestCase):
     def private_daemon(self, name):
-        from buddy.daemon import Daemon
+        from hey_my_buddy.blackboard.service.daemon import Daemon
 
         with clean_buddy_env():
             daemon = Daemon(self.directory / name)
@@ -82,7 +82,7 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         return daemon
 
     def test_stop_waits_for_initial_late_slots_and_keeps_every_stop_intent(self):
-        from buddy.daemon import SupervisorHandle
+        from hey_my_buddy.blackboard.service.daemon import SupervisorHandle
 
         daemon = self.private_daemon("late-start")
         blocked, release, stopping, stopped = (threading.Event() for _ in range(4))
@@ -124,7 +124,7 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         self.assertTrue(all(daemon.pool.handle(worker).stop_request.exists() for worker in daemon.pool.worker_ids))
 
     def test_signal_style_reentry_cannot_erase_late_slot_stop_intents(self):
-        from buddy.daemon import SupervisorHandle
+        from hey_my_buddy.blackboard.service.daemon import SupervisorHandle
 
         daemon = self.private_daemon("reentrant-start")
 
@@ -152,8 +152,8 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         self.assertTrue(daemon.pool.handle("local-8").stop_request.exists())
 
     def test_failed_late_start_drains_spawned_processes_but_preserves_reused_workers(self):
-        from buddy.daemon import SupervisorHandle
-        from buddy.errors import BoardError
+        from hey_my_buddy.blackboard.service.daemon import SupervisorHandle
+        from hey_my_buddy.errors import BoardError
 
         daemon = self.private_daemon("failed-start")
         reused = daemon.pool.handle("local")
@@ -215,8 +215,8 @@ class DaemonPoolLifecycleTests(BoardTestCase):
             self.assertTrue(handle.running(), "the other owner must retain its lock")
 
     def test_failed_start_drains_a_real_supervisor_through_its_private_instance_request(self):
-        from buddy.daemon import SupervisorHandle
-        from buddy.errors import BoardError
+        from hey_my_buddy.blackboard.service.daemon import SupervisorHandle
+        from hey_my_buddy.errors import BoardError
 
         daemon = self.private_daemon("real-failed-start")
         original_start = SupervisorHandle.start
@@ -229,7 +229,7 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         target = {"python": sys.executable, "pythonPath": str(PYTHON_ROOT), "stable": False}
         handle = daemon.pool.handle("local")
         try:
-            with patch("buddy.daemon.runtime.launch_target", return_value=target), patch.object(SupervisorHandle, "start", fail_second):
+            with patch("hey_my_buddy.blackboard.service.daemon.runtime.launch_target", return_value=target), patch.object(SupervisorHandle, "start", fail_second):
                 with self.assertRaises(BoardError) as raised:
                     daemon._start_pool()
             self.assertEqual(len(raised.exception.details["workers"]), 1)
@@ -243,8 +243,8 @@ class DaemonPoolLifecycleTests(BoardTestCase):
                 handle.process.wait(timeout=10)
 
     def test_private_start_abort_targets_only_the_matching_supervisor_instance(self):
-        from buddy.worker.supervisor import Supervisor
-        from buddy.worker.worker import Worker
+        from hey_my_buddy.buddy.runtime.supervisor import Supervisor
+        from hey_my_buddy.buddy.runtime.worker import Worker
 
         with patch.dict(os.environ, {"BUDDY_SUPERVISOR_START_ID": "1" * 32}):
             first = Supervisor("shared", self.directory)
@@ -260,8 +260,8 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         self.assertFalse(other_worker.stop_requested())
 
     def test_signal_style_reentry_followed_by_spawn_error_keeps_every_stop_intent(self):
-        from buddy.daemon import SupervisorHandle
-        from buddy.errors import BoardError
+        from hey_my_buddy.blackboard.service.daemon import SupervisorHandle
+        from hey_my_buddy.errors import BoardError
 
         daemon = self.private_daemon("failed-reentrant-start")
 
@@ -280,7 +280,7 @@ class DaemonPoolLifecycleTests(BoardTestCase):
 
 class DaemonHealthTests(BoardTestCase):
     def test_a_running_daemon_reports_the_shared_ceiling_and_pool(self):
-        from buddy.transport import _read_endpoint, _request
+        from hey_my_buddy.protocol.transport import _read_endpoint, _request
 
         with clean_buddy_env():
             with self.daemon(env={"BUDDY_MAX_CONCURRENT": "2", "BUDDY_WORKER_ID": "local"}) as process:

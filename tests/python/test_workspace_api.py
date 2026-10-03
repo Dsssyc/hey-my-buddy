@@ -15,11 +15,13 @@ from test_workflow_real import RealWorkspaceTestCase
 import test_scope_recovery as scope_recovery_tests
 import test_workspace_lifecycle as lifecycle_tests
 
-from buddy import cli, transport, workflow as workflow_module, workspace as workspace_module
-from buddy.console import CONSOLE_OPERATIONS
-from buddy.contracts import BuddyControl, CONTROL_NAME
-from buddy.errors import BoardError
-from buddy.service import CONTROL_OPERATIONS
+from hey_my_buddy.cli import main as cli
+from hey_my_buddy.protocol import transport
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace as workspace_module
+from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
 
 
 OPERATIONS = {

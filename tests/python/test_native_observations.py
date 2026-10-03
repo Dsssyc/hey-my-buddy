@@ -1,8 +1,8 @@
 """Quota warnings use retained native observations with explicit freshness and scope."""
 import json
 
-from buddy.harness_health import read_health
-from buddy.native_observations import quota_view, warnings
+from hey_my_buddy.blackboard.service.harness_health import read_health
+from hey_my_buddy.blackboard.evaluation.native_observations import quota_view, warnings
 from support import BoardTestCase
 from test_workflow import WorkflowTestCase, NONCE
 
@@ -11,8 +11,8 @@ class QuotaVisibilityTests(BoardTestCase):
     def test_optional_quota_read_is_bounded_and_restores_the_execution_deadline(self):
         import time
         from types import SimpleNamespace
-        from buddy.adapters.codex_runner import _observe_quota
-        from buddy.adapters.codex_protocol import CodexProtocolError
+        from hey_my_buddy.buddy.harnesses.codex.runner import _observe_quota
+        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
         connection = SimpleNamespace(deadline=time.monotonic() + 1000)
         previous = connection.deadline
         def read(_method, _params):
@@ -24,7 +24,7 @@ class QuotaVisibilityTests(BoardTestCase):
         self.assertEqual(connection.deadline, previous)
 
     def test_canonical_quota_keeps_its_native_scope_through_every_import(self):
-        from buddy.usage import normalize_quota
+        from hey_my_buddy.protocol.usage import normalize_quota
         raw = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
                "nativeAccountId": "fixture-account", "limitId": "fixture-limit", "planType": "fixture-plan",
                "windows": [{"name": "five-hour", "usedPercent": 94, "resetsAt": "2026-09-29T12:00:00Z"}]}
@@ -32,7 +32,7 @@ class QuotaVisibilityTests(BoardTestCase):
         self.assertEqual(normalize_quota(once), once)
 
     def test_missing_cache_cannot_be_relabelled_as_an_inclusive_input_total(self):
-        from buddy.usage import normalize_token_usage
+        from hey_my_buddy.protocol.usage import normalize_token_usage
         usage = normalize_token_usage({"inputTokens": 100, "outputTokens": 10,
                                        "inputBasis": "excludes-cached", "source": "native-fixture"})
         self.assertIsNone(usage["inputTokens"])
@@ -61,7 +61,7 @@ class QuotaVisibilityTests(BoardTestCase):
             self.assertEqual(read_health(db, "codex")["version"], "new")
 
     def test_a_recent_native_quota_failure_warns_without_a_fabricated_window(self):
-        from buddy.native_observations import persist
+        from hey_my_buddy.blackboard.evaluation.native_observations import persist
         board = self.board()
         attempt = {"attempt_id": "fixture", "adapter": "codex", "model_adapter": "codex", "model_provider": "openai"}
         with board.store.db.write() as db:
@@ -81,8 +81,8 @@ class NativeReceiptTests(WorkflowTestCase):
         from copy import deepcopy
         from types import SimpleNamespace
         from support import FakeClock
-        from buddy.adapters.codex_protocol import quota_candidate_from_response
-        from buddy.usage import normalize_token_usage
+        from hey_my_buddy.buddy.harnesses.codex.protocol import quota_candidate_from_response
+        from hey_my_buddy.protocol.usage import normalize_token_usage
         from test_usage import dsh_usage_record, codex_usage_record, CODEX_NATIVE
         clock = FakeClock("2026-09-29T10:00:00Z")
         board = self.board(clock=clock)
@@ -121,7 +121,7 @@ class NativeReceiptTests(WorkflowTestCase):
         self.assertEqual(next_run["quotaWarnings"][0]["code"], "HARNESS_QUOTA_NEAR_LIMIT")
         self.assertEqual(next_run["quotaWarnings"][0]["window"]["usedPercent"], 95)
         # A delayed old result cannot replace a more recent harness observation.
-        from buddy.native_observations import persist
+        from hey_my_buddy.blackboard.evaluation.native_observations import persist
         with board.store.db.write() as db:
             row = db.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)).fetchone()
             persist(db, row, {"quota": {**quota, "observedAt": "2026-09-29T09:00:00Z", "windows": []}})

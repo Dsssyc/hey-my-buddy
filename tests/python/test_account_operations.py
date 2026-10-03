@@ -9,10 +9,10 @@ import threading
 import time
 from unittest.mock import patch
 
-from buddy import accounts
-from buddy.db import canonical_json, utc_now
-from buddy.errors import BoardError
-from buddy.private_dirs import account_root
+from hey_my_buddy.blackboard.catalog import accounts
+from hey_my_buddy.blackboard.store.db import canonical_json, utc_now
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_dirs import account_root
 from test_workflow import WorkflowTestCase
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'mock_account_codex.py'
@@ -44,9 +44,9 @@ class AccountOperationTests(WorkflowTestCase):
         values.update(BUDDY_STATE_DIR=str(self.directory), BUDDY_RUNTIME_ROOT=str(runtime), BUDDY_DEV_SOURCE='1',
             BUDDY_CODEX_CLI=str(self.directory / 'no-real-codex'), BUDDY_CLAUDE_CLI=str(self.directory / 'no-real-claude'))
         self.enterContext(patch.dict(os.environ, values, clear=True))
-        self.enterContext(patch('buddy.harness_discovery.discover', side_effect=AssertionError('Real native CLI forbidden')))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.discovery.discover', side_effect=AssertionError('Real native CLI forbidden')))
         self.store = FakeStore()
-        self.enterContext(patch('buddy.account_keystore.open_store', return_value=self.store))
+        self.enterContext(patch('hey_my_buddy.blackboard.catalog.account_keystore.open_store', return_value=self.store))
         provider = accounts.WorkerAccountProvider(environment=lambda state, account, env, purpose: dict(env), capabilities=FLAGS)
         for adapter in ('codex', 'claude'):
             self.enterContext(accounts.using_provider(adapter, provider))
@@ -68,7 +68,7 @@ class AccountOperationTests(WorkflowTestCase):
             for table in ('meta', 'commands', 'events', 'attempts', 'workflow_artifacts'):
                 rows = [dict(row) for row in db.execute('SELECT * FROM ' + table)]
                 self.assertNotIn(secret, json.dumps(rows))
-        from buddy.backup import preflight
+        from hey_my_buddy.blackboard.store.backup import preflight
         self.assertNotIn(secret, json.dumps(preflight(board.store.directory)))
         self.assertNotIn('harnesses/codex/accounts', json.dumps(preflight(board.store.directory)))
 
@@ -113,7 +113,7 @@ class AccountOperationTests(WorkflowTestCase):
     def test_shared_login_mutation_and_wrong_revision_are_refused_before_native_spawn(self):
         board = self.selected()
         board.call('account_set', {'adapter': 'codex', 'source': 'native', 'expectedRevision': 1})
-        with patch('buddy.account_operations.CodexAccountProcess') as native:
+        with patch('hey_my_buddy.blackboard.catalog.account_operations.CodexAccountProcess') as native:
             with self.assertRaises(BoardError) as refused:
                 board.call('account_login', {'adapter': 'codex', 'mode': 'oauth', 'expectedRevision': 2})
             self.assertEqual(refused.exception.code, 'ACCOUNT_NATIVE_READ_ONLY')
@@ -124,7 +124,7 @@ class AccountOperationTests(WorkflowTestCase):
         secret = 'fixture-claude-key-systems-only'
         reply = board.call('account_login', {'adapter': 'claude', 'mode': 'api-key', 'expectedRevision': 1, 'apiKey': secret})
         self.assertEqual(reply['account']['accountType'], 'metered')
-        from buddy.harness_discovery import native_environment
+        from hey_my_buddy.buddy.harnesses.discovery import native_environment
         marker = {'adapter': 'claude', 'source': 'worker', 'revision': 1, 'credentialRevision': 1}
         env = {**os.environ, 'BUDDY_ACCOUNT_SELECTION': canonical_json(marker),
             'CLAUDE_CONFIG_DIR': str(account_root(board.store.directory, 'claude')), 'ANTHROPIC_API_KEY': 'inherited-key-must-drop'}
@@ -170,7 +170,7 @@ class AccountOperationTests(WorkflowTestCase):
         self.assertFalse(errors)
 
     def test_cli_refuses_key_in_arguments_and_delivers_only_stdin_key_to_rpc(self):
-        from buddy import cli
+        from hey_my_buddy.cli import main as cli
         secret = 'fixture-cli-private-key'
         params = {'adapter': 'codex', 'mode': 'api-key', 'expectedRevision': 1}
         with patch.object(cli, 'call_service', return_value={'account': {}}) as rpc, patch('sys.stdin', io.StringIO(secret)), contextlib.redirect_stdout(io.StringIO()):

@@ -9,10 +9,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from buddy import router, router_history, router_sequence
-from buddy.db import canonical_json
-from buddy.errors import BoardError
-from buddy.tool_evidence import ToolEventEvidence, normalize_tool_event
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from fixtures.router_tool_receipt import claim_tool_receipt
 from test_router_dispatch import RouterDispatchTestCase, A, B, C, T0, NONCE
 import test_router_dispatch as dispatch_fixtures
@@ -33,10 +33,10 @@ class FailoverTests(RouterDispatchTestCase):
             self.set_settings(mode="review")
             # Review failover tests provide their own private capability for
             # every dispatch; the real DSH review carrier is deferred.
-            self.enterContext(patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+            self.enterContext(patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "private fixture",
                 "systemSandbox": False, "sameAttemptContinuation": True}))
-        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "private fixture",
                 "systemSandbox": False, "sameAttemptContinuation": True}):
             request = (dispatch_fixtures.WorkflowWiringTests.route_goal(self) if governed else self.request())
@@ -71,7 +71,7 @@ class FailoverTests(RouterDispatchTestCase):
             return self.board_.store.decisions._row(db, decision_id)["decision_task_id"]
 
     def next_claim(self, request, suffix="next"):
-        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "private fixture",
                 "systemSandbox": False, "sameAttemptContinuation": True}):
             result = self.claim(suffix, task_id=self.current_task(request["decisionId"]))
@@ -237,7 +237,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_final_atomic_quota_claim_refusal_never_records_answer_or_switches(self):
         request, first = self.start()
-        with patch("buddy.quota_routing.claim", return_value=None):
+        with patch("hey_my_buddy.blackboard.routing.quota_routing.claim", return_value=None):
             result = self.report(first, self.answer(first))
         self.assertEqual(result["decision"]["outcome"], "changed")
         self.assertEqual(result["decision"]["status"], "needs-host")
@@ -331,7 +331,7 @@ class FailoverTests(RouterDispatchTestCase):
             db.execute("UPDATE evaluation_profiles SET model=? WHERE profile_id=?", ("b" * 80, B))
         request, first = self.start(three=True)
         bound = len(canonical_json(first["decisionInput"]).encode("utf-8"))
-        with patch("buddy.decision.MAX_DECISION_INPUT_BYTES", bound):
+        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
             result = self.report(first, self.failure(first))
         self.assertEqual(result["decision"]["status"], "needs-host")
         self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-input-too-large")
@@ -422,7 +422,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(len(self.tasks()), 1)
 
     def test_actual_quota_retry_claim_race_is_changed_at_final_adoption(self):
-        from buddy import quota_routing
+        from hey_my_buddy.blackboard.routing import quota_routing
         request, first = self.start()
         quota = {"provider": "fixture", "scope": {"limitId": "bravo"}, "balanceZero": True,
                  "observedAt": "2025-12-31T22:00:00.000Z", "source": "native"}
@@ -629,7 +629,7 @@ install_candidate_change("identity", candidate_sql("UPDATE evaluation_profiles S
 
 
 def quota_closed(self):
-    from buddy import quota_routing
+    from hey_my_buddy.blackboard.routing import quota_routing
     with self.board_.store.db.write() as db:
         quota_routing.record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "bravo"},
                             "balanceZero": True, "observedAt": T0, "source": "native"}, now=T0)

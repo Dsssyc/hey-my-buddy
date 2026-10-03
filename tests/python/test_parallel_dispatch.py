@@ -38,12 +38,12 @@ from unittest.mock import patch
 
 from support import BoardTestCase, wait_for
 
-from buddy import daemon as daemon_module
-from buddy.client import BoardClient
-from buddy.store import BoardStore
-from buddy.worker import supervisor as supervisor_module
-from buddy.worker import worker as worker_module
-from buddy.worker.worker import ReceiptSpool, Worker
+from hey_my_buddy.blackboard.service import daemon as daemon_module
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.buddy.runtime import supervisor as supervisor_module
+from hey_my_buddy.buddy.runtime import worker as worker_module
+from hey_my_buddy.buddy.runtime.worker import ReceiptSpool, Worker
 
 
 PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -944,7 +944,7 @@ class DaemonPoolTests(CapacityTestCase):
             'from fixtures.mock_readonly import install\n'
             '_patches = ExitStack()\n_fixture = SimpleNamespace(enterContext=_patches.enter_context)\n'
             'install(_fixture)\n'
-            'import os\nfrom buddy import runtime\n_original = runtime.launch_target\n'
+            'import os\nfrom hey_my_buddy.install import runtime\n_original = runtime.launch_target\n'
             'def _launch(*args, **kwargs):\n'
             '    target = _original(*args, **kwargs)\n'
             '    return {**target, "pythonPath": os.environ["PYTHONPATH"]}\n'

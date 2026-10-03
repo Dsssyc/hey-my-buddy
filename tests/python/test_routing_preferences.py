@@ -18,15 +18,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from buddy import schemas
-from buddy.adapters.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
-from buddy.adapters.decision import DecisionAdapter
-from buddy.adapters.dsh import DshAdapter
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.claude import ClaudeAdapter
-from buddy.adapters.zcode import ZcodeAdapter
-from buddy import router
-from buddy.errors import BoardError
+from hey_my_buddy.protocol import schemas
+from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.errors import BoardError
 from fixtures.router_tool_receipt import claim_tool_receipt
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
 from test_evaluation import family_key
@@ -163,7 +163,7 @@ class DecisionCapabilityTests(unittest.TestCase):
         native = Native()
         for implemented, ready, expected in ((False, True, False), (True, False, False), (True, True, True)):
             native.no_tool_structured, native.ready = implemented, ready
-            with mock.patch('buddy.adapters.adapters', return_value={'fixture': native}):
+            with mock.patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'fixture': native}):
                 self.assertEqual(DecisionAdapter().available()[0], expected)
 
     def test_unimplemented_review_is_ineligible_without_certificate_attributes(self):
@@ -206,11 +206,11 @@ class DecisionCapabilityTests(unittest.TestCase):
                                        runtime={}, environment={"BUDDY_STATE_DIR": str(Path(root) / "state"),
                                            "BUDDY_RUNTIME_ROOT": str(Path(root) / "runtime"), "BUDDY_DEV_SOURCE": "1"}, decision_input=document,
                                        turn={"input": {}}, agent_credential="must-not-pass")
-            with mock.patch("buddy.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
-                "buddy.adapters.adapter", return_value=Native()
+            with mock.patch("hey_my_buddy.buddy.roles.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
+                "hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Native()
             ):
                 handle = DecisionAdapter().start(context)
-            from buddy.private_dirs import context_root
+            from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
             prepare.assert_called_once_with(manifest, private_root)
             self.assertFalse(private_root.is_relative_to(directory))
@@ -229,8 +229,8 @@ class DecisionCapabilityTests(unittest.TestCase):
         context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
                                    decision_input={"profile": {"adapter": "codex"}})
-        with mock.patch("buddy.adapters.adapter", return_value=CodexAdapter()), mock.patch(
-            "buddy.router_input.prepare"
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
+            "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
                 mock.patch.object(CodexAdapter, "start_read_only_structured") as start:
             with self.assertRaises(BoardError) as raised:

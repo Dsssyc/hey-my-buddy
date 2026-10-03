@@ -12,8 +12,8 @@ import unittest
 from support import BoardTestCase
 from test_evaluation import EvaluationTestCase as EvaluationFixtures
 
-from buddy.db import SCHEMA_VERSION, Corruption
-from buddy.store import BoardStore
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, Corruption
+from hey_my_buddy.blackboard.store.store import BoardStore
 
 FAMILY_A = ("dsh", "deepseek-official", "deepseek-flash")
 FAMILY_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
@@ -26,7 +26,7 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
         super().setUp()
         from unittest.mock import patch
 
-        from buddy import workflow
+        from hey_my_buddy.blackboard.tasks import workflow
         from mock_workspace import MockWorkspace
 
         self.model_workspace = MockWorkspace(self.directory)

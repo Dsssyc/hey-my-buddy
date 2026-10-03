@@ -10,8 +10,8 @@ import json
 import unittest
 from pathlib import Path
 
-from buddy.adapters.zcode_protocol import NativeError
-from buddy.adapters.zcode_runner import NoToolEvidence
+from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
+from hey_my_buddy.buddy.harnesses.zcode.runner import NoToolEvidence
 
 from test_zcode_tool_evidence import FakeAppServerTests
 

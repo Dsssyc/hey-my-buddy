@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 from support import FakeClock
 from test_workflow import WorkflowTestCase
-from buddy import workflow as workflow_module, workspace
-from buddy.db import canonical_json
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
 
 
 class PreparationTests(WorkflowTestCase):

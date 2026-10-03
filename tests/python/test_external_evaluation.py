@@ -16,7 +16,7 @@ from unittest.mock import patch
 from support import FakeClock
 from test_evaluation import EvaluationTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, family_key
 
-from buddy import evaluation as evaluation_module
+from hey_my_buddy.blackboard.evaluation import evaluation as evaluation_module
 
 PROFILE_EFFORT_OFF = PROFILE
 PROFILE_EFFORT_HIGH = SECOND_PROFILE
@@ -71,7 +71,7 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
     def _ensure_model_workspace(self):
         """The deterministic workspace double every model fixture in this class shares."""
         from unittest.mock import patch as _patch
-        from buddy import workflow
+        from hey_my_buddy.blackboard.tasks import workflow
         from mock_workspace import MockWorkspace
 
         if not hasattr(self, "model_workspace"):
@@ -92,7 +92,7 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
         error: str | None = None,
     ) -> dict:
         """Claim, execute and review exactly one turn of an existing governed run."""
-        from buddy.db import sha256_text
+        from hey_my_buddy.blackboard.store.db import sha256_text
 
         workspace = self._ensure_model_workspace()
         client = board.client()
@@ -798,10 +798,10 @@ class ReviewLedgerPlanTests(ExternalEvaluationTestCase):
 
 class EvaluationWiringTests(ExternalEvaluationTestCase):
     def test_named_operations_are_wired_and_the_console_exposes_only_the_read(self):
-        from buddy.cli import METHODS
-        from buddy.console import CONSOLE_OPERATIONS
-        from buddy.service import CONTROL_OPERATIONS
-        from buddy.transport import METHOD_MAP
+        from hey_my_buddy.cli.main import METHODS
+        from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+        from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
+        from hey_my_buddy.protocol.transport import METHOD_MAP
 
         for operation in ("evaluation_prepare", "evaluation_history"):
             self.assertIn(operation, CONTROL_OPERATIONS)

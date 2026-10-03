@@ -1,6 +1,6 @@
 """Human settings patches and upgrade-required reads on private boards."""
 from unittest.mock import patch
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 PROFILE = 'dsh:deepseek-official:deepseek-flash:off'
@@ -46,12 +46,12 @@ class SingleRouterConfigurationTests(BoardTestCase):
 
     def test_mode_patch_preserves_temporarily_ineligible_router_and_reports_qualification(self):
         self.configure({'routerProfileIds': [PROFILE]}, enable=True)
-        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-tools-unrestricted',
                 'reason': 'fixture lost its restriction', 'systemSandbox': False,
                 'sameAttemptContinuation': False}):
             self.configure({'defaultRoutingMode': 'review'})
-            from buddy import router
+            from hey_my_buddy.blackboard.routing import router
             with self.board_.store.db.read() as db:
                 resolution = router.current_router(db)
             self.assertIsNone(resolution.profile)

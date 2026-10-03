@@ -1,8 +1,8 @@
 """Host boundary facts and existing CLI templates without dispatching work."""
 import unittest
 
-from buddy.errors import BoardError
-from buddy.router_boundary import build_boundary
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 
 CANDIDATE = {"profileId": "dsh:fixture:model:max", "adapter": "dsh", "provider": "fixture",
              "model": "model", "effort": "max", "contextWindow": 64000}
@@ -41,7 +41,7 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertNotIn("notBefore", reroute["params"])
         # Validate the public parameter vocabulary, without a control-file read
         # or any service/model call. Required input/reason are in the templates.
-        from buddy.cli_help import method_help
+        from hey_my_buddy.cli.cli_help import method_help
         help_ = method_help("continue")
         self.assertTrue(help_)
         fields = {item.name for item in help_.parameters}
@@ -67,7 +67,7 @@ class RouterBoundaryTests(unittest.TestCase):
         result = self.build(run_id="root", revision=42, target_run_id="nested-child", helper_policy="keep")
         params = [result["commands"]["continue"]["choices"][0]["params"],
                   result["commands"]["reroute"]["params"]]
-        from buddy.cli_help import method_help
+        from hey_my_buddy.cli.cli_help import method_help
         fields = {item.name for item in method_help("continue").parameters}
         for template in params:
             self.assertEqual(template["runId"], "root")

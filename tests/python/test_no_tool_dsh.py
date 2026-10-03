@@ -9,9 +9,9 @@ import tempfile
 import time
 import unittest
 
-from buddy.adapters.base import ExecutionContext, NoToolStructuredRequest
-from buddy.adapters.dsh import DshAdapter
-from buddy.adapters.dsh_runner import composed_safe
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.dsh.runner import composed_safe
 
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},

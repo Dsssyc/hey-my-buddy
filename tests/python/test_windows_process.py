@@ -10,10 +10,13 @@ import time
 import unittest
 from unittest import mock
 
-from buddy.adapters.base import ProcessHandle
-from buddy.adapters.codex_protocol import CodexProtocolError, Connection
-from buddy.adapters.windows_process import (CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED,
-                                            owned_popen)
+from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, Connection
+from hey_my_buddy.buddy.runtime.windows_process import (
+    CREATE_NEW_PROCESS_GROUP,
+    CREATE_SUSPENDED,
+    owned_popen,
+)
 
 
 class FakeProcess:
@@ -79,7 +82,7 @@ class FakeAPI:
 
 class WindowsProcessTests(unittest.TestCase):
     def launch(self, api, process):
-        with mock.patch("buddy.adapters.windows_process.subprocess.Popen", return_value=process) as popen:
+        with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process) as popen:
             child = owned_popen(["child"], windows_api=api, start_new_session=True)
         flags = popen.call_args.kwargs["creationflags"]
         self.assertEqual(flags & (CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP),
@@ -99,7 +102,7 @@ class WindowsProcessTests(unittest.TestCase):
         process = FakeProcess()
         api = FakeAPI(process)
         api.fail_at = "assign"
-        with mock.patch("buddy.adapters.windows_process.subprocess.Popen", return_value=process):
+        with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process):
             with self.assertRaises(OSError):
                 owned_popen(["child"], windows_api=api)
         self.assertEqual(process.kills, 1)
@@ -107,9 +110,9 @@ class WindowsProcessTests(unittest.TestCase):
         self.assertEqual(api.events[-1], ("close", 77))
 
     def test_missing_windows_api_fails_before_spawn(self):
-        with mock.patch("buddy.adapters.windows_process.WindowsAPI", side_effect=OSError("unavailable")), \
-             mock.patch("buddy.adapters.windows_process.subprocess.Popen") as popen, \
-             mock.patch("buddy.adapters.windows_process.os.name", "nt"):
+        with mock.patch("hey_my_buddy.buddy.runtime.windows_process.WindowsAPI", side_effect=OSError("unavailable")), \
+             mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen") as popen, \
+             mock.patch("hey_my_buddy.buddy.runtime.windows_process.os.name", "nt"):
             with self.assertRaises(OSError):
                 owned_popen(["child"])
         popen.assert_not_called()
@@ -118,7 +121,7 @@ class WindowsProcessTests(unittest.TestCase):
         process = FakeProcess()
         api = FakeAPI(process)
         api.fail_at = "resume"
-        with mock.patch("buddy.adapters.windows_process.subprocess.Popen", return_value=process):
+        with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process):
             with self.assertRaises(OSError):
                 owned_popen(["child"], windows_api=api)
         self.assertLess(api.events.index(("assign", 77, 42)), api.events.index(("resume", 42)))
@@ -145,7 +148,7 @@ class WindowsProcessTests(unittest.TestCase):
         child = self.launch(api, process)
         handle = ProcessHandle(child, own_group=True, log_paths={})
         with mock.patch.object(signal, "CTRL_BREAK_EVENT", 1, create=True), \
-             mock.patch("buddy.adapters.base.os.killpg", side_effect=AssertionError("PID signaling")):
+             mock.patch("hey_my_buddy.buddy.harnesses.base.os.killpg", side_effect=AssertionError("PID signaling")):
             handle.terminate(grace_seconds=0)
         self.assertEqual(process.signals, [1])
         self.assertIn(("terminate", 77), api.events)
@@ -162,7 +165,9 @@ class WindowsProcessTests(unittest.TestCase):
 
 class WindowsPipeTests(unittest.TestCase):
     def test_full_pipe_honors_deadline_and_cancel_without_windows_select(self):
-        from buddy.adapters import codex_protocol, claude_protocol, zcode_protocol
+        from hey_my_buddy.buddy.harnesses.codex import protocol as codex_protocol
+        from hey_my_buddy.buddy.harnesses.claude import protocol as claude_protocol
+        from hey_my_buddy.buddy.harnesses.zcode import protocol as zcode_protocol
         # CPython >=3.12 supports nonblocking Windows pipes. Exercise the same
         # branch with real nonblocking pipes; it must never use socket select.
         for module, error_type in ((codex_protocol, codex_protocol.CodexProtocolError),

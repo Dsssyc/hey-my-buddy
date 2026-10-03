@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from buddy import usage
+from hey_my_buddy.protocol import usage
 
 FIXTURES = Path(__file__).parent / "fixtures"
 DSH_NATIVE = json.loads((FIXTURES / "native-usage-dsh.json").read_text())

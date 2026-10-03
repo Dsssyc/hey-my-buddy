@@ -16,8 +16,8 @@ from pathlib import Path
 
 from test_zcode import ZcodeFixtureCase
 
-from buddy import inquiry as inquiry_module
-from buddy.private_dirs import context_root
+from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
+from hey_my_buddy.private_dirs import context_root
 
 
 class ZcodeCheckpointFlowTests(ZcodeFixtureCase):

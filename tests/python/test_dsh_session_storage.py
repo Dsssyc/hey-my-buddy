@@ -35,10 +35,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from buddy.adapters import turn_io
-from buddy.adapters.base import ExecutionContext, ProcessHandle
-from buddy.adapters.dsh import DshAdapter
-from buddy.schemas import normalize_spec
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.protocol.schemas import normalize_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "harnesses/dsh/scripts/run.mjs"
@@ -74,7 +74,7 @@ STUB = textwrap.dedent(
 
 class DshWorkspaceDefaultTests(unittest.TestCase):
     def test_the_removed_workspace_switch_is_rejected_on_submission(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         with tempfile.TemporaryDirectory(prefix="buddy-dsh-spec-") as root:
             common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
             # Every DSH run is execution-private now: the grouping switch is an

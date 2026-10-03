@@ -9,14 +9,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from buddy import launcher, runtime
-from buddy.errors import BoardError
+from hey_my_buddy.install import launcher, runtime
+from hey_my_buddy.errors import BoardError
 
 
 class LauncherTests(unittest.TestCase):
     def test_installed_launcher_uses_its_stable_hint_before_system_python(self):
         import shutil
-        from buddy.skill_install import write_runtime_hint
+        from hey_my_buddy.install.skill_install import write_runtime_hint
         source = Path(__file__).resolve().parents[2] / 'skills/buddy/scripts/buddy'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -53,6 +53,7 @@ class LauncherTests(unittest.TestCase):
             python.parent.mkdir(parents=True)
             python.write_text('#!/bin/sh\nprintf \'{"used":"active"}\\n\'\n')
             python.chmod(0o700)
+            (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
             (target / 'READY.json').write_text(json.dumps({'format': 1, 'state': 'READY', 'contentId': target.name}))
             launcher.write_active_runtime(state, target)
             bootstrap = base / 'bootstrap'
@@ -71,13 +72,14 @@ class LauncherTests(unittest.TestCase):
             state = Path(temporary)
             target = state / 'runtime' / ('a' * 32)
             python = target / 'venv/bin/python'
+            (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
             with mock.patch.dict(os.environ, {'BUDDY_STATE_DIR': str(state)}, clear=True), \
-                    mock.patch('buddy.launcher.selected_runtime', return_value=target), \
-                    mock.patch('buddy.launcher.os.execve', side_effect=SystemExit(0)) as execute:
+                    mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=target), \
+                    mock.patch('hey_my_buddy.install.launcher.os.execve', side_effect=SystemExit(0)) as execute:
                 with self.assertRaises(SystemExit):
                     launcher.main(['ping'])
             self.assertEqual(execute.call_args.args[0], str(python))
-            self.assertEqual(execute.call_args.args[1], [str(python), '-P', '-m', 'buddy.cli', 'ping'])
+            self.assertEqual(execute.call_args.args[1], [str(python), '-P', '-m', 'hey_my_buddy.cli.main', 'ping'])
 
     def test_host_scrubs_internal_identity_and_endpoints_but_worker_keeps_credential(self):
         inherited = {'BUDDY_STATE_DIR': '/private/state', 'BUDDY_RUNTIME_ROOT': '/private/runtime',

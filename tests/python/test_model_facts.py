@@ -16,8 +16,8 @@ from support import BoardTestCase, FIXTURE_CATALOG, FakeClock
 
 from test_evaluation import EvaluationTestCase
 
-from buddy import model_facts
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.evaluation import model_facts
+from hey_my_buddy.errors import BoardError
 
 
 #: A models.dev-shaped fixture payload with the real public field names (``cost``,

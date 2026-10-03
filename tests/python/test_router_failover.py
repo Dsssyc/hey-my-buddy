@@ -1,8 +1,8 @@
 """ADR-021 switch policy; no model, service, state or runtime calls."""
 import unittest
 
-from buddy.errors import BoardError
-from buddy.router_failover import classify_outcome
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing.router_failover import classify_outcome
 
 
 class RouterFailoverTests(unittest.TestCase):

@@ -3,7 +3,7 @@
 The observer runs inside the installed dsh process, so its contract is tested by
 driving the real ``harnesses/dsh/plugins/activity.mjs`` module with the discovered
 native event shapes and then reading the emitted file with the real
-``buddy.activity`` reader. The runner's private ``--activity-file`` boundary is
+``hey_my_buddy.protocol.activity`` reader. The runner's private ``--activity-file`` boundary is
 checked without spawning anything.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from buddy import activity as activity_module
+from hey_my_buddy.protocol import activity as activity_module
 
 ROOT = Path(__file__).resolve().parents[2]
 PLUGIN = ROOT / "harnesses/dsh/plugins/activity.mjs"

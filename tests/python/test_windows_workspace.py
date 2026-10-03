@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from buddy import windows_paths, workspace
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import windows_paths, workspace
+from hey_my_buddy.errors import BoardError
 
 
 class FakeHandle:

@@ -4,8 +4,8 @@ import os
 import shutil
 from unittest import mock
 
-from buddy import backup
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 

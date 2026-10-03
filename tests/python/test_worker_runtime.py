@@ -13,9 +13,10 @@ from unittest.mock import patch
 
 from support import stop_private_workers, wait_for
 from test_packaging import ROOT, load_build_skill
-from buddy import cli, runtime
-from buddy.client import BoardClient
-from buddy.transport import ServiceError
+from hey_my_buddy.cli import main as cli
+from hey_my_buddy.install import runtime
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol.transport import ServiceError
 
 
 class WorkerLaunchEnvironmentTests(unittest.TestCase):
@@ -170,7 +171,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
             "BUDDY_PYTHON": str(self.stage / "replaceable-python"),
         })
         self.assertEqual(json.loads(local_status.read_text())["supervisorPid"], original_local_pid)
-        probe = "import pathlib,time,json,os; gate=pathlib.Path(" + repr(str(self.work / "release-extra")) + "); end=time.monotonic()+35\nwhile not gate.exists() and time.monotonic()<end: time.sleep(0.05)\nfrom buddy import runtime\nr=runtime.resolve_runtime(); print(json.dumps({k:r[k] for k in ('identity','stable','actual','leaks','resourcesMissing')} | {'bridgePython':os.environ.get('BUDDY_PYTHON'),'virtualEnv':os.environ.get('VIRTUAL_ENV'),'uvEnvironment':os.environ.get('UV_PROJECT_ENVIRONMENT')}))"
+        probe = "import pathlib,time,json,os; gate=pathlib.Path(" + repr(str(self.work / "release-extra")) + "); end=time.monotonic()+35\nwhile not gate.exists() and time.monotonic()<end: time.sleep(0.05)\nfrom hey_my_buddy.install import runtime\nr=runtime.resolve_runtime(); print(json.dumps({k:r[k] for k in ('identity','stable','actual','leaks','resourcesMissing')} | {'bridgePython':os.environ.get('BUDDY_PYTHON'),'virtualEnv':os.environ.get('VIRTUAL_ENV'),'uvEnvironment':os.environ.get('UV_PROJECT_ENVIRONMENT')}))"
         submitted = self.staged_cli("execution-submit", {"requestId": "probe-extra", "task": "report only local runtime paths", "cwd": str(self.extra_work),
                                               "adapter": "command", "argv": ["python", "-c", probe], "timeoutSeconds": 60})
         # `local` is busy and the spare pool slots are lock-held by this test, so the

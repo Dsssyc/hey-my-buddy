@@ -4,11 +4,11 @@ from unittest.mock import patch
 
 from support import BoardTestCase
 
-from buddy.client import BoardClient
-from buddy.contracts import CONTRACT_VERSION
-from buddy.db import SCHEMA_VERSION
-from buddy.errors import BoardError
-from buddy.service import call_operation
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.service import call_operation
 
 
 class LivenessTests(BoardTestCase):
@@ -16,7 +16,7 @@ class LivenessTests(BoardTestCase):
         board = self.board()
         board.control.update(service_id="fixture-service", contract_version=CONTRACT_VERSION)
         with patch.object(board.store.db, "read", side_effect=AssertionError("storage scan")), \
-                patch("buddy.service.runtime.resolve_runtime", side_effect=AssertionError("runtime inspection")):
+                patch("hey_my_buddy.blackboard.service.service.runtime.resolve_runtime", side_effect=AssertionError("runtime inspection")):
             result = board.call("ping", {})
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["serviceId"], "fixture-service")
@@ -32,8 +32,8 @@ class LivenessTests(BoardTestCase):
             return call_operation(board.service, operation, params)
 
         client = BoardClient(board.directory, autostart=False)
-        with patch("buddy.transport._read_endpoint", return_value={"address": "private-fixture"}), \
-                patch("buddy.transport._request", side_effect=request), \
+        with patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"address": "private-fixture"}), \
+                patch("hey_my_buddy.protocol.transport._request", side_effect=request), \
                 patch.object(board.store, "integrity", wraps=board.store.integrity) as integrity:
             for _ in range(3):
                 client.call("worker_list")

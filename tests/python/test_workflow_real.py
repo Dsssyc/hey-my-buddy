@@ -1,6 +1,6 @@
 """Real workspace module + real DSH adapter, end to end over actual Git.
 
-These tests exercise the merged ``buddy.workspace`` implementation and the real
+These tests exercise the merged ``hey_my_buddy.blackboard.tasks.workspace`` implementation and the real
 ``DshAdapter`` turn staging/import/sealing logic. Only the model process is absent:
 Git, manifests, the turn input file and the shutdown gate are real.
 """
@@ -16,10 +16,10 @@ from unittest.mock import patch
 
 from support import BoardTestCase
 
-from buddy import workspace
-from buddy.adapters.base import ExecutionContext, ProcessHandle
-from buddy.adapters.dsh import DshAdapter
-from buddy.db import canonical_json, sha256_text
+from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
 CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 

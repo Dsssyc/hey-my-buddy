@@ -4,20 +4,20 @@ import json
 import unittest
 from unittest.mock import patch
 
-from buddy.adapters.base import Adapter
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.claude import ClaudeAdapter
-from buddy.adapters.dsh import DshAdapter
-from buddy.adapters.zcode import ZcodeAdapter
-from buddy.harness_health import read_health
+from hey_my_buddy.buddy.harnesses.base import Adapter
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.blackboard.service.harness_health import read_health
 from support import BoardTestCase
 
 
 class LocalEligibilityTests(unittest.TestCase):
     def test_native_sandbox_mechanisms_do_not_require_a_version_certificate(self):
-        self.assertIsNone(importlib.util.find_spec('buddy.harness_review'),
+        self.assertIsNone(importlib.util.find_spec('hey_my_buddy.harness_review'),
                           "the retired certificate store must not ship with the package")
-        with patch('buddy.adapters.base.sys.platform', 'darwin'), \
+        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), \
              patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             for item in (CodexAdapter(), ClaudeAdapter()):
@@ -43,16 +43,16 @@ class LocalEligibilityTests(unittest.TestCase):
         class Declared(Adapter):
             read_only_structured = True
             system_sandbox_platforms = ('darwin',)
-        with patch('buddy.adapters.base.sys.platform', 'darwin'):
+        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'):
             self.assertFalse(Declared().local_read_only_check()['eligible'])
 
     def test_native_sandbox_platform_and_missing_resource_are_separate_facts(self):
-        with patch('buddy.adapters.base.sys.platform', 'win32'):
+        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'win32'):
             result = ClaudeAdapter().local_read_only_check()
             self.assertFalse(result['eligible'])
             self.assertFalse(result['systemSandbox'])
             self.assertEqual(result['reasonCode'], 'readonly-platform-unsupported')
-        with patch('buddy.adapters.base.sys.platform', 'darwin'), patch('buddy.adapters.base.Path.is_file', return_value=False):
+        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), patch('hey_my_buddy.buddy.harnesses.base.Path.is_file', return_value=False):
             self.assertEqual(CodexAdapter().local_read_only_check()['reasonCode'], 'readonly-resource-missing')
 
     def test_non_sandbox_mechanism_cannot_allow_commands(self):
@@ -87,7 +87,7 @@ class HealthEligibilityTests(BoardTestCase):
             db.execute("INSERT INTO harness_health(adapter,revision,status,record_json) VALUES('codex',1,'ready',?) "
                        "ON CONFLICT(adapter) DO UPDATE SET revision=excluded.revision,status=excluded.status,record_json=excluded.record_json",
                        (json.dumps({'version': 'new-version', 'reviewVerification': {'verified': False}}),))
-        with patch('buddy.adapters.base.sys.platform', 'darwin'), board.store.db.read() as db:
+        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), board.store.db.read() as db:
             before = db.execute('SELECT record_json FROM harness_health WHERE adapter=?', ('codex',)).fetchone()[0]
             result = read_health(db, 'codex')
             self.assertTrue(result['readOnlyStructured']['eligible'])

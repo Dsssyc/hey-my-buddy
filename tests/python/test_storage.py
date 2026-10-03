@@ -6,8 +6,9 @@ from pathlib import Path
 import stat
 from types import SimpleNamespace
 from unittest import mock
-from buddy.errors import BoardError
-from buddy import private_dirs, storage
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy import private_dirs
+from hey_my_buddy.blackboard.tasks import storage
 from support import BoardTestCase
 
 class StorageTests(BoardTestCase):
@@ -19,9 +20,9 @@ class StorageTests(BoardTestCase):
         (candidate / 'READY.json').write_text('{}')
         (candidate / 'payload').write_text('runtime payload')
         (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'current', 'previous': 'previous'}))
-        patches = (mock.patch('buddy.storage.process_inventory', return_value=([], [], True)),
-                   mock.patch('buddy.storage.runtime_usage', return_value=[]),
-                   mock.patch('buddy.storage.is_ready', return_value=True))
+        patches = (mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)),
+                   mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', return_value=[]),
+                   mock.patch('hey_my_buddy.blackboard.tasks.storage.is_ready', return_value=True))
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
@@ -38,11 +39,11 @@ class StorageTests(BoardTestCase):
         (previous / 'READY.json').write_text('{}')
         (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'test-current', 'previous': 'test-previous'}))
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(shared)}), \
-             mock.patch('buddy.storage.DEFAULT_RUNTIME_ROOT', shared), \
-             mock.patch('buddy.home.default_state_dir', return_value=self.directory / 'daily-state'), \
-             mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), \
-             mock.patch('buddy.storage.runtime_usage', return_value=[]), \
-             mock.patch('buddy.storage.is_ready', return_value=True):
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.DEFAULT_RUNTIME_ROOT', shared), \
+             mock.patch('hey_my_buddy.home.default_state_dir', return_value=self.directory / 'daily-state'), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', return_value=[]), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.is_ready', return_value=True):
             result = storage.prune_old_runtimes(board.store)
         self.assertTrue(previous.is_dir())
         self.assertEqual(result['removedBytes'], 0)
@@ -58,7 +59,7 @@ class StorageTests(BoardTestCase):
         native = board.directory / 'harnesses/zcode/unknown'
         native.mkdir(parents=True)
         (native / 'sessions.sqlite').write_bytes(b'protected')
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             native_row = next(r for r in planned['candidates'] if r['category'] == 'zcode')
             self.assertFalse(native_row['eligible'])
@@ -71,7 +72,7 @@ class StorageTests(BoardTestCase):
 
     def test_confirmation_expiry_and_command_binding(self):
         board = self.board()
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             first = board.call('storage_plan', {})
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', {'planId':first['planId'], 'commandId':'x'})
@@ -98,7 +99,7 @@ class StorageTests(BoardTestCase):
                 'runtimeRoot': str(root), 'python': str(target / 'venv/bin/python'),
             }))
         (board.directory/'runtime-retention.json').write_text(json.dumps({'current':'current','previous':'previous'}))
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), mock.patch('buddy.storage.runtime_usage', return_value=['runtime-in-use']):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', return_value=['runtime-in-use']):
             planned=board.call('storage_plan', {})
         rows=[r for r in planned['candidates'] if r['category']=='runtimes']
         self.assertEqual(len(rows),3)
@@ -142,8 +143,8 @@ class StorageTests(BoardTestCase):
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
             'current': 'current', 'previous': 'previous',
         }))
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), \
-             mock.patch('buddy.storage.runtime_usage', side_effect=lambda path, *_: (
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', side_effect=lambda path, *_: (
                  ['runtime-in-use'] if path.name == active else
                  ['process-inspection-unavailable'] if path.name == unknown else [])):
             result = storage.prune_old_runtimes(board.store)
@@ -170,7 +171,7 @@ class StorageTests(BoardTestCase):
         outside=self.directory/'outside-native';outside.mkdir();sentinel=outside/'sessions.sqlite';sentinel.write_bytes(b'outside')
         (board.directory/'harnesses').mkdir()
         (board.directory/'harnesses/zcode').symlink_to(outside, target_is_directory=True)
-        with mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned=board.call('storage_plan',{})
             rows=[r for r in planned['candidates'] if r['category']=='zcode']
             self.assertEqual(len(rows),1)
@@ -187,7 +188,7 @@ class StorageTests(BoardTestCase):
             (root / 'session.json').write_text('retained')
         account = private_dirs.ensure_private_dir(private_dirs.account_root(state, 'codex'))
         (account / 'auth.json').write_text('user account')
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             goals = [row for row in planned['candidates'] if row['category'] == 'harnesses']
             self.assertEqual({row['adapter'] for row in goals}, {'codex', 'claude', 'dsh', 'zcode'})
@@ -208,12 +209,12 @@ class StorageTests(BoardTestCase):
             board.call('storage_plan', {})
         self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
         (storage_root / '.lock').unlink()
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
         params = {'planId': planned['planId'], 'commandId': 'linked-receipt', 'confirm': True}
         receipt = storage_root / ('receipt-' + hashlib.sha256(b'linked-receipt').hexdigest() + '.json')
         receipt.symlink_to(outside)
-        with mock.patch('buddy.storage.private_dirs.open_regular_fd', wraps=private_dirs.open_regular_fd) as opened:
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.open_regular_fd', wraps=private_dirs.open_regular_fd) as opened:
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', params)
         self.assertFalse(any(call.args[0] == receipt for call in opened.call_args_list))
@@ -222,7 +223,7 @@ class StorageTests(BoardTestCase):
         plan_path = storage_root / (planned['planId'] + '.json')
         plan_path.unlink()
         plan_path.symlink_to(outside)
-        with mock.patch('buddy.storage.private_dirs.open_regular_fd', wraps=private_dirs.open_regular_fd) as opened:
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.open_regular_fd', wraps=private_dirs.open_regular_fd) as opened:
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', params)
         self.assertFalse(any(call.args[0] == plan_path for call in opened.call_args_list))
@@ -290,7 +291,7 @@ class StorageTests(BoardTestCase):
                     value['pending'] = {**row, 'tomb': str(self.directory / 'external-delete')}
                 encoded = json.dumps(value)
                 outside.write_text(encoded)
-                with mock.patch('buddy.storage.json.load', side_effect=AssertionError('External journal was read')):
+                with mock.patch('hey_my_buddy.blackboard.tasks.storage.json.load', side_effect=AssertionError('External journal was read')):
                     with self.assertRaises(BoardError) as caught:
                         board.call('storage_apply', {'planId': planned['planId'], 'commandId': 'linked-journal', 'confirm': True})
                 self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
@@ -354,7 +355,7 @@ class StorageTests(BoardTestCase):
         candidate, planned, _ = self._runtime_plan(board)
         params = {'planId': planned['planId'], 'commandId': 'replay-pending', 'confirm': True}
         real_remove = private_dirs.remove_tree
-        with mock.patch('buddy.storage.private_dirs.remove_tree', side_effect=OSError('interrupted')):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', side_effect=OSError('interrupted')):
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', params)
         self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')
@@ -365,7 +366,7 @@ class StorageTests(BoardTestCase):
         value = json.loads(plan_path.read_text())
         value['expiresAt'] = '2000-01-01T00:00:00+00:00'
         plan_path.write_text(json.dumps(value))
-        with mock.patch('buddy.storage.private_dirs.remove_tree', wraps=real_remove):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', wraps=real_remove):
             result = board.call('storage_apply', params)
         self.assertTrue(result['complete'])
         self.assertEqual(len(result['removed']), 1)
@@ -395,7 +396,7 @@ class StorageTests(BoardTestCase):
         board = self.board()
         candidate, planned, _ = self._runtime_plan(board)
         params = {'planId': planned['planId'], 'commandId': 'replaced-tomb', 'confirm': True}
-        with mock.patch('buddy.storage.private_dirs.remove_tree', side_effect=OSError('interrupted')):
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', side_effect=OSError('interrupted')):
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', params)
         self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')
@@ -420,8 +421,8 @@ class StorageTests(BoardTestCase):
         local = root / 'local-runtime'
         local.mkdir()
         (local / 'READY.json').symlink_to(outside / 'READY.json')
-        with mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), \
-             mock.patch('buddy.storage.is_ready', side_effect=AssertionError('external READY was read')) as ready:
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.is_ready', side_effect=AssertionError('external READY was read')) as ready:
             planned = board.call('storage_plan', {})
         ready.assert_not_called()
         rows = [row for row in planned['candidates'] if row['category'] == 'runtimes']
@@ -447,8 +448,8 @@ class StorageTests(BoardTestCase):
                                                st_mtime_ns=value.st_mtime_ns, st_dev=value.st_dev)
                     return value
                 with mock.patch.object(Path, 'lstat', reparse), \
-                     mock.patch('buddy.storage.process_inventory', return_value=([], [], True)), \
-                     mock.patch('buddy.storage.is_ready', side_effect=AssertionError('Reparse READY was read')) as ready:
+                     mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
+                     mock.patch('hey_my_buddy.blackboard.tasks.storage.is_ready', side_effect=AssertionError('Reparse READY was read')) as ready:
                     planned = board.call('storage_plan', {})
                 ready.assert_not_called()
                 row = next(row for row in planned['candidates'] if Path(row['path']).name == candidate.name)

@@ -2,7 +2,7 @@
 import json
 from unittest.mock import patch
 
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 from test_console import ConsoleTestCase
 from test_workflow import WorkflowTestCase
 

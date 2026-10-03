@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.codex_tool_evidence import CodexToolEventProjector, control_binding
-from buddy.adapters.read_only import collect
-from buddy.errors import BoardError
-from buddy.router import answer_schema, budget
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector, control_binding
+from hey_my_buddy.buddy.roles.structured_call import collect
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing.router import answer_schema, budget
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mock_codex.py"
 SOURCE = Path(__file__).resolve().parents[2] / "src"
@@ -48,7 +48,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_root("thread-1", "turn-1")
 
     def test_typed_execution_and_raw_native_call_join_by_actual_call_id(self):
-        from buddy.tool_evidence import judge_tool_evidence
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         for name in ('shell', 'shell_command', 'exec_command', 'write_stdin'):
             with self.subTest(name=name):
                 projector = new_projector()
@@ -63,7 +63,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 self.assertIsNone(judge_tool_evidence(package, 'review', True))
 
     def test_mcp_namespace_cannot_borrow_builtin_execution_classification(self):
-        from buddy.tool_evidence import judge_tool_evidence
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         projector = new_projector()
         self.observe_root(projector)
         projector.observe_notification(raw({'type': 'function_call', 'name': 'exec_command',
@@ -74,7 +74,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(judge_tool_evidence(package, 'review', True), 'router-tools-forbidden')
 
     def test_two_raw_names_or_conflicting_categories_are_not_execution_aliases(self):
-        from buddy.tool_evidence import judge_tool_evidence
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         for names in (('shell', 'exec_command'), ('shell', 'fileChange')):
             with self.subTest(names=names):
                 projector = new_projector()
@@ -347,7 +347,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         facts = {(event["toolName"], event["phase"]) for event in evidence["events"] if event["callId"] == "call-1"}
         self.assertEqual(facts, {("commandExecution", "start"), ("commandExecution", "end"),
                                  ("shell", "start"), ("shell", "end")})
-        from buddy.tool_evidence import judge_tool_evidence
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         self.assertIsNone(judge_tool_evidence(evidence, 'review', True))
 
     def test_foreign_and_old_turn_facts_are_kept_with_their_real_identity(self):

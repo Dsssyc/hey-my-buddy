@@ -9,7 +9,7 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 "$BUDDY" status '{"runId":"<runId>"}'
 ```
 
-The shared skill's `scripts/buddy` is the single launcher. It resolves the uv project from its own location (the skill's `package/`, or the repository root for `skills/buddy/scripts/buddy` in a checkout) rather than the caller's working directory, selects Python 3.12 through uv, and forwards every argument verbatim. From the repository root the same CLI is `uv run --frozen buddy <command> '<json>'` or `uv run --frozen python -m buddy.cli <command> '<json>'`. The JSON argument defaults to `{}`; an unknown method name prints the closest candidates (`didYouMean`) and exits 2. Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`; the local `worker-start`/`worker-stop` commands validate their own small parameter set.
+The shared skill's `scripts/buddy` is the single launcher. It resolves the uv project from its own location (the skill's `package/`, or the repository root for `skills/buddy/scripts/buddy` in a checkout) rather than the caller's working directory, selects Python 3.12 through uv, and forwards every argument verbatim. From the repository root the same CLI is `uv run --frozen buddy <command> '<json>'` or `uv run --frozen python -m hey_my_buddy.cli.main <command> '<json>'`. The JSON argument defaults to `{}`; an unknown method name prints the closest candidates (`didYouMean`) and exits 2. Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`; the local `worker-start`/`worker-stop` commands validate their own small parameter set.
 
 ## Parameter input
 

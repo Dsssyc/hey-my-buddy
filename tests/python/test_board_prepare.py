@@ -11,9 +11,9 @@ from pathlib import Path
 
 from test_workflow import WorkflowTestCase
 
-from buddy import board_prepare
-from buddy.db import DB_FILE, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, Database
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import board_prepare
+from hey_my_buddy.blackboard.store.db import DB_FILE, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, Database
+from hey_my_buddy.errors import BoardError
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "schema-11.sql"
 

@@ -13,9 +13,9 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from buddy.adapters import turn_io
-from buddy.adapters.zcode_mcp import ATTENTION_REFUSAL, FINISH_DESCRIPTION
-from buddy.adapters.zcode_runner import governed_prompt
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.zcode.mcp import ATTENTION_REFUSAL, FINISH_DESCRIPTION
+from hey_my_buddy.buddy.harnesses.zcode.runner import governed_prompt
 
 ROOT = Path(__file__).resolve().parents[2]
 TURN_RESULT = ROOT / "harnesses/dsh/plugins/turn-result.mjs"

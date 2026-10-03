@@ -16,8 +16,8 @@ from unittest.mock import patch
 from mock_workspace import MockWorkspace
 from support import BoardTestCase
 
-from buddy import workflow as workflow_module
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module
+from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
 CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
@@ -31,7 +31,7 @@ class WorkflowTestCase(BoardTestCase):
         workflow_module._workspace_module = self.workspace
         self.controls: dict[str, dict] = {}
         self.addCleanup(self._restore_workspace)
-        self.catalog_validation = self.enterContext(patch("buddy.catalog.validate_configuration", create=True,
+        self.catalog_validation = self.enterContext(patch("hey_my_buddy.blackboard.catalog.catalog.validate_configuration", create=True,
                                                         side_effect=lambda configuration, **_: dict(configuration)))
         self.executors = {name: SimpleNamespace(native_resume=name == "zcode", validate_turn_provenance=lambda record: None)
                           for name in ("dsh", "zcode", "command", "external")}

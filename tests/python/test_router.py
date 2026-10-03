@@ -2,9 +2,9 @@
 import unittest
 import json
 
-from buddy import router
-from buddy.adapters.dsh import DshAdapter
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.errors import BoardError
 from fixtures.router_tool_receipt import claim_tool_receipt
 
 
@@ -37,7 +37,7 @@ class RouterContractTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from types import SimpleNamespace
-        from buddy.adapters.read_only import collect
+        from hey_my_buddy.buddy.roles.structured_call import collect
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'native.json'
             output.write_text(json.dumps({'status': 'cancelled', 'processState': {'shutdownConfirmed': False}}))
@@ -67,10 +67,10 @@ class RouterPublicationTests(WorkflowTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture()
-        self.enterContext(patch('buddy.adapters.dsh.DshAdapter.read_only_structured', True))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.read_only_structured', True))
         from fixtures import mock_readonly
         mock_readonly.install(self)
-        self.enterContext(patch('buddy.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
+        self.enterContext(patch('hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
     def settle(self, profile, *, code=None, preferences=None, result_status=None):
         board = self.board()
@@ -133,7 +133,7 @@ class RouterPublicationTests(WorkflowTestCase):
             self.assertIn('Changed continuation task', frozen['task'])
 
     def test_budget_publication_preserves_model_and_schema(self):
-        from buddy.db import SCHEMA_VERSION
+        from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         board = self.board()
         self.seed(board)
         snapshot = board.call('console_snapshot', {})
@@ -171,7 +171,7 @@ class RouterPublicationTests(WorkflowTestCase):
     def test_retained_legacy_capability_uses_local_eligibility_not_certificate(self):
         board = self.board()
         self.seed(board)
-        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'fixture',
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'fixture',
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             snapshot = board.call('console_snapshot', {})
         profile = next(p for p in snapshot['profiles'] if p['profileId'] == PROFILE_ID)
@@ -201,7 +201,7 @@ class RouterInputTests(unittest.TestCase):
     prepare = workspace_fixtures.WorkspaceTests.prepare
 
     def test_existing_input_is_materialized_without_live_or_ignored_files(self):
-        from buddy import router_input
+        from hey_my_buddy.buddy.roles import router_input
         (self.repo / 'src/file.txt').write_text('dirty frozen input')
         (self.repo / '.gitattributes').write_text('src/file.txt export-ignore\n')
         self.git('add', '.gitattributes')
@@ -222,7 +222,7 @@ class RouterInputTests(unittest.TestCase):
 
     def test_many_files_are_read_through_one_batch_process_and_failures_leave_no_copy(self):
         from unittest import mock
-        from buddy import router_input
+        from hey_my_buddy.buddy.roles import router_input
         for index in range(40):
             (self.repo / f'src/many-{index}.txt').write_text(f'file {index}\n')
         self.git('add', 'src')
@@ -248,7 +248,7 @@ class RouterInputTests(unittest.TestCase):
         self.assertFalse((attempt / 'frozen-input').exists())
 
     def test_git_replace_cannot_substitute_frozen_blob_contents(self):
-        from buddy import router_input
+        from hey_my_buddy.buddy.roles import router_input
         old = self.git('rev-parse', 'HEAD:src/file.txt').decode().strip()
         replacement = self.git('hash-object', '-w', '--stdin', data=b'replacement content').decode().strip()
         self.git('replace', old, replacement)
@@ -259,7 +259,7 @@ class RouterInputTests(unittest.TestCase):
         self.assertEqual((mirror / 'src/file.txt').read_bytes(), b'base\n')
 
     def test_frozen_symlink_cycle_has_a_bounded_input_error(self):
-        from buddy import router_input
+        from hey_my_buddy.buddy.roles import router_input
         (self.repo / 'src/a').symlink_to('b')
         (self.repo / 'src/b').symlink_to('a')
         self.git('add', 'src/a', 'src/b')
@@ -271,7 +271,7 @@ class RouterInputTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'router-input-unavailable')
 
     def test_changed_router_copy_and_escaping_link_are_rejected(self):
-        from buddy import router_input
+        from hey_my_buddy.buddy.roles import router_input
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'attempt'
         attempt.mkdir()

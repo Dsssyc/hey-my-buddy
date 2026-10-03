@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.base import ExecutionContext
-from buddy.adapters.codex_protocol import native_checkpoint
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.codex.protocol import native_checkpoint
 from test_workflow import WorkflowTestCase
 
 

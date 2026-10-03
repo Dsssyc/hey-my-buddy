@@ -9,7 +9,7 @@ from test_workflow_worker import GovernedWorkerTestCase, CONFIGURATION
 class HostQuotaRecoveryTests(GovernedWorkerTestCase):
     def setUp(self):
         super().setUp()
-        from buddy.store import BoardStore
+        from hey_my_buddy.blackboard.store.store import BoardStore
         from support import enable_fixture_configuration
         store = BoardStore(self.directory)
         store.initialize()

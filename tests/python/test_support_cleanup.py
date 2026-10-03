@@ -14,7 +14,7 @@ from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
     stop_private_service, stop_private_workers, wait_for,
 )
-from buddy.transport import _read_endpoint
+from hey_my_buddy.protocol.transport import _read_endpoint
 
 
 def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
@@ -118,7 +118,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 with private_state_dir() as directory:
                     environment = _child_environment(directory, {"BUDDY_MAX_CONCURRENT": "1"})
                     completed = subprocess.run(
-                        [sys.executable, "-m", "buddy.cli", "health"], env=environment,
+                        [sys.executable, "-m", "hey_my_buddy.cli.main", "health"], env=environment,
                         capture_output=True, text=True, timeout=60,
                     )
                     self.assertEqual(completed.returncode, 0, completed.stderr)

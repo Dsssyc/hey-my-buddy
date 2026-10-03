@@ -1,5 +1,5 @@
 """Bound native event receipts for private, deterministic Router fixtures."""
-from buddy.tool_evidence import ToolEventEvidence, normalize_tool_event
+from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 
 
 def tool_receipt(binding, tool_calls=0, *, native_identity=None, stream_complete=True, tool_name=None):

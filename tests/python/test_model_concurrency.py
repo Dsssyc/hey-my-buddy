@@ -14,7 +14,7 @@ from pathlib import Path
 
 from test_store import StoreConcurrencyTestCase
 
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 
 FAMILY_A = ("dsh", "deepseek-official", "deepseek-flash")
 FAMILY_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
@@ -106,7 +106,7 @@ class PublicationInterfaceTests(ModelConcurrencyTestCase):
         )
 
     def test_profile_page_and_limit_are_from_the_same_published_revision(self):
-        from buddy import catalog_store
+        from hey_my_buddy.blackboard.catalog import catalog_store
         original = catalog_store.profiles
         old_revision = self.board_.call("console_snapshot", {})["tableRevision"]
 

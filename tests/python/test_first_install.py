@@ -35,11 +35,11 @@ class SkillInstallTests(unittest.TestCase):
                             "CODEX_HOME": str(self.base / "codex")}
 
     def cleanup_private(self):
-        from buddy.checks import teardown_private_root
+        from hey_my_buddy.cli.checks import teardown_private_root
         self.assertIsNone(teardown_private_root(self.base), 'Private install did not stop; evidence retained')
 
     def install(self, **extra):
-        from buddy.skill_install import install
+        from hey_my_buddy.install.skill_install import install
         with patch.dict(os.environ, {**self.environment, **extra}):
             return install({})
 
@@ -75,7 +75,7 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.agents.iterdir() if not path.name.endswith(".lock")), ["buddy"])
 
     def test_foreign_directories_are_never_replaced(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         (self.claude / "buddy").mkdir(parents=True)
         with self.assertRaises(BoardError) as caught:
             self.install()
@@ -90,7 +90,7 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SKILL_TARGET_CONFLICT")
 
     def test_a_worker_credential_cannot_install(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         with self.assertRaises(BoardError) as caught:
             self.install(BUDDY_AGENT_CREDENTIAL="attempt-token")
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
@@ -99,7 +99,7 @@ class SkillInstallTests(unittest.TestCase):
     def test_an_installed_skill_copies_itself_and_reports_a_legacy_plugin(self):
         built = load_build_skill().build(ROOT, self.base / "built/buddy")
         (self.base / "codex/plugins/cache/personal/hey-my-buddy").mkdir(parents=True)
-        with patch("buddy.skill_install.project_root", return_value=built / "package"):
+        with patch("hey_my_buddy.install.skill_install.project_root", return_value=built / "package"):
             result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertEqual(json.loads((self.agents / "buddy/skill.json").read_text()),
@@ -108,9 +108,9 @@ class SkillInstallTests(unittest.TestCase):
         self.assertIn("codex plugin remove", result["next"])
 
     def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         with patch("pathlib.Path.symlink_to", side_effect=OSError(1, "Operation not permitted")), \
-                patch("buddy.upgrade.upgrade") as service:
+                patch("hey_my_buddy.install.upgrade.upgrade") as service:
             with self.assertRaises(BoardError) as caught:
                 self.install()
             service.assert_not_called()
@@ -123,7 +123,7 @@ class SkillInstallTests(unittest.TestCase):
 
     def test_windows_data_root_is_local_app_data(self):
         from pathlib import PurePosixPath
-        from buddy import home
+        from hey_my_buddy import home
         # Only the branch is exercised here; a WindowsPath cannot exist on POSIX.
         with patch.object(home.os, "name", "nt"), patch.object(home, "Path", PurePosixPath), \
                 patch.dict(os.environ, {"LOCALAPPDATA": "/Local"}):
@@ -133,7 +133,7 @@ class SkillInstallTests(unittest.TestCase):
             self.assertEqual(home.data_root(), Path.home() / ".local/share/hey-my-buddy")
 
     def test_paths_reports_skill_data_and_runtime_locations_without_starting_anything(self):
-        from buddy.skill_install import paths
+        from hey_my_buddy.install.skill_install import paths
         with patch.dict(os.environ, self.environment):
             before = paths({})
             self.install()
@@ -169,7 +169,7 @@ class DocumentationTests(unittest.TestCase):
 
     def test_operations_document_the_shared_skill_install(self):
         text = OPERATIONS.read_text()
-        self.assertIn("buddy.rpc_config", text)
+        self.assertIn("hey_my_buddy.protocol.rpc_config", text)
         self.assertIn("## Installation", text)
         for fragment in ("~/.agents/skills/buddy", "~/.claude/skills/buddy", "scripts/buddy install",
                          "packaging/build-skill.py", "codex plugin remove"):

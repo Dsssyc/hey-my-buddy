@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import uuid
 
-from buddy import workflow as workflow_module, workspace
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.errors import BoardError
 from test_workflow_real import CONFIGURATION, RealWorkspaceTestCase, private_environment
 from test_workflow import WorkflowTestCase
 
@@ -145,7 +145,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertTrue(self.summary(board, parent["runId"])["descendantsConfirmed"])
 
     def test_cancellation_attribution_follows_own_event_and_survives_replay(self):
-        from buddy import cli_views
+        from hey_my_buddy.cli import cli_views
 
         board, _, parent, child = self.parent_and_child()
         root_id = parent["runId"]
@@ -173,7 +173,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertEqual(replay["cancellation"], expected)
 
     def test_console_stop_attribution_does_not_relabel_completed_result(self):
-        from buddy import cli_views
+        from hey_my_buddy.cli import cli_views
 
         board, _, parent, _ = self.parent_and_child()
         root_id = parent["runId"]

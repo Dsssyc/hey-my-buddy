@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, Mock
 
-from buddy.adapters.base import AdapterOutcome
-from buddy.errors import BoardError
-from buddy.partial_outputs import capture
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.runtime.partial_outputs import capture
 
 
 class PartialOutputSafetyTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
 
     def test_unconfirmed_stop_and_explicit_pre_model_failure_never_scan_checkout(self):
         for stopped, payload in ((False, {"modelStarted": True}), (True, {"modelStarted": False})):
-            with self.subTest(stopped=stopped, payload=payload), patch("buddy.workflow.workspace_module") as workspace:
+            with self.subTest(stopped=stopped, payload=payload), patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module") as workspace:
                 result = AdapterOutcome("failed", result=payload, shutdown_confirmed=stopped)
                 capture(self.context(), result)
                 workspace.assert_not_called()
@@ -27,7 +27,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         module = SimpleNamespace(seal=Mock(return_value={"changedPaths": []}))
         result = AdapterOutcome("failed", result={"modelStarted": True, "code": "transport-error"},
                                 shutdown_confirmed=True)
-        with patch("buddy.workflow.workspace_module", return_value=module):
+        with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
             capture(self.context(), result)
         module.seal.assert_called_once()
         for key in ("partialWorkspaceSeal", "workspaceManifest", "partialOutput"):
@@ -37,7 +37,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         for payload in ({"modelStarted": True, "code": "transport-error"},
                         {"modelStarted": None, "code": "native-exit"}, {}):
             with self.subTest(payload=payload), patch(
-                    "buddy.workflow.workspace_module",
+                    "hey_my_buddy.blackboard.tasks.workflow.workspace_module",
                     return_value=SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))):
                 result = AdapterOutcome("failed", result=dict(payload), shutdown_confirmed=True)
                 capture(self.context(), result)
@@ -50,7 +50,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
     def test_out_of_scope_failure_preserves_conflict_instead_of_a_partial_output(self):
         module = SimpleNamespace(seal=Mock(side_effect=BoardError("WORKSPACE_SCOPE_VIOLATION", "outside declared scope")))
         result = AdapterOutcome("failed", result={"modelStarted": True}, shutdown_confirmed=True)
-        with patch("buddy.workflow.workspace_module", return_value=module):
+        with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
             capture(self.context(), result)
         self.assertEqual(result.result["partialSealError"]["code"], "WORKSPACE_SCOPE_VIOLATION")
         self.assertNotIn("partialWorkspaceSeal", result.result)

@@ -1,14 +1,14 @@
 """Unified tool-event evidence: pure normalization, collection and judgment.
 
 No board, no state directory and no model call: every test drives the pure data
-functions of ``buddy.tool_evidence`` directly, covering the fixed ACP
+functions of ``hey_my_buddy.protocol.tool_evidence`` directly, covering the fixed ACP
 classification, the fact-only collection semantics (dedup, conflicts, the
 128-event bound, late and foreign facts) and the single publication matrix.
 """
 import unittest
 
-from buddy import tool_evidence
-from buddy.errors import BoardError
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.errors import BoardError
 
 IDENTITY = {"sessionId": "session-1", "turnId": "turn-1"}
 SECOND_IDENTITY = {"sessionId": "session-2", "inputId": "input-2"}

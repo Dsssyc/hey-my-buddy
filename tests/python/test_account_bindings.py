@@ -4,10 +4,10 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from buddy.adapters.base import NoToolStructuredRequest, ReadOnlyStructuredRequest
-from buddy.adapters.codex_home import credential_source
-from buddy.adapters import read_only
-from buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.base import NoToolStructuredRequest, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.codex.home import credential_source
+from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.errors import BoardError
 import test_codex as codex_tests
 
 
@@ -18,7 +18,7 @@ class AccountBindingTests(unittest.TestCase):
     def setUp(self):
         codex_tests.CodexAdapterTests.setUp(self)
         Path(self.environment['BUDDY_RUNTIME_ROOT']).mkdir(mode=0o700)
-        sentinel = mock.patch('buddy.harness_discovery.discover',
+        sentinel = mock.patch('hey_my_buddy.buddy.harnesses.discovery.discover',
                               side_effect=AssertionError('Native CLI discovery is forbidden in account fixtures'))
         sentinel.start()
         self.addCleanup(sentinel.stop)
@@ -82,8 +82,8 @@ class AccountBindingTests(unittest.TestCase):
             spawn.assert_not_called()
 
     def test_structured_environment_uses_frozen_source_and_purpose(self):
-        from buddy.accounts import WorkerAccountProvider, using_provider
-        from buddy.private_dirs import account_root, ensure_private_dir
+        from hey_my_buddy.blackboard.catalog.accounts import WorkerAccountProvider, using_provider
+        from hey_my_buddy.private_dirs import account_root, ensure_private_dir
         worker_root = ensure_private_dir(account_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex'))
         observed = []
 

@@ -5,11 +5,11 @@ import hashlib
 import json
 from unittest.mock import patch
 
-from buddy.db import SCHEMA_VERSION
-from buddy.decision import MAX_DECISION_TASK_BYTES
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.blackboard.routing.decision import MAX_DECISION_TASK_BYTES
+from hey_my_buddy.errors import BoardError
 from fixtures.router_tool_receipt import claim_tool_receipt
-from buddy.worker.worker import Worker
+from hey_my_buddy.buddy.runtime.worker import Worker
 from test_decision import (DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
                              SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID)
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
@@ -518,7 +518,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertNotIn(task, json.dumps(decision["requested"]))
         worker = Worker("oversized-router", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
-        with patch("buddy.adapters.decision.DecisionAdapter.start") as start:
+        with patch("hey_my_buddy.buddy.roles.router.DecisionAdapter.start") as start:
             self.assertEqual(worker.run_once(), "idle")
         start.assert_not_called()
         replay = self.routed(board, task=task)

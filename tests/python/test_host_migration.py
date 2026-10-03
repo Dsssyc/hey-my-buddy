@@ -4,8 +4,8 @@ from pathlib import Path
 import sqlite3
 import unittest
 
-from buddy import migrations
-from buddy.db import SCHEMA
+from hey_my_buddy.blackboard.store import migrations
+from hey_my_buddy.blackboard.store.db import SCHEMA
 from test_migrations import shape
 
 

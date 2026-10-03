@@ -83,10 +83,10 @@ def prompt(mode: str, nonce: str, outside: Path) -> str:
 
 
 def run(args) -> dict:
-    from buddy import workspace
-    from buddy.adapters.base import ExecutionContext
-    from buddy.adapters.claude import ClaudeAdapter
-    from buddy.adapters.claude_config import cli_command, native_environment
+    from hey_my_buddy.blackboard.tasks import workspace
+    from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+    from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+    from hey_my_buddy.buddy.harnesses.claude.config import cli_command, native_environment
 
     root = args.root.resolve()
     if root.exists():

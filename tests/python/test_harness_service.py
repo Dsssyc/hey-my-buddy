@@ -2,8 +2,8 @@
 import json
 from unittest.mock import Mock, patch
 
-from buddy.service import BoardService
-from buddy.store import BoardStore
+from hey_my_buddy.blackboard.service.service import BoardService
+from hey_my_buddy.blackboard.store.store import BoardStore
 from support import BoardTestCase
 
 
@@ -21,7 +21,7 @@ class HarnessServiceTests(BoardTestCase):
         return json.loads(getattr(self.service, method)(json.dumps({'token': 'host', **params})))
 
     def test_capabilities_reports_unknown_without_calling_a_native_cli(self):
-        with patch('buddy.harness_health._discover') as native:
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover') as native:
             result = self.call('capabilities')
         self.assertNotIn('error', result)
         self.assertFalse(result['adapters']['codex']['available'])
@@ -42,7 +42,7 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_explicit_refresh_returns_selected_version_and_path(self):
         ready = {'adapter': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'], 'executable': '/native/codex'}
-        with patch('buddy.harness_health._snapshot', return_value={}), patch('buddy.harness_health._discover', return_value=ready) as native:
+        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
             result = self.call('capabilities', refresh=True, adapter='codex')
         self.assertNotIn('error', result)
         self.assertTrue(result['adapters']['codex']['available'])
@@ -58,7 +58,7 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_manual_path_requires_current_revision(self):
         missing = {'adapter': 'codex', 'status': 'missing', 'reasonCode': 'not-found'}
-        with patch('buddy.harness_health._snapshot', return_value={}), patch('buddy.harness_health._discover', return_value=missing):
+        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=missing):
             saved = self.call('harness_set', adapter='codex', path='/custom/codex', expectedRevision=0)
         self.assertEqual(saved['harness']['manualPath'], '/custom/codex')
         refused = self.call('harness_set', adapter='codex', path='/other/codex', expectedRevision=0)
@@ -68,11 +68,11 @@ class HarnessServiceTests(BoardTestCase):
         self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog
         payload = {'source': 'fixture', 'providers': [{'adapter': 'codex', 'provider': 'openai',
             'models': [{'id': 'gpt-6-sol', 'name': 'Sol', 'efforts': ['high']}]}]}
-        with patch('buddy.adapters.codex.sys.platform', 'darwin'), \
-             patch('buddy.adapters.codex.CodexAdapter.discover_models', return_value=payload), \
-             patch('buddy.harness_health._snapshot', return_value={}):
+        with patch('hey_my_buddy.buddy.harnesses.codex.adapter.sys.platform', 'darwin'), \
+             patch('hey_my_buddy.buddy.harnesses.codex.adapter.CodexAdapter.discover_models', return_value=payload), \
+             patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}):
             for version in ('0.157.0', '0.158.0'):
-                with self.subTest(version=version), patch('buddy.harness_health._discover', return_value={
+                with self.subTest(version=version), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
                         'adapter': 'codex', 'status': 'ready', 'version': version,
                         'command': ['/fixture/codex'], 'executable': '/fixture/codex'}):
                     result = self.call('capabilities', refresh=True, adapter='codex')

@@ -9,14 +9,25 @@ import time
 import unittest
 from unittest import mock
 
-from buddy.adapters.base import ProcessHandle
-from buddy.adapters.zcode_mcp import respond
-from buddy.adapters.zcode_protocol import (MAX_INQUIRY_RECEIPT_BYTES, MAX_TOOL_REFUSAL_BYTES,
-                                           MAX_TOOL_REFUSAL_DETAIL_BYTES, MAX_TOOL_REFUSAL_PREFIX_BYTES,
-                                           NativeConnection, NativeError, RootTurnEvidence, decode_json,
-                                           decode_native_failure, refusal_shaped, sign_receipt,
-                                           verify_inquiry_receipt, verify_receipt, verify_tool_refusal)
-from buddy.adapters.zcode_runner import catalog, configure_session, execution_deadline
+from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
+from hey_my_buddy.buddy.harnesses.zcode.protocol import (
+    MAX_INQUIRY_RECEIPT_BYTES,
+    MAX_TOOL_REFUSAL_BYTES,
+    MAX_TOOL_REFUSAL_DETAIL_BYTES,
+    MAX_TOOL_REFUSAL_PREFIX_BYTES,
+    NativeConnection,
+    NativeError,
+    RootTurnEvidence,
+    decode_json,
+    decode_native_failure,
+    refusal_shaped,
+    sign_receipt,
+    verify_inquiry_receipt,
+    verify_receipt,
+    verify_tool_refusal,
+)
+from hey_my_buddy.buddy.harnesses.zcode.runner import catalog, configure_session, execution_deadline
 
 
 class ReceiptTests(unittest.TestCase):
@@ -420,7 +431,7 @@ class RefusalWireBudgetTests(unittest.TestCase):
         self.finish = "mcp__buddy_x__buddy_finish_turn"
 
     def mint(self, detail: str, *, tool: str = "buddy_finish_turn", reason: str = "invalid-arguments") -> str:
-        from buddy.adapters.zcode_mcp import _refusal
+        from hey_my_buddy.buddy.harnesses.zcode.mcp import _refusal
         return _refusal(self.bridge, tool, reason, detail)["content"][0]["text"]
 
     def test_pathological_details_mint_envelopes_that_verify_byte_for_byte(self):
@@ -456,8 +467,8 @@ class RefusalWireBudgetTests(unittest.TestCase):
         self.assertIn("correct it and retry", envelope["detail"])
 
     def test_checkpoint_receipts_batch_serialized_overflow_explicitly(self):
-        from buddy.adapters.zcode_mcp import _checkpoint_batch
-        from buddy.adapters.turn_io import canonical_json
+        from hey_my_buddy.buddy.harnesses.zcode.mcp import _checkpoint_batch
+        from hey_my_buddy.buddy.roles.turn_io import canonical_json
         # 32 accepted-but-pathological questions (control characters expand
         # sixfold) cannot fit one receipt: the batch is the longest serialized
         # prefix and the overflow is counted, never silently dropped.
@@ -686,7 +697,7 @@ class InquiryEvidenceTests(unittest.TestCase):
         # verified receipt is handed to its callback and never retained, only a
         # bounded recent window of terminal call identities is kept, and no
         # cumulative count ever ends the turn.
-        from buddy.adapters.zcode_protocol import MAX_RETAINED_INQUIRY_CALLS
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import MAX_RETAINED_INQUIRY_CALLS
 
         self.started()
         content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
@@ -896,12 +907,12 @@ class OwnedProcessEvidenceTests(unittest.TestCase):
     def test_failed_group_observation_cannot_confirm_shutdown(self):
         process = mock.Mock(pid=12345)
         process.poll.return_value = 0
-        with mock.patch("buddy.adapters.base.os.getpgid", return_value=12345):
+        with mock.patch("hey_my_buddy.buddy.harnesses.base.os.getpgid", return_value=12345):
             handle = ProcessHandle(process, own_group=True, log_paths={})
         for error in (OSError(errno.EIO, "process observation unavailable"), PermissionError()):
-            with self.subTest(error=type(error).__name__), mock.patch("buddy.adapters.base.os.killpg", side_effect=error):
+            with self.subTest(error=type(error).__name__), mock.patch("hey_my_buddy.buddy.harnesses.base.os.killpg", side_effect=error):
                 self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
-        with mock.patch("buddy.adapters.base.os.killpg", side_effect=ProcessLookupError()):
+        with mock.patch("hey_my_buddy.buddy.harnesses.base.os.killpg", side_effect=ProcessLookupError()):
             self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
 
 

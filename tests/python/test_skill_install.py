@@ -7,8 +7,8 @@ import os
 import shutil
 from unittest import mock
 
-from buddy import skill_package, skill_install
-from buddy.errors import BoardError
+from hey_my_buddy.install import skill_package, skill_install
+from hey_my_buddy.errors import BoardError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +21,7 @@ class SkillPackageTests(unittest.TestCase):
             skill_package.assemble(ROOT, skill)
             for name in ('buddy', 'buddy.cmd', 'buddy.ps1'):
                 self.assertTrue((skill / 'scripts' / name).is_file(), name)
-            self.assertIn('active-runtime.json', (skill / 'package/src/buddy/launcher.py').read_text())
+            self.assertIn('active-runtime.json', (skill / 'package/src/hey_my_buddy/install/launcher.py').read_text())
 
     def test_same_marker_does_not_hide_a_damaged_launcher(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -67,11 +67,11 @@ class SkillPackageTests(unittest.TestCase):
             # bytes change, which is exactly the rebuild this defect covered.
             (target / 'SKILL.md').write_text((target / 'SKILL.md').read_text() + '\n<!-- rebuilt -->\n')
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
-                 mock.patch('buddy.skill_install.packaged_skill', return_value=source), \
-                 mock.patch('buddy.skill_install._check_claude_link'), \
-                 mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}), \
-                 mock.patch('buddy.skill_install.write_runtime_hint'), \
-                 mock.patch('buddy.upgrade.upgrade', return_value={'upgraded': True}) as upgrade:
+                 mock.patch('hey_my_buddy.install.skill_install.packaged_skill', return_value=source), \
+                 mock.patch('hey_my_buddy.install.skill_install._check_claude_link'), \
+                 mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+                 mock.patch('hey_my_buddy.install.skill_install.write_runtime_hint'), \
+                 mock.patch('hey_my_buddy.install.upgrade.upgrade', return_value={'upgraded': True}) as upgrade:
                 result = skill_install.install({})
             upgrade.assert_called_once()
             self.assertEqual(result['skill']['placement'], 'updated')
@@ -83,12 +83,12 @@ class SkillPackageTests(unittest.TestCase):
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
-                 mock.patch('buddy.skill_install.packaged_skill', return_value=source), \
-                 mock.patch('buddy.launcher.selected_runtime', return_value=None), \
-                 mock.patch('buddy.skill_install._check_claude_link'), \
-                 mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}), \
-                 mock.patch('buddy.skill_install.write_runtime_hint'), \
-                 mock.patch('buddy.upgrade.upgrade', return_value={'upgraded': True}) as upgrade:
+                 mock.patch('hey_my_buddy.install.skill_install.packaged_skill', return_value=source), \
+                 mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=None), \
+                 mock.patch('hey_my_buddy.install.skill_install._check_claude_link'), \
+                 mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+                 mock.patch('hey_my_buddy.install.skill_install.write_runtime_hint'), \
+                 mock.patch('hey_my_buddy.install.upgrade.upgrade', return_value={'upgraded': True}) as upgrade:
                 result = skill_install.install({})
             # The service may still switch generations, but the skill itself is
             # reported by its actual content, not by the version marker alone.
@@ -105,17 +105,17 @@ class SkillPackageTests(unittest.TestCase):
             source = root / 'source'
             active = root / 'runtime' / ('a' * 32)
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(home)}, clear=True), \
-                 mock.patch('buddy.skill_install.packaged_skill', return_value=source), \
-                 mock.patch('buddy.skill_install._marker', return_value={'version': 'fixture', 'contract': 'fixture'}), \
-                 mock.patch('buddy.skill_install._matches', return_value=True), \
-                 mock.patch('buddy.skill_install._check_claude_link'), \
-                 mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}), \
-                 mock.patch('buddy.skill_install.write_runtime_hint'), \
-                 mock.patch('buddy.launcher.selected_runtime', return_value=active), \
-                 mock.patch('buddy.runtime.runtime_dir', return_value=active), \
-                 mock.patch('buddy.runtime.content_id', return_value=active.name), \
-                 mock.patch('buddy.runtime.materialize') as materialize, \
-                 mock.patch('buddy.upgrade.upgrade') as upgrade:
+                 mock.patch('hey_my_buddy.install.skill_install.packaged_skill', return_value=source), \
+                 mock.patch('hey_my_buddy.install.skill_install._marker', return_value={'version': 'fixture', 'contract': 'fixture'}), \
+                 mock.patch('hey_my_buddy.install.skill_install._matches', return_value=True), \
+                 mock.patch('hey_my_buddy.install.skill_install._check_claude_link'), \
+                 mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+                 mock.patch('hey_my_buddy.install.skill_install.write_runtime_hint'), \
+                 mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=active), \
+                 mock.patch('hey_my_buddy.install.runtime.runtime_dir', return_value=active), \
+                 mock.patch('hey_my_buddy.install.runtime.content_id', return_value=active.name), \
+                 mock.patch('hey_my_buddy.install.runtime.materialize') as materialize, \
+                 mock.patch('hey_my_buddy.install.upgrade.upgrade') as upgrade:
                 result = skill_install.install({})
             self.assertEqual(result['skill']['placement'], 'already-current')
             self.assertEqual(result['service']['action'], 'none')
@@ -133,9 +133,9 @@ class SkillPackageTests(unittest.TestCase):
             def recover(_params):
                 journal.unlink()
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
-                 mock.patch('buddy.upgrade.upgrade', side_effect=recover) as recovery, \
-                 mock.patch('buddy.upgrade.idle_snapshot', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
-                 mock.patch('buddy.skill_install._place') as place:
+                 mock.patch('hey_my_buddy.install.upgrade.upgrade', side_effect=recover) as recovery, \
+                 mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
+                 mock.patch('hey_my_buddy.install.skill_install._place') as place:
                 with self.assertRaises(BoardError) as caught:
                     skill_install.install({})
             self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')

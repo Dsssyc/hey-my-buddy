@@ -1,8 +1,8 @@
 """Work-objective grouping is atomic display metadata, never Worker input."""
 import json
 
-from buddy import schemas
-from buddy.errors import BoardError
+from hey_my_buddy.protocol import schemas
+from hey_my_buddy.errors import BoardError
 from test_workflow import WorkflowTestCase
 
 
@@ -333,7 +333,7 @@ class RoutingSpanTests(WorkflowTestCase):
                         json.dumps({'budget': {'preset': 'deep'}})))
 
     def spans(self, board, task_id):
-        from buddy.objectives import _routing_spans
+        from hey_my_buddy.blackboard.tasks.objectives import _routing_spans
         with board.store.db.read() as db:
             return _routing_spans(db, task_id, task_id)
 

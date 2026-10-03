@@ -5,16 +5,16 @@ import tempfile
 import unittest
 from unittest import mock
 
-from buddy import transport
+from hey_my_buddy.protocol import transport
 
 
 class LocalLaunchTests(unittest.TestCase):
     def test_local_socket_denial_refuses_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'state'
-            with mock.patch('buddy.transport._trusted_directory', return_value=True), \
-                    mock.patch('buddy.transport.socket.socket') as socket_factory, \
-                    mock.patch('buddy.transport.subprocess.Popen') as spawn:
+            with mock.patch('hey_my_buddy.protocol.transport._trusted_directory', return_value=True), \
+                    mock.patch('hey_my_buddy.protocol.transport.socket.socket') as socket_factory, \
+                    mock.patch('hey_my_buddy.protocol.transport.subprocess.Popen') as spawn:
                 socket_factory.return_value.bind.side_effect = PermissionError('sandbox')
                 with self.assertRaises(transport.ServiceError) as caught:
                     transport.ensure_service(directory)
@@ -23,15 +23,15 @@ class LocalLaunchTests(unittest.TestCase):
             spawn.assert_not_called()
 
     def test_unreachable_recorded_service_does_not_spawn_another(self):
-        from buddy import locking
+        from hey_my_buddy import locking
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             (directory / 'control.json').write_text('{}')
             owner = os.open(directory / 'board-owner.lock', os.O_CREAT | os.O_RDWR, 0o600)
             locking.lock(owner)
             try:
-                with mock.patch('buddy.transport._attach_read_only', return_value=None), \
-                        mock.patch('buddy.transport.subprocess.Popen') as spawn:
+                with mock.patch('hey_my_buddy.protocol.transport._attach_read_only', return_value=None), \
+                        mock.patch('hey_my_buddy.protocol.transport.subprocess.Popen') as spawn:
                     with self.assertRaises(transport.ServiceError) as caught:
                         transport.ensure_service(directory)
             finally:

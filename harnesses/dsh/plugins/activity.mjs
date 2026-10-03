@@ -3,7 +3,7 @@
  *
  * A tiny, self-contained Cordis plugin that the delegation CLI mounts into a
  * headless dsh run through a temporary `--patch` overlay. It projects the live
- * root-session event feed into the frozen `buddy.activity` sidecar
+ * root-session event feed into the frozen `hey_my_buddy.protocol.activity` sidecar
  * (`activity.json`) that the owning Buddy Worker forwards through
  * `worker_progress`.
  *
@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path';
 /** Stable Cordis plugin name (the patch entry id mirrors it). */
 export const name = 'deepseek-delegate-activity';
 
-/** Must equal `buddy.activity.ACTIVITY_VERSION`. */
+/** Must equal `hey_my_buddy.protocol.activity.ACTIVITY_VERSION`. */
 const ACTIVITY_VERSION = 1;
 
 /** Bounds copied from the frozen contract; a longer value is truncated, never dropped silently. */

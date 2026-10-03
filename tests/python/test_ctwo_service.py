@@ -19,9 +19,9 @@ import c_two as cc
 
 from support import PYTHON_ROOT, BoardTestCase
 
-from buddy.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
-from buddy.transport import _read_endpoint
-from buddy.db import SCHEMA_VERSION
+from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
+from hey_my_buddy.protocol.transport import _read_endpoint
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 
 
 class TestNamedContract(BoardTestCase):
@@ -139,7 +139,7 @@ class TestNamedContract(BoardTestCase):
                 "VIRTUAL_ENV": "",
             }
             second = subprocess.run(
-                [sys.executable, "-m", "buddy.daemon"], env=environment, capture_output=True, text=True, timeout=60
+                [sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"], env=environment, capture_output=True, text=True, timeout=60
             )
             self.assertEqual(second.returncode, 2)
             self.assertIn("ALREADY_RUNNING", second.stderr)

@@ -1,7 +1,7 @@
 """ADR-018 items 12 and 13: parameter documents and generated per-method help.
 
-The governed path runs through the real ``buddy.cli`` module, the real
-``buddy.transport`` mapping and the real store/service validators; only the C-Two
+The governed path runs through the real ``hey_my_buddy.cli.main`` module, the real
+``hey_my_buddy.protocol.transport`` mapping and the real store/service validators; only the C-Two
 socket is substituted with the in-process board, exactly as in ``test_cli.py``.
 Every test uses a private state directory, starts no paid model and changes no user
 setting. Help must not start a service or a model, so its tests fail loudly if any
@@ -24,9 +24,9 @@ from unittest import mock
 from support import BoardTestCase
 from test_workflow import WorkflowTestCase
 
-import buddy.cli as cli
-import buddy.cli_help as cli_help
-import buddy.transport as transport
+import hey_my_buddy.cli.main as cli
+import hey_my_buddy.cli.cli_help as cli_help
+import hey_my_buddy.protocol.transport as transport
 
 #: Methods whose request validators the help reader must cover.
 PUBLIC_METHODS = tuple(cli.METHODS)
@@ -526,7 +526,7 @@ class HelpSourceFreshnessTests(unittest.TestCase):
                 target = copy / path.relative_to(cli_help.PACKAGE_ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, target)
-            schemas = copy / "schemas.py"
+            schemas = copy / "protocol" / "schemas.py"
             text = schemas.read_text(encoding="utf-8")
             text = text.replace("MAX_WORKFLOW_INPUT_BYTES = 64 * 1024", "MAX_WORKFLOW_INPUT_BYTES = 48 * 1024")
             text = text.replace("MAX_TASK_BYTES = 1024 * 1024", "MAX_TASK_BYTES = 3 * 512 * 1024")

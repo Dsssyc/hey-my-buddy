@@ -10,9 +10,9 @@ from threading import Barrier
 import unittest
 from unittest.mock import patch
 
-from buddy.db import canonical_json
-from buddy.native_observations import latest_quota, persist, record_quota, warnings
-from buddy.quota_routing import claim, exhausted, record, redetect, routing_facts
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.blackboard.evaluation.native_observations import latest_quota, persist, record_quota, warnings
+from hey_my_buddy.blackboard.routing.quota_routing import claim, exhausted, record, redetect, routing_facts
 
 NATIVE = {'source': 'native', 'credentialRevision': 0}
 WORKER = {'source': 'worker', 'credentialRevision': 0}
@@ -52,7 +52,7 @@ class AccountQuotaTests(unittest.TestCase):
                              "INSERT INTO harness_health(adapter) VALUES('codex');"
                              "INSERT INTO attempts(attempt_id) VALUES('old-attempt');")
         self.current = NATIVE
-        self.selector = patch('buddy.accounts.selection', side_effect=lambda db, adapter: self.current)
+        self.selector = patch('hey_my_buddy.blackboard.catalog.accounts.selection', side_effect=lambda db, adapter: self.current)
         self.selector.start()
         self.addCleanup(self.selector.stop)
 
@@ -78,7 +78,7 @@ class AccountQuotaTests(unittest.TestCase):
                        'model_provider': 'openai'}
             # Worker tries to claim that the receipt belongs to the new account.
             result = {'account': WORKER, 'quota': self.observation(T2, account=WORKER)}
-            with patch('buddy.accounts.attempt_account', return_value=NATIVE):
+            with patch('hey_my_buddy.blackboard.catalog.accounts.attempt_account', return_value=NATIVE):
                 persist(db, attempt, result)
             current = latest_quota(db, 'codex')
             old = latest_quota(db, 'codex', account=NATIVE)

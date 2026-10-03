@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
 
-from buddy.transport import (
+from hey_my_buddy.protocol.transport import (
     ServiceError,
     _attach_read_only,
     _read_endpoint,
@@ -38,10 +38,10 @@ class MutationRecorder:
 
     def __init__(self):
         self.patchers = [
-            patch("buddy.transport.Path.mkdir", autospec=True),
-            patch("buddy.transport.Path.chmod", autospec=True),
-            patch("buddy.transport.os.open", wraps=os.open),
-            patch("buddy.transport.subprocess.Popen", autospec=True),
+            patch("hey_my_buddy.protocol.transport.Path.mkdir", autospec=True),
+            patch("hey_my_buddy.protocol.transport.Path.chmod", autospec=True),
+            patch("hey_my_buddy.protocol.transport.os.open", wraps=os.open),
+            patch("hey_my_buddy.protocol.transport.subprocess.Popen", autospec=True),
         ]
         self.mkdir = self.chmod = self.os_open = self.popen = None
 
@@ -71,10 +71,10 @@ class AttachFixture(unittest.TestCase):
         self.endpoint_file = self.directory / "control.json"
         self.write_endpoint(ENDPOINT, 0o600)
         # The ping RPC is the only thing that may be touched: never the network.
-        self.request = patch("buddy.transport._request", return_value={"status": "ready"}).start()
+        self.request = patch("hey_my_buddy.protocol.transport._request", return_value={"status": "ready"}).start()
         # This fixture observes bootstrap I/O, not runtime installation. Never
         # resolve an operator's runtime or create environments from a unit test.
-        patch("buddy.runtime.launch_target", return_value=LAUNCH_TARGET).start()
+        patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
         self.addCleanup(patch.stopall)
 
     def write_endpoint(self, value, mode):
@@ -148,7 +148,7 @@ class TrustBoundaryTests(AttachFixture):
 
         with MutationRecorder() as recorder:
             recorder.popen.side_effect = spawn
-            with patch("buddy.transport._read_endpoint", side_effect=endpoint_read):
+            with patch("hey_my_buddy.protocol.transport._read_endpoint", side_effect=endpoint_read):
                 self.assertEqual(ensure_service(self.directory), ENDPOINT)
             spawned, created = recorder.popen.call_count, recorder.mkdir.call_count
         self.assertEqual(spawned, 1, "cold setup must still run when no endpoint can be trusted")
@@ -227,7 +227,7 @@ class TrustBoundaryTests(AttachFixture):
                 return os.stat_result(fields)
             return info
 
-        with patch("buddy.transport.os.lstat", side_effect=foreign_shared):
+        with patch("hey_my_buddy.protocol.transport.os.lstat", side_effect=foreign_shared):
             self.assertFalse(_trusted_directory(nested))
             self.assertIsNone(_read_endpoint(nested))
 
@@ -247,9 +247,9 @@ class TrustBoundaryTests(AttachFixture):
             return os.stat_result(fields)
 
         real_lstat, real_fstat = os.lstat, os.fstat
-        with patch("buddy.transport.os.lstat", side_effect=lambda *args, **kwargs: as_other_owner(real_lstat(*args, **kwargs))):
+        with patch("hey_my_buddy.protocol.transport.os.lstat", side_effect=lambda *args, **kwargs: as_other_owner(real_lstat(*args, **kwargs))):
             self.assertFalse(_trusted_directory(self.directory))
-        with patch("buddy.transport.os.fstat", side_effect=lambda *args, **kwargs: as_other_owner(real_fstat(*args, **kwargs))):
+        with patch("hey_my_buddy.protocol.transport.os.fstat", side_effect=lambda *args, **kwargs: as_other_owner(real_fstat(*args, **kwargs))):
             self.assertIsNone(_read_endpoint(self.directory))
 
     def test_unsafe_endpoint_file_mode_is_not_trusted(self):
@@ -291,18 +291,18 @@ class ColdStartTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-cold-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
-        self.spawn = patch("buddy.transport.subprocess.Popen", autospec=True).start()
+        self.spawn = patch("hey_my_buddy.protocol.transport.subprocess.Popen", autospec=True).start()
         child = Mock()
         child.poll.return_value = None
         child.wait.return_value = 0
         self.spawn.return_value = child
-        patch("buddy.runtime.launch_target", return_value=LAUNCH_TARGET).start()
+        patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
         self.addCleanup(patch.stopall)
 
     def test_cold_start_creates_private_state_directory_and_spawns_daemon(self):
         responses = [None, None, ENDPOINT]  # no attach before the spawn, then healthy
 
-        with patch("buddy.transport._healthy", side_effect=responses) as health:
+        with patch("hey_my_buddy.protocol.transport._healthy", side_effect=responses) as health:
             endpoint = ensure_service(self.directory)
         self.assertEqual(endpoint, ENDPOINT)
         self.assertEqual(health.call_count, 3, "cold start must re-check health after spawning")
@@ -311,7 +311,7 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.directory / "control-start.lock").stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
-        self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "buddy.daemon")
+        self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "hey_my_buddy.blackboard.service.daemon")
 
     def test_existing_service_under_a_shared_sticky_parent_attaches_read_only(self):
         """Regression: a service under a root-owned sticky /tmp is reused, not re-spawned."""
@@ -323,7 +323,7 @@ class ColdStartTests(unittest.TestCase):
         endpoint_file = directory / "control.json"
         endpoint_file.write_text(json.dumps(ENDPOINT))
         endpoint_file.chmod(0o600)
-        with patch("buddy.transport._request", return_value={"status": "ready"}) as request:
+        with patch("hey_my_buddy.protocol.transport._request", return_value={"status": "ready"}) as request:
             self.assertEqual(ensure_service(directory), ENDPOINT)
         request.assert_called_once()
         self.spawn.assert_not_called()
@@ -340,7 +340,7 @@ class ColdStartTests(unittest.TestCase):
 
     def test_cold_start_reports_a_daemon_that_exits_immediately(self):
         self.spawn.return_value.poll.return_value = 1
-        with patch("buddy.transport._healthy", return_value=None):
+        with patch("hey_my_buddy.protocol.transport._healthy", return_value=None):
             with self.assertRaises(ServiceError) as failure:
                 ensure_service(self.directory)
         self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
@@ -357,7 +357,7 @@ class ColdStartTests(unittest.TestCase):
         endpoint_file.write_text(json.dumps(ENDPOINT))
         endpoint_file.chmod(0o600)
         self.assertEqual(_read_endpoint(directory), ENDPOINT, "cold start must trust the endpoint it just wrote")
-        with patch("buddy.transport._request", return_value={"status": "ready"}) as request:
+        with patch("hey_my_buddy.protocol.transport._request", return_value={"status": "ready"}) as request:
             self.assertEqual(_attach_read_only(directory), ENDPOINT, "later attach must apply the same rule, with no cold-start exception")
         request.assert_called_once()
 

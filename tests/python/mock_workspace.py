@@ -1,6 +1,6 @@
 """Deterministic in-process workspace double for governed workflow tests.
 
-It implements exactly the ``buddy.workspace`` interface from the productivity
+It implements exactly the ``hey_my_buddy.blackboard.tasks.workspace`` interface from the productivity
 contract (``inspect``/``prepare``/``verify``/``seal``) with observable calls and
 injectable failures, so the workflow coordinator's transaction, idempotency and
 exclusion logic can be tested before the real Git-backed module is integrated.
@@ -12,8 +12,8 @@ import os
 import re
 from pathlib import Path
 
-from buddy.db import canonical_json, sha256_text
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.errors import BoardError
 
 
 class MockWorkspace:

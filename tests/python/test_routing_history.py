@@ -15,7 +15,7 @@ from unittest.mock import patch
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 from fixtures.router_tool_receipt import claim_tool_receipt
 
 ROUTING_TASK_TEXT = "Produce a verified implementation"
@@ -76,7 +76,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
         archived rows a real 0.6 deployment would carry: the row exists, is returned
         by the compact readers, and can never start work or a model call.
         """
-        from buddy.db import utc_now
+        from hey_my_buddy.blackboard.store.db import utc_now
 
         decision_id = f"dec-{request_id}"
         now = utc_now()
@@ -409,8 +409,8 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         submitted = self.routed(board, request_id="route-read-only")
         before = self.state_fingerprint(board)
         head = board.store.head()
-        with patch("buddy.adapters.decision.DecisionAdapter.start") as adapter_start, patch(
-            "buddy.worker.worker.Worker.run_once"
+        with patch("hey_my_buddy.buddy.roles.router.DecisionAdapter.start") as adapter_start, patch(
+            "hey_my_buddy.buddy.runtime.worker.Worker.run_once"
         ) as worker_run:
             self.history(board, submitted["runId"], limit=5)
             board.call("selection_list", {"kind": "maintain", "limit": 5})
@@ -427,10 +427,10 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         self.assertEqual(before["workflow_routes"], 1)
 
     def test_named_operation_is_exposed_across_service_console_and_cli(self):
-        from buddy.cli import METHODS
-        from buddy.console import CONSOLE_OPERATIONS
-        from buddy.service import CONTROL_OPERATIONS
-        from buddy.workflow import AGENT_OPERATIONS
+        from hey_my_buddy.cli.main import METHODS
+        from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+        from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
+        from hey_my_buddy.blackboard.tasks.workflow import AGENT_OPERATIONS
 
         self.assertIn("selection_list", CONTROL_OPERATIONS)
         self.assertIn("selection_list", CONSOLE_OPERATIONS)

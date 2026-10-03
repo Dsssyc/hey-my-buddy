@@ -7,17 +7,34 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from buddy.adapters import claude_config
-from buddy.adapters.claude_config import (AUTH_STATUS_ARGUMENTS, AUTH_STATUS_MAX_BYTES,
-                                          AUTH_STATUS_TIMEOUT_SECONDS, ClaudeUnavailable, DEFAULT_EFFORT,
-                                          EMPTY_MCP_CONFIG, MODEL_FALLBACK_VARIABLES, NATIVE_ENVIRONMENT_ALLOWLIST,
-                                          PACKAGE_REGISTRY_DOMAINS, READONLY_TOOLS, THIRD_PARTY_OVERRIDE_VARIABLES,
-                                          WRITABLE_TOOLS, account_problem, auth_status_problem, cli_command,
-                                          discovery_args, execution_args, native_environment, read_auth_status,
-                                          sandbox_settings, settings_policy, third_party_overrides,
-                                          token_source_missing)
-from buddy.adapters.claude_protocol import OUTCOME_SCHEMA
-from buddy.adapters.turn_io import canonical_json
+from hey_my_buddy.buddy.harnesses.claude import config as claude_config
+from hey_my_buddy.buddy.harnesses.claude.config import (
+    AUTH_STATUS_ARGUMENTS,
+    AUTH_STATUS_MAX_BYTES,
+    AUTH_STATUS_TIMEOUT_SECONDS,
+    ClaudeUnavailable,
+    DEFAULT_EFFORT,
+    EMPTY_MCP_CONFIG,
+    MODEL_FALLBACK_VARIABLES,
+    NATIVE_ENVIRONMENT_ALLOWLIST,
+    PACKAGE_REGISTRY_DOMAINS,
+    READONLY_TOOLS,
+    THIRD_PARTY_OVERRIDE_VARIABLES,
+    WRITABLE_TOOLS,
+    account_problem,
+    auth_status_problem,
+    cli_command,
+    discovery_args,
+    execution_args,
+    native_environment,
+    read_auth_status,
+    sandbox_settings,
+    settings_policy,
+    third_party_overrides,
+    token_source_missing,
+)
+from hey_my_buddy.buddy.harnesses.claude.protocol import OUTCOME_SCHEMA
+from hey_my_buddy.buddy.roles.turn_io import canonical_json
 
 
 def flag_value(args: list[str], flag: str) -> str | None:
@@ -30,7 +47,7 @@ def flag_value(args: list[str], flag: str) -> str | None:
 
 
 #: Inherited Worker/runtime pins and third-party provider endpoints a focused run
-#: must not depend on. ``buddy.checks`` sanitizes its children with its own list;
+#: must not depend on. ``hey_my_buddy.cli.checks`` sanitizes its children with its own list;
 #: this file states the same boundary itself so `python -m unittest
 #: tests.python.test_claude_config` is self-sufficient.
 FOCUSED_CLEARED_VARIABLES = (
@@ -45,7 +62,7 @@ FOCUSED_CLEARED_VARIABLES = (
 class ClaudeConfigTests(unittest.TestCase):
     def setUp(self):
         # The override cases below need the explicit development switch, and this
-        # focused file must supply it rather than rely on buddy.checks having set it.
+        # focused file must supply it rather than rely on hey_my_buddy.cli.checks having set it.
         environment = {key: value for key, value in os.environ.items()
                        if key not in FOCUSED_CLEARED_VARIABLES}
         environment["BUDDY_DEV_SOURCE"] = "1"
@@ -261,7 +278,7 @@ class ClaudeConfigTests(unittest.TestCase):
                "BUDDY_AGENT_CREDENTIAL": "worker-secret", "BUDDY_AGENT_CREDENTIAL_FILE": "/private/cred.json",
                "BUDDY_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
                "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}
-        with mock.patch('buddy.adapters.claude_config.cli_command', return_value=[]):
+        with mock.patch('hey_my_buddy.buddy.harnesses.claude.config.cli_command', return_value=[]):
             result = native_environment(env)
         self.assertEqual(result["PATH"], "/bin")
         self.assertEqual(result["HOME"], "/users/fixture")

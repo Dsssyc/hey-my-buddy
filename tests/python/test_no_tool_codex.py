@@ -9,11 +9,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.base import ExecutionContext, NoToolStructuredRequest
-from buddy.adapters.codex_no_tool import _format_correction, prepare_home
-from buddy.adapters.codex_protocol import CodexProtocolError
-from buddy.adapters.read_only import collect
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
+from hey_my_buddy.buddy.harnesses.codex.no_tool import _format_correction, prepare_home
+from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+from hey_my_buddy.buddy.roles.structured_call import collect
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "no_tool_codex.py"
@@ -56,7 +56,7 @@ class NoToolCodexTests(unittest.TestCase):
                    BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.runtime),
                    BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
                    BUDDY_CODEX_FIXTURE_CASE=case, BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
-        process = subprocess.run([sys.executable, "-m", "buddy.adapters.codex_runner", "--control", str(control_path)],
+        process = subprocess.run([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.codex.runner", "--control", str(control_path)],
                                  cwd=self.cwd, env=env, capture_output=True, text=True, timeout=12)
         return process, json.loads(process.stdout), directory
 

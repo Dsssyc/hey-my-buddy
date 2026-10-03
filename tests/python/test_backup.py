@@ -4,8 +4,8 @@ from pathlib import Path
 from unittest import mock
 import json
 
-from buddy import backup
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
@@ -36,7 +36,7 @@ class BackupTests(BoardTestCase):
         board = self.board()
         current = Path(board.call('backup', {})['path'])
         original = (current / 'manifest.json').read_bytes()
-        with mock.patch('buddy.backup.verify', side_effect=BoardError('BACKUP_INVALID', 'injected')):
+        with mock.patch('hey_my_buddy.blackboard.store.backup.verify', side_effect=BoardError('BACKUP_INVALID', 'injected')):
             with self.assertRaises(BoardError):
                 board.call('backup', {})
         self.assertEqual((current / 'manifest.json').read_bytes(), original)

@@ -1,6 +1,6 @@
 """Real-Git scope recovery: failure evidence, compare-and-swap and resealing.
 
-These tests drive the real ``buddy.workspace`` module, real Git checkouts and the
+These tests drive the real ``hey_my_buddy.blackboard.tasks.workspace`` module, real Git checkouts and the
 real governed workflow transactions. Only the model process is absent: the scope
 failure, its durable evidence, the conflict record, the restore/adopt/abandon
 decision and the resealed handoff are all real. A failed site is never promoted
@@ -16,9 +16,9 @@ from pathlib import Path
 
 from test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
 
-from buddy import workflow as workflow_module
-from buddy import workspace as workspace_module
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module
+from hey_my_buddy.blackboard.tasks import workspace as workspace_module
+from hey_my_buddy.errors import BoardError
 
 
 class ScopeRecoveryTestCase(RealWorkspaceTestCase):

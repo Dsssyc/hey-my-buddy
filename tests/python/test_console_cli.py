@@ -1,6 +1,6 @@
 """CLI-only console entry: strict local options, browser launch and fenced waits.
 
-Every case drives the real ``buddy.cli`` module and the real ``buddy.console_cli``
+Every case drives the real ``hey_my_buddy.cli.main`` module and the real ``hey_my_buddy.cli.console_cli``
 module with a fake in-process RPC, a fake non-autostart board client and a mocked
 browser. No daemon is started, no daily state is touched and no real browser is opened.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import io
-from buddy.contracts import CONTRACT_VERSION
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 import json
 import os
 import tempfile
@@ -16,11 +16,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import buddy.cli as cli
-import buddy.console_cli as console_cli
-import buddy.transport as transport
-from buddy.client import BoardClient
-from buddy.errors import BoardError
+import hey_my_buddy.cli.main as cli
+import hey_my_buddy.cli.console_cli as console_cli
+import hey_my_buddy.protocol.transport as transport
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.errors import BoardError
 
 CONSOLE_ID = "0123456789abcdef01234567"
 REPLACEMENT_ID = "fedcba9876543210fedcba98"
@@ -234,7 +234,7 @@ class LocalOptionTests(ConsoleCliTestCase):
             with self.subTest(params=params):
                 with mock.patch.object(transport, "call_service", rpc), mock.patch.object(
                     console_cli.webbrowser, "open", browser
-                ), mock.patch("buddy.client.BoardClient", client):
+                ), mock.patch("hey_my_buddy.protocol.client.BoardClient", client):
                     code, result, _stderr = self.run_cli("console", json.dumps(params))
                 self.assertEqual(code, 1)
                 self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
@@ -486,7 +486,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         client = FakeClient(
             error=BoardError("SERVICE_UNAVAILABLE", "The board service did not answer this operation")
         )
-        with mock.patch("buddy.client.BoardClient", return_value=client) as built:
+        with mock.patch("hey_my_buddy.protocol.client.BoardClient", return_value=client) as built:
             code, result, _stderr = self.run_cli("console", '{"action":"status"}')
         self.assertEqual(built.call_args_list, [mock.call(autostart=False)])
         self.assertEqual(code, 1)
@@ -685,7 +685,7 @@ class WaitTests(ConsoleCliTestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with mock.patch.object(transport, "call_service", rpc), mock.patch(
-            "buddy.client.BoardClient", side_effect=build
+            "hey_my_buddy.protocol.client.BoardClient", side_effect=build
         ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = cli.main(["console", '{"wait":true,"browser":false}'])
         self.assertEqual(code, 0)

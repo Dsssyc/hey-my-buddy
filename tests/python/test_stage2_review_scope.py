@@ -8,17 +8,19 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
-from buddy.adapters.dsh import DshAdapter
-from buddy.adapters.zcode import ZcodeAdapter
-from buddy.adapters import dsh_runner, read_only, zcode_runner
-from buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.harnesses.dsh import runner as dsh_runner
+from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.buddy.harnesses.zcode import runner as zcode_runner
+from hey_my_buddy.errors import BoardError
 
 
 class DeferredReviewTests(unittest.TestCase):
     def test_removed_modules_and_bridge_do_not_ship(self):
         for module in ('dsh_read_only', 'zcode_read_only', 'zcode_static_contract'):
-            self.assertIsNone(importlib.util.find_spec('buddy.adapters.' + module))
+            self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.' + module))
         root = Path(__file__).resolve().parents[2]
         self.assertFalse((root / 'harnesses/dsh/plugins/read-only-structured.mjs').exists())
 

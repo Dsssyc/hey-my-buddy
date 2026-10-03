@@ -5,10 +5,10 @@ import json
 import os
 from unittest.mock import patch
 
-from buddy.adapters.base import ExecutionContext
-from buddy.adapters.decision import DecisionAdapter
-from buddy.adapters.dsh import DshAdapter
-from buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.errors import BoardError
 from support import InProcessBoard
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE_ID
 from fixtures.router_tool_receipt import claim_tool_receipt
@@ -119,8 +119,8 @@ class SingleRouterClaimTests(DecisionTestCase):
                         connection.execute("UPDATE harness_health SET status='unhealthy' WHERE adapter='dsh'")
                     self.assert_unclaimed(board, request, 'router-unavailable', frozen)
                 else:
-                    with patch('buddy.native_observations.exhausted', return_value={'nativeCode': 'quota'}), \
-                            patch('buddy.quota_routing.claim', side_effect=AssertionError('Router must not use a Worker retry')):
+                    with patch('hey_my_buddy.blackboard.evaluation.native_observations.exhausted', return_value={'nativeCode': 'quota'}), \
+                            patch('hey_my_buddy.blackboard.routing.quota_routing.claim', side_effect=AssertionError('Router must not use a Worker retry')):
                         self.assert_unclaimed(board, request, 'router-quota-exhausted', frozen)
                 board.close()
                 self._stack.remove(board)
@@ -131,7 +131,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.publish_user_patch(board, request_id='fast', command_id='fast', configuration={'defaultRoutingMode': 'fast'})
         request = self.request(board)
         frozen = self.decision(board, request['decisionId'])
-        with patch('buddy.adapters.dsh.DshAdapter.no_tool_structured', False):
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured', False):
             self.assert_unclaimed(board, request, 'router-no-tool-unsupported', frozen)
 
     def test_family_capacity_is_frozen_and_unknown_stop_keeps_its_slot(self):
@@ -293,7 +293,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         context = ExecutionContext(task_id='task', attempt_id='attempt', generation=1,
             spec={'adapter': 'decision'}, directory=board.directory / 'blocked-adapter', runtime={},
             environment={'BUDDY_STATE_DIR': str(board.directory)}, decision_input=document)
-        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={'eligible': False}):
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False}):
             with self.assertRaises(BoardError) as failure:
                 DecisionAdapter().start(context)
         self.assertEqual(failure.exception.code, 'router-review-unsupported')
@@ -347,7 +347,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
-        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-resource-missing', 'reason': 'removed controller',
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             self.report(board, claim, stopped_answer(claim))

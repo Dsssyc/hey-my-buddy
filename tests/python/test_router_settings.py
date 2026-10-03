@@ -3,8 +3,8 @@ from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import unittest
 
-from buddy.errors import BoardError
-from buddy.router_settings import RouterSettings, convert_legacy_router_settings, validate_router_settings_patch
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing.router_settings import RouterSettings, convert_legacy_router_settings, validate_router_settings_patch
 
 PROFILE = "codex:openai:example:high"
 RETRY_MIN_SECONDS = 1

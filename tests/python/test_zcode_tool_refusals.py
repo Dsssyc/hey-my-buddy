@@ -48,7 +48,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         self.assertEqual(turn["provenance"]["toolResultSuccess"], True)
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
         # Exactly one admitted native input; the refusal never restarted the turn.
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         methods = (context_root(context, "zcode") / "native-logs" / "methods.jsonl").read_text()
         self.assertEqual(methods.split().count("session/send"), 1)
 
@@ -59,12 +59,12 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         import time
         from pathlib import Path
 
-        from buddy import inquiry as inquiry_module
+        from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
 
         context = self.context("inquiry-refusal-wrapped", timeout=40)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         credentials_path = context_root(context, "zcode") / "inquiry.json"
         deadline = time.monotonic() + 20.0
         credentials = None
@@ -81,7 +81,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
                                               {"inquiryId": "q-1", "question": "Unblock the refusal retry?"},
                                               timeout_ms=4000)
         self.assertTrue(asked["ok"], asked)
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)

@@ -21,11 +21,11 @@ from unittest import mock
 from support import FakeClock
 from test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
 
-from buddy import private_dirs
-from buddy import workflow as workflow_module
-from buddy import workspace as workspace_module
-from buddy.db import canonical_json
-from buddy.errors import BoardError
+from hey_my_buddy import private_dirs
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module
+from hey_my_buddy.blackboard.tasks import workspace as workspace_module
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
 
 
 def git(path, *arguments: str) -> str:
@@ -423,7 +423,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
     def test_storage_apply_reuses_workspace_protection_and_current_revision(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
-        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             candidate = next(r for r in planned['candidates'] if r['path'] == str(checkout))
             self.assertTrue(candidate['eligible'], candidate)
@@ -442,10 +442,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         native = private_dirs.goal_root(board.directory, 'zcode', run_id)
         session = private_dirs.ensure_private_dir(native / 'native') / 'sessions.sqlite'
         session.write_bytes(b'private session fixture')
-        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('buddy.storage.process_inventory', return_value=([],[],True)):
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             request = {'planId':planned['planId'], 'commandId':'native-interrupted', 'confirm':True}
-            with mock.patch('buddy.storage.private_dirs.remove_tree', side_effect=OSError('injected')):
+            with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', side_effect=OSError('injected')):
                 with self.assertRaises(BoardError) as caught:
                     board.call('storage_apply', request)
             self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')

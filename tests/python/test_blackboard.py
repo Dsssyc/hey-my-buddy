@@ -23,11 +23,11 @@ from unittest import mock
 # tests exercise this checkout rather than any installed copy of the package.
 from support import BoardTestCase, wait_for
 
-from buddy.errors import BoardError
-from buddy.adapters.base import AdapterOutcome
-from buddy.private_dirs import attempt_root, ensure_private_dir
-from buddy.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
-from buddy.worker.worker import Worker
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
+from hey_my_buddy.blackboard.store.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
+from hey_my_buddy.buddy.runtime.worker import Worker
 
 
 class TestAtomicity(BoardTestCase):
@@ -361,7 +361,7 @@ class TestCrashWindows(BoardTestCase):
                     [
                         sys.executable,
                         "-m",
-                        "buddy.worker.supervisor",
+                        "hey_my_buddy.buddy.runtime.supervisor",
                         "--worker-id",
                         "fault",
                         "--state-dir",
@@ -424,7 +424,7 @@ class TestCrashWindows(BoardTestCase):
                     [
                         sys.executable,
                         "-m",
-                        "buddy.worker.supervisor",
+                        "hey_my_buddy.buddy.runtime.supervisor",
                         "--worker-id",
                         "fault",
                         "--state-dir",
@@ -450,7 +450,7 @@ class TestCrashWindows(BoardTestCase):
                 # heartbeat follows the boot reconciliation and every claim pass, so
                 # two of them prove that at least one full claim pass ran after the
                 # boot decision and both had their chance to resume or release.
-                from buddy.checks import lock_is_held
+                from hey_my_buddy.cli.checks import lock_is_held
 
                 replacement_dir = self.directory / "workers" / "fault"
                 heartbeats: set[str] = set()
@@ -503,7 +503,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_a_receipt_that_cannot_be_committed_is_replayed_never_re_executed(self):
         """A daemon outage past the retry budget must not run the task twice."""
-        from buddy.client import BoardClient
+        from hey_my_buddy.protocol.client import BoardClient
 
         board = self.board()
         online = {"value": False}
@@ -541,8 +541,8 @@ class TestCrashWindows(BoardTestCase):
 
     def test_a_marker_write_failure_still_supervises_the_live_child(self):
         """The live handle, never a missing marker, decides whether work stopped."""
-        from buddy.adapters.command import CommandAdapter
-        import buddy.worker.worker as worker_module
+        from hey_my_buddy.buddy.runtime.command import CommandAdapter
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         board = self.board()
         client = board.client()
@@ -594,7 +594,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_native_controller_exit_does_not_prove_native_stop_after_collect_failure(self):
         """A gone outer controller cannot release credentials for an unseen native child."""
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         for adapter in ("codex", "zcode", "claude", "dsh", "decision"):
             with self.subTest(adapter=adapter):
@@ -617,7 +617,7 @@ class TestCrashWindows(BoardTestCase):
                     cancel=lambda owned: cancelled.append(owned),
                 )
                 with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                        mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+                        mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
                     receipt = worker.execute(claim)
                 self.assertFalse(receipt["report"]["shutdownConfirmed"])
                 self.assertEqual(cancelled, [handle])
@@ -625,7 +625,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_native_collect_proof_survives_later_receipt_failure(self):
         """A durable receipt error cannot erase a completed native stop proof."""
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         private_root = ensure_private_dir(attempt_root(
@@ -653,7 +653,7 @@ class TestCrashWindows(BoardTestCase):
             return original_receipt(*args)
 
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}), \
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "receipt", side_effect=fail_first_receipt):
             receipt = worker.execute(claim)
         self.assertEqual(calls, 2)
@@ -662,7 +662,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_native_collect_proof_survives_later_cleanup_failure(self):
         """Cleanup errors retain stop proof and get another chance in the exception path."""
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("zcode")
         private_root = ensure_private_dir(attempt_root(
@@ -690,7 +690,7 @@ class TestCrashWindows(BoardTestCase):
             return original_cleanup(*args)
 
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}), \
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=fail_first_cleanup):
             receipt = worker.execute(claim)
         self.assertEqual(calls, 2)
@@ -698,7 +698,7 @@ class TestCrashWindows(BoardTestCase):
         self.assertFalse(credential.exists(), "exception cleanup removes the stopped attempt credential")
 
     def test_persistent_cleanup_error_cannot_erase_native_stop_or_prevent_receipt(self):
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("claude")
         private_root = ensure_private_dir(attempt_root(
@@ -713,7 +713,7 @@ class TestCrashWindows(BoardTestCase):
             cancel=lambda _handle: self.fail("complete native stop proof already exists"),
         )
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}), \
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=RuntimeError("cleanup unavailable")):
             receipt = worker.execute(claim)
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
@@ -721,7 +721,7 @@ class TestCrashWindows(BoardTestCase):
         self.assertTrue(credential.exists(), "cleanup failed, so credentials must remain for diagnosis")
 
     def test_virtual_adapter_receipt_retains_evidence_failure_paths(self):
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("decision")
         handle = self._finished_fake_handle()
@@ -738,14 +738,14 @@ class TestCrashWindows(BoardTestCase):
             cancel=lambda _handle: self.fail("complete native stop proof already exists"),
         )
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
         self.assertEqual(receipt["report"]["result"]["evidenceRetention"], diagnostic)
 
     def test_retry_start_discounts_previous_stop_proof_and_keeps_credentials(self):
         """The next start can spawn before raising without returning a handle."""
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         private_root = ensure_private_dir(attempt_root(
@@ -773,7 +773,7 @@ class TestCrashWindows(BoardTestCase):
             cancel=lambda _handle: self.fail("the prior stopped handle is no longer current"),
         )
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertEqual(starts, 2, "the first confirmed pre-model failure must trigger one retry")
         self.assertFalse(receipt["report"]["shutdownConfirmed"])
@@ -781,7 +781,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_start_error_without_handle_does_not_retry_unknown_child(self):
         """A matching executable error cannot prove start failed before spawn."""
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         private_root = ensure_private_dir(attempt_root(
@@ -803,7 +803,7 @@ class TestCrashWindows(BoardTestCase):
             cancel=lambda _handle: self.fail("no handle was returned"),
         )
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertEqual(starts, 1, "unknown first start cannot safely launch a retry")
         self.assertFalse(receipt["report"]["shutdownConfirmed"])
@@ -811,7 +811,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_retry_preparation_failure_preserves_previous_stop_proof(self):
         """A failed validation before the next start leaves the prior proof intact."""
-        import buddy.worker.worker as worker_module
+        import hey_my_buddy.buddy.runtime.worker as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         prepared = 0
@@ -837,7 +837,7 @@ class TestCrashWindows(BoardTestCase):
             cancel=lambda _handle: self.fail("the prior handle already stopped"),
         )
         with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
-                mock.patch("buddy.runtime.resolve_runtime", return_value={"identity": "test"}):
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertEqual(prepared, 2)
         self.assertEqual(started, 1, "the second preparation must fail before another spawn")
@@ -914,7 +914,7 @@ class TestLifecycle(BoardTestCase):
             generation = before["attemptGeneration"]
             # Interrupt the waiting client: it observes the same task and never cancels it.
             waiting = subprocess.Popen(
-                [sys.executable, "-m", "buddy.cli", "await", json.dumps({"runId": run_id, "waitSeconds": 60})],
+                [sys.executable, "-m", "hey_my_buddy.cli.main", "await", json.dumps({"runId": run_id, "waitSeconds": 60})],
                 env={
                     **os.environ,
                     "BUDDY_STATE_DIR": str(self.directory),
@@ -929,7 +929,7 @@ class TestLifecycle(BoardTestCase):
             self.children.append(waiting)
             # Wait until the daemon has actually admitted the client's wait; that is
             # stronger evidence than elapsed time that it is genuinely waiting.
-            from buddy.transport import ServiceError, _read_endpoint, _request
+            from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, _request
 
             def wait_admitted() -> bool:
                 endpoint = _read_endpoint(self.directory)
@@ -1332,8 +1332,8 @@ class TestExtensibility(BoardTestCase):
             "import json, sys\n"
             "from pathlib import Path\n"
             "sys.path.insert(0, %r)\n"
-            "from buddy.client import BoardClient, new_nonce\n"
-            "from buddy.worker.worker import fsync_json\n"
+            "from hey_my_buddy.protocol.client import BoardClient, new_nonce\n"
+            "from hey_my_buddy.buddy.runtime.worker import fsync_json\n"
             "state = Path(%r)\n"
             "board = BoardClient(state)\n"
             "board.register_worker('external-agent', adapter='external', capabilities=['external', 'artifacts', 'task-text'])\n"
@@ -1397,7 +1397,7 @@ class TestPackaging(BoardTestCase):
     """Group 8 (service side): runtime identity, no source leaks, staging."""
 
     def test_runtime_identity_is_reported_and_stable(self):
-        from buddy import runtime
+        from hey_my_buddy.install import runtime
 
         described = runtime.describe(destination=self.directory / "runtime")
         self.assertEqual(len(described["contentId"]), 32)
@@ -1415,7 +1415,7 @@ class TestPackaging(BoardTestCase):
     def test_the_default_cold_start_installs_and_reports_the_stable_runtime(self):
         """No magic PYTHONPATH: the cold start installs and runs the stable runtime."""
         import shutil as shutil_module
-        from buddy import runtime
+        from hey_my_buddy.install import runtime
 
         if not shutil_module.which(os.environ.get("UV_BIN", "uv")):
             self.skipTest("uv is not available")
@@ -1467,7 +1467,7 @@ class TestPackaging(BoardTestCase):
         )
 
     def test_no_secrets_or_environments_are_copied_into_a_runtime(self):
-        from buddy import runtime
+        from hey_my_buddy.install import runtime
 
         copied = {relative for relative, _path in runtime.iter_assets(runtime.project_root())}
         for forbidden in (".venv", "node_modules", ".env", "tests", ".git"):
@@ -1483,7 +1483,7 @@ class TestTransitionTables(BoardTestCase):
         client = board.client()
         task = client.submit(requestId="t-1", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
         client.cancel(runId=task["runId"])
-        from buddy.errors import BoardError as _BoardError
+        from hey_my_buddy.errors import BoardError as _BoardError
 
         with board.store.db.write() as connection:
             row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["runId"],)).fetchone()
@@ -1492,7 +1492,7 @@ class TestTransitionTables(BoardTestCase):
         self.assertEqual(caught.exception.code, "ILLEGAL_TRANSITION")
 
     def test_tables_cover_every_declared_state(self):
-        from buddy.db import ATTEMPT_STATES, TASK_STATES
+        from hey_my_buddy.blackboard.store.db import ATTEMPT_STATES, TASK_STATES
 
         self.assertEqual(set(TASK_TRANSITIONS), set(TASK_STATES))
         self.assertEqual(set(ATTEMPT_TRANSITIONS), set(ATTEMPT_STATES))

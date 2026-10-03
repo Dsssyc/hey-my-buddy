@@ -14,7 +14,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from buddy import cli, daemon, launcher, transport, upgrade
+from hey_my_buddy.cli import main as cli
+from hey_my_buddy.blackboard.service import daemon
+from hey_my_buddy.install import launcher, upgrade
+from hey_my_buddy.protocol import transport
 
 
 #: Variables a Claude Code or Codex Host session exports that must never enter a
@@ -80,7 +83,7 @@ class ServiceEnvironmentBuilderTests(unittest.TestCase):
             self.assertEqual(environment["BUDDY_RUNTIME"], str(Path(directory) / "selected"))
 
     def test_worker_cannot_start_a_fresh_supervisor_with_host_authority(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-worker"}, clear=True):
             with self.assertRaises(BoardError) as caught:
                 cli._worker_command("worker-start", {})
@@ -154,9 +157,9 @@ class ColdStartEnvironmentTests(unittest.TestCase):
                       "runtime": {"runtimeDir": "/stable/runtime", "environment": "/stable/venv"}}
             with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, **SERVICE_KEPT_VARIABLES}, clear=True), \
                     mock.patch.object(transport, "_attach_read_only", return_value=None), \
-                    mock.patch("buddy.runtime.launch_target", return_value=target), \
+                    mock.patch("hey_my_buddy.install.runtime.launch_target", return_value=target), \
                     mock.patch.object(transport, "_healthy", return_value={"pid": 4242}), \
-                    mock.patch("buddy.launcher.write_active_runtime"), \
+                    mock.patch("hey_my_buddy.install.launcher.write_active_runtime"), \
                     mock.patch.object(transport.subprocess, "Popen") as spawn:
                 spawn.return_value.poll.return_value = None
                 endpoint = transport.ensure_service(state)
@@ -179,7 +182,7 @@ class ColdStartEnvironmentTests(unittest.TestCase):
                                               "BUDDY_CLAUDE_CLI": "/private/fixtures/claude",
                                               "PYTHONPATH": "/host/injected"}, clear=True), \
                     mock.patch.object(transport, "_attach_read_only", return_value=None), \
-                    mock.patch("buddy.runtime.launch_target", return_value=target), \
+                    mock.patch("hey_my_buddy.install.runtime.launch_target", return_value=target), \
                     mock.patch.object(transport, "_healthy", return_value={"pid": 4242}), \
                     mock.patch.object(transport.subprocess, "Popen") as spawn:
                 spawn.return_value.poll.return_value = None

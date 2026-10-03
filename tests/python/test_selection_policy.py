@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from buddy import selection_policy
+from hey_my_buddy.blackboard.routing import selection_policy
 
 DSH_ID = "dsh:deepseek-official:deepseek-flash:off"
 DSH_HIGH_ID = "dsh:deepseek-official:deepseek-flash:high"
@@ -49,7 +49,7 @@ class PolicyFactsTests(unittest.TestCase):
         check = selection_policy.expected_policy_check(facts, ZCODE_ID)
         self.assertEqual(check["userPreference"], "alternative")
         self.assertEqual(check["hardConstraints"], {})
-        from buddy import router
+        from hey_my_buddy.blackboard.routing import router
         answer = {"profileId": ZCODE_ID, "reason": "file evidence supports another route", "evidence": []}
         self.assertEqual(router.validate_answer(answer, [DSH_ID, ZCODE_ID]), answer)
 
@@ -87,11 +87,11 @@ class RouterAnswerTests(unittest.TestCase):
         return {"profileId": DSH_ID, "reason": "Read the frozen checkout", "evidence": [], **changes}
 
     def validate(self, value):
-        from buddy import router
+        from hey_my_buddy.blackboard.routing import router
         return router.validate_answer(value, [DSH_ID, ZCODE_ID])
 
     def assert_code(self, code, answer):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         with self.assertRaises(BoardError) as caught:
             self.validate(answer)
         self.assertEqual(caught.exception.code, code)
@@ -129,7 +129,7 @@ class RouterAnswerTests(unittest.TestCase):
             self.assert_code("answer-invalid-json" if value == "{not json" else "answer-shape", value)
 
     def test_reason_and_reference_shape_are_bounded(self):
-        from buddy import router
+        from hey_my_buddy.blackboard.routing import router
         for value in (None, "", "  ", 1, "x" * (router.MAX_REASON + 1)):
             with self.subTest(reason=value):
                 self.assert_code("answer-shape", self.answer(reason=value))
@@ -151,8 +151,8 @@ class RouterAnswerTests(unittest.TestCase):
         self.validate(self.answer(evidence=[{"kind": "file", "ref": "src/module.py"}]))
 
     def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
-        from buddy import router
-        from buddy.adapters.read_only import correction_code, schema_errors, valid_answer
+        from hey_my_buddy.blackboard.routing import router
+        from hey_my_buddy.buddy.roles.structured_call import correction_code, schema_errors, valid_answer
         schema = router.answer_schema([DSH_ID, ZCODE_ID])
         self.assertEqual(schema["properties"]["profileId"]["enum"], [DSH_ID, ZCODE_ID, None])
         self.assertEqual(set(schema["properties"]), {"profileId", "reason", "evidence"})

@@ -140,7 +140,7 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
 
             # The DSH activity observer's bounded sidecar is attempt-bound and
             # readable by the real helper the owning Worker uses.
-            from buddy import activity as activity_module
+            from hey_my_buddy.protocol import activity as activity_module
 
             attempt_directory = self.directory / "attempts" / run_id / turn["attemptId"]
             sidecar = activity_module.read_sidecar(
@@ -342,8 +342,8 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
     def test_cli_submission_token_creation_is_immutable_and_shared(self):
         from unittest import mock
 
-        from buddy import cli
-        from buddy.errors import BoardError
+        from hey_my_buddy.cli import main as cli
+        from hey_my_buddy.errors import BoardError
 
         with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
             tokens = self._race(lambda: cli._submission_token("req-race", {}))
@@ -366,8 +366,8 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
         import tempfile
         from unittest import mock
 
-        from buddy.adapters.base import ExecutionContext
-        from buddy.adapters.dsh import DshAdapter
+        from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+        from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 
         directory = Path(tempfile.mkdtemp(prefix="buddy-dsh-args-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))

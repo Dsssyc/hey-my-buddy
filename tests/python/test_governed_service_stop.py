@@ -1,8 +1,8 @@
 """Service shutdown fences governed work through the authoritative workflow path."""
 from __future__ import annotations
 
-from buddy.daemon import Daemon
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.daemon import Daemon
+from hey_my_buddy.errors import BoardError
 from test_workflow import WorkflowTestCase
 
 

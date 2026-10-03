@@ -1,0 +1,346 @@
+"""Adapter contract: how one attempt becomes real external work.
+
+Adapters never receive database handles and never write authoritative state. They
+receive a bounded execution context, own the child process handle, enforce their own
+deadline, and return a structured result the worker submits through C-Two.
+"""
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ...errors import BoardError
+
+
+@dataclass
+class ExecutionContext:
+    """Everything an adapter may know about one attempt."""
+
+    task_id: str
+    attempt_id: str
+    generation: int
+    spec: dict
+    directory: Path
+    runtime: dict
+    environment: dict
+    lease_seconds: int = 120
+    #: Bounded decision payload the service persisted for this attempt, handed to the
+    #: worker in its claim and written to disk by the decision adapter. It is the only
+    #: way decision input reaches a model; adapters still never see the database.
+    decision_input: dict | None = None
+    #: Governed turn claim: the service-owned turn identity plus the bounded context.
+    #: Coding adapters write it to the private attempt directory and pass the
+    #: runner its absolute path; internal executions can have no governed turn.
+    turn: dict | None = None
+    #: Attempt-scoped credential handed to the coding child. It is written to a private
+    #: file (never into the model-visible turn input) and exported by path.
+    agent_credential: str | None = None
+
+    @property
+    def cwd(self) -> str:
+        """The effective execution directory: the resolved workspace path when present."""
+        turn_input = self.turn_input
+        if isinstance(turn_input, dict):
+            manifest = turn_input.get("executionWorkspace")
+            if isinstance(manifest, dict) and manifest.get("path"):
+                return str(manifest["path"])
+        return self.spec["cwd"]
+
+    @property
+    def timeout_seconds(self) -> int:
+        return int(self.spec["timeoutSeconds"])
+
+    @property
+    def turn_input(self) -> dict | None:
+        if not isinstance(self.turn, dict):
+            return None
+        value = self.turn.get("input")
+        return value if isinstance(value, dict) else None
+
+    @property
+    def turn_id(self) -> str | None:
+        if not isinstance(self.turn, dict):
+            return None
+        value = self.turn.get("turnId")
+        return value if isinstance(value, str) and value else None
+
+    def task_file(self) -> Path:
+        return self.directory / "task.txt"
+
+    def turn_input_file(self) -> Path:
+        return self.directory / "turn-input.json"
+
+    def turn_output_file(self) -> Path:
+        return self.directory / "turn-output.json"
+
+    def credential_file(self) -> Path:
+        from ...private_dirs import context_root
+        return context_root(self, getattr(self, "private_adapter", None)) / "agent-credential.json"
+
+    def log_paths(self) -> dict:
+        return {
+            "stdout": str(self.directory / "runner.stdout.log"),
+            "stderr": str(self.directory / "runner.stderr.log"),
+        }
+
+
+@dataclass
+class AdapterOutcome:
+    """One structured attempt outcome, exactly as the worker reports it."""
+
+    status: str  # ok | failed | cancelled
+    result: dict = field(default_factory=dict)
+    error: str | None = None
+    exit_code: int | None = None
+    signal: str | None = None
+    shutdown_confirmed: bool = False
+    artifacts: list[dict] = field(default_factory=list)
+
+    def to_report(self) -> dict:
+        return {
+            "status": self.status,
+            "result": self.result,
+            "error": self.error,
+            "exitCode": self.exit_code,
+            "signal": self.signal,
+            "shutdownConfirmed": self.shutdown_confirmed,
+            "artifacts": self.artifacts,
+        }
+
+
+@dataclass(frozen=True)
+class ReadOnlyStructuredRequest:
+    """Generic native read-only call; no workflow turn or agent authority."""
+
+    cwd: str
+    prompt: str
+    output_schema: dict
+    budget: dict
+    capture_evidence: bool = False
+
+
+@dataclass(frozen=True)
+class NoToolStructuredRequest:
+    """One tool-free native call in a Host-created empty private directory."""
+
+    cwd: str
+    prompt: str
+    output_schema: dict
+    timeout_seconds: int = 60
+    capture_evidence: bool = False
+
+
+class Adapter:
+    """Base class for the built-in adapters."""
+
+    name = "base"
+    capabilities: tuple[str, ...] = ()
+    native_resume = False
+    model_discovery = False
+    read_only_structured = False
+    read_only_structured_resume = False
+    system_sandbox_platforms: tuple[str, ...] = ()
+    read_only_tool_categories: tuple[str, ...] = ()
+    no_tool_structured = False
+
+    def local_read_only_check(self) -> dict:
+        """Check the shipped mechanism without native calls or certificates.
+
+        Availability, account/quota and effective native policy are separate
+        facts checked by the blackboard and the existing execution controller.
+        """
+        sandbox = sys.platform in self.system_sandbox_platforms
+        result = {"eligible": False, "reasonCode": "readonly-not-implemented",
+                  "reason": "No implemented native read-only structured call",
+                  "systemSandbox": sandbox, "sameAttemptContinuation": self.read_only_structured_resume}
+        if not self.read_only_structured or type(self).start_read_only_structured is Adapter.start_read_only_structured:
+            return result
+        if self.system_sandbox_platforms and not sandbox:
+            return {**result, "reasonCode": "readonly-platform-unsupported",
+                    "reason": "The native read-only sandbox is unsupported on this platform"}
+        if not sandbox and (not self.read_only_tool_categories or
+                            set(self.read_only_tool_categories) - {"read", "search"}):
+            return {**result, "reasonCode": "readonly-tools-unrestricted",
+                    "reason": "A harness without a system sandbox must restrict tools to read and search"}
+        package = Path(__file__).resolve().parent
+        if not all(path.is_file() for path in (package.parent / "roles" / "structured_call.py",
+                                               package / self.name / "runner.py")):
+            return {**result, "reasonCode": "readonly-resource-missing", "reason": "The native read-only controller is missing"}
+        return {**result, "eligible": True, "reasonCode": None, "reason": None}
+
+    def start_no_tool_structured(self, context: ExecutionContext,
+                                 request: NoToolStructuredRequest) -> "ProcessHandle":
+        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} has no native no-tool structured call")
+
+    def start_read_only_structured(self, context: ExecutionContext,
+                                   request: ReadOnlyStructuredRequest) -> "ProcessHandle":
+        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} has no native read-only structured call")
+
+    def discover_models(self) -> dict:
+        raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")
+
+    def discovery_available(self) -> tuple[bool, str | None]:
+        """Whether fresh metadata can be queried; execution readiness may be stricter."""
+        return self.available()
+
+    @staticmethod
+    def validate_turn_provenance(record: dict) -> str | None:
+        return "this adapter does not support governed turn provenance"
+
+    def available(self) -> tuple[bool, str | None]:
+        return True, None
+
+    def prepare(self, context: ExecutionContext) -> None:  # pragma: no cover - trivial
+        """Validate that this adapter can run the context; raise BoardError otherwise."""
+
+    def start(self, context: ExecutionContext) -> "ProcessHandle":
+        raise NotImplementedError
+
+    def collect(self, handle: "ProcessHandle", context: ExecutionContext) -> AdapterOutcome:
+        raise NotImplementedError
+
+    def cancel(self, handle: "ProcessHandle", *, grace_seconds: float = 3.0) -> None:
+        handle.terminate(grace_seconds=grace_seconds)
+
+
+class ProcessHandle:
+    """One owned child process group or Windows Job.
+
+    Only the object that created the child may signal it: stored PIDs are diagnostic
+    values and a restarted service never sends signals from them.
+    """
+
+    def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict):
+        self.process = process
+        self.own_group = own_group
+        self.log_paths = log_paths
+        self.cancel_requested = False
+        self.signalled_at: float | None = None
+        self.job = vars(process).get("_buddy_job")
+        # Capture the process-group id while the leader is alive. Looking it up
+        # later with os.getpgid(child.pid) would fail as soon as the leader exits,
+        # even while its descendants are still running, and would then report a
+        # live group as stopped.
+        self.pgid: int | None = None
+        if own_group and self.job is None and os.name != "nt" and process.pid is not None:
+            try:
+                self.pgid = os.getpgid(process.pid)
+            except OSError:
+                self.pgid = process.pid
+
+    @property
+    def pid(self) -> int | None:
+        return self.process.pid
+
+    @property
+    def finished(self) -> bool:
+        return self.process.poll() is not None
+
+    def signal_group(self, sig: int) -> None:
+        if self.process.pid is None:
+            return
+        try:
+            if self.job is not None:
+                if sig == signal.SIGTERM and hasattr(signal, "CTRL_BREAK_EVENT"):
+                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                elif sig != signal.SIGTERM:
+                    self.job.terminate()
+            elif self.own_group and self.pgid is not None:
+                os.killpg(self.pgid, sig)
+            else:
+                self.process.send_signal(sig)
+        except (ProcessLookupError, PermissionError, OSError, ValueError):
+            pass
+
+    def group_alive(self) -> bool:
+        """Remain live unless the owned group is observed gone, including descendants."""
+        if self.job is not None:
+            try:
+                return self.job.active() != 0
+            except OSError:
+                return True
+        if self.own_group and os.name == 'nt':
+            return True  # A root PID without a held Job cannot prove tree shutdown.
+        if self.process.pid is None:
+            return False
+        try:
+            if self.own_group and self.pgid is not None:
+                os.killpg(self.pgid, 0)
+            else:
+                os.kill(self.process.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # The group exists but belongs to another user: still alive.
+            return True
+        except OSError:
+            # An unavailable process-group observation is not termination evidence.
+            return True
+
+    def terminate(self, *, grace_seconds: float = 3.0) -> None:
+        """Ask the child to stop, then terminate only its owned group or Job."""
+        self.cancel_requested = True
+        self.signalled_at = time.monotonic()
+        self.signal_group(signal.SIGTERM)
+        deadline = time.monotonic() + grace_seconds
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None and not self.group_alive():
+                return
+            time.sleep(0.05)
+        if self.job is not None:
+            self.signal_group(-1)
+        elif os.name == 'nt':
+            self.process.kill()
+        else:
+            self.signal_group(signal.SIGKILL)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None and not self.group_alive():
+                return
+            time.sleep(0.05)
+
+    def wait(self, timeout: float | None) -> int | None:
+        try:
+            return self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def shutdown_confirmed(self, settle_seconds: float = 2.0) -> bool:
+        """True only when the owned group is confirmed gone, never inferred from a PID."""
+        if self.process.poll() is None:
+            return False
+        deadline = time.monotonic() + settle_seconds
+        while time.monotonic() < deadline:
+            if not self.group_alive():
+                if self.job is not None:
+                    try:
+                        self.job.close(confirmed=True)
+                    except OSError:
+                        return False
+                return True
+            time.sleep(0.025)
+        stopped = not self.group_alive()
+        if stopped and self.job is not None:
+            try:
+                self.job.close(confirmed=True)
+            except OSError:
+                return False
+        return stopped
+
+
+def open_logs(paths: dict) -> tuple[Any, Any]:
+    Path(paths["stdout"]).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    stdout = os.open(paths["stdout"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    stderr = os.open(paths["stderr"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    return stdout, stderr
+
+
+def unsupported(adapter: str, reason: str) -> BoardError:
+    return BoardError("UNSUPPORTED_ADAPTER", reason, adapter=adapter)

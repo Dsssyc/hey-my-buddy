@@ -9,11 +9,11 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from buddy.billing import claude_status, codex_account, zcode_access
-from buddy.decision import DecisionCoordinator
-from buddy.harness_health import HarnessHealth
-from buddy.native_observations import exhausted, warnings
-from buddy import router
+from hey_my_buddy.protocol.billing import claude_status, codex_account, zcode_access
+from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
+from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, warnings
+from hey_my_buddy.blackboard.routing import router
 from support import BoardTestCase
 from test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
 
@@ -65,7 +65,7 @@ class BillingQuotaTests(BoardTestCase):
         board = self.board()
         board.call("model_catalog_refresh", {"requestId": "dsh-billing"})
         with board.store.db.read() as db:
-            from buddy.billing import for_provider
+            from hey_my_buddy.protocol.billing import for_provider
             self.assertEqual(for_provider(db, "dsh", "deepseek-official")["kind"], "metered")
         native = deepcopy(FIXTURE_CATALOG)
         provider = native["providers"][0]
@@ -74,12 +74,12 @@ class BillingQuotaTests(BoardTestCase):
         self.catalog_fixture(native)
         board.call("model_catalog_refresh", {"requestId": "zcode-billing"})
         with board.store.db.read() as db:
-            from buddy.billing import for_provider
+            from hey_my_buddy.protocol.billing import for_provider
             self.assertEqual(for_provider(db, "zcode", "zhipu")["kind"], "subscription")
             self.assertEqual(for_provider(db, "zcode", "other")["kind"], "unknown")
 
     def test_mock_codex_account_read_has_no_model_turn(self):
-        from buddy.codex_account_probe import read
+        from hey_my_buddy.buddy.harnesses.codex.account_probe import read
         path = Path(__file__).parent / "fixtures/mock_codex.py"
         billing, quota = read([sys.executable, str(path)], {"HOME": str(self.directory), "PATH": os.environ.get("PATH", "")})
         self.assertEqual(billing["kind"], "subscription")
@@ -88,7 +88,7 @@ class BillingQuotaTests(BoardTestCase):
         self.assertNotIn("balanceZero", quota)  # A subscription credit balance of zero proves no exhaustion.
 
     def test_codex_on_demand_read_is_throttled_even_for_forced_refresh(self):
-        from buddy.store import BoardStore
+        from hey_my_buddy.blackboard.store.store import BoardStore
         board = BoardStore(self.directory / "health")
         board.initialize()
         health = HarnessHealth(board)
@@ -97,9 +97,9 @@ class BillingQuotaTests(BoardTestCase):
             db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
                        (json.dumps({"reviewVerification": {"verified": True}}),))
         record = {"status": "ready", "command": ["mock-codex"], "fingerprint": {"id": 1}}
-        with patch("buddy.harness_health._snapshot", return_value={"fixture": 1}), \
-             patch("buddy.harness_health._discover", return_value=record), \
-             patch("buddy.codex_account_probe.read", return_value=(codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), None)) as probe:
+        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"fixture": 1}), \
+             patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=record), \
+             patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), None)) as probe:
             health.refresh("codex", force=True)
             health.refresh("codex", force=True)
             self.assertEqual(probe.call_count, 1)
@@ -181,7 +181,7 @@ class BillingQuotaTests(BoardTestCase):
         self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
 
     def test_exhaustion_outlives_display_freshness_and_unknown_cannot_clear_it(self):
-        from buddy.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record
         board = self.board()
         config = {'adapter': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash'}
         with board.store.db.write() as db:
@@ -192,7 +192,7 @@ class BillingQuotaTests(BoardTestCase):
             self.assertIsNone(exhausted(db, config))
 
     def test_reset_and_provider_or_limit_scope_are_independent(self):
-        from buddy.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record
         board = self.board()
         config = {'adapter': 'codex', 'provider': 'openai', 'model': 'limited-model'}
         with board.store.db.write() as db:
@@ -204,7 +204,7 @@ class BillingQuotaTests(BoardTestCase):
             self.assertIsNone(exhausted(db, config, now=stamp(120)))
 
     def test_account_reset_query_can_restore_a_previous_native_failure(self):
-        from buddy.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record
         board = self.board()
         config = {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
         with board.store.db.write() as db:
@@ -214,9 +214,9 @@ class BillingQuotaTests(BoardTestCase):
             self.assertIsNone(exhausted(db, config))
 
     def test_multiple_native_pools_restore_only_when_every_reported_pool_is_available(self):
-        from buddy.quota_routing import record
-        from buddy.adapters.codex_protocol import quota_candidate_from_response
-        from buddy.usage import normalize_quota
+        from hey_my_buddy.blackboard.routing.quota_routing import record
+        from hey_my_buddy.buddy.harnesses.codex.protocol import quota_candidate_from_response
+        from hey_my_buddy.protocol.usage import normalize_quota
         board = self.board()
         config = {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
         with board.store.db.write() as db:

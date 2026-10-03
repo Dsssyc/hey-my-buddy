@@ -123,7 +123,7 @@ class ConsoleTestCase(BoardTestCase):
     def board(self, **options):
         board = super().board(**options)
         if self.require_login:
-            from buddy.launcher import write_private
+            from hey_my_buddy.install.launcher import write_private
             settings = {"port": 0, "requireLogin": True, "revision": 0}
             write_private(board.directory / "console-settings.json", settings)
             board.console._settings = settings
@@ -388,7 +388,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], before_events)
         _stated, browser = self.open_console(board)
-        from buddy import catalog
+        from hey_my_buddy.blackboard.catalog import catalog
 
         original = catalog.discover
         catalog.discover = lambda: (_ for _ in ()).throw(AssertionError("GET must not discover models"))
@@ -596,7 +596,7 @@ class ConsoleAssetTests(ConsoleTestCase):
         text = body.decode()
         self.assertIn("Console assets are not built", text)
         self.assertIn("/api/console", text)
-        self.assertIn("console_assets", text)
+        self.assertIn("assets/index.html", text)
         self.assertIn("text/html", headers["content-type"])
         # The JSON API is still available without a frontend build.
         snapshot = browser.bootstrap()

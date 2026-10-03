@@ -11,8 +11,8 @@ import unittest
 
 from support import BoardTestCase, FIXTURE_CATALOG, FakeClock
 
-from buddy.errors import BoardError
-from buddy.db import sha256_text
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store.db import sha256_text
 
 PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
 PROFILE = {
@@ -170,7 +170,7 @@ class EvaluationTestCase(BoardTestCase):
     def model_claim(self, board, request_id: str, identity: dict):
         """Admit a governed model task; the fixture owns only process/model output."""
         from unittest.mock import patch
-        from buddy import workflow
+        from hey_my_buddy.blackboard.tasks import workflow
         from mock_workspace import MockWorkspace
 
         if not hasattr(self, "model_workspace"):
@@ -878,7 +878,7 @@ class EvaluationGateTests(EvaluationTestCase):
 
     def test_ordinary_reads_never_discover_models(self):
         board = self.board()
-        from buddy import catalog
+        from hey_my_buddy.blackboard.catalog import catalog
 
         original = catalog.discover
 
@@ -1286,8 +1286,8 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         self.assertTrue(repeated["duplicate"])
         self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
         # A failed discovery keeps the previous recorded catalog and the table.
-        from buddy import catalog
-        from buddy.errors import BoardError as _BoardError
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.errors import BoardError as _BoardError
 
         original = catalog.discover
         catalog.discover = lambda **_kwargs: (_ for _ in ()).throw(_BoardError("CATALOG_UNAVAILABLE", "no harness"))
@@ -1306,8 +1306,8 @@ class InstalledHarnessDiscoveryTests(BoardTestCase):
     """
 
     def test_installed_harness_discovery_is_truthful_and_credential_free(self):
-        from buddy import catalog
-        from buddy.adapters import adapters
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.buddy.harnesses.registry import adapters
 
         if not catalog.discovery_available():
             self.skipTest("the discovery helper and Node.js are not available in this build")

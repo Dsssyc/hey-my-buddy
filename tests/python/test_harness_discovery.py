@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from buddy import harness_discovery as discovery
+from hey_my_buddy.buddy.harnesses import discovery
 
 
 class HarnessDiscoveryTests(unittest.TestCase):

@@ -11,17 +11,19 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from buddy import attempt_evidence, backup, router
-from buddy.adapters.base import ExecutionContext, NoToolStructuredRequest
-from buddy.adapters.codex import CodexAdapter
-from buddy.adapters.command import CommandAdapter
-from buddy.adapters.decision import DecisionAdapter
-from buddy.adapters.base import ReadOnlyStructuredRequest
-from buddy.adapters.dsh import DshAdapter
-from buddy.adapters.zcode import ZcodeAdapter
-from buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
-from buddy.errors import BoardError
-from buddy.adapters import read_only, turn_io
+from hey_my_buddy.protocol import attempt_evidence
+from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.runtime.command import CommandAdapter
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
 import test_no_tool_codex as codex_fast_tests
 import test_no_tool_zcode as zcode_fast_tests
 import test_dsh_session_storage as dsh_coding_tests
@@ -291,7 +293,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     NoToolStructuredRequest(str(fixture.cwd), "Pick a profile", codex_fast_tests.SCHEMA, 3))
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
                 self.assertEqual(handle.wait(8), 0)
-                from buddy.adapters.read_only import collect
+                from hey_my_buddy.buddy.roles.structured_call import collect
                 outcome = collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 control = json.loads((evidence / "no-tool-control.json").read_text())

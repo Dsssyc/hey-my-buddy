@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from buddy.account_native import CodexAccountProcess, harden_home, key_value, write_codex_key
-from buddy.account_keystore import MacKeychain, open_store
-from buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.account_native import CodexAccountProcess, harden_home, key_value, write_codex_key
+from hey_my_buddy.blackboard.catalog.account_keystore import MacKeychain, open_store
+from hey_my_buddy.errors import BoardError
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'mock_account_codex.py'
 
@@ -83,7 +83,7 @@ class NativeAccountOwnerTests(unittest.TestCase):
         self.assertEqual(target.read_text(), 'sentinel')
 
     def test_unsupported_store_and_invalid_key_never_fall_back_or_echo(self):
-        with patch('buddy.account_keystore.sys.platform', 'linux'):
+        with patch('hey_my_buddy.blackboard.catalog.account_keystore.sys.platform', 'linux'):
             with self.assertRaises(BoardError) as unavailable:
                 open_store()
         self.assertEqual(unavailable.exception.code, 'ACCOUNT_SECRET_STORE_UNAVAILABLE')

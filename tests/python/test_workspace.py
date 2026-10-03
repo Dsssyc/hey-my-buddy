@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from buddy.errors import BoardError
-from buddy import workspace
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import workspace
 
 
 class WorkspaceTests(unittest.TestCase):

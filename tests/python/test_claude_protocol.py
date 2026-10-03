@@ -7,9 +7,18 @@ import threading
 import time
 import unittest
 
-from buddy.adapters.claude_protocol import (ClaudeProtocolError, Connection, OUTCOME_SCHEMA, QuotaRejected, TurnEvidence,
-                                            decode_json, model_usage_keys, parse_structured_output,
-                                            rate_limit_observation, result_quota_denial)
+from hey_my_buddy.buddy.harnesses.claude.protocol import (
+    ClaudeProtocolError,
+    Connection,
+    OUTCOME_SCHEMA,
+    QuotaRejected,
+    TurnEvidence,
+    decode_json,
+    model_usage_keys,
+    parse_structured_output,
+    rate_limit_observation,
+    result_quota_denial,
+)
 
 
 class FakeProcess:

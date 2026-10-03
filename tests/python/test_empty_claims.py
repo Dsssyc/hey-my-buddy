@@ -16,7 +16,7 @@ import unittest
 
 from support import BoardTestCase
 
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 
 NONCE = "a" * 32
 

@@ -19,9 +19,9 @@ from pathlib import Path
 
 from support import FIXTURE_CATALOG, BoardTestCase
 
-from buddy.errors import BoardError
-from buddy.private_dirs import attempt_root, ensure_private_dir
-from buddy.inquiry import (
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
+from hey_my_buddy.blackboard.tasks.inquiry import (
     MAX_JOURNAL_BYTES,
     bridge_request,
     observe,
@@ -148,7 +148,7 @@ class TestInquiry(BoardTestCase):
         claim = client.claim("w-inq", "claim-inq-1", "a" * 32)
         self.assertIsNotNone(claim["claim"]["turn"])
         attempt = claim["claim"]["attempt"]
-        from buddy.worker.worker import fsync_json
+        from hey_my_buddy.buddy.runtime.worker import fsync_json
 
         directory = self.directory / "attempts" / task["runId"] / attempt["attemptId"]
         directory.mkdir(parents=True, exist_ok=True)
@@ -355,7 +355,7 @@ class TestInquiry(BoardTestCase):
         import tempfile
         import uuid
 
-        # Keep the AF_UNIX address short even inside buddy.checks' private TMPDIR.
+        # Keep the AF_UNIX address short even inside hey_my_buddy.cli.checks' private TMPDIR.
         # A nested workdir can exceed macOS's socket limit before ENOENT is tested.
         missing = Path(tempfile.gettempdir()) / f"hbi-{uuid.uuid4().hex[:8]}"
         self.assertFalse(missing.exists())
@@ -374,9 +374,9 @@ class TestInquiry(BoardTestCase):
         self.assertIn("no observation or inquiry capability", result["bridge"]["reason"])
 
     def test_inquiry_capability_comes_from_the_adapter_registry(self):
-        from buddy.inquiry import inquiry_capable
+        from hey_my_buddy.blackboard.tasks.inquiry import inquiry_capable
 
-        from buddy.inquiry import observe_capable
+        from hey_my_buddy.blackboard.tasks.inquiry import observe_capable
 
         # DSH supports live injection; ZCode delivers at cooperative tool
         # checkpoints. Neither capability is inferred by probing a native CLI.
@@ -444,7 +444,7 @@ class TestInquiry(BoardTestCase):
         finally:
             bridge.close()
 
-    @mock.patch("buddy.inquiry.adapter_capabilities", return_value=frozenset({"zcode", "observe"}))
+    @mock.patch("hey_my_buddy.blackboard.tasks.inquiry.adapter_capabilities", return_value=frozenset({"zcode", "observe"}))
     def test_an_observe_only_adapter_refuses_a_question_without_asking_the_bridge(self, _capabilities):
         import copy
 

@@ -3,8 +3,10 @@ import json
 import os
 from pathlib import Path
 from unittest import mock
-from buddy import backup, private_dirs, upgrade
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy import private_dirs
+from hey_my_buddy.install import upgrade
+from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
@@ -38,15 +40,15 @@ class UpgradeTests(BoardTestCase):
         (home / 'cache.sqlite').write_bytes(b'native cache')
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
-             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
-             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
-             mock.patch('buddy.upgrade.runtime.read_ready', return_value={'sourceCommit': 'fixture'}), \
-             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch('buddy.upgrade.probe', return_value=health), \
-             mock.patch('buddy.upgrade.detach'), \
-             mock.patch('buddy.upgrade.start', return_value={'runtimeContentId': target.name}), \
-             mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints': True}), \
-             mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete': True}):
+             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'fixture'}), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
+             mock.patch('hey_my_buddy.install.upgrade.detach'), \
+             mock.patch('hey_my_buddy.install.upgrade.start', return_value={'runtimeContentId': target.name}), \
+             mock.patch('hey_my_buddy.install.upgrade.verify_started', return_value={'retainedDataFingerprints': True}), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.prune_old_runtimes', return_value={'complete': True}):
             result = upgrade.upgrade({})
         self.assertTrue(result['upgraded'], result)
         manifest = backup.verify(Path(result['backup']['path']))
@@ -79,15 +81,15 @@ class UpgradeTests(BoardTestCase):
         (invocation / 'call-1/request.json').write_text('{"prompt":"call evidence"}')
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
-             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
-             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
-             mock.patch('buddy.upgrade.runtime.read_ready', return_value={'sourceCommit': 'fixture'}), \
-             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch('buddy.upgrade.probe', return_value=health), \
-             mock.patch('buddy.upgrade.detach'), \
-             mock.patch('buddy.upgrade.start', return_value={'runtimeContentId': target.name}), \
-             mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints': True}), \
-             mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete': True}):
+             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'fixture'}), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
+             mock.patch('hey_my_buddy.install.upgrade.detach'), \
+             mock.patch('hey_my_buddy.install.upgrade.start', return_value={'runtimeContentId': target.name}), \
+             mock.patch('hey_my_buddy.install.upgrade.verify_started', return_value={'retainedDataFingerprints': True}), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.prune_old_runtimes', return_value={'complete': True}):
             result = upgrade.upgrade({})
         self.assertTrue(result['upgraded'], result)
         manifest = backup.verify(Path(result['backup']['path']))
@@ -131,16 +133,16 @@ class UpgradeTests(BoardTestCase):
         (state / 'control.json').write_text(json.dumps(endpoint))
         health = {**endpoint, 'maxConcurrent':1, 'waitCapacity':32}
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(root)}), \
-             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
-             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
-             mock.patch('buddy.upgrade.runtime.read_ready', return_value={'sourceCommit':'fixture'}), \
-             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir':str(target)}), \
-             mock.patch('buddy.upgrade.probe', return_value=health), \
-             mock.patch('buddy.upgrade.detach'), \
-             mock.patch('buddy.upgrade.start', side_effect=[BoardError('INJECTED','target failed'), health]), \
-             mock.patch('buddy.upgrade.private_migration.apply', side_effect=verified_relocation), \
-             mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints':True}), \
-             mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete':True}):
+             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit':'fixture'}), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir':str(target)}), \
+             mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
+             mock.patch('hey_my_buddy.install.upgrade.detach'), \
+             mock.patch('hey_my_buddy.install.upgrade.start', side_effect=[BoardError('INJECTED','target failed'), health]), \
+             mock.patch('hey_my_buddy.install.upgrade.private_migration.apply', side_effect=verified_relocation), \
+             mock.patch('hey_my_buddy.install.upgrade.verify_started', return_value={'retainedDataFingerprints':True}), \
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.prune_old_runtimes', return_value={'complete':True}):
             result = upgrade.upgrade({})
         self.assertFalse(result['upgraded'], result)
         self.assertEqual(result['failure'], 'INJECTED')
@@ -171,11 +173,11 @@ class UpgradeTests(BoardTestCase):
         health = {'serviceId': 'existing', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32}
         busy = BoardError('UPGRADE_NOT_IDLE', 'running work', active=[{'runId': 'busy', 'state': 'running'}])
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
-                mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
-                mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
-                mock.patch('buddy.upgrade.probe', return_value=health), \
-                mock.patch('buddy.upgrade.idle_snapshot', side_effect=busy), \
-                mock.patch('buddy.upgrade.runtime.materialize') as materialize:
+                mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
+                mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
+                mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
+                mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=busy), \
+                mock.patch('hey_my_buddy.install.upgrade.runtime.materialize') as materialize:
             with self.assertRaises(BoardError) as caught:
                 upgrade.upgrade({}, skill_source=source, skill_target=skill)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
@@ -194,8 +196,8 @@ class UpgradeTests(BoardTestCase):
             (directory / 'scripts/buddy').write_text(value + ' launcher')
         journal = {'skillTarget': str(skill), 'skillStage': str(staged),
                    'skillPrevious': str(previous), 'skillHadPrevious': True}
-        with mock.patch('buddy.skill_install.agent_skills_home', return_value=skill.parent), \
-             mock.patch('buddy.skill_install._link_claude', return_value={'status': 'already-linked'}):
+        with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
+             mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}):
             upgrade._publish_skill(journal)
             self.assertEqual((skill / 'SKILL.md').read_text(), 'new')
             upgrade._restore_skill(journal)
@@ -228,13 +230,13 @@ class UpgradeTests(BoardTestCase):
         before = upgrade.idle_snapshot(state)
         busy = BoardError('UPGRADE_NOT_IDLE', 'raced task', active=[{'runId': 'raced', 'state': 'queued'}])
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
-             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
-             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
-             mock.patch('buddy.upgrade.probe', return_value=health), \
-             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch('buddy.upgrade.idle_snapshot', side_effect=[before, before, busy]), \
-             mock.patch('buddy.upgrade.detach') as detach, \
-             mock.patch('buddy.upgrade.backup.create') as create:
+             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=[before, before, busy]), \
+             mock.patch('hey_my_buddy.install.upgrade.detach') as detach, \
+             mock.patch('hey_my_buddy.install.upgrade.backup.create') as create:
             result = upgrade.upgrade({})
         self.assertEqual(result['error']['code'], 'UPGRADE_NOT_IDLE')
         self.assertEqual(result['error']['details']['active'][0]['runId'], 'raced')
@@ -271,14 +273,14 @@ class UpgradeTests(BoardTestCase):
                     candidate.write_text('new undeclared content')
 
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
-             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
-             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
-             mock.patch('buddy.upgrade.probe', return_value=health), \
-             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch('buddy.upgrade.write_journal', side_effect=fenced_write), \
-             mock.patch('buddy.upgrade.detach') as detach, \
-             mock.patch('buddy.upgrade.start', return_value=health) as start, \
-             mock.patch('buddy.upgrade.backup.create') as create:
+             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
+             mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('hey_my_buddy.install.upgrade.write_journal', side_effect=fenced_write), \
+             mock.patch('hey_my_buddy.install.upgrade.detach') as detach, \
+             mock.patch('hey_my_buddy.install.upgrade.start', return_value=health) as start, \
+             mock.patch('hey_my_buddy.install.upgrade.backup.create') as create:
             result = upgrade.upgrade({})
         self.assertTrue(inserted)
         self.assertEqual(result['error']['code'], 'BACKUP_PREFLIGHT_FAILED', result)
@@ -370,7 +372,7 @@ class UpgradeTests(BoardTestCase):
         snapshot = state / '.restore.sqlite3'
         snapshot.write_bytes(b'keep reparse sentinel')
         original_linked = private_dirs.linked
-        with mock.patch('buddy.private_dirs.linked', side_effect=lambda path: path == snapshot or original_linked(path)):
+        with mock.patch('hey_my_buddy.private_dirs.linked', side_effect=lambda path: path == snapshot or original_linked(path)):
             with self.assertRaises(BoardError) as caught:
                 upgrade.restore(state, current)
         self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
@@ -382,7 +384,7 @@ class UpgradeTests(BoardTestCase):
         current = Path(backup.create(board.store)['path'])
         alias = self.directory / 'linked-state-parent'
         alias.symlink_to(state, target_is_directory=True)
-        with mock.patch('buddy.upgrade.backup.recover') as recover:
+        with mock.patch('hey_my_buddy.install.upgrade.backup.recover') as recover:
             with self.assertRaises(BoardError) as caught:
                 upgrade.restore(alias, current)
         self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
@@ -393,7 +395,7 @@ class UpgradeTests(BoardTestCase):
         current = Path(backup.create(board.store)['path'])
         alias = self.directory / 'linked-backup-parent'
         alias.symlink_to(current.parent, target_is_directory=True)
-        with mock.patch('buddy.upgrade.backup.recover') as recover:
+        with mock.patch('hey_my_buddy.install.upgrade.backup.recover') as recover:
             with self.assertRaises(BoardError) as caught:
                 upgrade.restore(board.directory, alias / current.name)
         self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
@@ -420,7 +422,8 @@ class UpgradeTests(BoardTestCase):
         board=self.board()
         child=mock.Mock()
         child.poll.return_value=None
-        with mock.patch('buddy.upgrade.subprocess.Popen',return_value=child), mock.patch('buddy.upgrade.time.monotonic',side_effect=[0,46]):
+        (self.directory/'runtime-target'/'src'/'hey_my_buddy').mkdir(parents=True)
+        with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen',return_value=child), mock.patch('hey_my_buddy.install.upgrade.time.monotonic',side_effect=[0,46]):
             with self.assertRaises(BoardError) as caught:
                 upgrade.start(board.directory, self.directory/'runtime-target')
         self.assertEqual(caught.exception.code,'UPGRADE_SHUTDOWN_UNCONFIRMED')

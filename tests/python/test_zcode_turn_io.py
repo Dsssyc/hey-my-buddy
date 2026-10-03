@@ -4,8 +4,8 @@ import json
 import unittest
 
 from test_zcode import ZcodeFixtureCase
-from buddy.adapters import turn_io
-from buddy.adapters.dsh import DshAdapter
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 
 
 class SharedTurnIOTests(ZcodeFixtureCase):
@@ -24,7 +24,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         self.assertNotIn(context.agent_credential, context.turn_input_file().read_text())
         self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
         self.assertEqual(context.environment["BUDDY_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         self.assertEqual(context.credential_file().parent, context_root(context, "zcode"))
         self.assertFalse(context.credential_file().is_relative_to(context.directory))
         self.assertFalse((context.directory / "agent-credential.json").exists())

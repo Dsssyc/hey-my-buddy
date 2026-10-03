@@ -7,14 +7,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from buddy import catalog, schemas
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.catalog import catalog
+from hey_my_buddy.protocol import schemas
+from hey_my_buddy.errors import BoardError
 from support import FIXTURE_CATALOG
 
 
 class CatalogTests(unittest.TestCase):
     def test_missing_harness_is_not_started_by_explicit_discovery(self):
-        from buddy.adapters.base import Adapter
+        from hey_my_buddy.buddy.harnesses.base import Adapter
 
         class MissingHarness(Adapter):
             model_discovery = True
@@ -25,14 +26,14 @@ class CatalogTests(unittest.TestCase):
             def discover_models(self):
                 raise AssertionError("No controller should be spawned for a missing executable")
 
-        with patch("buddy.adapters.adapters", return_value={"missing": MissingHarness()}), \
+        with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover()
         self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown",
                                                   "reason": "fixture executable missing"}])
 
     def test_explicit_discovery_refreshes_cached_unavailable_authentication(self):
-        from buddy.adapters import claude
+        from hey_my_buddy.buddy.harnesses.claude import adapter as claude
         native = {"source": "claude-fixture", "providers": [{"adapter": "claude", "provider": "anthropic",
                   "models": [{"id": "fixture-opus", "efforts": ["high"]}]}]}
         instance = claude.ClaudeAdapter()
@@ -42,7 +43,7 @@ class CatalogTests(unittest.TestCase):
              patch.object(claude, "third_party_overrides", return_value=[]), \
              patch.object(claude, "_probe_native_metadata", side_effect=[
                  BoardError("ADAPTER_UNAVAILABLE", "fixture not logged in"), {"catalog": native}]) as probe, \
-             patch("buddy.adapters.adapters", return_value={"claude": instance}), \
+             patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"claude": instance}), \
              patch.object(catalog, "_override", return_value=None):
             self.assertFalse(instance.available()[0])
             self.assertFalse(instance.available()[0])
@@ -135,7 +136,7 @@ class CatalogTests(unittest.TestCase):
             directory = Path(temporary)
             file = directory / "catalog.json"
             file.write_text(json.dumps(self.payload()))
-            with patch.dict(os.environ, {catalog.CATALOG_FILE_ENV: str(file)}), patch("buddy.adapters.adapter", return_value=Harness()):
+            with patch.dict(os.environ, {catalog.CATALOG_FILE_ENV: str(file)}), patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Harness()):
                 identity = dict(adapter="zcode", provider="deepseek-official", model="deepseek-flash", effort="high")
                 self.assertEqual(catalog.validate_configuration(identity, directory=directory), identity)
                 for replacement in ({"effort": "max"}, {"provider": "missing"}, {"model": "basic", "effort": "off"}):

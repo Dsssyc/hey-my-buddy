@@ -9,12 +9,14 @@ import stat
 from unittest.mock import patch
 
 from support import BoardTestCase
-from buddy import cli, daemon, schemas, transport
-from buddy.contracts import CONTRACT_VERSION, BuddyControl
-from buddy.db import Corruption, Database, SCHEMA_VERSION
-from buddy.errors import BoardError
-from buddy.service import CONTROL_OPERATIONS
-from buddy.store import BoardStore
+from hey_my_buddy.cli import main as cli
+from hey_my_buddy.blackboard.service import daemon
+from hey_my_buddy.protocol import schemas, transport
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION, BuddyControl
+from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
+from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
@@ -109,7 +111,7 @@ class CurrentCoreTests(BoardTestCase):
                     cli.main([method, "{}"])
                 self.assertEqual(caught.exception.code, 2)
         self.assertFalse(hasattr(daemon, "LegacySocketGuard"))
-        for module in ("buddy.legacy", "buddy.migrate", "buddy.dashboard"):
+        for module in ("hey_my_buddy.legacy", "hey_my_buddy.migrate", "hey_my_buddy.dashboard"):
             self.assertIsNone(importlib.util.find_spec(module))
         self.assertFalse(hasattr(schemas, "FINGERPRINT_VERSION_LEGACY"))
         self.assertFalse(hasattr(schemas, "legacy_fingerprint"))

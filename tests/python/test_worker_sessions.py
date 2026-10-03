@@ -7,8 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-from buddy import worker_sessions
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import worker_sessions
+from hey_my_buddy.errors import BoardError
 
 
 class FakeDB:

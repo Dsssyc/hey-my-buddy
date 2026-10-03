@@ -1,6 +1,6 @@
 """CLI surface tests: the current single-contract names, help and Host control privacy.
 
-The governed command path is driven through the real ``buddy.cli`` module, the real
+The governed command path is driven through the real ``hey_my_buddy.cli.main`` module, the real
 ``transport.call_service`` mapping and the real store/service validators; only the
 C-Two socket is substituted with the in-process board and only the Git-backed
 workspace module is replaced by the deterministic double.
@@ -19,9 +19,9 @@ from unittest import mock
 from support import BoardTestCase
 from test_workflow import WorkflowTestCase
 
-import buddy.cli as cli
-import buddy.transport as transport
-from buddy.errors import BoardError
+import hey_my_buddy.cli.main as cli
+import hey_my_buddy.protocol.transport as transport
+from hey_my_buddy.errors import BoardError
 
 #: Every CLI method that was removed by ADR-007, plus the ADR-008 removal of the
 #: internal maintenance call and the ADR-021 retirement of the paid review

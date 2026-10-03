@@ -10,7 +10,7 @@ import unittest
 
 from support import BoardTestCase, FakeClock
 
-from buddy.db import canonical_json, sha256_text
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
 
 class RoutingHealthTests(BoardTestCase):

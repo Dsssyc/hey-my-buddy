@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from buddy import router, schemas
-from buddy.db import canonical_json, sha256_text
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.protocol import schemas
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.errors import BoardError
 from fixtures import mock_readonly
 from support import BoardTestCase
 from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
@@ -109,7 +110,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
                                 preferenceChanges=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "later bound"}])
-        with patch("buddy.router.current_router", side_effect=AssertionError("replay must not resolve")):
+        with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("replay must not resolve")):
             replay = self.request(board)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(replay["decisionId"], first["decisionId"])
@@ -152,7 +153,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_review_ineligible_does_not_fall_back_to_available_fast_capability(self):
         board = self.board()
         self.seed(board)
-        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": False, "systemSandbox": False,
                 "reasonCode": "readonly-tools-unrestricted", "reason": "fixture tools unrestricted"}):
             view = self.audit(board, self.request(board))
@@ -182,7 +183,7 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.legacy(board)
-        with patch("buddy.router.current_router", side_effect=AssertionError("direct path must not resolve")):
+        with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("direct path must not resolve")):
             view = self.audit(board, self.request(board, requiredCapabilities=["input:image"]))
         self.assertEqual(view["status"], "completed")
         self.assertEqual(view["profileId"], PROFILE_ID)
@@ -195,7 +196,7 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.legacy(board)
-        with patch("buddy.router.current_router", side_effect=AssertionError("empty bounds must not resolve")):
+        with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("empty bounds must not resolve")):
             view = self.audit(board, self.request(board, requiredCapabilities=["not-present"]))
         self.assertEqual(view["status"], "needs-host")
         self.assertIn("legal candidate", view["reason"])
@@ -225,16 +226,16 @@ class SingleRouterRequestTests(BoardTestCase):
                 self.assertEqual(actual, code)
                 self.assertIn(text, reason)
             connection.execute("UPDATE evaluation_profiles SET available=1 WHERE profile_id=?", (PROFILE_ID,))
-            with patch("buddy.harness_health.read_health", return_value={"available": False, "reasonCode": "executable-missing", "reason": "fixture missing"}):
+            with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reasonCode": "executable-missing", "reason": "fixture missing"}):
                 _, code, reason = router.profile_problem(connection, PROFILE_ID, "review")
             self.assertEqual(code, "router-unavailable")
             self.assertIn("executable-missing", reason)
             self.assertIn("fixture missing", reason)
-            with patch("buddy.native_observations.exhausted", return_value={"nativeCode": "quota"}):
+            with patch("hey_my_buddy.blackboard.evaluation.native_observations.exhausted", return_value={"nativeCode": "quota"}):
                 _, code, reason = router.profile_problem(connection, PROFILE_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")
             self.assertIn("额度耗尽", reason)
-            with patch("buddy.adapters.dsh.DshAdapter.no_tool_structured", False):
+            with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", False):
                 _, code, reason = router.profile_problem(connection, PROFILE_ID, "fast")
             self.assertEqual(code, "router-no-tool-unsupported")
             self.assertIn("无工具结构化入口", reason)
@@ -294,7 +295,7 @@ class SingleRouterRequestTests(BoardTestCase):
         # The old assembly fits this ceiling; the final schema/account/snapshot
         # additions do not. Admission must check the entire actual packet.
         limit = len(canonical_json(document).encode("utf-8")) - 1
-        with patch("buddy.decision.MAX_DECISION_INPUT_BYTES", limit):
+        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", limit):
             response = self.request(board, requestId="bounded-packet")
         view = self.audit(board, response)
         self.assertEqual(view["status"], "needs-host")
@@ -372,7 +373,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             connection.execute("UPDATE meta SET value='1' WHERE key='router_configuration_version'")
-        with patch("buddy.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
+        with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
             view = self.submit(board)
         self.assertEqual(view["routing"]["status"], "explicit")
         self.assertEqual(view["executionConfiguration"], CONFIGURATION)

@@ -18,11 +18,11 @@ from pathlib import Path
 from support import BoardTestCase, FakeClock, wait_for
 from test_evaluation import EvaluationTestCase as EvaluationFixtures
 
-from buddy.errors import BoardError
-from buddy import router
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router
 from fixtures import mock_readonly
 from fixtures.router_tool_receipt import claim_tool_receipt
-from buddy.worker.worker import Worker
+from hey_my_buddy.buddy.runtime.worker import Worker
 
 PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
 PROFILE = {
@@ -693,7 +693,7 @@ class DecisionFailureTests(DecisionTestCase):
         from unittest.mock import patch
         board = self.board()
         self.seed(board)
-        with patch('buddy.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
+        with patch('hey_my_buddy.buddy.roles.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
             decision = self.outcome(board, 'select_first')
         # The generic Worker crossed start(), so an exception without a handle
         # carries unknown shutdown even though the fixture never spawned native work.
@@ -1021,10 +1021,10 @@ class DecisionFailureTests(DecisionTestCase):
 
 class DecisionSurfaceTests(DecisionTestCase):
     def test_http_cli_and_ctwo_expose_the_same_named_operations(self):
-        from buddy.console import CONSOLE_OPERATIONS
-        from buddy.service import CONTROL_OPERATIONS
-        from buddy.transport import METHOD_MAP
-        import buddy.cli as cli
+        from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+        from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
+        from hey_my_buddy.protocol.transport import METHOD_MAP
+        import hey_my_buddy.cli.main as cli
 
         for operation in ("selection_request", "selection_get"):
             self.assertIn(operation, CONTROL_OPERATIONS)
@@ -1265,7 +1265,7 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         manifest, frozen_root, expected_digest = self.input_verify.call_args.args
         self.assertEqual(manifest, decision["input"]["executionWorkspace"])
         self.assertEqual(request_view.cwd, str(frozen_root))
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         private_root = context_root(context, native.name)
         self.input_prepare.assert_called_once_with(manifest, private_root)
         self.assertTrue(Path(frozen_root).is_relative_to(private_root))

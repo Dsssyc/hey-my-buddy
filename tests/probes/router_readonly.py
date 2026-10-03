@@ -22,9 +22,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
-from buddy.adapters.base import ExecutionContext, ReadOnlyStructuredRequest
-from buddy.adapters import read_only
-from buddy.router import budget
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.blackboard.routing.router import budget
 
 ADAPTERS = ("codex", "claude", "dsh", "zcode")
 SCHEMA = {
@@ -53,15 +53,15 @@ CRITERIA = {
 def adapter_for(name):
     # 不调用 available()/discover_models()，这些检查可能启动原生子进程。
     if name == "codex":
-        from buddy.adapters.codex import CodexAdapter
+        from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
         return CodexAdapter()
     if name == "claude":
-        from buddy.adapters.claude import ClaudeAdapter
+        from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
         return ClaudeAdapter()
     if name == "dsh":
-        from buddy.adapters.dsh import DshAdapter
+        from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
         return DshAdapter()
-    from buddy.adapters.zcode import ZcodeAdapter
+    from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
     return ZcodeAdapter()
 
 
@@ -125,7 +125,7 @@ def input_hashes(path):
 
 
 def clean_environment(root):
-    from buddy.harness_discovery import native_environment
+    from hey_my_buddy.buddy.harnesses.discovery import native_environment
     environment = native_environment(os.environ)
     environment.update(BUDDY_STATE_DIR=str(root / "state"), BUDDY_RUNTIME_ROOT=str(root / "runtime"),
                        BUDDY_DEV_SOURCE="1", BUDDY_CLAUDE_SETTINGS_POLICY="isolated",

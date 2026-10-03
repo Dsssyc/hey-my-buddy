@@ -16,12 +16,12 @@ import time
 import unittest
 from pathlib import Path
 
-from buddy import tool_evidence
-from buddy.adapters.base import ExecutionContext, NoToolStructuredRequest
-from buddy.adapters.zcode import ZcodeAdapter
-from buddy.adapters.zcode_protocol import NativeError
-from buddy.adapters.zcode_runner import NoToolEvidence
-from buddy.adapters.zcode_tool_evidence import ZcodeToolFacts
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
+from hey_my_buddy.buddy.harnesses.zcode.runner import NoToolEvidence
+from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
 
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},

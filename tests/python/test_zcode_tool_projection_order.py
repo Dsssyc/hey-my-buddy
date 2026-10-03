@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import unittest
 
-from buddy import tool_evidence
-from buddy.adapters.zcode_tool_evidence import ZcodeToolFacts
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
 
 
 BINDING = {"adapter": "zcode", "taskId": "projection", "attemptId": "attempt", "generation": 1}

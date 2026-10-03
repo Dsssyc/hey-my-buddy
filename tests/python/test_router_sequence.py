@@ -11,9 +11,9 @@ import json
 import unittest
 
 from support import BoardTestCase
-from buddy import router_sequence
-from buddy.db import canonical_json, sha256_text
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router_sequence
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.errors import BoardError
 
 T0 = "2026-01-01T00:00:00.000Z"
 T1 = "2026-01-01T00:01:00.000Z"

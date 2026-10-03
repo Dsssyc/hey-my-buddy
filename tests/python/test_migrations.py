@@ -5,8 +5,8 @@ import sqlite3
 import unittest
 from pathlib import Path
 
-from buddy import migrations
-from buddy.db import SCHEMA
+from hey_my_buddy.blackboard.store import migrations
+from hey_my_buddy.blackboard.store.db import SCHEMA
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "schema-12.sql"
 

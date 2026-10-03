@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from buddy import locking
+from hey_my_buddy import locking
 
 
 class LockingTests(unittest.TestCase):

@@ -3,8 +3,8 @@
 The observer runs inside the installed dsh process, so its contract is tested by
 driving the real ``harnesses/dsh/plugins/activity.mjs`` module with the discovered
 native event shapes and then reading the emitted file with the real
-``buddy.activity`` reader. This suite does the same for
-``harnesses/dsh/plugins/usage.mjs`` and ``buddy.usage``: the desensitized native
+``hey_my_buddy.protocol.activity`` reader. This suite does the same for
+``harnesses/dsh/plugins/usage.mjs`` and ``hey_my_buddy.protocol.usage``: the desensitized native
 DSH record in ``fixtures/native-usage-dsh.json`` is projected by the production
 plugin, then normalized by the production adapter-side reader.
 """
@@ -20,7 +20,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from buddy import usage
+from hey_my_buddy.protocol import usage
 
 ROOT = Path(__file__).resolve().parents[2]
 PLUGIN = ROOT / "harnesses/dsh/plugins/usage.mjs"

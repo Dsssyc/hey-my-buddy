@@ -1,14 +1,14 @@
 """A failed pre-model start gets one retry; a child that may be working gets none."""
 from unittest.mock import Mock, patch
 
-from buddy.errors import BoardError
-from buddy.worker.worker import Worker
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.runtime.worker import Worker
 from support import BoardTestCase
 
 
 class HarnessStartupTests(BoardTestCase):
     def test_controllers_use_a_whitelist_and_router_has_no_attempt_authority(self):
-        from buddy.harness_runtime import controller_environment
+        from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
         class NoEnvironmentDump(dict):
             def items(self):
                 raise AssertionError('Do not collect arbitrary environment values')

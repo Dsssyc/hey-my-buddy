@@ -8,10 +8,17 @@ import time
 import unittest
 from types import SimpleNamespace
 
-from buddy.adapters.codex_protocol import (CodexProtocolError, Connection, TurnEvidence, attempt_token_usage,
-                                           checkpoint_resumable, native_checkpoint, parse_outcome,
-                                           validated_checkpoint)
-from buddy.adapters.codex_runner import execution_deadline
+from hey_my_buddy.buddy.harnesses.codex.protocol import (
+    CodexProtocolError,
+    Connection,
+    TurnEvidence,
+    attempt_token_usage,
+    checkpoint_resumable,
+    native_checkpoint,
+    parse_outcome,
+    validated_checkpoint,
+)
+from hey_my_buddy.buddy.harnesses.codex.runner import execution_deadline
 
 
 class StructuredOutcomeTests(unittest.TestCase):

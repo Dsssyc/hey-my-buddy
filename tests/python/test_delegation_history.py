@@ -17,8 +17,8 @@ from support import FakeClock
 from test_decision import DecisionTestCase
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
-from buddy import delegation
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import delegation
+from hey_my_buddy.errors import BoardError
 
 
 class DelegationTestCase(WorkflowTestCase):
@@ -263,7 +263,7 @@ class GoalProvenanceTests(DelegationTestCase):
         self.finish_turn(board, self.claim(board, run_id=child, claim_request_id="old-leaf-yields"), disposition="assistance")
         view = board.call("workflow_get", {"runId": parent["runId"]})
         view = self.take_over(board, view, "host-b", "new-controller")
-        with patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
+        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
             board.call("workflow_decide", {"runId": parent["runId"], "requestId": view["activeRequest"]["requestId"],
                        "commandId": "new-deep-helper", "expectedRevision": view["revision"], "decision": "approve",
                        "helpers": [self.helper_spec("new-grandchild")], **self.control(view)})
@@ -356,7 +356,7 @@ class GoalProvenanceTests(DelegationTestCase):
     def test_internal_routing_decision_belongs_to_its_owning_goal(self):
         board = self.board()
         self.seed(board)
-        with patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
+        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
             submitted = board.call(
                 "workflow_submit",
                 {
@@ -658,7 +658,7 @@ class ShutdownHistoryTests(DelegationTestCase):
     def test_review_filter_waits_for_a_descendants_fenced_router_to_stop(self):
         board = self.board(max_concurrent=2)
         self.seed(board)
-        with patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
+        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
             parent, helper_id = self.parent_and_helper(board, routed=True)
         helper = board.call("workflow_get", {"runId": helper_id})
         router_id = helper["routing"]["taskId"]
@@ -728,7 +728,7 @@ class BulkDecoratedViewsTests(DelegationTestCase):
     def test_helpers_and_decisions_never_appear_in_root_history(self):
         board = self.board()
         self.seed(board)
-        with patch("buddy.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
+        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
             routed = board.call(
                 "workflow_submit",
                 {

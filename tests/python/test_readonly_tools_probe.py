@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from buddy.adapters.base import AdapterOutcome
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from fixtures.router_tool_receipt import tool_receipt
 
 path = Path(__file__).resolve().parents[1] / 'probes' / 'router_readonly_tools.py'

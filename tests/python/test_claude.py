@@ -15,12 +15,12 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from buddy.adapters import claude as claude_module
-from buddy.adapters import turn_io
-from buddy.adapters.base import ExecutionContext
-from buddy.adapters.claude import ClaudeAdapter
-from buddy.adapters.claude_protocol import OUTCOME_SCHEMA, QUOTA_REJECTED_ERROR
-from buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+from hey_my_buddy.buddy.harnesses.claude.protocol import OUTCOME_SCHEMA, QUOTA_REJECTED_ERROR
+from hey_my_buddy.errors import BoardError
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
@@ -446,7 +446,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         argv = self.fixture_state()["argv"]
         self.assertEqual(flag_value(argv, "--setting-sources"), "")
         self.assertIn("--strict-mcp-config", argv)
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context_root(context, "claude").resolve()))
 
     def test_unsupported_settings_policy_is_refused_before_any_model_input(self):
@@ -565,7 +565,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         for code, extra in cases.items():
             with self.subTest(code=code):
                 environment = {**self.environment, **extra}
-                completed = subprocess.run([sys.executable, "-m", "buddy.adapters.claude_runner",
+                completed = subprocess.run([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.claude.runner",
                                             "--control", str(path)], capture_output=True, text=True,
                                            env=environment, timeout=30)
                 payload = json.loads(completed.stdout)
@@ -585,9 +585,9 @@ class ClaudeAdapterTests(unittest.TestCase):
 
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"

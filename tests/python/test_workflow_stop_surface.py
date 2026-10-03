@@ -1,7 +1,7 @@
 """Public receipt/wait boundaries preserve whole-goal stop evidence."""
 import unittest
 
-from buddy.blocking import await_run
+from hey_my_buddy.cli.blocking import await_run
 from test_blocking import VirtualClock
 from test_workflow import NONCE, WorkflowTestCase
 

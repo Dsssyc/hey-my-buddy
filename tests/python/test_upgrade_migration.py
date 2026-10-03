@@ -5,10 +5,11 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
-from buddy import backup, migrations, upgrade
-from buddy.db import Database
-from buddy.errors import BoardError
-from buddy.store import BoardStore
+from hey_my_buddy.blackboard.store import backup, migrations
+from hey_my_buddy.install import upgrade
+from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store.store import BoardStore
 from support import BoardTestCase
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "schema-12.sql"
@@ -77,7 +78,7 @@ class UpgradeMigrationTests(BoardTestCase):
             connection.execute("UPDATE evaluation_profiles SET label='rewritten'")
             return summary
 
-        with mock.patch("buddy.migrations.migrate_14_to_15", collateral):
+        with mock.patch("hey_my_buddy.blackboard.store.migrations.migrate_14_to_15", collateral):
             with self.assertRaises(BoardError) as caught:
                 upgrade.migrate_board(self.state, before)
         self.assertEqual(caught.exception.code, "UPGRADE_MIGRATION_FAILED")
@@ -99,6 +100,6 @@ class UpgradeMigrationTests(BoardTestCase):
         with self.assertRaises(BoardError) as caught:
             upgrade.verify_started(self.state, target, health, before)
         self.assertEqual(caught.exception.code, "UPGRADE_VERIFY_FAILED")
-        with mock.patch("buddy.upgrade.command", return_value={"leaks": []}):
+        with mock.patch("hey_my_buddy.install.upgrade.command", return_value={"leaks": []}):
             evidence = upgrade.verify_started(self.state, target, {**health, "schemaVersion": 14}, before)
         self.assertEqual(evidence["schemaVersion"], 14)

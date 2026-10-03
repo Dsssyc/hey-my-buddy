@@ -21,8 +21,8 @@ from threading import Event
 import unittest
 from unittest.mock import patch
 
-from buddy import runtime
-from buddy.errors import BoardError
+from hey_my_buddy.install import runtime
+from hey_my_buddy.errors import BoardError
 
 
 class RuntimeInterpreterTests(unittest.TestCase):
@@ -37,24 +37,28 @@ REAL_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASSETS = [
     {"path": "packaging/runtime-assets.json", "kind": "file"},
     {"path": "pyproject.toml", "kind": "file"},
-    {"path": "src/buddy", "kind": "directory"},
+    {"path": "src/hey_my_buddy", "kind": "directory"},
     {"path": "harnesses/dsh/scripts", "kind": "directory"},
 ]
 DEFAULT_RESOURCES = {
     "dsh.runner": "harnesses/dsh/scripts/run.mjs",
     "dsh.catalog": "harnesses/dsh/scripts/model-catalog.mjs",
-    "yaml.bridge": "src/buddy/yaml_bridge.py",
-    "console.assets": "src/buddy/console_assets",
+    "yaml.bridge": "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
+    "console.assets": "src/hey_my_buddy/console/assets",
 }
 
 
 def write_assets(root: Path) -> None:
     """The minimal set of declared files a synthetic runtime root needs."""
-    (root / "src" / "buddy" / "console_assets").mkdir(parents=True, exist_ok=True)
-    (root / "src" / "buddy" / "yaml_bridge.py").write_text("# yaml bridge\n")
-    (root / "src" / "buddy" / "console_assets" / "index.html").write_text("<html>console</html>\n")
-    (root / "src" / "buddy" / "__pycache__").mkdir(parents=True, exist_ok=True)
-    (root / "src" / "buddy" / "__pycache__" / "yaml_bridge.cpython-312.pyc").write_bytes(b"\0compiled")
+    bridge = root / "src" / "hey_my_buddy" / "buddy" / "harnesses" / "dsh"
+    bridge.mkdir(parents=True, exist_ok=True)
+    (bridge / "yaml_bridge.py").write_text("# yaml bridge\n")
+    console = root / "src" / "hey_my_buddy" / "console" / "assets"
+    console.mkdir(parents=True, exist_ok=True)
+    (console / "index.html").write_text("<html>console</html>\n")
+    cache = root / "src" / "hey_my_buddy" / "__pycache__"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "yaml_bridge.cpython-312.pyc").write_bytes(b"\0compiled")
     (root / "harnesses" / "dsh" / "scripts").mkdir(parents=True, exist_ok=True)
     for name in ("run.mjs", "model-catalog.mjs", "decision.mjs"):
         (root / "harnesses" / "dsh" / "scripts" / name).write_text(f"// {name}\n")
@@ -253,13 +257,13 @@ class DeclaredManifestTests(unittest.TestCase):
     def test_nested_asset_symlinks_outside_the_root_are_never_copied(self):
         outside = self.root.parent / "outside.py"
         outside.write_text("# not part of the declared root\n")
-        linked = self.root / "src/buddy/external.py"
+        linked = self.root / "src/hey_my_buddy/external.py"
         linked.symlink_to(outside)
         destination = self.root.parent / "copied"
         with self.assertRaises(BoardError) as failure:
             runtime._copy_assets(self.root, destination)
         self.assertEqual(failure.exception.code, "RUNTIME_ASSET_OUTSIDE_ROOT")
-        self.assertFalse((destination / "src/buddy/external.py").exists())
+        self.assertFalse((destination / "src/hey_my_buddy/external.py").exists())
 
     def test_a_missing_declared_asset_is_reported_not_skipped(self):
         (self.root / "pyproject.toml").unlink()
@@ -282,8 +286,8 @@ class DeclaredManifestTests(unittest.TestCase):
             {
                 "packaging/runtime-assets.json",
                 "pyproject.toml",
-                "src/buddy/yaml_bridge.py",
-                "src/buddy/console_assets/index.html",
+                "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
+                "src/hey_my_buddy/console/assets/index.html",
                 "harnesses/dsh/scripts/run.mjs",
                 "harnesses/dsh/scripts/model-catalog.mjs",
                 "harnesses/dsh/scripts/decision.mjs",
@@ -351,8 +355,8 @@ class RuntimeMaterializationTests(unittest.TestCase):
         for relative in (
             "pyproject.toml",
             "packaging/runtime-assets.json",
-            "src/buddy/yaml_bridge.py",
-            "src/buddy/console_assets/index.html",
+            "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
+            "src/hey_my_buddy/console/assets/index.html",
             "harnesses/dsh/scripts/run.mjs",
             "harnesses/dsh/scripts/model-catalog.mjs",
             "harnesses/dsh/scripts/decision.mjs",
@@ -360,7 +364,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
             self.assertTrue((target / relative).is_file(), relative)
         self.assertFalse((target / "tests").exists())
         self.assertFalse((target / ".venv").exists())
-        self.assertFalse((target / "src" / "buddy" / "__pycache__").exists())
+        self.assertFalse((target / "src" / "hey_my_buddy" / "__pycache__").exists())
         self.assertTrue(Path(record["python"]).is_file())
         self.assertEqual(runtime.find_ready(self.root, self.runtime_root), target)
         again = runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
@@ -368,7 +372,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(Path(again["runtimeDir"]), target)
 
     def test_materialize_accepts_a_manifest_with_only_another_harness(self):
-        resources = {"new-harness.runner": "src/buddy/yaml_bridge.py"}
+        resources = {"new-harness.runner": "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py"}
         write_manifest(self.root, resources=resources)
         target = self.materialize()
         self.assertTrue(runtime.is_ready(target))
@@ -478,7 +482,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
 
     def test_a_ready_runtime_rejects_an_outward_symlink_inside_an_asset_directory(self):
         target = self.materialize()
-        (target / "src/buddy/external.py").symlink_to(self.root / "src/buddy/yaml_bridge.py")
+        (target / "src/hey_my_buddy/external.py").symlink_to(self.root / "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py")
         self.assertFalse(runtime.is_ready(target))
 
     def test_a_shared_base_interpreter_symlink_is_allowed(self):
@@ -489,7 +493,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         interpreter.symlink_to(sys.executable)
         self.assertTrue(runtime.is_ready(target))
         actual = {
-            "package": str(target / "src/buddy"),
+            "package": str(target / "src/hey_my_buddy"),
             "prefix": record["environment"],
             "executable": record["python"],
             "resources": record["resources"],

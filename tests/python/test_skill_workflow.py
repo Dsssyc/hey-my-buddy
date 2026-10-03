@@ -12,7 +12,7 @@ import re
 import unittest
 from pathlib import Path
 
-import buddy.skill_package as skill_package
+import hey_my_buddy.install.skill_package as skill_package
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "buddy" / "SKILL.md"

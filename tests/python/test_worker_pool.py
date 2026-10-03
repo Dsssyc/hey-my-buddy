@@ -17,7 +17,7 @@ from pathlib import Path
 
 from support import BoardTestCase
 
-from buddy.daemon import WorkerPool
+from hey_my_buddy.blackboard.service.daemon import WorkerPool
 
 
 class WorkerPoolSizingTests(BoardTestCase):
@@ -32,8 +32,8 @@ class WorkerPoolSizingTests(BoardTestCase):
         process.poll.return_value = None
         try:
             handle.request_stop()  # the previous daemon's owner has not exited yet
-            with mock.patch("buddy.daemon.subprocess.Popen", return_value=process) as spawn, mock.patch(
-                "buddy.daemon.runtime.launch_target", return_value={"python": sys.executable, "pythonPath": None, "stable": False}
+            with mock.patch("hey_my_buddy.blackboard.service.daemon.subprocess.Popen", return_value=process) as spawn, mock.patch(
+                "hey_my_buddy.blackboard.service.daemon.runtime.launch_target", return_value={"python": sys.executable, "pythonPath": None, "stable": False}
             ):
                 pool.start()
                 spawn.assert_not_called()  # never duplicate a live owner

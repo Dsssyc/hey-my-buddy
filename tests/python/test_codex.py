@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from buddy.adapters.base import ExecutionContext
-from buddy.adapters.codex import CodexAdapter
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 
@@ -78,7 +78,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
 
     def test_coding_home_is_private_per_goal_and_keeps_source_auth_untouched(self):
-        from buddy.private_dirs import native_root
+        from hey_my_buddy.private_dirs import native_root
         auth = self.home / 'auth.json'
         auth.write_text('fixture login')
         context = self.context()
@@ -101,7 +101,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotEqual(stored['threads'][second.result['sessionId']]['codexHome'], str(home))
 
     def test_resumed_thread_reuses_home_and_recreates_only_a_private_auth_link(self):
-        from buddy.private_dirs import native_root
+        from hey_my_buddy.private_dirs import native_root
         (self.home / 'auth.json').write_text('fixture login')
         first = self.execute(self.context())
         home = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1') / 'codex-home'
@@ -114,8 +114,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse((home / 'auth.json').is_symlink())
 
     def test_selected_worker_account_never_falls_back_to_native_credentials(self):
-        from buddy.private_dirs import account_root
-        from buddy.accounts import WorkerAccountProvider, using_provider
+        from hey_my_buddy.private_dirs import account_root
+        from hey_my_buddy.blackboard.catalog.accounts import WorkerAccountProvider, using_provider
         provider = WorkerAccountProvider(capabilities={'workerAccount': True}, environment=lambda state, account, environment, purpose:
                                          {**environment, 'CODEX_HOME': str(account_root(state, 'codex'))})
         approved = using_provider('codex', provider)
@@ -145,7 +145,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual((root / 'auth.json').read_text(), 'worker login')
 
     def test_previous_unsettled_auth_is_retained_and_cannot_be_replaced(self):
-        from buddy.private_dirs import native_root
+        from hey_my_buddy.private_dirs import native_root
         root = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1')
         home = root / 'codex-home'
         home.mkdir(parents=True)
@@ -159,8 +159,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).exists())
 
     def test_unconfirmed_stop_retains_goal_auth_and_confirmed_cleanup_handles_refresh(self):
-        from buddy.private_dirs import native_root
-        from buddy.adapters.codex_home import remove_coding_auth
+        from hey_my_buddy.private_dirs import native_root
+        from hey_my_buddy.buddy.harnesses.codex.home import remove_coding_auth
         context = self.context()
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
@@ -182,7 +182,7 @@ class CodexAdapterTests(unittest.TestCase):
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(15))
-        with mock.patch('buddy.adapters.codex_home.remove_coding_auth', side_effect=OSError('fixture cleanup failure')):
+        with mock.patch('hey_my_buddy.buddy.harnesses.codex.home.remove_coding_auth', side_effect=OSError('fixture cleanup failure')):
             outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, 'ok', outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
@@ -191,8 +191,8 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_pinned_credential_operations_never_follow_a_replaced_parent(self):
         from contextlib import contextmanager
-        from buddy.adapters import codex_home
-        from buddy.errors import BoardError
+        from hey_my_buddy.buddy.harnesses.codex import home as codex_home
+        from hey_my_buddy.errors import BoardError
         real_pin = codex_home._pinned_home
         source = self.home / 'auth.json'
         source.write_text('source login')
@@ -222,8 +222,8 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_known_native_launch_failure_cleans_the_current_private_auth(self):
         import threading
-        from buddy.adapters import codex_runner
-        from buddy.private_dirs import native_root
+        from hey_my_buddy.buddy.harnesses.codex import runner as codex_runner
+        from hey_my_buddy.private_dirs import native_root
         (self.home / 'auth.json').write_text('source login')
         context = self.context()
         self.adapter.prepare(context)
@@ -321,7 +321,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
     def test_capability_readiness_does_not_start_a_native_probe(self):
-        with mock.patch("buddy.adapters.codex.cli_command", return_value=[str(FIXTURE)]), \
+        with mock.patch("hey_my_buddy.buddy.harnesses.codex.adapter.cli_command", return_value=[str(FIXTURE)]), \
              mock.patch.object(CodexAdapter, "discover_models", side_effect=AssertionError("native probe")):
             self.assertEqual(self.adapter.available(), (True, None))
 
@@ -424,9 +424,9 @@ class CodexAdapterTests(unittest.TestCase):
 
 
     def test_read_only_refuses_an_unacknowledged_policy_before_model_input(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context('readonly-policy-mismatch')
         context.turn = None
         request = ReadOnlyStructuredRequest(str(self.cwd), 'No model work before policy acknowledgement', answer_schema(['legal']), budget(), capture_evidence=True)
@@ -442,9 +442,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(result.shutdown_confirmed)
 
     def test_failed_config_readback_survives_without_a_model_call(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context('readonly-config-mismatch')
         context.turn = None
         request = ReadOnlyStructuredRequest(str(self.cwd), 'No model input before verified policy', answer_schema(['legal']), budget(), capture_evidence=True)
@@ -458,9 +458,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(result.shutdown_confirmed)
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"
@@ -479,9 +479,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse(context.turn_output_file().exists())
 
     def test_read_only_shutdown_removes_only_private_auth_link(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         account_home = self.root / 'account-home'
         account_home.mkdir()
         source_auth = account_home / 'auth.json'
@@ -496,12 +496,12 @@ class CodexAdapterTests(unittest.TestCase):
         result = collect(handle)
         self.assertEqual(result.status, 'ok', result.result)
         self.assertTrue(result.shutdown_confirmed)
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         self.assertFalse((context_root(context, "codex") / 'review-native/codex-home/auth.json').is_symlink())
         self.assertEqual(source_auth.read_text(), 'private fixture auth')
 
     def test_auth_cleanup_preserves_a_regular_file(self):
-        from buddy.adapters.codex_runner import _remove_private_auth
+        from hey_my_buddy.buddy.harnesses.codex.runner import _remove_private_auth
         home = self.root / 'native/codex-home'
         home.mkdir(parents=True)
         auth = home / 'auth.json'
@@ -511,9 +511,9 @@ class CodexAdapterTests(unittest.TestCase):
 
 
     def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context('readonly-budget')
         context.turn = None
         # A zero-call budget interrupts the fixture's first native tool call.
@@ -531,9 +531,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result['usage']['toolCalls'], 1)
 
     def test_denied_raw_tool_call_still_consumes_router_budget(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context('readonly-denied-budget')
         context.turn = None
         request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']),
@@ -549,9 +549,9 @@ class CodexAdapterTests(unittest.TestCase):
 
 
     def test_readonly_repairs_format_once_in_same_thread_but_not_bounds(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         for index, (case, calls) in enumerate((('readonly-repair', 2), ('readonly-outside', 1)), 1):
             with self.subTest(case=case):
                 context = self.context(case, index=index)

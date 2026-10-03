@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from test_decision import DecisionTestCase, PROFILE_ID
 
-from buddy import tool_evidence
+from hey_my_buddy.protocol import tool_evidence
 from support import InProcessBoard
 from test_single_router_claims import stopped_answer
 
@@ -51,7 +51,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 self._stack.append(board)
                 self.seed(board)
                 self.configure(board, defaultRoutingMode=mode)
-                with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+                with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
                         'eligible': True, 'reasonCode': None, 'reason': None,
                         'systemSandbox': sandbox, 'sameAttemptContinuation': False}):
                     requested, claim = self.request_route(board, f'matrix-{number}')
@@ -168,7 +168,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         result, first = self.request_route(board, "freeze-once")
-        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": None,
                 "systemSandbox": True, "sameAttemptContinuation": False}):
             _later, second = self.request_route(board, "freeze-true", worker="router-2")
@@ -268,7 +268,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.assertIsNone(self.problem(board, result["decisionId"], {**output, "toolEvidence": read_only}))
         problem = self.problem(board, result["decisionId"], {**output, "toolEvidence": execute})
         self.assertEqual(problem["code"], "router-tools-forbidden")
-        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": None,
                 "systemSandbox": True, "sameAttemptContinuation": False}):
             sandboxed, sandboxed_claim = self.request_route(board, "sandbox", worker="router-2")
@@ -297,7 +297,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
     def test_fast_mode_allows_no_tool_call_through_the_wrapper(self):
         board = self.board()
         self.seed(board)
-        self.enterContext(patch("buddy.adapters.dsh.DshAdapter.no_tool_structured", True, create=True))
+        self.enterContext(patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", True, create=True))
         self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode="fast")
         result, claim = self.request_route(board, "fast-zero")
         self.assertEqual(claim["decisionInput"]["routingMode"], "fast")

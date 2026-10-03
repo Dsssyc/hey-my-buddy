@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from buddy import checks
+from hey_my_buddy.cli import checks
 
 
 def hold_lock(path: Path) -> int:
@@ -306,7 +306,7 @@ class DeletedOpenFileObservationTests(unittest.TestCase):
         root = Path('/private/checks-fixture')
         output = b'p123\nn/private/checks-fixture/state/control-daemon.lock (deleted)\np456\nn/private/other/state/board-owner.lock\n'
         completed = subprocess.CompletedProcess([], 0, stdout=output, stderr=b'')
-        with patch('buddy.checks.shutil.which', return_value='/usr/sbin/lsof'), patch('buddy.checks.subprocess.run', return_value=completed):
+        with patch('hey_my_buddy.cli.checks.shutil.which', return_value='/usr/sbin/lsof'), patch('hey_my_buddy.cli.checks.subprocess.run', return_value=completed):
             pids, error, available = checks._open_file_pids(root)
         self.assertEqual(pids, {123})
         self.assertIsNone(error)

@@ -7,7 +7,7 @@ const project = fileURLToPath(new URL('../../../../', import.meta.url));
 export function loadYaml(text, { mode = 'json' } = {}) {
   const python = process.env.BUDDY_PYTHON;
   const command = python || 'uv';
-  const args = python ? ['-m', 'buddy.yaml_bridge'] : ['run', '--frozen', '--project', project, 'python', '-m', 'buddy.yaml_bridge'];
+  const args = python ? ['-m', 'hey_my_buddy.buddy.harnesses.dsh.yaml_bridge'] : ['run', '--frozen', '--project', project, 'python', '-m', 'hey_my_buddy.buddy.harnesses.dsh.yaml_bridge'];
   const result = spawnSync(command, args, {
     input: JSON.stringify({ text, mode }), encoding: 'utf8', timeout: 30000,
     maxBuffer: Math.max(1024 * 1024, Buffer.byteLength(text) * 8), windowsHide: true,

@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from buddy import checks
+from hey_my_buddy.cli import checks
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 
@@ -215,8 +215,8 @@ class ParallelOutcomeTests(RunnerTestCase):
     def test_a_passing_run_reports_its_totals_and_runs_the_node_suite(self):
         failure, output = self.run_parallel([self.passing()], node_summary="ℹ tests 7")
         self.assertIsNone(failure, output)
-        self.assertIn("buddy.checks: python tests run: 2 (skipped 1) in 1 of 1 files", output)
-        self.assertIn("buddy.checks: node tests run: 7", output)
+        self.assertIn("hey_my_buddy.cli.checks: python tests run: 2 (skipped 1) in 1 of 1 files", output)
+        self.assertIn("hey_my_buddy.cli.checks: node tests run: 7", output)
         self.assertTrue((self.markers / "node").exists())
         child_root = Path((self.markers / "root").read_text())
         self.assertEqual(child_root.parent, self.private_root)
@@ -252,7 +252,7 @@ class ParallelOutcomeTests(RunnerTestCase):
         failing = ["checksfixture_assertion", "checksfixture_empty", "checksfixture_import", "checksfixture_killed"]
         self.assertIn(f"python suite failed in 4 file(s): {', '.join(failing)}", failure)
         self.assertNotIn("checksfixture_pass", failure)
-        self.assertIn("buddy.checks: python tests run: 2 (skipped 1) in 1 of 5 files", output)
+        self.assertIn("hey_my_buddy.cli.checks: python tests run: 2 (skipped 1) in 1 of 5 files", output)
         # The failing test, its message and the file it belongs to are all printed.
         self.assertIn("----- checksfixture_assertion stderr -----", output)
         self.assertIn("test_breaks (checksfixture_assertion.Failing.test_breaks)", output)
@@ -270,7 +270,7 @@ class ParallelOutcomeTests(RunnerTestCase):
         self.assertEqual(failure, "node suite ran no tests")
         failure, output = self.run_parallel([self.passing()])
         self.assertIsNone(failure, output)
-        self.assertIn("buddy.checks: node tests run: not reported", output)
+        self.assertIn("hey_my_buddy.cli.checks: node tests run: not reported", output)
 
     def test_a_checkout_without_node_tests_is_refused(self):
         self.assertTrue(checks.dsh_node_tests(REPOSITORY))
@@ -305,7 +305,7 @@ class ParallelOutcomeTests(RunnerTestCase):
         with patch.object(checks, "run_suite_child", coloured):
             failure, output = self.run_parallel(["checksfixture_coloured"])
         self.assertIsNone(failure)
-        self.assertIn("buddy.checks: python tests run: 4 (skipped 3) in 1 of 1 files", output)
+        self.assertIn("hey_my_buddy.cli.checks: python tests run: 4 (skipped 3) in 1 of 1 files", output)
 
 
 class LeftoverProcessTests(RunnerTestCase):
@@ -356,7 +356,7 @@ class LeftoverProcessTests(RunnerTestCase):
             from pathlib import Path
             from unittest.mock import patch
 
-            from buddy import checks
+            from hey_my_buddy.cli import checks
 
             with patch.object(checks, "python_test_modules", return_value=sys.argv[3:]):
                 checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2)

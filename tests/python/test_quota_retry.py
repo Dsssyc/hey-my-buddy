@@ -14,10 +14,10 @@ from datetime import datetime, timedelta, timezone
 import json
 import unittest
 
-from buddy.decision import DecisionCoordinator
-from buddy.errors import BoardError
-from buddy.native_observations import exhausted
-from buddy.quota_routing import RETRY_WAIT_SECONDS, configuration_retry, record, retry_facts, routing_facts
+from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.evaluation.native_observations import exhausted
+from hey_my_buddy.blackboard.routing.quota_routing import RETRY_WAIT_SECONDS, configuration_retry, record, retry_facts, routing_facts
 from support import BoardTestCase, FakeClock
 import test_decision as _decision_fixtures
 from test_decision import PROFILE_ID, SECOND_PROFILE_ID
@@ -64,7 +64,7 @@ class QuotaRetryBoard(BoardTestCase):
 
     def marker_value(self):
         with self.board.store.db.read() as db:
-            from buddy.db import canonical_json
+            from hey_my_buddy.blackboard.store.db import canonical_json
             row = db.execute("SELECT value FROM meta WHERE key=?",
                              ("quota-retry:" + canonical_json(["dsh", "deepseek-official", None]),)).fetchone()
         return json.loads(row[0]) if row else None
@@ -196,7 +196,7 @@ class QuotaRetryTests(QuotaRetryBoard):
             self.assertIsNone(configuration_retry(db, config, now=self.clock.value))
         self.clock.advance(RETRY_WAIT_SECONDS)
         with self.board.store.db.write() as db:
-            from buddy.quota_routing import claim
+            from hey_my_buddy.blackboard.routing.quota_routing import claim
             # Even with the hour elapsed, a retained display observation alone
             # carries no claimable window.
             self.assertIsNone(claim(db, config, decision_id="dec-fallback-open", now=self.clock.value))
@@ -370,9 +370,9 @@ class RedetectTests(QuotaRetryBoard):
     def test_console_surface_requires_a_writable_session(self):
         reply = self.board.console_call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})
         self.assertEqual(reply["quota"]["opened"], [None])
-        from buddy.console import CONSOLE_OPERATIONS
-        from buddy.console_sessions import READ_OPERATIONS
-        from buddy.workflow import AGENT_OPERATIONS
+        from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+        from hey_my_buddy.console.console_sessions import READ_OPERATIONS
+        from hey_my_buddy.blackboard.tasks.workflow import AGENT_OPERATIONS
         self.assertIn("quota_redetect", CONSOLE_OPERATIONS)
         self.assertNotIn("quota_redetect", READ_OPERATIONS)
         self.assertNotIn("quota_redetect", AGENT_OPERATIONS)
@@ -384,15 +384,15 @@ class RedetectTests(QuotaRetryBoard):
 
 class RedetectSurfaceTests(unittest.TestCase):
     def test_cli_name_maps_to_the_named_operation(self):
-        from buddy import transport
+        from hey_my_buddy.protocol import transport
         self.assertEqual(transport.METHOD_MAP["quota-redetect"], ("control", "quota_redetect"))
-        from buddy.service import CONTROL_OPERATIONS
+        from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
         self.assertIn("quota_redetect", CONTROL_OPERATIONS)
-        from buddy.contracts import BuddyControl
+        from hey_my_buddy.protocol.contracts import BuddyControl
         self.assertTrue(hasattr(BuddyControl, "quota_redetect"))
 
     def test_help_documents_the_honest_parameters(self):
-        from buddy import cli_help
+        from hey_my_buddy.cli import cli_help
         summary = cli_help.SUMMARIES["quota-redetect"]
         self.assertIn("no model or balance query", summary)
         method = cli_help.method_help("quota-redetect")

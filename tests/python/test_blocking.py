@@ -10,15 +10,15 @@ import shlex
 import threading
 import unittest
 
-import buddy.blocking as blocking
-from buddy.blocking import (
+import hey_my_buddy.cli.blocking as blocking
+from hey_my_buddy.cli.blocking import (
     MAX_WAIT_SECONDS,
     WaitAbandoned,
     await_run,
     recovery_commands,
     validate_wait_seconds,
 )
-from buddy.transport import ServiceError
+from hey_my_buddy.protocol.transport import ServiceError
 
 
 class VirtualClock:
@@ -33,7 +33,7 @@ class VirtualClock:
 
 
 class FakeService:
-    """Injectable stand-in for ``buddy.transport.call_service``.
+    """Injectable stand-in for ``hey_my_buddy.protocol.transport.call_service``.
 
     Only the read-only operations await may use are implemented; anything else is
     an assertion failure, which is how "never starts or cancels" is enforced.
@@ -189,7 +189,7 @@ class RecoveryCommandTests(unittest.TestCase):
             self.assertEqual(json.loads(argv[-1]), {"runId": tricky_run})
 
         # The WAIT_ABANDONED envelope built by the CLI uses the same quoted commands.
-        from buddy.cli import _abandoned
+        from hey_my_buddy.cli.main import _abandoned
 
         abandoned = WaitAbandoned(tricky_request, None)
         payload = _abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id))

@@ -37,9 +37,9 @@ from pathlib import Path
 
 from support import stop_private_workers
 
-from buddy import rpc_config
-from buddy.service import WAIT_CAPACITY_DEFAULT
-from buddy.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
+from hey_my_buddy.protocol import rpc_config
+from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
+from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / "src"
@@ -86,7 +86,7 @@ class ProbeImpl:
 if os.environ.get("PROBE_SERVER_MODE") == "raw":
     cc.set_server(ipc_overrides=json.loads(os.environ["PROBE_SERVER_OVERRIDES"]))
 else:
-    from buddy import rpc_config
+    from hey_my_buddy.protocol import rpc_config
     rpc_config.configure_server()
 cc.register(ProbeContract, ProbeImpl(), name="buddy-probe",
             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
@@ -111,7 +111,7 @@ mode = os.environ.get("PROBE_CLIENT_MODE", "profile")
 if mode == "raw":
     cc.set_client(ipc_overrides=json.loads(os.environ["PROBE_CLIENT_OVERRIDES"]))
 elif mode == "profile":
-    from buddy import rpc_config
+    from hey_my_buddy.protocol import rpc_config
     rpc_config.configure_client()
 
 address, operation, argument = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -323,8 +323,8 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(created, set(), "the private C-Two profile must not be exported to child processes")
 
     def test_wait_admission_cannot_consume_every_native_callback(self):
-        from buddy.daemon import Daemon
-        from buddy.errors import BoardError
+        from hey_my_buddy.blackboard.service.daemon import Daemon
+        from hey_my_buddy.errors import BoardError
         with tempfile.TemporaryDirectory(prefix="buddy-wait-bound-") as root:
             with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "64"}):
                 with self.assertRaises(BoardError) as raised:
@@ -528,7 +528,7 @@ class RealDaemonControlTests(unittest.TestCase):
         log_path = self.work / "daemon.log"
         log = open(log_path, "ab")
         process = subprocess.Popen(
-            [sys.executable, "-m", "buddy.daemon"],
+            [sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"],
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=log,

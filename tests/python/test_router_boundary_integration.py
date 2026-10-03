@@ -8,10 +8,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from buddy import router, router_history, router_sequence
-from buddy.db import canonical_json
-from buddy.errors import BoardError
-from buddy.router_boundary_data import routing_boundary
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing.router_boundary_data import routing_boundary
 from support import FakeClock
 from test_router_dispatch import RouterDispatchTestCase, A, B, C, T0, NONCE
 import test_router_failover_integration as failover
@@ -142,7 +142,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(boundary["routerTrials"][0]["outcome"], "answered")
 
     def test_recorded_quota_reset_is_a_known_retry_time_without_a_new_fuse(self):
-        from buddy.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record
         self.add_profile(C, model="charlie")
         self.add_profile("dsh:fixture:delta:max", model="delta")
         with self.board_.store.db.write() as db:
@@ -150,7 +150,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
                 record(db, "dsh", {"provider": "fixture", "scope": {"limitId": model},
                     "observedAt": T0, "ordinaryUsageAllowed": False, "reachedType": "quota-exceeded",
                     "resetsAt": f"2026-01-01T00:{minute}:00.000Z"}, now=T0)
-        with patch("buddy.quota_routing.utc_now", return_value=T0):
+        with patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", return_value=T0):
             request = self.request()
         boundary = self.boundary(request["decisionId"])
         self.assertEqual(boundary["retryAt"], "2026-01-01T00:20:00Z")
@@ -159,13 +159,13 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.tasks(), [])
 
     def test_queued_dispatch_preflight_failure_keeps_its_own_outcome_and_recovery(self):
-        from buddy.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record
         request = self.request()
         with self.board_.store.db.write() as db:
             record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "alpha"},
                 "observedAt": T0, "ordinaryUsageAllowed": False, "reachedType": "quota-exceeded",
                 "resetsAt": "2026-01-01T00:20:00.000Z"}, now=T0)
-        with patch("buddy.quota_routing.utc_now", return_value=T0):
+        with patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", return_value=T0):
             first = self.claim("preflight", task_id=request["runId"])
         self.assertIsNone(first["claim"])
         second = self.next_claim(request)
@@ -276,7 +276,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.add_profile(C, model="charlie")
         self.add_profile(delta, model="delta")
         for ordinal, ceiling in enumerate(("MAX_DECISION_INPUT_BYTES", "MAX_DECISION_PROFILES")):
-            with self.subTest(ceiling=ceiling), patch("buddy.decision." + ceiling, 1):
+            with self.subTest(ceiling=ceiling), patch("hey_my_buddy.blackboard.routing.decision." + ceiling, 1):
                 request = self.request(request_id="oversize-" + str(ordinal))
             boundary = self.boundary(request["decisionId"])
             self.assert_packet(boundary, ids=(A, B, C, delta))
@@ -623,7 +623,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.assertEqual(raised.exception.code, "ANCESTOR_TERMINAL")
 
     def test_cli_brief_get_and_await_retain_only_existing_boundary_data(self):
-        from buddy import cli, cli_views
+        from hey_my_buddy.cli import main as cli, cli_views
         view = self.routed()
         boundary = view["routing"]["routingBoundary"]
         rendered = cli._render_output("get", view, cli_views.OUTPUT_BRIEF)

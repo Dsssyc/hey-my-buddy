@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from buddy.decision import SOLE_CANDIDATE_REASON
+from hey_my_buddy.blackboard.routing.decision import SOLE_CANDIDATE_REASON
 from fixtures.router_tool_receipt import claim_tool_receipt
 from test_decision import (
     DecisionTestCase,
@@ -77,7 +77,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertEqual(self.decision(board, multi["decisionId"])["routerProblem"]["code"], "router-not-configured")
 
     def test_selection_source_reads_only_recorded_frozen_facts(self):
-        from buddy.router import selection_source
+        from hey_my_buddy.blackboard.routing.router import selection_source
         # The program's direct selection keeps its recorded marker.
         self.assertEqual(selection_source({"routerCalled": False}), "single-candidate")
         # A frozen empty candidate set names the zero-candidate Host boundary.

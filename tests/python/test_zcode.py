@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from buddy.adapters.base import ExecutionContext
-from buddy.adapters.zcode import ZcodeAdapter
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
 
@@ -100,7 +100,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
         self.assertEqual(len(credentials["token"]), 64)
         self.assertEqual(oct((context_root(context, "zcode") / "inquiry.json").stat().st_mode & 0o777), "0o600")
@@ -132,7 +132,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertIsNone(outcome.result["resolved"])
 
     def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
-        from buddy.worker.worker import classify_termination
+        from hey_my_buddy.buddy.runtime.worker import classify_termination
 
         for index, case in enumerate(("turn-failed-quota", "turn-failed-quiet"), 1):
             with self.subTest(case=case):
@@ -194,7 +194,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, first = self.execute(first_context)
         self.assertEqual(first.status, "failed", first.to_report())
         self.assertNotIn("turn", first.result)
-        from buddy.private_dirs import context_root
+        from hey_my_buddy.private_dirs import context_root
         root = Path(json.loads((context_root(first_context, "zcode") / "zcode-control.json").read_text())["nativeRoot"])
         prior_session = json.loads((root / "sessions.fixture.json").read_text())["sessionId"]
         _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
@@ -297,7 +297,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(uncertain.artifacts, [])
 
     def test_oauth_provider_is_rejected_before_any_native_execution(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         value = json.loads(self.personal.read_text())
         value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
         self.personal.write_text(json.dumps(value))
@@ -308,7 +308,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertFalse(context.directory.exists())
 
     def test_coding_never_falls_back_to_native_defaults(self):
-        from buddy.errors import BoardError
+        from hey_my_buddy.errors import BoardError
         for key in ("provider", "model", "effort"):
             for value in (None, "", " \t", False):
                 with self.subTest(key=key, value=value):

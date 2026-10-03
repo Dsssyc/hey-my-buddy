@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class DistributionTests(unittest.TestCase):
     def test_install_entry_and_private_bootstraps(self):
         config = tomllib.loads((ROOT / "pyproject.toml").read_text())
-        self.assertEqual(config["project"]["scripts"], {"hey-my-buddy": "buddy.package_install:main"})
+        self.assertEqual(config["project"]["scripts"], {"hey-my-buddy": "hey_my_buddy.install.package_install:main"})
         for name in ("install.sh", "install.ps1"):
             script = (ROOT / name).read_text()
             self.assertIn("0.12.19", script)
@@ -50,38 +50,38 @@ class DistributionTests(unittest.TestCase):
             with zipfile.ZipFile(wheel) as archive:
                 wheel_files = set(archive.namelist())
                 expected = {
-                    "buddy/_distribution/SKILL.md",
-                    "buddy/_distribution/skill.json",
-                    "buddy/_distribution/scripts/buddy",
-                    "buddy/_distribution/package/pyproject.toml",
-                    "buddy/_distribution/package/uv.lock",
-                    "buddy/_distribution/package/packaging/runtime-assets.json",
-                    "buddy/_distribution/package/packaging/hatch_build.py",
-                    "buddy/_distribution/package/src/buddy/runtime.py",
-                    "buddy/_distribution/package/src/buddy/console_assets/index.html",
-                    "buddy/_distribution/package/harnesses/dsh/scripts/run.mjs",
-                    "buddy/package_install.py",
+                    "hey_my_buddy/_distribution/SKILL.md",
+                    "hey_my_buddy/_distribution/skill.json",
+                    "hey_my_buddy/_distribution/scripts/buddy",
+                    "hey_my_buddy/_distribution/package/pyproject.toml",
+                    "hey_my_buddy/_distribution/package/uv.lock",
+                    "hey_my_buddy/_distribution/package/packaging/runtime-assets.json",
+                    "hey_my_buddy/_distribution/package/packaging/hatch_build.py",
+                    "hey_my_buddy/_distribution/package/src/hey_my_buddy/install/runtime.py",
+                    "hey_my_buddy/_distribution/package/src/hey_my_buddy/console/assets/index.html",
+                    "hey_my_buddy/_distribution/package/harnesses/dsh/scripts/run.mjs",
+                    "hey_my_buddy/install/package_install.py",
                 }
                 self.assertFalse(expected - wheel_files, expected - wheel_files)
-                self.assertTrue(any(name.startswith("buddy/_distribution/references/") for name in wheel_files))
-                self.assertTrue(any(name.startswith("buddy/_distribution/package/harnesses/dsh/plugins/") for name in wheel_files))
-                self.assertTrue(any(name.startswith("buddy/_distribution/package/src/buddy/console_assets/assets/") for name in wheel_files))
+                self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/references/") for name in wheel_files))
+                self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/package/harnesses/dsh/plugins/") for name in wheel_files))
+                self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/package/src/hey_my_buddy/console/assets/assets/") for name in wheel_files))
                 entry = next(name for name in wheel_files if name.endswith(".dist-info/entry_points.txt"))
-                self.assertIn("hey-my-buddy = buddy.package_install:main", archive.read(entry).decode())
+                self.assertIn("hey-my-buddy = hey_my_buddy.install.package_install:main", archive.read(entry).decode())
                 self.assertFalse(any(line.startswith("buddy =") for line in archive.read(entry).decode().splitlines()))
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in wheel_files))
                 # A wheel built directly from the checkout carries its source commit.
-                self.assertEqual(json.loads(archive.read("buddy/_distribution/skill.json"))["sourceCommit"], head)
+                self.assertEqual(json.loads(archive.read("hey_my_buddy/_distribution/skill.json"))["sourceCommit"], head)
             with tarfile.open(sdist) as archive:
                 names = archive.getnames()
                 for suffix in ("packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
                                "skills/buddy/SKILL.md", "docs/reference/architecture.md",
-                               "src/buddy/runtime.py", "src/buddy/console_assets/index.html",
-                               "harnesses/dsh/scripts/run.mjs", "src/buddy/build-info.json"):
+                               "src/hey_my_buddy/install/runtime.py", "src/hey_my_buddy/console/assets/index.html",
+                               "harnesses/dsh/scripts/run.mjs", "src/hey_my_buddy/build-info.json"):
                     self.assertTrue(any(name.endswith("/" + suffix) for name in names), suffix)
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in names))
                 # The sdist carries the source commit for a later Git-less wheel build.
-                metadata = next(name for name in names if name.endswith("/src/buddy/build-info.json"))
+                metadata = next(name for name in names if name.endswith("/src/hey_my_buddy/build-info.json"))
                 self.assertEqual(json.loads(archive.extractfile(metadata).read())["sourceCommit"], head)
                 archive.extractall(root / "sdist", filter="data")
             # A wheel built from the extracted sdist, with no Git checkout present,
@@ -91,7 +91,7 @@ class DistributionTests(unittest.TestCase):
                                         cwd=layout, env=env, capture_output=True, text=True, timeout=180)
             self.assertEqual(from_sdist.returncode, 0, from_sdist.stdout + from_sdist.stderr)
             with zipfile.ZipFile(next((root / "from-sdist").glob("*.whl"))) as archive:
-                marker = json.loads(archive.read("buddy/_distribution/skill.json"))
+                marker = json.loads(archive.read("hey_my_buddy/_distribution/skill.json"))
             self.assertEqual(marker["sourceCommit"], head)
 
 

@@ -25,7 +25,7 @@ import type { Snapshot } from "./types";
  * snapshot shape the frontend refuses, or preview data that stops matching the
  * parser, fails here; `tests/python/test_host_preview.py` additionally asserts
  * the resulting report and proves the emitted tree is deterministic, so the
- * guard is part of the normal `buddy.checks` run.
+ * guard is part of the normal `hey_my_buddy.cli.checks` run.
  *
  * With no `BUDDY_PREVIEW_FIXTURES` in the environment (a plain `npm test`) the
  * script is run into a private temporary directory first.

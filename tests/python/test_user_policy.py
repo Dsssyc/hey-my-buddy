@@ -2,7 +2,7 @@
 import json
 
 from support import BoardTestCase
-from buddy.errors import BoardError
+from hey_my_buddy.errors import BoardError
 
 #: ``live`` and ``retired`` are each their own model family in this fixture.
 LIVE_FAMILY = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live'}

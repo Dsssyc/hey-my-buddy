@@ -14,11 +14,11 @@ from unittest import mock
 
 from support import BoardTestCase
 
-from buddy import activity as activity_module
-from buddy.activity import ActivitySidecar, is_newer, normalize_activity, read_sidecar, validate_sidecar
-from buddy.adapters import ExecutionContext, adapter as get_adapter
-from buddy.errors import BoardError
-from buddy.worker.worker import Worker, _Renewal
+from hey_my_buddy.protocol import activity as activity_module
+from hey_my_buddy.protocol.activity import ActivitySidecar, is_newer, normalize_activity, read_sidecar, validate_sidecar
+from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal
 
 #: Inherited variables that would otherwise point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of this private root.

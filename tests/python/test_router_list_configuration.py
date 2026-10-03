@@ -13,8 +13,8 @@ import unittest
 from unittest import mock
 
 from support import BoardTestCase
-from buddy import router, router_settings
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router, router_settings
+from hey_my_buddy.errors import BoardError
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:beta:max"
@@ -222,7 +222,7 @@ class RouterListConfigurationTests(BoardTestCase):
         before = deepcopy(entry)
         self.publish(entry)
         self.assertEqual(entry, before)
-        from buddy.router_settings import validate_router_settings_patch
+        from hey_my_buddy.blackboard.routing.router_settings import validate_router_settings_patch
         result = validate_router_settings_patch(entry)
         entry["routerProfileIds"].append("changed:after:the:call")
         self.assertEqual(result["routerProfileIds"], [A])

@@ -20,7 +20,7 @@ from fixtures.router_tool_receipt import tool_receipt
 
 
 def prepare_input(manifest, directory):
-    from buddy.router_input import digest
+    from hey_my_buddy.buddy.roles.router_input import digest
 
     root = directory / "mock-frozen-input"
     root.mkdir(mode=0o700, parents=True)
@@ -29,7 +29,7 @@ def prepare_input(manifest, directory):
 
 
 def verify_input(manifest, root, expected):
-    from buddy.router_input import digest
+    from hey_my_buddy.buddy.roles.router_input import digest
 
     return {"unchanged": digest(root) == expected,
             "manifestSha256": (manifest or {}).get("manifestSha256"),
@@ -38,7 +38,7 @@ def verify_input(manifest, root, expected):
 
 def install(testcase, *, path=None, **options):
     """Inject locally eligible native capability only within this test process."""
-    from buddy.adapters.dsh import DshAdapter
+    from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 
     testcase._readonly_fixture = Path(path) if path is not None else Path(__file__).resolve()
     testcase._readonly_options = options
@@ -60,12 +60,12 @@ def install(testcase, *, path=None, **options):
         "sameAttemptContinuation": False,
     }))
     testcase.enterContext(patch.object(DshAdapter, "available", side_effect=lambda: (testcase._readonly_fixture.is_file(), "mock fixture missing")))
-    testcase.input_prepare = testcase.enterContext(patch("buddy.router_input.prepare", side_effect=prepare_input))
-    testcase.input_verify = testcase.enterContext(patch("buddy.router_input.verify", side_effect=verify_input))
+    testcase.input_prepare = testcase.enterContext(patch("hey_my_buddy.buddy.roles.router_input.prepare", side_effect=prepare_input))
+    testcase.input_verify = testcase.enterContext(patch("hey_my_buddy.buddy.roles.router_input.verify", side_effect=verify_input))
 
 
 def start(context, request, fixture, options):
-    from buddy.adapters.base import ProcessHandle, open_logs
+    from hey_my_buddy.buddy.harnesses.base import ProcessHandle, open_logs
 
     assert context.turn is None and context.agent_credential is None
     assert context.cwd == request.cwd

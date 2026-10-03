@@ -17,27 +17,27 @@ from unittest import mock
 
 from support import BoardTestCase
 
-import buddy.cli as cli
-import buddy.transport as transport
-from buddy.adapters import adapter as get_adapter, adapters, supported_capabilities
-from buddy.console import CONSOLE_OPERATIONS
-from buddy.errors import BoardError
-from buddy.service import CONTROL_OPERATIONS
+import hey_my_buddy.cli.main as cli
+import hey_my_buddy.protocol.transport as transport
+from hey_my_buddy.buddy.harnesses.registry import adapter as get_adapter, adapters, supported_capabilities
+from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
 
 RETIRED_MODULES = (
-    "buddy.harness_review",
-    "buddy.review_probe",
-    "buddy.review_replay",
-    "buddy.review_evidence",
-    "buddy.sandbox_probe",
-    "buddy.adapters.review_check",
+    "hey_my_buddy.harness_review",
+    "hey_my_buddy.review_probe",
+    "hey_my_buddy.review_replay",
+    "hey_my_buddy.review_evidence",
+    "hey_my_buddy.sandbox_probe",
+    "hey_my_buddy.buddy.harnesses.review_check",
 )
 RETIRED_RESOURCES = ("review-certificates.json",)
 
 
 class RetiredVerifierSurfaceTests(unittest.TestCase):
     def test_the_verifier_modules_and_certificate_resource_are_not_packaged(self):
-        package = importlib.util.find_spec("buddy")
+        package = importlib.util.find_spec("hey_my_buddy")
         roots = [Path(root) for root in package.submodule_search_locations]
         for name in RETIRED_MODULES:
             self.assertIsNone(importlib.util.find_spec(name), name)

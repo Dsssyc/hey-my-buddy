@@ -23,12 +23,12 @@ DELEGATE_ROOT = PYTHON_ROOT.parent
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from buddy.client import BoardClient  # noqa: E402
-from buddy.console import Console  # noqa: E402
-from buddy.decision import DecisionCoordinator  # noqa: E402
-from buddy.evaluation import EvaluationStore  # noqa: E402
-from buddy.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
-from buddy.store import BoardStore  # noqa: E402
+from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
+from hey_my_buddy.console.server import Console  # noqa: E402
+from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
+from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noqa: E402
+from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
+from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
 #: A discovery document with the same shape the installed-harness helper emits. Tests
 #: point ``BUDDY_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
@@ -145,7 +145,7 @@ def _lock_held(path: Path) -> bool:
 
 def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
     """Stop the daemon attached to this exact test directory and await its locks."""
-    from buddy.transport import ServiceError, _read_endpoint, _request
+    from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, _request
 
     directory = Path(directory)
     deadline = time.monotonic() + timeout
@@ -393,11 +393,11 @@ class BoardTestCase(unittest.TestCase):
     @contextmanager
     def daemon(self, *, env: dict | None = None):
         """Start the real daemon in a child process and wait for health."""
-        from buddy.transport import _request, _read_endpoint, ServiceError
+        from hey_my_buddy.protocol.transport import _request, _read_endpoint, ServiceError
 
         environment = _child_environment(self.directory, env)
         log = open(self.directory / "test-daemon.log", "ab")
-        command = [sys.executable, '-m', 'buddy.daemon']
+        command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
         if environment.get('BUDDY_MODEL_CATALOG_FILE'):
             command = [sys.executable, str(Path(__file__).parent / 'fixtures/daemon_with_catalog.py')]
         process = subprocess.Popen(
@@ -467,7 +467,7 @@ class BoardTestCase(unittest.TestCase):
         """Run the real CLI in a child process; returns (exit code, parsed stdout)."""
         environment = _child_environment(self.directory, env)
         completed = subprocess.run(
-            [sys.executable, "-m", "buddy.cli", *arguments],
+            [sys.executable, "-m", "hey_my_buddy.cli.main", *arguments],
             env=environment,
             capture_output=True,
             text=True,

@@ -12,9 +12,9 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from buddy import router, router_history
-from buddy.db import canonical_json
-from buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router, router_history
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"
@@ -29,7 +29,7 @@ class CurrentRouterTestCase(BoardTestCase):
         self.board_ = self.board(clock=self.clock)
         # Ordered-resolution scenarios supply a private review mechanism;
         # production DSH review is intentionally unavailable in this stage.
-        self.enterContext(patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
             'eligible': True, 'reasonCode': None, 'reason': 'private fixture',
             'systemSandbox': False, 'sameAttemptContinuation': True}))
 
@@ -180,7 +180,7 @@ class ResolutionTests(CurrentRouterTestCase):
     def test_quota_exhausted_item_is_skipped_from_recorded_observations(self):
         self.add_profile(A, model="alpha")
         self.add_profile(B, provider="other")
-        from buddy.native_observations import record_quota
+        from hey_my_buddy.blackboard.evaluation.native_observations import record_quota
         with self.board_.store.db.write() as db:
             record_quota(db, "dsh", {"provider": "fixture", "observedAt": T0, "balanceZero": True,
                                      "source": "test"}, now=T0)

@@ -122,7 +122,7 @@ The native routing call has a separate [Router contract](decision.md). In fast m
 
 ## Frontend build
 
-Source lives in `apps/console/` (React 19, Vite 8, TypeScript); a relative-base build produces `src/buddy/console_assets/`. These checked-in assets are included in plugin staging and the stable runtime. End users do not need npm. The frontend source and `apps/console/README.md` are available only in a full repository checkout and are excluded from the plugin. Contributors use a supported Node 24 LTS release, read that source README, and run `npm ci`, `npm run typecheck`, `npm test` and `npm run build` from `apps/console/`. Test the built console through a private, source-backed state directory; Vite alone does not supply the authoritative API.
+Source lives in `apps/console/` (React 19, Vite 8, TypeScript); a relative-base build produces `src/hey_my_buddy/console/assets/`. These checked-in assets are included in plugin staging and the stable runtime. End users do not need npm. The frontend source and `apps/console/README.md` are available only in a full repository checkout and are excluded from the plugin. Contributors use a supported Node 24 LTS release, read that source README, and run `npm ci`, `npm run typecheck`, `npm test` and `npm run build` from `apps/console/`. Test the built console through a private, source-backed state directory; Vite alone does not supply the authoritative API.
 
 ## Native eligibility facts (0.23.0)
 

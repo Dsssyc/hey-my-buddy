@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-from buddy.contracts import CONTRACT_VERSION
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 import os
 import unittest
 from pathlib import Path
@@ -20,7 +20,9 @@ from unittest import mock
 import test_workspace_lifecycle as lifecycle_tests
 from test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
 
-from buddy import cli, cli_views, transport, workflow as workflow_module, workspace as workspace_module
+from hey_my_buddy.cli import main as cli, cli_views
+from hey_my_buddy.protocol import transport
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace as workspace_module
 
 PACKET = "Implement the bounded change described here. " * 40
 SUMMARY = "Changed tracked.txt and ran the focused checks. " * 30
@@ -240,7 +242,7 @@ class ProjectionUnitTests(unittest.TestCase):
 
 class ContractVersionTests(unittest.TestCase):
     def test_every_printed_result_including_error_has_contract_version(self):
-        from buddy.contracts import CONTRACT_VERSION
+        from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
         self.assertEqual(json.loads(cli._dumps({"error": {"code": "DENIED"}}))["contractVersion"], CONTRACT_VERSION)
         self.assertEqual(json.loads(cli._dumps(cli_views.render("list", {"runs": []})))["contractVersion"], CONTRACT_VERSION)
 

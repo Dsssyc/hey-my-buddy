@@ -23,13 +23,13 @@ from pathlib import Path
 
 from support import BoardTestCase, wait_for
 
-from buddy.adapters import ExecutionContext, adapter as get_adapter
-from buddy.adapters.base import AdapterOutcome
-from buddy.client import BoardClient
-from buddy.db import TERMINATION_REASONS
-from buddy.errors import BoardError
-from buddy.store import UNCERTAIN_QUEUE_REASON
-from buddy.worker.worker import (
+from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.blackboard.store.db import TERMINATION_REASONS
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store.store import UNCERTAIN_QUEUE_REASON
+from hey_my_buddy.buddy.runtime.worker import (
     TERMINATION_COMPLETED,
     TERMINATION_DEADLINE,
     TERMINATION_HARNESS_ERROR,
@@ -493,7 +493,7 @@ class RealDaemonRestart(RecoveryBase):
                     [
                         sys.executable,
                         "-m",
-                        "buddy.worker.supervisor",
+                        "hey_my_buddy.buddy.runtime.supervisor",
                         "--worker-id",
                         "recover-live",
                         "--state-dir",

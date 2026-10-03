@@ -8,6 +8,6 @@ export default defineConfig({
   base: "./",
   // README and console share the canonical logo; keep the extra read scope narrow.
   server: { fs: { allow: [fileURLToPath(new URL(".", import.meta.url)), fileURLToPath(new URL("../../docs/assets", import.meta.url))] } },
-  build: { outDir: "../../src/buddy/console_assets", emptyOutDir: true },
+  build: { outDir: "../../src/hey_my_buddy/console/assets", emptyOutDir: true },
   test: { environment: "jsdom", clearMocks: true },
 });

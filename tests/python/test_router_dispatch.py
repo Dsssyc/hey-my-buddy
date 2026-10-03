@@ -15,8 +15,8 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from buddy import router, router_history, router_sequence
-from buddy.db import canonical_json
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.blackboard.store.db import canonical_json
 
 A = "dsh:fixture:alpha:max"
 B = "dsh:fixture:bravo:max"
@@ -534,7 +534,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_actor_graft_is_included_in_admission_byte_ceiling(self):
         first = self.request(request_id="pick-1")
         bound = len(canonical_json(self.snapshot_of(first["decisionId"])["baseInput"]).encode("utf-8"))
-        with patch("buddy.decision.MAX_DECISION_INPUT_BYTES", bound):
+        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
             refused = self.request(request_id="pick-2")
         self.assertEqual(refused["status"], "needs-host")
         self.assertIsNone(refused["runId"])
@@ -550,7 +550,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         bound = len(canonical_json(original["document"]).encode("utf-8"))
         with self.board_.store.db.write() as db:
             db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
-        with patch("buddy.decision.MAX_DECISION_INPUT_BYTES", bound):
+        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
             response = self.claim("oversize")
         self.assertIsNone(response["claim"])
         self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")
@@ -573,7 +573,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
 
     def test_request_snapshot_and_dispatch_preserve_the_same_deadline_override(self):
         self.set_settings(mode="review")
-        with patch("buddy.adapters.dsh.DshAdapter.local_read_only_check", return_value={
+        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "fixture", "systemSandbox": False,
                 "sameAttemptContinuation": True}):
             response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose",
