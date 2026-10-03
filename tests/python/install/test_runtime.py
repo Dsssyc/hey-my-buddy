@@ -207,7 +207,7 @@ class DeclaredManifestTests(unittest.TestCase):
                 self.assertIn("declare itself as a file", failure.exception.message)
 
     def test_a_resource_must_be_covered_by_a_declared_asset(self):
-        for relative in ("undeclared/runner.py", "src/buddy-neighbor/runner.py", "pyproject.toml/runner.py"):
+        for relative in ("undeclared/runner.py", "src/hey_my_buddy-neighbor/runner.py", "pyproject.toml/runner.py"):
             with self.subTest(relative=relative):
                 write_manifest(self.root, resources={"new-harness.runner": relative})
                 with self.assertRaises(BoardError) as failure:
