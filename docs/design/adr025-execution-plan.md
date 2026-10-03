@@ -1,8 +1,8 @@
 # ADR-025 执行计划
 
-状态：待 Claude Code Host 审阅。2026-10-03 从 `socu/buddy-core` 的 `2bdb49737564110099ffa2cdbafeb3759af67f74` 建立独立 worktree，分支为 `socu/adr025-run-module`。本次交付只有计划和搬动对照表；提交后停止，收到用户转达的审阅通过结果才开始第零步。本计划中的能力与协议选择是设计，未经原生核对的项目明确保留待核对状态。
+状态：Claude Code Host 已审阅通过，用户于 2026-10-03 转达并补充执行决定。本分支 `socu/adr025-run-module` 从 `2bdb497` 建立，现已合入 `socu/buddy-core` 的 `dd8a9ab`。本次修订按用户决定提交后直接开始第零步、F-D1 接 F-D2、F-C1，无须再审计划；各步的 Host 验收仍是必经暂停点。未经核对的原生能力仍明确标为待核对。
 
-宏任务是完成 [ADR-025](../decisions/025-harness-run-module.md)。实施顺序固定为第零步目录、第一步公共格式与外层、第二步 ZCode、第三步 Codex 与 Claude Code、第四步 DSH、第五步 C-Two 实时通道。每步由数个独立验收的微任务组成；每步通过完整检查、提交该步记录后停止，等待用户转达 Claude Code Host 的验收结果。DSH 的可行性核对可在计划获准后提前进行，其结果不授权第四步提前实施。
+宏任务是完成 [ADR-025](../decisions/025-harness-run-module.md)。步骤编号仍为第零步目录、第一步公共格式与外层、第二步 ZCode、第三步 Codex 与 Claude Code、第四步 DSH、第五步 C-Two 实时通道。依赖只有：第零步先完成并验收，第一步随后完成并验收，第五步切换等待所有 harness 抽取完成并验收。第一步之后四个 harness 在各自 worktree 并行；DSH ACP 客户端、C-Two 后端等不碰公共文件的新代码可更早独立开始。现在并行启动第零步、F-D1 接 F-D2、F-C1。每条线完成后提交记录和完整检查结果、停下等 Host 验收，互不依赖的线可以继续。
 
 ## 1. 范围与当前源码复核
 
@@ -28,7 +28,7 @@
 
 ## 2. 第零步的文件搬动与路径规则
 
-[逐文件搬动表](adr025-step0-file-map.tsv) 是第零步的完整输入，按 `2bdb497` 的 `git ls-files` 列出全部 633 个文件，每个文件恰好一行、一个目的地，没有重复目的地。表中 114 个源码/打包资产文件、180 个 Python 测试及 fixture 文件要 `git mv`，共 294 个；其中 Python 测试模块为 158 个。`tests/python/support.py` 和 `mock_workspace.py` 是共用测试设施，原位保留。表中的原位文件也逐个列出，包括 DSH 的 23 个文件、控制台源码、文档、CI 与启动脚本。
+[逐文件搬动表](adr025-step0-file-map.tsv) 是第零步的完整输入，按合入 `dd8a9ab` 后的 `git ls-files` 列出全部 635 个文件（原基线 633 个，加本计划及对照表），每个文件恰好一行、一个目的地，没有重复目的地。表中 114 个源码/打包资产文件、178 个 Python 测试及 fixture 文件要 `git mv`，共 292 个；其中 Python 测试模块为 158 个。`tests/python/support.py` 和 `mock_workspace.py` 是共用测试设施，原位保留；根包基础模块对应的 `test_locking.py` 和 `test_private_directories.py` 也留在测试根目录。表中的原位文件也逐个列出，包括 DSH 的 23 个文件、控制台源码、文档、CI 与启动脚本。
 
 | 当前位置或职责 | 第零步目的地 | 选择理由 |
 | --- | --- | --- |
@@ -36,14 +36,17 @@
 | DB、store、迁移、离线 board 准备、backup、private migration | `blackboard/store/` | 持有数据库或核对数据库事实；整文件搬动 |
 | workflow、宏任务、检出、问询导入、验收、存储回收、worker sessions、调度 | `blackboard/tasks/` | 黑板机械规则与权威读取；`workflow.py` 等大文件不拆 |
 | decision、Router 边界、列表、健康记录、输入发布和偏好规则 | `blackboard/routing/` | 黑板持有路由事实与发布权 |
-| evaluation、catalog、账户选择、model facts、native observations、user policy | `blackboard/evaluation/` | 这些现有文件持有或接收数据库对象；其中发现调用仍在事务外执行 |
-| service、daemon、harness health、account operations、keystore | `blackboard/service/` | 保留现有服务生命周期与服务持有的账户操作句柄 |
+| catalog、catalog_store、accounts、account_keystore、account_operations | `blackboard/catalog/` | 模型目录与账户归在一起；对应账户/目录测试同迁，服务持有账户进程的职责不变 |
+| evaluation、model facts、native observations、user policy | `blackboard/evaluation/` | 评价、模型事实与偏好 |
+| service、daemon、harness health | `blackboard/service/` | 保留现有服务生命周期与句柄归属 |
 | `worker/`、command、Windows 子进程、partial outputs | `buddy/runtime/` | 保留 Worker 运行时的认领、进程对象、截止时间和持久回执 |
 | `adapters/decision.py`、`turn_io.py`、`read_only.py`、`router_input.py` | `buddy/roles/router.py`、`turn_io.py`、`structured_call.py`、`router_input.py` | 按角色整理现有任务书、回合文件、冻结副本与旧 Router 公共启动收集；旧公共通道等所有 harness 抽完后删除 |
 | 每个 harness 的 adapter/config/protocol/runner/工具事实文件 | `buddy/harnesses/<harness>/`，主 adapter 文件名为 `adapter.py` | 第零步只按表改路径，内部函数和类名不改 |
-| adapter 注册表、base、native observations、harness discovery/runtime selection、YAML bridge | `buddy/harnesses/` | 共用原生运行机制，之后的公共模块直接在这里形成 |
+| adapter 注册表、base、native observations、harness discovery/runtime selection | `buddy/harnesses/` | 共用原生运行机制，之后的公共模块直接在这里形成 |
 | `account_native.py`、`account_integrations.py`、`codex_account_probe.py` | 共用 harness 目录及 `codex/account_probe.py` | 原生账户驱动归原生机制一侧；调用方仍是原服务对象，账户进程不交给 Worker，不并入模型运行接口 |
-| contracts、schemas、client、transport、rpc config、errors、activity、usage、billing、路径/锁/证据边界 | `protocol/` | 两侧共用的操作、值、路径与事实格式；整文件搬动 |
+| contracts、schemas、client、transport、rpc config、activity、usage、billing、跨边界证据格式 | `protocol/` | 只放两侧之间的操作、传输、客户端和跨边界事实格式 |
+| errors、home、locking、private_dirs | 根包下的同名文件 | 基础模块不属于协议；对应测试留在测试根目录 |
+| yaml_bridge.py | `buddy/harnesses/dsh/yaml_bridge.py` | 仅供 DSH Node 运行器/profile 安装使用，第四步随旧集成删除 |
 | launcher、runtime、package/skill install、skill package、upgrade | `install/` | 显式安装及运行时材料，不改变安装/升级算法 |
 | CLI、help/views、blocking、console CLI、checks | `cli/`；CLI 文件名为 `main.py` | 入口与检查定位集中；无旧包重导出 |
 | console server、sessions、已有构建资产 | `console/server.py`、`console_sessions.py`、`console/assets/` | 控制台只作构建输出和取资源路径适配 |
@@ -51,7 +54,7 @@
 
 表中的目录均相对 `src/hey_my_buddy/`。测试按表进入 `tests/python/blackboard/`、`buddy/`、`protocol/`、`console/`、`install/`、`cli/` 的对应目录，单个交叉测试文件仍整体保留。为源包和被 unittest 递归发现的测试目录补空 `__init__.py`；不增加转发 import、旧模块别名或兼容包。fixture 根据使用的 harness 或权威数据归属搬动，并逐个更新所有调用点。
 
-第零步的整文件规则优先于彻底消除历史依赖。例如 `db.py` 同时定义存储和 JSON/时间小函数，`tool_evidence.py` 同时有事实收集和纯判定，`router.py` 同时有持久规则和 prompt；本步只按其持久职责或共用接口归属放置，跨包 import 按真实目的地改写，不拆成新实现。`protocol/tool_evidence.py` 的纯判定仍只由黑板发布路径调用。后续只抽 ADR-025 需要的角色/运行接缝；不趁机整顿全黑板。安装和 CLI 入口原有的离线数据库读取保留在其原调用路径，目录调整不授予新的状态所有权。
+第零步登记 protocol→任一侧、buddy→黑板、黑板→buddy 的实际跨边界导入，含文件、行号与目标；只登记，不修。第零步的整文件规则优先于彻底消除历史依赖。例如 `db.py` 同时定义存储和 JSON/时间小函数，`tool_evidence.py` 同时有事实收集和纯判定，`router.py` 同时有持久规则和 prompt；本步只按其持久职责或共用接口归属放置，跨包 import 按真实目的地改写，不拆成新实现。`protocol/tool_evidence.py` 的纯判定仍只由黑板发布路径调用。后续只抽 ADR-025 需要的角色/运行接缝；不趁机整顿全黑板。安装和 CLI 入口原有的离线数据库读取保留在其原调用路径，目录调整不授予新的状态所有权。
 
 路径替换按完整 Python 模块名和表中完整文件路径进行，不能全局替换单词 `buddy`。覆盖相对 import、测试间 import/patch 目标、`python -m`、源码路径断言、`Path(__file__).parents[...]`、CLI help 的 AST 来源定位、runtime manifest 与资源键、Hatch 的 contracts/build-info 定位、wheel/sdist、launcher shell/PowerShell、CI 检查命令和 Vite 输出目录。保留现有资源键名与 CLI 输入/输出；`yaml.bridge` 更新到新文件，`console.assets` 更新到新资产目录。预计入口如下：
 
@@ -78,7 +81,7 @@ Vite 输出：../../src/hey_my_buddy/console/assets
 
 ### 3.1 公共运行请求
 
-Python 用冻结的 dataclass 表达值；跨控制器的内部 JSON 用 `formatVersion: 1`、固定键集和现有有界 JSON 规则。以下字段是最终公共接口，不暴露公开 CLI；序列化在外层边界验证一次。旧控制文件的读取上限、严格 JSON 与普通 JSON 的已有差异先保留，在该 harness 微任务迁移并证明等价；不借统一格式收紧或放宽角色输入。
+Python 用冻结的 dataclass 表达值；跨控制器的内部 JSON 用 `formatVersion: 1`、固定键集和现有有界 JSON 规则。以下字段是当前公共接口草案，不暴露公开 CLI；序列化在外层边界验证一次。后续步骤可根据实际接口缺口调整字段，由 Host 统一修改公共文件并在该步记录写明改变及理由；并行微任务不得自行修改公共值。旧控制文件的读取上限、严格 JSON 与普通 JSON 的已有差异先保留，在该 harness 微任务迁移并证明等价；不借统一格式收紧或放宽角色输入。
 
 | 字段 | 类型与含义 |
 | --- | --- |
@@ -136,7 +139,7 @@ schemaStatus 记录该路径实际执行的检查及依据，不新增一套能�
 | Codex | 保留私有 no-tool config、模型工具字段、空 dynamicTools/environments、native config 层回读及快速的 EOF 完整性；不能静态扫描厂商实现证明它正确 | 保留原生 buddy-router 文件权限图、never 审批、禁网、原生工具及策略回读；可接受 execute 的判定仍由黑板根据系统沙盒事实决定 | 保留 Worker workspace-write、授权 cwd 为 writableRoots、never 审批、当前 networkAccess=false；不新增强回读或额外工具限制 |
 | Claude Code | 当前无可达实现，能力仍为 unavailable，调用前按当前规则拒绝；本次不新增快速路由或试用另一条 CLI 通道 | 复用当前 `execution_args`，Glob/Grep/LS/Read、原生拒绝表、default 权限和原生沙盒；Router 网络白名单为空；Worker 只读保留其注册表白名单差异 | 保留现有 WRITABLE_TOOLS、acceptEdits、stdio 权限请求一律 deny、受限沙盒与包注册表白名单；不改成 bypassPermissions |
 | ZCode | 复用 app-server、空 toolAllowlist/MCP、关闭 offPeak/dynamicWorkflow、no-tools runtime preferences；保留快速未知事件拒绝和 EOF/close 证据 | 当前 Worker 读范围没有原生只读强制；驱动如实报告 unrestricted，不能由工作区核对或 yolo 名字得出只读结论；Router 审阅继续 unavailable | 保留同一个 app-server 的 yolo 默认工具与会话私有完成/问询 MCP；原生权限 deny、用户交互 decline；源 provider 偏好不回写 |
-| DSH | 第四步前保持当前 direct-LLM；重做后使用 ACP 代理会话，检查是否能原生关闭任务工具，否则报告 unrestricted，Router 按零工具证据判定；不再直接调模型 | ACP 是否能拒绝写/命令/联网必须逐项核对；未覆盖的范围报告 unrestricted；只有真实核对和差异确认支持时才声明相应能力 | ACP 运行原生代理与工具；controller 回答权限请求的策略在差异表确认后固定；不为了获得权限另建任务工具或外层沙盒 |
+| DSH | 第四步前保持当前 direct-LLM；重做后使用 ACP 代理会话，检查是否能原生关闭任务工具，否则报告 unrestricted，Router 按零工具证据判定；不再直接调模型 | ACP 是否能拒绝写/命令/联网必须逐项核对；未覆盖的范围报告 unrestricted；只有核对证据和上述授权范围支持时才声明相应能力 | ACP 运行原生代理与工具；controller 回答权限请求的策略按核对结论及已授权差异固定；不为了获得权限另建任务工具或外层沙盒 |
 
 上述 Codex 机制中的原生实验开关是现有事实，重构保持当前调用；不为新能力新增实验接口依赖。资格仅检查本地公开接口、设置/版本能力和本项目所需资源是否存在，不解析厂商安装包来证明限制；原生有效策略与事件来自本次运行。没有现成能力的 harness 如实报告未限制或不可用，角色保持当前资格判定；统一接口本身不扩展 ZCode 审阅或 Claude Code 快速能力。平台未核对的事实写进验收记录，当前方案不引入系统级统一沙盒。
 
@@ -165,9 +168,9 @@ class LiveChannel(Protocol):
 
 ## 6. DSH 的核对门槛与差异确认
 
-DSH 首选 Python 控制器驱动本机已安装命令的 `--profile acp`，不用 `deepseek-harness-sdk`，不下载内置 DSH、不寻找本项目用的 Node、不读凭据内容、不更改日常设置或目录。可行性核对在计划通过后作为 F-D1、F-D2 两个微任务进行；握手不得发送 prompt 或触发模型。空会话、私有存储覆盖和配置改变均限定在核对目录，若安装的接口不能保证隔离，停止该操作并记录未验证。
+用户已一并授权本计划中的原生核对、各步真实冒烟及为同一目的必需的重跑，不再逐次询问；每次保持最小，在验收记录列 harness 与运行次数。额度或登录导致不能运行时，记未验证并继续其他工作，不反复尝试、不改登录；计划外的付费运行仍先问。DSH 首选 Python 控制器驱动本机已安装命令的 `--profile acp`，不用 `deepseek-harness-sdk`，不下载内置 DSH、不寻找本项目用的 Node、不读凭据内容、不更改日常设置或目录。可行性核对在计划通过后作为 F-D1、F-D2 两个微任务进行；握手不得发送 prompt 或触发模型。空会话、私有存储覆盖和配置改变均限定在核对目录，若安装的接口不能保证隔离，停止该操作并记录未验证。
 
-| 第 11 条问题 | F-D1 不调用模型能取得的证据 | F-D2 一次逐次授权运行必须取得的证据与失败条件 |
+| 第 11 条问题 | F-D1 不调用模型能取得的证据 | F-D2 已授权最小真实运行必须取得的证据与失败条件 |
 | --- | --- | --- |
 | 哪些工具发权限请求，能否拒写/命令/联网 | 初始化的能力、公开权限选项、会话工具/模式声明及本次 client 应答接口；未出现实际调用的工具覆盖仍标待验证 | 在隔离 fixture 中请求代表性的写入、命令、联网；逐条关联 permission request、deny、工具结束与受控 sentinel/本机服务结果；没有权限请求或没有可核对事件不宣称被阻止 |
 | 用量能取得多少 | 公开协议的 usage/update 字段及能力声明，逐个注明本地握手是否实际回报 | 收到输入/输出/cache/total 等实际字段、作用域及累计/增量依据；缺项为空，纠正累计不重复计数；不得用模型自述补齐 |
@@ -176,22 +179,22 @@ DSH 首选 Python 控制器驱动本机已安装命令的 `--profile acp`，不�
 | Python MCP 完成工具是否可行 | 向空会话挂本次临时 Python MCP，观察工具发现/能力声明和安全关闭；不得调用模型 | 原生根实际调用，参数经本次 schema 校验，回执和 native call/结果/结束事件有真实 ID、顺序及关联；普通末条文本不能伪装完成回执 |
 | 问询只能检查点还是实时送达 | 公开 prompt/steer/cancel 与 client 回调接口；未运行时无法证明实时插入，标待验证 | 运行中送一个 inquiryId，观察在原 turn 实时或下一检查点签收、回答工具相关事件，原工作继续且 deadline 不变；只存在 API 名不等于实时可用 |
 
-F-D2 在具体脚本、选定配置、私有目录、代表性操作、输出与停止标准已可审阅后，由 Host 单独询问用户批准这一次模型调用；未批准不运行。一次运行无法证明所有覆盖时记部分/未知；追加调用或换 `--profile sdk` 的真实运行都重新询问，不用已有批准覆盖多次。核对输出只保存筛选后的公开事实，原始日志放忽略的 `tmp/`，记录中的位置使用 `~` 或 `<probe-root>`。
+F-D2 在脚本、配置、私有任务和停止标准明确后直接运行，授权来自用户本次决定。一次运行不能覆盖所有问题则记录部分/未知；为同一核对目的必需的最小重跑已有授权，逐次登记原因和次数，不扩大为计划外实验。因额度或登录失败时不反复尝试，记未验证并继续。记录只保存筛选后的公开事实，原始日志放忽略的 `tmp/`，位置使用 `~` 或 `<probe-root>`。
 
 ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开接口能否补上，并登记 ACP 的失败项、SDK 能力与局限；不用 Python SDK 包。仍失败时，按 ADR 的“Python 控制器加最少的进程内插件”列出确切缺口和所需最小插件。此退路与 Python-only 目标及目录删除会有差异，必须停止实施，把修改后的边界交用户/Claude Code Host 确认；不自行写新 JavaScript 或把未核对项视为通过。
 
-第四步动手前，下面各项必须有逐项结论，并由用户明确确认行为差异；审阅计划本身不代替这次确认。默认不新增 native resume，也不默认开放 DSH 审阅；可用能力的改变必须在核对结果中有证据。
+第四步记录逐项列出下表的实际差异。ADR-025“影响”已写明的三项——问询可能只能在检查点送达、快速路由加入 DSH 系统提示词、原生续接可能成为新能力——按计划进行，无须再次确认。表中的其他项是核对事项，不代表用户同意扩大行为；若发现超出这三项及已明确批准的 DSH 重做/停止口径的行为差异，先停下说明。
 
-| 行为 | 当前基线 | 拟议 ACP 行为与需确认的差异 |
+| 行为 | 当前基线 | 拟议 ACP 行为与差异记录边界 |
 | --- | --- | --- |
 | Worker 载体 | headless + Node 运行器/进程内插件 | ACP 代理会话 + Python 控制器/Python MCP；完成/会话事件证明转换，仍保留 six-field outcome、身份与 seal |
 | 快速路由 | direct-LLM，不创建 Agent/Session，单条 user 消息 | 经代理运行时，有 DSH 自己的系统提示词、会话和原生开销；响应/用量可能不同；不向原生 prompt 加第二套本项目角色规则 |
 | 最终值机制 | Worker 完成插件 + awaited flush；fast 末条 stream 文本 | Worker Python MCP 签收并关联 ACP root/end；fast 选择经核对的完成机制，若 MCP 是必需则作为最终值交付服务，不开放任务工具 |
 | 工具与权限 | Worker 默认原生工具；fast tools=[]；review unavailable | ACP 原生工具开关/权限应答覆盖以六问结果为准；不能强制的记 unrestricted；增加 review 资格须另有逐项确认 |
-| 模型/推理配置 | Worker 报 requested；fast 严格核对 prepareCall；有硬编码 Node 默认 | 统一冻结配置和会话回读，拒绝静默改用另一个 buddy；Worker 的配置失败行为可能更明确，属于需确认的改动 |
-| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 可能只能 cooperative-checkpoint；关闭实时能力、签收时机与未答问题收尾须确认，不能模拟另一条运行通道 |
+| 模型/推理配置 | Worker 报 requested；fast 严格核对 prepareCall；有硬编码 Node 默认 | 统一冻结配置和会话回读，拒绝静默改用另一个 buddy；若改变既有配置失败语义且超出已批准差异，先停下说明 |
+| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 可能只能 cooperative-checkpoint；按实际送达模式和签收/未答问题收尾逐项记录，不能模拟另一条运行通道 |
 | 会话私有存储 | attempt 私有 JSONL；Python 快速配置了 JSONL 但没有 Session | ACP 私有会话存储；需要证明配置覆盖确实生效；原生 user store 不能作为替代 |
-| 续接 | reconstructed-new-session，不 native resume | 本次默认保持重建；ACP load/resume 只记录能力，不自动启用，不扩大历史/账户迁移 |
+| 续接 | reconstructed-new-session，不 native resume | 依六问事实实现或记录 ACP load/resume 能力；原生续接成为新能力已在授权范围，仍要求私有状态、来源绑定与停止证据，不扩大历史/账户迁移 |
 | 取消与停止 | Node 对未知组观察异常可能当作 gone | Python 统一 conservative 双组观察；ACP cancel ack 只是中断事实；权限/未知 OS 错误均不报 stopped |
 | 用量与额度 | Worker 与 fast 不同，fast 两次纠正未累计；部分缺失 | ACP 原生语义字段、跨纠正运行的实际累计及诚实完整性；额度未提供仍为空；每个字段差异需登记 |
 | 发现与依赖 | Node catalog helper，项目维护 DSH profile/plugin 资源 | 无 prompt 的 ACP/SDK 元数据操作；删除项目的 runner、插件、目录脚本和 Node 测试/fixture；原生 DSH 的 Node 由 DSH 自己负责 |
@@ -200,11 +203,11 @@ ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开
 
 选择 Worker 运行时自己注册临时 C-Two 端点接收服务的活请求。当前 lease renewal 至少 5 秒、取消读取间隔 2 秒，而问询传输默认超时为 1,500 ms；把问询塞进这些往返会改变延迟与 wait 行为，并把 live 交互与租约绑在一起。因此 lease/claim/renew 保持当前职责，服务通过 Worker 的独立具名操作转达。所有角色与 harness 共用这一组运行通道。
 
-第五步开工前运行 F-C1：在独立私有根中启动真实 Python 子进程，用项目锁定的 C-Two 0.6.0 公开 API 注册、连接、调用、退出，证明一个 Worker 可以同时当黑板 client 和临时 server，两个控制器可以同时拥有每运行一个端点，并验证注册失败/重名、并发、关闭、再次创建、异常退出与端点不可达。只用合成事实，不启动原生 harness，不调用模型；不审阅 C-Two 内部来证明能力。核对 `cc.register/connect/server_address/shutdown` 的实际生命周期与配置组合；假如当前公开 API、配置全局性或运行时不能满足，不安装新版、不开自制 socket 后门，停止并报告。
+F-C1 现在与第零步、DSH 核对并行：在独立私有根，用项目锁定的 C-Two 0.6.0 公开 API 核对每次运行一个临时端点的生命周期、注册重名、异常退出与端点不可达、再次创建，以及 `set_server`/`set_client` 设置是否进程全局和对多个端点的影响。用户作为 C-Two 作者已确认一个进程可以 `cc.register` 自己为服务并用 `cc.connect` 连接别的服务，这一点作为输入事实，不重复证明。只用合成事实，不启动 harness 或模型，不审阅 C-Two 内部去证明能力。关键项失败且需要改 ADR 时停止报告，不安装新版或改回自制 socket。
 
 控制器每次启动选随机人名作为 C-Two resource 名，使用短的进程私有地址，重名注册失败换另一个人名；名字不含 task ID，不充当身份。Worker 端点每个持有进程一个，按该 Worker 当前内存句柄表转发，控制器端点每次运行一个。端点描述 `{address, name, instanceId}` 在私有启动/ready 材料里发布；认证 token 只存运行时私有绑定，另加完整执行身份与新 instanceId，使用 0600、无链接的发布方式。退出只关闭自己持有的资源和原生句柄，不删除别人的端点。
 
-新增内部具名操作 `worker_live_attach`/`worker_live_detach`，以现有 attempt actor 的 workerId/attemptId/generation/nonce 加 workerInstance 核对当前持有者，在服务内存保存这次运行的 Worker 地址与服务到 Worker 的窄能力。它们不添加公开 CLI 命令、不修改现有 claim/renew 参数、数据库 schema 或历史行。Worker 到 controller 使用另一份仅对本次执行有效的 token；服务拿不到 controller 地址/token，也不能绕过 Worker。服务重启使映射失效，持有句柄的原 Worker 在成功 reconcile/renew 后重新 attach；单靠保存的 PID、地址或 instanceId 不恢复所有权。需要新的内部 RPC 契约元数据时只在本步骤说明内部影响，不改公开 CLI 契约。
+新增内部具名操作 `worker_live_attach`/`worker_live_detach`，以现有 attempt actor 的 workerId/attemptId/generation/nonce 加 workerInstance 核对当前持有者，在服务内存保存这次运行的 Worker 地址与服务到 Worker 的窄能力。它们不添加公开 CLI 命令、不修改现有 claim/renew 参数、数据库 schema 或历史行。Worker 到 controller 使用另一份仅对本次执行有效的 token；服务拿不到 controller 地址/token，也不能绕过 Worker。服务重启使映射失效，持有句柄的原 Worker 在成功 reconcile/renew 后重新 attach；单靠保存的 PID、地址或 instanceId 不恢复所有权。这两个操作是 C-Two 契约变化；第五步将 `CONTRACT_VERSION` 提高到届时当前契约的下一 minor 版本（当前 0.28.0 对应计划值 0.29.0），所有具名操作/客户端与私有运行时一致切换，不留旧协议兼容层。记录版本前后值、旧客户端/服务拒绝混用、私有打包与 idle cutover 的影响；公开 CLI 参数与黑板 schema 不变，日常安装仍不在授权内。若实施前基线版本改变，以整合记录锁定的新版本值为准。
 
 同一 `WorkerRuntimeLive` 和 `HarnessRunLive` contract 只公开 `request`、`observe`、`capabilities`，使用第五节的固定帧；不提供任意方法名 dispatch、启动其他运行、延长租约或操作别的 attempt。C-Two 请求线程先核对身份并进入有界队列，原生连接仍由控制器的既有 owner loop 操作；不让多个 RPC 线程同时写原生 stdio。Worker 的转达不持有 SQLite 事务或业务锁，活动更新走现有 `worker_progress.data.activity`，不会延长模型 deadline。
 
@@ -225,9 +228,9 @@ ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开
 | 0-A 基线与全部测试编号 | 计划获准；旧布局未改；只写证据 | 用私有环境列出真正加载的 Python 每个 `TestCase.id()`、Node 每个测试路径/层级名称、Vitest 每个文件/完整测试名，记录重复/skip/动态与继承用例；运行旧完整检查并记录退出码、组件计数与清理证据。不能用 AST 方法数量代替全部编号 |
 | 0-B 逐文件搬动 | 0-A 验收；独占整个实施 worktree | 严格按 TSV `git mv`，补空包目录、修改 import/启动/打包/检查/Vite/help 来源路径；只路径与配置定位，无函数/测试断言语义变化。审阅去掉映射后的 diff、资产摘要及保护文档摘要；保持文件整体 |
 | 0-C 私有旧布局安装升级 | 0-B 验收；私有安装/运行时目录 | 使用 `2bdb497` 的固定旧布局 wheel/skill，在 `<upgrade-root>` 中运行旧安装 launcher，再用新 wheel/skill 执行现有 idle upgrade；旧包安装、活动指针、Python/源码/资源定位、备份和新 CLI 全链均有证据，覆盖升级失败回滚。fixture/检查可补到对应 install 测试，不能改升级行为来迁就测试 |
-| 0-D 编号对照与完整交付 | 0-C 验收；只补映射/记录 | 再列全部编号，按 TSV 模块前缀改名求双射，Node/Vitest 编号保持；逐行解释差异，漏发现、额外用例、失败导入均阻塞。运行新完整检查、wheel/sdist/skill 与最小无模型启动，记录路径更新范围和私有根完全收尾 |
+| 0-D 编号对照与完整交付 | 0-C 验收；只补映射/记录 | 再列全部编号，按 TSV 模块前缀改名求双射，Node/Vitest 编号保持；入库模块改名表和脚本的集合/计数对应结果，例外逐条说明；原始编号留 `tmp/`，漏发现、无解释的额外用例、失败导入均阻塞。运行新完整检查、wheel/sdist/skill 与最小无模型启动，记录路径更新范围和私有根完全收尾 |
 
-第零步不并行委派任何搬动或搬动中的修复；0-A 至 0-D 只有一个写入者。旧布局安装的构建输入使用单独固定 checkout/导出的材料，不能为测试改日常安装。新入口必须脱离源码目录仍可运行；合成 command 微任务通过同一黑板路径完成并保留回执，无须调用模型。验证“版本化旧 runtime 包仍保留、新活动指针可启动”与“新包不存在 `buddy` 兼容 namespace”是两项独立断言。
+第零步不并行委派任何搬动或搬动中的修复；0-A 至 0-D 只有一个写入者。旧布局安装的构建输入使用单独固定 checkout/导出的材料，不能为测试改日常安装。新入口必须脱离源码目录仍可运行；合成 command 微任务通过同一黑板路径完成并保留回执，无须调用模型。验证“版本化旧 runtime 包仍保留、新活动指针可启动”与“构建 wheel 文件清单中不存在顶层 `buddy/` 兼容 namespace”是两项独立断言。后一项直接检查 wheel 的 ZIP 文件清单，不用 `import buddy`：`tests/python` 在 PYTHONPATH 上，其测试目录里的 `buddy` 包会令 import 成功。0-D 还列出三类跨边界 import：protocol 导入黑板/buddy 任一侧、buddy 导入黑板、黑板导入 buddy；保留文件/行号/目标模块和类别计数，只登记、不修。
 
 ### 第一步：公共格式、外层与角色接缝
 
@@ -236,9 +239,9 @@ ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开
 | 1-A 公共值与 LiveChannel | 第零步获 Host 验收；`buddy/harnesses` 与协议/契约测试 | 落实第三、五节的冻结类型、序列化边界、当前值的转换和实时接口；将真实现有成功/失败/未知结果 fixture 逐项映射，不升级证明强度、不产生角色 verdict |
 | 1-B 共用启动与收集 | 1-A 验收；四个 harness 外层、runtime、旧 structured_call | 将重复的日志、owned spawn、deadline、bounded stdout、双层停止收集合成一份；DSH Worker 仍启动旧 Node；保持各路径字节/解码/宽限与凭据清理时机；原生 controller 本体不改 |
 | 1-C 角色控制器与观察策略 | 1-B 验收；`buddy/roles`、注册表/调用点 | 放置公共角色控制器、Worker/Router 准备和事实观察策略，保留候选、未知事件、即时预算/attention、检出/seal 和回合来源规则；给后续逐 harness 切换建立唯一调用点，未抽 harness 不另造执行载体 |
-| 1-D 外层迁移与防护验证 | 1-C 验收；受影响测试与验收材料 | 提供逐测试 old/new ID 表；注入 controller/native 两组未消失、stdout 无效、spawn 后 marker 写失败、证据路径替换等故障，确认原防护仍失败；四个 harness 的 fixture 路径和完整检查通过 |
+| 1-D 外层迁移与防护验证 | 1-C 验收；受影响测试与验收材料 | 提供测试编号变化表及未变化集合相等结果；注入 controller/native 两组未消失、stdout 无效、spawn 后 marker 写失败、证据路径替换等故障，确认原防护仍失败；四个 harness 的 fixture 路径和完整检查通过 |
 
-1-A 的新格式只在内部；当前 AdapterOutcome 与 role output 按基线投影。1-B 的共用读取器有显式读取规则参数，不把 Codex/Claude 严格 512 KiB 与 Router 普通 256 KiB 简单替换成一个更大/更严格值。第一步的原生启动参数、原生工具策略与接口未改，因此不为验证公共值另花模型调用；如审阅 diff 发现涉及原生行为，先列出具体检查，单独问用户批准再运行。
+1-A 的新格式只在内部；当前 AdapterOutcome 与 role output 按基线投影。1-B 的共用读取器有显式读取规则参数，不把 Codex/Claude 严格 512 KiB 与 Router 普通 256 KiB 简单替换成一个更大/更严格值。第一步的原生启动参数、原生工具策略与接口未改，因此不为验证公共值另花模型调用；如审阅 diff 发现涉及计划内原生行为，列出具体检查后按现有授权最小运行并登记次数；计划外的付费检查先问。
 
 ### 第二步：ZCode
 
@@ -247,16 +250,16 @@ ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开
 | 2-A Worker 角色与完成服务 | 第一步获 Host 验收；ZCode/Worker role 的 prompt、MCP 与来源边界 | 把任务书、six-field outcome、协助、attention/inquiry-pending 和检出处理留给角色；MCP 作为本次服务承载 schema/签名回执；原生 root/call/order 验证留在 ZCode 驱动；保留旧拒绝信封大小与 HMAC |
 | 2-B 单一原生运行 | 2-A 验收；ZCode driver/config/protocol/事实投影 | 将 create/resume、configure、subscribe/send、settlement、close/EOF 收成同一 run；通过请求的工具范围/schema/续接及角色 observer 表达差异；发现不发送输入；问询接 ExistingLiveChannel，read 未限制事实不冒充资格 |
 | 2-C 切换调用、删除旧入口 | 2-B 验收；注册表、角色调用和 ZCode 测试 | Worker、fast 均走一个 run；删除 ZCode 的 `start_no_tool_structured`/基类审阅占位调用和 runner 的旧模式路由，不留 compat wrapper；read-only-worker-carrier-unimplemented 的外部资格结论保持 |
-| 2-D 证据与整步验证 | 2-C 验收；迁移表、防护故障、原生脚本/验收记录 | 逐项核对 signed finish、拒绝、checkpoint/inquiry、resume、消息用量、工具投影顺序、失败 drain、unknown fast/Worker 差异；故障复现并跑完整检查。准备一次私有原生冒烟，单独问用户批准后运行并保存真实产物/停止证据 |
+| 2-D 证据与整步验证 | 2-C 验收；迁移表、防护故障、原生脚本/验收记录 | 逐项核对 signed finish、拒绝、checkpoint/inquiry、resume、消息用量、工具投影顺序、失败 drain、unknown fast/Worker 差异；故障复现并跑完整检查。按已授权计划做一次最小私有原生冒烟，保存真实产物/停止证据和运行次数 |
 
 ### 第三步：Codex 与 Claude Code
 
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
-| 3-A Codex 单一运行 | 第二步获 Host 验收；Codex driver 与角色调用、对应测试 | 合并现有 App Server 上的运行分支、重复配置核对和 Router 纠正骨架；保留 mode 对应的原生 config/权限、Worker checkpoint/private home/绑定、fast EOF 与 review 完成根口径；删除两个旧 structured 启动入口 |
-| 3-B Claude Code 单一运行 | 3-A 验收；Claude driver/config/protocol、角色与测试 | 合并用户消息边界、发送/等待/drain 和目录核对；Worker/审阅共用 run；发现 initialize-only；无快速、native resume、问询的资格保持；删除其旧审阅入口和 inherited no-tool 使用路径 |
+| 3-A Codex 单一运行 | 第一步获 Host 验收；Codex driver 与角色调用、对应测试 | 合并现有 App Server 上的运行分支、重复配置核对和 Router 纠正骨架；保留 mode 对应的原生 config/权限、Worker checkpoint/private home/绑定、fast EOF 与 review 完成根口径；删除两个旧 structured 启动入口 |
+| 3-B Claude Code 单一运行 | 第一步获 Host 验收，与 3-A/ZCode/DSH 并行；Claude driver/config/protocol、角色与测试 | 合并用户消息边界、发送/等待/drain 和目录核对；Worker/审阅共用 run；发现 initialize-only；无快速、native resume、问询的资格保持；删除其旧审阅入口和 inherited no-tool 使用路径 |
 | 3-C StructuredOutput 修正 | 3-B 验收；Claude 原生交付识别、事实投影与预算测试 | 在 CLI `--json-schema` 的原生输出路径识别真正属于本次根的内建 StructuredOutput 交付；交付事件进入 completionEvidence，排除普通工具 start/end 和预算计数。保持其他工具/不完整流/子会话/同名 MCP 工具的计数与拒绝；不得往公共工具名字白名单加全面豁免 |
-| 3-D 迁移与整步验证 | 3-C 验收；两 harness 的逐测试对照与原生材料 | 覆盖 Codex 账户/检出/配置/checkpoint/断流、Claude 第三方账户拒绝/消息边界/权限/背景沉降/结构化结果；注入相关故障，完整检查。分别准备一次 Codex、一次 Claude Code 的真实私有冒烟，每次先问用户，不能用一次授权覆盖两个调用 |
+| 3-D 迁移与整步验证 | 3-C 验收；两 harness 的逐测试对照与原生材料 | 覆盖 Codex 账户/检出/配置/checkpoint/断流、Claude 第三方账户拒绝/消息边界/权限/背景沉降/结构化结果；注入相关故障，完整检查。Codex、Claude Code 两线分别完成自己的迁移检查、最小真实冒烟和完整检查，分别提交记录并停下等 Host；登记各自 harness 与次数，不互相等待 |
 
 3-C 的识别依据是启用本次原生 schema、真实根会话、原生内建操作来源、call ID 关联及最终结构化结果；普通 `mcp__...StructuredOutput`、伪造子会话、只有名字无原生来源、缺失终态均不能豁免。对 stream tool-use 与 assistant 完整块的重复事件、后续 tool_result 配对、预算为 0 的结构化审阅、真正 Read 调用计数及仍需拒绝的 other 调用分别验证；防护测试临时恢复旧投影后必须失败。若原生事件不足以按这些条件识别，停止说明并调整经过审阅的识别规则，不静态证明厂商安装包。
 
@@ -265,36 +268,36 @@ ACP 某项失败时，先只核对同一已安装 DSH 的 `--profile sdk` 公开
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
 | F-D1 无模型握手 | 本计划获准；只用隔离核对材料，不改运行模块 | 按第六节完成六问的免费部分，列 actual/declared/unknown；空会话、私有状态、配置/MCP 与停止证据；失败项只读核对 SDK profile 退路并停止报告 |
-| F-D2 经批准的真实核对 | F-D1 验收且用户批准这一次模型调用 | 一个明确脚本/配置/私有任务，记录六问需要实际运行的事实、真实 artifacts 和双组停止；形成行为差异逐项结论，交用户确认；未确认不得实施第四步 |
+| F-D2 已授权的真实核对 | F-D1 经本 Host 核对；无需再次询问模型授权 | 一个明确脚本/配置/私有任务，记录六问需要实际运行的事实、真实 artifacts 和双组停止；形成行为差异逐项结论；已列三项按计划，超出范围才停止说明；F-D1/F-D2 线完成后提交记录等 Host |
 
 ### 第四步：DSH Python ACP 重做
 
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
-| 4-A ACP 控制与元数据 | 第三步获 Host 验收，F-D1/F-D2 通过且差异确认；Python DSH 模块 | 用已安装 `dsh --profile acp` 实现 stdio client、能力/会话配置/无 prompt 发现、私有存储与保守组停止；不采用 Python SDK、不安装 native runtime；模拟乱序/断帧/取消/失联验证 |
+| 4-A ACP 控制与元数据 | 第一步与 DSH 核对获 Host 验收；仅不碰公共文件的 ACP 客户端可在核对后提前写；Python DSH 模块 | 用已安装 `dsh --profile acp` 实现 stdio client、能力/会话配置/无 prompt 发现、私有存储与保守组停止；不采用 Python SDK、不安装 native runtime；模拟乱序/断帧/取消/失联验证 |
 | 4-B 结果与可选会话服务 | 4-A 验收；Python MCP、Worker/Router role 的 DSH 接线 | 同一 run 服务 Worker/fast/经确认的 read 范围；完成工具、问询/检查点、权限 deny/allow 的已确认策略、语义工具事件与用量转成公共事实；接 ExistingLiveChannel；保持 outcome 与 seal 外层职责 |
 | 4-C 删除项目 Node 集成 | 4-B 验收；DSH 老入口/目录、manifest/discovery/打包/checks、测试 fixture | 删除 `harnesses/dsh/` 的运行器/全部插件/目录脚本与 Node 测试，并删除 Python direct-LLM controller、旧入口、只供这些代码使用的 Node fixture/YAML bridge 资源；按逐测试意图表迁移 Node/Python 场景。更新打包资源、discovery/available 中本项目的 Node 要求和检查定位，DSH 命令只来自已安装 harness；只剩控制台开发需要 Node |
-| 4-D DSH 整步验收 | 4-C 验收；旧/新测试表、差异实现清单与真实核对 | 故障证明停止未知、配置不一致、completion/问询失配、权限/迟到工具事实仍被发现；完整检查与新分发包私有验证。实现后的真实冒烟单独问用户；F-D2 早期核对不能当作最终实现已验证 |
+| 4-D DSH 整步验收 | 4-C 验收；旧/新测试表、差异实现清单与真实核对 | 故障证明停止未知、配置不一致、completion/问询失配、权限/迟到工具事实仍被发现；完整检查与新分发包私有验证。实现后的最小真实冒烟已有授权，记录次数；F-D2 早期核对不能当作最终实现已验证 |
 
-Node 测试不按“删掉文件即删掉要求”处理；每个旧编号对应 Python 新编号或经确认的行为差异/仅 Node 实现细节删除原因。第三步未验收、六问未满足或差异未获确认时，不启动 4-A。ACP 不能满足的退路先做审阅与批准，任何采用 SDK profile/最小插件的实施微任务必须补明确输入、行为差异、删除范围及验证后重新停下确认。
+Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧编号对应 Python 新编号或已授权行为差异/仅 Node 实现细节删除原因，未变的编号以集合相等证明。DSH 完整抽取依赖第一步及 DSH 核对验收，与其他 harness 并行。六问揭示需要改 ADR 的不可行项、超出已授权行为差异时停止；额度/登录导致未验证则如实记录，可继续无需这份证据的工作。ACP 不能满足的退路先做审阅与批准，任何采用 SDK profile/最小插件的实施微任务必须补明确输入、行为差异、删除范围及验证后重新停下确认。
 
 ### 第五步：C-Two 实时通道
 
 | 微任务 | 依赖与范围 | 独立交付及验收 |
 | --- | --- | --- |
-| F-C1 无模型本机核对 | 第四步获 Host 验收，或计划通过后提前只做独立实验；不得先改生产通道 | 按第七节验证真实 C-Two 临时端点、Worker client/server 共存、碰撞/关闭/异常/重建；公开 API 和跨进程证据；任何关键项失败停止，不开始 5-A |
-| 5-A 公共 C-Two 后端 | 第四步验收及 F-C1 通过；公共 live contract/后端与 controller | 替换 ExistingLiveChannel 背后的实现，随机人名的每运行端点、完整身份、窄 token、有界队列/帧、原生 owner loop 调用；用四 harness 的合成 session/活动/问询验证同一 contract |
-| 5-B Worker 持有与服务转达 | 5-A 验收；Worker/runtime 与 protocol/service/inquiry | 实现 Worker endpoint、内部 attach/detach、服务内存定位、reconcile 后重新登记；去掉服务到 controller 的活连接；不改 claim/lease/receipt/schema，服务事务外转达 |
+| F-C1 无模型本机核对 | 现在独立 worktree 并行开始；不得先改生产通道 | 按第七节核对真实临时端点生命周期、碰撞/异常退出、set_server/set_client 进程全局设置；不重复证明作者确认的 client/server 共存；需要改 ADR 的失败项停止说明 |
+| 5-A 公共 C-Two 后端 | F-C1 获 Host 验收后可提前实现独立后端；切换须所有 harness 验收；公共 live contract/后端与 controller | 替换 ExistingLiveChannel 背后的实现，随机人名的每运行端点、完整身份、窄 token、有界队列/帧、原生 owner loop 调用；用四 harness 的合成 session/活动/问询验证同一 contract |
+| 5-B Worker 持有与服务转达 | 5-A 验收、四个 harness 全部获 Host 验收；Worker/runtime 与 protocol/service/inquiry | 实现 Worker endpoint、内部 attach/detach、服务内存定位、reconcile 后重新登记；去掉服务到 controller 的活连接；不改 claim/lease/receipt/schema，服务事务外转达 |
 | 5-C 活动迁移与旧通道删除 | 5-B 验收；四 harness 的发布/观察、runtime 转报、问询桥/测试 | 活动经 C-Two snapshot 进入 Worker progress；删除两套 socket 和 activity 文件实时转报及相关路径预算，只保留持久证据。迁移旧问询/活动测试，删入口检查证明无双通道 |
-| 5-D 失联与整步验收 | 5-C 验收；故障场景、迁移表、原生脚本和分发验证 | 验证服务重启、Worker/控制器死亡、同名/旧地址/旧 token/旧 attempt、消息重放/冲突、队列满/超时、端点失联但原生仍活、取消与 lease 独立、持久回执恢复；完整检查。准备受影响 DSH/ZCode 的真实问询冒烟，每一次调用分别先问用户 |
+| 5-D 失联与整步验收 | 5-C 验收；故障场景、迁移表、原生脚本和分发验证 | 验证服务重启、Worker/控制器死亡、同名/旧地址/旧 token/旧 attempt、消息重放/冲突、队列满/超时、端点失联但原生仍活、取消与 lease 独立、持久回执恢复；完整检查。准备受影响 DSH/ZCode 的真实问询冒烟，按已有授权最小运行并分别记录次数 |
 
-微任务默认顺序提交。第三步两个 harness 的实现将来可以独立 worktree 并行，但只有 3-A 和 3-B 在契约/文件所有权完全明确后才考虑；本计划默认串行以降低公共角色文件冲突。任何后续启用并行要在各自任务描述写明基线、唯一可写目录和公共文件整合归属。第零步始终串行。
+除第零步串行独占实施 worktree 外，尽可能并行。第一步验收后启动 ZCode、Codex、Claude Code、DSH 四个独立 worktree；若公共接口需先用 ZCode 校验，可只让其先完成一个小切片，随后铺开，不把整步 ZCode 验收变成其他 harness 的额外依赖。每个任务描述固定基线、唯一可写目录与公共文件整合归属。并行线只写自己的 harness 包和对应测试/证据；公共值、角色模块、注册表、公共实时接口由本 Host 统一修改。发现接口缺口先在交付中提出，本 Host 处理并提交公共变更后，对原微任务 continue；不得私改公共文件。共享接口调整在相关步骤记录写明字段变化及原因。
 
 ## 9. 逐测试迁移、故障注入与完整检查
 
-每步先冻结输入 commit 和实际收集的测试编号，产出 `docs/acceptance/adr025-step-N-test-map.tsv`，字段为 `old_id/new_id/disposition/reason/guard/fault_check`。第零步 old/new 为真实 unittest ID 的模块前缀映射，类名、方法名、继承用例、参数化/动态用例不改；Node 与 Vitest 使用测试文件加完整层级名称，重复名字带收集序号并显式核对。按集合和多重计数验证一一对应，不能只比较数量；不能把未收集或 import 失败说成测试被替换。原始机器输出放 `tmp/`，入库表的路径仅为仓库相对路径或占位符。
+每步先冻结输入 commit 和实际收集的测试编号。第零步入库 `docs/acceptance/adr025-step-0-module-map.tsv` 及核对结果：模块级 old/new 改名表、按映射后的测试集合与多重计数一一对应、例外逐条说明；不为每个测试入库一行。真正加载的 unittest ID、继承/动态用例、Node/Vitest 文件与完整测试名的原始清单放 `tmp/`，以脚本比较，不能只比总数或用 AST 方法数替代。
 
-后续步骤为每个迁移测试保留测试目的；一对多须列每个新 ID，多个旧测试合并须逐个解释相同目的如何覆盖，删除须有确定原因。新增测试独立标明，不得填进旧 ID 掩盖缺失。涉及防护的迁移除了正常通过，还在一次性测试 worktree/私有 fixture 注入一个能破坏该防护的故障，保存“预期拒绝/测试失败 → 恢复 → 测试通过”的摘要；不能修改日常板、用户状态或为制造失败调用模型。第零步未改变 guard 内容，无须逐个重做厂商证明；路径/fixture 防护移到新位置的，以代表性运行验证新测试确实可发现故障，保留完整 ID 双射。
+后续每步的测试表只列编号变化、被删除和新增的测试，字段为 `old_id/new_id/disposition/reason/guard/fault_check`；未变化部分以集合相等证明。一对多/合并/删除仍说明覆盖目的和原因，不用新增测试掩盖旧覆盖丢失。迁移防护的测试在一次性测试 worktree/私有 fixture 注入破坏防护的故障，保存“应失败 → 恢复 → 通过”的摘要；原始列表和运行日志放 `tmp/`。第零步只变路径而未迁移防护逻辑的项目不扩大为厂商证明；路径/fixture 防护的代表性故障检查仍执行。
 
 | 防护族 | 对应现有测试输入 | 注入故障与必须观察到的结果 |
 | --- | --- | --- |
@@ -310,12 +313,12 @@ Node 测试不按“删掉文件即删掉要求”处理；每个旧编号对应
 
 测试子进程按当前 checks 的 SANITIZED_VARIABLES 清除继承 runtime/worker/agent authority、`VIRTUAL_ENV` 与 `UV_PROJECT_ENVIRONMENT`，使用独立 `BUDDY_STATE_DIR`、空私有 `BUDDY_RUNTIME_ROOT` 和 `BUDDY_DEV_SOURCE=1`。私有安装升级场景明确关闭源码模式并从其私有安装启动，检查实际解释器、包、manifest/资源、launcher、service 和 Worker 来源；不能只从当前 checkout import 来宣称安装通过。每天的配置、凭据、board/runtime 都不修改，凭据仅用 synthetic fixture 或由 native 自己处理已授权登录。
 
-各微任务只跑受影响检查；整步集成时跑一次完整检查。通过后仅有新改动/失败/未解决问题才重跑对应检查或完整检查。真实冒烟按已列验证需要逐次询问用户，用任务实际成果、原生身份、工具事实、回合/结果、双层停止和清理材料验证，不靠模型宣称或 dashboard 状态。Linux/Windows 未实际运行的部分明确记未验证，不为本机重构强行加平台环境或升级依赖。
+各微任务只跑受影响检查；整步集成时跑一次完整检查。通过后仅有新改动/失败/未解决问题才重跑对应检查或完整检查。本计划原生核对/冒烟及同目的必要重跑按用户的一并授权执行，每次记录 harness、次数及最小目的；额度/登录不能运行则记未验证并继续，不反复尝试或更改登录。计划外付费运行仍先问用户。真实冒烟用任务实际成果、原生身份、工具事实、回合/结果、双层停止和清理材料验证，不靠模型宣称或 dashboard 状态。Linux/Windows 未实际运行的部分明确记未验证，不为本机重构强行加平台环境或升级依赖。
 
 ## 10. 整合登记、暂停点与交付
 
-每步交付 `docs/acceptance/adr025-step-N.md`、该步测试对照表及实际必要的核对记录。记录包含输入/输出 commit、微任务 run/artifact/attempt 身份、逐项验收/continue 问题与后续 seal、整合 commit、Host 自行修过的范围外或合并问题、完整检查退出码和组件摘要、故障注入摘要、原生授权及真实证据边界、保留/回收的私有目录。原始输出和一次性实验脚本只放忽略的 `tmp/`；记录中的主目录/工作目录使用 `~`、`<repo>`、`<worktree>`、`<probe-root>`、`<upgrade-root>`。
+每步交付 `docs/acceptance/adr025-step-N.md`、第零步模块表/后续编号变化表及实际必要的核对记录。记录包含输入/输出 commit、微任务 run/artifact/attempt 身份、逐项验收/continue 问题与后续 seal、整合 commit、Host 自行修过的范围外或合并问题、完整检查退出码和组件摘要、故障注入摘要、原生授权及真实证据边界、保留/回收的私有目录。原始输出和一次性实验脚本只放忽略的 `tmp/`；记录中的主目录/工作目录使用 `~`、`<repo>`、`<worktree>`、`<probe-root>`、`<upgrade-root>`。
 
-固定暂停点为：本计划提交；第零步记录提交；第一步记录提交；第二步记录提交；第三步记录提交；DSH 六问失败或行为差异待确认；第四步记录提交；C-Two 核对失败；第五步记录提交。只依据用户转达的 Host 验收进入下一步，不直接给 Claude Code 发消息。未批准的原生模型检查保持待执行；不将缺证据的步骤写成验收通过。
+固定暂停点为每条线的步骤记录与完整检查结果提交后：第零步、第一步、ZCode、Codex、Claude Code、DSH、第五步，以及两项核对完成。等用户转达 Claude Code Host 验收后才启动依赖该步的工作；互不依赖的并行线继续。另在可行性核对不通过而需要改 ADR、DSH 行为差异超出已写明三项、改动明显超出计划时停止说明。额度/登录造成未验证按前述规则记录，不把未验证冒充验收通过。
 
-本计划完成时只验证文档与 TSV 的完整性、链接、基线、路径卫生和提交范围，不运行完整行为测试，也不启动原生 CLI、握手或模型；完整行为验证从 0-A 开始。日常安装、升级和最终发布仍需用户另行明确授权，本宏任务的重构验收不包含这些操作。
+本次修订提交后直接并行开始第零步、F-D1 接 F-D2、F-C1，不再等待计划审阅。日常安装、升级和最终发布仍不在本宏任务授权内；不改用户配置、凭据或日常数据，不读取凭据文件内容。
