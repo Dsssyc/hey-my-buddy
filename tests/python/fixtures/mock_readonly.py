@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from unittest.mock import patch
+from fixtures.router_tool_receipt import tool_receipt
 
 
 def prepare_input(manifest, directory):
@@ -36,7 +37,7 @@ def verify_input(manifest, root, expected):
 
 
 def install(testcase, *, path=None, **options):
-    """Inject verified native capability only within this test process."""
+    """Inject locally eligible native capability only within this test process."""
     from buddy.adapters.dsh import DshAdapter
 
     testcase._readonly_fixture = Path(path) if path is not None else Path(__file__).resolve()
@@ -52,8 +53,12 @@ def install(testcase, *, path=None, **options):
         side_effect=lambda _native, context, request: start(
             context, request, testcase._readonly_fixture, testcase._readonly_options),
     ))
-    for flag in ("read_only_structured", "read_only_structured_verified"):
-        testcase.enterContext(patch.object(DshAdapter, flag, True))
+    testcase.enterContext(patch.object(DshAdapter, "read_only_structured", True))
+    testcase.enterContext(patch.object(DshAdapter, "local_read_only_check", return_value={
+        "eligible": True, "reasonCode": None, "reason": None,
+        "systemSandbox": False,
+        "sameAttemptContinuation": False,
+    }))
     testcase.enterContext(patch.object(DshAdapter, "available", side_effect=lambda: (testcase._readonly_fixture.is_file(), "mock fixture missing")))
     testcase.input_prepare = testcase.enterContext(patch("buddy.router_input.prepare", side_effect=prepare_input))
     testcase.input_verify = testcase.enterContext(patch("buddy.router_input.verify", side_effect=verify_input))
@@ -69,7 +74,10 @@ def start(context, request, fixture, options):
     control = context.directory / "mock-readonly.json"
     control.write_text(json.dumps({"document": context.decision_input, "cwd": request.cwd,
                                   "prompt": request.prompt, "schema": request.output_schema,
-                                  "budget": request.budget, "options": options}))
+                                  "budget": request.budget, "options": options,
+                                  "binding": {"adapter": context.decision_input["profile"]["adapter"],
+                                              "taskId": context.task_id, "attemptId": context.attempt_id,
+                                              "generation": context.generation}}))
     control.chmod(0o600)
     stdout, stderr = open_logs(context.log_paths())
     # Never inherit a governed Worker credential into the stand-in child.
@@ -125,7 +133,7 @@ def main(control_path):
     envelope = {"status": "ok", "rawAnswer": json.dumps(answer) if mode == "json_answer" else answer,
                 "processState": {"shutdownConfirmed": shutdown}, "requested": document["profile"],
                 "resolved": {**document["profile"], "reasoningEffort": document["profile"]["effort"]},
-                "nativeIdentity": {"adapter": document["profile"]["adapter"], "sessionId": "mock-native"},
+                **tool_receipt(control["binding"], 1, native_identity={"sessionId": "mock-native"}),
                 "usage": {"elapsedMs": 200, "toolCalls": 1, "bytesRead": 33}}
     codes = {"error": "call-timeout", "protocol_error": "invalid-native-result",
              "budget": "readonly-budget-exhausted", "deadline": "deadline"}

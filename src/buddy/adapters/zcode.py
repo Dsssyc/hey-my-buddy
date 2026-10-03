@@ -21,7 +21,6 @@ from . import turn_io
 from .zcode_config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths
 from .zcode_protocol import NativeError, decode_json
 
-
 class ZcodeAdapter(Adapter):
     name = "zcode"
     #: ``observe`` publishes bounded native activity. ``inquiry`` is the
@@ -37,10 +36,17 @@ class ZcodeAdapter(Adapter):
     native_resume = True
     model_discovery = True
     no_tool_structured = True
-
     def start_no_tool_structured(self, context, request):
         from .read_only import start_no_tool
         return start_no_tool(self.name, context, request)
+
+    def local_read_only_check(self) -> dict:
+        """Report the deferred Worker-carrier review without inspecting an SDK."""
+        result = super().local_read_only_check()
+        if not self.read_only_structured:
+            return {**result, "reasonCode": "readonly-worker-carrier-unimplemented",
+                    "reason": "ZCode review on the Worker carrier is not implemented; its separate read-only channel was removed from stage 2"}
+        return result
 
     def available(self) -> tuple[bool, str | None]:
         from ..harness_runtime import selected

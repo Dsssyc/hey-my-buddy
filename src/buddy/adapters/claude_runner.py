@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..errors import BoardError
 from .base import ProcessHandle
 from .windows_process import owned_popen
 from .claude_config import (DEFAULT_EFFORT, DEFAULT_MODEL_ALIAS, TOOL_DENIAL_MESSAGE, account_problem,
@@ -164,6 +165,18 @@ def execution_deadline(timeout_seconds) -> float:
     return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
+def _read_only_collector(control: dict):
+    """The evidence collector bound to the private control file's frozen attempt identity."""
+    from .claude_tool_evidence import ReadOnlyToolEvidence
+    try:
+        binding = {"adapter": "claude", "taskId": control["taskId"], "attemptId": control["attemptId"],
+                   "generation": control["generation"]}
+        return ReadOnlyToolEvidence(binding)
+    except (KeyError, TypeError, BoardError):
+        raise ClaudeProtocolError("invalid-control",
+                                  "the read-only control file carries no frozen attempt identity") from None
+
+
 def _read_only_call(connection, control, result, catalog, early_messages, user_sent, process):
     """Use native restricted file tools and JSON Schema without a workflow turn."""
     from .read_only import valid_answer
@@ -172,40 +185,54 @@ def _read_only_call(connection, control, result, catalog, early_messages, user_s
             model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
             for model in catalog["providers"][0]["models"]):
         raise ClaudeProtocolError("invalid-configuration", "Unknown native read-only configuration")
-    connection.pump_available()
-    result["modelStarted"] = True
-    connection.send({"type": "user", "message": {"role": "user",
-                    "content": [{"type": "text", "text": request["prompt"]}]}})
-    user_sent["value"] = True
-    evidence = TurnEvidence(session_id, control["cwd"])
-    def observed(frame):
-        activity = evidence.observe(frame)
-        result["usage"] = {"toolCalls": evidence.tool_calls, "bytesRead": None}
-        # A limit of N allows N native tool calls; the next one is interrupted.
-        if evidence.tool_calls > request["budget"]["toolCalls"]:
-            raise ClaudeProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
-        if activity:
-            _activity(control, evidence, *activity)
-    connection.on_message = observed
-    for was_sent, message in early_messages:
-        if not was_sent and message.get("type") in ("assistant", "result", "stream_event"):
-            raise ClaudeProtocolError("native-turn-started-early", "Model output preceded the read-only request")
-        observed(message)
-    early_messages.clear()
-    while evidence.result is None:
-        connection.pump()
-    process.stdin.close()
-    connection.drain_until_closed(min(10.0, max(0.0, connection.deadline - time.monotonic())))
-    native_result = evidence.result
-    if (not evidence.init_observed or native_result.get("session_id") != session_id
-            or native_result.get("subtype") != "success" or native_result.get("is_error") is not False
-            or evidence.unsettled_background_tasks()):
-        raise ClaudeProtocolError("native-turn-failed", "No completed native structured answer")
-    raw = native_result.get("structured_output")
-    result.update(status="ok", rawAnswer=raw, answerValid=valid_answer(raw, request["outputSchema"]),
-                  resolved=dict(spec), nativeIdentity={"sessionId": session_id},
-                  usage={"toolCalls": evidence.tool_calls, "bytesRead": None})
-    return evidence
+    collector = _read_only_collector(control)
+    try:
+        connection.pump_available()
+        result["modelStarted"] = True
+        connection.send({"type": "user", "message": {"role": "user",
+                        "content": [{"type": "text", "text": request["prompt"]}]}})
+        user_sent["value"] = True
+        evidence = TurnEvidence(session_id, control["cwd"])
+        def observed(frame):
+            # Facts are collected before any filter or rejection can drop the frame.
+            collector.observe_frame(frame)
+            activity = evidence.observe(frame)
+            result["usage"] = {"toolCalls": collector.tool_calls, "bytesRead": None}
+            # A limit of N allows N native tool calls; the next one is interrupted,
+            # counted by the same unified collector the receipt reports.
+            if collector.tool_calls > request["budget"]["toolCalls"]:
+                raise ClaudeProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
+            if activity:
+                _activity(control, evidence, *activity)
+        connection.on_message = observed
+        for was_sent, message in early_messages:
+            if not was_sent and message.get("type") in ("assistant", "result", "stream_event"):
+                # Its facts are still collected before the boundary rejection.
+                collector.observe_frame(message)
+                raise ClaudeProtocolError("native-turn-started-early", "Model output preceded the read-only request")
+            observed(message)
+        early_messages.clear()
+        while evidence.result is None:
+            connection.pump()
+        process.stdin.close()
+        connection.drain_until_closed(min(10.0, max(0.0, connection.deadline - time.monotonic())))
+        # Only the transport's observed end completes the stream: the receipt's
+        # evidence is finished here, never inferred from the final result JSON.
+        result["toolEvidence"] = collector.finish(stream_complete=True)
+        native_result = evidence.result
+        if (not evidence.init_observed or native_result.get("session_id") != session_id
+                or native_result.get("subtype") != "success" or native_result.get("is_error") is not False
+                or evidence.unsettled_background_tasks()):
+            raise ClaudeProtocolError("native-turn-failed", "No completed native structured answer")
+        raw = native_result.get("structured_output")
+        result.update(status="ok", rawAnswer=raw, answerValid=valid_answer(raw, request["outputSchema"]),
+                      resolved=dict(spec), nativeIdentity={"sessionId": session_id},
+                      usage={"toolCalls": collector.tool_calls, "bytesRead": None}, correctionCount=0)
+        return evidence
+    except BaseException:
+        # A stream that never provably closed still reports the facts collected so far.
+        result["toolEvidence"] = collector.finish(stream_complete=False)
+        raise
 
 
 def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:

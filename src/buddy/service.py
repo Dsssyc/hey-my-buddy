@@ -43,7 +43,6 @@ CONTROL_OPERATIONS = (
     "account_logout",
     "account_remove",
     "harness_set",
-    "harness_verify",
     "harness_prepare",
     "quota_redetect",
     "service_control",
@@ -680,12 +679,6 @@ class BoardService(_BaseResource):
             self.store._notify(head)
             return response
         return self._guard('harness.prepare', request_json, handler)
-
-    def harness_verify(self, request_json: str) -> str:
-        from .harness_review import request
-        def handler(params):
-            return request(self.store, params)
-        return self._guard('harness.verify', request_json, handler)
 
     def quota_redetect(self, request_json: str) -> str:
         from .quota_routing import redetect

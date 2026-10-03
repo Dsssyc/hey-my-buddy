@@ -33,23 +33,19 @@ export type HarnessHealth = {
   quota?: HarnessQuota | null;
   /** Persisted exhaustion records with their recovery state; absent means none recorded. */
   quotaRouting?: QuotaRoutingRecord[];
-  reviewVerification?: ReviewVerification;
+  readOnlyStructured?: ReadOnlyStructured;
+  systemSandbox?: boolean;
   billingByProvider?: Record<string, BillingFact>;
   account?: import("./harness-account").HarnessAccount;
 };
 
-export type ReviewVerification = {
-  adapter: string;
-  version: string | null;
-  platform: string;
-  status: "verified" | "new-version" | "unverified" | "queued" | "running" | "stopping" | "unconfirmed" | "failed";
-  implemented: boolean;
-  verified: boolean;
-  runId?: string;
-  reasonCode?: string | null;
-  nativeReasonCode?: string;
-  failedChecks?: string[];
-  checks?: Record<string, boolean>;
+export type ReadOnlyStructured = {
+  eligible: boolean;
+  systemSandbox: boolean;
+  reasonCode: string | null;
+  reason: string | null;
+  sameAttemptContinuation: boolean;
+  implemented?: boolean;
 };
 
 export type BillingFact = {
@@ -203,9 +199,7 @@ export type Decision = {
   createdAt: string;
   error?: string | null;
   updatedAt?: string;
-  routingMode?: RoutingMode;
-  requestedRoutingMode?: RoutingMode;
-  fallback?: RoutingFallback | null;
+  routingMode?: RoutingMode | null;
 };
 export type Delegation = {
   kind: "goal" | "helper" | "decision" | "execution";
@@ -341,21 +335,70 @@ export type ModelConcurrencySetting = ModelFamily & { limit: number };
  */
 export type ModelConcurrencyEntry = ModelConcurrencySetting & { active: number };
 export type RoutingMode = "fast" | "review";
-export type RoutingFallback = { from: "review"; to: "fast"; code: string; reason: string };
 export type RoutingBudget = "brief" | "standard" | "deep";
 export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
+/**
+ * The ordered Router list settings (ADR-021 §2). `routerProfileIds` is the
+ * user's order; the head is the preferred first choice and the tail follows it.
+ * The retired single/dual slot fields (`routerProfileId`, `fastRouterProfileId`,
+ * `reviewRouterProfileId`, `decisionProfileId`) are never valid keys again.
+ */
 export type Configuration = {
   revision: number;
-  fastRouterProfileId: string | null;
-  reviewRouterProfileId: string | null;
+  routerProfileIds: string[];
+  routerRetryIntervalSeconds: number;
   defaultRoutingMode: RoutingMode;
   routingBudget: RoutingBudget;
   routingBudgetLimits?: RoutingBudgetLimits;
 };
+/** The complete published four-part identity of one listed buddy. */
+export type RouterHealthIdentity = { adapter: string; provider: string; model: string; effort: string };
+/**
+ * One listed buddy's health facts (ADR-021 §20): resolution eligibility with its
+ * machine reason code, skip window and retry facts, the all-time and windowed
+ * outcome counts of its own immutable timeline, and its last recorded error.
+ * Unknown-nature entries count into `windowEntries` but never as an answer or a
+ * failure; input-changed and cancelled records are not no-answers at all.
+ */
+export type RouterHealthEntry = {
+  profileId: string;
+  index: number;
+  identity: RouterHealthIdentity | null;
+  eligible: boolean;
+  code?: string | null;
+  inSkipWindow?: boolean;
+  skipUntil?: string | null;
+  retryAt?: string | null;
+  retryInProgress?: boolean;
+  answeredCount?: number;
+  noAnswerCount?: number;
+  lastAnsweredAt?: string | null;
+  lastNoAnswerAt?: string | null;
+  consecutiveNoAnswers?: number;
+  windowSize?: number;
+  windowEntries?: number;
+  windowAnsweredCount?: number;
+  windowFailureCount?: number;
+  windowBudgetExhaustedCount?: number;
+  windowBoundsRejectedCount?: number;
+  windowAttemptCount?: number;
+  lastError?: { code: string | null; at: string; phase?: string | null } | null;
+};
 export type RoutingHealth = {
+  available?: boolean;
+  reasonCode?: string | null;
+  /** The buddy currently holding the Router role, or null while none can serve. */
+  currentRouterProfileId?: string | null;
+  /** Per-buddy facts in the user's list order; absent data is unknown, not success. */
+  routers?: RouterHealthEntry[];
+  /** Terminal selection records whose attribution or nature cannot be proven. */
+  unattributedCount?: number;
+  unattributed?: { decisionId: string; at: string; outcome: string; code: string | null }[];
   windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
   abstentionCount: number; cancelledCount: number; staleCount: number;
   budgetExhaustedCount?: number; boundsRejectedCount?: number; inputChangedCount?: number;
+  /** Window entries that reached a model attempt; a request stays one entry. */
+  attemptCount?: number;
   lastSuccessAt: string | null; lastSuccessDecisionId: string | null;
   recentFailures: { decisionId: string; runId: string | null; at: string; code: string }[];
 };
@@ -397,7 +440,8 @@ export type Snapshot = {
   consoleAccess?: ConsoleAccess;
   tableRevision: number;
   gate: Gate;
-  configuration: Configuration;
+  configuration: Configuration | null;
+  configurationError?: { code: string; message: string; revision: number } | null;
   profiles: Profile[];
   /** Effective preferences (read-only view); `source` names where each came from. */
   preferences: Preference[];

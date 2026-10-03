@@ -1,62 +1,75 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HarnessReview, parseReviewVerification } from "./HarnessReview";
-import type { ConsoleApi } from "./api";
-import type { HarnessHealth, Snapshot } from "./types";
+import { HarnessReview } from "./HarnessReview";
+import { parseReadOnlyStructured } from "./api";
+import type { HarnessHealth } from "./types";
 
 afterEach(() => { cleanup(); sessionStorage.clear(); });
+const eligibility = { eligible: true, systemSandbox: true, sameAttemptContinuation: true, reasonCode: null, reason: null };
 const row: HarnessHealth = { adapter: "codex", version: "0.159.0", status: "ready", available: true, revision: 3, manualPath: null,
-  reviewVerification: { adapter: "codex", version: "0.159.0", platform: "darwin", status: "new-version", implemented: true, verified: false } };
-const snapshot = { csrfToken: "fixture-csrf", configuration: { reviewRouterProfileId: "codex-profile" }, profiles: [{ profileId: "codex-profile",
-  adapter: "codex", provider: "openai", model: "gpt-6-sol", effort: "high", enabled: true, available: true }] } as Snapshot;
+  readOnlyStructured: eligibility };
 
-describe("explicit review verification", () => {
-  it("starts only when clicked and displays a pending version without inventing a certificate", async () => {
-    const command = vi.fn().mockResolvedValue({ runId: "verification-1", status: "queued" });
-    const refresh = vi.fn();
-    render(<HarnessReview row={row} snapshot={snapshot} api={{ command } as unknown as ConsoleApi} canWrite onRefresh={refresh} />);
-    expect(screen.getByText("审阅能力：新版本待验证")).toBeTruthy();
-    expect(command).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "重新验证审阅能力" }));
-    expect(command).toHaveBeenCalledWith("harness_verify", expect.objectContaining({ adapter: "codex", profileId: "codex-profile",
-      expectedRevision: 3, execute: true }), "fixture-csrf");
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(screen.getByText("审阅能力：等待验证")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "重新验证审阅能力" }) as HTMLButtonElement).disabled).toBe(true);
+function expectNoVerificationControls() {
+  expect(screen.queryByRole("button", { name: /验证/ })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "审阅验证配置" })).toBeNull();
+}
+
+describe("local review eligibility", () => {
+  it("shows local eligibility without a model invocation or certificate requirement", () => {
+    render(<HarnessReview row={row} />);
+    expect(screen.getByText("审阅资格：符合本地检查")).toBeTruthy();
+    expect(screen.getByText("本地资格检查不调用模型，不代表原生调用已验证。")).toBeTruthy();
+    expect(screen.getByText("具有原生系统沙盒；实际策略由每次运行核对。")).toBeTruthy();
+    expectNoVerificationControls();
   });
-  it("keeps the exact request identity after a lost reply", async () => {
-    const command = vi.fn().mockRejectedValueOnce(new Error("回复丢失，请核对本次请求")).mockResolvedValueOnce({ runId: "verification-1", status: "queued" });
-    render(<HarnessReview row={row} snapshot={snapshot} api={{ command } as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: "重新验证审阅能力" }));
-    await userEvent.click(screen.getByRole("button", { name: "核对本次验证" }));
-    expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
+
+  it("does not retry a retired request after a lost reply", () => {
+    sessionStorage.setItem("buddy-review-intent:codex", JSON.stringify({ requestId: "lost-reply", profileId: "codex-profile", expectedRevision: 3 }));
+    render(<HarnessReview row={row} />);
+    expectNoVerificationControls();
+    expect(screen.queryByText("核对本次验证")).toBeNull();
   });
-  it('preserves an unconfirmed identity across folding or reloading the details', async () => {
-    const command = vi.fn().mockRejectedValueOnce(new Error('lost reply')).mockResolvedValueOnce({runId: 'verification-1', status: 'completed'});
-    const first = render(<HarnessReview row={row} snapshot={snapshot} api={{command} as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', {name: '重新验证审阅能力'}));
+
+  it("does not restore retired paid verification on folding or reloading", () => {
+    sessionStorage.setItem("buddy-review-intent:codex", JSON.stringify({ requestId: "old-request", profileId: "codex-profile", expectedRevision: 3 }));
+    const first = render(<HarnessReview row={row} />);
+    expectNoVerificationControls();
     first.unmount();
-    render(<HarnessReview row={row} snapshot={snapshot} api={{command} as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', {name: '核对本次验证'}));
-    expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
-    expect(sessionStorage.getItem('buddy-review-intent:codex')).toBeNull();
+    render(<HarnessReview row={row} />);
+    expectNoVerificationControls();
+    expect(screen.getByText("审阅资格：符合本地检查")).toBeTruthy();
   });
-  it('shows the recorded binding failure with a relevant remedy', () => {
-    const failed = {...row, reviewVerification: {...row.reviewVerification!, status: 'failed' as const,
-      reasonCode: 'HARNESS_REVIEW_BINDING_CHANGED', failedChecks: []}};
-    render(<HarnessReview row={failed} snapshot={snapshot} api={{command: vi.fn()} as unknown as ConsoleApi} canWrite onRefresh={vi.fn()} />);
-    expect(screen.getByText('版本或路径已变化，请刷新后重新验证。')).toBeTruthy();
-    expect(screen.queryByText(/检查 CLI 权限/)).toBeNull();
+
+  it("shows the recorded local failure reason with no paid remedy", () => {
+    render(<HarnessReview row={{ ...row, readOnlyStructured: { ...eligibility, eligible: false,
+      reasonCode: "readonly-resource-missing", reason: "The native read-only controller is missing" } }} />);
+    expect(screen.getByText("审阅资格：不可用")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("The native read-only controller is missing");
+    expectNoVerificationControls();
   });
-  it("does not submit while writes are unavailable", async () => {
+
+  it("has no mutation entry even when rendered inside a writable or unavailable page", () => {
     const command = vi.fn();
-    render(<HarnessReview row={row} snapshot={snapshot} api={{ command } as unknown as ConsoleApi} canWrite={false} onRefresh={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: "重新验证审阅能力" }));
+    // Old props cannot recreate the removed action on stale caller data.
+    render(<HarnessReview {...{ row, api: { command }, canWrite: false }} />);
+    expectNoVerificationControls();
     expect(command).not.toHaveBeenCalled();
   });
-  it("refuses certificates with missing checks or a different version", () => {
-    expect(parseReviewVerification({ ...row.reviewVerification, status: "verified", verified: true }, row)).toBeNull();
-    expect(parseReviewVerification({ ...row.reviewVerification, version: "0.157.0" }, row)).toBeNull();
+
+  it("refuses incomplete eligibility and retired certificates instead of inventing availability", () => {
+    expect(parseReadOnlyStructured({ eligible: true })).toBeNull();
+    expect(parseReadOnlyStructured({ ...eligibility, eligible: "true" })).toBeNull();
+    expect(parseReadOnlyStructured({ ...eligibility, systemSandbox: "true" })).toBeNull();
+    expect(parseReadOnlyStructured({ ...eligibility, reason: "failed local check" })).toBeNull();
+    expect(parseReadOnlyStructured({ verified: true, status: "verified", version: "0.157.0" })).toBeNull();
+    render(<HarnessReview row={{ ...row, readOnlyStructured: undefined }} />);
+    expect(screen.getByText("审阅资格：未知")).toBeTruthy();
+    expect(screen.queryByText(/符合本地检查/)).toBeNull();
+  });
+
+  it.each(["dsh", "zcode"])("states %s's remaining boundary without a system sandbox", adapter => {
+    render(<HarnessReview row={{ ...row, adapter, readOnlyStructured: { ...eligibility, systemSandbox: false } }} />);
+    expect(screen.getByText("无系统沙盒，不能保证阻止副本外读取或外传；黑板的事后判定只覆盖上报的工具事件。")).toBeTruthy();
+    expectNoVerificationControls();
   });
 });

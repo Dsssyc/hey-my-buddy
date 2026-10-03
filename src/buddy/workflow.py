@@ -256,11 +256,19 @@ class WorkflowCoordinator:
             view["sealedArtifacts"] = json.loads(row["sealed_artifacts_json"])
         return view
 
-    @staticmethod
-    def _request_view(row, *, include_audit: bool = False, compact: bool = False) -> dict:
+    def _request_view(self, row, *, include_audit: bool = False, compact: bool = False, connection=None, now=None) -> dict:
         payload = json.loads(row["payload_json"])
+        boundary = payload.get("routingBoundary")
+        if connection is not None and payload.get("source") == "routing" and payload.get("decisionId"):
+            # Proxy rows retain the leaf's frozen decision. Only command fencing
+            # is refreshed from the current owned lineage, never its frozen packet.
+            target_id = (payload.get("origin") or {}).get("runId") or row["run_id"]
+            target = self._run_optional(connection, target_id)
+            decision = self.board.decisions._row(connection, payload["decisionId"])
+            if target is not None and decision is not None:
+                boundary = self._routing_boundary(connection, decision, target, now=now)
         if compact:
-            return {
+            view = {
                 "requestId": row["request_id"],
                 "kind": row["kind"],
                 "state": row["state"],
@@ -271,6 +279,9 @@ class WorkflowCoordinator:
                 "origin": payload.get("origin"),
                 "routing": payload.get("source") == "routing",
             }
+            if boundary is not None:
+                view["routingBoundary"] = boundary
+            return view
         view = {
             "requestId": row["request_id"],
             "kind": row["kind"],
@@ -291,6 +302,8 @@ class WorkflowCoordinator:
             "origin": payload.get("origin"),
             "routing": payload.get("source") == "routing",
         }
+        if boundary is not None:
+            view["routingBoundary"] = boundary
         if isinstance(payload.get("preparationError"), dict):
             view["preparationError"] = {
                 "code": _head(payload["preparationError"].get("code"), 100),
@@ -570,7 +583,8 @@ class WorkflowCoordinator:
         children = children[:MAX_CHILD_VIEW]
         artifacts = artifacts[:MAX_ARTIFACT_VIEW]
         active = self._open_boundary(connection, run_row)
-        active_request = self._request_view(active) if active is not None else None
+        projection_now = self.now()
+        active_request = self._request_view(active, connection=connection, now=projection_now) if active is not None else None
         goal = json.loads(run_row["goal_json"])
         state = run_row["state"]
         from .native_observations import warnings
@@ -597,12 +611,12 @@ class WorkflowCoordinator:
             "configurationLocked": bool(run_row["configuration_locked"]),
             "executionConfigurationRevision": run_row["execution_configuration_revision"],
             "quotaWarnings": warnings(connection, self._configuration(run_row), now=self.now()),
-            "routing": self._routing_view(connection, run_row),
+            "routing": self._routing_view(connection, run_row, now=projection_now),
             "currentTurn": self._turn_view(turns[0]) if turns else None,
             "turns": [self._turn_view(row, compact=True) for row in turns],
             "activeRequest": active_request,
-            "requests": [self._request_view(row, compact=True) for row in requests],
-            "pendingRequests": [self._request_view(row, compact=True) for row in pending[:MAX_REQUEST_VIEW]],
+            "requests": [self._request_view(row, compact=True, connection=connection, now=projection_now) for row in requests],
+            "pendingRequests": [self._request_view(row, compact=True, connection=connection, now=projection_now) for row in pending[:MAX_REQUEST_VIEW]],
             "children": [self._child_view(row) for row in children],
             "artifacts": [self._artifact_view(row) for row in artifacts],
             "scope": self._current_scope(connection, run_row),
@@ -1081,8 +1095,33 @@ class WorkflowCoordinator:
             spec = {**spec, **(self._configuration(run) or {}), "cwd": task["cwd"]}
         return spec
 
-    def _routing_view(self, connection, run) -> dict:
-        from .router import routing_facts, selection_source
+    def _routing_boundary(self, connection, decision, run, *, post_transition: bool = False, now=None):
+        """Project a frozen decision with the current owning Host's command fence."""
+        from .router_boundary_data import routing_boundary
+
+        owner, seen = run, set()
+        while owner["run_id"] not in seen:
+            seen.add(owner["run_id"])
+            parent = connection.execute(
+                "SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (owner["run_id"],)
+            ).fetchone()
+            if parent is None:
+                break
+            candidate = self._run_optional(connection, parent["parent_run_id"])
+            if candidate is None:
+                break
+            owner = candidate
+        # Establishing the leaf boundary increments its revision and propagates
+        # one boundary transition to each ancestor in the same transaction.
+        increment = 1 if post_transition else 0
+        return routing_boundary(
+            connection, decision, now=now if now is not None else self.now(), run_id=run["run_id"],
+            revision=run["revision"] + increment, owner_run_id=owner["run_id"],
+            owner_revision=owner["revision"] + increment,
+        )
+
+    def _routing_view(self, connection, run, *, now=None) -> dict:
+        from .router import selection_source
         goal = json.loads(run["goal_json"])
         if not run["current_routing_id"]:
             request = self._open_boundary(connection, run)
@@ -1108,7 +1147,8 @@ class WorkflowCoordinator:
             "resolved": "completed", "needs-host": "needs-host", "fenced": "fenced",
         }[link["state"]]
         requested = json.loads(decision["requested_json"])
-        return {
+        current = self.board.decisions._view(connection, decision, include_audit=False)
+        view = {
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
             "selectedProfile": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
@@ -1117,9 +1157,17 @@ class WorkflowCoordinator:
             "constraints": requested.get("constraints", schemas.configuration_constraints(goal)),
             "requiredCapabilities": requested.get("requiredCapabilities", []),
             "source": selection_source(requested),
-            **routing_facts(requested),
+            **{key: current[key] for key in (
+                "routerProfileIds", "routerIdentities", "routingMode", "routingBudget", "budget",
+                "routerRetryIntervalSeconds", "routerProblem",
+                "routerProfileId", "routerProfile", "routerIndex", "decisionModel", "routerTrials",
+            ) if key in current},
             "routingBasis": requested.get("routingBasis"),
         }
+        boundary = self._routing_boundary(connection, decision, run, now=now)
+        if boundary is not None:
+            view["routingBoundary"] = boundary
+        return view
 
     def _start_routing(self, connection, run_id: str, now: str) -> None:
         run = self._run_row(connection, run_id)
@@ -1146,6 +1194,20 @@ class WorkflowCoordinator:
                                  payload={"decisionId": decision_id, "routingTaskId": response["runId"],
                                           "ownerGeneration": run["owner_generation"]})
         self.routing_settled(connection, decision_id=decision_id, now=now)
+
+    def routing_dispatched(self, connection, *, decision_id: str, task_id: str, now: str) -> None:
+        """Record that one pending route's internal dispatch task moved.
+
+        The route's internal task pointer is the decision request's current task,
+        which the dispatch step itself re-points; a pending route only records the
+        movement. The governed Goal keeps waiting for routing — no business Worker
+        turn opens here, and a link that does not exist yet (first routing of a
+        Goal) is not fabricated.
+        """
+        connection.execute(
+            "UPDATE workflow_routes SET updated_at=? WHERE decision_id=? AND state='pending'",
+            (now, decision_id),
+        )
 
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
         """Adopt a frozen recommendation with its result, under owner/lineage fencing."""
@@ -1195,9 +1257,24 @@ class WorkflowCoordinator:
                                (reason, now, run["current_routing_id"]))
         request_id = f"routing-{uuid.uuid4()}"
         payload = {"source": "routing", "decisionId": run["current_routing_id"], "summary": reason,
-                   "neededWork": ["Continue with a complete configuration, or fix the selector/catalog and continue with reroute=true."],
+                   "neededWork": ["读取路由边界的冻结候选和事实，指定完整合法 buddy 继续同一委派，或在列明的时间后显式 reroute=true；仅更改共享 Router 设置需要用户。"],
                    "attempted": "Bounded model routing and native configuration validation",
                    "acceptance": "A legal adapter/provider/model/effort tuple is ready for execution"}
+        if run["current_routing_id"]:
+            decision = self.board.decisions._row(connection, run["current_routing_id"])
+            current = self.board.decisions._view(connection, decision, include_audit=False)
+            payload.update({key: current[key] for key in (
+                "routerProfileIds", "routerIdentities", "routingMode", "routingBudget", "budget",
+                "routerRetryIntervalSeconds", "configurationRevision",
+                "routerProfileId", "routerProfile", "routerIndex", "decisionModel", "routerProblem",
+            ) if key in current})
+            boundary = self._routing_boundary(connection, decision, run, post_transition=True, now=now)
+            if boundary is not None:
+                payload["routingBoundary"] = boundary
+                payload["summary"] = reason = boundary["reason"][:2000]
+            if decision["decision_attempt_id"] is None and not any(
+                    trial.get("attemptId") for trial in current.get("routerTrials", [])):
+                payload["attempted"] = "已冻结合法候选并检查请求边界；未调用 Router，未创建 Worker 业务回合。"
         connection.execute(
             "INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,state,expected_revision,created_at,updated_at)"
             " VALUES(?,?,'attention',?,?,'open',?,?,?)",
@@ -1566,6 +1643,7 @@ class WorkflowCoordinator:
         no task prompt, model input/output or table payload is embedded.
         """
         from .router import routing_facts, selection_source
+        from .router_sequence import dispatch
         run_id = run_row["run_id"]
         total = int(
             connection.execute(
@@ -1612,7 +1690,7 @@ class WorkflowCoordinator:
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),
                     "current": bool(current_id) and row["decision_id"] == current_id,
-                    **routing_facts(requested),
+                    **routing_facts(requested, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
                 }
             )
         next_cursor = None
@@ -1647,7 +1725,7 @@ class WorkflowCoordinator:
             "hostConclusions": [host_conclusions.view(row) for row in conclusions[:50]],
             "hostConclusionsTruncated": len(conclusions) > 50,
             "turns": [self._turn_view(row, include_audit=True) for row in turns],
-            "requests": [self._request_view(row, include_audit=True) for row in requests],
+            "requests": [self._request_view(row, include_audit=True, connection=connection) for row in requests],
             "continuations": [
                 {
                     "continuationId": row["continuation_id"],
@@ -1781,7 +1859,11 @@ class WorkflowCoordinator:
             self._expect_revision(run_row, expected)
             request_row = self._request_row(connection, run_id, request_id)
             if json.loads(request_row["payload_json"]).get("source") == "routing":
-                raise BoardError("CONFIGURATION_REQUIRED", "A routing request is resolved with continue configuration or reroute, not an assistance decision")
+                raise BoardError(
+                    "CONFIGURATION_REQUIRED",
+                    "Resolve this routing boundary with a complete buddy configuration or explicit reroute on the same goal; only changing shared Router settings needs the user",
+                    routingBoundary=self._request_view(request_row, connection=connection).get("routingBoundary"),
+                )
             if request_row["state"] != "open":
                 raise BoardError(
                     "CONFLICT",
@@ -1980,7 +2062,11 @@ class WorkflowCoordinator:
             request_row = self._request_row(connection, run_id, request_id)
             active = self._open_boundary(connection, run_row)
             if json.loads(request_row["payload_json"]).get("source") == "routing":
-                raise BoardError("CONFIGURATION_REQUIRED", "A routing request is resolved with continue configuration or reroute, not an assistance decision")
+                raise BoardError(
+                    "CONFIGURATION_REQUIRED",
+                    "Resolve this routing boundary with a complete buddy configuration or explicit reroute on the same goal; only changing shared Router settings needs the user",
+                    routingBoundary=self._request_view(request_row, connection=connection).get("routingBoundary"),
+                )
             if request_row["state"] != "open" or active is None or active["request_id"] != request_id:
                 raise BoardError(
                     "CONFLICT",
@@ -2460,7 +2546,11 @@ class WorkflowCoordinator:
             routing = self._routing_view(connection, run_row)
             if configuration is None and not reroute and (
                     self._configuration(run_row) is None or routing["status"] in ("needs-host", "fenced")):
-                raise BoardError("CONFIGURATION_REQUIRED", "Continue with a complete configuration, or reroute after fixing the selector/catalog")
+                raise BoardError(
+                    "CONFIGURATION_REQUIRED",
+                    "Continue the same goal with a complete buddy configuration, or explicitly reroute at the boundary's retry time; only changing shared Router settings needs the user",
+                    routingBoundary=routing.get("routingBoundary"),
+                )
             live_helpers = sum(
                 child["state"] in ("active", "attention")
                 or not self._stop_proven(connection, connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone())
@@ -5178,7 +5268,7 @@ class WorkflowCoordinator:
             extension.update(title=run_row["title"], objectiveId=run_row["objective_id"])
         if run_row["active_request_id"]:
             request = connection.execute(
-                "SELECT kind, summary, payload_json FROM workflow_requests WHERE request_id=?", (run_row["active_request_id"],)
+                "SELECT * FROM workflow_requests WHERE request_id=?", (run_row["active_request_id"],)
             ).fetchone()
             if request is not None:
                 extension["requestKind"] = request["kind"]
@@ -5186,6 +5276,9 @@ class WorkflowCoordinator:
                 payload = json.loads(request["payload_json"])
                 extension["requestRouting"] = payload.get("source") == "routing"
                 extension["requestTargetRunId"] = (payload.get("origin") or {}).get("runId") or payload.get("childTaskId")
+                boundary = self._request_view(request, connection=connection).get("routingBoundary")
+                if boundary is not None:
+                    extension["routingBoundary"] = boundary
         return extension
 
     # -- claim gate ----------------------------------------------------------

@@ -19,9 +19,9 @@ class DecisionAdapter(Adapter):
     def available(self) -> tuple[bool, str | None]:
         from . import adapters
         for native in adapters().values():
-            if (getattr(native, "no_tool_structured", False) or native.read_only_structured and native.read_only_structured_verified) and native.available()[0]:
+            if (getattr(native, "no_tool_structured", False) or native.local_read_only_check()["eligible"]) and native.available()[0]:
                 return True, None
-        return False, "No native read-only structured configuration has been verified"
+        return False, "No native adapter has an eligible structured Router entrypoint"
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
         from . import adapter
@@ -34,7 +34,7 @@ class DecisionAdapter(Adapter):
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if fast:
             if not getattr(native, "no_tool_structured", False):
-                raise BoardError("UNSUPPORTED_ADAPTER", "This native adapter has no no-tool structured capability")
+                raise BoardError("router-no-tool-unsupported", "Router 不可用：harness 未实现无工具结构化入口")
             from .base import NoToolStructuredRequest
             # The native call receives an empty owner-private cwd under its
             # actual harness attempt; its no-tool profile disables project input.
@@ -50,13 +50,16 @@ class DecisionAdapter(Adapter):
             handle.no_tool_cwd = root
             handle.router_started = started
             return handle
-        if not (native.read_only_structured and native.read_only_structured_verified):
-            raise BoardError("UNSUPPORTED_ADAPTER", "This native read-only structured capability is unverified")
+        eligibility = native.local_read_only_check()
+        if not eligibility["eligible"]:
+            detail = eligibility.get("reason") or "harness 不满足审阅模式本地资格"
+            raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         manifest = document.get("executionWorkspace")
         root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
         budget = document["budget"]
-        request = ReadOnlyStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], budget)
+        request = ReadOnlyStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], budget,
+                                            capture_evidence=document.get("captureEvidence") is True)
         child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)},
                                 turn=None, agent_credential=None)
         started = time.monotonic()
@@ -75,7 +78,7 @@ class DecisionAdapter(Adapter):
                 handle.no_tool_cwd.rmdir()
             except OSError:
                 pass  # Retain unexpected native files for inspection.
-        if outcome.shutdown_confirmed and handle.router_input is not None:
+        if outcome.shutdown_confirmed and getattr(handle, 'router_input', None) is not None:
             verification = router_input.verify(*handle.router_input)
             # The mirror is a full copy of the frozen input. Once the native group is
             # proven stopped and the copy verified, the digests are the evidence; keep
@@ -93,6 +96,7 @@ class DecisionAdapter(Adapter):
             "resolved": native_result.get("resolved"), "observed": native_result.get("observed"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
+            "toolEvidence": native_result.get("toolEvidence"),
             "harnessVersion": native_result.get("harnessVersion"),
             "nativeEvidence": native_result.get("nativeEvidence"),
             "nativeFailure": native_result.get("nativeFailure"),
@@ -110,13 +114,9 @@ class DecisionAdapter(Adapter):
             code = "router-budget-exhausted"
         if code == "no-tool-violation":
             code = "router-tools-forbidden"
-        if (document.get("routingMode", "review") == "review" and native_result.get("modelStarted") is False
-                and outcome.shutdown_confirmed and code == "readonly-policy-unverified"):
+        if code == "readonly-policy-unverified":
             code = "router-review-unavailable"
-            result.update(reasonCode="router-review-unverified", reason="The native review permission policy could not be verified before model input")
-        if document.get("routingMode") == "fast" and outcome.status == "ok":
-            if native_result.get("zeroToolVerified") is not True or type(usage.get("toolCalls")) is not int or usage["toolCalls"] != 0:
-                code = "router-tools-forbidden"
+            result.update(reason="The native review permission policy could not be verified")
         if verification is not None and not verification["unchanged"]:
             code = "router-input-changed"
         if code is None and outcome.status == "ok":

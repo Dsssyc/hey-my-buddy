@@ -1,11 +1,11 @@
-"""Offline DSH controller tests with a fake native profile and LLM result."""
+"""Offline DSH controller tests with the shared no-tool protocol fixture."""
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
-import textwrap
 import time
 import unittest
 
@@ -17,38 +17,7 @@ from buddy.adapters.dsh_runner import composed_safe
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
           "required": ["choice"], "additionalProperties": False}
 
-FAKE = '''#!/usr/bin/env python3
-import json, os, sys, time
-from pathlib import Path
-args = sys.argv[1:]
-patch = json.loads(Path(args[args.index('--patch') + 1]).read_text())
-plugin = next(row for row in patch if 'insert' in row)['insert'][0]
-config = plugin['config']
-case = (Path(__file__).parent / 'case').read_text()
-if '--dump-config' in args:
-    print('- id: headless-runner')
-    print('  disabled: ' + ('false' if case == 'unsafe' else 'true'))
-    print('- id: buddy-no-tool-structured')
-    print('  name: ' + plugin['name'])
-    sys.exit(0)
-if case == 'timeout':
-    time.sleep(5)
-if case == 'truncated':
-    sys.exit(0)
-request = json.loads(Path(config['requestFile']).read_text())
-assert 'Return only one JSON value matching this schema:' in request['prompt']
-if case == 'tool':
-    result = {'status':'error','code':'no-tool-violation','modelStarted':True,'usage':{'toolCalls':1}}
-else:
-    answer = ('bad JSON' if case == 'correct' and 'call-1' in config['requestFile'] else
-              '{"choice":"b"}' if case == 'enum' else '{"choice":"a"}')
-    result = {'status':'ok','rawAnswer':answer,'resolved':request['spec'],
-              'observed':None,'modelStarted':True,'nativeIdentity':{'callId':request['callId']},
-              'usage':{'toolCalls':0},'streamComplete':True,'nativeToolsDisabled':True,
-              'nativeChunkCount':3,'nativeToolSchemaCount':0}
-Path(config['outputFile']).write_text(json.dumps(result))
-sys.exit(0 if result['status'] == 'ok' else 1)
-'''
+FIXTURE = Path(__file__).parent / "fixtures" / "mock_dsh.py"
 
 
 class DshNoToolTests(unittest.TestCase):
@@ -75,7 +44,7 @@ class DshNoToolTests(unittest.TestCase):
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
         self.fake = self.root / "fake-dsh"
-        self.fake.write_text(textwrap.dedent(FAKE))
+        shutil.copyfile(FIXTURE, self.fake)
         self.fake.chmod(0o755)
         self.dsh_home = self.root / "dsh-home"
         profile = self.dsh_home / "profiles" / "headless"
@@ -106,7 +75,7 @@ class DshNoToolTests(unittest.TestCase):
             handle.terminate(grace_seconds=2)
         self.assertIsNotNone(handle.wait(timeout + 8))
         outcome = DshAdapter().collect(handle, context)
-        if outcome.result.get("code") == "invalid-native-result" and not (case == "truncated"):
+        if outcome.result.get("code") == "invalid-native-result" and case not in ("truncated", "ok-with-events", "ok-truncated"):
             self.fail(f"controller stderr: {Path(handle.log_paths['stderr']).read_text()}")
         return outcome
 
@@ -118,6 +87,7 @@ class DshNoToolTests(unittest.TestCase):
                 self.assertTrue(outcome.result["zeroToolVerified"])
                 self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
                 self.assertEqual(outcome.result["correctionCount"], count)
+                self.assertEqual(len(outcome.result["toolEvidence"]["nativeIdentity"]), count + 1)
                 control = json.loads((self.root / f"attempt-{self.index}" / 'no-tool-control.json').read_text())
                 self.assertTrue((Path(control['directory']) / "dsh-home" /
                                  "profiles" / "headless" / "package.json").is_file())
@@ -146,6 +116,10 @@ class DshNoToolTests(unittest.TestCase):
                 self.assertEqual(outcome.status, "failed")
                 self.assertEqual(outcome.result["code"], code)
                 self.assertNotIn("zeroToolVerified", outcome.result)
+        # The retired violation branch invented a call that no chunk carried.
+        outcome = self.execute("tool")
+        self.assertNotIn("usage", outcome.result)
+        self.assertEqual(outcome.result["toolEvidence"]["events"], [])
 
     def test_deadline_and_cancel(self):
         late = self.execute("timeout", timeout=1)

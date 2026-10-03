@@ -102,10 +102,13 @@ assert all(re.fullmatch(r"[a-z_.]+", kind) for kind in REVIEW_EVENT_KINDS), REVI
 #: Card input is text, risk and evidence references only: the counters, revision and
 #: timestamp are derived by the backend and a supplied one is an unknown field.
 CARD_FIELDS = frozenset({"profileId", "summary", "strengths", "limitations", "risks", "evidenceIds"})
-#: The published configuration carries only the fixed decision profile. There is no
-#: automatic-maintenance or scheduler setting: maintenance synthesis is performed by
-#: an external Harness through ``evaluation_prepare`` and the ordinary writer gate.
-CONFIGURATION_FIELDS = frozenset({"fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode", "routingBudget"})
+#: The published configuration carries only the ordered Router list settings
+#: (ADR-021 第 2 条): the buddy list, its retry interval, the routing mode and the
+#: review budget preset. There is no automatic-maintenance or scheduler setting:
+#: maintenance synthesis is performed by an external Harness through
+#: ``evaluation_prepare`` and the ordinary writer gate.
+CONFIGURATION_FIELDS = frozenset({"routerProfileIds", "routerRetryIntervalSeconds",
+                                  "defaultRoutingMode", "routingBudget"})
 #: The Harness-owned maintenance reads. ``evaluation.prepare`` is a bounded,
 #: deterministic fact collection with no model call and no writer lease;
 #: ``evaluation.history`` is a bounded read of the existing publication log.
@@ -336,26 +339,9 @@ class EvaluationStore:
 
     @staticmethod
     def _validate_configuration(entry: Any) -> dict:
-        if not isinstance(entry, dict):
-            raise BoardError("INVALID_ARGUMENT", "configuration must be an object")
-        schemas.reject_unknown(entry, CONFIGURATION_FIELDS, "configuration")
-        from . import router
-        result = {}
-        for key in ("fastRouterProfileId", "reviewRouterProfileId"):
-            if key not in entry:
-                continue
-            profile_id = entry[key]
-            if profile_id is not None:
-                if not isinstance(profile_id, str) or not schemas.IDENTIFIER_PATTERN.fullmatch(profile_id):
-                    raise BoardError("INVALID_ARGUMENT", f"configuration.{key} must be a profileId or null")
-            result[key] = profile_id
-        if "defaultRoutingMode" in entry:
-            result["defaultRoutingMode"] = router.mode(entry["defaultRoutingMode"])
-        if "routingBudget" in entry:
-            result["routingBudget"] = router.budget(entry["routingBudget"])["preset"]
-        if not result:
-            raise BoardError("INVALID_ARGUMENT", "configuration requires a routing model or budget")
-        return result
+        """The strict list-settings patch: omissions preserve, ``[]`` clears, everything else validates."""
+        from .router_settings import validate_router_settings_patch
+        return validate_router_settings_patch(entry)
 
 
     # -- publish -------------------------------------------------------------
@@ -651,16 +637,24 @@ class EvaluationStore:
             state = self._state(connection)
             table_revision = int(state["table_revision"])
             from . import router
-            settings = router.configuration(connection)
-            routing_budget = router.configured_budget(connection)
+            configuration_error = None
+            try:
+                settings = router.configuration(connection)
+                routing_budget = router.configured_budget(connection)
+            except BoardError as error:
+                settings, routing_budget = None, None
+                configuration_error = {"code": error.code, "message": str(error),
+                                       "revision": int(state["configuration_revision"])}
+            configured_ids = (settings or {}).get("routerProfileIds") or []
+            configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
             profiles = [
                 self._profile_view(row)
                 for row in connection.execute(
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
                     "LEFT JOIN harness_health h ON h.adapter=p.adapter "
                     "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
-                    "WHERE (p.available=1 AND h.status='ready') OR p.profile_id IN (?,?) ORDER BY p.rowid LIMIT 202",
-                    (settings["fastRouterProfileId"], settings["reviewRouterProfileId"])
+                    f"WHERE (p.available=1 AND h.status='ready') OR p.profile_id IN ({configured_marks}) ORDER BY p.rowid LIMIT 202",
+                    configured_ids
                 )
             ]
             from .billing import for_provider
@@ -715,11 +709,12 @@ class EvaluationStore:
             "csrfToken": "",
             "tableRevision": table_revision,
             "gate": gate,
-            "configuration": {
+            "configuration": ({
                 "revision": int(state["configuration_revision"]),
                 **settings,
                 "routingBudgetLimits": routing_budget,
-            },
+            } if settings is not None else None),
+            "configurationError": configuration_error,
             "profiles": profiles,
             "modelConcurrency": model_concurrency,
             "unavailableProfileCount": unavailable_count,
@@ -2599,7 +2594,7 @@ class EvaluationStore:
         from .adapters import adapters
         native = adapters().get(row["adapter"])
         capabilities = json.loads(row["capabilities_json"])
-        if not (native and native.read_only_structured and native.read_only_structured_verified):
+        if not (native and native.local_read_only_check()["eligible"]):
             capabilities = [item for item in capabilities if item != "decision"]
         elif 'decision' not in capabilities:
             capabilities.append('decision')

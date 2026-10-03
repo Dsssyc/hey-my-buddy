@@ -423,15 +423,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
 
-    def test_router_certificate_follows_the_selected_native_version_without_a_probe(self):
-        from buddy.harness_runtime import bound
-        import sys
-        with bound([{'adapter': 'codex', 'status': 'ready', 'version': '0.157.0'}]):
-            self.assertEqual(self.adapter.read_only_structured_verified, sys.platform == 'darwin')
-        with bound([{'adapter': 'codex', 'status': 'ready', 'version': '0.158.0'}]):
-            self.assertFalse(self.adapter.read_only_structured_verified)
-            self.assertTrue(self.adapter.available()[0])
-
     def test_read_only_refuses_an_unacknowledged_policy_before_model_input(self):
         from buddy.adapters.base import ReadOnlyStructuredRequest
         from buddy.adapters.read_only import collect
@@ -465,46 +456,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIs(result.result['modelStarted'], False)
         self.assertIs(result.result['nativeConfigPolicy']['features']['apps'], True)
         self.assertTrue(result.shutdown_confirmed)
-
-    def test_native_controller_probe_uses_the_same_profile_and_fixed_targets(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
-        from buddy.sandbox_probe import results
-        context = self.context()
-        context.turn = None
-        (self.cwd / 'marker.txt').write_text('private-marker\n')
-        sentinel = self.root / ('outside-' + 'a' * 32 + '.txt')
-        sentinel.write_text('private-sentinel\n')
-        request = ReadOnlyStructuredRequest(str(self.cwd.resolve()), 'fixture', answer_schema(['legal']), budget(),
-            capture_evidence=True, native_probe={'sentinel': str(sentinel.resolve()), 'url': 'http://127.0.0.1:12345/'})
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        outcome = collect(handle)
-        self.assertTrue(results(outcome.result['nativeSandboxProbes'])[1])
-        self.assertEqual(len(json.loads((self.root/'fixture.json').read_text())['sandboxProbes']), 5)
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(sentinel.read_text(), 'private-sentinel\n')
-
-    def test_unrelated_native_probe_response_fails_before_model_start(self):
-        from buddy.adapters.base import ReadOnlyStructuredRequest
-        from buddy.adapters.read_only import collect
-        from buddy.router import answer_schema, budget
-        context = self.context('probe-unrelated-reply')
-        context.turn = None
-        (self.cwd / 'marker.txt').write_text('private-marker\n')
-        sentinel = self.root / ('outside-' + 'b' * 32 + '.txt')
-        sentinel.write_text('private-sentinel\n')
-        request = ReadOnlyStructuredRequest(str(self.cwd.resolve()), 'fixture', answer_schema(['legal']), budget(),
-            capture_evidence=True, native_probe={'sentinel': str(sentinel.resolve()), 'url': 'http://127.0.0.1:12345/'})
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        outcome = collect(handle)
-        self.assertFalse(outcome.result['modelStarted'])
-        self.assertEqual(outcome.result['code'], 'invalid-protocol')
-        self.assertTrue(outcome.shutdown_confirmed)
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
         from buddy.adapters.base import ReadOnlyStructuredRequest
@@ -559,27 +510,23 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(auth.read_text(), 'retain regular file')
 
 
-    def test_router_budget_interrupts_and_keeps_unknown_read_bytes(self):
-        from buddy.adapters.decision import DecisionAdapter
+    def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
         from buddy.router import answer_schema, budget
         context = self.context('readonly-budget')
         context.turn = None
-        context.decision_input = {
-            'profile': {'adapter': 'codex', 'provider': 'openai', 'model': 'fixture-model', 'effort': 'low'},
-            'profiles': [{'profileId': 'legal'}], 'task': 'Select', 'tableRevision': 1,
-            # A zero-call budget interrupts the fixture's first native tool call.
-            'budget': {**budget(), 'toolCalls': 0}, 'outputSchema': answer_schema(['legal']),
-        }
-        adapter = DecisionAdapter()
-        with mock.patch.object(CodexAdapter, 'read_only_structured_verified', True):
-            handle = adapter.start(context)
-            self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-            self.assertIsNotNone(handle.wait(20))
-            outcome = adapter.collect(handle, context)
+        # A zero-call budget interrupts the fixture's first native tool call.
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']),
+                                             {**budget(), 'toolCalls': 0}, capture_evidence=True)
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        outcome = collect(handle)
         self.assertEqual(outcome.status, 'failed', outcome.result)
-        self.assertEqual(outcome.result['code'], 'router-budget-exhausted')
+        self.assertEqual(outcome.result['code'], 'readonly-budget-exhausted')
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertTrue(outcome.result['stopEvidence']['nativeInterruptAcknowledged'])
+        self.assertTrue(outcome.result['nativeInterruptAcknowledged'])
         self.assertIsNone(outcome.result['usage']['bytesRead'])
         self.assertEqual(outcome.result['usage']['toolCalls'], 1)
 

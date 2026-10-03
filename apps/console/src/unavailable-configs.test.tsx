@@ -73,7 +73,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: revision,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: decisionId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 1, routerProfileIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: live,
     // `unavailableProfileCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision profile; the console
@@ -391,7 +391,7 @@ describe("stale settings and unrelated saves", () => {
     // The stale review Router is no longer a stacked detail page: the global
     // status strip carries the attention and links to the effort it names.
     const status = screen.getByRole("region", { name: "全局状态" });
-    expect(within(status).getByRole("link", { name: "审阅 Router 需处理，去处理" })).toBeTruthy();
+    expect(within(status).getByRole("link", { name: "Router 需处理，去处理" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "只改这条意见");

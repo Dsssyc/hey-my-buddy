@@ -64,14 +64,14 @@ class HarnessServiceTests(BoardTestCase):
         refused = self.call('harness_set', adapter='codex', path='/other/codex', expectedRevision=0)
         self.assertEqual(refused['error']['code'], 'REVISION_CONFLICT')
 
-    def test_router_catalog_certificate_uses_the_published_health_version(self):
+    def test_router_catalog_eligibility_does_not_require_a_version_certificate(self):
         self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog
         payload = {'source': 'fixture', 'providers': [{'adapter': 'codex', 'provider': 'openai',
             'models': [{'id': 'gpt-6-sol', 'name': 'Sol', 'efforts': ['high']}]}]}
         with patch('buddy.adapters.codex.sys.platform', 'darwin'), \
              patch('buddy.adapters.codex.CodexAdapter.discover_models', return_value=payload), \
              patch('buddy.harness_health._snapshot', return_value={}):
-            for version, verified in [('0.157.0', True), ('0.158.0', False)]:
+            for version in ('0.157.0', '0.158.0'):
                 with self.subTest(version=version), patch('buddy.harness_health._discover', return_value={
                         'adapter': 'codex', 'status': 'ready', 'version': version,
                         'command': ['/fixture/codex'], 'executable': '/fixture/codex'}):
@@ -80,7 +80,7 @@ class HarnessServiceTests(BoardTestCase):
                     with self.board.db.read() as db:
                         row = db.execute("SELECT capabilities_json FROM evaluation_profiles WHERE profile_id='codex:openai:gpt-6-sol:high'").fetchone()
                     self.assertIsNotNone(row)
-                    self.assertEqual('decision' in json.loads(row[0]), verified)
+                    self.assertIn('decision', json.loads(row[0]))
 
     def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
         with patch.object(self.board.workflow, 'continue_run', return_value={}), \

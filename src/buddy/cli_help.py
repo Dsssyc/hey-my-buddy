@@ -43,7 +43,6 @@ SUMMARIES: dict[str, str] = {
     "capabilities": "Adapter report with availability, capabilities, named operations and the honest limitations map.",
     "adapters": "Adapter report; the same operation as capabilities.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
-    "harness-verify": "Prepare or explicitly start one native review verification for an enabled configuration.",
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "accounts": "Read sanitized account sources and capabilities without a native refresh.",
     "account-set": "Select native or Worker account source for future attempts using expectedRevision.",
@@ -1177,7 +1176,9 @@ class _Extractor:
             if limit is not None:
                 bounds = f"at most {self._render(limit, self._signature_module(parts, module))} entries"
         elif helper == "bounded_text":
-            kind = "string"
+            # bounded_text requires a string even with allow_empty=True;
+            # absent input is None and is refused by the runtime validator.
+            kind, required = "string", True
             maximum = _keyword(node, "max_bytes")
             bounds = f"≤{self._render(maximum, module)} UTF-8 bytes" if maximum is not None else None
             if _keyword_value(node, "allow_empty") is True:

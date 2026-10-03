@@ -12,7 +12,7 @@ const initial = (): Snapshot => ({
   gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
   configuration: {
     revision: 1,
-    fastRouterProfileId: null, reviewRouterProfileId: "flash-off", defaultRoutingMode: "review" as const, routingBudget: "standard",
+    routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
   profiles: [
     {

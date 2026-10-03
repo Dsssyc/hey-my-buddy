@@ -49,7 +49,7 @@ function profiles(): Profile[] {
   ];
 }
 
-/** Codex awaits its review verification; DSH carries a near-limit quota window. */
+/** Codex lacks local review eligibility; DSH carries a near-limit quota window. */
 function harnesses(): HarnessHealth[] {
   return [
     { adapter: "claude", status: "ready", available: true, revision: 2, manualPath: null,
@@ -58,8 +58,7 @@ function harnesses(): HarnessHealth[] {
     { adapter: "codex", status: "ready", available: true, revision: 2, manualPath: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
-      reviewVerification: { adapter: "codex", version: "0.159.0", platform: "darwin",
-        status: "new-version", implemented: true, verified: false } },
+      readOnlyStructured: { implemented: true, eligible: false, systemSandbox: true, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "本地只读运行资源不可用" } },
     { adapter: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
@@ -76,13 +75,13 @@ function harnesses(): HarnessHealth[] {
 
 type SnapshotWithHarnesses = Snapshot & { harnesses: HarnessHealth[] };
 
-function snapshot(reviewRouterProfileId: string | null = solMediumId): SnapshotWithHarnesses {
+function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHarnesses {
   const base: Snapshot = {
     csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, fastRouterProfileId: flashMaxId, reviewRouterProfileId,
+    configuration: { revision: 1, routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
@@ -97,8 +96,8 @@ function snapshot(reviewRouterProfileId: string | null = solMediumId): SnapshotW
   return { ...base, harnesses: harnesses() };
 }
 
-function fixture(reviewRouterProfileId: string | null = solMediumId) {
-  let state = snapshot(reviewRouterProfileId);
+function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Snapshot> = {}) {
+  let state = { ...snapshot(routerProfileId), ...extra };
   const command = vi.fn(async (operation: string, _params: Record<string, any>, _csrfToken?: string) => {
     if (operation === "model_profiles") {
       // Only the checked 显示不可用配置 asks for this page; the fixture keeps
@@ -128,6 +127,21 @@ function renderBuddy(hash: string, f: ReturnType<typeof fixture>) {
 const sectionsNav = () => screen.getByRole("navigation", { name: "Buddy 配置分区" });
 const sectionLink = (name: string) => within(sectionsNav()).getByRole("link", { name });
 const statusStrip = () => screen.getByRole("region", { name: "全局状态" });
+
+describe("current Router health", () => {
+  it("keeps an explicit null current Router unavailable even when the configured head is eligible", async () => {
+    const f = fixture(mediumId, { routingHealth: {
+      available: false, currentRouterProfileId: null, reasonCode: "router-unavailable",
+      windowSize: 20, sampleCount: 2, failureCount: 2, consecutiveFailures: 2,
+      abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+      lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
+    } });
+    renderBuddy("#buddy", f);
+    await screen.findByRole("heading", { name: "模型 3" });
+    expect(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" })).toBeTruthy();
+    expect(statusStrip().textContent).not.toContain("Router：可用");
+  });
+});
 const currentSection = () =>
   within(sectionsNav()).getAllByRole("link").filter(link => link.getAttribute("aria-current") === "page")
     .map(link => link.textContent);
@@ -203,34 +217,31 @@ describe("section navigation", () => {
     renderBuddy("#buddy", f);
     await screen.findByRole("heading", { name: "模型 3" });
     const alerts = () => [
-      "快速 Router 可用", "审阅 Router 待验证，去处理", "Harness 可用 3/4", "额度提醒：DSH",
+      "Router 需处理，去处理", "Harness 可用 3/4", "额度提醒：DSH",
     ].map(name => within(statusStrip()).getByRole("link", { name }));
-    expect(alerts()).toHaveLength(4);
+    expect(alerts()).toHaveLength(3);
 
     await user.click(sectionLink("Router"));
     expect(statusStrip()).toBeTruthy();
-    expect(alerts()).toHaveLength(4);
+    expect(alerts()).toHaveLength(3);
     await user.click(sectionLink("Harness"));
     expect(statusStrip()).toBeTruthy();
-    expect(alerts()).toHaveLength(4);
+    expect(alerts()).toHaveLength(3);
   });
 });
 
 describe("status reminders jump to the entry that can handle them", () => {
-  it("jumps the review reminder to the opened and focused Codex harness row", async () => {
+  it("jumps an ineligible Router reminder to its model effort", async () => {
     const f = fixture();
     const user = userEvent.setup();
     renderBuddy("#buddy", f);
     await screen.findByRole("heading", { name: "模型 3" });
-    await user.click(within(statusStrip()).getByRole("link", { name: "审阅 Router 待验证，去处理" }));
-    expect(window.location.hash).toBe("#buddy/harness/codex");
-    await waitFor(() => expect(screen.getByRole("region", { name: "Harness 状态" })).toBeTruthy());
-    const codexRow = document.getElementById("harness-codex")!;
-    // The Codex row arrives expanded, so the review verification controls are at hand.
-    expect(screen.getByRole("button", { name: "Codex 收起详情" })).toBeTruthy();
-    expect(within(codexRow).getByText("审阅能力：新版本待验证")).toBeTruthy();
-    expect(within(codexRow).getByLabelText("审阅验证配置")).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(codexRow));
+    await user.click(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" }));
+    expect(window.location.hash).toBe(`#buddy/models/${encodeURIComponent(solMediumId)}`);
+    await screen.findByRole("heading", { name: "GPT-6 Sol" });
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById(`effort-tag-${solMediumId}`)));
+    expect(screen.queryByLabelText("审阅验证配置")).toBeNull();
+
   });
 
   it("jumps the quota reminder to the opened and focused DSH row", async () => {
@@ -257,7 +268,7 @@ describe("deep links", () => {
     expect(screen.queryByRole("region", { name: "模型分区" })).toBeNull();
     const codexRow = document.getElementById("harness-codex")!;
     expect(await screen.findByRole("button", { name: "Codex 收起详情" })).toBeTruthy();
-    expect(within(codexRow).getByText("审阅能力：新版本待验证")).toBeTruthy();
+    expect(within(codexRow).getByText("本地只读运行资源不可用")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(codexRow));
     expect(currentSection()).toEqual(["Harness"]);
   });
@@ -277,12 +288,12 @@ describe("deep links", () => {
 
   it("focuses the named Router line from a #buddy/router target", async () => {
     const f = fixture();
-    renderBuddy("#buddy/router/review", f);
+    renderBuddy("#buddy/router/current", f);
     await screen.findByRole("region", { name: "路由状态" });
     expect(screen.getByRole("region", { name: "Router 分区" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "模型分区" })).toBeNull();
-    const line = document.getElementById("router-review")!;
-    expect(line.textContent).toContain("审阅 Router");
+    const line = document.getElementById("router-current")!;
+    expect(line.textContent).toContain("Router");
     await waitFor(() => expect(document.activeElement).toBe(line));
   });
 
@@ -313,7 +324,7 @@ describe("deep links", () => {
     const user = userEvent.setup();
     renderBuddy("#buddy/router", f);
     await screen.findByRole("region", { name: "路由状态" });
-    const reviewLine = document.getElementById("router-review")!;
+    const reviewLine = document.getElementById("router-current")!;
     await user.click(within(reviewLine).getByRole("button", { name: "查看所在家族" }));
     expect(window.location.hash).toBe(`#buddy/models/${encodeURIComponent(solMediumId)}`);
     await waitFor(() => expect(screen.getByRole("region", { name: "模型分区" })).toBeTruthy());
@@ -334,7 +345,7 @@ describe("deep links", () => {
     expect(screen.queryByRole("button", { name: /^Claude Sonnet 5/ })).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
 
-    await user.click(within(statusStrip()).getByRole("link", { name: "审阅 Router 需处理，去处理" }));
+    await user.click(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" }));
     expect(window.location.hash).toBe(`#buddy/models/${encodeURIComponent(highId)}`);
     await waitFor(() => expect(screen.getByLabelText("搜索模型")).toHaveProperty("value", ""));
     expect((screen.getByRole("checkbox", { name: "只看已启用" }) as HTMLInputElement).checked).toBe(false);

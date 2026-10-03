@@ -27,17 +27,13 @@ class CodexAdapter(Adapter):
     native_resume = True
     model_discovery = True
     read_only_structured = True
+    system_sandbox_platforms = ("darwin", "linux", "win32")
     read_only_structured_resume = True
     no_tool_structured = True
 
     def start_no_tool_structured(self, context, request):
         from .read_only import start_no_tool
         return start_no_tool(self.name, context, request)
-    @property
-    def read_only_structured_verified(self):
-        from ..harness_runtime import selected
-        from ..harness_review import verified
-        return verified(self.name, selected(self.name))
 
     def start_read_only_structured(self, context, request):
         from .read_only import start

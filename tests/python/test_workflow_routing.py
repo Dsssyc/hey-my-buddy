@@ -8,6 +8,7 @@ from unittest.mock import patch
 from buddy.db import SCHEMA_VERSION
 from buddy.decision import MAX_DECISION_TASK_BYTES
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 from buddy.worker.worker import Worker
 from test_decision import (DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
                              SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID)
@@ -47,8 +48,10 @@ class TestWorkflowRouting(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
-            "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
-                       "inputVerification": {"unchanged": True, "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
+            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+                       "stopEvidence": {"shutdownConfirmed": shutdown, "native": {"shutdownConfirmed": shutdown}},
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
@@ -302,7 +305,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertIsNotNone(claimed["claim"], claimed)
         self.assertEqual(claimed["claim"]["task"]["spec"]["effort"], "high")
         self.assertEqual(claimed["claim"]["turn"]["turnIndex"], 1)
-        unrelated = self.routed(board, request_id="unrelated")
+        # The helper still owns a writer in this checkout; the unrelated goal
+        # uses an isolated fixture worktree to reach the Host authorization check.
+        unrelated = self.routed(board, request_id="unrelated", executionWorkspace={"kind": "worktree", "access": "write"})
         fresh = board.call("workflow_get", {"runId": parent["runId"]})
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION, reason="Host attempted to configure an unrelated goal")
@@ -321,7 +326,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board.console_call("user_policy_publish", {
             "commandId": "changed", "writerId": grant["writerId"], "generation": grant["generation"],
             "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
-            "configuration": {"reviewRouterProfileId": SECOND_PROFILE_ID},
+            "configuration": {"routerProfileIds": [SECOND_PROFILE_ID]},
         })
         claimed = self.router_claim(board, submitted, claim_id="after-writer")
         self.assertIsNone(claimed["claim"])

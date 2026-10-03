@@ -99,7 +99,11 @@ def reject_tool_event(message: dict):
             pending.extend(value)
 
 
-def _observe(message: dict, thread_id: str, turn_id: str, state: dict):
+def _observe(message: dict, thread_id: str, turn_id: str, state: dict, projector=None):
+    if projector is not None:
+        # Collect the fact before the no-tool policy rejects the frame, so the
+        # violation's evidence survives the failed turn.
+        projector.observe_notification(message)
     reject_tool_event(message)
     method = message.get("method")
     params = message.get("params")
@@ -188,6 +192,7 @@ def _format_correction(raw, schema):
 
 def run_call(connection, control: dict, result: dict, catalog: dict):
     spec, request = control["spec"], control["noToolRequest"]
+    projector = control.get("_toolProjector")
     for message in control.get("_earlyNoToolNotifications", []):
         method = message.get("method")
         if isinstance(method, str) and method.startswith(("item/", "rawResponseItem/", "collabAgent/", "tool/", "mcp/")):
@@ -257,10 +262,14 @@ def run_call(connection, control: dict, result: dict, catalog: dict):
                 raise CodexProtocolError("no-tool-violation", "Native turn started with a tool item")
         result["nativeTurnId"] = turn_id
         result["nativeIdentity"] = {"sessionId": thread_id, "turnId": turn_id}
+        if projector is not None:
+            # The trusted root identity comes only from this native turn receipt;
+            # a correction's root turn joins the list in turn order.
+            projector.observe_root(thread_id, turn_id)
         result["modelStarted"] = True
         state = {"started": False, "completed": None, "final": None}
         def observed(message):
-            _observe(message, thread_id, turn_id, state)
+            _observe(message, thread_id, turn_id, state, projector)
         connection.on_notification = observed
         for message in pending:
             observed(message)

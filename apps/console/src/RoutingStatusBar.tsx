@@ -4,7 +4,9 @@ import type { Editor } from "./use-editor";
 import { Badge, Help } from "./ui";
 import { dayClock } from "./objective-display";
 import { profileTitle } from "./profile-display";
+import { ROUTER_RETRY_INTERVAL_MAX, retryIntervalSeconds } from "./console-data";
 import { isDecisionCandidate, isFastRouterCandidate, routerAttention } from "./policy";
+import { routerListEqual } from "./draft";
 
 export const BUDGET_LABEL: Record<RoutingBudget, string> = { brief: "简要", standard: "标准", deep: "深入" };
 const BUDGET_HELP = "审阅预算用于后续路由；快速路由固定 60 秒。";
@@ -17,6 +19,7 @@ const MODE_LABEL: Record<RoutingMode, string> = { fast: "快速", review: "审�
  */
 export function healthSummary(health: RoutingHealth | undefined): { text: string; warning: string } {
   if (!health) return { text: "未知", warning: "" };
+  if (health.available === false) return { text: "不可用", warning: `Router 当前不可用${health.reasonCode ? `（${health.reasonCode}）` : ""}；请查看详情，必要时更换 Router。` };
   if (health.sampleCount === 0) return { text: "暂无样本", warning: "" };
   if (health.consecutiveFailures > 0) {
     return {
@@ -40,6 +43,7 @@ export function RoutingHealthDetails({ health }: { health: RoutingHealth | undef
   ].filter((entry) => entry !== null) : [];
   return <div className="routing-status" aria-label="路由健康" tabIndex={-1}>
     <h3>路由健康 <Help label="路由健康说明">弃权、取消和过期不计为失败；显示最近 5 条失败。</Help></h3>
+    {health?.available === false && <p className="small">Router 当前不可用{health.reasonCode ? `（${health.reasonCode}）` : ""}</p>}
     {!health
       ? <p className="muted">路由摘要未知</p>
       : health.sampleCount === 0
@@ -82,37 +86,48 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter, expande
   expanded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const routerIds = { fast: data.configuration.fastRouterProfileId, review: data.configuration.reviewRouterProfileId };
-  const routers = Object.fromEntries((["fast", "review"] as RoutingMode[]).map(mode =>
-    [mode, routerIds[mode] ? data.profiles.find(p => p.profileId === routerIds[mode]) : undefined])) as Record<RoutingMode, typeof data.profiles[number] | undefined>;
-  const name = (mode: RoutingMode) => routers[mode] ? profileTitle(routers[mode]!) : routerIds[mode] || "尚未指定，请选择";
-  const candidate = (mode: RoutingMode) => mode === "fast" ? isFastRouterCandidate(routers[mode]) : isDecisionCandidate(routers[mode]);
-  const defaultMode = data.configuration.defaultRoutingMode;
-  const budget = data.configuration.routingBudget ?? "standard";
-  const routerDirty = (mode: RoutingMode) => !!editor.draft && snapshot.configuration[mode === "fast" ? "fastRouterProfileId" : "reviewRouterProfileId"] !== routerIds[mode];
-  const modeDirty = !!editor.draft && snapshot.configuration.defaultRoutingMode !== defaultMode;
-  const budgetDirty = !!editor.draft && (snapshot.configuration.routingBudget ?? "standard") !== budget;
+  const configuration = snapshot.configuration === null ? null : data.configuration;
+  const list = configuration?.routerProfileIds ?? [];
+  // The current Router is the health projection's role holder; the list head is
+  // only the fallback when this snapshot carries no health facts at all.
+  const routerId = snapshot.routingHealth && "currentRouterProfileId" in snapshot.routingHealth
+    ? snapshot.routingHealth.currentRouterProfileId ?? null
+    : list[0] ?? null;
+  const router = routerId ? data.profiles.find(p => p.profileId === routerId) : undefined;
+  const name = router ? profileTitle(router) : routerId || (configuration ? (list.length ? "当前不可用" : "尚未指定，请选择") : "升级不可用");
+  const defaultMode = configuration?.defaultRoutingMode;
+  const candidate = defaultMode === "fast" ? isFastRouterCandidate(router) : isDecisionCandidate(router);
+  const budget = configuration?.routingBudget;
+  const interval = configuration?.routerRetryIntervalSeconds;
+  const intervalValid = retryIntervalSeconds(interval) !== null;
+  const recorded = snapshot.configuration;
+  const routerDirty = !!editor.draft && !routerListEqual(recorded?.routerProfileIds, list);
+  const modeDirty = !!editor.draft && recorded?.defaultRoutingMode !== defaultMode;
+  const budgetDirty = !!editor.draft && recorded?.routingBudget !== budget;
+  const intervalDirty = !!editor.draft && recorded?.routerRetryIntervalSeconds !== interval;
   const health = healthSummary(snapshot.routingHealth);
-  const warnings = (["fast", "review"] as RoutingMode[]).map(mode => !routerIds[mode]
-    ? `未指定${MODE_LABEL[mode]} Router；请在档位菜单中选择。`
-    : routerAttention(data, mode)?.message).filter(Boolean);
-  const warning = warnings.join(" ") || health.warning;
+  const warning = !configuration ? `Router 设置升级不可用${snapshot.configurationError?.message ? `：${snapshot.configurationError.message}` : ""}`
+    : !routerId ? (list.length ? "列表中的 buddy 当前都不可担任；请查看详情。" : "未指定 Router；请在档位菜单中选择。")
+      : routerAttention(data)?.message || health.warning;
   function setBudget(value: RoutingBudget) {
-    editor.update(d => ({ ...d, configuration: { ...d.configuration, routingBudget: value } }));
+    editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, routingBudget: value } }) : d);
   }
   function setMode(value: RoutingMode) {
-    editor.update(d => ({ ...d, configuration: { ...d.configuration, defaultRoutingMode: value } }));
+    editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, defaultRoutingMode: value } }) : d);
+  }
+  function setInterval(value: number) {
+    editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, routerRetryIntervalSeconds: value } }) : d);
   }
   return <section className={"routing-status-bar" + (warning ? " warning" : "")} aria-label="路由状态">
     <div className="routing-status-line">
       {expanded && <h2>Router</h2>}
       {!expanded && warning && <p className="routing-warning"><span aria-hidden="true">⚠ </span>{warning}</p>}
       {!expanded && <span className="routing-status-facts">
-        {(["fast", "review"] as RoutingMode[]).map(mode => <span key={mode}>{MODE_LABEL[mode]} Router：<strong>{name(mode)}</strong>{routerDirty(mode) && <span className="unsaved-mark">未保存</span>}</span>)}
+        <span>Router：<strong>{name}</strong>{routerDirty && <span className="unsaved-mark">未保存</span>}</span>
         <span aria-hidden="true" className="routing-sep">｜</span>
-        <span>默认模式：<strong>{MODE_LABEL[defaultMode]}</strong>{modeDirty && <span className="unsaved-mark">未保存</span>}</span>
+        <span>默认模式：<strong>{defaultMode ? MODE_LABEL[defaultMode] : "升级不可用"}</strong>{modeDirty && <span className="unsaved-mark">未保存</span>}</span>
         <span aria-hidden="true" className="routing-sep">｜</span>
-        <span>审阅预算：{BUDGET_LABEL[budget]}{budgetDirty && <span className="unsaved-mark">未保存</span>}</span>
+        <span>审阅预算：{budget ? BUDGET_LABEL[budget] : "升级不可用"}{budgetDirty && <span className="unsaved-mark">未保存</span>}</span>
         <span aria-hidden="true" className="routing-sep">｜</span>
         <span>状态：{health.text}</span>
       </span>}
@@ -122,30 +137,49 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter, expande
     </div>
     <div id="routing-details" className="routing-details" hidden={!open && !expanded}>
       <div className="routing-detail-block">
-        <h3>Router 位置 <Help label="Router 说明">快速 Router 需支持无工具调用；审阅 Router 需已验证只读调用。请在已启用档位的菜单中设置。</Help></h3>
-        {(["fast", "review"] as RoutingMode[]).map(mode => <p className="router-line" key={mode} id={`router-${mode}`} tabIndex={-1}>
-          <span>{MODE_LABEL[mode]} Router：</span><strong>{name(mode)}</strong>
-          {routerIds[mode] && <Badge tone={candidate(mode) ? "green" : "amber"}>{candidate(mode) ? "可担任" : "需要处理"}</Badge>}
-          {routers[mode] && <button type="button" className="button small-button" onClick={() => onShowRouter(routers[mode]!.profileId)}>查看所在家族</button>}
-        </p>)}
+        <h3>Router <Help label="Router 说明">快速模式需支持无工具调用；审阅模式需具备本地只读资格。请在已启用档位的菜单中设置；菜单只替换列表第一项并保留其余顺序。</Help></h3>
+        {!configuration && <p className="small" role="status">{warning}</p>}
+        <p className="router-line" id="router-current" tabIndex={-1}>
+          <span>Router：</span><strong>{name}</strong>
+          {routerId && <Badge tone={candidate ? "green" : "amber"}>{candidate ? "可担任" : "需要处理"}</Badge>}
+          {router && <button type="button" className="button small-button" onClick={() => onShowRouter(router.profileId)}>查看所在家族</button>}
+        </p>
+        <p className="small">列表顺序：{list.length ? list.join(" → ") : "（空）"}</p>
       </div>
       <div className="routing-detail-block">
-        <h3>默认模式 <Help label="路由数据流向">需要 Router 判断时，快速模式会将任务描述发给快速 Router 的模型提供方，包括交给其他模型的任务；审阅模式还会读取冻结的仓库副本。单一候选由程序选择。</Help></h3>
+        <h3>默认模式 <Help label="路由数据流向">需要 Router 判断时，任务包发送给 Router 的模型提供方；审阅模式还发送冻结代码副本。单一候选由程序选择。DSH/ZCode 无系统沙盒，不能保证阻止副本外读取或外传。</Help></h3>
         <div className="segmented" role="radiogroup" aria-label="默认路由模式">
           {(["fast", "review"] as RoutingMode[]).map(mode => <label key={mode} className={"segment" + (defaultMode === mode ? " checked" : "")}>
-            <input type="radio" name="default-routing-mode" checked={defaultMode === mode} disabled={!editor.editing} onChange={() => setMode(mode)} />{MODE_LABEL[mode]}
+            <input type="radio" name="default-routing-mode" checked={defaultMode === mode} disabled={!editor.editing || !configuration} onChange={() => setMode(mode)} />{MODE_LABEL[mode]}
           </label>)}
         </div>
       </div>
       <div className="routing-detail-block">
-        <h3>审阅预算 <Help label="路由预算说明">{BUDGET_HELP}{snapshot.configuration.routingBudgetLimits && ` 当前记录：${BUDGET_LABEL[snapshot.configuration.routingBudgetLimits.preset]} ${snapshot.configuration.routingBudgetLimits.timeoutSeconds} 秒 / ${snapshot.configuration.routingBudgetLimits.toolCalls} 次工具调用。`}</Help></h3>
+        <h3>审阅预算 <Help label="路由预算说明">{BUDGET_HELP}{snapshot.configuration?.routingBudgetLimits && ` 当前记录：${BUDGET_LABEL[snapshot.configuration?.routingBudgetLimits.preset]} ${snapshot.configuration?.routingBudgetLimits.timeoutSeconds} 秒 / ${snapshot.configuration?.routingBudgetLimits.toolCalls} 次工具调用。`}</Help></h3>
         <div className="segmented" role="radiogroup" aria-label="审阅预算">
           {(Object.keys(BUDGET_LABEL) as RoutingBudget[]).map(value => <label key={value}
             className={"segment" + (budget === value ? " checked" : "")}>
             <input type="radio" name="routing-budget" value={value} checked={budget === value}
-              disabled={!editor.editing} onChange={() => setBudget(value)} />
+              disabled={!editor.editing || !configuration} onChange={() => setBudget(value)} />
             {BUDGET_LABEL[value]}
           </label>)}
+        </div>
+      </div>
+      <div className="routing-detail-block">
+        <h3>重试间隔 <Help label="重试间隔说明">一个 Router 没有给出答案后，经过这段秒数才会再次使用它；各列表项依次补位。1–2147483647 的整数秒。</Help></h3>
+        <div className="concurrency-row">
+          <input type="number" inputMode="numeric" min={1} max={ROUTER_RETRY_INTERVAL_MAX}
+            step={1} value={interval === undefined || Number.isNaN(interval) ? "" : interval}
+            disabled={!editor.editing || !configuration}
+            aria-label="重试间隔秒数" aria-invalid={!intervalValid || undefined}
+            onChange={(event) => {
+              const raw = event.target.value;
+              setInterval(raw === "" ? NaN : Number(raw));
+            }} />
+          <span className="small muted" aria-live="polite">
+            {intervalValid ? "秒" : "需要 1–2147483647 的整数秒；当前修改不会保存"}
+          </span>
+          {intervalDirty && <span className="unsaved-mark">未保存</span>}
         </div>
       </div>
       <RoutingHealthDetails health={snapshot.routingHealth} />

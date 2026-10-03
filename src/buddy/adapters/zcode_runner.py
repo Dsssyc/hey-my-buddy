@@ -31,6 +31,7 @@ from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, INQUIRY_JOURNAL_VERSION, 
                              MAX_INQUIRY_ID_BYTES, MAX_QUESTION_BYTES, ActivityProjection, NativeConnection,
                              NativeError, RootTurnEvidence, ZcodeAttemptUsage, decode_json, quota_native_code,
                              read_shared_snapshot)
+from .zcode_tool_evidence import ZcodeToolFacts
 
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
@@ -706,8 +707,9 @@ class NoToolEvidence:
     OPERATION_EVENTS = {"turn-started", "turn-completed", "turn-failed", "session-closed"}
     TELEMETRY_EVENTS = {"turn.started", "model.request.status", "stream.chunk", "usage.delta", "turn.terminal"}
 
-    def __init__(self, session_id: str, input_id: str):
+    def __init__(self, session_id: str, input_id: str, tools: ZcodeToolFacts | None = None):
         self.session_id, self.input_id = session_id, input_id
+        self.tools = tools
         self.turn_id = None
         self.last_seq = -1
         self.completed = False
@@ -738,6 +740,11 @@ class NoToolEvidence:
             raise NativeError("native-turn-failed", "no-tool native turn failed")
 
     def observe(self, message: dict, _ordinal: int) -> None:
+        if self.tools is not None:
+            # Native tool facts are projected before any rejection or
+            # session/turn filter: a refused, foreign or child call stays in
+            # the evidence the receipt carries, whatever this method decides.
+            self.tools.observe(message)
         _reject_no_tool_events(message)
         method, params = message.get("method"), message.get("params")
         if not isinstance(params, dict):
@@ -773,6 +780,10 @@ class NoToolEvidence:
                         or self.metadata_turn is not None and params.get("turnId") != self.metadata_turn):
                     raise NativeError("wrong-native-turn", "no-tool turn identity differs")
                 self.turn_id = params["turnId"]
+                if self.tools is not None:
+                    # The trusted root identity comes only from this verified
+                    # canonical turn start, never from the observed events.
+                    self.tools.add_root(self.session_id, self.turn_id)
             elif not self.turn_id or params.get("turnId") != self.turn_id:
                 raise NativeError("wrong-native-turn", "no-tool event differs from the admitted turn")
             elif kind == "turn.failed":
@@ -835,14 +846,15 @@ def _no_tool_preflight(message: dict, _ordinal: int) -> None:
     raise NativeError("invalid-protocol", "unexpected native event before no-tool admission: " + label)
 
 
-def _no_tool_call(connection: NativeConnection, control: dict, result: dict, workspace: dict, access: dict) -> str:
+def _no_tool_call(connection: NativeConnection, control: dict, result: dict, workspace: dict, access: dict,
+                  tools: ZcodeToolFacts) -> str:
     from .read_only import correction_code, no_tool_prompt, valid_answer
     request = control["noToolRequest"]
     spec = control["spec"]
     base_prompt = no_tool_prompt(request["prompt"], request["outputSchema"])
     prompt = base_prompt
     for attempt in range(2):
-        connection.observe = _no_tool_preflight
+        connection.observe = tools.observe_with(_no_tool_preflight)
         snapshot = connection.call("session/create", {
             "workspace": workspace, "titleGenerationEnabled": False, "toolAllowlist": [],
             "mcpServers": [], "offPeakToolEnabled": False, "dynamicWorkflowEnabled": False})
@@ -855,7 +867,7 @@ def _no_tool_call(connection: NativeConnection, control: dict, result: dict, wor
         result["resolved"] = configure_session(connection, snapshot, spec, access)
         result["sessionId"] = session_id
         input_id = "buddy-no-tool-" + secrets.token_hex(16)
-        evidence = NoToolEvidence(session_id, input_id)
+        evidence = NoToolEvidence(session_id, input_id, tools)
         connection.observe = evidence.observe
         connection.call("session/subscribe", {"sessionId": session_id,
                         "deliveryKind": "web-remote-replayable", "includeSnapshot": False})
@@ -869,12 +881,14 @@ def _no_tool_call(connection: NativeConnection, control: dict, result: dict, wor
             connection.pump()
             if requests:
                 raise NativeError("no-tool-violation", "native interaction requested in a no-tool call")
+        tools.close_pending = True
         closed = connection.call("session/close", {"sessionId": session_id})
         if closed.get("closed") is not True:
             raise NativeError("session-close-unconfirmed", "no-tool session close was not acknowledged")
+        tools.close_pending = False
         result.update(rawAnswer=evidence.raw_answer, answerValid=valid_answer(evidence.raw_answer, request["outputSchema"]),
                       nativeIdentity={"sessionId": session_id, "turnId": evidence.turn_id},
-                      usage={"toolCalls": 0}, correctionCount=attempt,
+                      usage={"toolCalls": tools.tool_calls}, correctionCount=attempt,
                       nativeEventCount=evidence.events)
         correction = correction_code(evidence.raw_answer, request["outputSchema"])
         if correction is None or attempt:
@@ -883,7 +897,49 @@ def _no_tool_call(connection: NativeConnection, control: dict, result: dict, wor
     return session_id
 
 
+def _drain_structured(connection, result: dict, tools: ZcodeToolFacts, channel: str) -> bool:
+    """Keep every stopped stream frame, even after an earlier failure."""
+    complete = True
+
+    def failed(error):
+        nonlocal complete
+        complete = False
+        if result["status"] == "ok":
+            result.update(status="error", code=error.code, error=str(error))
+        if error.code == "no-tool-violation":
+            tools.violation = True
+
+    while True:
+        try:
+            message = connection.messages.get(timeout=1)
+        except queue.Empty:
+            failed(NativeError("invalid-protocol", f"{channel} native stream ended without EOF"))
+            return False
+        if message is None:
+            return complete
+        if isinstance(message, NativeError):
+            failed(message)
+            continue
+        try:
+            # Projection precedes rejection, and an observer failure never
+            # prevents the following frames from being projected too.
+            connection.observe(message, 0)
+            if "id" in message and "method" in message:
+                raise NativeError("no-tool-violation", f"native interaction after {channel} settlement")
+            if "id" in message:
+                raise NativeError("invalid-protocol", f"unclaimed native response after {channel} settlement")
+        except NativeError as error:
+            failed(error)
+        except (TypeError, ValueError, KeyError, AttributeError, RecursionError, BoardError):
+            tools.evidence.observe_incomplete("zcode", {})
+            failed(NativeError("invalid-protocol", f"{channel} native frame could not be recorded"))
+
+
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
+    if "readOnlyRequest" in control:
+        return {"status": "error", "code": "readonly-worker-carrier-unimplemented", "modelStarted": False,
+                "processState": {"shutdownConfirmed": True}}, 1
+    started_at = time.monotonic()
     deadline = execution_deadline(control["timeoutSeconds"])
     directory = Path(control["directory"])
     root = Path(control["nativeRoot"])
@@ -930,15 +986,25 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     handle = ProcessHandle(process, own_group=True, log_paths={})
     result = {"status": "error", "mode": "zcode", "harnessVersion": version,
               "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
+    # The fast structured entry keeps one fact collector before
+    # the native handshake, no MCP finish bridge, no governed turn authority.
+    structured = bool(control.get("noToolRequest"))
     record = None
     session_id = None
     connection = None
+    tools: ZcodeToolFacts | None = None
     inquiry_bridge: InquiryBridge | None = None
     attempt_usage: ZcodeAttemptUsage | None = None
     try:
-        connection = NativeConnection(process, deadline, cancelled, no_tools=bool(control.get("noToolRequest")))
-        if control.get("noToolRequest"):
-            connection.observe = _no_tool_preflight
+        connection = NativeConnection(process, deadline, cancelled, no_tools=structured)
+        if structured:
+            # The collector's binding is the control file's own program
+            # identity; the projection spans every correction session and is
+            # installed before the runtime handshake so no native tool fact is
+            # lost. Refused tool.updated calls remain in the evidence.
+            tools = ZcodeToolFacts({"adapter": "zcode", "taskId": control["taskId"],
+                                    "attemptId": control["attemptId"], "generation": control["generation"]})
+            connection.observe = tools.observe_with(_no_tool_preflight)
         connection.call("runtime/capabilities", {})
         workspace = {"workspacePath": control["cwd"], "workspaceKey": control["cwd"]}
         if control.get("discover"):
@@ -946,8 +1012,8 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             session_id = snapshot["session"]["sessionId"]
             result = {**result, "status": "ok", "catalog": catalog(snapshot, access, version)}
         elif control.get("noToolRequest"):
-            session_id = _no_tool_call(connection, control, result, workspace, access)
-            result.update(status="ok", zeroToolVerified=True)
+            session_id = _no_tool_call(connection, control, result, workspace, access, tools)
+            result.update(status="ok")
         else:
             turn_input = decode_json(Path(control["inputFile"]).read_bytes())
             if not isinstance(turn_input, dict):
@@ -1086,8 +1152,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                       "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(), "sessionId": session_id,
                       "previousSessionId": previous, "resumeMode": mode, "outcome": evidence.receipt["outcome"]}
             result.update(status="ok", sessionId=session_id)
-        # The no-tool loop closes each session itself, including a corrected turn.
-        if not control.get("noToolRequest"):
+        # The no-tool and read-only loops close every session themselves,
+        # including a corrected turn; only the governed turn is closed here.
+        if not structured:
             closed = connection.call("session/close", {"sessionId": session_id})
             if closed.get("closed") is not True:
                 raise NativeError("session-close-unconfirmed", "ZCode did not acknowledge closing the native session")
@@ -1096,8 +1163,10 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             record["provenance"] = evidence.provenance()
     except NativeError as error:
         result.update(status="cancelled" if error.code == "cancelled" else "error", code=error.code, error=str(error))
-        if control.get("noToolRequest") and error.code == "no-tool-violation":
-            result["usage"] = {"toolCalls": 1}
+        if control.get("noToolRequest") and error.code == "no-tool-violation" and tools is not None:
+            # The receipt's count comes from the projected facts; a refused
+            # interaction the projection cannot name still counts as one.
+            tools.violation = True
         if error.code == "native-disconnected":
             result["failureKind"] = "transport"
         # Whitelisted native failure attribution (only the exported turn.failed
@@ -1144,31 +1213,36 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             handle.terminate(grace_seconds=1.0)
         shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
         result["processState"] = {"shutdownConfirmed": shutdown, "nativeExitCode": process.returncode}
-        if control.get("noToolRequest") and result["status"] == "ok" and shutdown:
+        if result["status"] == "ok" and (not shutdown or process.returncode != 0):
+            result.update(status="error", code="native-shutdown-failed", error="the native app server did not exit normally with confirmed group shutdown")
+            record = None
+        eof = False
+        if structured and shutdown and connection is not None and tools is not None:
             # The native server has exited. Read through its terminal EOF so an
-            # event queued after prompt_completed cannot hide behind close/ack.
-            try:
-                while True:
-                    message = connection.messages.get(timeout=1)
-                    if message is None:
-                        break
-                    if isinstance(message, NativeError):
-                        raise message
-                    if "id" in message and "method" in message:
-                        raise NativeError("no-tool-violation", "native interaction after no-tool settlement")
-                    if "id" in message:
-                        raise NativeError("invalid-protocol", "unclaimed native response after no-tool settlement")
-                    connection.observe(message, 0)
-            except queue.Empty:
-                result.update(status="error", code="invalid-protocol", error="no-tool native stream ended without EOF")
-            except NativeError as error:
-                result.update(status="error", code=error.code, error=str(error))
-                if error.code == "no-tool-violation":
-                    result["usage"] = {"toolCalls": 1}
-            if result["status"] == "ok" and control["noToolRequest"].get("captureEvidence"):
+            # event queued after settlement cannot hide behind close/ack. A late
+            # tool frame keeps its projected fact and marks the stream
+            # incomplete; whether any recorded call was allowed is judged only
+            # by the blackboard, never here.
+            channel = "no-tool" if control.get("noToolRequest") else "read-only"
+            eof = _drain_structured(connection, result, tools, channel)
+            if (result["status"] == "ok" and isinstance(control.get("noToolRequest"), dict)
+                    and control["noToolRequest"].get("captureEvidence")):
                 result["nativeEvidence"] = {"eventCount": result.get("nativeEventCount"),
                                             "toolAllowlist": [], "titleGenerationEnabled": False,
                                             "streamEof": True}
+        if tools is not None:
+            # Every structured receipt carries the attempt's toolEvidence: the
+            # stream is complete only when it drained to EOF, each root session
+            # closed with an acknowledged close and the owned process stopped.
+            # usage counts come from the collector alone, the accumulated time
+            # spans every answer round, and unread bytes stay honestly null.
+            calls = tools.tool_calls
+            result["usage"] = {**(result.get("usage") or {}), "toolCalls": calls, "bytesRead": None,
+                               "elapsedMs": round((time.monotonic() - started_at) * 1000)}
+            if result["status"] == "ok" and control.get("noToolRequest"):
+                # Only the no-tool channel claims zero tools; a read-only call's
+                # allowance is judged by the blackboard from the recorded facts.
+                result["zeroToolVerified"] = calls == 0
         process.stdout.close()
     if cancelled.is_set():
         result.update(status="cancelled", code="cancelled", error="the owned ZCode execution was cancelled")
@@ -1178,6 +1252,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         record = None
     if result["status"] != "ok":
         result.pop("zeroToolVerified", None)
+    if tools is not None:
+        result["toolEvidence"] = tools.finish(bool(result["status"] == "ok"
+                                                  and eof and shutdown and not tools.close_pending))
     if record is not None:
         private_json(Path(control["outputFile"]), record, exclusive=True)
         result["nativeTurnId"] = record["provenance"]["nativeTurnId"]

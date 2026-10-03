@@ -73,7 +73,7 @@ function fixture(options: {
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: session(), tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: flashOff , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     unavailableProfileCount: 1,
     cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
@@ -164,7 +164,7 @@ afterEach(() => { cleanup(); window.location.hash = ""; document.documentElement
 function envelope(consoleSession: unknown, include = true) {
   return {
     tableRevision: 2,
-    configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: null,
+    configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     profiles: [], cards: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { runs: [] },

@@ -35,13 +35,19 @@ function card(overrides: Partial<TimelineSpan> = {}) {
 }
 
 describe("recorded routing facts", () => {
-  it("shows recorded fast, review fallback and historic review without current settings", () => {
-    const fallback = { from: "review" as const, to: "fast" as const, code: "REVIEW_UNAVAILABLE", reason: "审阅配置不可用" };
-    const fast = card({ routing: { routingMode: "fast", requestedRoutingMode: "review", fallback } });
-    const fields = Object.fromEntries(fast.fields.map(field => [field.label, field.value]));
-    expect(fields).toMatchObject({ 请求模式: "审阅", 实际模式: "快速", 模式降级: "已从审阅降级为快速：审阅配置不可用（REVIEW_UNAVAILABLE）" });
+  it("shows only recorded fast or review and keeps missing historic modes unrecorded", () => {
+    for (const [routingMode, expected] of [["fast", "快速"], ["review", "审阅"]] as const) {
+      const fields = Object.fromEntries(card({ routing: { routingMode } }).fields.map(field => [field.label, field.value]));
+      expect(fields["实际模式"]).toBe(expected);
+      expect(fields["请求模式"]).toBeUndefined();
+      expect(fields["模式降级"]).toBeUndefined();
+    }
     const historic = Object.fromEntries(card({ routing: undefined }).fields.map(field => [field.label, field.value]));
-    expect(historic).toMatchObject({ 请求模式: "审阅（历史记录）", 实际模式: "审阅（历史记录）", 模式降级: "未降级" });
+    expect(historic["实际模式"]).toBe("未记录");
+    const legacy = { requestedRoutingMode: "review", fallback: { from: "review", to: "fast", code: "NO_REVIEW", reason: "历史降级原因" } };
+    const fields = Object.fromEntries(card({ routing: { ...legacy, routingMode: null } }).fields.map(field => [field.label, field.value]));
+    expect(fields["实际模式"]).toBe("未记录");
+    expect(JSON.stringify(fields)).not.toContain("历史降级原因");
   });
   it("shows the selected target, preference deviation and measured usage without the internal task id", () => {
     const result = card({ configuration: { ...OPUS, model: "router-own-model" }, routing: {
@@ -78,48 +84,53 @@ describe("recorded routing facts", () => {
 });
 
 describe("routing timeline interactions", () => {
-  it("keeps a one-millisecond failed fallback readable without changing its recorded duration", () => {
+  it("keeps a one-millisecond failed route readable without changing its recorded duration", () => {
     const { timeline, span } = fixture({
-      endAt: "2026-09-26T01:21:00.001Z", resultStatus: "failed",
-      routing: { routingMode: "fast", requestedRoutingMode: "review",
-        fallback: { from: "review", to: "fast", code: "NO_REVIEW", reason: "审阅配置不可用" } },
+      endAt: "2026-09-26T01:21:00.001Z", resultStatus: "failed", routing: { routingMode: "fast" },
     });
     const recordedTimes = [span.startAt, span.endAt];
     const { container } = render(<ObjectiveTimeline {...props(timeline)} />);
     const bar = container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
-    const cross = bar.querySelector<HTMLElement>(".routing-cross")!;
-    const mark = bar.querySelector<HTMLElement>(".routing-fallback-mark")!;
     expect(bar.classList.contains("failed")).toBe(true);
-    expect(bar.classList.contains("fallback")).toBe(true);
+    expect(bar.querySelector(".routing-cross")).toBeTruthy();
+    expect(bar.querySelector(".routing-fallback-mark")).toBeNull();
     expect([span.startAt, span.endAt]).toEqual(recordedTimes);
     expect(bar.style.width).toBe("0.3%");
     const stylesheet = document.createElement("style");
     stylesheet.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     document.head.append(stylesheet);
-    expect(getComputedStyle(bar).minWidth).toBe("24px");
-    expect(getComputedStyle(cross).right).toBe("12px");
-    expect(getComputedStyle(mark).zIndex).toBe("2");
+    expect(getComputedStyle(bar).minWidth).toBe("14px");
     stylesheet.remove();
   });
-  it("uses separate textures and marks a review-to-fast fallback accessibly", () => {
-    const fallback = { from: "review" as const, to: "fast" as const, code: "NO_REVIEW", reason: "审阅配置不可用" };
-    const fast = fixture({ routing: { routingMode: "fast", requestedRoutingMode: "review", fallback } });
+  it("uses the recorded mode textures without presenting retired fallback facts", () => {
+    const legacy = { requestedRoutingMode: "review", fallback: { from: "review", to: "fast", code: "NO_REVIEW", reason: "历史降级原因" } };
+    const fast = fixture({ routing: { ...legacy, routingMode: "fast" } });
     const fastView = render(<ObjectiveTimeline {...props(fast.timeline)} />);
     const fastBar = fastView.container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(fastBar.classList.contains("fast")).toBe(true);
-    expect(fastBar.classList.contains("fallback")).toBe(true);
-    expect(fastBar.querySelector(".routing-fallback-mark")?.textContent).toBe("↘");
-    expect(fastBar.getAttribute("aria-label")).toContain("从审阅降级为快速：审阅配置不可用");
+    expect(fastBar.classList.contains("fallback")).toBe(false);
+    expect(fastBar.querySelector(".routing-fallback-mark")).toBeNull();
+    expect(fastBar.getAttribute("aria-label")).not.toContain("降级");
     fireEvent.click(fastView.getByRole("button", { name: "列表" }));
     const listEntry = fastView.container.querySelector<HTMLButtonElement>('.tl-entry[data-key="span:s-r2-r"]')!;
     expect(listEntry.querySelector(".swatch.routing.fast")).toBeTruthy();
-    expect(listEntry.textContent).toContain("已降级");
+    expect(listEntry.textContent).not.toContain("已降级");
     fastView.unmount();
-    const review = fixture({ routing: { routingMode: "review", requestedRoutingMode: "review", fallback: null } });
+    const review = fixture({ routing: { routingMode: "review" } });
     const reviewView = render(<ObjectiveTimeline {...props(review.timeline)} />);
     const reviewBar = reviewView.container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(reviewBar.classList.contains("review")).toBe(true);
     expect(reviewBar.querySelector(".routing-fallback-mark")).toBeNull();
+    reviewView.unmount();
+    const historicView = render(<ObjectiveTimeline {...props(fixture({ routing: undefined }).timeline)} />);
+    const historicBar = historicView.container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
+    expect(historicBar.classList.contains("fast")).toBe(false);
+    expect(historicBar.classList.contains("review")).toBe(false);
+    expect(historicBar.getAttribute("aria-label")).toContain("未记录");
+    fireEvent.click(historicView.getByRole("button", { name: "列表" }));
+    const historicEntry = historicView.container.querySelector<HTMLButtonElement>('.tl-entry[data-key="span:s-r2-r"]')!;
+    expect(historicEntry.querySelector(".swatch.routing.review")).toBeNull();
+    expect(historicEntry.querySelector(".swatch.routing.fast")).toBeNull();
     const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     expect(styles).toContain(".sp.routing.fast {");
     expect(styles).toContain(".sp.routing.review {");
@@ -138,7 +149,7 @@ describe("routing timeline interactions", () => {
     const { container } = render(<ObjectiveTimeline {...callbacks} />);
     const button = container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(button.textContent).toBe("");
-    expect(button.title).toBe(`审阅（历史记录）路由 · 已选 Claude Opus 5.5 · high · ${label}`);
+    expect(button.title).toBe(`未记录路由 · 已选 Claude Opus 5.5 · high · ${label}`);
     expect(button.getAttribute("aria-label")).toBe(button.title);
     if (css) expect(button.classList.contains(css)).toBe(true);
     expect(!!button.querySelector(".routing-cross")).toBe(css === "failed");

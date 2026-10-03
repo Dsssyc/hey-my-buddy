@@ -1,16 +1,96 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi, validRoutingConfiguration } from "./api";
+import { createApi, parseRoutingHealth, validRoutingConfiguration } from "./api";
 
-describe("0.20.0 routing configuration", () => {
-  const current = { revision: 4, fastRouterProfileId: "fast", reviewRouterProfileId: null,
+describe("L4 ordered Router list configuration", () => {
+  const current = { revision: 4, routerProfileIds: [], routerRetryIntervalSeconds: 600,
     defaultRoutingMode: "fast", routingBudget: "brief" };
-  it("accepts both Router slots and rejects the old public selector or budget", () => {
+  it("accepts the list settings and rejects retired slots, selectors or intervals", () => {
     expect(validRoutingConfiguration(current)).toBe(true);
-    expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "review", reviewRouterProfileId: "review" })).toBe(true);
-    expect(validRoutingConfiguration({ ...current, decisionProfileId: "old" })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "review", routerProfileIds: ["review", "fast"] })).toBe(true);
+    // An empty list is an explicit clear; duplicates are a board refusal.
+    expect(validRoutingConfiguration({ ...current, routerProfileIds: [] })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, routerProfileIds: ["a", "a"] })).toBe(false);
+    for (const retired of [{ decisionProfileId: "old" }, { routerProfileId: "old" },
+      { fastRouterProfileId: "old" }, { reviewRouterProfileId: "old" },
+      { fastRouterProfileId: null, reviewRouterProfileId: null }]) {
+      expect(validRoutingConfiguration({ ...current, ...retired })).toBe(false);
+    }
     expect(validRoutingConfiguration({ ...current, routingBudget: "quick" })).toBe(false);
     expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "other" })).toBe(false);
-    expect(validRoutingConfiguration({ ...current, fastRouterProfileId: undefined })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routerProfileIds: undefined })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routerProfileIds: [""] })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routerProfileIds: "a" })).toBe(false);
+    for (const interval of [0, -1, 1.5, NaN, 2147483648, "600", true, null]) {
+      expect(validRoutingConfiguration({ ...current, routerRetryIntervalSeconds: interval })).toBe(false);
+    }
+    expect(validRoutingConfiguration({ ...current, routerRetryIntervalSeconds: 1 })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, routerRetryIntervalSeconds: 2147483647 })).toBe(true);
+  });
+});
+
+describe("snapshot upgrade boundary and routing health", () => {
+  const configuration = { revision: 4, routerProfileIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
+  const snapshot = { csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null },
+    tableRevision: 1, configuration, configurationError: null, gate: { phase: "open" }, profiles: [], cards: [],
+    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [],
+    tasks: { runs: [] } };
+  const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级", revision: 4 };
+  const health = { available: false, reasonCode: "router-consecutive-failures", windowSize: 20, sampleCount: 3,
+    failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+    lastSuccessAt: null, lastSuccessDecisionId: null,
+    recentFailures: [{ decisionId: "timeout", runId: "run", at: "2026-10-02T00:00:00Z", code: "router-timeout" }] };
+  function apiFor(body: unknown) {
+    return createApi("", vi.fn(async () => new Response(JSON.stringify(body))) as typeof fetch);
+  }
+  it("accepts the explicit unavailable upgrade state without inventing settings", async () => {
+    await expect(apiFor({ ...snapshot, configuration: null, configurationError: error }).snapshot())
+      .resolves.toMatchObject({ configuration: null, configurationError: error });
+    for (const broken of [null, { ...error, revision: "4" }, { ...error, message: "" }, { ...error, code: "unknown" }]) {
+      await expect(apiFor({ ...snapshot, configuration: null, configurationError: broken }).snapshot())
+        .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+    await expect(apiFor({ ...snapshot, configurationError: error }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+  it("refuses legacy single and dual slots at the live snapshot parser", async () => {
+    await expect(apiFor({ ...snapshot, configuration: { ...configuration, routerProfileId: "head" } }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...snapshot, configuration: { ...configuration, fastRouterProfileId: "fast", reviewRouterProfileId: "review" } }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+  it("preserves service availability and timeout failures without calculating a threshold", async () => {
+    await expect(apiFor({ ...snapshot, routingHealth: health }).snapshot()).resolves.toMatchObject({ routingHealth: health });
+    expect(parseRoutingHealth({ ...health, available: true, reasonCode: null })).toMatchObject({ available: true });
+    expect(parseRoutingHealth({ ...health, consecutiveFailures: 0 })).toMatchObject({ available: false });
+    for (const broken of [{ ...health, available: "false" }, { ...health, reasonCode: 3 }, { ...health, recentFailures: {} }]) {
+      await expect(apiFor({ ...snapshot, routingHealth: broken }).snapshot()).resolves.toMatchObject({ routingHealth: undefined });
+    }
+  });
+  it("parses per-buddy health entries and drops only malformed health", async () => {
+    const routers = [{
+      profileId: "head", index: 0, identity: { adapter: "dsh", provider: "p", model: "m", effort: "max" },
+      eligible: true, code: null, inSkipWindow: false, skipUntil: null, retryAt: null, retryInProgress: false,
+      answeredCount: 2, noAnswerCount: 4, lastAnsweredAt: "2026-10-02T00:00:00Z", lastNoAnswerAt: "2026-10-02T01:00:00Z",
+      consecutiveNoAnswers: 4, windowSize: 20, windowEntries: 6, windowAnsweredCount: 2, windowFailureCount: 4,
+      windowBudgetExhaustedCount: 4, windowBoundsRejectedCount: 0, windowAttemptCount: 4,
+      lastError: { code: "timeout", at: "2026-10-02T01:00:00Z", phase: "runtime" },
+    }, { profileId: "tail", index: 1, identity: null, eligible: false, code: "router-skip-window" }];
+    const listHealth = { ...health, available: false, reasonCode: "router-skip-window",
+      currentRouterProfileId: "tail", routers, unattributedCount: 1,
+      unattributed: [{ decisionId: "dec-u", at: "2026-10-02T02:00:00Z", outcome: "unknown", code: null }] };
+    await expect(apiFor({ ...snapshot, routingHealth: listHealth }).snapshot()).resolves.toMatchObject({ routingHealth: listHealth });
+    // A malformed entry or an unknown-nature outcome stays unknown rather than
+    // being read as success or failure: the whole health object is dropped.
+    for (const broken of [
+      { ...listHealth, routers: [{ ...routers[0], profileId: "" }] },
+      { ...listHealth, routers: [{ ...routers[0], index: -1 }] },
+      { ...listHealth, routers: [{ ...routers[0], eligible: "yes" }] },
+      { ...listHealth, routers: "head" },
+      { ...listHealth, currentRouterProfileId: 3 },
+      { ...listHealth, unattributed: [{ decisionId: 4, at: "", outcome: "", code: null }] },
+    ]) {
+      expect(parseRoutingHealth(broken)).toBeUndefined();
+    }
+    expect(parseRoutingHealth({ ...health })?.routers).toBeUndefined();
   });
 });
 

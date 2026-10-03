@@ -47,7 +47,7 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
                 # directly and never reach the family quota check under test.
                 "profileSettings": [{"profileId": DECISION_PROFILE, "enabled": True},
                                     {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
-                "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": DECISION_PROFILE},
+                "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [DECISION_PROFILE]},
             },
         )
 

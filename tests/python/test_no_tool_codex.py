@@ -45,6 +45,7 @@ class NoToolCodexTests(unittest.TestCase):
         directory.mkdir(mode=0o700)
         control = {"directory": str(directory), "nativeRoot": str(directory / "native"),
                    "cwd": str(self.cwd), "timeoutSeconds": timeout,
+                   "taskId": "router-task", "attemptId": "router-attempt", "generation": 7,
                    "spec": {"provider": "openai", "model": "fixture-model", "effort": "low"},
                    "noToolRequest": {"prompt": "Pick a profile", "outputSchema": SCHEMA}}
         control_path = directory / "control.json"
@@ -66,6 +67,13 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertTrue(result["zeroToolVerified"])
         self.assertEqual(result["usage"]["toolCalls"], 0)
         self.assertEqual(json.loads(result["rawAnswer"]), {"profileId": "legal"})
+        evidence = result["toolEvidence"]
+        self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": "router-task",
+                                               "attemptId": "router-attempt", "generation": 7})
+        self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "turn-1"}])
+        self.assertTrue(evidence["streamComplete"])
+        self.assertEqual((evidence["events"], evidence["toolCalls"], evidence["unsettledToolCalls"],
+                          evidence["truncated"]), ([], 0, 0, False))
         trace = json.loads((directory / "trace.json").read_text())
         self.assertEqual(trace["thread"]["environments"], [])
         self.assertEqual(trace["thread"]["dynamicTools"], [])
@@ -100,6 +108,8 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertTrue(outcome.result["zeroToolVerified"])
+        self.assertEqual(outcome.result["toolEvidence"]["binding"],
+                         {"adapter": "codex", "taskId": "task", "attemptId": "attempt", "generation": 1})
 
     def test_native_metadata_notifications_do_not_hide_tools_or_break_the_turn(self):
         process, result, _directory = self.run_case('native-metadata')
@@ -126,6 +136,23 @@ class NoToolCodexTests(unittest.TestCase):
                 self.assertNotEqual(process.returncode, 0)
                 self.assertEqual(result["code"], "no-tool-violation", result)
                 self.assertFalse(result["zeroToolVerified"])
+
+    def test_projected_facts_survive_rejections_and_corrections_add_roots(self):
+        for case, tool_name in (("typed", "commandExecution"), ("collab", "collabAgentToolCall"),
+                                ("raw", "exec_command"), ("late", "custom_tool_call_output")):
+            with self.subTest(case=case):
+                process, result, _ = self.run_case(case)
+                evidence = result["toolEvidence"]
+                self.assertFalse(evidence["streamComplete"])
+                self.assertTrue(any(event["toolName"] == tool_name for event in evidence["events"]),
+                                (case, evidence["events"]))
+                self.assertEqual(evidence["binding"]["taskId"], "router-task")
+        process, result, _directory = self.run_case("format")
+        self.assertEqual(process.returncode, 0, result)
+        evidence = result["toolEvidence"]
+        self.assertEqual([identity["turnId"] for identity in evidence["nativeIdentity"]], ["turn-1", "turn-2"])
+        self.assertEqual(evidence["events"], [])
+        self.assertTrue(evidence["streamComplete"])
 
     def test_unknown_partial_and_eof_rejected(self):
         for case in ("unknown", "truncated", "eof"):

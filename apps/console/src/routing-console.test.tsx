@@ -20,7 +20,7 @@ function snapshot(records: Task[] = []): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
-    configuration: { revision: 9, fastRouterProfileId: null, reviewRouterProfileId: worker.profileId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 9, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
     familyPreferences: [], preferenceOverrides: [],
@@ -93,7 +93,7 @@ describe("sole candidate routing basis", () => {
     const audit = { ...decision("sole"), input: null, runId: null,
       constraints: { adapter: "dsh" }, requiredCapabilities: ["execution:dsh"],
       routerCalled: false, routingBasis, reason: "唯一合法候选，未调用 Router",
-      routingMode: "fast", requestedRoutingMode: "fast",
+      routingMode: "fast",
       output: { programSelection: { preferences: [{ profileId: worker.profileId, mode: "pin", reason: "当时固定此配置" }] } },
       policyCheck: { hardConstraints: { adapter: "dsh" }, userPreference: "none" },
     };
@@ -113,7 +113,7 @@ describe("sole candidate routing basis", () => {
     const value = workflow();
     value.routing = { status: "completed", source: "single-candidate", decisionId: null,
       constraints: { adapter: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis,
-      reason: "唯一合法候选，未调用 Router", routingMode: "fast", requestedRoutingMode: "fast" };
+      reason: "唯一合法候选，未调用 Router", routingMode: "fast" };
     const command = vi.fn(async () => ({ ...value, routingHistory: { entries: [], total: 0, nextCursor: null } }));
     render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
     expect(screen.getByText("程序直选（唯一合法候选，未调用 Router）")).toBeTruthy();
@@ -132,7 +132,7 @@ describe("zero candidate routing source", () => {
     const value = workflow();
     value.routing = { status: "needs-host", source: "no-candidate", decisionId: "decision-none",
       routingBasis: emptyBasis, reason: "no enabled, available, capability-matching profile is a legal candidate",
-      routingMode: "review", requestedRoutingMode: "review" };
+      routingMode: "review" };
     const command = vi.fn(async () => ({ ...value, routingHistory: { entries: [], total: 0, nextCursor: null } }));
     render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
     expect(screen.getByText("无合法候选")).toBeTruthy();
@@ -152,7 +152,7 @@ describe("zero candidate routing source", () => {
     const audit = { ...decision("boundary"), status: "needs-host", input: null, runId: null,
       profileId: null, selectedProfile: null, output: null, routerCalled: null,
       routingBasis: emptyBasis, budget: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 },
-      routingMode: "review", requestedRoutingMode: "review",
+      routingMode: "review",
       reason: "no enabled, available, capability-matching profile is a legal candidate" };
     const command = vi.fn(async () => ({ decision: audit }));
     render(<DecisionDetails decisionId="boundary" api={apiFor(snapshot(), command)} csrfToken="csrf" />);
@@ -191,18 +191,40 @@ describe("routing configuration", () => {
 });
 
 describe("recorded decision details", () => {
-  it("shows requested and actual mode with the recorded downgrade reason", async () => {
-    const audit = decision("fallback", { routingMode: "fast", requestedRoutingMode: "review",
-      fallback: { from: "review", to: "fast", code: "REVIEW_UNAVAILABLE", reason: "审阅配置失效" } });
+  it("shows the saved mode while retaining retired routing fields only in raw audit snapshots", async () => {
+    const legacy = { requestedRoutingMode: "review", fallback: { from: "review", to: "fast", code: "REVIEW_UNAVAILABLE", reason: "审阅配置失效" } };
+    const audit = { ...decision("historic-fallback", { routingMode: "fast" }), ...legacy,
+      output: { ...legacy, status: "completed" } };
+    const original = structuredClone(audit);
     const command = vi.fn(async () => ({ decision: audit }));
     render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
     const detail = await screen.findByRole("region", { name: "决策依据详情" });
-    expect(within(detail).getByText("请求模式").nextElementSibling!.textContent).toBe("审阅");
+    expect(within(detail).queryByText("请求模式")).toBeNull();
     expect(within(detail).getByText("实际模式").nextElementSibling!.textContent).toBe("快速");
-    expect(within(detail).getByText("模式降级").nextElementSibling!.textContent).toContain("审阅配置失效");
+    expect(within(detail).queryByText("模式降级")).toBeNull();
     expect(within(detail).getByText("预算配置").nextElementSibling!.textContent).toContain("固定 60 秒，无工具");
     expect(within(detail).getByText("工具调用")).toBeTruthy();
     expect(within(detail).queryByText("工具调用 / 上限")).toBeNull();
+    const raw = within(detail).getByText("持久模型回执").closest("details")!;
+    expect(raw.open).toBe(false);
+    expect(raw.textContent).toContain('"requestedRoutingMode": "review"');
+    expect(raw.textContent).toContain("审阅配置失效");
+    expect(audit).toEqual(original);
+  });
+  it("does not infer a historic audit's missing mode from retired request or fallback fields", async () => {
+    const legacy = { requestedRoutingMode: "review", fallback: { from: "review", to: "fast", code: "NO_REVIEW" } };
+    const audit = { ...decision("historic-mode"), ...legacy, input: { ...decision("historic-mode").input, ...legacy } };
+    const original = structuredClone(audit);
+    const command = vi.fn(async () => ({ decision: audit }));
+    render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
+    const detail = await screen.findByRole("region", { name: "决策依据详情" });
+    expect(within(detail).getByText("实际模式").nextElementSibling!.textContent).toBe("未记录");
+    expect(within(detail).queryByText("请求模式")).toBeNull();
+    expect(within(detail).queryByText("模式降级")).toBeNull();
+    const raw = within(detail).getByText("发送给路由模型的快照").closest("details")!;
+    expect(raw.textContent).toContain('"requestedRoutingMode": "review"');
+    expect(raw.textContent).toContain('"code": "NO_REVIEW"');
+    expect(audit).toEqual(original);
   });
   it("shows saved evidence, program preferences and unknown native usage without current facts", async () => {
     const audit = {
@@ -235,6 +257,9 @@ describe("recorded decision details", () => {
     const command = vi.fn(async () => ({ decision: audit }));
     render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
     const detail = await screen.findByRole("region", { name: "决策依据详情" });
+    expect(within(detail).getByText("实际模式").nextElementSibling!.textContent).toBe("未记录");
+    expect(within(detail).queryByText("请求模式")).toBeNull();
+    expect(within(detail).queryByText("模式降级")).toBeNull();
     expect(within(detail).getByText("引用证据").nextElementSibling!.textContent).toBe("未记录");
     expect(within(detail).getByText("预算配置").nextElementSibling!.textContent).toBe("未记录");
     expect(within(detail).getByText("工具调用 / 上限").nextElementSibling!.textContent).toBe("未记录 / 未记录");

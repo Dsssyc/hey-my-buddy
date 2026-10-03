@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoutingStatusBar } from "./RoutingStatusBar";
@@ -21,7 +21,7 @@ function snapshot(routingHealth: RoutingHealth | undefined, extra: Partial<Snaps
   return {
     csrfToken: "csrf", consoleSession: { id: "s", canWrite: false, reason: null }, tableRevision: 1,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, fastRouterProfileId: router.profileId, reviewRouterProfileId: router.profileId, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { revision: 1, routerProfileIds: [router.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [router], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [],
     familyAnnotations: [], evidence: [], decisions: [],
     sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 }, capabilities: {},
@@ -119,7 +119,7 @@ describe("routing health details (R4)", () => {
 describe("the one-line routing status", () => {
   it("edits the default mode and review budget while showing read-only limits and data flow", async () => {
     const state = snapshot(healthy, { configuration: {
-      revision: 1, fastRouterProfileId: router.profileId, reviewRouterProfileId: router.profileId,
+      revision: 1, routerProfileIds: [router.profileId], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review", routingBudget: "standard",
       routingBudgetLimits: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 },
     } });
@@ -129,56 +129,56 @@ describe("the one-line routing status", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "详情" }));
     await userEvent.setup().click(screen.getByRole("radio", { name: "快速" }));
     await userEvent.setup().click(screen.getByRole("radio", { name: "简要" }));
-    expect(changes[0].configuration.defaultRoutingMode).toBe("fast");
-    expect(changes[1].configuration.routingBudget).toBe("brief");
+    expect(changes[0].configuration!.defaultRoutingMode).toBe("fast");
+    expect(changes[1].configuration!.routingBudget).toBe("brief");
     const budgetHelp = screen.getByRole("button", { name: "路由预算说明", hidden: true });
     const budgetTip = document.getElementById(budgetHelp.getAttribute("aria-describedby")!)!;
     expect(budgetTip.textContent).toContain("标准 300 秒 / 24 次工具调用");
     expect(budgetTip.textContent).not.toContain("字节");
     const flowHelp = screen.getByRole("button", { name: "路由数据流向", hidden: true });
     const flowTip = document.getElementById(flowHelp.getAttribute("aria-describedby")!)!;
-    expect(flowTip.textContent).toContain("任务描述发给快速 Router");
-    expect(flowTip.textContent).toContain("冻结的仓库副本");
+    expect(flowTip.textContent).toContain("任务包发送给 Router");
+    expect(flowTip.textContent).toContain("冻结代码副本");
+    expect(flowTip.textContent).toContain("DSH/ZCode 无系统沙盒，不能保证阻止副本外读取或外传");
   });
   it("shows Router, budget and health in one line and no warning when nothing needs handling", () => {
     renderBar(snapshot(healthy));
     expect(bar().className).not.toContain("warning");
-    expect(bar().textContent).toContain("快速 Router：Test · high");
-    expect(bar().textContent).toContain("审阅 Router：Test · high");
+    expect(bar().textContent).toContain("Router：Test · high");
+    expect(bar().textContent).not.toMatch(/快速 Router|审阅 Router/);
     expect(bar().textContent).toContain("默认模式：审阅");
     expect(bar().textContent).toContain("审阅预算：标准");
     expect(bar().textContent).toContain("状态：正常");
     expect(bar().querySelector(".routing-warning")).toBeNull();
   });
 
-  it("turns into a warning with the resolving action when the Router is not verified", () => {
+  it("turns into a warning with the resolving action when the Router lacks local eligibility", () => {
     const unverified = { ...router, capabilities: ["execution:codex"] };
     const alternative = { ...router, profileId: "claude:anthropic:verified:medium", adapter: "claude", provider: "anthropic", model: "verified" };
     renderBar(snapshot(healthy, { profiles: [unverified, alternative] }));
     expect(bar().className).toContain("warning");
     expect(bar().querySelector(".routing-warning")!.textContent)
-      .toContain("审阅 Router 待验证，请展开 Codex 详情重新验证。");
+      .toContain("尚不具备本地只读路由资格");
     expect(bar().querySelector(".routing-warning")!.textContent).not.toMatch(/routing:fast|decision/);
   });
 
-  it("explains the Host boundary when no verified Router is available", async () => {
+  it("explains the Host boundary when no eligible Router is available", async () => {
     const user = userEvent.setup();
     const unverified = { ...router, capabilities: ["execution:codex"] };
     renderBar(snapshot(healthy, { profiles: [unverified] }));
     const warning = bar().querySelector(".routing-warning")!.textContent;
-    expect(warning).toContain("审阅 Router 待验证，请展开 Codex 详情重新验证。");
+    expect(warning).toContain("尚不具备本地只读路由资格");
     await user.click(screen.getByRole("button", { name: "详情" }));
-    expect(screen.getByText(/审阅 Router 需已验证只读调用/)).toBeTruthy();
+    expect(screen.getByText(/审阅模式需具备本地只读资格/)).toBeTruthy();
   });
 
   it("warns when no Router is set and when routing keeps failing", () => {
-    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, fastRouterProfileId: null, reviewRouterProfileId: null , defaultRoutingMode: "review" as const, routingBudget: "standard"} }));
-    expect(bar().textContent).toContain("快速 Router：尚未指定，请选择");
-    expect(bar().textContent).toContain("审阅 Router：尚未指定，请选择");
-    expect(bar().querySelector(".routing-warning")!.textContent).toContain("未指定快速 Router");
+    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} }));
+    expect(bar().textContent).toContain("Router：尚未指定，请选择");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("未指定 Router");
     view.unmount();
-    renderBar(snapshot({ ...healthy, failureCount: 3, consecutiveFailures: 3 }));
-    expect(bar().textContent).toContain("状态：连续失败 3 次");
+    renderBar(snapshot({ ...healthy, available: false, reasonCode: "ROUTER_UNAVAILABLE", failureCount: 3, consecutiveFailures: 3 }));
+    expect(bar().textContent).toContain("状态：不可用");
     expect(bar().querySelector(".routing-warning")!.textContent).toContain("请查看详情");
   });
 
@@ -192,7 +192,7 @@ describe("the one-line routing status", () => {
     expect(details.getAttribute("aria-expanded")).toBe("true");
     const panel = document.getElementById("routing-details")!;
     expect(panel.hidden).toBe(false);
-    expect(within(panel).getAllByText("可担任")).toHaveLength(2);
+    expect(within(panel).getAllByText("可担任")).toHaveLength(1);
     const budget = within(panel).getByRole("radiogroup", { name: "审阅预算" });
     expect(within(budget).getAllByRole("radio").map(radio => radio.parentElement!.textContent)).toEqual(["简要", "标准", "深入"]);
     expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
@@ -200,5 +200,81 @@ describe("the one-line routing status", () => {
     expect(within(budget).getByRole("radio", { name: "深入" })).toHaveProperty("disabled", true);
     await user.click(within(panel).getAllByRole("button", { name: "查看所在家族" })[0]);
     expect(onShowRouter).toHaveBeenCalledWith(router.profileId);
+  });
+  it("shows upgrade unavailability and disables Router controls without inventing settings", async () => {
+    const state = snapshot(healthy, { configuration: null, configurationError: { code: "router-settings-upgrade-required", message: "请先升级设置", revision: 1 } });
+    const writable = { ...editor, editing: true } as Editor;
+    render(<RoutingStatusBar data={state as ConsoleView} snapshot={state} editor={writable} onShowRouter={vi.fn()} expanded />);
+    expect(bar().textContent).toContain("升级不可用");
+    expect(screen.getByRole("status").textContent).toContain("请先升级设置");
+    expect(screen.getAllByRole("radio").every(input => (input as HTMLInputElement).disabled)).toBe(true);
+    expect(bar().textContent).not.toContain("默认模式：审阅");
+  });
+  it("does not expose a retained dirty Router draft as usable after an upgrade boundary", () => {
+    const draft = snapshot(healthy);
+    const state = { ...draft, configuration: null,
+      configurationError: { code: "router-settings-upgrade-required", message: "请先升级设置", revision: 1 } };
+    render(<RoutingStatusBar data={draft as ConsoleView} snapshot={state} editor={{ ...editor, editing: true } as Editor}
+      onShowRouter={vi.fn()} expanded />);
+    expect(screen.getByRole("status").textContent).toContain("请先升级设置");
+    expect(screen.queryByText("可担任")).toBeNull();
+    expect(screen.getAllByRole("radio").every(input => (input as HTMLInputElement).disabled)).toBe(true);
+  });
+  it("uses the service availability fact without deriving a failure threshold", () => {
+    renderBar(snapshot({ ...healthy, available: true, consecutiveFailures: 4, failureCount: 4 }));
+    expect(bar().textContent).toContain("状态：连续失败 4 次");
+    expect(bar().textContent).not.toContain("状态：不可用");
+  });
+
+});
+
+describe("the ordered Router list and retry interval", () => {
+  const tail = { ...router, profileId: "claude:anthropic:backup:medium", model: "backup", effort: "medium" };
+  const listState = (routingHealth: RoutingHealth | undefined) => snapshot(routingHealth, {
+    profiles: [router, tail],
+    configuration: { revision: 1, routerProfileIds: [router.profileId, tail.profileId],
+      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+  });
+
+  it("names the current Router from health facts instead of defaulting to the list head", () => {
+    renderBar(listState({ ...healthy, currentRouterProfileId: tail.profileId }));
+    // The head is skipped, so the tail buddy holds the role.
+    expect(bar().textContent).toContain("Router：Test · medium");
+    expect(bar().textContent).toContain(`列表顺序：${router.profileId} → ${tail.profileId}`);
+  });
+
+  it("falls back to the list head only when the snapshot carries no health facts", () => {
+    renderBar(listState(undefined));
+    expect(bar().textContent).toContain("Router：Test · high");
+  });
+
+  it("says the list is unavailable when health reports no current Router", () => {
+    renderBar(listState({ ...healthy, available: false, reasonCode: "router-skip-window", currentRouterProfileId: null }));
+    expect(bar().textContent).toContain("Router：当前不可用");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("当前都不可担任");
+  });
+
+  it("binds the retry seconds input to the settings and marks out-of-range values", async () => {
+    const user = userEvent.setup();
+    const state = listState(healthy);
+    const changes: ReturnType<typeof makeDraft>[] = [];
+    const writable = { ...editor, editing: true, update: vi.fn(fn => changes.push(fn(makeDraft(state)))) } as unknown as Editor;
+    render(<RoutingStatusBar data={state as ConsoleView} snapshot={state} editor={writable} onShowRouter={vi.fn()} expanded />);
+    const input = screen.getByLabelText("重试间隔秒数") as HTMLInputElement;
+    expect(input.value).toBe("600");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    // One change event per edit: the mocked editor does not re-render, so the
+    // controlled value would be restored between keystrokes.
+    fireEvent.change(input, { target: { value: "" } });
+    expect(changes[0].configuration!.routerRetryIntervalSeconds).toBe(NaN);
+    fireEvent.change(input, { target: { value: "45" } });
+    expect(changes[1].configuration!.routerRetryIntervalSeconds).toBe(45);
+    // An out-of-range recorded value renders as invalid with the bounded hint.
+    const broken = { ...state, configuration: { ...state.configuration!, routerRetryIntervalSeconds: 0 } };
+    cleanup();
+    render(<RoutingStatusBar data={broken as ConsoleView} snapshot={broken} editor={writable} onShowRouter={vi.fn()} expanded />);
+    const invalid = screen.getByLabelText("重试间隔秒数");
+    expect(invalid.getAttribute("aria-invalid")).toBe("true");
+    expect(bar().textContent).toContain("需要 1–2147483647 的整数秒");
   });
 });

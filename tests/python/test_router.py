@@ -3,7 +3,9 @@ import unittest
 import json
 
 from buddy import router
+from buddy.adapters.dsh import DshAdapter
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 
 
 class RouterContractTests(unittest.TestCase):
@@ -66,7 +68,8 @@ class RouterPublicationTests(WorkflowTestCase):
         super().setUp()
         self.catalog_fixture()
         self.enterContext(patch('buddy.adapters.dsh.DshAdapter.read_only_structured', True))
-        self.enterContext(patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', True))
+        from fixtures import mock_readonly
+        mock_readonly.install(self)
         self.enterContext(patch('buddy.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
     def settle(self, profile, *, code=None, preferences=None, result_status=None):
@@ -75,8 +78,11 @@ class RouterPublicationTests(WorkflowTestCase):
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
         board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
-        result = {'status': 'error' if code else 'ok', 'operation': 'select',
+        result = {**claim_tool_receipt(claim), 'status': 'error' if code else 'ok', 'operation': 'select',
                   'tableRevision': claim['decisionInput']['tableRevision'],
+                  'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
+                  'usage': {'elapsedMs': 100, 'toolCalls': 0},
+                  'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
                   'decision': {'profileId': profile, 'reason': 'Read the frozen input',
                                'evidence': [{'kind': 'card', 'ref': 'not-supplied'}]}}
         if code:
@@ -100,7 +106,7 @@ class RouterPublicationTests(WorkflowTestCase):
                 self.assertEqual(decision['status'], 'needs-host')
                 health = board.store.decisions.health_summary()
                 self.assertEqual(health[counter], 1)
-                self.assertEqual(health['failureCount'], 0)
+                self.assertEqual(health['failureCount'], 1 if code == 'router-budget-exhausted' else 0)
                 board.close()
                 self._stack.remove(board)
 
@@ -139,7 +145,7 @@ class RouterPublicationTests(WorkflowTestCase):
             'configuration': {'routingBudget': 'deep'}})
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')
-        self.assertEqual(configured['reviewRouterProfileId'], PROFILE_ID)
+        self.assertEqual(configured['routerProfileIds'], [PROFILE_ID])
         self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
     def test_budget_update_does_not_change_selection_request_replay(self):
@@ -162,16 +168,20 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertEqual(health['cancelledCount'], 1)
         self.assertEqual(health['budgetExhaustedCount'], 0)
 
-    def test_retained_legacy_capability_cannot_be_advertised_as_verified(self):
+    def test_retained_legacy_capability_uses_local_eligibility_not_certificate(self):
         board = self.board()
         self.seed(board)
-        with patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', False):
+        with patch('buddy.adapters.dsh.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'fixture',
+                'systemSandbox': False, 'sameAttemptContinuation': False}):
             snapshot = board.call('console_snapshot', {})
         profile = next(p for p in snapshot['profiles'] if p['profileId'] == PROFILE_ID)
         self.assertNotIn('decision', profile['capabilities'])
         with board.store.db.read() as connection:
             recorded = json.loads(connection.execute('SELECT capabilities_json FROM evaluation_profiles WHERE profile_id=?', (PROFILE_ID,)).fetchone()[0])
         self.assertIn('decision', recorded)
+        self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
+        eligible = board.call('console_snapshot', {})
+        self.assertIn('decision', next(p for p in eligible['profiles'] if p['profileId'] == PROFILE_ID)['capabilities'])
 
     def test_outside_choice_is_rejected_and_not_abstention(self):
         board, decision = self.settle('foreign')

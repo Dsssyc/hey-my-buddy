@@ -1,14 +1,10 @@
-import type { RoutingFallback, RoutingMode } from "./types";
+import type { RoutingMode } from "./types";
 import { effortText } from "./profile-display";
 import type { ExcludedProfile, RoutingBasis } from "./workflow-types";
 
-/** A missing mode belongs to a pre-0.20 record, which used review routing. */
+/** Use only the recorded mode; missing historic facts stay unrecorded. */
 export function recordedRoutingMode(mode: RoutingMode | null | undefined): string {
-  return mode === "fast" ? "快速" : mode === "review" ? "审阅" : "审阅（历史记录）";
-}
-
-export function fallbackDescription(fallback: RoutingFallback | null | undefined): string {
-  return fallback ? `已从审阅降级为快速：${fallback.reason || fallback.code}${fallback.reason && fallback.code ? `（${fallback.code}）` : ""}` : "未降级";
+  return mode === "fast" ? "快速" : mode === "review" ? "审阅" : "未记录";
 }
 
 /** How one recorded route was selected; null keeps an unknown or unrecorded source blank. */

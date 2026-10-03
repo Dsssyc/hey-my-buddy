@@ -6,6 +6,7 @@ import {
   setFamilyAnnotation,
   setFamilyPreference,
   setPreferenceOverride,
+  withFirstRouter,
 } from "./draft";
 import type { Editor } from "./use-editor";
 import type {
@@ -45,7 +46,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 export const EMPTY_EVIDENCE = "评价证据未记录";
 const PREFERENCE_MODES: PreferenceMode[] = ["prefer", "pin", "exclude"];
 const capabilityLabel = (value: string) => value === "routing:fast" ? "支持无工具路由调用"
-  : value === "decision" ? "当前 Harness 版本已验证只读路由调用" : value;
+  : value === "decision" ? "具备本地只读路由资格" : value;
 
 /** DOM id of an effort tag, so the routing details can jump to it. */
 export function effortTagId(profileId: string): string {
@@ -62,8 +63,9 @@ type TagProps = {
   familyPreference: FamilyPreference | undefined;
   /** The override mode in the draft's baseline, for the pin-transition rule. */
   baselineOverrideMode: OverrideMode | undefined;
-  routerModes: RoutingMode[];
-  onSetRouter: (profile: Profile, mode: RoutingMode) => void;
+  isRouter: boolean;
+  routingMode: RoutingMode | undefined;
+  onSetRouter: (profile: Profile) => void;
 };
 
 /**
@@ -72,7 +74,7 @@ type TagProps = {
  * the effort's preference override and "设为 Router".
  */
 function EffortTag({
-  profile, editor, recordedEnabled, effective, override, familyPreference, baselineOverrideMode, routerModes, onSetRouter,
+  profile, editor, recordedEnabled, effective, override, familyPreference, baselineOverrideMode, isRouter, routingMode, onSetRouter,
 }: TagProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -97,7 +99,7 @@ function EffortTag({
     profile.available ? "" : "unavailable",
     effective ? `pref-${effective.mode}` : "",
     override ? "override" : "",
-    routerModes.length ? "router" : ""].filter(Boolean).join(" ");
+    isRouter ? "router" : ""].filter(Boolean).join(" ");
   function toggle() {
     if (!canToggle) return;
     editor.update(d => ({ ...d, profiles: d.profiles.map(p => p.profileId === profile.profileId ? { ...p, enabled: !p.enabled } : p) }));
@@ -113,7 +115,7 @@ function EffortTag({
     </button>
     <span className="effort-name">{effort}</span>
     {effective && <span className="pref-icon" aria-hidden="true">{PREFERENCE_ICON[effective.mode]}</span>}
-    {routerModes.map(mode => <span key={mode} className="router-mark">{mode === "fast" ? "快速 Router" : "审阅 Router"}</span>)}
+    {isRouter && <span className="router-mark">Router</span>}
     {!profile.available && <span className="unavailable-mark">不可用</span>}
     {pending && <span className="unsaved-dot" title="启用状态未保存" aria-hidden="true">•</span>}
     <span className="sr-only">{[profile.enabled ? "已启用" : "未启用", preferenceText,
@@ -140,23 +142,22 @@ function EffortTag({
           <input value={override.reason} maxLength={500}
             onChange={e => editor.update(d => setPreferenceOverride(d, profile.profileId, override.mode, e.target.value))} /></label>}
       </fieldset>
-      {(["fast", "review"] as RoutingMode[]).map(mode => {
-        const label = mode === "fast" ? "快速" : "审阅";
-        const refusal = routerModes.includes(mode) ? null : routerRefusal(profile, mode);
-        const reasonId = `router-reason-${mode}-${profile.profileId}`;
-        return <div className="menu-group" key={mode}>
-          {routerModes.includes(mode) ? <p className="small menu-current-router">当前{label} Router</p> : <>
+      {(() => {
+        const refusal = !routingMode ? "Router 设置升级不可用" : isRouter ? null : routerRefusal(profile, routingMode);
+        const reasonId = `router-reason-${profile.profileId}`;
+        return <div className="menu-group">
+          {isRouter ? <p className="small menu-current-router">当前 Router</p> : <>
             <button type="button" className="button small-button menu-action" disabled={!!refusal || !editor.editing}
               aria-describedby={refusal ? reasonId : undefined}
               onClick={() => {
                 if (refusal || !editor.editing) return;
                 setMenuOpen(false);
-                onSetRouter(profile, mode);
-              }}>设为{label} Router</button>
+                onSetRouter(profile);
+              }}>设为 Router</button>
             {refusal && <p id={reasonId} className="small muted menu-reason">{refusal}</p>}
           </>}
         </div>;
-      })}
+      })()}
     </Popover>}
   </div>;
 }
@@ -207,15 +208,15 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
   isNew?: boolean;
   onCloseList: () => void;
 }) {
-  const [routerConfirm, setRouterConfirm] = useState<{ profile: Profile; mode: RoutingMode } | null>(null);
+  const [routerConfirm, setRouterConfirm] = useState<{ profile: Profile } | null>(null);
   const radioName = useId();
   const key = family.key;
   const efforts = family.profiles;
   const enabledCount = efforts.filter(p => p.enabled).length;
   const available = efforts.some(p => p.available);
-  const routerIds = { fast: data.configuration.fastRouterProfileId, review: data.configuration.reviewRouterProfileId };
-  const confirmedMode = routerConfirm?.mode;
-  const currentRouterId = confirmedMode ? routerIds[confirmedMode] : null;
+  const configuration = recorded.configuration === null ? null : data.configuration;
+  const routerId = configuration?.routerProfileIds[0] ?? null;
+  const currentRouterId = routerId;
   const currentRouter = currentRouterId ? data.profiles.find(p => p.profileId === currentRouterId) : undefined;
   const familyPreference = data.familyPreferences.find(p => familyKey(p) === key);
   const recordedFamilyPreference = recorded.familyPreferences.find(p => familyKey(p) === key);
@@ -244,14 +245,16 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
   const updates = cards.map(card => card.updatedAt).filter((value): value is string => !!value).sort();
   const latest = updates.length ? updates[updates.length - 1] : null;
 
-  function setRouter(profile: Profile, mode: RoutingMode) {
-    const field = mode === "fast" ? "fastRouterProfileId" : "reviewRouterProfileId";
-    editor.update(d => ({ ...d, configuration: { ...d.configuration, [field]: profile.profileId } }));
+  function setRouter(profile: Profile) {
+    if (!configuration) return;
+    // The menu only ever replaces the first list item: the user's tail order
+    // stays and the new head's old duplicate goes (draft.withFirstRouter).
+    editor.update(d => d.configuration ? ({ ...d, configuration: withFirstRouter(d.configuration, profile.profileId) }) : d);
   }
-  function requestRouter(profile: Profile, mode: RoutingMode) {
-    const currentId = routerIds[mode];
-    if (currentId && currentId !== profile.profileId) setRouterConfirm({ profile, mode });
-    else setRouter(profile, mode);
+  function requestRouter(profile: Profile) {
+    if (!configuration) return;
+    if (routerId && routerId !== profile.profileId) setRouterConfirm({ profile });
+    else setRouter(profile);
   }
   function closeConfirm(target: Profile) {
     setRouterConfirm(null);
@@ -288,7 +291,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
               override={data.preferenceOverrides.find(p => p.profileId === profile.profileId)}
               familyPreference={familyPreference}
               baselineOverrideMode={(editor.baseline ?? recorded).preferenceOverrides.find(p => p.profileId === profile.profileId)?.mode}
-              routerModes={(["fast", "review"] as RoutingMode[]).filter(mode => routerIds[mode] === profile.profileId)} onSetRouter={requestRouter} />)}
+              isRouter={routerId === profile.profileId} routingMode={configuration?.defaultRoutingMode} onSetRouter={requestRouter} />)}
           </div>
         </div>
         <div className="family-field">
@@ -356,9 +359,9 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
         </section>
       </div>
     </div>
-    {routerConfirm && <ConfirmDialog title={`替换${routerConfirm.mode === "fast" ? "快速" : "审阅"} Router`} confirmLabel="替换"
+    {routerConfirm && <ConfirmDialog title="替换 Router" confirmLabel="替换"
       onCancel={() => closeConfirm(routerConfirm.profile)}
-      onConfirm={() => { setRouter(routerConfirm.profile, routerConfirm.mode); closeConfirm(routerConfirm.profile); }}>
+      onConfirm={() => { setRouter(routerConfirm.profile); closeConfirm(routerConfirm.profile); }}>
       将替换当前 Router {currentRouter ? profileTitle(currentRouter) : currentRouterId}，改为 {profileTitle(routerConfirm.profile)}。
     </ConfirmDialog>}
   </>;

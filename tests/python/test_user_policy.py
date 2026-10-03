@@ -17,7 +17,7 @@ class UserPolicyTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             for profile_id, available in [('live', 1), ('retired', 0)]:
                 db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,created_revision,updated_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (profile_id, profile_id, 'dsh', 'fixture', profile_id, 'max', available, 1, '["decision"]', 0, 0))
-            db.execute("UPDATE meta SET value='retired' WHERE key='router_review_profile_id'")
+            db.execute("UPDATE meta SET value=? WHERE key='router_profile_ids'", (json.dumps(['retired']),))
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent',0)")
 
     def user(self, operation, params):
@@ -54,7 +54,7 @@ class UserPolicyTests(BoardTestCase):
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
         snapshot = self.board_.call('console_snapshot', {})
         self.assertEqual(snapshot['familyAnnotations'][0]['text'], 'prefer local evidence')
-        self.assertEqual(snapshot['configuration']['reviewRouterProfileId'], 'retired')
+        self.assertEqual(snapshot['configuration']['routerProfileIds'], ['retired'])
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['enabled'])
 

@@ -41,6 +41,7 @@ class ClaudeAdapter(Adapter):
     native_resume = False
     model_discovery = True
     read_only_structured = True
+    system_sandbox_platforms = ("darwin", "linux")
 
     def start_read_only_structured(self, context, request):
         from .read_only import start

@@ -95,7 +95,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertFalse(report["started"])
                 self.assertEqual(report["modelCalls"], 0)
                 self.assertFalse(report["probeChecksPassed"])
-                self.assertEqual(report["status"], "refused" if adapter in ("dsh", "zcode") else "prepared")
+                self.assertEqual(report["status"], "prepared" if native.read_only_structured else "refused")
                 self.assertEqual(report["request"]["budget"],
                                  {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
                 self.assertEqual(report["inputHashesBefore"], report["inputHashesAfter"])
@@ -108,12 +108,12 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertNotIn(sentinel.read_text().strip(), report["request"]["prompt"])
                 self.assertEqual((self.root / "frozen/marker.txt").stat().st_mode & 0o777, 0o600)  # native policy, not file modes, must deny writes
 
-    def test_explicit_execute_refuses_dsh_and_zcode_without_start(self):
+    def test_explicit_execute_refuses_unimplemented_entry_without_start(self):
         for adapter in ("dsh", "zcode"):
             self.root = Path(self.temporary.name) / adapter
             native = probe.adapter_for(adapter)
-            self.assertFalse(native.read_only_structured)
-            with patch.object(native, "start_read_only_structured") as start, \
+            with patch.object(native, "read_only_structured", False), \
+                 patch.object(native, "start_read_only_structured") as start, \
                  patch.object(probe, "adapter_for", return_value=native):
                 report = probe.run(self.args(adapter, execute=True))
             self.assertEqual(report["status"], "refused")

@@ -46,7 +46,6 @@ METHODS = [
     "account-logout",
     "account-remove",
     "harness-set",
-    "harness-verify",
     "quota-redetect",
     "runtime",
     "backup",
@@ -752,12 +751,60 @@ def main(argv: list[str] | None = None) -> int:
             result = call_service(args.method, prepared)
             if isinstance(result, dict):
                 _scrub_and_save(result)
-        print(_dumps(cli_views.render(args.method, result, mode)))
+        print(_dumps(_render_output(args.method, result, mode)))
         return 1 if isinstance(result, dict) and result.get("error") else 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope
         payload = error.payload() if isinstance(error, BoardError) else {"code": "SERVICE_ERROR", "message": str(error)}
         print(_dumps({"error": payload}))
         return 1
+
+
+def _render_output(method: str, response, mode: str):
+    """Keep the new routing DTO in brief output without widening other views."""
+    rendered = cli_views.render(method, response, mode)
+    if mode != cli_views.OUTPUT_BRIEF or not isinstance(response, dict) or not isinstance(rendered, dict):
+        return rendered
+    routing = response.get("routing")
+    projected = rendered.get("routing")
+    if isinstance(routing, dict) and isinstance(projected, dict):
+        # cli_views uses a strict key list. Preserve the frozen list alongside
+        # its actual current dispatch identity, including explicit absent actors.
+        fields = (
+            "routerProfileIds", "routerIdentities", "routerProfileId", "routerProfile", "routerIndex",
+            "budget", "routingBudget", "routerRetryIntervalSeconds", "configurationRevision", "decisionModel", "routingBoundary",
+        )
+        rendered = {**rendered, "routing": {**projected, **{key: routing[key] for key in fields if key in routing}}}
+    pending = response.get("pendingRequests")
+    projected_pending = rendered.get("pendingRequests")
+    if isinstance(pending, list) and isinstance(projected_pending, list):
+        boundaries = {item.get("requestId"): item["routingBoundary"] for item in pending
+                      if isinstance(item, dict) and isinstance(item.get("routingBoundary"), dict)}
+        if boundaries:
+            rendered = {**rendered, "pendingRequests": [
+                {**item, "routingBoundary": boundaries[item.get("requestId")]} if item.get("requestId") in boundaries else item
+                for item in projected_pending
+            ]}
+    if method == "await":
+        workflow = response.get("workflow")
+        boundary = workflow.get("routingBoundary") if isinstance(workflow, dict) else None
+        if isinstance(boundary, dict):
+            rendered = {**rendered, "routingBoundary": boundary}
+            if isinstance(rendered.get("request"), dict):
+                rendered["request"] = {**rendered["request"], "routingBoundary": boundary}
+            # Print the program's complete tuples and blocked metadata instead
+            # of placeholder configurations supplied by the older wait view.
+            commands = boundary.get("commands") or {}
+            next_commands = []
+            continuation = commands.get("continue") or {}
+            for choice in continuation.get("choices", []):
+                if not choice.get("blocked"):
+                    next_commands.append({"method": choice["method"], "params": choice["params"]})
+            reroute = commands.get("reroute") or {}
+            if not reroute.get("blocked") and isinstance(reroute.get("params"), dict):
+                next_commands.append({"method": reroute["method"], "params": reroute["params"],
+                                      "notBefore": reroute.get("notBefore")})
+            rendered["nextCommands"] = next_commands
+    return rendered
 
 
 def _dumps(value) -> str:

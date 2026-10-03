@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -133,10 +132,7 @@ def _read_only_call(connection, control, result, catalog):
     """A structured native call with no workflow identity or completion tools."""
     from .read_only import valid_answer
     spec, request = control["spec"], control["readOnlyRequest"]
-    if request.get("nativeProbe") is not None:
-        if connection.responses:
-            raise CodexProtocolError("invalid-protocol", "Review starts with an uncorrelated native reply")
-        connection.strict_responses = True
+    projector = control.get("_toolProjector")
     if spec.get("provider") != "openai" or not any(
             model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
             for model in catalog["providers"][0]["models"]):
@@ -145,16 +141,16 @@ def _read_only_call(connection, control, result, catalog):
     from .codex_config import read_only_config, policy_matches
     expected = tomllib.loads(read_only_config(control['cwd']))
     configured = connection.call('config/read', {'cwd': control['cwd'], 'includeLayers': False}).get('config') or {}
-    # Failed readback must survive too; review-check publishes only a strict,
-    # sanitized projection before removing this private controller result.
+    # Failed readback must survive too; the retained policy evidence is the
+    # acknowledged native state, never the controller's own proposal.
     result['nativeConfigPolicy'] = configured
     profile = (configured.get('permissions') or {}).get('buddy-router') or {}
     filesystem = {key: value for key, value in (profile.get('filesystem') or {}).items() if value is not None}
     if (not policy_matches(configured, expected) or configured.get('mcp_servers')
             or filesystem != expected['permissions']['buddy-router']['filesystem'] or profile.get('extends')):
         raise CodexProtocolError('readonly-policy-unverified', 'Codex effective configuration differs from the private read-only policy')
-    # Retain the acknowledged effective config, not our requested TOML. Review
-    # certification must inspect native evidence rather than our own proposal.
+    # Retain the acknowledged effective config, not our requested TOML; the
+    # caller must be able to inspect native evidence, not our proposal.
     response = connection.call("thread/start", {
         "cwd": control["cwd"], "model": spec["model"], "modelProvider": "openai",
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
@@ -180,24 +176,12 @@ def _read_only_call(connection, control, result, catalog):
     if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(control["cwd"]).resolve():
         raise CodexProtocolError("wrong-native-workspace", "Read-only native checkout differs")
     result.update(sessionId=thread_id, resolved=dict(spec))
-    probe = request.get("nativeProbe")
-    if probe is not None:
-        from ..sandbox_probe import run as native_probe
-        if (not request.get("captureEvidence") or not isinstance(probe, dict)
-                or set(probe) != {"sentinel", "url"} or not isinstance(probe.get("sentinel"), str)
-                or not isinstance(probe.get("url"), str)
-                or Path(probe["sentinel"]).parent != Path(control["cwd"]).parent
-                or not re.fullmatch(r"outside-[0-9a-f]{32}\.txt", Path(probe["sentinel"]).name)
-                or not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}/", probe["url"])):
-            raise CodexProtocolError("invalid-configuration", "Invalid private native sandbox fixture")
-        result["nativeSandboxProbes"] = native_probe(connection, frozen=Path(control["cwd"]),
-                            sentinel=Path(probe["sentinel"]), url=probe["url"])
     previous_tools = 0
     prompt = request["prompt"]
     for call_index in range(2):
         pending = []
         connection.on_notification = lambda message: pending.append(message)
-        control["_readonlyToolBase"] = previous_tools
+        control["_readonlyToolBase"] = 0 if projector is not None else previous_tools
         control["_readonlyTurnBase"] = call_index
         result["modelStarted"] = True
         response = connection.call("turn/start", {
@@ -211,10 +195,17 @@ def _read_only_call(connection, control, result, catalog):
             raise CodexProtocolError("wrong-native-turn", "No read-only turn identity")
         result["nativeTurnId"] = turn_id
         result['nativeIdentity'] = {'sessionId': thread_id, 'turnId': turn_id}
+        if projector is not None:
+            # The trusted root identity comes only from this native turn receipt.
+            projector.observe_root(thread_id, turn_id)
         evidence = TurnEvidence(thread_id, turn_id)
         raw_calls = set()
         control['_readonlyRawCalls'] = 0
         def observed(message):
+            if projector is not None:
+                # Facts are collected before any identity or capture filtering,
+                # so foreign, child and old-turn calls cannot hide.
+                projector.observe_notification(message)
             params = message.get('params') or {}
             if params.get('threadId') != thread_id or params.get('turnId') not in (None, turn_id):
                 return
@@ -242,11 +233,14 @@ def _read_only_call(connection, control, result, catalog):
                     else:
                         result['nativeEvidenceTruncated'] = True
             activity = evidence.observe(message)
-            observed_tools = max(evidence.tool_calls, len(raw_calls))
-            control['_readonlyRawCalls'] = len(raw_calls)
-            result["usage"] = {"toolCalls": previous_tools + observed_tools, "bytesRead": None}
+            # The collector's deduplicated starts are the one count the budget
+            # and usage report; the ad-hoc tallies only serve its absence.
+            observed_tools = projector.tool_calls if projector is not None else max(evidence.tool_calls, len(raw_calls))
+            control['_readonlyRawCalls'] = observed_tools
+            counted = observed_tools if projector is not None else previous_tools + observed_tools
+            result["usage"] = {"toolCalls": counted, "bytesRead": None}
             # A limit of N allows N native tool calls; the next one is interrupted.
-            if previous_tools + observed_tools + (5 if probe is not None else 0) > request["budget"]["toolCalls"]:
+            if counted > request["budget"]["toolCalls"]:
                 raise CodexProtocolError("readonly-budget-exhausted", "Read-only tool budget exhausted")
             if activity:
                 _activity(control, evidence, *activity)
@@ -266,7 +260,8 @@ def _read_only_call(connection, control, result, catalog):
             result.update(status="ok", rawAnswer=raw, answerValid=False)
         else:
             result.update(status="ok", rawAnswer=raw, answerValid=True)
-        result["usage"] = {"toolCalls": previous_tools + max(evidence.tool_calls, len(raw_calls)), "bytesRead": None}
+        result["usage"] = {"toolCalls": projector.tool_calls if projector is not None
+                           else previous_tools + max(evidence.tool_calls, len(raw_calls)), "bytesRead": None}
         result["nativeIdentity"] = {"sessionId": thread_id, "turnId": turn_id}
         result["correctionCount"] = call_index
         from .read_only import correction_code
@@ -275,8 +270,11 @@ def _read_only_call(connection, control, result, catalog):
             break
         previous_tools += max(evidence.tool_calls, len(raw_calls))
         prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
-    if probe is not None:
-        result["usage"]["nativeProbeCalls"] = 5
+
+    if projector is not None:
+        # Both answer turns (correction included) completed inside one attempt:
+        # their roots and tool counts accumulated on the one collector.
+        control["_readonlyStreamsComplete"] = True
 
 
 def _observe_quota(connection, evidence) -> dict | None:
@@ -372,6 +370,14 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     result = {"status": "error", "mode": "codex", "harnessVersion": version,
               'codingHomePrepared': bool(control.get('credentialSource')),
               "requested": control.get("spec"), "resolved": None, "observed": None, "modelStarted": False}
+    # The unified tool-evidence collector exists before any native frame can
+    # arrive, so every structured result of these branches carries its facts.
+    projector = None
+    if control.get("noToolRequest") or control.get("readOnlyRequest"):
+        from .codex_tool_evidence import CodexToolEventProjector, control_binding
+        binding = control_binding(control)
+        if binding is not None:
+            projector = control["_toolProjector"] = CodexToolEventProjector(binding)
     record = None
     connection = None
     thread_id = turn_id = None
@@ -381,6 +387,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     try:
         connection = Connection(process, deadline, cancelled)
         def early_notification(message):
+            if projector is not None:
+                # Collect the fact before the no-tool policy rejects the frame.
+                projector.observe_notification(message)
             if control.get('noToolRequest'):
                 from .codex_no_tool import reject_tool_event
                 reject_tool_event(message)
@@ -571,7 +580,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     except CodexProtocolError as error:
         result.update(status="cancelled" if error.code == "user-cancel" else "error", code=error.code, error=str(error))
         if control.get("noToolRequest") and error.code == "no-tool-violation":
-            result["usage"] = {"toolCalls": 1, "bytesRead": None}
+            result["usage"] = {"toolCalls": projector.tool_calls if projector is not None else 1, "bytesRead": None}
         record = None
         thread_id = thread_id or result.get("sessionId")
         turn_id = turn_id or result.get("nativeTurnId")
@@ -613,6 +622,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         result["usage"].setdefault("toolCalls", None)
         result["zeroToolVerified"] = bool(result["status"] == "ok" and stream_complete
                                           and shutdown and process.returncode == 0 and result["usage"]["toolCalls"] == 0)
+        if projector is not None:
+            # stream_complete already means drained-to-EOF over completed turns.
+            result["toolEvidence"] = projector.finish(stream_complete)
     if evidence is not None and not control.get("readOnlyRequest") and not control.get("noToolRequest"):
         result["tokenUsage"] = attempt_token_usage(evidence)
         # Even a transport failure can leave a completed root assistant message.
@@ -631,6 +643,10 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         private_json(Path(control["outputFile"]), record, exclusive=True)
     if control.get("readOnlyRequest"):
         result.setdefault("usage", {"toolCalls": None, "bytesRead": None})["elapsedMs"] = round((time.monotonic() - started) * 1000)
+        if projector is not None:
+            # The review branch reports completed root turns; the process stop
+            # evidence stays in processState and is judged at publication.
+            result["toolEvidence"] = projector.finish(bool(control.get("_readonlyStreamsComplete")))
     return result, 0 if result["status"] == "ok" else 1
 
 

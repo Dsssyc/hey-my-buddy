@@ -6,7 +6,7 @@ import type { Preference } from "./types";
 import { decisionStatus } from "./decision-types";
 import { effortText, profileTitle } from "./profile-display";
 import { Badge, formatDate } from "./ui";
-import { fallbackDescription, recordedRoutingMode, routingBasisSummary } from "./routing-display";
+import { recordedRoutingMode, routingBasisSummary } from "./routing-display";
 
 export function configurationText(value: DecisionModel | null | undefined): string {
   return value ? [value.adapter, value.provider, value.model, effortText(value.effort ?? value.reasoningEffort)].filter(Boolean).join(" / ") || "未记录" : "未记录";
@@ -83,9 +83,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <dl className="facts">
       {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}
       <dt>路由模型</dt><dd>{configurationText(model)}</dd>
-      {audit.kind !== "maintain" && <><dt>请求模式</dt><dd>{recordedRoutingMode(audit.requestedRoutingMode)}</dd>
-        <dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
-        <dt>模式降级</dt><dd>{fallbackDescription(audit.fallback)}</dd></>}
+      {audit.kind !== "maintain" && <><dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd></>}
       <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
       <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>

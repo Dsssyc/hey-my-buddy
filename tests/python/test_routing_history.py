@@ -16,6 +16,7 @@ from test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
 from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
 from buddy.errors import BoardError
+from fixtures.router_tool_receipt import claim_tool_receipt
 
 ROUTING_TASK_TEXT = "Produce a verified implementation"
 
@@ -55,8 +56,11 @@ class RoutingHistoryTestCase(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
-            "result": {"status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
-                       "inputVerification": {"unchanged": True, "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
+            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+                       "usage": {"elapsedMs": 100, "toolCalls": 0},
+                       "zeroToolVerified": True,
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
                        "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
@@ -266,11 +270,11 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.publish_user_patch(
             board, request_id="profiles-changed", command_id="profiles-changed",
             profileSettings=[{"profileId": PROFILE_ID, "enabled": False}],
-            configuration={"reviewRouterProfileId": SECOND_PROFILE_ID},
+            configuration={"routerProfileIds": [SECOND_PROFILE_ID]},
         )
         snapshot = board.call("console_snapshot", {})
         self.assertEqual(snapshot["tableRevision"], initial_revision + 1)
-        self.assertEqual(snapshot["configuration"]["reviewRouterProfileId"], SECOND_PROFILE_ID)
+        self.assertEqual(snapshot["configuration"]["routerProfileIds"], [SECOND_PROFILE_ID])
         frozen_config = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(frozen_config["executionConfiguration"]["model"], PROFILE["model"])
         self.assertEqual(frozen_config["executionConfigurationRevision"], 1)

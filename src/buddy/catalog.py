@@ -265,6 +265,8 @@ class CatalogView:
         registry = adapters()
         proposals = []
         for entry in self.payload["providers"]:
+            native = registry.get(entry['adapter'])
+            review_eligible = native is not None and native.local_read_only_check()['eligible']
             for model in entry["models"]:
                 for effort in model["efforts"]:
                     identity = ":".join((entry["adapter"], entry["provider"], model["id"], effort))
@@ -274,7 +276,7 @@ class CatalogView:
                         "profileId": profile_id, "label": f"{model['name']} · {effort}"[:200],
                         "adapter": entry["adapter"], "provider": entry["provider"], "model": model["id"], "effort": effort,
                         "available": model["available"], "unavailableReason": model["unavailableReason"], "enabled": False,
-                        "capabilities": [f"execution:{entry['adapter']}", f"effort:{effort}"] + [f"input:{item}" for item in model["inputModalities"]][:30] + (["decision"] if getattr(registry.get(entry['adapter']), 'read_only_structured', False) and getattr(registry.get(entry['adapter']), 'read_only_structured_verified', False) else []),
+                        "capabilities": [f"execution:{entry['adapter']}", f"effort:{effort}"] + [f"input:{item}" for item in model["inputModalities"]][:30] + (["decision"] if review_eligible else []),
                         "contextWindow": model["contextWindow"],
                         "description": (model["description"] or f"{model['name']} via {entry['displayName']}")[:4000],
                         "source": f"catalog:{self.discovery_id or self.source}"[:256],

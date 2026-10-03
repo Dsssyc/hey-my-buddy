@@ -320,7 +320,8 @@ export type UserPolicyPublication = {
   familyPreferenceChanges?: FamilyPreferenceChangePatch[];
   preferenceChanges?: PreferenceChangePatch[];
   familyAnnotationChanges?: FamilyAnnotationChangePatch[];
-  configuration?: Partial<Pick<Configuration, "fastRouterProfileId" | "reviewRouterProfileId" | "defaultRoutingMode" | "routingBudget">>;
+  configuration?: Partial<Pick<Configuration,
+    "routerProfileIds" | "routerRetryIntervalSeconds" | "defaultRoutingMode" | "routingBudget">>;
   /** Per-family limit patches; the board refuses any `active` occupancy here. */
   modelConcurrency?: ModelConcurrencySetting[];
 };
@@ -412,14 +413,32 @@ export function familyAnnotationChanges(
   return changed.sort(byFamily);
 }
 
-export const ROUTER_FIELDS = ["fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode"] as const;
+/** The ordered Router list is equal when it holds the same ids in the same order. */
+export function routerListEqual(a: string[] | undefined, b: string[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+export const ROUTER_FIELDS = ["routerProfileIds", "defaultRoutingMode", "routerRetryIntervalSeconds"] as const;
+
+/**
+ * Replaces the head of the Router list: the user's tail order stays, and the
+ * new head's old duplicate in the tail goes. The list patch is always the whole
+ * array, so clearing the first choice publishes `[]` and clears the list.
+ */
+export function withFirstRouter(configuration: Configuration, profileId: string): Configuration {
+  const tail = configuration.routerProfileIds.slice(1).filter(id => id !== profileId);
+  return { ...configuration, routerProfileIds: [profileId, ...tail] };
+}
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
-  return baseline.configuration[field] !== draft.configuration[field];
+  if (!baseline.configuration || !draft.configuration) return false;
+  const before = baseline.configuration[field];
+  const after = draft.configuration[field];
+  return field === "routerProfileIds" ? !routerListEqual(before as string[], after as string[]) : before !== after;
 }
 
 export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
-  return (baseline.configuration.routingBudget ?? "standard") !== (draft.configuration.routingBudget ?? "standard");
+  return !!baseline.configuration && !!draft.configuration && baseline.configuration.routingBudget !== draft.configuration.routingBudget;
 }
 
 export function configurationChanged(baseline: Draft, draft: Draft): boolean {
@@ -456,9 +475,13 @@ export function publication(
     ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
-          ...Object.fromEntries(ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field))
-            .map(field => [field, draft.configuration[field]])),
-          ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration.routingBudget ?? "standard" } : {}),
+          ...(routerFieldChanged(baseline, draft, "routerProfileIds")
+            ? { routerProfileIds: draft.configuration!.routerProfileIds ?? [] } : {}),
+          ...(routerFieldChanged(baseline, draft, "routerRetryIntervalSeconds")
+            ? { routerRetryIntervalSeconds: draft.configuration!.routerRetryIntervalSeconds } : {}),
+          ...(routerFieldChanged(baseline, draft, "defaultRoutingMode")
+            ? { defaultRoutingMode: draft.configuration!.defaultRoutingMode } : {}),
+          ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration!.routingBudget ?? "standard" } : {}),
         } }
       : {}),
   };
@@ -485,12 +508,12 @@ function fingerprint(draft: UserEditable): string {
       .filter((a) => a.text)
       .map((a) => ({ key: familyKey(a), text: a.text }))
       .sort((a, b) => a.key.localeCompare(b.key)),
-    configuration: {
-      fastRouterProfileId: draft.configuration.fastRouterProfileId,
-      reviewRouterProfileId: draft.configuration.reviewRouterProfileId,
+    configuration: draft.configuration ? {
+      routerProfileIds: draft.configuration.routerProfileIds ?? [],
+      routerRetryIntervalSeconds: draft.configuration.routerRetryIntervalSeconds,
       defaultRoutingMode: draft.configuration.defaultRoutingMode,
-      routingBudget: draft.configuration.routingBudget ?? "standard",
-    },
+      routingBudget: draft.configuration.routingBudget,
+    } : null,
     modelConcurrency: [...draft.modelConcurrency]
       .map(({ adapter, provider, model, limit }) => ({ key: familyKey({ adapter, provider, model }), limit }))
       .sort((a, b) => a.key.localeCompare(b.key)),
@@ -530,7 +553,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "familyPreference" | "preference" | "familyAnnotation" | "configuration" | "defaultRoutingMode" | "routingBudget" | "modelConcurrency";
+  field: "enabled" | "familyPreference" | "preference" | "familyAnnotation" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelConcurrency";
   /** The profile id, or the `adapter/provider/model` of a family-level field. */
   profileId: string;
   message: string;
@@ -547,18 +570,20 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   familyPreference: "家族偏好",
   preference: "档位偏好",
   familyAnnotation: "家族备注",
-  configuration: "Router",
+  configuration: "Router 列表",
   defaultRoutingMode: "默认路由模式",
   routingBudget: "路由预算",
+  routerRetryIntervalSeconds: "重试间隔",
   modelConcurrency: "并发上限",
 };
 
 const familyText = (family: ModelFamily) => `${family.adapter}/${family.provider}/${family.model}`;
 
 function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
-  if (field === "configuration") return `Router${profileId ? ` ${profileId}` : "（空）"}`;
+  if (field === "configuration") return profileId ? `Router 列表（${profileId}）` : "Router 列表";
   if (field === "defaultRoutingMode") return "默认路由模式";
   if (field === "routingBudget") return "路由预算";
+  if (field === "routerRetryIntervalSeconds") return "重试间隔";
   if (field === "familyPreference" || field === "familyAnnotation" || field === "modelConcurrency") {
     return `模型家族 ${profileId} 的${FIELD_NAMES[field]}`;
   }
@@ -699,24 +724,25 @@ export function rebaseDraft(
     else fail("changed", "familyAnnotation", familyText(change));
   }
 
-  const mergedRouting = { ...nextBaseline.configuration };
-  for (const field of ROUTER_FIELDS) {
-    if (!routerFieldChanged(baseline, draft, field)) continue;
-    const old = baseline.configuration[field];
-    const wanted = draft.configuration[field];
-    const fresh = nextBaseline.configuration[field];
-    if (fresh === old || fresh === wanted) {
-      // Each field is independently fenced by the configuration revision.
-      Object.assign(mergedRouting, { [field]: wanted });
-    } else fail("changed", field === "defaultRoutingMode" ? "defaultRoutingMode" : "configuration", String(wanted ?? ""));
-  }
-
-  let routingBudget = nextBaseline.configuration.routingBudget ?? "standard";
-  if (routingBudgetChanged(baseline, draft)) {
-    const old = baseline.configuration.routingBudget ?? "standard";
-    const wanted = draft.configuration.routingBudget ?? "standard";
-    if (routingBudget === old || routingBudget === wanted) routingBudget = wanted;
-    else fail("changed", "routingBudget", "", `（现为 ${routingBudget}）`);
+  let mergedRouting = nextBaseline.configuration;
+  if (baseline.configuration && draft.configuration && nextBaseline.configuration) {
+    mergedRouting = { ...nextBaseline.configuration };
+    for (const field of [...ROUTER_FIELDS, "routingBudget"] as const) {
+      const changed = field === "routerProfileIds"
+        ? !routerListEqual(baseline.configuration.routerProfileIds, draft.configuration.routerProfileIds)
+        : baseline.configuration[field] !== draft.configuration[field];
+      if (!changed) continue;
+      const old = baseline.configuration[field];
+      const wanted = draft.configuration[field];
+      const fresh = nextBaseline.configuration[field];
+      const freshMatches = field === "routerProfileIds"
+        ? routerListEqual(fresh as string[], old as string[]) || routerListEqual(fresh as string[], wanted as string[])
+        : fresh === old || fresh === wanted;
+      if (freshMatches) Object.assign(mergedRouting, { [field]: wanted });
+      else fail("changed", field === "routerProfileIds" ? "configuration" : field, String(Array.isArray(wanted) ? wanted.join("、") : wanted ?? ""));
+    }
+  } else if (configurationChanged(baseline, draft)) {
+    fail("changed", "configuration", "", "（设置需升级）");
   }
 
   // Family concurrency limits: the key is the exact adapter/provider/model
@@ -774,7 +800,7 @@ export function rebaseDraft(
       familyPreferences,
       preferenceOverrides,
       familyAnnotations,
-      configuration: { ...mergedRouting, routingBudget },
+      configuration: mergedRouting,
       modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
         mergedConcurrency.get(familyKey(entry)) ?? entry),
     },

@@ -16,11 +16,12 @@ import type { Snapshot } from "./types";
  * defect: the preview snapshot lagged behind the schema and the new console
  * refused to load it).
  *
- * This test consumes the exact JSON bytes emitted by
+ * This test consumes the synthetic scenario tree emitted by
  * `tests/probes/objective_console_preview.py --emit-fixtures` through the real
  * console parsers — `createApi(...).snapshot()`, `.objectives()`,
  * `.objectiveTimeline()`, the `workflow_get` command path and
- * `parseWorkflowReply` — and never through a hand-written fixture. A future
+ * `parseWorkflowReply`. Only synthetic Router settings and eligibility are
+ * re-authored for L4 at the test boundary below. A future
  * snapshot shape the frontend refuses, or preview data that stops matching the
  * parser, fails here; `tests/python/test_host_preview.py` additionally asserts
  * the resulting report and proves the emitted tree is deterministic, so the
@@ -60,8 +61,12 @@ function resolveFixtures(): { directory: string; generated: boolean } {
   if (configured) return { directory: resolve(configured), generated: false };
   const python = process.env.BUDDY_PREVIEW_PYTHON ?? "python3";
   const directory = mkdtempSync(join(tmpdir(), "buddy-preview-"));
+  const previewEnvironment = { ...process.env };
+  for (const key of ["BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
+    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
+    "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"]) delete previewEnvironment[key];
   const result = spawnSync(python, [previewScript, "--emit-fixtures", directory], {
-    cwd: repositoryRoot, encoding: "utf8",
+    cwd: repositoryRoot, encoding: "utf8", env: previewEnvironment,
   });
   if (result.status !== 0) {
     throw new Error(`could not emit the preview fixtures with ${python}: ${result.stdout ?? ""}${result.stderr ?? ""}`);
@@ -89,7 +94,8 @@ function bodyFor(entry: ManifestEntry): unknown {
 
 /** The real `createApi` request path against one fixed fixture response. */
 function apiFor(entry: ManifestEntry) {
-  const body = JSON.stringify(bodyFor(entry));
+  const original = bodyFor(entry);
+  const body = JSON.stringify(original);
   const fetcher = (async () => new Response(body, {
     status: entry.httpStatus,
     headers: { "Content-Type": "application/json" },
@@ -235,14 +241,16 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(snapshots).toHaveLength(1);
     expect(workflows.length).toBeGreaterThanOrEqual(3);
 
-    // A preview snapshot must carry the two Router slots and the family note
+    // A preview snapshot must carry the single Router and the family note
     // schema the current console requires (the original schema-13 defect).
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
-      fastRouterProfileId: expect.any(String), reviewRouterProfileId: expect.any(String),
+      routerProfileIds: expect.any(Array),
+      routerRetryIntervalSeconds: expect.any(Number),
       defaultRoutingMode: "fast", routingBudget: "standard",
     });
     expect("decisionProfileId" in snapshotFacts.configuration).toBe(false);
+    expect("routerProfileId" in snapshotFacts.configuration).toBe(false);
 
     // Recorded quota: normal, stale and unknown observations stay distinct.
     const quotaFacts = snapshotFacts.harnesses as { adapter: string; quota: ReturnType<typeof quotaView> }[];

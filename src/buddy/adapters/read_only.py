@@ -120,6 +120,8 @@ def _account_environment(name: str, context: ExecutionContext, *, purpose: str) 
 
 
 def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
+    if name in ("dsh", "zcode"):
+        raise BoardError("UNSUPPORTED_ADAPTER", "Review on the Worker carrier is not implemented", adapter=name)
     native_environment = _account_environment(name, context, purpose='review')
     ensure_private_dir(context.directory)
     control = {
@@ -133,8 +135,6 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
     }
-    if request.native_probe is not None:
-        control["readOnlyRequest"]["nativeProbe"] = request.native_probe
     path = context.directory / "readonly-control.json"
     private_json(path, control)
     from ..harness_runtime import controller_environment
@@ -177,6 +177,7 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
     evidence = directory / invocation_name
     control = {
         "directory": str(invocation), "nativeRoot": str(invocation / "native"), "evidenceRoot": str(evidence),
+        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "account": context.runtime.get('account'),
         "cwd": str(cwd.resolve()), "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
@@ -253,12 +254,6 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
         pass
     if not isinstance(payload, dict):
         payload = {"status": "error", "code": "invalid-native-result"}
-    if getattr(handle, "no_tool", False) is True and payload.get("status") == "ok" and (
-            payload.get("zeroToolVerified") is not True or
-            type((payload.get("usage") or {}).get("toolCalls")) is not int or
-            (payload.get("usage") or {}).get("toolCalls") != 0):
-        payload = {"status": "error", "code": "invalid-native-result",
-                   "processState": payload.get("processState", {})}
     stopped = (payload.get("processState", {}).get("shutdownConfirmed") is True
                and handle.shutdown_confirmed() is True)
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"

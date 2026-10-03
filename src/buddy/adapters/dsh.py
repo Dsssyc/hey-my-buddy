@@ -44,12 +44,18 @@ class DshAdapter(Adapter):
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline")
     model_discovery = True
     no_tool_structured = True
-    # The native DSH permission policy does not confine reads or networking.
-    # Do not advertise a read-only structured Router capability.
 
     def start_no_tool_structured(self, context, request):
         from .read_only import start_no_tool
         return start_no_tool(self.name, context, request)
+
+    def local_read_only_check(self) -> dict:
+        """Worker-carrier review belongs to the next stage, not a separate channel."""
+        result = super().local_read_only_check()
+        if not self.read_only_structured:
+            return {**result, "reasonCode": "readonly-worker-carrier-unimplemented",
+                    "reason": "DSH review on the Worker carrier is not implemented; its separate read-only channel was removed from stage 2"}
+        return result
 
     def discover_models(self) -> dict:
         from .dsh_catalog import discover_models

@@ -1200,8 +1200,6 @@ class BoardStore:
             task = self._task_row(connection, params)
             self.workflow.guard_task_control(connection, task, params, operation="task_retry")
             spec = json.loads(task["spec_json"])
-            if spec.get("reviewCheck"):
-                raise BoardError("UNSUPPORTED", "A review verification is not retried; explicitly call harness-verify with a new requestId")
             if spec.get("decision"):
                 # A paid decision call is never replayed implicitly. A decision result
                 # is retained and inspected; a new request is an explicit Host choice.
@@ -1599,12 +1597,31 @@ class BoardStore:
                 ).fetchone()
                 attempt_id = str(uuid.uuid4())
                 generation = int(generation_row["generation"]) + 1
+                # Pre-claim Router preparation runs before the selector family and
+                # its capacity check: a superseded, circumstances-changed or
+                # before-model-unavailable dispatch is settled or advanced here, so
+                # the family below only ever freezes the current dispatch's tuple.
+                # A returned reason keeps the task queued (or records its honest
+                # closure) and this claim moves on to the next candidate.
+                if task["adapter"] == scheduling.DECISION_ADAPTER:
+                    preclaim = self.decisions.prepare_router_claim(connection, task=task, now=self.now())
+                    if preclaim is not None:
+                        blocker = preclaim
+                        still_queued = connection.execute(
+                            "SELECT state FROM tasks WHERE task_id=?", (task["task_id"],)
+                        ).fetchone()["state"] == "queued"
+                        if still_queued and preclaim != "decision-closed":
+                            connection.execute(
+                                "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
+                                (preclaim, self.now(), task["task_id"]),
+                            )
+                        continue
                 # The model family this attempt is frozen to. A routing task has no
-                # family of its own in its specification: the fixed decision profile
-                # resolves one here, its quota is checked before the claim commits,
-                # and the same tuple is frozen onto the attempt. Business work uses
-                # the effective specification's family, which a governed run has
-                # already resolved and validated.
+                # family of its own in its specification: the current dispatch's
+                # Router resolves one here, its quota is checked before the claim
+                # commits, and the same tuple is frozen onto the attempt. Business
+                # work uses the effective specification's family, which a governed
+                # run has already resolved and validated.
                 family = scheduling.model_family(effective_spec)
                 if task["adapter"] == scheduling.DECISION_ADAPTER:
                     family = self.decisions.selector_family(connection, spec)
@@ -1703,8 +1720,6 @@ class BoardStore:
             effective_cwd = chosen["cwd"] or spec["cwd"]
             from .accounts import freeze
             account_adapter = chosen_family[0] if chosen_family else chosen['adapter']
-            if chosen['adapter'] == 'review-check':
-                account_adapter = (spec.get('reviewCheck') or {}).get('adapter')
             frozen_account = freeze(connection, attempt_id, account_adapter)
             if frozen_account is not None:
                 from .harness_health import read_health
@@ -2444,9 +2459,6 @@ class BoardStore:
                 error=error_text,
                 now=now,
             )
-            from .harness_review import complete as complete_review
-            complete_review(self, connection, task_row, attempt_row, result=result, status=status,
-                            shutdown_confirmed=shutdown_confirmed, now=now)
             if decision is not None:
                 response["decision"] = decision
                 if decision.get("preflightFallback"):
