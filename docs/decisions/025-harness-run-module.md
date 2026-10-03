@@ -2,7 +2,7 @@
 
 ## 状态
 
-提议：用户于 2026-10-03 指出适配器过于围绕 Worker buddy 编写、缺少通用的公共实现，并同意先做一轮架构修缮；由 Claude Code Host 起草。用户同日确认：由 Codex 实现，Claude Code Host 在每一步结束时验收；各 harness 的顺序不限，按第 10 条进行。尚未实现，实现与安装需另行授权。本文是 [ADR-023](023-harness-integration-principles.md) 第 7 条（能复用已有的执行载体就复用）在代码结构上的落实，不改变黑板的 schema、CLI 契约与 Worker 运行时的认领、租约和回执。[ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 L6、L10 至 L12，以及 [ADR-022](022-expected-duration-and-graceful-stop.md) 与 [ADR-024](024-console-session-view.md) 中涉及适配器的部分排在本文之后。
+已接受：用户于 2026-10-03 指出适配器过于围绕 Worker buddy 编写、缺少通用的公共实现，并同意先做一轮架构修缮；由 Claude Code Host 起草。用户同日决定由 Codex 实现，Claude Code Host 在每一步结束时验收；各 harness 的顺序不限，按第 10 条进行；第 8 条为何只涉及 DSH 已向用户说明。尚未实现；安装需另行授权。本文是 [ADR-023](023-harness-integration-principles.md) 第 7 条（能复用已有的执行载体就复用）在代码结构上的落实，不改变黑板的 schema、CLI 契约与 Worker 运行时的认领、租约和回执。[ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 L6、L10 至 L12，以及 [ADR-022](022-expected-duration-and-graceful-stop.md) 与 [ADR-024](024-console-session-view.md) 中涉及适配器的部分排在本文之后。
 
 ## 背景
 
