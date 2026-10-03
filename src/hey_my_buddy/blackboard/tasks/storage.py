@@ -51,12 +51,26 @@ def tree_info(path: Path) -> tuple[int, str, bool]:
     return size, digest.hexdigest(), safe
 
 
+def _service_process_patterns() -> list[tuple[re.Pattern[str], str]]:
+    """Exact ``-m`` patterns for every generation's long-lived service modules.
+
+    The names come from the one shared entry table, so this inventory and the
+    launcher can never disagree about a generation's process names. The kind is
+    the role of the pattern that actually matched; the command text is never
+    searched a second time.
+    """
+    from ...install.entrypoints import ENTRY_MODULES, SERVICE_ROLES
+    return [(re.compile(rf' -m {re.escape(modules[role])}(?: |$)'), role)
+            for modules in ENTRY_MODULES.values() for role in SERVICE_ROLES]
+
+
 def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     """Only observations. Commands and unrelated process details never escape."""
     try:
         listing = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return [], [], False
+    services = _service_process_patterns()
     orphans, commands = [], []
     for line in listing.splitlines():
         parts = line.strip().split(None, 1)
@@ -64,9 +78,9 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
             continue
         pid, command = parts
         commands.append(command)
-        if not re.search(r' -m buddy\.(daemon|worker\.supervisor)(?: |$)', command):
+        kind = next((role for pattern, role in services if pattern.search(command)), None)
+        if kind is None:
             continue
-        kind = 'supervisor' if 'hey_my_buddy.buddy.runtime.supervisor' in command else 'daemon'
         match = re.search(r'--state-dir\s+(\S+)', command)
         observed_state = match.group(1) if match else None
         # Daemon argv can omit its state root. Control identity provides one exact

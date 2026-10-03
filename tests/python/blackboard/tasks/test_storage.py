@@ -464,3 +464,48 @@ class StorageTests(BoardTestCase):
         reasons = storage._zcode_reasons(store, object(), {'run_id': 'run', 'state': 'running'},
                                          {'acceptance_verdict': None}, 0)
         self.assertEqual(reasons, ['continuation-supported', 'shutdown-unconfirmed'])
+
+
+class ProcessInventoryServiceTests(BoardTestCase):
+    """The real inventory recognizes both package generations' service modules.
+
+    Only the ``ps`` data source is replaced: the simulated listing is literal
+    text spelled independently of the shared entry table, so a misspelling in
+    that table cannot fake its own inputs. Every service line carries a
+    ``--state-dir`` outside the observed board and the board has no
+    ``control.json``, so open-file inspection is never reached.
+    """
+
+    def test_real_inventory_recognizes_both_generations_by_their_matched_module(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        foreign = self.directory / 'another-board'
+        foreign.mkdir()
+        runtime = self.directory / 'runtime-root' / ('a' * 32)
+        listing = '\n'.join([
+            f' 101 /usr/bin/python3 -P -m buddy.daemon --state-dir {foreign}',
+            f' 102 /usr/bin/python3 -m buddy.worker.supervisor --worker-id old-0 --state-dir {foreign}',
+            f' 103 {runtime}/venv/bin/python -P -m hey_my_buddy.blackboard.service.daemon --state-dir {foreign}',
+            f' 104 {runtime}/venv/bin/python -m hey_my_buddy.buddy.runtime.supervisor --worker-id new-1 --state-dir {foreign}',
+            f' 201 /usr/bin/python3 -m buddy.daemonization --state-dir {foreign}',
+            f' 202 /usr/bin/python3 -m xbuddy.daemon --state-dir {foreign}',
+            f' 203 /usr/bin/python3 -m buddy.worker.supervisord --state-dir {foreign}',
+            f' 204 /usr/bin/python3 -m hey_my_buddy.blackboard.service.daemonware --state-dir {foreign}',
+            f' 205 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.supervisorish --state-dir {foreign}',
+            f' 206 /usr/bin/python3 -m buddy.client --state-dir {foreign}',
+        ])
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing) as ps, \
+                mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.run',
+                           side_effect=AssertionError('open-file inspection was reached')):
+            orphans, commands, known = storage.process_inventory(state)
+        ps.assert_called_once()
+        self.assertTrue(known)
+        self.assertEqual({row['pid']: row for row in orphans}, {
+            101: {'pid': 101, 'kind': 'daemon', 'stateDir': str(foreign), 'runtimeDir': None},
+            102: {'pid': 102, 'kind': 'supervisor', 'stateDir': str(foreign), 'runtimeDir': None},
+            103: {'pid': 103, 'kind': 'daemon', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
+            104: {'pid': 104, 'kind': 'supervisor', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
+        })
+        # Every simulated process stays observable, including the near misses.
+        self.assertEqual(len(commands), 10)
+        self.assertIn(f'/usr/bin/python3 -m buddy.daemonization --state-dir {foreign}', commands)

@@ -185,20 +185,6 @@ def _runtime_ready(target: Path) -> bool:
     return isinstance(marker, dict) and marker.get('state') == 'READY' and marker.get('contentId') == target.name and _runtime_python(target).is_file()
 
 
-#: Entry modules for each package generation a materialized runtime can ship.
-#: A coordinator addresses a target runtime with that runtime's own modules: an
-#: old-layout rollback target still imports ``buddy``, and imposing the
-#: coordinator's current layout on it would strand that target's client, daemon
-#: and CLI. The table is keyed by the top-level package each generation ships
-#: under ``src/``; no compatibility name is installed into either generation.
-ENTRY_MODULES = {
-    'hey_my_buddy': {'client': 'hey_my_buddy.protocol.client',
-                     'daemon': 'hey_my_buddy.blackboard.service.daemon',
-                     'cli': 'hey_my_buddy.cli.main'},
-    'buddy': {'client': 'buddy.client', 'daemon': 'buddy.daemon', 'cli': 'buddy.cli'},
-}
-
-
 def entry_modules(target: Path) -> dict[str, str]:
     """The entry modules of a materialized runtime's *own* package layout.
 
@@ -206,16 +192,19 @@ def entry_modules(target: Path) -> dict[str, str]:
     never guesses a package name for a runtime it did not install. Exactly one
     known generation must be present; anything else fails explicitly instead of
     imposing this layout on an unrecognized target. This runs in the
-    system-Python bootstrap, so it stays stdlib-only and imports lazily.
+    system-Python bootstrap, so the shared table is imported lazily: the module
+    top level stays stdlib-only and works when the launcher is executed
+    directly as a script, before any package dependency exists.
     """
     from hey_my_buddy.errors import BoardError
+    from hey_my_buddy.install.entrypoints import COORDINATED_ROLES, ENTRY_MODULES
     found = [modules for package, modules in ENTRY_MODULES.items()
              if (target / 'src' / package).is_dir()]
     if len(found) != 1:
         raise BoardError('RUNTIME_LAYOUT_UNKNOWN',
                          'The runtime ships no single package layout this coordinator can address',
                          runtimeDir=str(target), known=sorted(ENTRY_MODULES))
-    return found[0]
+    return {role: found[0][role] for role in COORDINATED_ROLES}
 
 
 def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | None:
