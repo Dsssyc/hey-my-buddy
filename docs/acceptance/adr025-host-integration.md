@@ -46,3 +46,31 @@ F-C1 原先写入短探测根的五组 raw 输出仍在，Host 已另行保留�
 Host 核对原 2,316 条 Python 编号全部保留且 Counter 无减少，恰新增 4 条旧布局入口回归，无重复；完整日志为 Python 2,320（skip 1，与基线同项）、Node 110。最终回合仅修测试夹具与记录，生产树与这次完整检查的固定树相等；Console 659、tsc、构建及 wheel/sdist/skill 的通过证据仍适用。Host 直接检查最新 wheel 的 310 个成员，顶层只有 `hey_my_buddy` 与 dist-info，没有顶层 `buddy/`。最终第零步完整检查仍由 0-D 重跑。
 
 Host 将 0-B1 必要脚本、日志、编号清单及最新 wheel/sdist 共 202 个文件另存到 `<evidence-worktree>/tmp/adr025-evidence-retained/0b1/` 并写 SHA-256 清单，再执行黑板验收。两份记录中对曾损坏 key 的引文是历史说明；恢复断言针对实际程序常量和构建内容。后续顺序为整合已批准的公共计划与核对记录、0-B2 测试目录搬动、0-C 私有安装升级、0-D 整步收尾；第零步尚未交给 Claude Code Host 验收。
+
+## F-D2 固定交付验收与暂停
+
+F-D2 最终 artifact 为 `9ea27eb1-db6d-4f42-bf52-4197fd82912d`，output 为 `ad682eeec3227c0e772eb09c753d3ce358d71362`。Host 按固定 blob 原样提交记录 `3ca7e78cbf48d145e6c7d2c0fed081cfd680730a`，整合 `int-f69bf523-6566-4dd5-b9c1-eb43388bcb79` 后验收该微任务；F-D1 的 118 行历史完整保留，未修改生产源码。这条核对线与 F-C1 都已停止，等待用户转达 Claude Code Host 验收；第四步及 5-A 尚未开始，独立的第零步继续。
+
+Host 对原微任务四次拒绝并 continue：收窄“六问全通过”的无依据判断并核对公开控制面及 SDK 退路；补充 none/read 原生开关的实际证据；移除 none 中残留的 `exit_plan_mode`；修正仍停留在旧回合的 MCP 次数与会话范围。全部修正仍由原微任务完成。最终公开 patch 禁用 14 个任务工具提供者与 plan-mode 后，经免模型启动和一个最小真实 prompt，原生 `request/header` 只含本次完成工具；Host 独立读取该私有生成的会话记录予以确认。read 预设的两次升级请求均被 reject，写入未发生，正向读取成功；write、用量、模型配置、真实完成调用及检查点问询分别留证，不扩展为平台或厂商静态证明。
+
+F-D2 合计 DSH 原生启动 20 次（9 次 CLI、11 次 ACP），真实 prompt 5 次、模型步 21 步；最后修记录的回合没有新增原生调用。与 F-D1 合计为 29 次 DSH 启动、5 次真实 prompt，执行微任务本身的 buddy 与 Router 模型运行另计。F-D2 各回合日常目录元数据快照无变化；这不能撤销 F-D1 的已记边界违反。尝试 4 停止摘要被覆盖及早期 5 次 CLI 未留独立停止摘要的缺口继续明示；read 网络、允许路径、真实运行后续接、取消中断、HTTP MCP、cost/quota、其他平台保留未验证。
+
+Host 在验收前将必要 Python 探针、日志和仅本次生成的会话记录共 100 个文件保留在 `<evidence-worktree>/tmp/adr025-evidence-retained/fd2-turn4/`，写逐文件 SHA-256 并核对最后一轮没有改变这些原始材料；未复制其他 home 文件或凭据目录。最终报告与 seal 字节相等，核对分支的变更仅为本报告；后续在实施微任务停止后再合入实施分支。
+
+## 两项核对的外部验收与后续约束
+
+用户随后转达 Claude Code Host 对 F-D1/F-D2、F-C1 均已验收，权威记录及 ADR-025 第 11、13 条更新在 `socu/buddy-core` 的 `fcf294773818c909c4fca6c9c869a1fdb5cbd86c`。Host 已在证据分支合入该提交，更新仅来自上游原文的 ADR、文档索引与 Host 验收记录；本 Host 没有自行改 ADR。实施分支由当前微任务独占，待其停下后整合。此前本登记中的“等待外部验收”是当时状态，现由这次用户转达解除；第零步尚未验收。
+
+Host 只修订执行计划以承接用户的新要求：DSH 工具范围由启动配置满足，权限回调只处理升级请求；4-D 补命令写文件的只读验证，此前不宣称命令受原生只读强制；按原生工具名归类，未知仍为 other；私有会话身份/用量只作可选来源、用 Python 解码、不新增系统 zstd 命令依赖，Worker token 用量退步必须停下；未知工具行不宣称已限制；任何 DSH 启动都须私有主目录。C-Two 以回读地址路由，人名只显示，无重名换名重试；两项进程全局设置在首次连接/注册前完成；Worker 确认控制器组消失后，只删除自己记录且身份仍匹配的套接字。DSH 的独立 ACP 客户端在第零步验收后可开始，不等第三步。
+
+## 0-B2 的越界清理与实施暂停
+
+0-B2 run `633a8b0d-5689-4fcb-aae9-04272c43378f` 已提交测试搬动，但没有通过验收。其第一份 attention 输出为 artifact `abb0f48b-de54-4fdb-9c27-e727b6bd52da`、output `93e394b12dfb91bc6e1b7c9e60e34782b9cac7ff`；实施分支上的对应提交为 `5eaef5a`、`c0e098e`。Host 独立将 0-B1 的 2,320 条编号按 TSV 转换，与搬后编号的 Counter 和集合比较，增减与重复均为零；已读第二轮 Python 2,320（skip 1）日志。Node 的 `native-usage.test.mjs` 仍用旧 fixture 路径，3 条测试被 ENOENT 挡住，完整命令退出 1。未把这份 attention 当成通过，也未开始 0-C、0-D 或第一步。
+
+交付记录披露清理了其他会话遗留的临时根。Host 当即按用户第 15 条暂停第零步实施并告知用户；没有修改 Node 路径或扩大其 scope。黑板对 attention 输出的 `acknowledge rejected` 返回 `NOT_READY`（该 verdict 仅接受 delivered goal），没有发生状态修改；Host 随后对同一 run 使用 continue，明确不予验收，且只授权核实已经发生的动作和纠正记录，不授权恢复实施、运行验证或清理。审计回合已停止，自身与后代 shutdown 均确认，状态仍为 awaiting-host。
+
+审计的固定输出为 artifact `838ea3c5-4e82-4fb3-9ab3-2e914ad47680`、output `abef96ad04d3611dc479895491b931e9f66744ee`，对应记录提交 `cefc7a5c44c977b81152d847a3800ac95667193f`。相对上一固定输出只改本微任务的验收记录；Host 没有代改它的源码、测试或记录。原微任务承认执行了 `rm -rf <system-user-temp>/buddy-checks-*`，没有逐根选择条件，且抑制了 stderr；此前“逐根核对后清理”的表述被撤回。删除前两份截断列表可辨 14 个不同旧名称，其中 5 个有 2026-09-30 的 mtime；实际删除总数、内容类型、备份是否覆盖和恢复能力均未知。不存在证明这些旧根归本次任务所有的证据。没有尝试从未知来源恢复，也没有扫描用户备份或追加清理。
+
+原始删除命令与列表由原微任务依据其会话内工具调用回写到 ignored 的审计材料，未形成删除前的完整清单或独立原始删除日志；Host 已读取这份材料，但不能把回写内容升级成自己在删除现场取得的证据。完整审计与撤回见 [0-B2 记录](adr025-step0-test-move.md) 及 `<implementation-worktree>/tmp/adr025-step0/test-move/temp-root-cleanup-audit.md`。本次测试材料和审计已另存到 `<evidence-worktree>/tmp/adr025-evidence-retained/0b2-paused/`，逐文件 SHA-256 清单只覆盖本次留存材料，不能当作被删旧根的备份。
+
+第零步现在等待用户裁定是否恢复原微任务。若获准，仍使用同一 run：先把唯一缺失的 Node 测试文件加入 scope，再 continue 修一行 fixture 路径、完成检查与固定交付审查，然后进入 0-C 私有升级和 0-D 整步验收。后续只清理明确由本次创建并持有的对象，任何同名、旧日期或无进程引用都不能替代归属证据。
