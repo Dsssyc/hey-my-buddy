@@ -399,7 +399,7 @@ class BoardTestCase(unittest.TestCase):
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
         if environment.get('BUDDY_MODEL_CATALOG_FILE'):
-            command = [sys.executable, str(Path(__file__).parent / 'fixtures/daemon_with_catalog.py')]
+            command = [sys.executable, str(Path(__file__).parent / 'blackboard/service/fixtures/daemon_with_catalog.py')]
         process = subprocess.Popen(
             command,
             env=environment,
