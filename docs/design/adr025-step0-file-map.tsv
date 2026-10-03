@@ -332,7 +332,7 @@ src/buddy/account_native.py	src/hey_my_buddy/buddy/harnesses/account_native.py	g
 src/buddy/account_operations.py	src/hey_my_buddy/blackboard/catalog/account_operations.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/accounts.py	src/hey_my_buddy/blackboard/catalog/accounts.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/activity.py	src/hey_my_buddy/protocol/activity.py	git-mv	只改路径、导入与路径断言；文件整体保留
-src/buddy/adapters/__init__.py	src/hey_my_buddy/buddy/harnesses/__init__.py	git-mv	只改路径、导入与路径断言；文件整体保留
+src/buddy/adapters/__init__.py	src/hey_my_buddy/buddy/harnesses/registry.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/adapters/base.py	src/hey_my_buddy/buddy/harnesses/base.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/adapters/claude.py	src/hey_my_buddy/buddy/harnesses/claude/adapter.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/adapters/claude_config.py	src/hey_my_buddy/buddy/harnesses/claude/config.py	git-mv	只改路径、导入与路径断言；文件整体保留
@@ -432,7 +432,7 @@ src/buddy/upgrade.py	src/hey_my_buddy/install/upgrade.py	git-mv	只改路径、�
 src/buddy/usage.py	src/hey_my_buddy/protocol/usage.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/user_policy.py	src/hey_my_buddy/blackboard/evaluation/user_policy.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/windows_paths.py	src/hey_my_buddy/blackboard/tasks/windows_paths.py	git-mv	只改路径、导入与路径断言；文件整体保留
-src/buddy/worker/__init__.py	src/hey_my_buddy/buddy/runtime/__init__.py	git-mv	只改路径、导入与路径断言；文件整体保留
+src/buddy/worker/__init__.py	src/hey_my_buddy/buddy/runtime/api.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/worker/supervisor.py	src/hey_my_buddy/buddy/runtime/supervisor.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/worker/worker.py	src/hey_my_buddy/buddy/runtime/worker.py	git-mv	只改路径、导入与路径断言；文件整体保留
 src/buddy/worker_sessions.py	src/hey_my_buddy/blackboard/tasks/worker_sessions.py	git-mv	只改路径、导入与路径断言；文件整体保留
