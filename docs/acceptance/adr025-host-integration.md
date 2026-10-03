@@ -46,3 +46,13 @@ F-C1 原先写入短探测根的五组 raw 输出仍在，Host 已另行保留�
 Host 核对原 2,316 条 Python 编号全部保留且 Counter 无减少，恰新增 4 条旧布局入口回归，无重复；完整日志为 Python 2,320（skip 1，与基线同项）、Node 110。最终回合仅修测试夹具与记录，生产树与这次完整检查的固定树相等；Console 659、tsc、构建及 wheel/sdist/skill 的通过证据仍适用。Host 直接检查最新 wheel 的 310 个成员，顶层只有 `hey_my_buddy` 与 dist-info，没有顶层 `buddy/`。最终第零步完整检查仍由 0-D 重跑。
 
 Host 将 0-B1 必要脚本、日志、编号清单及最新 wheel/sdist 共 202 个文件另存到 `<evidence-worktree>/tmp/adr025-evidence-retained/0b1/` 并写 SHA-256 清单，再执行黑板验收。两份记录中对曾损坏 key 的引文是历史说明；恢复断言针对实际程序常量和构建内容。后续顺序为整合已批准的公共计划与核对记录、0-B2 测试目录搬动、0-C 私有安装升级、0-D 整步收尾；第零步尚未交给 Claude Code Host 验收。
+
+## F-D2 固定交付验收与暂停
+
+F-D2 最终 artifact 为 `9ea27eb1-db6d-4f42-bf52-4197fd82912d`，output 为 `ad682eeec3227c0e772eb09c753d3ce358d71362`。Host 按固定 blob 原样提交记录 `3ca7e78cbf48d145e6c7d2c0fed081cfd680730a`，整合 `int-f69bf523-6566-4dd5-b9c1-eb43388bcb79` 后验收该微任务；F-D1 的 118 行历史完整保留，未修改生产源码。这条核对线与 F-C1 都已停止，等待用户转达 Claude Code Host 验收；第四步及 5-A 尚未开始，独立的第零步继续。
+
+Host 对原微任务四次拒绝并 continue：收窄“六问全通过”的无依据判断并核对公开控制面及 SDK 退路；补充 none/read 原生开关的实际证据；移除 none 中残留的 `exit_plan_mode`；修正仍停留在旧回合的 MCP 次数与会话范围。全部修正仍由原微任务完成。最终公开 patch 禁用 14 个任务工具提供者与 plan-mode 后，经免模型启动和一个最小真实 prompt，原生 `request/header` 只含本次完成工具；Host 独立读取该私有生成的会话记录予以确认。read 预设的两次升级请求均被 reject，写入未发生，正向读取成功；write、用量、模型配置、真实完成调用及检查点问询分别留证，不扩展为平台或厂商静态证明。
+
+F-D2 合计 DSH 原生启动 20 次（9 次 CLI、11 次 ACP），真实 prompt 5 次、模型步 21 步；最后修记录的回合没有新增原生调用。与 F-D1 合计为 29 次 DSH 启动、5 次真实 prompt，执行微任务本身的 buddy 与 Router 模型运行另计。F-D2 各回合日常目录元数据快照无变化；这不能撤销 F-D1 的已记边界违反。尝试 4 停止摘要被覆盖及早期 5 次 CLI 未留独立停止摘要的缺口继续明示；read 网络、允许路径、真实运行后续接、取消中断、HTTP MCP、cost/quota、其他平台保留未验证。
+
+Host 在验收前将必要 Python 探针、日志和仅本次生成的会话记录共 100 个文件保留在 `<evidence-worktree>/tmp/adr025-evidence-retained/fd2-turn4/`，写逐文件 SHA-256 并核对最后一轮没有改变这些原始材料；未复制其他 home 文件或凭据目录。最终报告与 seal 字节相等，核对分支的变更仅为本报告；后续在实施微任务停止后再合入实施分支。
