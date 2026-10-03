@@ -29,6 +29,7 @@ from pathlib import Path
 
 from . import cli_help, cli_views
 from ..install import runtime
+from ..install.entrypoints import ENTRY_MODULES
 from ..protocol import transport
 from ..errors import BoardError
 from ..install.launcher import service_environment
@@ -315,7 +316,7 @@ def _worker_command_unlocked(action: str, params: dict) -> dict:
     log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         child = subprocess.Popen(
-            [target["python"], "-m", "hey_my_buddy.buddy.runtime.supervisor", "--worker-id", worker_id, "--state-dir", str(state_dir)],
+            [target["python"], "-m", ENTRY_MODULES['hey_my_buddy']['supervisor'], "--worker-id", worker_id, "--state-dir", str(state_dir)],
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=log_fd,

@@ -25,6 +25,7 @@ import c_two as cc
 from . import rpc_config
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from ..errors import BoardError
+from ..install.entrypoints import ENTRY_MODULES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 PROTOCOL_VERSION = 2
@@ -395,7 +396,7 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
         log_fd = os.open(directory / "control.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             child = subprocess.Popen(
-                [target["python"], "-m", "hey_my_buddy.blackboard.service.daemon"],
+                [target["python"], "-m", ENTRY_MODULES['hey_my_buddy']['daemon']],
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=log_fd,

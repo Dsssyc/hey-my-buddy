@@ -24,6 +24,7 @@ import c_two as cc
 
 from ...protocol import rpc_config
 from ...install import runtime
+from ...install.entrypoints import ENTRY_MODULES
 from ..tasks import scheduling
 from ...console.server import Console
 from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
@@ -143,7 +144,7 @@ class SupervisorHandle:
                 [
                     target["python"],
                     "-m",
-                    "hey_my_buddy.buddy.runtime.supervisor",
+                    ENTRY_MODULES['hey_my_buddy']['supervisor'],
                     "--worker-id",
                     self.worker_id,
                     "--state-dir",
