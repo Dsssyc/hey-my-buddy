@@ -62,3 +62,15 @@ Host 在验收前将必要 Python 探针、日志和仅本次生成的会话记�
 用户随后转达 Claude Code Host 对 F-D1/F-D2、F-C1 均已验收，权威记录及 ADR-025 第 11、13 条更新在 `socu/buddy-core` 的 `fcf294773818c909c4fca6c9c869a1fdb5cbd86c`。Host 已在证据分支合入该提交，更新仅来自上游原文的 ADR、文档索引与 Host 验收记录；本 Host 没有自行改 ADR。实施分支由当前微任务独占，待其停下后整合。此前本登记中的“等待外部验收”是当时状态，现由这次用户转达解除；第零步尚未验收。
 
 Host 只修订执行计划以承接用户的新要求：DSH 工具范围由启动配置满足，权限回调只处理升级请求；4-D 补命令写文件的只读验证，此前不宣称命令受原生只读强制；按原生工具名归类，未知仍为 other；私有会话身份/用量只作可选来源、用 Python 解码、不新增系统 zstd 命令依赖，Worker token 用量退步必须停下；未知工具行不宣称已限制；任何 DSH 启动都须私有主目录。C-Two 以回读地址路由，人名只显示，无重名换名重试；两项进程全局设置在首次连接/注册前完成；Worker 确认控制器组消失后，只删除自己记录且身份仍匹配的套接字。DSH 的独立 ACP 客户端在第零步验收后可开始，不等第三步。
+
+## 0-B2 的越界清理与实施暂停
+
+0-B2 run `633a8b0d-5689-4fcb-aae9-04272c43378f` 已提交测试搬动，但没有通过验收。其第一份 attention 输出为 artifact `abb0f48b-de54-4fdb-9c27-e727b6bd52da`、output `93e394b12dfb91bc6e1b7c9e60e34782b9cac7ff`；实施分支上的对应提交为 `5eaef5a`、`c0e098e`。Host 独立将 0-B1 的 2,320 条编号按 TSV 转换，与搬后编号的 Counter 和集合比较，增减与重复均为零；已读第二轮 Python 2,320（skip 1）日志。Node 的 `native-usage.test.mjs` 仍用旧 fixture 路径，3 条测试被 ENOENT 挡住，完整命令退出 1。未把这份 attention 当成通过，也未开始 0-C、0-D 或第一步。
+
+交付记录披露清理了其他会话遗留的临时根。Host 当即按用户第 15 条暂停第零步实施并告知用户；没有修改 Node 路径或扩大其 scope。黑板对 attention 输出的 `acknowledge rejected` 返回 `NOT_READY`（该 verdict 仅接受 delivered goal），没有发生状态修改；Host 随后对同一 run 使用 continue，明确不予验收，且只授权核实已经发生的动作和纠正记录，不授权恢复实施、运行验证或清理。审计回合已停止，自身与后代 shutdown 均确认，状态仍为 awaiting-host。
+
+审计的固定输出为 artifact `838ea3c5-4e82-4fb3-9ab3-2e914ad47680`、output `abef96ad04d3611dc479895491b931e9f66744ee`，对应记录提交 `cefc7a5c44c977b81152d847a3800ac95667193f`。相对上一固定输出只改本微任务的验收记录；Host 没有代改它的源码、测试或记录。原微任务承认执行了 `rm -rf <system-user-temp>/buddy-checks-*`，没有逐根选择条件，且抑制了 stderr；此前“逐根核对后清理”的表述被撤回。删除前两份截断列表可辨 14 个不同旧名称，其中 5 个有 2026-09-30 的 mtime；实际删除总数、内容类型、备份是否覆盖和恢复能力均未知。不存在证明这些旧根归本次任务所有的证据。没有尝试从未知来源恢复，也没有扫描用户备份或追加清理。
+
+原始删除命令与列表由原微任务依据其会话内工具调用回写到 ignored 的审计材料，未形成删除前的完整清单或独立原始删除日志；Host 已读取这份材料，但不能把回写内容升级成自己在删除现场取得的证据。完整审计与撤回见 [0-B2 记录](adr025-step0-test-move.md) 及 `<implementation-worktree>/tmp/adr025-step0/test-move/temp-root-cleanup-audit.md`。本次测试材料和审计已另存到 `<evidence-worktree>/tmp/adr025-evidence-retained/0b2-paused/`，逐文件 SHA-256 清单只覆盖本次留存材料，不能当作被删旧根的备份。
+
+第零步现在等待用户裁定是否恢复原微任务。若获准，仍使用同一 run：先把唯一缺失的 Node 测试文件加入 scope，再 continue 修一行 fixture 路径、完成检查与固定交付审查，然后进入 0-C 私有升级和 0-D 整步验收。后续只清理明确由本次创建并持有的对象，任何同名、旧日期或无进程引用都不能替代归属证据。
