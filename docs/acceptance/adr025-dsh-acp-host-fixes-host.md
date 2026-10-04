@@ -12,6 +12,6 @@
 
 本次原生 DSH 验证 0 次、模型检查 0 次；原客户端历史为 DSH 无模型握手 1 次、prompt 0 次，计数保持独立。修正后的已安装 DSH 无模型握手由用户的 Claude Code Host 执行，本 Host 与 Worker 均未抢先运行。代理、CA、locale 等继承由合成环境和普通 Python 子进程证明，实际 DSH Worker 行为尚未据此宣称验证。
 
-Worker 使用开始时由 Host 创建并登记的 `<system-tmp>/a25f-u1fu7fbr/`，本次未手动删除对象；聚焦测试的自有夹具正常收尾，`t/` 仅余 uv 自建锁文件，未在检出创建测试 run 目录或常驻台账。Host 已把固定 patch、测试和变异日志、原始编号及模拟材料按确切路径与 SHA 保留于 `<repo>/tmp/adr025-host/acp-host-fixes-first-*/`、`acp-host-fixes-second-*/`、`acp-host-fixes-final-2_n573dk/`；前两个随机目录的确切位置由同目录 pointer 文件登记，星号仅为此处展示，不用于操作。没有复制私有主目录、凭据或基线归档树。原任务根仍保留，待验收后 Host 按该一个确切路径整体删除；旧 run continue 被拒绝前分配而未使用的 `<system-tmp>/a25d-lhys8472/` 同样有创建账目，尚未删除。
+Worker 使用开始时由 Host 创建并登记的 `<system-tmp>/a25f-u1fu7fbr/`，本次未手动删除对象；聚焦测试的自有夹具正常收尾，`t/` 仅余 uv 自建锁文件，未在检出创建测试 run 目录或常驻台账。Host 已把固定 patch、测试和变异日志、原始编号及模拟材料按确切路径与 SHA 保留于 `<repo>/tmp/adr025-host/acp-host-fixes-first-5tqfus__/`、`acp-host-fixes-second-szsq67uf/`、`acp-host-fixes-final-2_n573dk/`。没有复制私有主目录、凭据或基线归档树。原任务根仍保留，待验收后 Host 按该一个确切路径整体删除；旧 run continue 被拒绝前分配而未使用的 `<system-tmp>/a25d-lhys8472/` 同样有创建账目，尚未删除。
 
 本线已提交，停下等用户转达两处复核及无模型握手结果。黑板保持 delivered，最终 acknowledge 暂留至外部复核通过，以便需要修正时仍能对同一个 run continue；整合已登记不等于外部验收。第一步独立进行到 1-C，ACP 公共接线仍等待第一步外部验收。
