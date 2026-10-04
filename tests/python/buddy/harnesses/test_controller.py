@@ -510,6 +510,38 @@ class RealStopTests(unittest.TestCase):
         self.assertIs(stop_confirmed({"processState": {"shutdownConfirmed": False}}, handle), False)
 
 
+class ObservationErrorStopTests(unittest.TestCase):
+    """An unavailable POSIX group observation is not termination evidence.
+
+    The Windows Job branch of the same conservative rule is pinned by
+    ``buddy.runtime.test_windows_process``; this is the POSIX owned-group branch
+    at the shared face: a leader that already exited, whose group can no longer
+    be observed, keeps the attempt unconfirmed — unknown stays alive, so the
+    collection never reports a stop on the strength of a failed observation.
+    """
+
+    def test_an_observation_error_of_the_owned_group_keeps_the_attempt_unconfirmed(self):
+        if os.name == "nt":
+            self.skipTest("POSIX owned groups only")
+        with tempfile.TemporaryDirectory(prefix="controller-observe-") as name:
+            log_paths = {"stdout": str(Path(name) / "stdout"), "stderr": str(Path(name) / "stderr")}
+            handle = launch_controller(prepare=lambda _bound: ([sys.executable, "-c", "pass"],
+                                                    name, dict(os.environ)),
+                                       log_paths=log_paths)
+            self.assertIsNotNone(handle.wait(5))
+            receipt = {"processState": {"shutdownConfirmed": True}}
+            self.assertIs(stop_confirmed(receipt, handle), True,
+                          "the group must be observed gone before the fault is injected")
+            for error in (PermissionError("the group belongs to another user"),
+                          OSError("the group cannot be observed")):
+                with self.subTest(error=type(error).__name__), \
+                        mock.patch("hey_my_buddy.buddy.harnesses.base.os.killpg", side_effect=error):
+                    self.assertTrue(handle.group_alive())
+                    self.assertIs(handle.shutdown_confirmed(settle_seconds=0), False)
+                    collection = collect_controller(handle, read=lambda _path: None, stop=stop_confirmed)
+                    self.assertIs(collection.stop_confirmed, False)
+
+
 class CollectControllerTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-collect-")
@@ -586,6 +618,38 @@ class RouterCollectCoercionTests(unittest.TestCase):
         self.assertEqual(outcome.status, "failed")
         self.assertIs(outcome.shutdown_confirmed, False)
         self.assertEqual(outcome.result["code"], "invalid-native-result")
+
+
+class ReplacedEvidenceTests(unittest.TestCase):
+    """A replaced evidence path never becomes the collected native result.
+
+    The private-path guard and the ordinary-file check of the Router's read are
+    what make a replaced final component — here a link pointing at an outside
+    payload that claims a clean confirmed stop — behave exactly like an
+    unreadable one: the real ``structured_call.collect`` folds it into its own
+    invalid-native-result refusal instead of reading through the replacement.
+    """
+
+    def test_a_replaced_stdout_link_still_refuses_at_the_real_collect(self):
+        with tempfile.TemporaryDirectory(prefix="controller-replaced-") as name:
+            root = Path(name)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "payload.json").write_text(json.dumps(
+                {"status": "ok", "processState": {"shutdownConfirmed": True}}))
+            stdout = root / "stdout"
+            stdout.write_text(json.dumps({"status": "ok", "processState": {"shutdownConfirmed": True}}))
+            stdout.unlink()
+            stdout.symlink_to(outside / "payload.json")
+            handle = SimpleNamespace(process=SimpleNamespace(returncode=0),
+                                     log_paths={"stdout": str(stdout)},
+                                     shutdown_confirmed=lambda: True)
+            outcome = structured_call.collect(handle)
+            self.assertEqual(outcome.status, "failed", outcome.to_report())
+            self.assertIs(outcome.shutdown_confirmed, False)
+            self.assertEqual(outcome.result["code"], "invalid-native-result")
+            self.assertEqual((outside / "payload.json").read_text(),
+                             json.dumps({"status": "ok", "processState": {"shutdownConfirmed": True}}))
 
 
 class SignalNameTests(unittest.TestCase):
