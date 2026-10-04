@@ -1,14 +1,14 @@
 # ADR-025 第一步 1-D：外层迁移与防护验证（微任务交付记录）
 
-2026-10-04，微任务 1-D 的执行记录，交付等待本 Host 审查。固定输入 `a5c3c21587e668d72678a3b24dcab0e1a94de38d`（1-A、1-B、1-C 已由本 Host 内部验收并整合，独立 ACP 客户端线另线整合），本 run `cc0e12cf-834b-4ec7-bca4-203bd9b4c857`、attempt `579219ab-73d9-41ac-81ad-7265be876b30`，在 Host 分配的独立 worktree 按普通路由完成，未指定 buddy/配置，未再委派。第一步整步的 Claude Code Host 外部验收尚未开始，本文不宣告第一步完成，也不进入任何 harness 抽取（第二步及以后）。本微任务自身的执行（zcode / GLM-5.3 经受控回合）计 1 次，与下文检查计数分开。
+2026-10-04，微任务 1-D 的执行记录，交付等待本 Host 审查。固定输入 `a5c3c21587e668d72678a3b24dcab0e1a94de38d`（1-A、1-B、1-C 已由本 Host 内部验收并整合，独立 ACP 客户端线另线整合），本 run `cc0e12cf-834b-4ec7-bca4-203bd9b4c857`，attempt `579219ab-73d9-41ac-81ad-7265be876b30`（第 1 回合）与 `56a88349-f478-4dd2-ab90-d2c608bbb9fe`（本次 continue 回合），在 Host 分配的独立 worktree 按普通路由完成，未指定 buddy/配置，未再委派。本 run 至此为两个实施回合：第 1 回合交付两个防护测试、变化表与本文首版并完成聚焦检查；本次为第 2 实施回合、第 1 次 continue，纯文档修正（见文末一节），未改源码/测试/TSV，未重跑任何测试、编号、变异、CLI、原生或模型检查，未覆写任何原始日志。第一步整步的 Claude Code Host 外部验收尚未开始，本文不宣告第一步完成，也不进入任何 harness 抽取（第二步及以后）。本微任务自身的执行（zcode / GLM-5.3 经受控回合）计 2 次（两个实施回合各 1 次），与各回合检查计数分开。
 
 ## 交付物与写范围
 
-改动恰好落在授权写范围内，共三个路径：新增本文与[第一步测试变化表](adr025-step1-test-map.tsv)，修改 `tests/python/buddy/harnesses/test_controller.py`（只新增 `ObservationErrorStopTests` 与 `ReplacedEvidenceTests` 两个防护测试类，未改任何既有测试）。生产源码、公共值/role/registry/runtime、ADR、SKILL、Host 指南、README/AGENTS/CONTEXT 与既有历史记录全部只读；跟踪的变更恰为上述三个路径；检查另创建了被 git 忽略的 `<worktree>/.venv/`，它不在普通 `git status` 的输出中，`src/hey_my_buddy/buddy/harnesses/base.py`（SHA-256 `e0e7609403eea51c…`）与 `buddy/harnesses/controller.py`（`8460e0f4e9e6354…`）与本 run 固定输入逐字节相同。发现源代码缺陷时按约定在交付中报告（本次未发现，见"未验证项"），未代改任何来源产物。
+改动恰好落在授权写范围内，共三个路径：新增本文与[第一步测试变化表](adr025-step1-test-map.tsv)，修改 `tests/python/buddy/harnesses/test_controller.py`（只新增 `ObservationErrorStopTests` 与 `ReplacedEvidenceTests` 两个防护测试类，未改任何既有测试）。生产源码、公共值/role/registry/runtime、ADR、SKILL、Host 指南、README/AGENTS/CONTEXT 与既有历史记录全部只读；第 1 回合交付后 `git status` 的非忽略输出恰为上述三个路径（两个未跟踪文档与一个修改的测试文件），检出内另有第 1 回合 `uv run --frozen` 创建、被 gitignore 因而不会出现在 `git status` 中的 `<worktree>/.venv/`——两项分开陈述；`src/hey_my_buddy/buddy/harnesses/base.py`（SHA-256 `e0e7609403eea51c…`）与 `buddy/harnesses/controller.py`（`8460e0f4e9e6354…`）与本 run 固定输入逐字节相同。发现源代码缺陷时按约定在交付中报告（本次未发现，见"未验证项"），未代改任何来源产物。
 
 ## 基线原始清单的披露与重建
 
-任务描述中的 `<repo>` 指 Host 实施检出；本微任务的隔离检出及已检索范围不可见首次 baseline 原始清单 `<host-repo>/tmp/adr025-host/step1-baseline-ids-6jjv5tze/ids.json`。本微任务因此以权威锚点 `4cf58dee3553195585b6224be3baca47401fb08e` 在任务根通过 `git archive` 建只读副本，用与当前树相同的真实加载器动态重建基线：158 个模块、2,322 个唯一编号、重复 0、导入错误 0。Host 已独立确认原始清单在实施检出存在，且重建的 2,322 个编号与原始集合完全相等。这里更正原交付把隔离检出不可见扩大为“本机不存在”的表述；重建的操作、计数与验证结论不变。
+任务描述中的 `<repo>` 指 Host 的实施检出（本文一律记作 `<host-repo>`），不是本微任务的隔离检出。主分支首次 baseline 原始清单 `<host-repo>/tmp/adr025-host/step1-baseline-ids-6jjv5tze/ids.json` 对本微任务的隔离检出及第 1 回合的检索范围（上游源仓库工作副本与黑板工作区状态目录）不可见，第 1 回合因此把它写成“在本机不存在”——该表述超出了实际检索的目录范围，本次 continue 更正为如上事实。基线按权威锚点重建：以 `git archive 4cf58dee3553195585b6224be3baca47401fb08e`（第零步验收基线，登记为 2,322 编号）在本任务根落成只读副本，用与当前树完全相同的加载器收集，得到 158 个模块、2,322 个唯一编号、重复 0、导入错误 0；Host 已用上述原始清单独立复核，确认本微任务重建的编号集合与原始清单的 2,322 个编号集合相等。基线由此成立。
 
 ## 编号集合与变化表
 
@@ -38,18 +38,24 @@ Node 与 Console 编号本步源码未改，以源字节证明：`git diff --qui
 
 ## 聚焦检查（无完整检查，按微任务边界）
 
-本轮实际运行且只运行：两个新测试类单跑（2 项 OK，退出 0）；`buddy.harnesses.test_controller` 全模块一次通过（37 项 = 整合后 35 + 本轮 2，OK，退出 0，此后未重复）；三次变异红（各退出 1）与三次恢复绿（各退出 0）的单用例运行；三次编号收集（加载器收集，非测试执行）。全部命令显式设置 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向任务根 `t/`，并清除继承的 runtime/Worker/凭据变量。没有完整检查、没有其余模块的重跑、没有 Console、没有打包，也没有任何真实 harness CLI 或模型启动：全部材料为合成 fixture、mock、进程内收集与真实普通 Python 子进程（`sys.executable -c pass` 一类的短命子进程，仅用于进程组观察）。原生 harness/model 检查 0 次。
+第 1 回合实际运行且只运行（本次 continue 回合未运行任何检查）：两个新测试类单跑（2 项 OK，退出 0）；`buddy.harnesses.test_controller` 全模块一次通过（37 项 = 整合后 35 + 本轮 2，OK，退出 0，此后未重复）；三次变异红（各退出 1）与三次恢复绿（各退出 0）的单用例运行；三次编号收集（加载器收集，非测试执行）。全部命令显式设置 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向任务根 `t/`，并清除继承的 runtime/Worker/凭据变量。没有完整检查、没有其余模块的重跑、没有 Console、没有打包，也没有任何真实 harness CLI 或模型启动：全部材料为合成 fixture、mock、进程内收集与真实普通 Python 子进程（`sys.executable -c pass` 一类的短命子进程，仅用于进程组观察）。原生 harness/model 检查 0 次。
 
 本次验收目标的"行为保持"由三点支撑：基线 2,322 个编号完整保留（没有任何既有测试被删除或改名，Worker 运行时与 Router 的既有调用方测试原样在集合中）；`test_controller` 模块一次全绿；1-B/1-C 记录中已验收的红→绿族未重复注入、其证据继续有效。这不是完整检查，Worker/runtime、Router 资格/预算/unknown/凭据清理行为保持的最终确认归 Host 在整步整合后的一次 `uv --frozen` 完整检查与 Console 测试/类型/构建。
 
 ## 未验证项与接线余项（如实声明，不伪称实现）
 
-本整合尚无完整检查：本微任务按约定未运行完整检查、Console 测试/类型/构建与打包；`57f6a63` 的 2,453 项 Python（跳过 1）/163 模块/110 项 Node 与 `f8b42a5` 的动态收集 164 模块/2,488 编号都是当时（不含 1-B/1-C/1-D 或不含 1-C/1-D）的事实，仅作历史引用，不填作本次成绩。公共事实/外层/角色模块（`run_contract.py`、`live.py`、`legacy_facts.py`、`harnesses/controller.py`、`roles/controller.py`）已放置，但 `RUN_SEAMS` 仍为空：四个原生 harness 均未注册、未抽取，Worker 与 Router 全部继续走旧载体，`ROLE_RUN_NOT_MIGRATED` 守卫在位。1-C 已披露的公共接线余项归 Host 在首个 harness 抽取切片统一处理：`HarnessRun` 协议对 `services` 的 `Any` 标注收紧、`RunRequest.sessionServices` 描述对象（SessionService）的生成方、已抽取 harness 在 Worker 运行时下的监督形状（外层句柄/截止/取消与 `run_harness` 的对应）；本步不伪称已实现全部运行路径，第五步的 C-Two live 迁移也未开始。DSH Node 停止口径的历史例外按计划原样保留至第四步。独立 ACP 客户端线仍待外部验收：其 71 项编号只作计数与归属链接，不写成通过。本轮仅在 macOS 上运行，Linux/Windows 未验证；本轮未发现新的源代码缺陷。
+本整合尚无完整检查：本微任务按约定未运行完整检查、Console 测试/类型/构建与打包；`57f6a63` 的 2,453 项 Python（跳过 1）/163 模块/110 项 Node 与 `f8b42a5` 的动态收集 164 模块/2,488 编号都是当时（不含 1-B/1-C/1-D 或不含 1-C/1-D）的事实，仅作历史引用，不填作本次成绩。公共事实/外层/角色模块（`run_contract.py`、`live.py`、`legacy_facts.py`、`harnesses/controller.py`、`roles/controller.py`）已放置，但 `RUN_SEAMS` 仍为空：四个原生 harness 均未注册、未抽取，Worker 与 Router 全部继续走旧载体，`ROLE_RUN_NOT_MIGRATED` 守卫在位。1-C 已披露的公共接线余项归 Host 在首个 harness 抽取切片统一处理：`HarnessRun` 协议对 `services` 的 `Any` 标注收紧、`RunRequest.sessionServices` 描述对象（SessionService）的生成方、已抽取 harness 在 Worker 运行时下的监督形状（外层句柄/截止/取消与 `run_harness` 的对应）；本步不伪称已实现全部运行路径，第五步的 C-Two live 迁移也未开始。DSH Node 停止口径的历史例外按计划原样保留至第四步。独立 ACP 客户端线仍待外部验收：其 71 项编号只作计数与归属链接，不写成通过。第 1 回合的检查仅在 macOS 上运行，Linux/Windows 未验证；本微任务（两个实施回合）未发现新的源代码缺陷。
 
-## 任务根与清理登记（Worker 未删除任何对象）
+## 任务根与清理登记（Worker 未做手动清理）
 
-任务根为 Host 开始时原子创建并登记的 `<system-tmp>/a25v-w6zbxl88/`（t/m/h/d 齐备）。每条检查/诊断命令都显式将 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其 `t/`。本微任务创建的对象全部在该根内并原样保留：`m/` 下 `collect_ids.py`、`compare_ids.py`、`make_test_map.py`、`run_mutations.py`、三份编号 JSON（`ids-baseline-4cf58de.json`、`ids-current-a5c3c21.json`、`ids-final-1d.json`）、`ids-added.txt`、`ids-removed.txt`、`mutation-summary.json`、基线只读副本 `baseline-4cf58de/`、三个一次性变异副本 `mutants/m1-observation-error/`、`mutants/m2-strict-nondict/`、`mutants/m3-replaced-evidence/`（各含 pristine 副本、`mutation-red.log`、`restore-green.log`）；`t/` 下仅 uv 工具自建的锁对象；`h/`、`d/` 未使用。检出内另由 `uv run --frozen` 创建了 gitignored `<worktree>/.venv/`（AGENTS 规定的项目验证环境，不是日常安装，未安装或升级任何日常 runtime）。Worker 未进行手动清理；测试中替换 stdout 的 fixture 构造及普通 `TemporaryDirectory` 自有收尾按用户规定的例外执行。没有用通配符清理，未按同名/日期/无进程推断归属；任务根由 Host 验收后按这一个确切路径整体删除，其他会话物品一律未动。未读取凭据文件内容，未改用户配置、凭据或日常数据。
+任务根为 Host 开始时原子创建并登记的 `<system-tmp>/a25v-w6zbxl88`（t/m/h/d 齐备）。第 1 回合的每条检查/诊断命令都显式将 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其 `t/`；本次 continue 回合未运行检查。第 1 回合创建的对象全部在该根内并原样保留：`<system-tmp>/a25v-w6zbxl88/m/` 下 `collect_ids.py`、`compare_ids.py`、`make_test_map.py`、`run_mutations.py`、三份编号 JSON（`ids-baseline-4cf58de.json`、`ids-current-a5c3c21.json`、`ids-final-1d.json`）、`ids-added.txt`、`ids-removed.txt`、`mutation-summary.json`、基线只读副本 `baseline-4cf58de/`、三个一次性变异副本 `mutants/m1-observation-error/`、`mutants/m2-strict-nondict/`、`mutants/m3-replaced-evidence/`（各含 pristine 副本、`mutation-red.log`、`restore-green.log`）；`t/` 下仅 uv 工具自建的锁对象；`h/`、`d/` 未使用。检出内另由第 1 回合 `uv run --frozen` 创建了 gitignored `<worktree>/.venv/`（AGENTS 规定的项目验证环境，不是日常安装，未安装或升级任何日常 runtime）。Worker 未做任何手动清理：未执行 rm/unlink/rmdir/rmtree，未用通配符，未按同名/日期/无进程推断归属；第 1 回合聚焦运行中普通测试 fixture 对自己刚创建对象的构造与收尾（如证据替换 fixture 内的 `stdout.unlink`、各 fixture 的 `TemporaryDirectory` 清理）按用户对普通测试 fixture 的例外照常执行，检查运行器自建自收尾的根同理，均不属 Worker 手动清理。任务根由 Host 验收后按这一个确切路径整体删除，其他会话物品一律未动。未读取凭据文件内容，未改用户配置、凭据或日常数据。
+
+## 第一次 continue（第二实施回合）：纯文档记录修正
+
+Host 审查第 1 回合固定输出 `6cd39fb1817f12cb3f43a4d08bb2b193cdf271ff`：两个防护测试与编号变化表通过——重建的 2,322 编号与 Host 原始清单集合相等、最终 2,532 保留原集合并新增 210、139 条核心编号与 71 条 ACP 归属精确对应、三组变异的红/恢复绿与 SHA 恢复相等均经 Host 实读；原 artifact 整体因三处记录事实被拒，授权本 run 同 run 纯文档 continue。本回合只写本文，未改源码/测试/TSV 字节，未重跑测试、编号、变异、CLI、原生或模型检查，未覆写任何原始日志；任务根与既有材料只读未动，本回合无新增一次性材料。三处修正均已就地写入上文：其一，“基线原始清单的披露与重建”一节改为如实表述——任务描述的 `<repo>` 指 Host 实施检出（本文记 `<host-repo>`），该清单对本微任务隔离检出及第 1 回合检索范围不可见，故从权威 `4cf58de` 重建，Host 已独立确认重建与其原始清单 2,322 集合相等，第 1 回合“在本机不存在”的写法超出实际检索范围，予以更正；其二，交付与写范围一节把“`git status` 非忽略输出恰为三个路径”与“检出另有被忽略的 `.venv/`”分开陈述，清理登记一节改为“Worker 未做手动清理，普通测试 fixture 构造/收尾按用户例外执行”，任务根改记 `<system-tmp>/a25v-w6zbxl88`；其三，回合计数更新为同一 run 的第 2 实施回合/第 1 次 continue，第 1 回合聚焦检查证据继续有效。既有证据与未验证边界保持原样，独立 ACP 线仍为待外部验收、不写成已验收。本微任务自身的执行累计 2 次（两个实施回合各 1 次），检查计数不变。
 
 ## 状态
 
-固定 artifact 收齐（本文、变化表、两个防护测试）后停在此处，等本 Host 审查；整步完整检查、Console 测试/类型/构建与整步记录归 Host 在收齐整合后统一进行，随后停等 Claude Code Host 的第一步整步外部验收。本记录不宣告第一步完成，第四、五步及任何 harness 抽取均未开始。
+第 1 回合交付的两个防护测试与编号变化表已过 Host 审查；本次 continue 完成纯文档修正后形成固定累积 artifact，停在此处等本 Host 复核本文；整步完整检查、Console 测试/类型/构建与整步记录归 Host 在收齐整合后统一进行，随后停等 Claude Code Host 的第一步整步外部验收。本记录不宣告第一步完成，第四、五步及任何 harness 抽取均未开始。
+
+Host 整合补记：上述文档 continue 在用户补充相称性规则之前已发出。规则到达后，Host 在 `1de0168` 直接更正自己已掌握的三处小表述（原始清单的可见范围、被忽略的 `.venv/` 与 `git status`、普通 fixture 操作与 Worker 手动清理），并登记原因；收齐本回合后采用其完整回合身份与记录，未再次打回或重跑。源码、测试及 TSV 与首轮固定输出字节相等，整合后的完整检查已在 `1de0168` 启动，其结论由整步 Host 记录承接。
