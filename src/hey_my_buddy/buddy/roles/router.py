@@ -9,8 +9,56 @@ from ...errors import BoardError
 from ...private_dirs import context_root, ensure_private_dir
 from ...blackboard.routing import router
 from . import router_input
-from ..harnesses.base import Adapter, ExecutionContext, ProcessHandle, ReadOnlyStructuredRequest
+from . import controller as role_seam
+from ..harnesses.base import (
+    Adapter,
+    ExecutionContext,
+    NoToolStructuredRequest,
+    ProcessHandle,
+    ReadOnlyStructuredRequest,
+)
 from . import structured_call as read_only
+
+
+def prepare_router_fast(document: dict, profile: dict, native: Adapter,
+                        context: ExecutionContext) -> role_seam.FastPreparation:
+    """Everything the fast mode's native call needs, except the start itself.
+
+    The eligibility check only confirms the declared capability exists; the
+    zero-tool verdict stays with the blackboard at publication. The native call
+    receives an empty owner-private cwd under its actual harness attempt; its
+    no-tool profile disables project input.
+    """
+    if not getattr(native, "no_tool_structured", False):
+        raise BoardError("router-no-tool-unsupported", "Router 不可用：harness 未实现无工具结构化入口")
+    root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
+    if any(root.iterdir()):
+        raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
+    request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60,
+                                      capture_evidence=document.get("captureEvidence") is True)
+    child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
+    return role_seam.FastPreparation(harness=native.name, native=native, request=request, context=child_context,
+                                     no_tool_cwd=root)
+
+
+def prepare_router_review(document: dict, profile: dict, native: Adapter,
+                          context: ExecutionContext) -> role_seam.ReviewPreparation:
+    """Eligibility, the frozen mirror and the read-only request, before any start.
+
+    The mirror is materialized from the immutable input tree before the native
+    call exists, and the binding the collection re-verifies is frozen here.
+    """
+    eligibility = native.local_read_only_check()
+    if not eligibility["eligible"]:
+        detail = eligibility.get("reason") or "harness 不满足审阅模式本地资格"
+        raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
+    manifest = document.get("executionWorkspace")
+    root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
+    request = ReadOnlyStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"],
+                                        document["budget"], capture_evidence=document.get("captureEvidence") is True)
+    child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
+    return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,
+                                       mirror=(manifest, root, digest))
 
 
 class DecisionAdapter(Adapter):
@@ -34,39 +82,17 @@ class DecisionAdapter(Adapter):
         fast = document.get("routingMode") == "fast"
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if fast:
-            if not getattr(native, "no_tool_structured", False):
-                raise BoardError("router-no-tool-unsupported", "Router 不可用：harness 未实现无工具结构化入口")
-            from ..harnesses.base import NoToolStructuredRequest
-            # The native call receives an empty owner-private cwd under its
-            # actual harness attempt; its no-tool profile disables project input.
-            root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
-            if any(root.iterdir()):
-                raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
-            request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60,
-                                              capture_evidence=document.get("captureEvidence") is True)
-            child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
-            started = time.monotonic()
-            handle = native.start_no_tool_structured(child_context, request)
-            handle.router_input = None
-            handle.no_tool_cwd = root
-            handle.router_started = started
-            return handle
-        eligibility = native.local_read_only_check()
-        if not eligibility["eligible"]:
-            detail = eligibility.get("reason") or "harness 不满足审阅模式本地资格"
-            raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
-        context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        manifest = document.get("executionWorkspace")
-        root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
-        budget = document["budget"]
-        request = ReadOnlyStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], budget,
-                                            capture_evidence=document.get("captureEvidence") is True)
-        child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)},
-                                turn=None, agent_credential=None)
+            preparation = prepare_router_fast(document, profile, native, context)
+        else:
+            preparation = prepare_router_review(document, profile, native, context)
         started = time.monotonic()
-        handle = native.start_read_only_structured(child_context, request)
-        handle.router_input = (manifest, root, digest)
+        handle = role_seam.start_router_preparation(preparation)
         handle.router_started = started
+        if fast:
+            handle.router_input = None
+            handle.no_tool_cwd = preparation.no_tool_cwd
+        else:
+            handle.router_input = preparation.mirror
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext):
