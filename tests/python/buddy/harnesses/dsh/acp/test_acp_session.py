@@ -143,29 +143,6 @@ class ExactTitleTest(AcpTestCase):
                          "a title that merely starts with a listed one is not listed")
         self.assertIn("not on the explicit allow list", decisions[1]["basis"])
 
-    def test_cleanup_guard_preserves_instead_of_deleting(self):
-        import uuid
-
-        from .support import AcpTestCase as _Case
-        from .support import run_container
-
-        probe = _Case("run")
-        container = run_container()
-        marker = container / f"guard-probe-{uuid.uuid4().hex[:8]}"
-        marker.mkdir(mode=0o700)
-        probe.container = container
-        probe.id = lambda: "guard-probe"
-        probe._append_manifest = lambda entry: None
-        probe._append_deletion = lambda path: None
-        probe._deletable = [marker]
-        probe.preserved = ["synthetic unconfirmed stop"]
-        with self.assertRaises(AssertionError):
-            probe._remove_created()
-        self.assertTrue(marker.is_dir(), "a preserved directory must not be deleted")
-        probe.preserved = []
-        probe._remove_created()
-        self.assertFalse(marker.exists(), "a confirmed cleanup deletes the registered path")
-
 
 class StopStateTest(AcpTestCase):
     def test_leader_exits_while_its_group_survives(self):
@@ -205,6 +182,42 @@ class StopStateTest(AcpTestCase):
         self.assertEqual(0, facts["protocolFaultCount"])
         self.assertEqual(0, facts["unmatchedResponseCount"])
         self.assertTrue(facts["eof"])
+
+    def test_unconfirmed_stop_fails_the_test_with_the_observed_evidence(self):
+        """The shutdown guard presents an unconfirmed stop as a test failure.
+
+        The synthetic observation is fully in-memory: a Job-like handle whose
+        group is still active drives the production ``group_observation`` job
+        branch to ``alive`` with ``shutdownConfirmed`` false on every platform,
+        and no process group of this run is touched. The guard must raise with
+        that evidence in the message - the failure is the record, and no
+        directory or ledger is preserved.
+        """
+
+        class UnstoppableHandle:
+            process = type("FakeProcess", (), {"poll": lambda self: None})()
+            job = type("ActiveJob", (), {"active": lambda self: 1})()
+
+            def terminate(self, *, grace_seconds):
+                return None
+
+            def wait(self, timeout):
+                return None
+
+            def group_alive(self):
+                return True
+
+        class UnconfirmedClient:
+            handle = UnstoppableHandle()
+
+            def shutdown(self, *, drain_seconds, settle_seconds):
+                return {"shutdownConfirmed": False, "leaderExited": False}
+
+        with self.assertRaises(AssertionError) as caught:
+            self._shutdown_client(UnconfirmedClient())
+        message = str(caught.exception)
+        self.assertIn("did not stop", message)
+        self.assertIn("alive", message, "the observed evidence must be in the failure")
 
 
 if __name__ == "__main__":  # pragma: no cover - direct execution convenience

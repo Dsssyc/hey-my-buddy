@@ -1,20 +1,25 @@
-"""Owned launch of a native ACP process behind a forced private home.
+"""Owned launch of a native ACP process with a forced private DSH home.
 
 Every launch - a real harness, a test fake, or even ``--version``/``--help`` -
 must go through :func:`launch`. The caller supplies a private root it created
-for this run; the private ``HOME`` and ``DSH_HOME`` directories must already
-exist inside it as real, non-symlink directories. Missing roots, the user's
-default DSH home, the user's real home directory, and any path that resolves
-through a symlink are rejected before a process exists. The child environment
-is a whitelist: ``PATH`` inherited for the launcher's shebang, the two private
-homes, and only explicitly enumerated extra keys (for example
-``DSH_PERMISSION_MODE``). ``HOME`` and ``DSH_HOME`` are reserved: an extra key
-by either name is refused, and the validated values are always set last, so no
-argument can redirect the child to a default or outside home. Log paths are
-bound to the private root through the project's private-path guards and can
-never be steered outside it by an argument. The log records argv, home paths
-and environment key names; it never records an environment value and this
-module never reads a credential file.
+for this run; the ``DSH_HOME`` directory must already exist inside it as a
+real, non-symlink directory, and missing roots, the user's default DSH home,
+and any path that resolves through a symlink are rejected before a process
+exists. The child environment is the project's ``native_environment`` pass
+over the parent environment - its existing allowed keys (identity, locale,
+temp, terminal, proxy and CA trust roots) are kept and nothing else crosses,
+so no credential variable reaches the child - plus the validated homes set
+last: ``DSH_HOME`` is always this run's private directory, and ``HOME`` stays
+at its inherited value unless the caller explicitly provides a private home,
+which is validated exactly as before (missing, non-directory, symlink,
+out-of-root, the user's real home and the user's default DSH home are all
+refused). ``HOME`` and ``DSH_HOME`` are reserved: an extra key by either name
+is refused, so no argument can bypass the explicit entry or the validation or
+silently redirect the child to a default or outside home. Log paths are bound
+to the private root through the project's private-path guards and can never
+be steered outside it by an argument. The log records argv, home paths and
+environment key names; it never records an environment value and this module
+never reads a credential file.
 
 A failure after the child exists (launch-bookkeeping or connection-start
 errors) never loses ownership: the child is finalized as far as observation
@@ -31,6 +36,7 @@ from pathlib import Path
 
 from ..... import private_dirs
 from .....errors import BoardError
+from ... import discovery
 from ...base import ProcessHandle
 from ....runtime.windows_process import owned_popen
 from .connection import group_observation
@@ -134,11 +140,18 @@ def ensure_private_log_path(path: Path, root: Path) -> Path:
     return path
 
 
-def child_environment(dsh_home: Path, home: Path, extra_env: dict | None = None) -> dict:
-    """The whitelist environment: PATH, both private homes, and enumerated extras.
+def child_environment(dsh_home: Path, home: Path | None = None, extra_env: dict | None = None,
+                      *, source: dict | None = None) -> dict:
+    """The native environment plus this run's forced homes.
 
-    Reserved keys are refused, and the validated homes are set after any merge,
-    so an extra key can never override them.
+    The parent environment goes through :func:`native_environment`, so exactly
+    its existing allowed keys are kept - identity, locale, temp, terminal,
+    proxy and CA trust roots - and no other parent or credential variable is
+    brought in. ``DSH_HOME`` is always set to this run's validated private
+    directory. ``HOME`` keeps its inherited value unless the caller explicitly
+    provides the run's private home. Reserved keys are refused in
+    ``extra_env``, and the validated homes are set after any merge, so an
+    extra key can never override them.
     """
     if extra_env:
         overlap = sorted(set(extra_env) & set(RESERVED_ENV_KEYS))
@@ -146,19 +159,16 @@ def child_environment(dsh_home: Path, home: Path, extra_env: dict | None = None)
             raise LaunchRejected(
                 "extra environment may not override the reserved private-home keys",
                 keys=overlap)
-    environment = {
-        "PATH": os.environ.get("PATH") or os.defpath,
-        "HOME": str(home),
-        "DSH_HOME": str(dsh_home),
-    }
+    environment = discovery.native_environment(dict(os.environ if source is None else source))
     if extra_env:
         environment.update({str(key): str(value) for key, value in extra_env.items()})
-    environment["HOME"] = str(home)
     environment["DSH_HOME"] = str(dsh_home)
+    if home is not None:
+        environment["HOME"] = str(home)
     return environment
 
 
-def record_launch(log_path: Path, argv: list[str], dsh_home: Path, home: Path,
+def record_launch(log_path: Path, argv: list[str], dsh_home: Path, home: Path | None,
                   environment: dict, *, spawn_cwd: Path | None, rejected: list[str] | None,
                   pid: int | None = None) -> None:
     """Append one launch record through the guarded private-file open; environment
@@ -167,7 +177,7 @@ def record_launch(log_path: Path, argv: list[str], dsh_home: Path, home: Path,
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"),
         "argv": argv,
         "dshHome": str(dsh_home),
-        "home": str(home),
+        "home": str(home) if home is not None else None,
         "envKeys": sorted(environment.keys()),
         "spawnCwd": str(spawn_cwd) if spawn_cwd is not None else None,
         "rejected": rejected,
@@ -234,13 +244,17 @@ def finalize_after_spawn_failure(process, handle, *, settle_seconds: float = 5.0
 def launch(argv: list[str], *, private_root: Path, dsh_home: Path | None = None,
            home: Path | None = None, extra_env: dict | None = None,
            cwd: Path | None = None, launch_log: Path | None = None) -> tuple[subprocess.Popen, ProcessHandle]:
-    """Validate the private homes, then spawn one owned process group for ``argv``.
+    """Validate this run's private directories, then spawn one owned process group.
 
-    Returns the live ``Popen`` and its ``ProcessHandle``; any validation failure
-    raises :class:`LaunchRejected` before a process exists and is recorded in the
+    ``DSH_HOME`` is always forced into the verified private root: ``dsh_home``
+    defaults to ``<private root>/dsh-home`` and must exist there as a real,
+    non-symlink directory. ``home`` is optional - without it the child keeps
+    the parent's inherited ``HOME``; with it, the explicit private home is
+    validated exactly like ``DSH_HOME``. Any validation failure raises
+    :class:`LaunchRejected` before a process exists and is recorded in the
     launch log. A failure after the child exists raises
-    :class:`LaunchOwnershipError` carrying the process, handle and stop evidence.
-    The caller keeps both objects: EOF, a session close or a cancel
+    :class:`LaunchOwnershipError` carrying the process, handle and stop
+    evidence. The caller keeps both objects: EOF, a session close or a cancel
     acknowledgement never proves the group stopped - only this handle's
     conservative observation does.
     """
@@ -254,8 +268,10 @@ def launch(argv: list[str], *, private_root: Path, dsh_home: Path | None = None,
         # The root itself is untrustworthy; nothing is created or written there.
         raise LaunchRejected("; ".join(root_problems), argv=argv)
     dsh = Path(dsh_home) if dsh_home is not None else root / "dsh-home"
-    user_home = Path(home) if home is not None else root / "home"
-    problems = _violations(dsh, root, "dsh-home") + _violations(user_home, root, "home")
+    user_home = Path(home) if home is not None else None
+    problems = _violations(dsh, root, "dsh-home")
+    if user_home is not None:
+        problems = problems + _violations(user_home, root, "home")
     spawn_cwd = Path(cwd) if cwd is not None else root
     log_path = ensure_private_log_path(
         Path(launch_log) if launch_log is not None else root / "logs" / "launches.jsonl", root)
