@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import NoToolStructuredRequest, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses import controller
 from hey_my_buddy.buddy.harnesses.codex.home import credential_source
 from hey_my_buddy.buddy.roles import structured_call as read_only
 from hey_my_buddy.errors import BoardError
@@ -74,7 +75,7 @@ class AccountBindingTests(unittest.TestCase):
         review = ReadOnlyStructuredRequest(str(self.cwd), 'Fixture only', {'type': 'object'},
                                            {'timeoutSeconds': 5})
         fast = NoToolStructuredRequest(str(self.cwd), 'Fixture only', {'type': 'object'}, 5)
-        with mock.patch.object(read_only, 'owned_popen') as spawn:
+        with mock.patch.object(controller, 'owned_popen') as spawn:
             for call, request in ((read_only.start, review), (read_only.start_no_tool, fast)):
                 with self.assertRaises(BoardError) as refused:
                     call('codex', context, request)

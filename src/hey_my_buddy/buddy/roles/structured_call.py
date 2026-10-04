@@ -5,16 +5,19 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import stat
-import subprocess
 import sys
-import time
 import uuid
 
-from ..harnesses.base import AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle, ReadOnlyStructuredRequest, open_logs
+from ..harnesses.base import AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle, ReadOnlyStructuredRequest
+from ..harnesses.controller import (
+    collect_controller,
+    launch_controller,
+    read_plain_evidence,
+    read_router_result,
+    router_stop_confirmed,
+)
 from ...errors import BoardError
 from ...private_dirs import context_root, ensure_private_dir
-from ..runtime.windows_process import owned_popen
 from .turn_io import private_json, canonical_json, guard_private_path
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
@@ -141,17 +144,16 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
     environment = controller_environment(context.directory, native_environment, read_only=True)
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
-    stdout, stderr = open_logs(context.log_paths())
-    try:
-        process = owned_popen([sys.executable, "-m", f"hey_my_buddy.buddy.harnesses.{name}.runner", "--control", str(path)],
-                                   cwd=request.cwd, env=environment, stdin=subprocess.DEVNULL,
-                                   stdout=stdout, stderr=stderr, start_new_session=True, close_fds=True)
-    finally:
-        os.close(stdout)
-        os.close(stderr)
-    handle = ProcessHandle(process, own_group=True, log_paths=context.log_paths())
-    handle.deadline = time.monotonic() + request.budget["timeoutSeconds"] + 10
-    return handle
+    # The review budget reaching here is validated positive by the blackboard
+    # (a supplied timeoutSeconds of 0 or less is refused), so the outer layer's
+    # zero rule is unreachable and the +10 second grace always applies. The
+    # environment is built before the guard loop exactly as the baseline did;
+    # the command and cwd below are precomputed values.
+    return launch_controller(
+        prepare=lambda _environment: ([sys.executable, "-m", f"hey_my_buddy.buddy.harnesses.{name}.runner", "--control", str(path)],
+                         request.cwd, environment),
+        log_paths=context.log_paths(),
+        timeout_seconds=request.budget["timeoutSeconds"], unbounded_deadline=None, grace_seconds=10)
 
 
 def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructuredRequest) -> ProcessHandle:
@@ -194,32 +196,17 @@ def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructure
         environment["DSH_HOME"] = native_environment["DSH_HOME"]
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
-    stdout, stderr = open_logs(context.log_paths())
-    try:
-        process = owned_popen([sys.executable, "-m", f"hey_my_buddy.buddy.harnesses.{name}.runner", "--control", str(path)],
-                              cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
-                              stdout=stdout, stderr=stderr, start_new_session=True, close_fds=True)
-    finally:
-        os.close(stdout)
-        os.close(stderr)
-    handle = ProcessHandle(process, own_group=True, log_paths=context.log_paths())
-    handle.deadline = time.monotonic() + request.timeout_seconds
+    # The request validated 0 < timeout_seconds <= 60, so the outer layer's
+    # zero rule is unreachable here and the deadline is always stamped.
+    handle = launch_controller(
+        prepare=lambda _environment: ([sys.executable, "-m", f"hey_my_buddy.buddy.harnesses.{name}.runner", "--control", str(path)],
+                         str(cwd), environment),
+        log_paths=context.log_paths(),
+        timeout_seconds=request.timeout_seconds, unbounded_deadline=None)
     handle.no_tool = True
     handle.no_tool_control = path
     handle.no_tool_evidence = binding
     return handle
-
-
-def _evidence_json(path: Path) -> object:
-    path = guard_private_path(path)
-    metadata = path.lstat()
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 256 * 1024:
-        raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence must be bounded ordinary JSON", path=str(path))
-    with path.open("rb") as stream:
-        raw = stream.read(256 * 1024 + 1)
-    if len(raw) > 256 * 1024:
-        raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence exceeds its byte bound", path=str(path))
-    return json.loads(raw)
 
 
 def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
@@ -235,7 +222,7 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
         pair = [guard_private_path(source / name) for name in ("request.json", "result.json")]
         if not all(path.exists() for path in pair):
             continue
-        values = [_evidence_json(path) for path in pair]
+        values = [read_plain_evidence(path) for path in pair]
         target = ensure_private_dir(binding.evidence_root / f"call-{number}")
         for source_file, value in zip(pair, values):
             private_json(target / source_file.name, value)
@@ -246,16 +233,21 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
         private_json(evidence / "result.json", payload)
 
 
+def _collect_result(path: Path) -> dict:
+    """The Router channel's read rule over the shared plain evidence read.
+
+    The baseline exceptions fold to the channel's own invalid-native-result
+    sentinel, and a parsed non-object falls back the same way before any stop
+    judgment runs.
+    """
+    payload = read_router_result(path)
+    return payload if isinstance(payload, dict) else {"status": "error", "code": "invalid-native-result"}
+
+
 def collect(handle: ProcessHandle) -> AdapterOutcome:
-    payload = None
-    try:
-        payload = _evidence_json(Path(handle.log_paths["stdout"]))
-    except (OSError, ValueError, BoardError, RecursionError):
-        pass
-    if not isinstance(payload, dict):
-        payload = {"status": "error", "code": "invalid-native-result"}
-    stopped = (payload.get("processState", {}).get("shutdownConfirmed") is True
-               and handle.shutdown_confirmed() is True)
+    collection = collect_controller(handle, read=_collect_result, stop=router_stop_confirmed)
+    payload = collection.payload
+    stopped = collection.stop_confirmed
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"
     if stopped and payload.get("status") == "cancelled":
         status = "cancelled"
