@@ -8,6 +8,8 @@
 
 Host 实读本轮 18 个聚焦模块的日志，313 项测试全部通过，其中 `test_controller` 为 35 项。新增的两个测试直接调用 `DshAdapter.start`，分别检验 selected 失败和 arguments 失败时的 FD 边界；独立复验输出与基线探针的 trace 和 FD 状态一致。加载器比较保留的 682 个旧编号，删除与变化均为 0；本轮相对上一份交付仅新增两个 FD 测试。真实 harness 验证和模型检查均为 0 次；微任务自身实施回合单独计数。本次没有完整检查，整合后的检查按执行计划集中进行，不把此前不含 1-B 的 2,453/163/110 结果记成本次结果。
 
-固定交付按原字节整合为 `4c49bda`，输入主分支为 `c1f5101`。整合凭据及 accepted 回执保存在 `<repo>/tmp/adr025-host/1b-integration-3-result.json`、`1b-accept-3-result.json`；这是 1-B 的内部微任务验收，第一步整步的 Claude Code Host 验收仍未开始。1-C、1-D 尚未实施。
+固定交付按原字节整合为 `4c49bda`，整合前本分支为 `c1f5101`。整合凭据及 accepted 回执保存在 `<repo>/tmp/adr025-host/1b-integration-3-result.json`、`1b-accept-3-result.json`；这是 1-B 的内部微任务验收，第一步整步的 Claude Code Host 验收仍未开始。
+
+随后 Host 在 `f8b42a5` 仅动态收集编号：164 个模块、2,488 个唯一编号，无导入错误，原 2,453 个编号集合全部保留，新增 35 个属于 controller 测试；原始清单与集合比较位于 `<repo>/tmp/adr025-host/after-1b-ids-xc517sv9/`。这不是测试执行。1-C 已从 `f8b42a5` 在独立 worktree 通过普通路由提交，run 为 `511b3514-bb69-43db-bca3-aafc2a540620`，唯一公共角色写入者与其临时根已在任务开始时指定；ACP 整改不写这些公共文件。1-D 尚未开始。
 
 新规则已落实：Worker 报告 Host 创建并登记的 `<system-tmp>/a25b-8sebf31t/`，本轮未手动删除对象。Host 在验收前把本轮脚本、18 份聚焦日志、编号、FD 探针及累积 patch 共 27 个文件/目录登记项保留于 `<repo>/tmp/adr025-host/1b-final-review-ydr8lamt/`，没有复制私有主目录或凭据文件。验收后 Host 仅对上述登记的任务根执行一次按确切路径的整体删除，成功且确认已不存在，未使用通配符、未屏蔽报错；回执为 `<repo>/tmp/adr025-host/1b-task-root-cleanup.json`。原历史材料及其他会话对象未动。
