@@ -3,7 +3,12 @@ name = "hey-my-buddy"
 version = "0.28.0"
 description = "A durable agent blackboard with independent workers and C-Two RPC"
 requires-python = ">=3.12,<3.15"
-dependencies = ["c-two==0.6.0", "portalocker>=3,<4", "pyyaml>=6,<7"]
+dependencies = [
+    "c-two==0.6.0",
+    "portalocker>=3,<4",
+    "pydantic>=2,<3",
+    "pyyaml>=6,<7",
+]
 
 [project.scripts]
 hey-my-buddy = "hey_my_buddy.install.package_install:main"

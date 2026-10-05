@@ -14,6 +14,7 @@ from unittest import mock
 from hey_my_buddy.protocol import attempt_evidence
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.harnesses import controller
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
@@ -60,8 +61,8 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
         process = SimpleNamespace(returncode=0)
         handle = SimpleNamespace(process=process, log_paths=context.log_paths(), shutdown_confirmed=lambda: True)
-        with (mock.patch.object(read_only, "owned_popen", return_value=process) as spawn,
-              mock.patch.object(read_only, "ProcessHandle", return_value=handle)):
+        with (mock.patch.object(controller, "owned_popen", return_value=process) as spawn,
+              mock.patch.object(controller, "ProcessHandle", return_value=handle)):
             self.assertIs(read_only.start_no_tool("codex", context, request), handle)
         self.assertEqual(spawn.call_args.args[0][-2:], ["--control", str(context.directory / "no-tool-control.json")])
         Path(handle.log_paths["stdout"]).write_text(json.dumps({"status": "ok", "zeroToolVerified": True,

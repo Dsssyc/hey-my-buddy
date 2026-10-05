@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...protocol import activity as activity_module
-from ..harnesses.registry import ExecutionContext, adapter as get_adapter, supported_capabilities
+from ..harnesses.registry import ExecutionContext, supported_capabilities
+from ..roles import controller as role_seam
 from ...protocol.client import BoardClient, new_nonce
 from ...blackboard.store.db import TERMINATION_REASONS
 from ...errors import BoardError
@@ -531,7 +532,7 @@ class Worker:
             shutdown_confirmed = holder.get("confirmed_stopped") is True
             if not shutdown_confirmed and handle is not None and implementation is not None:
                 try:
-                    implementation.cancel(handle)
+                    role_seam.worker_cancel(implementation, handle)
                     handle.wait(timeout=15)
                 except Exception as cleanup_error:  # noqa: BLE001 - keep the honest default
                     self.log(f"could not confirm this attempt's child stopped: {cleanup_error!r}")
@@ -669,15 +670,15 @@ class Worker:
             from ...blackboard.catalog.accounts import execution_environment
             context.runtime['account'] = dict(claim['account'])
             context.environment = execution_environment(self.state_dir, claim['account'], context.environment)
-        implementation = get_adapter(spec["adapter"])
-        usable, reason = implementation.available()
-        if not usable:
+        implementation = role_seam.worker_executor(spec["adapter"])
+        preparation = role_seam.prepare_worker_run(implementation, context)
+        if not preparation.available:
             return self.receipt(
                 claim,
                 {
                     "status": "failed",
                     "result": None,
-                    "error": reason,
+                    "error": preparation.reason,
                     "exitCode": None,
                     "signal": None,
                     "shutdownConfirmed": True,
@@ -686,11 +687,12 @@ class Worker:
                 },
                 directory,
             )
-        try:
-            implementation.prepare(context)
-        except BoardError as error:
+        if preparation.error is not None:
+            error = preparation.error
             if holder.get('harnessHistory') and error.code == 'ADAPTER_UNAVAILABLE':
-                raise
+                # The captured BoardError itself: the guarded harness retry above
+                # matches on this code, so the original object and code must reach it.
+                raise error
             return self.receipt(
                 claim,
                 {
@@ -712,7 +714,7 @@ class Worker:
         holder.pop("confirmed_stopped", None)
         holder.pop("handle", None)
         holder["start_invoked"] = True
-        handle = implementation.start(context)
+        handle = role_seam.worker_start(implementation, context)
         holder["handle"] = handle
         holder["started"] = True
         # A durable marker for the recovery path, written while the handle is alive.
@@ -753,19 +755,19 @@ class Worker:
             while True:
                 if self.stop_requested() and not handle.cancel_requested:
                     self.log("stop requested; cancelling this owned process group")
-                    implementation.cancel(handle)
+                    role_seam.worker_cancel(implementation, handle)
                 if handle.wait(timeout=0.25) is not None:
                     break
                 if deadline is not None and time.monotonic() >= deadline:
                     timed_out = True
                     self.log("worker deadline reached; cancelling this owned process group")
-                    implementation.cancel(handle)
+                    role_seam.worker_cancel(implementation, handle)
                     handle.wait(timeout=10)
                     break
         finally:
             renewal.stop()
             renewal.join(timeout=2)
-        outcome = implementation.collect(handle, context)
+        outcome = role_seam.worker_collect(implementation, handle, context)
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         # Virtual adapters project native results. Keep the controller's retention
         # failure diagnostic in the final receipt even when that projection omits it.
@@ -918,7 +920,7 @@ class _Renewal(threading.Thread):
             return False
         if not self.handle.cancel_requested:
             self.worker.log("durable cancel intent observed; cancelling this owned process group")
-            self.implementation.cancel(self.handle)
+            role_seam.worker_cancel(self.implementation, self.handle)
         return True
 
     def _renew(self) -> bool:
@@ -942,7 +944,7 @@ class _Renewal(threading.Thread):
             return True
         if response.get("cancelRequested") and not self.handle.cancel_requested:
             self.worker.log("durable cancel intent observed; cancelling this owned process group")
-            self.implementation.cancel(self.handle)
+            role_seam.worker_cancel(self.implementation, self.handle)
             return False
         if response.get("finished"):
             # A committed result is terminal and immutable; the completion path in

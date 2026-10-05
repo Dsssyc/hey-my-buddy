@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -23,8 +21,8 @@ from ....errors import BoardError
 from ....private_dirs import context_root, ensure_private_dir
 from ....protocol import usage
 from ...roles import turn_io
-from ..base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
-from ...runtime.windows_process import owned_popen
+from ..base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle
+from ..controller import collect_controller, launch_controller, read_strict_result, signal_name, stop_confirmed
 from .config import ClaudeUnavailable, cli_command, settings_policy, third_party_overrides
 from .protocol import QUOTA_REJECTED_ERROR, decode_json
 
@@ -120,30 +118,25 @@ class ClaudeAdapter(Adapter):
     def start(self, context: ExecutionContext) -> ProcessHandle:
         self.prepare(context)
         from ..runtime_selection import controller_environment
-        paths = context.log_paths()
-        stdout, stderr = open_logs(paths)
-        try:
-            process = owned_popen([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.claude.runner", "--control",
-                                        str(context.directory / "claude-control.json")],
-                                       cwd=turn_io.workspace_cwd(context), env=controller_environment(context.directory, context.environment),
-                                       stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                       start_new_session=True, close_fds=True)
-        finally:
-            os.close(stdout)
-            os.close(stderr)
-        handle = ProcessHandle(process, own_group=True, log_paths=paths)
         # timeout_seconds == 0 requests an unlimited execution; now + 0 must not
         # become an immediate handle deadline, so the unlimited case is infinite.
-        handle.deadline = math.inf if context.timeout_seconds == 0 else time.monotonic() + context.timeout_seconds
-        return handle
+        return launch_controller(
+            prepare=lambda _environment: ([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.claude.runner", "--control",
+                              str(context.directory / "claude-control.json")],
+                             turn_io.workspace_cwd(context),
+                             controller_environment(context.directory, context.environment)),
+            log_paths=context.log_paths(),
+            timeout_seconds=context.timeout_seconds, unbounded_deadline=math.inf)
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
-        payload = _read_result(Path(handle.log_paths["stdout"]))
-        exit_code = handle.process.returncode
+        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=decode_json),
+                                        stop=stop_confirmed)
+        payload = collection.payload
+        exit_code = collection.exit_code
         # The native CLI owns another group. The controller receipt plus the
         # outer controller group's disappearance are both required, including on
         # cancellation and quota rejection.
-        shutdown = bool(payload and payload.get("processState", {}).get("shutdownConfirmed") is True and handle.shutdown_confirmed())
+        shutdown = collection.stop_confirmed
         if payload is None:
             payload = {"status": "invalid-result", "error": "the Claude controller produced no complete JSON result"}
         # ADR-018 items 22/23 and the retained root assistant text. The canonical
@@ -199,7 +192,7 @@ class ClaudeAdapter(Adapter):
             elif seal:
                 payload["workspaceSeal"] = seal
         return AdapterOutcome(status=status, result=payload, error=payload.get("error") or error or seal_error,
-                              exit_code=exit_code, signal=_signal_name(exit_code), shutdown_confirmed=shutdown,
+                              exit_code=exit_code, signal=signal_name(exit_code), shutdown_confirmed=shutdown,
                               artifacts=_artifacts(context, handle) if shutdown else [])
 
     def cancel(self, handle: ProcessHandle, *, grace_seconds: float = 8.0) -> None:
@@ -280,22 +273,19 @@ def _probe_native_metadata() -> dict:
         turn_io.private_json(control, {"discover": True, "directory": str(directory), "cwd": str(directory),
                                        "timeoutSeconds": 25})
         logs = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
-        stdout, stderr = open_logs(logs)
-        try:
-            process = owned_popen([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.claude.runner", "--control", str(control)],
-                                       stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, env=controller_environment(directory))
-        finally:
-            os.close(stdout)
-            os.close(stderr)
-        handle = ProcessHandle(process, own_group=True, log_paths=logs)
+        handle = launch_controller(
+            prepare=lambda _environment: ([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.claude.runner",
+                              "--control", str(control)], None, controller_environment(directory)),
+            log_paths=logs)
         if handle.wait(30) is None:
             handle.terminate(grace_seconds=8)
-        payload = _read_result(Path(logs["stdout"]))
-        stopped = bool(payload and payload.get("processState", {}).get("shutdownConfirmed") is True and handle.shutdown_confirmed())
-        if not payload or process.returncode != 0 or payload.get("status") != "ok" or not stopped:
-            reason = payload.get("error") if isinstance(payload, dict) else None
+        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=decode_json),
+                                        stop=stop_confirmed)
+        stopped = collection.stop_confirmed
+        if not collection.payload or collection.exit_code != 0 or collection.payload.get("status") != "ok" or not stopped:
+            reason = collection.payload.get("error") if isinstance(collection.payload, dict) else None
             raise BoardError("ADAPTER_UNAVAILABLE", reason or "Claude native model discovery did not settle", adapter="claude")
-        return payload
+        return collection.payload
     finally:
         # A killed controller cannot establish that its separate native group
         # stopped. Preserve its private state in that case, just like a turn.
@@ -387,28 +377,6 @@ def _read_native_turn(context: ExecutionContext, shutdown: bool, exit_code: int 
         return None, "the Claude result session does not equal the UUID preallocated by Buddy"
     error = turn_io.validate_outcome(record.get("outcome")) or ClaudeAdapter.validate_turn_provenance(record)
     return (None, error) if error else (record, None)
-
-
-def _read_result(path: Path) -> dict | None:
-    try:
-        with path.open("rb") as stream:
-            raw = stream.read(512 * 1024 + 1)
-        if len(raw) > 512 * 1024:
-            return None
-        value = decode_json(raw)
-        return value if isinstance(value, dict) else None
-    except (OSError, ValueError, RecursionError):
-        return None
-
-
-def _signal_name(code: int | None) -> str | None:
-    if code is None or code >= 0:
-        return None
-    import signal
-    try:
-        return signal.Signals(-code).name
-    except ValueError:
-        return f"signal-{-code}"
 
 
 def _artifacts(context: ExecutionContext, handle: ProcessHandle) -> list[dict]:

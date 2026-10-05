@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from ...errors import BoardError
+from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from ...private_dirs import context_root, ensure_private_dir, linked
 from ..harnesses.base import ExecutionContext
 
@@ -39,10 +40,6 @@ ASSISTANCE_HINTS = (
     "authorize a helper or continue you; your internal subagents remain available for work inside "
     "this authorized scope.",
 )
-
-
-def canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def input_hash(value: dict) -> str:

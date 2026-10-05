@@ -1,0 +1,7 @@
+old_id	new_id	disposition	reason	guard	fault_check
+buddy.harnesses.dsh.acp.test_acp_launch.LegalLaunchTest.test_child_environment_is_the_whitelist_plus_enumerated_extras	buddy.harnesses.dsh.acp.test_acp_launch.LegalLaunchTest.test_child_environment_is_native_environment_plus_the_forced_homes	renamed	环境继承从窄白名单改为现有 native_environment	子进程环境与默认 HOME	71 项聚焦通过；合成父环境逐键比对
+buddy.harnesses.dsh.acp.test_acp_launch.LegalLaunchTest.test_legal_launch_runs_and_logs_the_whitelist	buddy.harnesses.dsh.acp.test_acp_launch.LegalLaunchTest.test_legal_launch_runs_and_logs_the_native_environment	renamed	环境继承从窄白名单改为现有 native_environment	子进程环境与默认 HOME	71 项聚焦通过；合成父环境逐键比对
+buddy.harnesses.dsh.acp.test_acp_session.ExactTitleTest.test_cleanup_guard_preserves_instead_of_deleting		removed	用户取消常驻 preserve/清理台账，普通 fixture 收尾	测试临时目录	由停止未确认失败测试承接
+	buddy.harnesses.dsh.acp.test_acp_launch.LegalLaunchTest.test_parent_home_is_kept_without_an_explicit_private_home	added	验证环境澄清或停止未确认的测试失败	默认/显式 HOME 或保守停止	71 项聚焦；停止守卫另做单项与 POSIX 函数缺失模拟
+	buddy.harnesses.dsh.acp.test_acp_launch.LegalLaunchTest.test_spawned_child_receives_the_native_environment_with_forced_homes	added	验证环境澄清或停止未确认的测试失败	默认/显式 HOME 或保守停止	71 项聚焦；停止守卫另做单项与 POSIX 函数缺失模拟
+	buddy.harnesses.dsh.acp.test_acp_session.StopStateTest.test_unconfirmed_stop_fails_the_test_with_the_observed_evidence	added	验证环境澄清或停止未确认的测试失败	默认/显式 HOME 或保守停止	71 项聚焦；停止守卫另做单项与 POSIX 函数缺失模拟

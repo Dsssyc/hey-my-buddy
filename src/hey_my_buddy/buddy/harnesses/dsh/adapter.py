@@ -8,19 +8,15 @@ process group, the child handle, the deadline and the log files.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
-import subprocess
-import sys
-import time
 from pathlib import Path
 
 from ....errors import BoardError
 from ....private_dirs import context_root, ensure_private_dir
 from ...roles import turn_io
 from ....install.runtime import resource_path
-from ..base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
-from ...runtime.windows_process import owned_popen
+from ..base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle
+from ..controller import collect_controller, launch_controller, legacy_node_stop_confirmed, read_last_line_result, signal_name
 
 TERMINATE_GRACE_SECONDS = 3.0
 
@@ -157,65 +153,60 @@ class DshAdapter(Adapter):
         self.prepare(context)
         inquiry = self.inquiry_paths(context)
         context.inquiry = inquiry  # type: ignore[attr-defined]
-        log_paths = context.log_paths()
-        stdout, stderr = open_logs(log_paths)
-        from ..discovery import native_environment
-        from ..runtime_selection import selected
-        record = selected('dsh', context.environment) or {}
-        environment = native_environment(context.environment, command=record.get('command', []))
-        # The DSH bridge has intentionally scoped blackboard authority. None of
-        # the Host/Worker service identity or provider API-key variables survive.
-        for key in ('BUDDY_AGENT_CREDENTIAL_FILE', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_STATE_DIR', 'BUDDY_PYTHON', 'DSH_HOME'):
-            if key in context.environment:
-                environment[key] = context.environment[key]
-        if os.environ.get('BUDDY_DEV_SOURCE') == '1' and os.environ.get('BUDDY_RUNNER_PATH'):
-            for key in ('DSH_BIN', 'MOCK_ARTIFACT_DIR', 'MOCK_STUB_SLEEP_SECONDS'):
+
+        def build_environment():
+            # The DSH baseline evaluated this block after opening the run's logs
+            # and before its spawn try/finally: a failure here leaves the two log
+            # descriptors open, which the shared launch's ``before_try`` step
+            # preserves. (Repairing the leaked descriptors is not authorized here.)
+            from ..discovery import native_environment
+            from ..runtime_selection import selected
+            record = selected('dsh', context.environment) or {}
+            environment = native_environment(context.environment, command=record.get('command', []))
+            # The DSH bridge has intentionally scoped blackboard authority. None of
+            # the Host/Worker service identity or provider API-key variables survive.
+            for key in ('BUDDY_AGENT_CREDENTIAL_FILE', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_STATE_DIR', 'BUDDY_PYTHON', 'DSH_HOME'):
                 if key in context.environment:
                     environment[key] = context.environment[key]
-        try:
-            process = owned_popen(
-                self.arguments(context, inquiry),
-                cwd=self.workspace_cwd(context),
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-                close_fds=True,
-            )
-        finally:
-            os.close(stdout)
-            os.close(stderr)
-        handle = ProcessHandle(process, own_group=True, log_paths={**log_paths, **{
-            "inquirySocket": inquiry["socketPath"],
-            "inquiryResults": inquiry["resultsPath"],
-            "inquiryError": inquiry["errorPath"],
-        }})
+            if os.environ.get('BUDDY_DEV_SOURCE') == '1' and os.environ.get('BUDDY_RUNNER_PATH'):
+                for key in ('DSH_BIN', 'MOCK_ARTIFACT_DIR', 'MOCK_STUB_SLEEP_SECONDS'):
+                    if key in context.environment:
+                        environment[key] = context.environment[key]
+            return environment
+
+        handle = launch_controller(
+            prepare=lambda environment: (self.arguments(context, inquiry),
+                                         self.workspace_cwd(context), environment),
+            before_try=build_environment,
+            log_paths={**context.log_paths(), **{
+                "inquirySocket": inquiry["socketPath"],
+                "inquiryResults": inquiry["resultsPath"],
+                "inquiryError": inquiry["errorPath"],
+            }},
+            # ``timeoutSeconds=0`` is the normalized no-deadline sentinel: the runner
+            # installs no headless termination timer for it. Stamping ``now + 0``
+            # would publish an already-expired deadline for a run that is still
+            # allowed to finish, so an unbounded attempt reports no deadline rather
+            # than a misleading immediate one. Positive values are unchanged.
+            timeout_seconds=context.timeout_seconds, unbounded_deadline=None)
         handle.inquiry = inquiry  # type: ignore[attr-defined]
-        # ``timeoutSeconds=0`` is the normalized no-deadline sentinel: the runner
-        # installs no headless termination timer for it. Stamping ``now + 0``
-        # would publish an already-expired deadline for a run that is still
-        # allowed to finish, so an unbounded attempt reports no deadline rather
-        # than a misleading immediate one. Positive values are unchanged.
-        timeout_seconds = context.timeout_seconds
-        handle.deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
         if getattr(handle, "no_tool", False):
             from ...roles.structured_call import collect
             return collect(handle)
+        # The legacy stop rule runs in its own branches below, so the shared
+        # collection face carries this path's read and exit code only.
+        collection = collect_controller(handle, read=read_last_line_result)
+        payload = collection.payload
+        exit_code = collection.exit_code
         stdout_path = Path(handle.log_paths["stdout"])
-        try:
-            raw = stdout_path.read_text(errors="replace")
-            payload = json.loads(raw.strip().splitlines()[-1]) if raw.strip() else None
-            if not isinstance(payload, dict):
-                payload = None
-        except (OSError, ValueError, IndexError):
-            payload = None
-        exit_code = handle.process.returncode
         inquiry = getattr(handle, "inquiry", {})
         if payload is None:
+            # Legacy basis, removed with the Node runner in step four: a preflight
+            # failure (exit 2 with an empty stdout log, before any dsh spawn) is
+            # accepted as this path's inner stop fact.
             preflight = _preflight_failed(exit_code, stdout_path) and handle.shutdown_confirmed()
             stopped = handle.shutdown_confirmed()
             return AdapterOutcome(
@@ -227,7 +218,7 @@ class DshAdapter(Adapter):
                         **(_native_usage(context) if stopped else {})},
                 error="the dsh runner produced no parseable result",
                 exit_code=exit_code,
-                signal=_signal_name(handle.process),
+                signal=signal_name(handle.process.returncode),
                 shutdown_confirmed=stopped,
             )
         payload = {**payload, "inquiryBridge": {k: inquiry.get(k) for k in ("socketPath", "resultsPath", "errorPath")}}
@@ -236,9 +227,14 @@ class DshAdapter(Adapter):
         native_usage = payload.get("nativeUsage") if isinstance(payload.get("nativeUsage"), dict) else {}
         payload["nativeUsage"] = {**native_usage, "sidecarWritten": native_usage_sidecar_path(context).is_file()}
         payload.update(_native_usage(context))
-        shutdown_confirmed = (bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
-            exit_code, stdout_path
-        )) and handle.shutdown_confirmed()
+        # Legacy basis, removed with the Node runner in step four: any truthy
+        # runner receipt counts (not only ``is True``), and the runner's exit-2
+        # preflight failure counts as the inner layer's stop. The outer layer is
+        # the same conservative owned-group observation every path shares.
+        shutdown_confirmed = legacy_node_stop_confirmed(
+            handle,
+            native_receipt=payload.get("processState", {}).get("shutdownConfirmed"),
+            preflight=lambda: _preflight_failed(exit_code, stdout_path))
         status = payload.get("status")
         if handle.cancel_requested or status == "cancelled":
             final = "cancelled" if shutdown_confirmed else "failed"
@@ -280,7 +276,7 @@ class DshAdapter(Adapter):
             result=payload,
             error=error,
             exit_code=exit_code,
-            signal=_signal_name(handle.process),
+            signal=signal_name(handle.process.returncode),
             shutdown_confirmed=shutdown_confirmed,
             artifacts=artifacts,
         )
@@ -404,18 +400,6 @@ def _preflight_failed(exit_code: int | None, stdout_path: Path) -> bool:
         return exit_code == 2 and stdout_path.stat().st_size == 0
     except OSError:
         return False
-
-
-def _signal_name(process: subprocess.Popen) -> str | None:
-    code = process.returncode
-    if code is None or code >= 0:
-        return None
-    import signal as signal_module
-
-    try:
-        return signal_module.Signals(-code).name
-    except ValueError:
-        return f"signal-{-code}"
 
 
 def _discovered_artifacts(handle: ProcessHandle, payload: dict) -> list[dict]:

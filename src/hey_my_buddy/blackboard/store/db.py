@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 import secrets
 import sqlite3
@@ -17,6 +16,8 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+
+from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
 SCHEMA_VERSION = 15
 #: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
@@ -1116,11 +1117,6 @@ def utc_now() -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def canonical_json(value) -> str:
-    """Deterministic JSON for fingerprints and payload hashing."""
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
 
 
 class Corruption(RuntimeError):
