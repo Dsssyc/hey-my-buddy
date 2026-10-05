@@ -102,8 +102,29 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
-            self.assertEqual(result["reasonCode"], "output-limit")
+            self.assertIn(result["reasonCode"], ("output-limit", "shutdown-unverified"))
+            self.assertEqual(result["status"], "unhealthy")
+            self.assertFalse(result["available"])
             self.assertNotIn("secret", str(result))
+
+            # Withhold containment evidence after actually stopping our fixture.
+            # The probe must stay unavailable and must not expose its output.
+            terminate = discovery._terminate_group
+
+            def unobserved_stop(process):
+                terminate(process)
+                return False
+
+            with patch.object(discovery, "_home", return_value=home), patch.object(
+                discovery, "_common_dirs", return_value=[]
+            ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
+                discovery, "_terminate_group", side_effect=unobserved_stop
+            ):
+                uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
+            self.assertEqual(uncertain["reasonCode"], "shutdown-unverified")
+            self.assertEqual(uncertain["status"], "unhealthy")
+            self.assertFalse(uncertain["available"])
+            self.assertNotIn("secret", str(uncertain))
 
     def test_snapshot_hash_changes_when_default_record_changes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -383,7 +383,9 @@ class TestCrashWindows(BoardTestCase):
                             "task": "long running work",
                             "cwd": str(self.workdir()),
                             "adapter": "command",
-                            "argv": ["/bin/sh", "-c", "sleep 25"],
+                            # This test owns the final group cleanup; its child
+                            # must not expire naturally while recovery is observed.
+                            "argv": [sys.executable, "-c", "import signal; signal.pause()"],
                             "timeoutSeconds": 120,
                             "requiredCapabilities": ["fault-worker"],
                         }
