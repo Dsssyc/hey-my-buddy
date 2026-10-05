@@ -612,11 +612,12 @@ class TestCrashWindows(BoardTestCase):
                     raise RuntimeError("native collection failed")
 
                 fake_adapter = SimpleNamespace(
+                    name=claim["task"]["spec"]["adapter"],
                     available=lambda: (True, None), prepare=lambda _context: None,
                     start=lambda _context: handle, collect=collect_failure,
                     cancel=lambda owned: cancelled.append(owned),
                 )
-                with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+                with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                         mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
                     receipt = worker.execute(claim)
                 self.assertFalse(receipt["report"]["shutdownConfirmed"])
@@ -635,6 +636,7 @@ class TestCrashWindows(BoardTestCase):
         credential.write_text('{"token":"private-test-sentinel"}')
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=lambda _context: None,
             start=lambda _context: handle,
             collect=lambda _handle, _context: AdapterOutcome(
@@ -652,7 +654,7 @@ class TestCrashWindows(BoardTestCase):
                 raise OSError("injected receipt failure")
             return original_receipt(*args)
 
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "receipt", side_effect=fail_first_receipt):
             receipt = worker.execute(claim)
@@ -672,6 +674,7 @@ class TestCrashWindows(BoardTestCase):
         credential.write_text('{"token":"private-test-sentinel"}')
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=lambda _context: None,
             start=lambda _context: handle,
             collect=lambda _handle, _context: AdapterOutcome(
@@ -689,7 +692,7 @@ class TestCrashWindows(BoardTestCase):
                 raise RuntimeError("injected cleanup failure")
             return original_cleanup(*args)
 
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=fail_first_cleanup):
             receipt = worker.execute(claim)
@@ -708,11 +711,12 @@ class TestCrashWindows(BoardTestCase):
         credential.write_text('{"token":"private-test-sentinel"}')
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=lambda _context: None, start=lambda _context: handle,
             collect=lambda _handle, _context: AdapterOutcome(status="failed", shutdown_confirmed=True),
             cancel=lambda _handle: self.fail("complete native stop proof already exists"),
         )
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=RuntimeError("cleanup unavailable")):
             receipt = worker.execute(claim)
@@ -731,13 +735,14 @@ class TestCrashWindows(BoardTestCase):
                                           claim["attempt"]["attemptId"] / "no-tool-fixture")}
         handle.evidence_retention_failure = diagnostic
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=lambda _context: None, start=lambda _context: handle,
             collect=lambda _handle, _context: AdapterOutcome(
                 status="failed", result={"status": "error", "code": "evidence-retention-failed"},
                 error="evidence-retention-failed", shutdown_confirmed=True),
             cancel=lambda _handle: self.fail("complete native stop proof already exists"),
         )
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
@@ -764,6 +769,7 @@ class TestCrashWindows(BoardTestCase):
             return first_handle
 
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=lambda _context: None,
             start=start,
             collect=lambda _handle, _context: AdapterOutcome(
@@ -772,7 +778,7 @@ class TestCrashWindows(BoardTestCase):
             ),
             cancel=lambda _handle: self.fail("the prior stopped handle is no longer current"),
         )
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertEqual(starts, 2, "the first confirmed pre-model failure must trigger one retry")
@@ -797,12 +803,13 @@ class TestCrashWindows(BoardTestCase):
             raise FileNotFoundError(2, "injected after possible spawn", "mock")
 
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=lambda _context: None,
             start=uncertain_start,
             collect=lambda _handle, _context: self.fail("no handle was returned"),
             cancel=lambda _handle: self.fail("no handle was returned"),
         )
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertEqual(starts, 1, "unknown first start cannot safely launch a retry")
@@ -829,6 +836,7 @@ class TestCrashWindows(BoardTestCase):
             return self._finished_fake_handle()
 
         fake_adapter = SimpleNamespace(
+            name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=prepare, start=start,
             collect=lambda _handle, _context: AdapterOutcome(
                 status="failed", result={"modelStarted": False, "code": "native-exit"},
@@ -836,7 +844,7 @@ class TestCrashWindows(BoardTestCase):
             ),
             cancel=lambda _handle: self.fail("the prior handle already stopped"),
         )
-        with mock.patch.object(worker_module, "get_adapter", return_value=fake_adapter), \
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute(claim)
         self.assertEqual(prepared, 2)
