@@ -4,7 +4,6 @@ from __future__ import annotations
 from .... import locking
 import hashlib
 import hmac
-import json
 import os
 import queue
 import re
@@ -16,8 +15,9 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
 
-from ...roles.turn_io import MAX_OUTCOME_BYTES, canonical_json, validate_outcome
+from ...roles.turn_io import MAX_OUTCOME_BYTES, validate_outcome
 from ..native_observations import bound_native_text, native_counter
+from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, MAX_WAITING_REASON, PHASES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -77,17 +77,10 @@ class NativeError(Exception):
         self.failure = failure
 
 
-def decode_json(raw: str | bytes) -> object:
-    def pairs(items):
-        result = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError("duplicate JSON member")
-            result[key] = value
-        return result
-    def invalid(_):
-        raise ValueError("non-finite JSON number")
-    return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
+#: The one shared strict decode (duplicate members and non-finite numbers,
+#: including the ``1e999`` overflow, refused); the caller keeps its own error
+#: mapping around the ``ValueError`` this raises.
+decode_json = decode_strict_json
 
 
 def sign_receipt(payload: dict, key: str) -> str:

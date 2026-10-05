@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import queue
 import select
@@ -11,7 +10,7 @@ import time
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 
-from ...roles.turn_io import canonical_json
+from ....json_codec import canonical_json, decode_strict_json
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_CHECKPOINT_MESSAGE_BYTES = 65536
@@ -28,16 +27,10 @@ class CodexProtocolError(Exception):
         self.code = code
 
 
-def decode_json(raw: bytes | str) -> object:
-    def pairs(items):
-        value = {}
-        for key, item in items:
-            if key in value:
-                raise ValueError("duplicate JSON member")
-            value[key] = item
-        return value
-    return json.loads(raw, object_pairs_hook=pairs,
-                      parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("non-finite JSON")))
+#: The one shared strict decode (duplicate members and non-finite numbers,
+#: including the ``1e999`` overflow, refused); the caller keeps its own error
+#: mapping around the ``ValueError`` this raises.
+decode_json = decode_strict_json
 
 
 class Connection:

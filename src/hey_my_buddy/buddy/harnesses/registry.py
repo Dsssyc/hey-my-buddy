@@ -19,28 +19,31 @@ BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdap
 
 #: The extracted harness run modules, registered by the ADR-025 step that
 #: extracts each harness (steps two to four). Registration is the only way into
-#: the new seam and is explicit: only an object whose ``run``
-#: is callable may enter under a harness name, so no command adapter and no
-#: string-shaped stand-in is ever mistaken for a run. Registering a harness
-#: commits the same step to deleting its legacy structured entries; the role
-#: seam refuses to route a registered name through them, so a half-finished
-#: switch fails loudly instead of silently keeping two execution paths.
+#: the new seam and is explicit: only an object whose ``run`` is callable may
+#: enter under a harness name, so no command adapter and no string-shaped
+#: stand-in is ever mistaken for a run. Registering a harness commits the same
+#: step to deleting its legacy structured entries; the role seam refuses to
+#: route a registered name through them, so a half-finished switch fails loudly
+#: instead of silently keeping two execution paths.
 RUN_SEAMS: dict[str, HarnessRun] = {}
 
 
 def register_run_seam(name: str, module: HarnessRun) -> None:
     """Register one extracted harness's run module under its harness name.
 
-    The capability check is the honest local one: ``run`` must
-    be callable on the registered object, and nothing more — no attribute-shape
-    trust, no static analysis of anyone's package.
+    The capability check is the honest local one: ``run`` must be callable on
+    the registered object, and nothing more — no attribute-shape trust, no
+    static analysis of anyone's package. Model discovery is not part of this
+    step's seam.
     """
     if name not in HARNESS_NAMES:
         raise BoardError("INVALID_ARGUMENT", f"{name!r} is not a harness name", adapter=name)
     if name in RUN_SEAMS:
         raise BoardError("CONFLICT", f"{name} already has a registered run seam", adapter=name)
     if not callable(getattr(module, "run", None)):
-        raise BoardError("INVALID_ARGUMENT", "a run seam must carry a callable run", adapter=name)
+        raise BoardError("INVALID_ARGUMENT",
+                         "a run seam must carry a callable run, and nothing about "
+                         "the registration proves more than that", adapter=name)
     RUN_SEAMS[name] = module
 
 

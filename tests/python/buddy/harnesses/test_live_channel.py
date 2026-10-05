@@ -12,7 +12,6 @@ reachable without loss.
 """
 from __future__ import annotations
 
-import json
 import unittest
 
 from hey_my_buddy.buddy.harnesses import live as lv
@@ -86,16 +85,16 @@ class LimitTests(unittest.TestCase):
 
     def test_oversized_questions_and_bad_timeouts_are_refused_at_the_value(self):
         with self.assertRaises(BoardError):
-            lv.InquiryPayload("q-1", "x" * (lv.MAX_QUESTION_BYTES + 1))
+            lv.InquiryPayload(question_id="q-1", question="x" * (lv.MAX_QUESTION_BYTES + 1))
         with self.assertRaises(BoardError):
-            lv.InquiryPayload("q-1", "水" * 2001)  # 6003 UTF-8 bytes, 2001 characters
+            lv.InquiryPayload(question_id="q-1", question="水" * 2001)  # 6003 UTF-8 bytes, 2001 characters
         channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"])
         for timeout in (99, 5001, 0, "1500"):
             with self.assertRaises(BoardError, msg=str(timeout)):
                 channel.request(inquiry_request(), timeout_ms=timeout)
 
     def test_a_multibyte_question_at_the_byte_bound_is_accepted(self):
-        payload = lv.InquiryPayload("q-1", "水" * 1333)  # 3999 UTF-8 bytes
+        payload = lv.InquiryPayload(question_id="q-1", question="水" * 1333)  # 3999 UTF-8 bytes
         self.assertEqual(len(payload.question.encode()), lv.MAX_QUESTION_BYTES - 1)
 
 
@@ -146,8 +145,8 @@ class RequestBindingTests(unittest.TestCase):
         channel = self.channel(bridge)
         channel.request(inquiry_request(), timeout_ms=1500)
         notice = lv.LiveRequest(identity=identity(), request_id="request-1", kind="finish-notice",
-                                payload=lv.FinishNoticePayload("n-1", "wrap up"))
-        reply = channel.request(notice, timeout_ms=1500)
+                                payload=lv.FinishNoticePayload(notice_id="n-1", message="wrap up"))
+        channel.request(notice, timeout_ms=1500)
         # finish-notice is unsupported everywhere, but a plain inquiry kind
         # change under a committed request id is a conflict, not a new ask.
         self.assertEqual(len(bridge.calls), 1)
@@ -190,7 +189,7 @@ class RequestBindingTests(unittest.TestCase):
         foreign = lv.LiveRequest(
             identity=RunIdentity(task_id="other", attempt_id="attempt-fixture", generation=1,
                                  invocation_id="invocation-fixture"),
-            request_id="request-1", kind="inquiry", payload=lv.InquiryPayload("question-1", "hello?"))
+            request_id="request-1", kind="inquiry", payload=lv.InquiryPayload(question_id="question-1", question="hello?"))
         reply = channel.request(foreign, timeout_ms=1500)
         self.assertEqual((reply.status, reply.reason_code), ("unavailable", "identity-mismatch"))
         self.assertEqual(bridge.calls, [])
@@ -212,7 +211,7 @@ class RequestBindingTests(unittest.TestCase):
         self.assertEqual((reply.status, reply.reason_code), ("unsupported", "inquiry-unsupported"))
         for channel in (codex, self.channel(harness="dsh")):
             notice = lv.LiveRequest(identity=identity(), request_id="n-1", kind="finish-notice",
-                                    payload=lv.FinishNoticePayload("n-1", "please wrap up"))
+                                    payload=lv.FinishNoticePayload(notice_id="n-1", message="please wrap up"))
             answered = channel.request(notice, timeout_ms=1500)
             self.assertEqual((answered.status, answered.reason_code),
                              ("unsupported", "finish-notice-unsupported"))
@@ -422,7 +421,7 @@ class ObserveTests(unittest.TestCase):
         # activity beside 32 bounded answers) is refused by the encoder.
         oversized = lv.LiveSnapshot(
             identity=identity(), sequence=1, activity={"blob": "x" * 30000},
-            inquiries=tuple(lv.InquiryState(f"question-{index}", "answered", "x" * 4000, seq=index + 1)
+            inquiries=tuple(lv.InquiryState(question_id=f"question-{index}", status="answered", answer="x" * 4000, seq=index + 1)
                             for index in range(32)))
         with self.assertRaises(BoardError):
             lv.encode_live_snapshot(oversized)
@@ -456,7 +455,7 @@ class ObserveTests(unittest.TestCase):
                              native_correlation={"inquiryId": "question-1"})
         self.assertEqual(lv.decode_live_reply(lv.encode_live_reply(reply)), reply)
         snapshot = lv.LiveSnapshot(identity=identity(), sequence=3, activity={"phase": "finishing"},
-                                   inquiries=(lv.InquiryState("question-1", "queued", seq=4),))
+                                   inquiries=(lv.InquiryState(question_id="question-1", status="queued", seq=4),))
         self.assertEqual(lv.decode_live_snapshot(lv.encode_live_snapshot(snapshot)), snapshot)
         for wrong_version in (True, 1.0):
             payload = request.to_payload()

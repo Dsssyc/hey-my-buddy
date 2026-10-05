@@ -10,7 +10,6 @@ request exactly.
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 import queue
@@ -22,7 +21,7 @@ from pathlib import Path
 
 from ....protocol.usage import identifier as _identifier
 from ..native_observations import bound_native_text, native_counter
-from ...roles.turn_io import canonical_json
+from ....json_codec import canonical_json, decode_strict_json
 
 _WINDOWS_PIPE = os.name == "nt"
 
@@ -70,22 +69,10 @@ class QuotaRejected(Exception):
         self.resets_at = resets_at
 
 
-def decode_json(raw: bytes | str) -> object:
-    def finite_float(value):
-        number = float(value)
-        if not math.isfinite(number):
-            raise ValueError("non-finite JSON")
-        return number
-
-    def pairs(items):
-        value = {}
-        for key, item in items:
-            if key in value:
-                raise ValueError("duplicate JSON member")
-            value[key] = item
-        return value
-    return json.loads(raw, object_pairs_hook=pairs, parse_float=finite_float,
-                      parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("non-finite JSON")))
+#: The one shared strict decode (duplicate members, non-finite numbers and the
+#: ``1e999`` overflow refused); the caller keeps its own error mapping around
+#: the ``ValueError`` this raises.
+decode_json = decode_strict_json
 
 
 class Connection:
