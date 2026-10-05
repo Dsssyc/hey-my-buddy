@@ -15,3 +15,6 @@
 Worker 使用开始时由 Host 创建并登记的 `<system-tmp>/a25f-u1fu7fbr/`，本次未手动删除对象；聚焦测试的自有夹具正常收尾，`t/` 仅余 uv 自建锁文件，未在检出创建测试 run 目录或常驻台账。Host 已把固定 patch、测试和变异日志、原始编号及模拟材料按确切路径与 SHA 保留于 `<repo>/tmp/adr025-host/acp-host-fixes-first-5tqfus__/`、`acp-host-fixes-second-szsq67uf/`、`acp-host-fixes-final-2_n573dk/`。没有复制私有主目录、凭据或基线归档树。原任务根仍保留，待验收后 Host 按该一个确切路径整体删除；旧 run continue 被拒绝前分配而未使用的 `<system-tmp>/a25d-lhys8472/` 同样有创建账目，尚未删除。
 
 本线已提交，停下等用户转达两处复核及无模型握手结果。黑板保持 delivered，最终 acknowledge 暂留至外部复核通过，以便需要修正时仍能对同一个 run continue；整合已登记不等于外部验收。第一步独立进行到 1-C，ACP 公共接线仍等待第一步外部验收。
+
+
+2026-10-05 外部复核收尾：用户转达 Claude Code Host 已核对 `0c8822b`，两处整改通过，ACP 71 项测试通过；Host 用新客户端对已安装 DSH 执行了不调用模型的初始化、新建会话、关闭、停止，日常 DSH 目录未变。Codex 本轮没有重复原生握手；复核固定产物六条路径仍与 `70c95a9` 字节相同，并在整合后的两次标准完整检查中得到 2497/166/110 通过。原微任务 `9ceb132c-e9a8-4cbf-b051-aab67197e8a0` 已用固定 artifact `67ec3ae9-9d7a-45dd-8483-38570f1e89d2`、既有整合 `int-f42076f2-de72-4700-9f27-4d27cbb4d521` 完成 acknowledged accepted（revision 16）。这条客户端线的内部验收收尾；公共接线仍等第一步整步验收。上面的待验收与旧验证记录保留其历史时点，当前边界见[第一步瘦身记录](adr025-step1-pydantic.md)。
