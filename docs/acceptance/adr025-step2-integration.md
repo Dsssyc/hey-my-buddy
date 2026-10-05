@@ -61,3 +61,7 @@ Worker 提出的公共缺口由 Host 作出以下选择，并交原 run 串行�
 第三份固定交付 `9fb5d24`、artifact `8195c1ef-66da-45fb-8ffd-56efe497c470` 的累计补丁摘要为 `7faa3bbda96851f3e24e85aab7618453a947f57f2fc55c0eae3f38770555e450`，23 个路径字节已核对。Host 再次拒绝：交付排除仍只用裸 call ID，外来根复用该 ID 时被误删；排除后的统计从有界事件列表重算，未结束调用还被算成了零；角色反馈只包住结算循环，没有包住 RPC 内部泵，反向请求若发生在 `session/send` 回复之前仍会拖到超时。真实收集器和本地 Python 对端的复现保存在 `2b-review-3-probes.json`，本轮没有安装版 ZCode 或模型调用。
 
 第三次 `continue` 的固定说明摘要为 `9ecd49652f3344b6d11feeb6cc389ea40dd8f273674f61e2e2244094ce105383`。Host 将 `protocol/tool_evidence.py` 及其现有测试补入微任务范围，只允许把已验证调用的可选排除放回拥有完整调用表的收集器，以完整原生身份及 call ID 为键；默认空排除保持原行为，判定与公开包格式不变。这是本步事实保留的局部修正，未扩展其他 harness 或公共 CLI。另要求把发出的配置放在 `PolicyFact.requested`，不能写成原生 `reported`。修正仍由原 run 完成，Host 仅登记审查与接口选择。
+
+第三次继续的 ZCode Worker 回合因提供方返回 `429`、`1308`、`rate_limited`、`not-retryable` 失败；停止已确认，只留下未经验证的部分交付 `0b03c27`。Host 保留该交付，没有重试此受限路径，也没有改登录、运行时或共享配置。在同一 run 请求重新路由，任务说明明确排除受限执行途径，仍不指定 buddy；路由 `dec-2eb60dd1-0f31-45ed-a969-429bae4af15c` 自动选中 Codex 的 `gpt-6.1-sol / max` 继续原 2-B。这次使用 Codex 执行微任务不涉及 Codex 运行模块的抽取。
+
+等待期间，Host 从 `9fb5d24` 的独立固定快照实跑公共格式、实时格式及 ZCode 实时绑定的 67 个测试，全部通过；原始记录为本步 `tmp/` 的 `2b-host-format-live-9fb5d24.log`。这批不含安装版原生程序或模型调用，与后续针对收集器和 RPC 泵的修正分开核对；2-B 尚未验收，整步完整检查与真实冒烟仍未进行。
