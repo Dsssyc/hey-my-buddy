@@ -16,7 +16,7 @@ from ..base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle
 from ..controller import collect_controller, launch_controller, read_strict_result, signal_name, stop_confirmed
 from ...roles import turn_io
 from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths
-from .protocol import NativeError, decode_json
+from .protocol import NativeError
 
 class ZcodeAdapter(Adapter):
     name = "zcode"
@@ -114,7 +114,7 @@ class ZcodeAdapter(Adapter):
         if getattr(handle, "no_tool", False):
             from ...roles.structured_call import collect
             return collect(handle)
-        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=decode_json),
+        collection = collect_controller(handle, read=lambda path: read_strict_result(path),
                                         stop=stop_confirmed)
         payload = collection.payload
         exit_code = collection.exit_code
@@ -224,7 +224,7 @@ class ZcodeAdapter(Adapter):
                 log_paths=logs)
             if handle.wait(30) is None:
                 handle.terminate(grace_seconds=8)
-            collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=decode_json),
+            collection = collect_controller(handle, read=lambda path: read_strict_result(path),
                                             stop=stop_confirmed)
             stopped = collection.stop_confirmed
             if not collection.payload or collection.exit_code != 0 or collection.payload.get("status") != "ok" or not stopped:

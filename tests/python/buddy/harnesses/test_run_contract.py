@@ -16,9 +16,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from pydantic import ValidationError
 
+from hey_my_buddy import json_codec
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.errors import BoardError
 
@@ -310,6 +312,115 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertEqual(layer.exit_code, 4294967295)
         with self.assertRaises(BoardError):
             rc.PrivateStatePaths(invocation_root="relative/inv", native_root="/tmp/native")
+
+
+class WholeFrameGateTests(unittest.TestCase):
+    """The whole-frame bound of the run request and result frames, refused
+    before the parser ever runs.
+
+    Each padded frame carries exactly the payload of a frame one padding
+    shorter that decodes fine — every field stays within its own bound and
+    only the raw JSON frame's byte count is invalid. A refusal message alone
+    proves nothing about the order: a decoder that parsed first and bounded
+    afterwards would refuse the same frames with the same message, so the
+    tests spy on the root package's real :func:`decode_strict_json` call
+    point — an over-limit refusal must reach it zero times, and the legal
+    control must be parsed by it exactly once. A legal canonical request
+    frame can never reach the 16 MiB bound (the worst legal escaping — a
+    2 MiB input of control characters at six bytes each, beside the bounded
+    schemas, services and references — stays below 14 MiB), so only
+    non-canonical padding or oversized raw transport bytes exercise the
+    bound there.
+    """
+
+    def padded_over(self, text: str, maximum: int) -> str:
+        """The same frame with one whitespace run between its first tokens."""
+        padding = maximum - len(text.encode()) + 1024
+        self.assertGreater(padding, 0)
+        return "{" + " " * padding + text[1:]
+
+    def assert_refused_before_parsing(self, decode, frame: object, parser, label: str):
+        with self.assertRaises(BoardError) as raised:
+            decode(frame)
+        self.assertIn("frame", raised.exception.message, label)
+        self.assertIn("byte bound", raised.exception.message, label)
+        parser.assert_not_called()
+
+    def test_an_over_limit_request_frame_is_refused_before_parsing(self):
+        request = full_request(Path("/tmp"))
+        text = rc.encode_run_request(request)
+        self.assertLess(len(text.encode()), rc.MAX_RUN_REQUEST_BYTES)
+        padded = self.padded_over(text, rc.MAX_RUN_REQUEST_BYTES)
+        self.assertGreater(len(padded.encode()), rc.MAX_RUN_REQUEST_BYTES)
+        with mock.patch.object(json_codec, "decode_strict_json",
+                               wraps=json_codec.decode_strict_json) as parser:
+            self.assert_refused_before_parsing(rc.decode_run_request, padded, parser, "text form")
+            # The same raw transport bytes hit the bound before any parsing too.
+            self.assert_refused_before_parsing(rc.decode_run_request, padded.encode(), parser,
+                                               "bytes form")
+            # Without the padding the very same payload is one legal frame.
+            self.assertEqual(rc.decode_run_request(text), request)
+            parser.assert_called_once_with(text)
+
+    def test_an_over_limit_result_frame_is_refused_before_parsing(self):
+        result = full_result()
+        text = rc.encode_run_result(result)
+        self.assertLess(len(text.encode()), rc.MAX_RUN_RESULT_BYTES)
+        padded = self.padded_over(text, rc.MAX_RUN_RESULT_BYTES)
+        self.assertGreater(len(padded.encode()), rc.MAX_RUN_RESULT_BYTES)
+        with mock.patch.object(json_codec, "decode_strict_json",
+                               wraps=json_codec.decode_strict_json) as parser:
+            self.assert_refused_before_parsing(rc.decode_run_result, padded, parser, "text form")
+            self.assert_refused_before_parsing(rc.decode_run_result, padded.encode(), parser,
+                                               "bytes form")
+            self.assertEqual(rc.decode_run_result(text), result)
+            parser.assert_called_once_with(text)
+
+
+class StrictScalarTypeTests(unittest.TestCase):
+    """Ordinary fields keep strict scalar types at both entries (step 2-P).
+
+    The step 1 review confirmed the behavior was right but untested: an int
+    never passes a bool field and a str never passes an int field, on the
+    Python constructor exactly as on the wire decode. The covered fields are
+    the ones whose type is held by the shared strict configuration alone.
+    """
+
+    def test_python_construction_refuses_int_for_bool_and_str_for_int(self):
+        request = full_request(Path("/tmp"))
+        with self.assertRaises(BoardError, msg="capture_evidence"):
+            edited(request, capture_evidence=1)
+        with self.assertRaises(BoardError, msg="network.requested"):
+            edited(request, network=rc.NetworkPolicy(requested=1, allowed_domains=None))
+        with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
+            edited(request, budget=rc.RunBudget(timeout_seconds="60", max_output_bytes=1024))
+        with self.assertRaises(BoardError, msg="identity.generation"):
+            rc.RunIdentity(task_id="task", attempt_id="attempt", generation=True,
+                           invocation_id="invocation")
+        with self.assertRaises(BoardError, msg="end.native_exit_code"):
+            rc.RunEnd(status="ok", native_exit_code="0")
+
+    def test_the_wire_entries_refuse_int_for_bool_and_str_for_int(self):
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["captureEvidence"] = 1
+        with self.assertRaises(BoardError, msg="captureEvidence"):
+            rc.decode_run_request(payload)
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["budget"]["timeoutSeconds"] = "60"
+        with self.assertRaises(BoardError, msg="timeoutSeconds"):
+            rc.decode_run_request(payload)
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["identity"]["generation"] = True
+        with self.assertRaises(BoardError, msg="generation"):
+            rc.decode_run_request(payload)
+        result_payload = full_result().to_payload()
+        result_payload["modelStarted"] = 1
+        with self.assertRaises(BoardError, msg="modelStarted"):
+            rc.decode_run_result(result_payload)
+        result_payload = full_result().to_payload()
+        result_payload["end"]["nativeExitCode"] = "0"
+        with self.assertRaises(BoardError, msg="nativeExitCode"):
+            rc.decode_run_result(result_payload)
 
 
 class FreezingTests(unittest.TestCase):

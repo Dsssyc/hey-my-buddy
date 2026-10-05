@@ -43,25 +43,6 @@ from hey_my_buddy.buddy.roles import turn_io
 CHILD_SOURCE = "print('controller-out')"
 
 
-def strict_decode(raw):
-    """A caller's strict decoder: duplicate members and non-finite numbers refused.
-
-    The real harness decoders (codex/zcode/claude protocol ``decode_json``) keep
-    their own pinned tests; this stands in for the contract the shared reader
-    must propagate.
-    """
-    def pairs(items):
-        value = {}
-        for key, item in items:
-            if key in value:
-                raise ValueError("duplicate JSON member")
-            value[key] = item
-        return value
-
-    return json.loads(raw, object_pairs_hook=pairs,
-                      parse_constant=lambda _name: (_ for _ in ()).throw(ValueError("non-finite JSON")))
-
-
 class FakeProcess:
     """The Popen surface the outer layer touches, without a real child."""
 
@@ -339,40 +320,41 @@ class StrictReadTests(unittest.TestCase):
     def write(self, raw: bytes):
         self.path.write_bytes(raw)
 
-    def test_a_complete_object_result_is_decoded_through_the_calling_decoder(self):
+    def test_a_complete_object_result_is_decoded_by_the_common_strict_decoder(self):
         self.write(b'{"status": "ok", "processState": {"shutdownConfirmed": true}}')
-        self.assertEqual(read_strict_result(self.path, decode=json.loads),
+        self.assertEqual(read_strict_result(self.path),
                          {"status": "ok", "processState": {"shutdownConfirmed": True}})
 
     def test_non_object_values_and_undecodable_bytes_return_none(self):
         for raw in (b"[1, 2]", b'"text"', b"17", b"null", b"{broken", b"\xff\xfe\x00"):
             with self.subTest(raw=raw):
                 self.write(raw)
-                self.assertIsNone(read_strict_result(self.path, decode=json.loads))
+                self.assertIsNone(read_strict_result(self.path))
 
     def test_duplicate_members_and_non_finite_numbers_are_refused(self):
-        for raw in (b'{"a": 1, "a": 2}', b'{"a": NaN}', b'{"a": Infinity}'):
+        for raw in (b'{"a": 1, "a": 2}', b'{"a": NaN}', b'{"a": Infinity}', b'{"a": 1e999}'):
             with self.subTest(raw=raw):
                 self.write(raw)
-                self.assertIsNone(read_strict_result(self.path, decode=strict_decode))
+                self.assertIsNone(read_strict_result(self.path))
 
     def test_the_512_kib_read_cap_refuses_before_decoding(self):
         self.write(b" " * (512 * 1024 + 1))
 
         def explode(raw):
-            raise AssertionError("an over-limit result must never be decoded")
+            raise AssertionError("an over-limit result must never reach the strict decoder")
 
-        self.assertIsNone(read_strict_result(self.path, decode=explode))
+        with mock.patch.object(controller, "decode_strict_json", explode):
+            self.assertIsNone(read_strict_result(self.path))
         self.assertEqual(self.path.stat().st_size, 512 * 1024 + 1)
 
     def test_exactly_the_cap_is_still_read_and_decoded(self):
         payload = json.dumps({"padding": "x" * (512 * 1024 - 15)}).encode()
         self.assertEqual(len(payload), 512 * 1024)
         self.write(payload)
-        self.assertEqual(read_strict_result(self.path, decode=json.loads)["padding"], payload[13:-2].decode())
+        self.assertEqual(read_strict_result(self.path)["padding"], payload[13:-2].decode())
 
     def test_a_missing_result_file_returns_none(self):
-        self.assertIsNone(read_strict_result(self.path, decode=json.loads))
+        self.assertIsNone(read_strict_result(self.path))
 
 
 class PlainAndLastLineReadTests(unittest.TestCase):
@@ -553,8 +535,7 @@ class CollectControllerTests(unittest.TestCase):
         stdout.write_text(json.dumps({"status": "cancelled", "processState": {"shutdownConfirmed": True}}))
         handle = SimpleNamespace(log_paths={"stdout": str(stdout)}, process=FakeProcess(-15),
                                  shutdown_confirmed=lambda: True)
-        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=json.loads),
-                                        stop=stop_confirmed)
+        collection = collect_controller(handle, read=read_strict_result, stop=stop_confirmed)
         self.assertIsInstance(collection, ControllerCollection)
         self.assertEqual(collection.payload, {"status": "cancelled", "processState": {"shutdownConfirmed": True}})
         self.assertEqual(collection.exit_code, -15)
@@ -574,8 +555,7 @@ class CollectControllerTests(unittest.TestCase):
     def test_an_unreadable_result_keeps_the_attempt_unconfirmed(self):
         handle = SimpleNamespace(log_paths={"stdout": str(self.root / "missing")},
                                  process=FakeProcess(1), shutdown_confirmed=lambda: True)
-        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=json.loads),
-                                        stop=stop_confirmed)
+        collection = collect_controller(handle, read=read_strict_result, stop=stop_confirmed)
         self.assertIsNone(collection.payload)
         self.assertIs(collection.stop_confirmed, False)
         self.assertEqual(collection.exit_code, 1)

@@ -8,11 +8,13 @@ face, with its own differences expressed as explicit rules, never merged into
 a stronger or weaker assumption. The native runner, config, protocol and
 tool-evidence bodies keep their own implementations; this module adds no
 process ownership, no IPC, no role verdict and no fact the paths did not
-already publish. The strict decoders stay parameters because the Codex, Claude
-and ZCode decoders genuinely differ (Claude also refuses floats that overflow
-to infinity), the Router's ordinary 256 KiB read keeps its private-path
-exceptions, the DSH worker keeps its unbounded last-line read, and the DSH
-worker keeps its legacy Node stop exceptions documented until step four.
+already publish. The Codex, Claude and ZCode strict reads share the root
+package's one strict decoder (:func:`hey_my_buddy.json_codec.decode_strict_json`,
+which refuses duplicate members and every non-finite number, overflow to
+infinity included), the Router's ordinary 256 KiB read keeps its own ordinary
+semantics and private-path exceptions, the DSH worker keeps its unbounded
+last-line read, and the DSH worker keeps its legacy Node stop exceptions
+documented until step four.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from pathlib import Path
 from .base import ProcessHandle, open_logs
 from ..runtime.windows_process import owned_popen
 from ...errors import BoardError
+from ...json_codec import decode_strict_json
 from ..roles.turn_io import guard_private_path
 
 #: The strict controller-result bound shared by the Codex, Claude and ZCode
@@ -87,20 +90,20 @@ def launch_controller(*, prepare, log_paths: dict, before_try=None, timeout_seco
     return handle
 
 
-def read_strict_result(path: Path, *, decode) -> dict | None:
+def read_strict_result(path: Path) -> dict | None:
     """The strict controller-result read of the Codex, Claude and ZCode paths.
 
     Reads at most 512 KiB + 1 byte; an over-limit file, undecodable bytes or a
-    non-object value return None. ``decode`` is the calling harness's own
-    protocol decoder (duplicate members and non-finite numbers refused); the
-    three are never merged into one stronger decoder.
+    non-object value return None. Decoding is the root package's one strict
+    decoder: duplicate members and non-finite numbers (``1e999`` overflow
+    included) are refused on all three paths alike.
     """
     try:
         with path.open("rb") as stream:
             raw = stream.read(STRICT_RESULT_BYTES + 1)
         if len(raw) > STRICT_RESULT_BYTES:
             return None
-        value = decode(raw)
+        value = decode_strict_json(raw)
         return value if isinstance(value, dict) else None
     except (OSError, ValueError, RecursionError):
         return None

@@ -13,12 +13,15 @@ reachable without loss.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
+from hey_my_buddy import json_codec
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.blackboard.tasks import inquiry as board_inquiry
 from hey_my_buddy.buddy.harnesses.zcode import protocol as zcode_protocol
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import schemas as board_schemas
 
 
@@ -462,6 +465,112 @@ class ObserveTests(unittest.TestCase):
             payload["formatVersion"] = wrong_version
             with self.assertRaises(BoardError, msg=repr(wrong_version)):
                 lv.decode_live_request(payload)
+
+
+class WholeFrameGateTests(unittest.TestCase):
+    """The whole-frame bound of the three live frames, refused before the
+    parser ever runs.
+
+    Each refused frame either carries the padded payload of a frame one
+    padding shorter that decodes fine, or — the snapshot — a canonical frame
+    whose every field is within its own bound (32 bounded 4000-byte answers,
+    the set the existing pager really carries); only the raw frame's byte
+    count is invalid. A refusal message alone proves nothing about the order,
+    so the tests spy on the root package's real :func:`decode_strict_json`
+    call point: an over-limit refusal must reach it zero times, and each
+    normal-size control must be parsed by it exactly once. The request and
+    reply frames alone can never reach 64 KiB canonically: their bounded
+    fields sum to a few KiB (a question escapes to at most six times its
+    4000 bytes), so padding or oversized raw transport bytes exercise their
+    bound.
+    """
+
+    def padded_over(self, text: str) -> str:
+        padding = lv.MAX_LIVE_FRAME_BYTES - len(text.encode()) + 1024
+        self.assertGreater(padding, 0)
+        return "{" + " " * padding + text[1:]
+
+    def assert_refused_before_parsing(self, decode, frame, parser, label: str):
+        with self.assertRaises(BoardError) as raised:
+            decode(frame)
+        self.assertIn("frame", raised.exception.message, label)
+        self.assertIn("byte bound", raised.exception.message, label)
+        parser.assert_not_called()
+
+    def spied_parser(self):
+        return mock.patch.object(json_codec, "decode_strict_json",
+                                 wraps=json_codec.decode_strict_json)
+
+    def test_over_limit_request_and_reply_frames_are_refused_before_parsing(self):
+        request = inquiry_request()
+        text = lv.encode_live_request(request)
+        self.assertLess(len(text.encode()), lv.MAX_LIVE_FRAME_BYTES)
+        padded = self.padded_over(text)
+        self.assertGreater(len(padded.encode()), lv.MAX_LIVE_FRAME_BYTES)
+        with self.spied_parser() as parser:
+            self.assert_refused_before_parsing(lv.decode_live_request, padded, parser, "request text")
+            self.assert_refused_before_parsing(lv.decode_live_request, padded.encode(),
+                                               parser, "request bytes")
+            self.assertEqual(lv.decode_live_request(text), request)
+            parser.assert_called_once_with(text)
+        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued")
+        reply_text = lv.encode_live_reply(reply)
+        reply_padded = self.padded_over(reply_text)
+        with self.spied_parser() as parser:
+            self.assert_refused_before_parsing(lv.decode_live_reply, reply_padded, parser, "reply text")
+            self.assertEqual(lv.decode_live_reply(reply_text), reply)
+            parser.assert_called_once_with(reply_text)
+
+    def test_a_snapshot_of_legal_bounded_answers_that_exceeds_one_frame_is_refused(self):
+        inquiries = tuple(lv.InquiryState(question_id=f"question-{index:02d}", status="answered",
+                                          answer="x" * lv.MAX_ANSWER_BYTES, seq=index + 1)
+                          for index in range(lv.MAX_INQUIRIES_PER_RUN))
+        snapshot = lv.LiveSnapshot(identity=identity(), sequence=1, inquiries=inquiries)
+        payload = snapshot.to_payload()
+        # Every field is within its own bound; only the whole exceeds one frame.
+        self.assertEqual(len(payload["inquiries"]), lv.MAX_INQUIRIES_PER_RUN)
+        self.assertGreater(len(canonical_json(payload).encode()), lv.MAX_LIVE_FRAME_BYTES)
+        with self.spied_parser() as parser:
+            self.assert_refused_before_parsing(lv.decode_live_snapshot, payload, parser,
+                                               "snapshot mapping")
+            self.assert_refused_before_parsing(lv.decode_live_snapshot,
+                                               canonical_json(payload).encode(), parser,
+                                               "snapshot bytes")
+            # A normal-size snapshot of the same shape still parses, exactly once.
+            small = lv.LiveSnapshot(identity=identity(), sequence=1)
+            self.assertEqual(lv.decode_live_snapshot(small.to_payload()), small)
+            parser.assert_called_once_with(canonical_json(small.to_payload()))
+
+
+class StrictScalarTypeTests(unittest.TestCase):
+    """Ordinary live fields keep strict scalar types at both entries (step 2-P).
+
+    An int never passes a bool field and a str never passes an int field, on
+    the Python constructor exactly as on the wire decode.
+    """
+
+    def test_python_construction_refuses_int_for_bool_and_str_for_int(self):
+        with self.assertRaises(BoardError, msg="capabilities.activity"):
+            lv.LiveCapabilities(activity=1, inquiry_delivery="realtime")
+        with self.assertRaises(BoardError, msg="inquiry.seq"):
+            lv.InquiryState(question_id="question-1", status="queued", seq=True)
+
+    def test_the_wire_entries_refuse_int_for_bool_and_str_for_int(self):
+        snapshot = lv.LiveSnapshot(identity=identity(), sequence=3,
+                                   inquiries=(lv.InquiryState(question_id="question-1",
+                                                              status="queued", seq=4),))
+        payload = snapshot.to_payload()
+        payload["sequence"] = "3"
+        with self.assertRaises(BoardError, msg="sequence"):
+            lv.decode_live_snapshot(payload)
+        payload = snapshot.to_payload()
+        payload["truncated"] = 1
+        with self.assertRaises(BoardError, msg="truncated"):
+            lv.decode_live_snapshot(payload)
+        payload = snapshot.to_payload()
+        payload["inquiries"][0]["seq"] = True
+        with self.assertRaises(BoardError, msg="seq"):
+            lv.decode_live_snapshot(payload)
 
 
 if __name__ == "__main__":
