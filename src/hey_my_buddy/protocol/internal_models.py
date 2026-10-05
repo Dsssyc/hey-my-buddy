@@ -5,31 +5,27 @@ pydantic instead of per-class handwritten ``__post_init__``/``to_payload``/
 ``from_payload`` triples. Everything the formats share lives here exactly
 once: the frozen no-extra model base with camelCase wire aliases, the board
 error boundary around pydantic's validation errors, and the bounded
-string/identifier/count/path/tuple/:class:`FrozenJson` field types. The
-differences from plain pydantic are deliberate and explicit in this module:
-JSON arrays are accepted for tuple fields (the wire carries arrays, Python
-values carry tuples), a field with a Python-side default is still required on
-the wire (:meth:`InternalModel.from_payload` checks the exact key set), deep
-JSON stays copy-isolated and immutable through :class:`FrozenJson`, and a wire
-``"unknown"`` can spell an absent Python value. The public board schemas in
+string/identifier/count/path/tuple/:class:`FrozenJson` field types. Ordinary
+pydantic semantics apply end to end: a field with a default may be omitted on
+the wire and on the constructor, extra members are refused, and both the
+snake_case and camelCase spellings of a name are accepted (``populate_by_name``
+is what the constructors already use). Deep JSON stays copy-isolated and
+immutable through :class:`FrozenJson`. The public board schemas in
 ``protocol/schemas.py`` are deliberately untouched by this module.
 """
 from __future__ import annotations
 
 import json
 import re
-from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar, Optional, Self, Tuple
+from typing import Annotated, Any, Optional, Self, Tuple
 
 from pydantic import (
     AfterValidator,
-    BeforeValidator,
     BaseModel,
     ConfigDict,
     Field,
     ValidationError,
-    model_validator,
 )
 from pydantic.alias_generators import to_camel
 from pydantic_core import core_schema
@@ -216,61 +212,39 @@ def _absolute_path(value: str) -> str:
 AbsolutePath = Annotated[str, AfterValidator(_absolute_path)]
 
 
-def _json_array(value: Any) -> Any:
-    """The wire form of a tuple field is a JSON array."""
-    return tuple(value) if isinstance(value, list) else value
-
-
 def JsonTuple(item: Any, *, max_items: int) -> Any:
     """One tuple field of at most ``max_items`` items whose wire form is a JSON
-    array of them."""
-    return Annotated[Tuple[item, ...], BeforeValidator(_json_array), Field(max_length=max_items)]
+    array of them.
 
-
-@dataclass(frozen=True)
-class UnknownableText:
-    """One wire text whose literal ``unknown`` spells an absent Python value.
-
-    The existing run result projects an unknown harness version as the wire
-    string ``"unknown"`` while the Python value stays ``None``; both directions
-    of that spelling live in this one type.
+    The field itself is validated in pydantic's lax mode so a JSON array (a
+    Python list after decoding) converts into the immutable tuple the Python
+    value holds; the element type keeps the model's strict behaviour, which the
+    library enforces inside a lax tuple too: a probe on the project's pydantic
+    shows a bool never passes an ``int`` element and a ``str`` never passes one
+    either, so accepting arrays does not loosen the element types.
     """
-
-    maximum: int
-
-    def __get_pydantic_core_schema__(self, source_type: Any, handler: Any) -> core_schema.CoreSchema:
-        def to_python(value: Any) -> Optional[str]:
-            if value is None or value == "unknown":
-                return None
-            return check_text(value, "value", maximum=self.maximum)
-
-        def to_wire(value: Optional[str]) -> str:
-            return "unknown" if value is None else value
-
-        return core_schema.no_info_plain_validator_function(
-            to_python, serialization=core_schema.plain_serializer_function_ser_schema(to_wire))
+    return Annotated[Tuple[item, ...], Field(strict=False, max_length=max_items)]
 
 
-#: Marks one decode as a wire frame: every nesting level of a wire frame
-#: carries its exact key set, while constructor calls keep the ordinary Python
-#: rules (defaults may be omitted). A scope marker rather than pydantic's
-#: validation context, because pydantic routes ``model_validate`` of a model
-#: with a custom ``__init__`` through the constructor and drops the context
-#: there; a scope marker stays visible on every routing.
-_wire_decode: ContextVar[bool] = ContextVar("internal_wire_decode", default=False)
+#: The exact internal frame-version field. The strict mode keeps the scalar
+#: strict — ``True`` and ``1.0`` never pass it (a strict ``int`` refuses a bool
+#: and a float, where ``Literal[1]`` alone would match them by equality) — and
+#: the ``ge``/``le`` pair refuses every other integer. A frame carries ``1`` by
+#: default, so the wire may also omit it.
+FormatVersion = Annotated[int, Field(strict=True, ge=1, le=1)]
 
 
 class InternalModel(BaseModel):
     """The common base of the harness-internal formats (ADR-025 decision 6).
 
-    The base is immutable and closed: frozen instances, no extra wire members,
+    The base is immutable and closed: frozen instances, no extra members,
     strict scalar types (a bool never passes an int field, a number never
     passes a string field), and snake_case construction beside the camelCase
-    wire names. Every field of every nesting level is required on the wire even
-    when it carries a Python-side default, and the wire speaks only the
-    camelCase aliases, so an internal frame always holds the same key set at
-    every level in both directions. Validation failures surface as
-    :class:`BoardError`, never as pydantic's own error type.
+    wire names. Ordinary default semantics apply on the wire exactly as on the
+    constructor: a field with a default may be omitted, a required field may
+    not, and an unknown member is refused at every nesting level. Validation
+    failures surface as :class:`BoardError`, never as pydantic's own error
+    type.
     """
 
     model_config = ConfigDict(
@@ -281,76 +255,30 @@ class InternalModel(BaseModel):
         strict=True,
     )
 
-    #: Set by a frame model whose wire form carries the exact format version;
-    #: ``True`` and ``1.0`` compare equal to ``1`` in Python and are refused.
-    WIRE_FORMAT_VERSION: ClassVar[Optional[int]] = None
-    #: ``False`` on the one model whose wire key set is a nonempty subset of
-    #: its fields instead of the exact full set.
-    WIRE_KEYS_EXACT: ClassVar[bool] = True
-
     def __init__(self, **data: Any) -> None:
         try:
             super().__init__(**data)
         except ValidationError as error:
             raise _validation_failure(type(self), error) from None
 
-    @staticmethod
-    def decoding_wire() -> bool:
-        return _wire_decode.get()
-
-    @model_validator(mode="before")
-    @classmethod
-    def _wire_shape(cls, data: Any) -> Any:
-        """The exact wire key set of one frame level, checked before any field
-        validation so a missing default or a snake_case spelling on the wire is
-        refused exactly like the hand-written codecs refused it. The check runs
-        only inside a wire decode; constructor calls keep ordinary Python
-        defaults."""
-        if not isinstance(data, dict) or not cls.decoding_wire():
-            return data
-        if cls.WIRE_FORMAT_VERSION is not None:
-            version = data.get("formatVersion")
-            if type(version) is not int or version != cls.WIRE_FORMAT_VERSION:
-                raise _BoardValueError("INVALID_ARGUMENT",
-                                       f"the {_wire_label(cls)} format version is not supported",
-                                       formatVersion=version)
-            data = {key: item for key, item in data.items() if key != "formatVersion"}
-        keys = {field.alias or name for name, field in cls.model_fields.items()}
-        if cls.WIRE_KEYS_EXACT:
-            if set(data) != keys:
-                raise _BoardValueError("INVALID_ARGUMENT",
-                                       f"the {_wire_label(cls)} payload must carry exactly "
-                                       f"{', '.join(sorted(keys))}")
-        elif not data or not set(data) <= keys:
-            raise _BoardValueError("INVALID_ARGUMENT",
-                                   f"the {_wire_label(cls)} payload must carry one or more of "
-                                   f"{', '.join(sorted(keys))}")
-        return data
-
     @classmethod
     def from_payload(cls, value: Any) -> Self:
         """Validate and unfreeze one model from its internal JSON form."""
         if not isinstance(value, dict):
             raise fail(f"the {_wire_label(cls)} payload must be an object")
-        token = _wire_decode.set(True)
         try:
             return cls.model_validate(value)
         except ValidationError as error:
             raise _validation_failure(cls, error) from None
-        finally:
-            _wire_decode.reset(token)
 
     def to_payload(self) -> dict:
         """The exact wire projection of one model, aliases and all."""
-        payload = self.model_dump(mode="json", by_alias=True)
-        if self.WIRE_FORMAT_VERSION is not None:
-            payload["formatVersion"] = self.WIRE_FORMAT_VERSION
-        return payload
+        return self.model_dump(mode="json", by_alias=True)
 
 
 __all__ = [
-    "AbsolutePath", "Count", "ExitCode", "FrozenJson", "FrozenJsonAt", "Hex64", "Identifier",
-    "InternalModel", "JsonTuple", "MAX_COUNT", "MAX_EXIT_CODE", "MAX_PATH_BYTES", "MIN_EXIT_CODE",
-    "NonNegativeInt", "OptionalFrozenJsonAt", "OptionalText", "RawText", "Text", "UnknownableText",
+    "AbsolutePath", "Count", "ExitCode", "FormatVersion", "FrozenJson", "FrozenJsonAt", "Hex64",
+    "Identifier", "InternalModel", "JsonTuple", "MAX_COUNT", "MAX_EXIT_CODE", "MAX_PATH_BYTES",
+    "MIN_EXIT_CODE", "NonNegativeInt", "OptionalFrozenJsonAt", "OptionalText", "RawText", "Text",
     "check_text", "fail",
 ]

@@ -18,12 +18,15 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, CommandAdapter, DecisionAdapter, DshAdapter, register_run_seam, run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import (
     decode_run_request,
+    FEEDBACK_CONTINUE,
+    FEEDBACK_STOP,
     FrozenJson,
     NetworkPolicy,
     PrivateStatePaths,
     RunBudget,
     RunConfiguration,
     RunEnd,
+    RunFeedback,
     RunIdentity,
     RunRequest,
     RunResult,
@@ -55,7 +58,8 @@ class FakeHarnessRun:
         self.services.append(services)
         self.cancelled.append(cancelled)
         for sequence, fact in enumerate(self.facts):
-            if not observer(fact):
+            feedback = observer(fact)
+            if feedback.action == "stop":
                 self.stopped_at = sequence
                 return self._result(request, status="cancelled", interrupt=True)
             if cancelled():
@@ -153,7 +157,7 @@ class RunCallPointTests(unittest.TestCase):
         module = FakeHarnessRun()
         services = object()
         cancelled = lambda: False  # noqa: E731 - the seam passes the callable through
-        result = self.run_fake(module, lambda fact: True, services, cancelled)
+        result = self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, services, cancelled)
         self.assertIs(module.requests[0], self.request)
         self.assertIs(module.services[0], services)
         self.assertIs(module.cancelled[0], cancelled)
@@ -164,7 +168,7 @@ class RunCallPointTests(unittest.TestCase):
         module = FakeHarnessRun()
         register_run_seam("zcode", module)
         self.addCleanup(RUN_SEAMS.pop, "zcode")
-        observer = lambda fact: True
+        observer = lambda fact: FEEDBACK_CONTINUE
         # An unregistered harness, a look-alike registered under another name,
         # and a direct call with a non-registered module are all refused here,
         # at the one call point, without a second channel existing.
@@ -181,7 +185,7 @@ class RunCallPointTests(unittest.TestCase):
 
     def test_cancelled_callback_reaches_the_module(self):
         module = FakeHarnessRun(facts=[observation("model-start", 0, started=True)])
-        result = self.run_fake(module, lambda fact: True, None, cancelled=lambda: True)
+        result = self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None, cancelled=lambda: True)
         self.assertEqual(result.end.status, "cancelled")
 
 

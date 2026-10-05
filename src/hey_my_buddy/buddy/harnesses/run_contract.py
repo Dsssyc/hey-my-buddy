@@ -31,6 +31,7 @@ from ...protocol.internal_models import (
     AbsolutePath,
     Count,
     ExitCode,
+    FormatVersion,
     FrozenJson,
     FrozenJsonAt,
     Hex64,
@@ -43,11 +44,11 @@ from ...protocol.internal_models import (
     OptionalText,
     RawText,
     Text,
-    UnknownableText,
     check_text,
     fail,
 )
-from pydantic import BeforeValidator, Field, field_serializer, model_serializer, model_validator
+
+from pydantic import AfterValidator, BeforeValidator, Field, field_serializer, model_serializer, model_validator
 
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
@@ -113,6 +114,12 @@ MAX_SERVICE_TOOL_NAMES = 16
 MAX_NETWORK_DOMAINS = 64
 MAX_CHECKS = 8
 MAX_ROOT_IDENTITIES = 32
+#: The role-assembled input text keeps the old input allowed set: any bounded
+#: string, NUL included (the board's task text admits NUL and the native wire
+#: serializes it escaped), but a whole input is never empty — the library's
+#: own length bound enforces it on construction and decode alike. The
+#: corrected input of one feedback carries the same allowed set.
+NonEmptyInputText = Annotated[RawText(MAX_INPUT_TEXT_BYTES), Field(min_length=1)]
 
 
 class RunIdentity(InternalModel):
@@ -174,14 +181,25 @@ class RunBudget(InternalModel):
 
 
 class RunContinuation(InternalModel):
-    """A requested continuation; without evidence no native resume is enabled."""
+    """A requested continuation; without evidence no native resume is enabled.
+
+    A native-session resume names the exact previous session it continues; a
+    reconstruction may honestly carry none.
+    """
 
     mode: ContinuationMode
-    previous_session_id: Text(512)
+    previous_session_id: OptionalText(512) = None
     binding_ref: OptionalText(512) = None
     previous_native_turn_id: OptionalText(512) = None
     previous_attempt_id: Optional[Identifier] = None
     previous_input_sha256: Optional[Hex64] = None
+
+    @model_validator(mode="after")
+    def _native_resume_names_its_session(self) -> "RunContinuation":
+        if self.mode == "native-session" and not self.previous_session_id:
+            raise fail("a native-session continuation requires the exact previous session id",
+                       field="previousSessionId")
+        return self
 
 
 class SessionService(InternalModel):
@@ -198,14 +216,14 @@ class SessionService(InternalModel):
 class RunRequest(InternalModel):
     """One harness run request: values only, no role authority of any kind."""
 
-    WIRE_FORMAT_VERSION = FORMAT_VERSION
+    format_version: FormatVersion = FORMAT_VERSION
 
     identity: RunIdentity
     harness: HarnessName
     configuration: RunConfiguration
     cwd: AbsolutePath
     private_state: PrivateStatePaths
-    input_text: Text(MAX_INPUT_TEXT_BYTES)
+    input_text: NonEmptyInputText
     tool_scope: ToolScope
     network: NetworkPolicy
     output_schema: FrozenJsonAt(MAX_SCHEMA_BYTES)
@@ -223,8 +241,6 @@ class NativeIdentity(InternalModel):
     field that was never reported stays absent from the wire instead of being
     written as ``null``.
     """
-
-    WIRE_KEYS_EXACT = False
 
     session_id: OptionalText(512) = None
     thread_id: OptionalText(512) = None
@@ -244,12 +260,21 @@ class NativeIdentity(InternalModel):
 
 
 class RunEnd(InternalModel):
-    """The native/protocol end fact; never a role verdict."""
+    """The native/protocol end fact; never a role verdict.
+
+    ``message`` is the bounded raw text of the failure the driver itself
+    observed — the composed codes and whitelisted summaries the native paths
+    already produce (at most a few hundred bytes; the bound holds the longest
+    real composition, a whitelisted failure summary inside a native error
+    text). A role's own stop wording stays with the role and never travels
+    here.
+    """
 
     status: EndStatus
     reason_code: OptionalText(128) = None
     native_exit_code: Optional[ExitCode] = None
     signal: OptionalText(32) = None
+    message: Optional[RawText(512)] = None
 
 
 class ModelStartEvidence(InternalModel):
@@ -319,20 +344,22 @@ class DeniedInteraction(InternalModel):
     """
 
     method: Text(128)
-    action: Text(32)
+    action: Text(64)
     request_id: OptionalText(128) = None
     native_identity: Optional[NativeIdentity] = None
     reason: OptionalText(400) = None
 
 
 def _count_pairs(value: Any) -> Any:
-    """The wire form of the unknown-event counts is one JSON object."""
-    if InternalModel.decoding_wire() and not isinstance(value, dict):
-        raise fail("countsByType must be a JSON object", field="countsByType")
+    """The wire form of the unknown-event counts is one JSON object.
+
+    This is the one input conversion the strict tuple still needs: a decoded
+    JSON object arrives as a ``Mapping`` and becomes the tuple of its pairs.
+    Everything else passes to the strict tuple validation unchanged, so a JSON
+    array of pairs is refused exactly like any non-object value.
+    """
     if isinstance(value, Mapping):
         return tuple(value.items())
-    if isinstance(value, list):
-        return tuple(tuple(pair) if isinstance(pair, list) else pair for pair in value)
     return value
 
 
@@ -523,38 +550,43 @@ def _validated_tool_evidence(value: Any) -> Optional[FrozenJson]:
     for event in events:
         if not isinstance(event, dict) or set(event) != set(tool_evidence_protocol.EVENT_FIELDS):
             raise fail("a tool evidence event must carry its exact field set", field="toolEvidence.events")
-        if not isinstance(event["nativeIdentity"], dict) or not event["nativeIdentity"] \
-                or set(event["nativeIdentity"]) - set(NATIVE_ID_KEYS):
+        # The projection's own incomplete facts are real evidence and stay
+        # lossless here: an event identity may be empty and callId/toolName/
+        # phase may be None when the native frame carried none of them. The
+        # closed key set, the version and the category/phase enums are exactly
+        # the collector's own; whether such an event may pass is judged only by
+        # the blackboard.
+        identity = event["nativeIdentity"]
+        if not isinstance(identity, dict) or set(identity) - set(NATIVE_ID_KEYS):
             raise fail("a tool evidence event identity is malformed", field="toolEvidence.events")
-        for key, item in event["nativeIdentity"].items():
+        for key, item in identity.items():
             check_text(item, f"toolEvidence event {key}", maximum=512)
-        check_text(event["callId"], "toolEvidence event callId", maximum=512)
-        check_text(event["toolName"], "toolEvidence event toolName", maximum=512)
+        for key in ("callId", "toolName", "phase"):
+            if event[key] is not None:
+                check_text(event[key], f"toolEvidence event {key}", maximum=512)
         if event["category"] not in tool_evidence_protocol.ACP_CATEGORIES:
             raise fail("a tool evidence event category is not an ACP category", field="toolEvidence.events")
-        if event["phase"] not in tool_evidence_protocol.TOOL_EVENT_PHASES:
+        if event["phase"] is not None and event["phase"] not in tool_evidence_protocol.TOOL_EVENT_PHASES:
             raise fail("a tool evidence event phase must be start or end", field="toolEvidence.events")
     return FrozenJson.from_value(package, "toolEvidence", maximum=MAX_PACKAGE_BYTES)
 
 
 def _native_error_record(value: Any) -> Optional[FrozenJson]:
-    """One harness's own raw native failure record (``{code, kind}`` shape).
+    """One harness's own whitelisted native failure attribution, as JSON.
 
-    This is a second, separate existing fact beside the whitelist quota
-    attribution: ZCode and DSH results carry a raw ``nativeFailure`` record for
-    failures that are not quota failures, and it must round-trip instead of
-    being folded into the end reason. ``code`` is required and bounded; the
-    other entries are bounded scalars.
+    This is a second, separate existing fact beside the quota attribution: the
+    harness already projects the native failure attribution through its own
+    whitelist before it reaches this field, and the real shapes are structured
+    (nested attribution objects, nullable codes and text summaries), so the
+    field keeps that bounded JSON verbatim instead of re-describing every
+    vendor's schema. Redeciding what the whitelist admits stays with the
+    harness; nothing here judges publishability.
     """
     if value is None:
         return None
     unpacked = value.value if isinstance(value, FrozenJson) else value
-    if not isinstance(unpacked, dict) or "code" not in unpacked:
-        raise fail("nativeError must be an object with a code", field="nativeError")
-    for key, item in unpacked.items():
-        if item is None or isinstance(item, (bool, int)):
-            continue
-        check_text(item, f"nativeError.{key}", maximum=400 if key == "code" else 64)
+    if not isinstance(unpacked, dict):
+        raise fail("nativeError must be an object", field="nativeError")
     return FrozenJson.from_value(unpacked, "nativeError", maximum=MAX_PACKAGE_BYTES)
 
 
@@ -570,6 +602,37 @@ ToolEvidencePackage = Annotated[Optional[FrozenJson], BeforeValidator(_validated
 NativeErrorRecord = Annotated[Optional[FrozenJson], BeforeValidator(_native_error_record)]
 
 
+class RunFeedback(InternalModel):
+    """The role observer's minimal in-process answer to the observed facts.
+
+    The actions are exactly three: ``continue`` lets the run proceed, ``stop``
+    asks the driver to interrupt the native run at once, and ``correct``
+    carries the complete next input text of one in-run correction. Whether a
+    correction is offered at all — at most once, never for an enum violation —
+    and how that text is assembled stay with the role's observation code; the
+    driver only executes the feedback, keeps the one native process and the
+    total deadline, and reports how many corrections happened. No role verdict
+    travels in this value.
+    """
+
+    action: Literal["continue", "stop", "correct"]
+    input_text: Optional[NonEmptyInputText] = None
+
+    @model_validator(mode="after")
+    def _correction_carries_its_input(self) -> "RunFeedback":
+        if self.action == "correct" and self.input_text is None:
+            raise fail("a correction carries the complete next input text", field="inputText")
+        if self.action != "correct" and self.input_text is not None:
+            raise fail("only a correction carries an input text", field="inputText")
+        return self
+
+
+#: The shared immutable continue/stop answers; every correcting answer carries
+#: its own input text and is constructed per observation.
+FEEDBACK_CONTINUE = RunFeedback(action="continue")
+FEEDBACK_STOP = RunFeedback(action="stop")
+
+
 class RunResult(InternalModel):
     """One native run's facts; ``ok`` means the native interaction completed.
 
@@ -578,12 +641,21 @@ class RunResult(InternalModel):
     a Worker success, a publishable Router answer or a Host acceptance.
     """
 
-    WIRE_FORMAT_VERSION = FORMAT_VERSION
+    format_version: FormatVersion = FORMAT_VERSION
 
     identity: RunIdentity
     harness: HarnessName
     end: RunEnd
-    harness_version: UnknownableText(64) = None
+    #: The version text the native probe actually returns is truncated to 80
+    #: characters by the production probe; the library's character bound carries
+    #: exactly that source. An empty probe text stays empty here — the legacy
+    #: "unknown" spelling is the outer projection's choice.
+    harness_version: Annotated[Optional[str], Field(max_length=80)] = None
+    #: The old native event count's exact meaning, kept as its own fact: the
+    #: canonical native events observed before the final round's settlement. It
+    #: is a count, never an order — sequence and ordinal evidence is the native
+    #: provenance's own.
+    native_event_count: Optional[Count] = None
     model_started: Optional[bool] = None
     model_start_evidence: ModelStartEvidence = Field(
         default_factory=lambda: ModelStartEvidence(basis="unknown"))
@@ -641,25 +713,28 @@ class HarnessRun(Protocol):
 
     ``run`` takes one frozen request and returns one factual result. ``observer``
     is the role-owned in-process callback that receives already-normalized,
-    retained run facts and returns whether to continue; its observation set is
-    placed by step 1-C. ``services`` are the role-held narrow session service
+    retained run facts and answers with one :class:`RunFeedback`: continue, stop
+    (the driver interrupts the native run), or correct (the driver runs the
+    carried next input text as one in-run correction on the same native process
+    and total deadline). ``services`` are the role-held narrow session service
     instances (completion, inquiry, checkpoint); their method surface belongs to
     the roles. ``cancelled`` is the outer cancel check. Model discovery is not
     part of this step's seam; the later ADR-025 steps place it through the Host.
     """
 
-    def run(self, request: RunRequest, *, observer: Callable[[Mapping[str, Any]], bool],
+    def run(self, request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
             services: Any, cancelled: Callable[[], bool]) -> RunResult: ...
 
 
 __all__ = [
-    "CHECK_BASES", "CONTINUATION_MODES", "END_STATUSES", "FORMAT_VERSION", "FrozenAccountReference",
+    "CHECK_BASES", "CONTINUATION_MODES", "END_STATUSES", "FEEDBACK_CONTINUE", "FEEDBACK_STOP",
+    "FORMAT_VERSION", "FrozenAccountReference",
     "FrozenJson", "GROUP_STATES", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
     "MAX_RUN_RESULT_BYTES", "MODEL_START_BASES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "DeniedInteraction", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "NetworkPolicy", "POLICY_ENFORCEMENTS", "PrivateStatePaths",
-    "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunIdentity", "RunRequest",
-    "RunResult", "RunValue", "SCHEMA_STATUSES", "SessionService", "StopEvidence", "StopLayer",
-    "TOOL_SCOPES", "UnknownEvents", "VALUE_MECHANISMS", "canonical_json", "decode_run_request",
-    "decode_run_result", "encode_run_request", "encode_run_result",
+    "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
+    "RunRequest", "RunResult", "RunValue", "SCHEMA_STATUSES", "SessionService", "StopEvidence",
+    "StopLayer", "TOOL_SCOPES", "UnknownEvents", "VALUE_MECHANISMS", "canonical_json",
+    "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",
 ]

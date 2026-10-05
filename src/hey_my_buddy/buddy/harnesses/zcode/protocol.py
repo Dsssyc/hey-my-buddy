@@ -95,12 +95,6 @@ COOPERATIVE_INQUIRY_NOTE = (
     "buddy_answer_inquiry verified against the root turn's own tool evidence"
 )
 
-#: The bare session-tool names the private MCP exposes inside one native root
-#: turn. The runner mounts them as ``mcp__<server>__<bare name>``, so a refusal
-#: envelope is bound to its tool by requiring the tracked native tool name to
-#: end with the envelope's bare name.
-SESSION_TOOLS = ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn")
-
 
 class ActivityProjection:
     """Bounded, metadata-only phase projection from the native event stream.
@@ -248,7 +242,8 @@ def refusal_shaped(raw: object) -> bool:
     return _refusal_payload(raw) is not None
 
 
-def verify_tool_refusal(raw: object, configuration: dict, native_tool: str) -> dict:
+def verify_tool_refusal(raw: object, configuration: dict, native_tool: str,
+                        mounted_tools: tuple[str, ...] | list[str]) -> dict:
     """Verify one signed tool-refusal envelope against this attempt, input and tool.
 
     The private MCP mints these for expected argument, attention and inquiry
@@ -256,9 +251,11 @@ def verify_tool_refusal(raw: object, configuration: dict, native_tool: str) -> d
     a *successful* tool result framed with a plain header; the signature binds
     the attempt identity, the turn input and the exact session tool, so a
     tampered, cross-attempt or cross-tool envelope fails here fatally instead
-    of becoming a recoverable refusal. A verified refusal only ever means
-    "correct the call and retry in this same native turn"; it can never carry
-    an outcome or mutate state.
+    of becoming a recoverable refusal. The tool binding is checked against the
+    session tools this run actually mounted — never a fixed global set — so a
+    refusal verifies only for the service the driver really bound. A verified
+    refusal only ever means "correct the call and retry in this same native
+    turn"; it can never carry an outcome or mutate state.
     """
     tool = native_tool.rsplit("__", 1)[-1] if isinstance(native_tool, str) else None
     envelope = _refusal_payload(raw)
@@ -275,7 +272,7 @@ def verify_tool_refusal(raw: object, configuration: dict, native_tool: str) -> d
                 or envelope["identity"] != configuration["identity"]
                 or envelope["inputSha256"] != configuration["inputSha256"]):
             raise NativeError("invalid-tool-refusal", "the tool refusal envelope failed its attempt-identity binding")
-        if (not isinstance(envelope["tool"], str) or envelope["tool"] not in SESSION_TOOLS
+        if (not isinstance(envelope["tool"], str) or envelope["tool"] not in tuple(mounted_tools)
                 or envelope["tool"] != tool or not native_tool.endswith("__" + envelope["tool"])):
             raise NativeError("invalid-tool-refusal", "the tool refusal envelope was signed for a different session tool")
         if (envelope["reason"] not in TOOL_REFUSAL_REASONS
@@ -752,6 +749,7 @@ class NativeConnection:
         self.ordinal = 0
         self.observe: Callable[[dict, int], None] = lambda _message, _ordinal: None
         self.attention: Callable[[dict], None] = lambda _record: None
+        self.after_pump: Callable[[], None] = lambda: None
         os.set_blocking(process.stdin.fileno(), False)
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -792,6 +790,18 @@ class NativeConnection:
             raise NativeError("native-disconnected", "the native app server input closed") from None
 
     def pump(self) -> None:
+        """Dispatch feedback after each I/O step, including a call's reply wait.
+
+        Reverse requests record facts and finish their same-id refusal before
+        this callback runs; an ordinary observer exception then interrupts the
+        waiting call without bypassing the refusal or the attention recorder.
+        """
+        try:
+            self._pump()
+        finally:
+            self.after_pump()
+
+    def _pump(self) -> None:
         if self.cancelled.is_set():
             raise NativeError("cancelled", "the owned ZCode execution was cancelled")
         remaining = self.deadline - time.monotonic()
@@ -814,8 +824,15 @@ class NativeConnection:
                 }})
                 return
             if self.no_tools:
+                # Every native interaction in a no-tool call — provider headers
+                # included — is answered with the documented refusal and
+                # recorded as a denied interaction. Whether it ends the run is
+                # the role observer's immediate decision over the retained
+                # fact, never this pump's; the fast rule keeps its own legacy
+                # stop reason instead of unsupported-provider.
+                self.attention_request(message, outcome="refused-with-jsonrpc-error")
                 self.send({"id": message["id"], "error": {"code": -32601, "message": "No interactions are allowed in a no-tool call"}})
-                raise NativeError("no-tool-violation", "Native interaction in a no-tool call")
+                return
             if message["method"] == "interaction/requestProviderRuntimeHeaders":
                 # OAuth account providers need a native authentication host that this
                 # adapter deliberately cannot impersonate. It stays a hard error.
@@ -899,15 +916,27 @@ class RootTurnEvidence:
                  checkpoint_name: str | None = None, answer_name: str | None = None,
                  on_delivery: Callable[[dict, str], None] | None = None,
                  on_answer: Callable[[dict, str], None] | None = None,
-                 validate_outcome: Callable[[object], str | None]):
+                 validate_outcome: Callable[[object], str | None],
+                 mounted_tools: tuple[str, ...] | list[str]):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
         self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
         self.on_delivery, self.on_answer = on_delivery, on_answer
         self.validate_outcome = validate_outcome
+        #: The bare session tools this run actually mounted — a required,
+        #: caller-provided set with no default: a signed refusal envelope
+        #: verifies only for a tool this run really bound, and the verifier
+        #: never assumes which tools a carrier mounts.
+        self.mounted_tools = tuple(mounted_tools)
         self.turn_id: str | None = None
         self.call_id: str | None = None
         self.receipt: dict | None = None
         self.finish_failed = False
+        #: Root-session calls whose result carried verified delivery evidence
+        #: (a verified receipt or a verified signed refusal envelope). Only
+        #: these are the completion mechanism's own calls; everything else the
+        #: projection saw — child relays, foreign sessions, unverified or
+        #: forged same-name calls — stays a task-tool fact.
+        self.verified_delivery_calls: set[str] = set()
         self.last_seq = -1
         self.start_seq = self.call_seq = self.result_seq = self.end_seq = -1
         self.completed_ordinal = self.settled_ordinal = self.close_ordinal = 0
@@ -996,7 +1025,8 @@ class RootTurnEvidence:
                     # envelope can never slip through as a plain retryable
                     # failure. Only a fully verified, attempt/tool/input-bound
                     # envelope recovers the turn for a corrected retry.
-                    verify_tool_refusal(content, self.bridge, self.tool_name)
+                    verify_tool_refusal(content, self.bridge, self.tool_name, self.mounted_tools)
+                    self.verified_delivery_calls.add(tool_call_id)
                     self._retry_failed_finish()
                     return
                 if result.get("success") is False:
@@ -1005,6 +1035,7 @@ class RootTurnEvidence:
                 if result.get("success") is not True:
                     raise NativeError("finish-tool-failed", "the native finish result has no explicit success evidence")
                 self.receipt = verify_receipt(content, self.bridge, self.validate_outcome)
+                self.verified_delivery_calls.add(tool_call_id)
                 self.result_seq = seq
             return
         if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:
@@ -1015,6 +1046,16 @@ class RootTurnEvidence:
             self._inquiry_result(self.answer_calls, self._terminal_answer_calls, data, kind,
                                  "inquiry-answer", tool_call_id)
             return
+
+    def verified_delivery(self) -> frozenset[tuple[str, str]]:
+        """The verified delivery calls, as the collector's own full call keys.
+
+        Each entry is ``(canonical_json(native_identity), callId)`` on the
+        verified root, so an exclusion cannot catch a foreign root that merely
+        reuses the call id. An unstarted root has no verified delivery calls.
+        """
+        identity = canonical_json({"sessionId": self.session_id, "turnId": self.turn_id})
+        return frozenset((identity, call_id) for call_id in self.verified_delivery_calls)
 
     def _retain_terminal(self, calls: dict[str, dict], terminal: deque[str], tool_call_id: str) -> None:
         """Keep only the most recent terminal call identities, never a payload.
@@ -1058,9 +1099,10 @@ class RootTurnEvidence:
             # ordinary-error path, exactly like the finish tool: a forged or
             # wrong-tool envelope is fatal even when the wrapper marked the
             # result failed.
-            verify_tool_refusal(content, self.bridge, native_name)
+            verify_tool_refusal(content, self.bridge, native_name, self.mounted_tools)
             call["result"] = "tool-refusal"
             self._retain_terminal(calls, terminal, tool_call_id)
+            self.verified_delivery_calls.add(tool_call_id)
             return
         if result.get("success") is False:
             call["result"] = "tool-error"
@@ -1071,6 +1113,7 @@ class RootTurnEvidence:
         receipt = verify_inquiry_receipt(content, self.bridge, receipt_kind)
         call["result"] = "receipt-verified"
         self._retain_terminal(calls, terminal, tool_call_id)
+        self.verified_delivery_calls.add(tool_call_id)
         callback = self.on_delivery if receipt_kind == "inquiry-checkpoint" else self.on_answer
         if callback is not None:
             callback(receipt, tool_call_id)

@@ -17,7 +17,13 @@ import os
 
 from ... import locking
 from ...json_codec import canonical_json
-from ..roles.turn_io import MAX_OUTCOME_BYTES
+
+#: The byte bound of one governed outcome document, shared by the Worker role's
+#: six-field validator, the MCP carrier's input frames and the refusal budgets
+#: below. It lives here — the common receipt primitive — so both sides take it
+#: from one place and the roles do not own a byte budget the native verification
+#: also enforces.
+MAX_OUTCOME_BYTES = 65536
 
 #: Shared inquiry bounds, identical to the board and the DSH bridge. The role's
 #: session tools, the native verification and the observation bridge all enforce

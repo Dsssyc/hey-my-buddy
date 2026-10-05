@@ -19,7 +19,7 @@ from ..harnesses.base import (
     ProcessHandle,
     ReadOnlyStructuredRequest,
 )
-from ..harnesses.run_contract import HarnessRun, RunRequest, RunResult
+from ..harnesses.run_contract import HarnessRun, RunFeedback, RunRequest, RunResult
 
 __all__ = [
     'FastPreparation',
@@ -173,7 +173,7 @@ def run_harness(
     module: HarnessRun,
     request: RunRequest,
     *,
-    observer: Callable[[Mapping[str, Any]], bool],
+    observer: Callable[[Mapping[str, Any]], RunFeedback],
     services: object | None,
     cancelled: Callable[[], bool],
 ) -> RunResult:
@@ -183,8 +183,9 @@ def run_harness(
     ``request.harness`` — never an attribute probe result, a look-alike, or an
     unregistered object — so a command adapter or an arbitrary object is never
     mistaken for a run. The observer receives normalized, retained fact mappings
-    and answers whether to continue. The caller owns its session services;
-    this entry point passes them through without defining unused role policy.
+    and answers with one :class:`RunFeedback` (continue, stop, or one in-run
+    correction). The caller owns its session services; this entry point passes
+    them through without defining unused role policy.
     """
     from ..harnesses.registry import run_seam
 

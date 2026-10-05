@@ -3,6 +3,9 @@
 The fake app-server and its harness moved to ``test_zcode_tool_evidence`` so the
 unified tool-evidence wiring runs against the same server; every no-tool case
 here keeps asserting the native no-tool parameters and the refusal behavior.
+The unit cases pin the step 2-B boundary: the driver's protocol checks stay
+fatal, while tool markers and unknown legal events become retained facts the
+role observer decides over (the fast rule stops, the Worker rule continues).
 """
 from __future__ import annotations
 
@@ -10,18 +13,27 @@ import json
 import unittest
 from pathlib import Path
 
+from hey_my_buddy.buddy.harnesses.zcode.native_run import NoToolProtocol
+from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
-from hey_my_buddy.buddy.harnesses.zcode.runner import NoToolEvidence
+from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests
 
 
-class NoToolEvidenceTests(unittest.TestCase):
+class NoToolPolicyTests(unittest.TestCase):
     def event(self, kind, payload=None, *, session="root", turn="turn", seq=2):
         return {"method": "session/event", "params": {"sessionId": session, "turnId": turn,
                 "seq": seq, "type": kind, "payload": payload or {}}}
 
-    def test_all_tool_event_forms_violate_even_without_id_or_in_child(self):
+    def chain(self):
+        facts = native_run._RunFacts()
+        classifier = native_run._Classifier(facts)
+        classifier.admitted = True
+        return facts, classifier
+
+    def test_all_tool_event_forms_are_facts_the_fast_rule_stops_on(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE, FEEDBACK_STOP
         for kind, payload, session in (
             ("tool.updated", {"kind": "scheduled", "toolName": "shell"}, "root"),
             ("tool.updated", {"kind": "result", "toolName": "mcp"}, "root"),
@@ -31,21 +43,27 @@ class NoToolEvidenceTests(unittest.TestCase):
             ("message.upserted", {"message": {"parts": [{"type": "tool_use"}]}}, "root"),
         ):
             with self.subTest(kind=kind, session=session):
-                evidence = NoToolEvidence("root", "input")
-                evidence.observe(self.event("turn.started", {"inputId": "input"}, seq=1), 1)
-                with self.assertRaises(NativeError) as caught:
-                    evidence.observe(self.event(kind, payload, session=session), 2)
-                self.assertEqual(caught.exception.code, "no-tool-violation")
+                facts, classifier = self.chain()
+                correction = FastCorrection({"type": "object"}, "base")
+                self.assertTrue(classifier.observe(self.event(kind, payload, session=session)))
+                mapping = facts.mapping(tool_calls=0, settled=False, raw_answer=None)
+                self.assertEqual(correction.observer(mapping), FEEDBACK_STOP)
+                self.assertEqual(correction.stop_reason, "no-tool-violation")
+                # The Worker rule keeps the run running over the same fact.
+                self.assertEqual(worker_observer(mapping), FEEDBACK_CONTINUE)
 
-    def test_unknown_and_incomplete_events_cannot_settle(self):
-        evidence = NoToolEvidence("root", "input")
-        evidence.observe(self.event("turn.started", {"inputId": "input"}, seq=1), 1)
-        with self.assertRaises(NativeError) as caught:
-            evidence.observe(self.event("future.event"), 2)
-        self.assertEqual(caught.exception.code, "invalid-protocol")
-        self.assertFalse(evidence.settled)
+    def test_unknown_events_are_counts_the_fast_rule_stops_on(self):
+        facts, classifier = self.chain()
+        protocol = NoToolProtocol("root", "input")
+        protocol.observe(self.event("turn.started", {"inputId": "input"}, seq=1), 1)
+        self.assertTrue(classifier.observe(self.event("future.event")))
+        correction = FastCorrection({"type": "object"}, "base")
+        self.assertEqual(correction.observer(
+            facts.mapping(tool_calls=0, settled=False, raw_answer=None)).action, "stop")
+        self.assertEqual(correction.stop_reason, "invalid-protocol")
+        self.assertFalse(protocol.settled)
 
-    def test_projected_metadata_never_proves_completion_and_rejects_tools(self):
+    def test_projected_metadata_never_proves_completion_and_marked_kinds_stop_the_fast_rule(self):
         for method, key, kind in (
             ("computer-use/operation-event", "sequenceNumber", "tool-scheduled"),
             ("computer-use/operation-event", "sequenceNumber", "tool-started"),
@@ -55,12 +73,15 @@ class NoToolEvidenceTests(unittest.TestCase):
             ("v4/telemetry/event", "eventSeq", "workflow.lifecycle"),
         ):
             with self.subTest(kind=kind):
-                evidence = NoToolEvidence("root", "input")
-                with self.assertRaises(NativeError) as caught:
-                    evidence.observe({"method": method, "params": {
-                        "sessionId": "child", "turnId": "other", "kind": kind, key: 1}}, 1)
-                self.assertEqual(caught.exception.code, "no-tool-violation")
-        evidence = NoToolEvidence("root", "input")
+                facts, classifier = self.chain()
+                correction = FastCorrection({"type": "object"}, "base")
+                self.assertTrue(classifier.observe({"method": method, "params": {
+                    "sessionId": "child", "turnId": "other", "kind": kind, key: 1}}))
+                self.assertEqual(correction.observer(
+                    facts.mapping(tool_calls=0, settled=False, raw_answer=None)).action, "stop")
+                self.assertEqual(correction.stop_reason, "no-tool-violation")
+        facts, classifier = self.chain()
+        evidence = NoToolProtocol("root", "input")
         evidence.observe({"method": "computer-use/operation-event", "params": {
             "sessionId": "root", "turnId": "turn", "kind": "turn-completed", "sequenceNumber": 1}}, 1)
         self.assertFalse(evidence.completed)
@@ -71,7 +92,7 @@ class NoToolEvidenceTests(unittest.TestCase):
 
     def test_unknown_or_reordered_metadata_fails_closed(self):
         for kinds in (("compaction.terminal",), ("usage.delta", "usage.delta")):
-            evidence = NoToolEvidence("root", "input")
+            evidence = NoToolProtocol("root", "input")
             with self.assertRaises(NativeError) as caught:
                 for kind in kinds:
                     evidence.observe({"method": "v4/telemetry/event", "params": {

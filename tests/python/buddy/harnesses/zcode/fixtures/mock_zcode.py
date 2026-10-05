@@ -186,6 +186,13 @@ def complete_turn():
         # retries with the softer outcome in the same turn.
         content, _error = finish("assistance" if case == "live" else "attention")
     tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
+    if case == "task-tool":
+        # The root uses one real task tool (scheduled + result) before it
+        # finishes: the task-tool fact must be projected for a completion-tool
+        # run too, while the delivery tool's own call stays receipt evidence.
+        event("tool.updated", {"kind": "scheduled", "toolName": "Bash", "toolCallId": "call-task"})
+        event("tool.updated", {"kind": "result", "toolCallId": "call-task",
+                               "result": {"success": True, "truncated": False}})
     if case == "forged-receipt":
         receipt = json.loads(content)
         receipt["outcome"]["summary"] = "changed after the bridge signed it"
@@ -234,6 +241,25 @@ def inquiry_turn():
         # compliant root then checkpoints, answers and retries the finish.
         native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
         checkpoint_and_answer()
+        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        settle_turn()
+        return
+    if case == "inquiry-answer-refused":
+        # The root answers with an unknown inquiryId first: the session tool
+        # refuses through its signed envelope, delivered inside the native
+        # wrapper's successful result; the compliant root then answers with
+        # the exact id it checkpointed and completes the turn.
+        content, error = native_tool_call("buddy_checkpoint", {}, call_id="call-checkpoint-root")
+        if content is None:
+            return content, error
+        listed = json.loads(content)["inquiries"]
+        native_tool_call("buddy_answer_inquiry",
+                         {"inquiryId": "never-queued", "answer": "wrong id"},
+                         call_id="call-answer-wrong", error_as_result=True)
+        for item in listed:
+            native_tool_call("buddy_answer_inquiry",
+                             {"inquiryId": item["inquiryId"], "answer": f"fixture answer for {item['inquiryId']}"},
+                             call_id="call-answer-" + item["inquiryId"])
         native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return

@@ -45,7 +45,7 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     verify_receipt,
     verify_tool_refusal,
 )
-from hey_my_buddy.buddy.harnesses.zcode.runner import InquiryBridge
+from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -383,14 +383,14 @@ class BridgeQueueTests(unittest.TestCase):
                                                       "method": "ask", "inquiryId": f"q-{failure}-probe",
                                                       "question": "durable?"})
                 elif failure == "raise":
-                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
+                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
                         asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
                         raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
                                                           "token": self.harness.credentials["token"],
                                                           "method": "ask", "inquiryId": f"q-{failure}-probe",
                                                           "question": "durable?"})
                 else:
-                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=flaky_write):
+                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=flaky_write):
                         asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
                         raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
                                                           "token": self.harness.credentials["token"],
@@ -430,7 +430,7 @@ class BridgeQueueTests(unittest.TestCase):
         delivery = verify_inquiry_receipt(checkpoint_receipt(
             [{"inquiryId": "q-flaky", "question": "delivered anyway?", "questionSha256": sha,
               "state": "queued", "askedAt": "t"}], config), config, "inquiry-checkpoint")
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
             bridge.deliver_inquiries(delivery, "root-ckpt")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "queued", "a failed append must not fabricate delivery")
         self.assertTrue(str(bridge.error).startswith("journal-unavailable"))
@@ -438,7 +438,7 @@ class BridgeQueueTests(unittest.TestCase):
         bridge.deliver_inquiries(delivery, "root-ckpt-2")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered")
         answer = verify_inquiry_receipt(answer_receipt("q-flaky", "still fine", config, sha=sha), config, "inquiry-answer")
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
             bridge.record_answer(answer, "root-answer")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered", "a failed append must not fabricate the answer")
         bridge.record_answer(answer, "root-answer-2")
@@ -446,7 +446,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(bridge.entries["q-flaky"]["answer"]["toolCallId"], "root-answer-2")
         # A discard that cannot be recorded refuses explicitly instead.
         self.ask("q-flaky-2", "another?")
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
             discarded = self.harness.request("discard", inquiryId="q-flaky-2")
         self.assertFalse(discarded["ok"])
         self.assertEqual(discarded["reason"], "bridge-refused")
@@ -609,7 +609,7 @@ class JournalBarrierTests(unittest.TestCase):
         flaky_write.triggered = False
         record = {**bridge._identity_fields(), "inquiryId": "q-rollback", "state": "queued",
                   "question": "rolled back?", "questionSha256": "a" * 64, "askedAt": "t"}
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.runner.os.write", side_effect=flaky_write):
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=flaky_write):
             self.assertFalse(bridge._journal(record))
         path = Path(harness.credentials["resultsPath"])
         self.assertEqual(path.read_bytes(), b"", "a failed append must leave no fragment behind")
@@ -656,7 +656,8 @@ class FinishToolTests(unittest.TestCase):
     def refusal(self, result: dict, tool: str) -> dict:
         """Verify the isError text as the signed refusal envelope it must be."""
         self.assertTrue(result.get("isError"), result)
-        return verify_tool_refusal(result["content"][0]["text"], self.config, f"mcp__buddy_x__{tool}")
+        return verify_tool_refusal(result["content"][0]["text"], self.config, f"mcp__buddy_x__{tool}",
+                                              ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
 
     @staticmethod
     def outcome(disposition: str) -> dict:
@@ -879,13 +880,15 @@ class FinishToolTests(unittest.TestCase):
                 # name must not verify it.
                 with self.assertRaises(NativeError) as error:
                     verify_tool_refusal(result["content"][0]["text"], self.config, "mcp__buddy_x__buddy_checkpoint"
-                                        if tool != "buddy_checkpoint" else "mcp__buddy_x__buddy_finish_turn")
+                                        if tool != "buddy_checkpoint" else "mcp__buddy_x__buddy_finish_turn",
+                                        ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
         # A foreign attempt configuration cannot verify another attempt's refusal.
         foreign = {**self.config, "identity": OTHER_IDENTITY, "key": "e" * 64}
         with self.assertRaises(NativeError):
             verify_tool_refusal(self.call("buddy_finish_turn", self.outcome("completed"))["content"][0]["text"],
-                                foreign, "mcp__buddy_x__buddy_finish_turn")
+                                foreign, "mcp__buddy_x__buddy_finish_turn",
+                                ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
 
     def test_an_explicit_null_suggested_profile_is_the_accepted_no_suggestion(self):
         # The incident's finish arguments are now valid: an explicit null

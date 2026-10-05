@@ -20,8 +20,8 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
-from hey_my_buddy.buddy.harnesses.zcode.runner import NoToolEvidence
 from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
+from hey_my_buddy.json_codec import canonical_json
 
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
@@ -52,10 +52,13 @@ for line in sys.stdin:
         send({'method':'startup/storageState','params':{'phase':'ready','elapsedMs':10}})
         send({'id':'runtime-preferences','method':'session/requestRuntimePreferences','params':{}})
         reply = json.loads(sys.stdin.readline())
-        assert reply['result']['nativeSearchEnhancementsEnabled'] is False
+        assert reply['result']['nativeSearchEnhancementsEnabled'] is (case in ('write-final', 'write-post-close'))
     if method == 'session/create':
-        assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False and p['mcpServers'] == []
-        assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
+        if case in ('write-final', 'write-post-close'):
+            assert p.get('mode') == 'yolo' and p['mcpServers'] == [] and p['titleGenerationEnabled'] is False
+        else:
+            assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False and p['mcpServers'] == []
+            assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
         session += 1; workspace = p['workspace']; subscribed = False; closed = False
         result = {'session':{'sessionId':f's-{session}','sessionKind':'interactive','workspace':workspace},
           'settings':{'model':{'available':[{'ref':{'providerId':'fixture-api','modelId':'fixture-model'},
@@ -70,6 +73,14 @@ for line in sys.stdin:
     elif method == 'session/send':
         assert subscribed
         assert 'Return only one JSON value matching this schema:' in p['content']
+        if case == 'reverse-before-send-reply':
+            send({'id':'srv-before-reply','method':'interaction/requestPermission',
+                  'params':{'sessionId':f's-{session}','kind':'shell'}})
+            reply = json.loads(sys.stdin.readline())
+            Path('refusal-reply.json').write_text(json.dumps(
+                {'id':reply.get('id'),'refused':'error' in reply}))
+            time.sleep(30)
+            sys.exit(0)
         result = {'accepted':True,'sessionId':f's-{session}'}
     elif method == 'session/close':
         if closed:
@@ -83,8 +94,14 @@ for line in sys.stdin:
     if case == 'native-stream' and method == 'session/setModel':
         event('session.updated',2,{})
     send({'id':call['id'],'result':result})
-    if method == 'session/close' and case == 'post-close-tool':
-        event('tool.updated',3,{'kind':'scheduled','toolName':'mcp'})
+    if method == 'session/close' and case == 'post-close-foreign':
+        send({'method':'session/event','params':{'sessionId':'s-child','turnId':'t-child',
+              'seq':3,'type':'tool.updated','payload':{'kind':'scheduled','toolCallId':'c-foreign',
+              'toolName':'Glob','source':'sub-agent'}}})
+    if method == 'session/close' and case in ('post-close-tool', 'write-post-close'):
+        payload = {'kind':'scheduled','toolCallId':'c-late','toolName':'Bash'} if case == 'write-post-close' \
+                  else {'kind':'scheduled','toolName':'mcp'}
+        event('tool.updated',3,payload)
     if method == 'session/send':
         ident = p['inputId']
         if case == 'native-stream':
@@ -100,6 +117,17 @@ for line in sys.stdin:
             event('part.delta',3,{'delta':{'type':'text','text':'{'}})
             event('message.upserted',4,{'message':{'parts':[{'type':'text','text':'{"choice":"a"}'}]}})
             event('model.streaming',5,{'streaming':False})
+        if case == 'reverse-request':
+            send({'id':'srv-1','method':'interaction/requestPermission',
+                  'params':{'sessionId':f's-{session}','kind':'shell'}})
+            reply = json.loads(sys.stdin.readline())
+            Path('refusal-reply.json').write_text(json.dumps(
+                {'id': reply.get('id'), 'refused': 'error' in reply}))
+            sys.exit(0)
+        elif case == 'reverse-oauth':
+            send({'id':'srv-2','method':'interaction/requestProviderRuntimeHeaders',
+                  'params':{'sessionId':f's-{session}','providerId':'fixture-account'}})
+            time.sleep(30)
         if case == 'tool':
             event('tool.updated',2,{'kind':'scheduled','toolName':'shell'})
         elif case == 'tool-foreign':
@@ -137,6 +165,21 @@ class ProjectionTests(unittest.TestCase):
         facts = ZcodeToolFacts(dict(BINDING))
         facts.add_root("s-1", "t-1")
         return facts
+
+    def test_verified_delivery_exclusion_joins_the_root_and_preserves_unsettled_counts(self):
+        facts = self.facts()
+        for session, turn, name in (("s-1", "t-1", "mcp__session__finish"),
+                                    ("s-foreign", "t-foreign", "Bash")):
+            facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'shared', 'toolName': name},
+                                session=session, turn=turn))
+            facts.observe(frame({'kind': 'result', 'toolCallId': 'shared',
+                                 'result': {'success': True}}, session=session, turn=turn))
+        facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'open', 'toolName': 'Bash'}))
+        package = facts.finish(True, exclude_calls={(canonical_json(ROOT), "shared")})
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 1))
+        self.assertEqual([(event["nativeIdentity"]["sessionId"], event["callId"])
+                          for event in package["events"]],
+                         [("s-foreign", "shared"), ("s-foreign", "shared"), ("s-1", "open")])
 
     def test_native_started_and_progress_belong_to_the_existing_call(self):
         facts = self.facts()
@@ -348,12 +391,23 @@ class ProjectionTests(unittest.TestCase):
 
 
 class ProjectionOrderingTests(unittest.TestCase):
-    """Facts are projected before the controller's own rejection and filters."""
+    """Facts are projected and classified before the role decides and before the
+    driver's own protocol checks run — the ordering the unified run preserves."""
 
     def facts(self) -> ZcodeToolFacts:
         facts = ZcodeToolFacts(dict(BINDING))
         facts.add_root("s-1", "t-1")
         return facts
+
+    def chain(self, facts: ZcodeToolFacts):
+        from hey_my_buddy.buddy.harnesses.zcode import native_run
+        from hey_my_buddy.buddy.roles.run_observers import FastCorrection
+        run_facts = native_run._RunFacts()
+        classifier = native_run._Classifier(run_facts)
+        classifier.admitted = True
+        protocol = native_run.NoToolProtocol("s-1", "input", facts)
+        correction = FastCorrection({"type": "object"}, "base prompt")
+        return protocol, classifier, run_facts, correction
 
     def test_rejected_tool_frames_are_projected_before_the_no_tool_refusal(self):
         for payload, session in (({"kind": "scheduled", "toolCallId": "c-1", "toolName": "shell"}, "s-1"),
@@ -361,32 +415,44 @@ class ProjectionOrderingTests(unittest.TestCase):
                                    "toolName": "Glob"}, "s-child")):
             with self.subTest(session=session):
                 facts = self.facts()
-                evidence = NoToolEvidence("s-1", "input", facts)
-                evidence.observe(frame({"inputId": "input"}, session="s-1", turn="t-1", seq=1, kind="turn.started"), 1)
+                protocol, classifier, run_facts, correction = self.chain(facts)
+                protocol.observe(frame({"inputId": "input"}, session="s-1", turn="t-1", seq=1, kind="turn.started"), 1)
                 self.assertEqual(facts.roots, [{"sessionId": "s-1", "turnId": "t-1"}])
-                with self.assertRaises(NativeError) as caught:
-                    evidence.observe(frame(payload, session=session), 2)
-                self.assertEqual(caught.exception.code, "no-tool-violation")
+                tool_frame = frame(payload, session=session)
+                facts.observe(tool_frame)
+                changed = classifier.observe(tool_frame)
+                self.assertTrue(changed)
+                self.assertEqual(correction.observer(run_facts.mapping(tool_calls=facts.tool_calls,
+                                                                       settled=False, raw_answer=None)).action,
+                                 "stop")
+                self.assertEqual(correction.stop_reason, "no-tool-violation")
                 package = facts.finish(False)
                 self.assertEqual(len(package["events"]), 1)
                 self.assertEqual(package["toolCalls"], 1)
                 self.assertFalse(package["streamComplete"])
+
     def test_a_tool_frame_with_a_stale_sequence_is_a_fact_before_the_protocol_check(self):
         facts = self.facts()
-        evidence = NoToolEvidence("s-1", "input", facts)
-        evidence.observe(frame({"inputId": "input"}, session="s-1", turn="t-1", seq=5, kind="turn.started"), 1)
-        with self.assertRaises(NativeError) as caught:
-            evidence.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}, seq=2), 2)
-        self.assertEqual(caught.exception.code, "no-tool-violation")
+        protocol, classifier, run_facts, correction = self.chain(facts)
+        protocol.observe(frame({"inputId": "input"}, session="s-1", turn="t-1", seq=5, kind="turn.started"), 1)
+        tool_frame = frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}, seq=2)
+        facts.observe(tool_frame)
+        self.assertTrue(classifier.observe(tool_frame))
+        self.assertEqual(correction.observer(run_facts.mapping(tool_calls=facts.tool_calls,
+                                                               settled=False, raw_answer=None)).action,
+                         "stop")
+        self.assertEqual(correction.stop_reason, "no-tool-violation")
         self.assertEqual(facts.finish(False)["toolCalls"], 1)
 
     def test_a_non_tool_frame_with_a_stale_sequence_stays_a_protocol_error(self):
         facts = self.facts()
-        evidence = NoToolEvidence("s-1", "input", facts)
-        evidence.observe(frame({"inputId": "input"}, session="s-1", turn="t-1", seq=5, kind="turn.started"), 1)
+        protocol, classifier, run_facts, correction = self.chain(facts)
+        protocol.observe(frame({"inputId": "input"}, session="s-1", turn="t-1", seq=5, kind="turn.started"), 1)
+        stale = {"method": "session/event", "params": {"sessionId": "s-1", "turnId": "t-1",
+                 "seq": 2, "type": "message.upserted", "payload": {}}}
+        self.assertFalse(classifier.observe(stale))
         with self.assertRaises(NativeError) as caught:
-            evidence.observe({"method": "session/event", "params": {"sessionId": "s-1", "turnId": "t-1",
-                             "seq": 2, "type": "message.upserted", "payload": {}}}, 2)
+            protocol.observe(stale, 2)
         self.assertEqual(caught.exception.code, "invalid-protocol")
         self.assertEqual(facts.finish(False)["events"], [])
 

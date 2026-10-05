@@ -13,6 +13,8 @@ from the observed events. Nothing here judges categories; the blackboard does.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
 
 ADAPTER = "zcode"
@@ -256,17 +258,24 @@ class ZcodeToolFacts:
         """Observed unique call starts, for the receipt's cumulative count."""
         return self.evidence.tool_calls
 
-    def finish(self, stream_complete: bool) -> dict:
+    def finish(self, stream_complete: bool, *,
+               exclude_calls: Iterable[tuple[str, str]] | None = None) -> dict:
         """Close the collector and return the receipt's ``toolEvidence`` package.
 
         ``stream_complete`` is true only when the real native stream drained to
         EOF, every root session closed with an acknowledged close, and the owned
         process stopped; the collector keeps its facts verbatim either way.
+        ``exclude_calls`` names the verified delivery calls as the collector's
+        own full ``(canonical_json(native_identity), callId)`` keys: the shared collector
+        removes exactly those calls' events and counts from its complete call
+        table, while every unverified, foreign or conflicting fact the
+        projection observed stays.
         """
         for key in self._metadata_starts - self._canonical_starts:
             self._incomplete({"sessionId": key[0], "turnId": key[1]},
                              {"sessionId": key[0], "turnId": key[1]}, key[2], None, self._names.get(key))
-        return self.evidence.finish(list(self.roots), stream_complete is True)
+        return self.evidence.finish(list(self.roots), stream_complete is True,
+                                    exclude_calls=exclude_calls)
 
 
 __all__ = ["ADAPTER", "ZcodeToolFacts"]

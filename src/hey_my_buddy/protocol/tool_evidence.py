@@ -13,6 +13,7 @@ reasoning text or model claims are ever retained.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from ..blackboard.store.db import canonical_json
@@ -198,6 +199,7 @@ class ToolEventEvidence:
         self._truncated = False
         self._incomplete = False
         self._closed_roots: set[str] = set()
+        self._excluded: frozenset = frozenset()
 
     def close_root(self, native_identity: dict) -> None:
         """Record an actual native turn end before transport drain finishes."""
@@ -233,6 +235,10 @@ class ToolEventEvidence:
         self._retain({"nativeIdentity": identity, "callId": bounded(native_event.get("callId")),
                       "toolName": name or native_type, "category": category or "other",
                       "phase": native_event.get("phase") if native_event.get("phase") in TOOL_EVENT_PHASES else None})
+        call_id = bounded(native_event.get("callId"))
+        if identity and call_id:
+            key = (canonical_json(identity), call_id)
+            self._calls.setdefault(key, {"pairs": set()})["incomplete"] = True
 
     def observe(self, event: dict) -> None:
         """Record one normalized event; identical projections collapse, conflicts stay."""
@@ -255,12 +261,24 @@ class ToolEventEvidence:
         else:
             self._events.append(record)
 
-    def finish(self, native_identity: list, stream_complete: bool) -> dict:
+    def finish(self, native_identity: list, stream_complete: bool, *,
+               exclude_calls: Iterable[tuple[str, str]] | None = None) -> dict:
         """Close the attempt's stream and return the ``toolEvidence`` package.
 
         ``native_identity`` is the complete list of this attempt's trusted root
         identities; each later finish replaces it with the then-current list and
         keeps the stream complete only if every close reported completion.
+
+        ``exclude_calls`` names calls whose results the caller verified as the
+        completion mechanism's own delivery evidence, as the collector's own
+        full call keys — ``(canonical_json(native_identity), callId)`` pairs,
+        exactly the identity join ``observe`` uses. Exclusion removes a
+        verified delivery call's events from the published package and its
+        counts, and nothing else: a foreign root reusing the call id stays a
+        fact, a call with conflicting facts is never hidden, and the counts
+        always come from the complete internal call table — never recounted
+        from the bounded events list. With no exclusion (the default) the
+        package is exactly what every current harness publishes.
         """
         if not isinstance(native_identity, list):
             raise BoardError("INVALID_ARGUMENT", "native_identity must be a list of root identity objects")
@@ -270,21 +288,56 @@ class ToolEventEvidence:
             if validated not in roots:
                 roots.append(validated)
         self._root_identities = roots
+        self._excluded = self._exclusion_keys(exclude_calls)
         reported = stream_complete is True
         self._stream_reported = reported if self._stream_reported is None else (self._stream_reported and reported)
         self._finished = True
         return self._package()
 
+    def _exclusion_keys(self, exclude_calls: Iterable[tuple[str, str]] | None) -> frozenset[tuple[str, str]]:
+        keys = set()
+        for item in () if exclude_calls is None else exclude_calls:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise BoardError("INVALID_ARGUMENT",
+                                 "exclude_calls entries must be (canonical nativeIdentity, callId) pairs")
+            identity, call_id = item
+            if (not isinstance(identity, str) or not identity
+                    or not isinstance(call_id, str) or not 0 < len(call_id) <= 512):
+                raise BoardError("INVALID_ARGUMENT", "an excluded call must carry its canonical identity and bounded call id")
+            keys.add((identity, call_id))
+        return frozenset(keys)
+
+    def _excludable(self, key: tuple[str, str]) -> bool:
+        """A verified delivery call hides nothing but itself.
+
+        Incomplete or conflicting tool facts are never excluded: dropping the
+        whole call would hide those facts behind the delivery evidence.
+        """
+        if key not in self._excluded:
+            return False
+        call = self._calls.get(key)
+        if call is None or call.get("incomplete"):
+            return False
+        facts = {fact for fact, _phase in call["pairs"]}
+        return _consistent_call_facts(self.binding["adapter"], facts)
+
     def _package(self) -> dict:
-        started = self.tool_calls
-        unsettled = sum(1 for call in self._calls.values()
+        excluded = {key for key in self._calls if self._excludable(key)}
+        kept_calls = {key: call for key, call in self._calls.items()
+                      if key not in excluded}
+        started = sum(1 for call in kept_calls.values()
+                      if any(phase == "start" for _fact, phase in call["pairs"]))
+        unsettled = sum(1 for call in kept_calls.values()
                         if {phase for _fact, phase in call["pairs"]} == {"start"})
+        kept_events = [{**event, "nativeIdentity": dict(event["nativeIdentity"])}
+                       for event in self._events
+                       if (canonical_json(event["nativeIdentity"]), event["callId"]) not in excluded]
         return {
             "version": TOOL_EVIDENCE_VERSION,
             "binding": dict(self.binding),
             "nativeIdentity": [dict(identity) for identity in self._root_identities],
             "streamComplete": bool(self._stream_reported) and not self._late and not self._incomplete,
-            "events": [{**event, "nativeIdentity": dict(event["nativeIdentity"])} for event in self._events],
+            "events": kept_events,
             "toolCalls": started,
             "unsettledToolCalls": unsettled,
             "truncated": self._truncated,

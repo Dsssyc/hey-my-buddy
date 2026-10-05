@@ -23,6 +23,7 @@ from ...json_codec import canonical_json, decode_bounded_frame
 from ...protocol.activity import is_newer as _activity_is_newer
 from ...protocol.internal_models import (
     FrozenJson,
+    FormatVersion,
     Identifier,
     InternalModel,
     JsonTuple,
@@ -116,7 +117,7 @@ class FinishNoticePayload(InternalModel):
 class LiveRequest(InternalModel):
     """One live request, bound to the execution identity and its request id."""
 
-    WIRE_FORMAT_VERSION = LIVE_FORMAT_VERSION
+    format_version: FormatVersion = LIVE_FORMAT_VERSION
 
     identity: RunIdentity
     request_id: Identifier
@@ -135,7 +136,7 @@ class LiveRequest(InternalModel):
 class LiveReply(InternalModel):
     """One live request's reply fact; ``queued`` is never reported as delivered."""
 
-    WIRE_FORMAT_VERSION = LIVE_FORMAT_VERSION
+    format_version: FormatVersion = LIVE_FORMAT_VERSION
 
     identity: RunIdentity
     request_id: Identifier
@@ -183,7 +184,7 @@ class LiveSnapshot(InternalModel):
     own ``seq``) never skips an undelivered fact.
     """
 
-    WIRE_FORMAT_VERSION = LIVE_FORMAT_VERSION
+    format_version: FormatVersion = LIVE_FORMAT_VERSION
 
     identity: RunIdentity
     sequence: NonNegativeInt

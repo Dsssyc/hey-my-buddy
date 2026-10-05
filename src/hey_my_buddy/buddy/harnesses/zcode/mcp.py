@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 from ....json_codec import canonical_json, decode_strict_json
-from ...roles.turn_io import MAX_OUTCOME_BYTES
+from ..session_receipts import MAX_OUTCOME_BYTES
 from ...roles import worker_services
 
 

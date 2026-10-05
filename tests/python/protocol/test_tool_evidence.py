@@ -9,6 +9,7 @@ import unittest
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.json_codec import canonical_json
 
 IDENTITY = {"sessionId": "session-1", "turnId": "turn-1"}
 SECOND_IDENTITY = {"sessionId": "session-2", "inputId": "input-2"}
@@ -138,6 +139,64 @@ class NormalizeToolEventTests(unittest.TestCase):
 
 
 class ToolEventEvidenceTests(unittest.TestCase):
+    def test_verified_delivery_exclusion_keeps_a_foreign_id_collision_and_an_open_call(self):
+        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        delivery = settled_events("other", call_id="shared", tool="mcp__session__finish")
+        foreign = settled_events("execute", call_id="shared", identity=SECOND_IDENTITY, tool="Bash")
+        opened = settled_events("execute", call_id="open", tool="Bash")[0]
+        for event in delivery + foreign + [opened]:
+            evidence.observe(event)
+        package = evidence.finish([IDENTITY], True,
+                                  exclude_calls={(canonical_json(IDENTITY), "shared")})
+        self.assertEqual(package["events"], foreign + [opened])
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 1))
+        self.assertEqual(evidence.tool_calls, 3, "live observations still include all starts")
+
+    def test_delivery_exclusion_counts_the_full_call_table_after_event_truncation(self):
+        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        for event in settled_events("other", call_id="delivery"):
+            evidence.observe(event)
+        for index in range(65):
+            for event in settled_events("read", call_id=f"read-{index}"):
+                evidence.observe(event)
+        evidence.observe(settled_events("execute", call_id="open", tool="Bash")[0])
+        package = evidence.finish([IDENTITY], True,
+                                  exclude_calls={(canonical_json(IDENTITY), "delivery")})
+        self.assertTrue(package["truncated"])
+        self.assertEqual(len(package["events"]), tool_evidence.MAX_TOOL_EVENTS - 2)
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (66, 1))
+
+    def test_verified_delivery_cannot_hide_conflicting_or_incomplete_call_facts(self):
+        for broken in ("conflict", "incomplete"):
+            with self.subTest(broken=broken):
+                evidence = tool_evidence.ToolEventEvidence(BINDING)
+                for event in settled_events("other", call_id="delivery", tool="finish"):
+                    evidence.observe(event)
+                if broken == "conflict":
+                    evidence.observe(settled_events("execute", call_id="delivery", tool="Bash")[0])
+                else:
+                    evidence.observe_incomplete("zcode", native_fact("finish", "delivery", phase=None))
+                package = evidence.finish([IDENTITY], True,
+                                          exclude_calls={(canonical_json(IDENTITY), "delivery")})
+                self.assertEqual(len(package["events"]), 3)
+                self.assertEqual(package["toolCalls"], 1)
+                if broken == "incomplete":
+                    self.assertFalse(package["streamComplete"])
+
+    def test_delivery_exclusion_keeps_late_stream_facts_and_rejects_bare_ids(self):
+        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        for event in settled_events("other", call_id="delivery"):
+            evidence.observe(event)
+        evidence.finish([IDENTITY], True)
+        evidence.observe(settled_events("other", call_id="delivery")[1])
+        package = evidence.finish([IDENTITY], True,
+                                  exclude_calls={(canonical_json(IDENTITY), "delivery")})
+        self.assertFalse(package["streamComplete"])
+        for invalid in ({"delivery"}, [(IDENTITY, "delivery")], [(canonical_json(IDENTITY), None)]):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(BoardError):
+                    evidence.finish([IDENTITY], True, exclude_calls=invalid)
+
     def test_settled_calls_after_a_native_turn_end_remain_late(self):
         tracker = tool_evidence.ToolEventEvidence(BINDING)
         tracker.close_root(IDENTITY)

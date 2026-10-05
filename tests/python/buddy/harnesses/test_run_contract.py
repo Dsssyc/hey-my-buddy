@@ -168,7 +168,10 @@ class CodecRoundtripTests(unittest.TestCase):
         back = rc.decode_run_result(rc.encode_run_result(result))
         self.assertIsNone(back.model_started)
         self.assertIsNone(back.harness_version)
-        self.assertIn('"harnessVersion":"unknown"', rc.encode_run_result(result))
+        # An absent optional text is None/JSON null end to end; the legacy
+        # receipts' literal "unknown" spelling is a role projection, not a
+        # wire form of this format (UnknownableText is gone).
+        self.assertIn('"harnessVersion":null', rc.encode_run_result(result))
 
     def test_a_decoded_observed_block_is_never_filled_from_the_request(self):
         request = full_request(self.root)
@@ -216,10 +219,12 @@ class CodecRoundtripTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rc.decode_run_result(wrong_version)
 
-    def test_every_nesting_level_enforces_its_exact_wire_keys(self):
-        # A default-valued field missing from the wire, a snake_case spelling
-        # and an unknown member are refused at every nesting level, exactly as
-        # the hand-written per-class codecs refused them.
+    def test_every_nesting_level_keeps_the_closed_key_set(self):
+        # Ordinary pydantic semantics since the step 2-B simplification: an
+        # unknown member is refused at every nesting level and a required field
+        # may not be omitted, while a default-valued field may be — the wire
+        # no longer re-implements "defaults are required" (the ContextVar key
+        # set and its snake_case refusal went with it).
         def without(payload: dict, path: str) -> dict:
             node = payload
             *parents, leaf = path.split(".")
@@ -231,22 +236,24 @@ class CodecRoundtripTests(unittest.TestCase):
         request = full_request(Path("/tmp")).to_payload()
         for path in ("identity.turnId", "budget.toolCalls", "network.allowedDomains",
                      "sessionServices.0.deliveryMode", "frozenAccount.nativeLocation"):
+            decoded = rc.decode_run_request(without(json.loads(json.dumps(request)), path))
+            self.assertIsInstance(decoded, rc.RunRequest, path)
+        for path in ("identity.taskId", "budget.timeoutSeconds"):
             with self.assertRaises(BoardError, msg=path):
                 rc.decode_run_request(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
         for path in ("stopEvidence.native.groupState", "configuration.checked.model",
                      "end.signal", "modelStartEvidence.eventSequence"):
-            with self.assertRaises(BoardError, msg=path):
-                rc.decode_run_result(without(json.loads(json.dumps(result)), path))
+            self.assertIsInstance(
+                rc.decode_run_result(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
         with self.assertRaises(BoardError):
-            rc.decode_run_request({**request, "network": {"requested": False, "allowed_domains": None}})
-        with self.assertRaises(BoardError):
-            rc.decode_run_request({**request, "identity": {**identity().to_payload(), "task_id": "x"}})
+            rc.decode_run_request({**request, "network": {"requested": False, "allowed_domains": None,
+                                                          "extra": 1}})
         with self.assertRaises(BoardError):
             rc.decode_run_result({**result, "end": {"status": "ok", "reasonCode": None,
                                                     "nativeExitCode": 0, "signal": None, "extra": 1}})
-        # The subset rule of the native identity keeps working beside the exact
-        # rule: one key is enough, an unknown key and an empty object are not.
+        # The subset rule of the native identity keeps working: one key is
+        # enough, an unknown key and an empty object are not.
         self.assertEqual(rc.NativeIdentity.from_payload({"sessionId": "s1"}).session_id, "s1")
         for broken in ({}, {"bogus": "x"}):
             with self.assertRaises(BoardError):
@@ -480,6 +487,83 @@ class FreezingTests(unittest.TestCase):
             request.session_services[0].tool_names.append("extra")
 
 
+class NonEmptyInputTests(unittest.TestCase):
+    """The whole-input nonempty bound holds on both entries; NUL still rides."""
+
+    def request(self, **changes):
+        base = full_request(Path("/tmp"))
+        fields = dict(base.__dict__)
+        fields.update(changes)
+        return rc.RunRequest(**fields)
+
+    def test_construction_and_decode_refuse_an_empty_whole_input(self):
+        with self.assertRaises(BoardError):
+            self.request(input_text="")
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["inputText"] = ""
+        with self.assertRaises(BoardError):
+            rc.decode_run_request(payload)
+
+    def test_a_nul_bearing_input_still_roundtrips(self):
+        request = self.request(input_text="line one\x00line two")
+        back = rc.decode_run_request(rc.encode_run_request(request))
+        self.assertEqual(back.input_text, "line one\x00line two")
+
+    def test_a_correction_with_an_empty_input_is_refused_on_both_entries(self):
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="correct", input_text="")
+        payload = rc.RunFeedback(action="correct", input_text="real text").to_payload()
+        payload["inputText"] = ""
+        with self.assertRaises(BoardError):
+            rc.RunFeedback.from_payload(payload)
+
+    def test_a_native_session_continuation_requires_its_previous_session(self):
+        with self.assertRaises(BoardError):
+            rc.RunContinuation(mode="native-session")
+        with self.assertRaises(BoardError):
+            rc.RunContinuation(mode="native-session", previous_session_id="")
+        payload = rc.RunContinuation(mode="reconstructed-new-session").to_payload()
+        self.assertIsNone(rc.RunContinuation.from_payload(payload).previous_session_id)
+        wire = rc.RunContinuation(mode="native-session", previous_session_id="s-1").to_payload()
+        wire["previousSessionId"] = None
+        with self.assertRaises(BoardError):
+            rc.RunContinuation.from_payload(wire)
+
+    def test_the_harness_version_carries_the_real_probe_bound(self):
+        result = rc.RunResult(identity=identity(), harness="zcode",
+                              end=rc.RunEnd(status="ok"), harness_version="v" * 80)
+        self.assertEqual(result.harness_version, "v" * 80)
+        with self.assertRaises(BoardError):
+            rc.RunResult(identity=identity(), harness="zcode",
+                         end=rc.RunEnd(status="ok"), harness_version="v" * 81)
+        self.assertIn("v" * 80, rc.encode_run_result(result))
+
+
+class RunFeedbackTests(unittest.TestCase):
+    """The minimal in-process observer answer of the run seam (step 2-B)."""
+
+    def test_the_three_actions_roundtrip_and_only_a_correction_carries_input(self):
+        continue_feedback = rc.FEEDBACK_CONTINUE
+        stop_feedback = rc.FEEDBACK_STOP
+        correct = rc.RunFeedback(action="correct", input_text="the complete next input")
+        self.assertEqual((continue_feedback.action, stop_feedback.action), ("continue", "stop"))
+        for value, expected in ((continue_feedback, "continue"), (stop_feedback, "stop"), (correct, "correct")):
+            back = rc.RunFeedback.from_payload(value.to_payload())
+            self.assertEqual(back, value)
+            self.assertEqual(back.action, expected)
+        self.assertEqual(correct.input_text, "the complete next input")
+
+    def test_a_correction_without_input_and_a_carrying_continue_are_refused(self):
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="correct")
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="continue", input_text="smuggled")
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="stop", input_text="smuggled")
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="restart")
+
+
 class InterfaceSurfaceTests(unittest.TestCase):
     def test_no_role_authority_or_secret_material_fits_the_request(self):
         payload = full_request(Path("/tmp")).to_payload()
@@ -530,9 +614,22 @@ class InterfaceSurfaceTests(unittest.TestCase):
         decoded = rc.decode_run_result(payload)
         self.assertEqual(decoded.tool_evidence.value["nativeIdentity"], [])
         self.assertFalse(decoded.tool_evidence.value["streamComplete"])
+        # The projection's own incomplete event facts — an empty identity and
+        # missing callId/toolName/phase — ride losslessly since the Host's
+        # step 2-B continuation decision; the closed key set, the version and
+        # the category enum stay exactly the collector's.
+        carried = json.loads(json.dumps(package))
+        carried["events"].append({"nativeIdentity": {}, "callId": None, "toolName": None,
+                                  "category": "other", "phase": None})
+        payload = full_result().to_payload()
+        payload["toolEvidence"] = carried
+        decoded = rc.decode_run_result(payload)
+        self.assertIsNone(decoded.tool_evidence.value["events"][-1]["callId"])
         for mutation in ({"version": 2}, {"events": [{"nativeIdentity": {}, "callId": "c",
-                                                      "toolName": "Read", "category": "read",
-                                                      "phase": "start"}]}):
+                                                      "toolName": "Read", "category": "navigate",
+                                                      "phase": "start"}]},
+                          {"events": [{"nativeIdentity": {"bogus": "x"}, "callId": "c",
+                                       "toolName": "Read", "category": "other", "phase": "start"}]}):
             broken = json.loads(json.dumps(package))
             broken.update(mutation)
             payload = full_result().to_payload()

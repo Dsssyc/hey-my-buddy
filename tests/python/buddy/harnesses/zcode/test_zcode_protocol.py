@@ -29,7 +29,12 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     verify_receipt,
     verify_tool_refusal,
 )
-from hey_my_buddy.buddy.harnesses.zcode.runner import catalog, configure_session, execution_deadline
+from hey_my_buddy.buddy.harnesses.zcode.native_run import catalog, configure_session, execution_deadline
+from hey_my_buddy.json_codec import canonical_json
+
+# The session tools one run actually mounts; refusal envelopes verify only
+# against this set, never a fixed global one.
+MOUNTED_TOOLS = ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn")
 from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 
 
@@ -68,19 +73,22 @@ class ReceiptTests(unittest.TestCase):
                 decode_json(invalid)
 
     def test_wrong_input_and_reordered_events_cannot_establish_a_root(self):
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         def event(seq, input_id):
             return {"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn", "seq": seq,
                     "type": "turn.started", "payload": {"inputId": input_id}}}
         with self.assertRaises(NativeError):
             tracker.observe(event(1, "wrong-input"), 1)
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         tracker.observe(event(2, "input-root"), 1)
         with self.assertRaises(NativeError):
             tracker.observe(event(1, "input-root"), 2)
 
     def test_root_relayed_child_finish_does_not_consume_root_receipt(self):
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn", "seq": 1,
                         "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
         tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn", "seq": 2,
@@ -95,9 +103,24 @@ class ReceiptTests(unittest.TestCase):
         }}, seq)
 
     def started_tracker(self):
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         return tracker
+
+    def test_verified_delivery_keys_come_only_from_the_verified_root_and_call(self):
+        tracker = self.started_tracker()
+        scheduled = {"kind": "scheduled", "toolName": "finish", "toolCallId": "shared"}
+        result = {"kind": "result", "toolCallId": "shared",
+                  "result": {"success": True, "truncated": False, "content": self.receipt()}}
+        self.root_event(tracker, 2, "tool.updated", scheduled, sessionId="foreign")
+        self.root_event(tracker, 3, "tool.updated", result, sessionId="foreign")
+        self.assertEqual(tracker.verified_delivery(), frozenset())
+        self.root_event(tracker, 2, "tool.updated", scheduled)
+        self.assertEqual(tracker.verified_delivery(), frozenset())
+        self.root_event(tracker, 3, "tool.updated", result)
+        identity = {"sessionId": "sess-root", "turnId": "native-turn"}
+        self.assertEqual(tracker.verified_delivery(), frozenset({(canonical_json(identity), "shared")}))
 
     def test_failed_finish_can_retry_with_one_successful_root_receipt(self):
         failures = ({"kind": "error", "error": "The required parameter request is missing"},
@@ -153,7 +176,8 @@ class ReceiptTests(unittest.TestCase):
         # verified envelope recovers the turn; the corrected call then succeeds.
         finish = "mcp__buddy_x__buddy_finish_turn"
         refusal = json.dumps(self._signed_refusal())
-        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
         self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
@@ -175,7 +199,8 @@ class ReceiptTests(unittest.TestCase):
                         json.dumps(self._signed_refusal(identity={"taskId": "goal", "attemptId": "other",
                                                                  "generation": 1, "turnId": "logical"}))):
             with self.subTest(content=content[:60]):
-                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
+                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
                 self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
                 self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
                 with self.assertRaises(NativeError) as error:
@@ -191,7 +216,8 @@ class ReceiptTests(unittest.TestCase):
         finish = "mcp__buddy_x__buddy_finish_turn"
         header = "MCP tool returned an error:\n"
         verified = header + json.dumps(self._signed_refusal())
-        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
         self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
@@ -201,7 +227,8 @@ class ReceiptTests(unittest.TestCase):
         for content in (header + json.dumps({**self._signed_refusal(), "detail": "changed after signing"}),
                         header + json.dumps(self._signed_refusal(tool="buddy_answer_inquiry"))):
             with self.subTest(content=content[:60]):
-                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
+                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge,
+                                          validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
                 self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
                 self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
                 with self.assertRaises(NativeError) as error:
@@ -339,7 +366,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
     def test_a_well_bound_envelope_verifies_for_exactly_its_tool(self):
         raw = self.refusal()
         self.assertTrue(refusal_shaped(raw))
-        envelope = verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"])
+        envelope = verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
         self.assertEqual(envelope["reason"], "invalid-arguments")
         self.assertEqual(envelope["tool"], "buddy_finish_turn")
         for bare, native in self.names.items():
@@ -347,7 +374,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                 continue
             with self.subTest(native=native):
                 with self.assertRaises(NativeError) as error:
-                    verify_tool_refusal(raw, self.bridge, native)
+                    verify_tool_refusal(raw, self.bridge, native, MOUNTED_TOOLS)
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
                 self.assertIn("different session tool", str(error.exception))
 
@@ -358,11 +385,11 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
         raw = self.refusal()
         framed = "MCP tool returned an error:\n" + raw
         self.assertTrue(refusal_shaped(framed))
-        envelope = verify_tool_refusal(framed, self.bridge, self.names["buddy_finish_turn"])
+        envelope = verify_tool_refusal(framed, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
         self.assertEqual(envelope["reason"], "invalid-arguments")
         tampered = "MCP tool returned an error:\n" + json.dumps({**json.loads(raw), "detail": "changed after signing"})
         with self.assertRaises(NativeError) as error:
-            verify_tool_refusal(tampered, self.bridge, self.names["buddy_finish_turn"])
+            verify_tool_refusal(tampered, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
         self.assertIn("signature", str(error.exception))
         for not_shaped in ("x" * 300 + raw, framed + " trailing", "error: {" + raw,
                            "MCP tool returned an error:\nnot json", " ", ""):
@@ -388,7 +415,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                 if name == "not an object":
                     self.assertFalse(refusal_shaped(raw))
                 with self.assertRaises(NativeError) as error:
-                    verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"])
+                    verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
         # Prose before a genuinely signed envelope is just framing: the prefix
         # never enters the signature, so the envelope still verifies and can
@@ -396,11 +423,11 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
         prose_framed = "the tool refused: " + self.refusal()
         self.assertTrue(refusal_shaped(prose_framed))
         self.assertEqual(verify_tool_refusal(prose_framed, self.bridge,
-                                             self.names["buddy_finish_turn"])["reason"], "invalid-arguments")
+                                             self.names["buddy_finish_turn"], MOUNTED_TOOLS)["reason"], "invalid-arguments")
         with self.assertRaises(NativeError):
-            verify_tool_refusal(self.refusal(), {**self.bridge, "key": "d" * 64}, self.names["buddy_finish_turn"])
+            verify_tool_refusal(self.refusal(), {**self.bridge, "key": "d" * 64}, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
         with self.assertRaises(NativeError):
-            verify_tool_refusal("x" * 70001, self.bridge, self.names["buddy_finish_turn"])
+            verify_tool_refusal("x" * 70001, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
 
     def test_dispatch_never_treats_a_receipt_or_prose_as_a_refusal(self):
         outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
@@ -415,7 +442,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                                                                        "arguments": {"disposition": "completed"}}}, self.bridge)["result"]
         self.assertTrue(refused.get("isError"))
         self.assertTrue(refusal_shaped(refused["content"][0]["text"]))
-        envelope = verify_tool_refusal(refused["content"][0]["text"], self.bridge, self.names["buddy_finish_turn"])
+        envelope = verify_tool_refusal(refused["content"][0]["text"], self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS)
         self.assertEqual(envelope["reason"], "invalid-arguments")
 
 
@@ -451,7 +478,7 @@ class RefusalWireBudgetTests(unittest.TestCase):
             with self.subTest(case=name):
                 text = self.mint(detail)
                 self.assertLessEqual(len(text.encode()) + MAX_TOOL_REFUSAL_PREFIX_BYTES, MAX_TOOL_REFUSAL_BYTES)
-                envelope = verify_tool_refusal(text, self.bridge, self.finish)
+                envelope = verify_tool_refusal(text, self.bridge, self.finish, MOUNTED_TOOLS)
                 self.assertTrue(envelope["detail"].strip())
                 # The kept detail is a prefix of the original, so the leading
                 # correction guidance survives and nothing is rewritten.
@@ -459,14 +486,14 @@ class RefusalWireBudgetTests(unittest.TestCase):
 
     def test_the_review_repro_wire_sizes_now_verify(self):
         text = self.mint('"' * 65536)
-        envelope = verify_tool_refusal(text, self.bridge, self.finish)
+        envelope = verify_tool_refusal(text, self.bridge, self.finish, MOUNTED_TOOLS)
         # The unfixed mint emitted 131,450 wire bytes and was refused; the
         # fitted mint now uses most of the budget without exceeding it.
         self.assertGreater(len(text.encode()), MAX_TOOL_REFUSAL_BYTES // 2)
         self.assertEqual(envelope["reason"], "invalid-arguments")
 
     def test_a_whitespace_detail_falls_back_to_the_retry_instruction(self):
-        envelope = verify_tool_refusal(self.mint(" " * 70000), self.bridge, self.finish)
+        envelope = verify_tool_refusal(self.mint(" " * 70000), self.bridge, self.finish, MOUNTED_TOOLS)
         self.assertIn("correct it and retry", envelope["detail"])
 
     def test_checkpoint_receipts_batch_serialized_overflow_explicitly(self):
@@ -502,7 +529,7 @@ class InquiryEvidenceTests(unittest.TestCase):
             answer_name="mcp__buddy_x__buddy_answer_inquiry",
             on_delivery=lambda receipt, call: self.deliveries.append((receipt, call)),
             on_answer=lambda receipt, call: self.answers.append((receipt, call)),
-            validate_outcome=validate_outcome)
+            validate_outcome=validate_outcome, mounted_tools=MOUNTED_TOOLS)
 
     def event(self, seq: int, kind: str, payload: dict, **identity) -> None:
         self.tracker.observe({"method": "session/event", "params": {
@@ -662,7 +689,7 @@ class InquiryEvidenceTests(unittest.TestCase):
                     "sess-root", "input-root", "mcp__buddy_x__buddy_finish_turn", self.bridge,
                     checkpoint_name="mcp__buddy_x__buddy_checkpoint",
                     on_delivery=lambda receipt, call: None,
-                    validate_outcome=validate_outcome)
+                    validate_outcome=validate_outcome, mounted_tools=MOUNTED_TOOLS)
                 tracker.observe({"method": "session/event", "params": {
                     "sessionId": "sess-root", "turnId": "native-turn", "seq": 1, "type": "turn.started",
                     "payload": {"inputId": "input-root"}}}, 1)
@@ -817,7 +844,8 @@ class NativeFailureAttributionTests(unittest.TestCase):
             return {"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
                                                           "seq": 2, "type": kind, "payload": payload}}
 
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", bridge, validate_outcome=validate_outcome)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", bridge,
+                                  validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
                         "seq": 1, "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
         with self.assertRaises(NativeError) as error:
@@ -827,7 +855,8 @@ class NativeFailureAttributionTests(unittest.TestCase):
         self.assertIn("rate_limited", str(error.exception))
         # The state.updated prompt_failed envelope exports only a reason string
         # and an opaque patch, so no attribution is manufactured for it.
-        quiet = RootTurnEvidence("sess-root", "input-root", "finish", bridge, validate_outcome=validate_outcome)
+        quiet = RootTurnEvidence("sess-root", "input-root", "finish", bridge,
+                               validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         quiet.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
                        "seq": 1, "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
         with self.assertRaises(NativeError) as prompt_error:
