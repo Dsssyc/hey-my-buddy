@@ -334,12 +334,5 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
 
-def outcome(**changes) -> dict:
-    value = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
-             "artifacts": [], "request": None}
-    value.update(changes)
-    return value
-
-
 if __name__ == "__main__":
     unittest.main()
