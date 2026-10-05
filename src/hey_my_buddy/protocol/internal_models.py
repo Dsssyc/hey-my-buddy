@@ -294,6 +294,10 @@ class InternalModel(BaseModel):
         except ValidationError as error:
             raise _validation_failure(type(self), error) from None
 
+    @staticmethod
+    def decoding_wire() -> bool:
+        return _wire_decode.get()
+
     @model_validator(mode="before")
     @classmethod
     def _wire_shape(cls, data: Any) -> Any:
@@ -302,7 +306,7 @@ class InternalModel(BaseModel):
         refused exactly like the hand-written codecs refused it. The check runs
         only inside a wire decode; constructor calls keep ordinary Python
         defaults."""
-        if not isinstance(data, dict) or not _wire_decode.get():
+        if not isinstance(data, dict) or not cls.decoding_wire():
             return data
         if cls.WIRE_FORMAT_VERSION is not None:
             version = data.get("formatVersion")

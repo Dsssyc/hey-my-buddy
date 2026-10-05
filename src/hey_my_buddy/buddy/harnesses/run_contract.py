@@ -327,6 +327,8 @@ class DeniedInteraction(InternalModel):
 
 def _count_pairs(value: Any) -> Any:
     """The wire form of the unknown-event counts is one JSON object."""
+    if InternalModel.decoding_wire() and not isinstance(value, dict):
+        raise fail("countsByType must be a JSON object", field="countsByType")
     if isinstance(value, Mapping):
         return tuple(value.items())
     if isinstance(value, list):

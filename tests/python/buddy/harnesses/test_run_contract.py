@@ -250,6 +250,18 @@ class CodecRoundtripTests(unittest.TestCase):
             with self.assertRaises(BoardError):
                 rc.NativeIdentity.from_payload(broken)
 
+        counts = rc.UnknownEvents(counts=(("foo", 1),), total=1)
+        self.assertEqual(counts.to_payload()["countsByType"], {"foo": 1})
+        array_counts = {"countsByType": [["foo", 1]], "total": 1, "truncated": False}
+        with self.assertRaises(BoardError):
+            rc.UnknownEvents.from_payload(array_counts)
+        with self.assertRaises(BoardError):
+            rc.decode_run_result({**result, "unknownEvents": array_counts})
+        for bad_domains in ("", "1", "x", {}):
+            with self.assertRaises(BoardError, msg=repr(bad_domains)):
+                rc.decode_run_request({**request, "network": {"requested": False,
+                                                             "allowedDomains": bad_domains}})
+
     def test_the_new_bounds_hold_the_old_allowed_sets(self):
         # The role-assembled input follows the board's 1 MiB task text bound, so
         # a 300,000-character non-turn prompt is a legal request.
