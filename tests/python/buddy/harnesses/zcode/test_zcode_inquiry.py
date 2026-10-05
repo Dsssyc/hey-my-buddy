@@ -30,17 +30,22 @@ from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.roles import turn_io
-from hey_my_buddy.buddy.harnesses.zcode.mcp import attention_requests, pending_inquiries, read_inquiry_entries, respond
-from hey_my_buddy.buddy.harnesses.zcode.protocol import (
-    COOPERATIVE_INQUIRY_NOTE,
+from hey_my_buddy.buddy.roles.worker_services import attention_requests, pending_inquiries, read_inquiry_entries
+from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
+    MAX_JOURNAL_BYTES,
+    sign_receipt,
+)
+from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
+from hey_my_buddy.buddy.harnesses.zcode.protocol import (
+    COOPERATIVE_INQUIRY_NOTE,
     NativeError,
     verify_inquiry_receipt,
     verify_receipt,
     verify_tool_refusal,
 )
-from hey_my_buddy.buddy.harnesses.zcode.runner import MAX_JOURNAL_BYTES, InquiryBridge
+from hey_my_buddy.buddy.harnesses.zcode.runner import InquiryBridge
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -79,7 +84,6 @@ class BridgeHarness:
 
 
 def checkpoint_receipt(inquiries: list[dict], config: dict) -> str:
-    from hey_my_buddy.buddy.harnesses.zcode.protocol import sign_receipt
     receipt = {"version": 1, "kind": "inquiry-checkpoint", "identity": config["identity"],
                "inquiries": inquiries, "receiptId": "0" * 31 + "1"}
     receipt["signature"] = sign_receipt(receipt, config["key"])
@@ -87,7 +91,6 @@ def checkpoint_receipt(inquiries: list[dict], config: dict) -> str:
 
 
 def answer_receipt(inquiry_id: str, answer: str, config: dict, *, sha: str = "b" * 64) -> str:
-    from hey_my_buddy.buddy.harnesses.zcode.protocol import sign_receipt
     receipt = {"version": 1, "kind": "inquiry-answer", "identity": config["identity"],
                "inquiryId": inquiry_id, "questionSha256": sha, "answer": answer, "receiptId": "0" * 31 + "2"}
     receipt["signature"] = sign_receipt(receipt, config["key"])
@@ -480,8 +483,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(restarted.entries["q-merge"]["delivery"], committed["delivery"])
 
     def test_the_board_journal_importer_reads_the_real_records(self):
-        from hey_my_buddy.buddy.harnesses.zcode.protocol import sign_receipt
-
+    
         self.ask("q-import", "what next?")
         sha = self.harness.bridge.entries["q-import"]["questionSha256"]
         receipt = {"version": 1, "kind": "inquiry-answer", "identity": IDENTITY, "inquiryId": "q-import",
@@ -770,7 +772,7 @@ class FinishToolTests(unittest.TestCase):
                                                 "at": "2026-01-01T00:00:00Z"}, **IDENTITY}) + "\n")
         settled = self.call("buddy_finish_turn", self.outcome("completed"))
         self.assertFalse(settled.get("isError"), settled)
-        verify_receipt(settled["content"][0]["text"], self.config)
+        verify_receipt(settled["content"][0]["text"], self.config, turn_io.validate_outcome)
 
     def test_foreign_or_unversioned_journal_records_are_never_exposed(self):
         import hashlib
@@ -836,17 +838,17 @@ class FinishToolTests(unittest.TestCase):
         self.assertIn("attention", envelope["detail"])
         attention = self.call("buddy_finish_turn", self.outcome("attention"))
         self.assertFalse(attention.get("isError"), attention)
-        receipt = verify_receipt(attention["content"][0]["text"], self.config)
+        receipt = verify_receipt(attention["content"][0]["text"], self.config, turn_io.validate_outcome)
         self.assertEqual(receipt["outcome"]["disposition"], "attention")
 
     def test_a_completed_outcome_still_verifies_without_attention(self):
         accepted = self.call("buddy_finish_turn", self.outcome("completed"))
-        receipt = verify_receipt(accepted["content"][0]["text"], self.config)
+        receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
         self.assertEqual(receipt["outcome"]["disposition"], "completed")
         tampered = json.loads(accepted["content"][0]["text"])
         tampered["outcome"]["summary"] = "changed"
         with self.assertRaises(NativeError):
-            verify_receipt(json.dumps(tampered), self.config)
+            verify_receipt(json.dumps(tampered), self.config, turn_io.validate_outcome)
 
     def test_unknown_tools_and_invalid_outcomes_are_bounded_errors(self):
         unknown = self.call("buddy_something_else", {})
@@ -894,7 +896,7 @@ class FinishToolTests(unittest.TestCase):
         with_null["request"]["suggestedProfileId"] = None
         accepted = self.call("buddy_finish_turn", with_null)
         self.assertFalse(accepted.get("isError"), accepted)
-        receipt = verify_receipt(accepted["content"][0]["text"], self.config)
+        receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
         self.assertIsNone(receipt["outcome"]["request"]["suggestedProfileId"])
         for invalid in (5, True, {}, []):
             with self.subTest(invalid=invalid):
@@ -1113,7 +1115,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": context.attempt_id,
                                             "generation": 1, "turnId": "turn-1"})
         self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
-        from hey_my_buddy.buddy.harnesses.zcode.runner import governed_prompt
+        from hey_my_buddy.buddy.roles.worker_services import governed_prompt
 
         prompt = governed_prompt("task", {"turn": 1}, "mcp__buddy_x__buddy_finish_turn",
                                  checkpoint_tool="mcp__buddy_x__buddy_checkpoint",

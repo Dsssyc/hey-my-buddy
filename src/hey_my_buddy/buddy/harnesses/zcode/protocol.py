@@ -1,8 +1,6 @@
 """Bounded NDJSON transport and root-turn evidence for ZCode's native app server."""
 from __future__ import annotations
 
-from .... import locking
-import hashlib
 import hmac
 import os
 import queue
@@ -15,8 +13,19 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
 
-from ...roles.turn_io import MAX_OUTCOME_BYTES, validate_outcome
 from ..native_observations import bound_native_text, native_counter
+from ..session_receipts import (
+    MAX_ANSWER_BYTES,
+    MAX_INQUIRIES,
+    MAX_INQUIRY_ID_BYTES,
+    MAX_INQUIRY_RECEIPT_BYTES,
+    MAX_QUESTION_BYTES,
+    MAX_TOOL_REFUSAL_BYTES,
+    MAX_TOOL_REFUSAL_DETAIL_BYTES,
+    MAX_TOOL_REFUSAL_PREFIX_BYTES,
+    TOOL_REFUSAL_REASONS,
+    sign_receipt,
+)
 from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, MAX_WAITING_REASON, PHASES
 
@@ -47,19 +56,6 @@ USAGE_DELTA_COUNTERS = ("inputTokens", "outputTokens", "totalTokens", "reasoning
 QUOTA_FAILURE_CODE_FIELDS = ("code", "errorType")
 QUOTA_FAILURE_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
 
-#: Shared inquiry bounds, identical to the board and the DSH bridge. The MCP
-#: tools, the controller's verification and the observation bridge all enforce
-#: the same budget so a bounded value can never be rejected after mutation.
-MAX_QUESTION_BYTES = 4000
-MAX_ANSWER_BYTES = 4000
-MAX_INQUIRIES = 32
-MAX_INQUIRY_ID_BYTES = 128
-
-#: The only inquiry-journal record format this source writes and replays. Every
-#: reader requires exactly this version and the record's attempt identity, so a
-#: malformed, foreign or unbound line is ignored instead of merged.
-INQUIRY_JOURNAL_VERSION = 1
-
 #: Bounded retention for completed inquiry tool calls inside one native turn.
 #: Only the most recent terminal call identities per tool are kept (to reject an
 #: immediate duplicate terminal result); a verified receipt is handed to its
@@ -83,23 +79,6 @@ class NativeError(Exception):
 decode_json = decode_strict_json
 
 
-def sign_receipt(payload: dict, key: str) -> str:
-    return hmac.new(bytes.fromhex(key), canonical_json(payload).encode(), hashlib.sha256).hexdigest()
-
-
-def serialized_footprint(text: str) -> int:
-    """The byte length ``text`` occupies inside a canonical JSON document.
-
-    The raw UTF-8 length cannot bound a signed envelope's wire size: JSON
-    escaping costs six bytes per C0 control character (``\\u0001``), two per
-    quote or backslash, while non-ASCII text stays literal under
-    ``ensure_ascii=False``. Every budget that has to survive signing plus the
-    native wrapper's framing is computed on this footprint, never the raw
-    length.
-    """
-    return len(canonical_json(text).encode()) - 2
-
-
 #: How this adapter carries Host questions, stated once and reported verbatim.
 #: The native protocol still has no turn-bound in-turn input: ``session/send``
 #: has no delivery/expectedTurn fields and rejects a send during an active
@@ -116,36 +95,11 @@ COOPERATIVE_INQUIRY_NOTE = (
     "buddy_answer_inquiry verified against the root turn's own tool evidence"
 )
 
-#: Honest bounds of the signed inquiry receipts the MCP tools return. A
-#: checkpoint receipt may carry every queued question, so its budget covers
-#: ``MAX_INQUIRIES`` x ``MAX_QUESTION_BYTES`` plus framing.
-MAX_INQUIRY_RECEIPT_BYTES = 200 * 1024
-
 #: The bare session-tool names the private MCP exposes inside one native root
 #: turn. The runner mounts them as ``mcp__<server>__<bare name>``, so a refusal
 #: envelope is bound to its tool by requiring the tracked native tool name to
 #: end with the envelope's bare name.
 SESSION_TOOLS = ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn")
-
-#: The closed set of reasons a signed tool-refusal envelope may carry. Every
-#: member is an expected, bounded refusal our own MCP mints for a correctable
-#: caller mistake or an outstanding Host condition; anything else is not a
-#: refusal this controller will recover from.
-TOOL_REFUSAL_REASONS = ("invalid-arguments", "attention-outstanding", "inquiry-pending",
-                        "unknown-inquiry", "inquiry-state", "inquiry-channel-absent")
-
-#: A refusal detail is the same bounded correction text the plain MCP errors
-#: carried (validator output, the pending-inquiry refusal, the attention note),
-#: so it inherits the outcome byte bound; the envelope adds only fixed framing.
-MAX_TOOL_REFUSAL_DETAIL_BYTES = MAX_OUTCOME_BYTES
-MAX_TOOL_REFUSAL_BYTES = MAX_OUTCOME_BYTES + 4096
-
-#: The installed native wrapper frames an MCP ``isError`` text with one bounded
-#: plain header line (observed: ``MCP tool returned an error:``) before the
-#: content. The controller tolerates exactly that much transport framing when
-#: dispatching to refusal verification; the framing never enters the signature,
-#: and only the full HMAC over the attempt, input and tool binding decides.
-MAX_TOOL_REFUSAL_PREFIX_BYTES = 256
 
 
 class ActivityProjection:
@@ -227,13 +181,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def verify_receipt(raw: object, configuration: dict) -> dict:
+def verify_receipt(raw: object, configuration: dict, validate_outcome: Callable[[object], str | None]) -> dict:
     """Verify the signed finish receipt; malformed and forged failures stay distinct.
 
     Every stage keeps the fatal ``invalid-finish`` code — only a fully verified
     receipt is a success — but the bounded message distinguishes an unusable
     payload (no bounded JSON, wrong object shape) from a signature, attempt-
-    identity or outcome failure, without ever quoting the raw content.
+    identity or outcome failure, without ever quoting the raw content. The
+    six-field outcome rule itself belongs to the Worker role: the current
+    caller injects its narrow validator, so this protocol verifies the receipt
+    with it instead of re-deciding what a legal outcome is, and a role-signed
+    receipt still never skips the signature, binding or order checks here.
     """
     if not isinstance(raw, str) or len(raw.encode()) > 70000:
         raise NativeError("invalid-finish", "the finish tool returned no bounded JSON receipt")
@@ -334,36 +292,6 @@ def verify_tool_refusal(raw: object, configuration: dict, native_tool: str) -> d
 
 def _valid_inquiry_id(value: object) -> bool:
     return isinstance(value, str) and 0 < len(value.encode()) <= MAX_INQUIRY_ID_BYTES
-
-
-def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
-    """One bounded, shared-locked read of the inquiry journal file.
-
-    This is the reader side of the journal's cross-process barrier (POSIX flock,
-    the same primitive the service uses for its lifetime locks): while the
-    controller writer holds the exclusive side through its append/fsync/commit
-    transaction, this read waits, so a reader can never observe a record that
-    the writer has not fully committed — neither an in-flight append nor the
-    remains of a failed one. Returns ``None`` when the file cannot be opened and
-    ``b""`` when it exceeds its byte bound.
-    """
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
-        return None
-    try:
-        locking.lock(fd, shared=True)
-        if os.fstat(fd).st_size > max_bytes:
-            return b""
-        chunks = bytearray()
-        while len(chunks) <= max_bytes:
-            block = os.read(fd, 65536)
-            if not block:
-                break
-            chunks.extend(block)
-        return bytes(chunks[:max_bytes + 1])
-    finally:
-        os.close(fd)  # closing releases the shared lock
 
 
 def _valid_question_sha(value: object) -> bool:
@@ -970,10 +898,12 @@ class RootTurnEvidence:
     def __init__(self, session_id: str, input_id: str, tool_name: str, bridge: dict, *,
                  checkpoint_name: str | None = None, answer_name: str | None = None,
                  on_delivery: Callable[[dict, str], None] | None = None,
-                 on_answer: Callable[[dict, str], None] | None = None):
+                 on_answer: Callable[[dict, str], None] | None = None,
+                 validate_outcome: Callable[[object], str | None]):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
         self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
         self.on_delivery, self.on_answer = on_delivery, on_answer
+        self.validate_outcome = validate_outcome
         self.turn_id: str | None = None
         self.call_id: str | None = None
         self.receipt: dict | None = None
@@ -1074,7 +1004,7 @@ class RootTurnEvidence:
                     return
                 if result.get("success") is not True:
                     raise NativeError("finish-tool-failed", "the native finish result has no explicit success evidence")
-                self.receipt = verify_receipt(content, self.bridge)
+                self.receipt = verify_receipt(content, self.bridge, self.validate_outcome)
                 self.result_seq = seq
             return
         if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:

@@ -10,24 +10,27 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
-from hey_my_buddy.buddy.harnesses.zcode.protocol import (
+from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_INQUIRY_RECEIPT_BYTES,
     MAX_TOOL_REFUSAL_BYTES,
     MAX_TOOL_REFUSAL_DETAIL_BYTES,
     MAX_TOOL_REFUSAL_PREFIX_BYTES,
+    sign_receipt,
+)
+from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
+from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeConnection,
     NativeError,
     RootTurnEvidence,
     decode_json,
     decode_native_failure,
     refusal_shaped,
-    sign_receipt,
     verify_inquiry_receipt,
     verify_receipt,
     verify_tool_refusal,
 )
 from hey_my_buddy.buddy.harnesses.zcode.runner import catalog, configure_session, execution_deadline
+from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 
 
 class ReceiptTests(unittest.TestCase):
@@ -43,41 +46,41 @@ class ReceiptTests(unittest.TestCase):
 
     def test_bridge_receipt_is_bound_to_input_identity_and_outcome(self):
         raw = self.receipt()
-        self.assertEqual(verify_receipt(raw, self.bridge)["outcome"], self.outcome)
+        self.assertEqual(verify_receipt(raw, self.bridge, validate_outcome)["outcome"], self.outcome)
         for key, value in (("inputSha256", "c" * 64), ("outcome", {**self.outcome, "summary": "forged"}),
                            ("identity", {**self.bridge["identity"], "generation": 2})):
             with self.subTest(key=key):
                 changed = json.loads(raw)
                 changed[key] = value
                 with self.assertRaises(NativeError):
-                    verify_receipt(json.dumps(changed), self.bridge)
+                    verify_receipt(json.dumps(changed), self.bridge, validate_outcome)
         other_attempt = {**self.bridge, "identity": {**self.bridge["identity"], "attemptId": "other"}}
         with self.assertRaises(NativeError):
-            verify_receipt(raw, other_attempt)
+            verify_receipt(raw, other_attempt, validate_outcome)
 
     def test_prose_duplicate_members_and_nonfinite_values_are_rejected(self):
         raw = self.receipt()
         for invalid in ("Here is the result: " + raw, "```json\n" + raw + "\n```", raw + raw):
             with self.assertRaises(NativeError):
-                verify_receipt(invalid, self.bridge)
+                verify_receipt(invalid, self.bridge, validate_outcome)
         for invalid in ('{"a":1,"a":2}', '{"a":NaN}', '{"a":Infinity}'):
             with self.assertRaises(ValueError):
                 decode_json(invalid)
 
     def test_wrong_input_and_reordered_events_cannot_establish_a_root(self):
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
         def event(seq, input_id):
             return {"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn", "seq": seq,
                     "type": "turn.started", "payload": {"inputId": input_id}}}
         with self.assertRaises(NativeError):
             tracker.observe(event(1, "wrong-input"), 1)
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
         tracker.observe(event(2, "input-root"), 1)
         with self.assertRaises(NativeError):
             tracker.observe(event(1, "input-root"), 2)
 
     def test_root_relayed_child_finish_does_not_consume_root_receipt(self):
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
         tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn", "seq": 1,
                         "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
         tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn", "seq": 2,
@@ -92,7 +95,7 @@ class ReceiptTests(unittest.TestCase):
         }}, seq)
 
     def started_tracker(self):
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge, validate_outcome=validate_outcome)
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         return tracker
 
@@ -150,7 +153,7 @@ class ReceiptTests(unittest.TestCase):
         # verified envelope recovers the turn; the corrected call then succeeds.
         finish = "mcp__buddy_x__buddy_finish_turn"
         refusal = json.dumps(self._signed_refusal())
-        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
         self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
@@ -172,7 +175,7 @@ class ReceiptTests(unittest.TestCase):
                         json.dumps(self._signed_refusal(identity={"taskId": "goal", "attemptId": "other",
                                                                  "generation": 1, "turnId": "logical"}))):
             with self.subTest(content=content[:60]):
-                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
                 self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
                 self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
                 with self.assertRaises(NativeError) as error:
@@ -188,7 +191,7 @@ class ReceiptTests(unittest.TestCase):
         finish = "mcp__buddy_x__buddy_finish_turn"
         header = "MCP tool returned an error:\n"
         verified = header + json.dumps(self._signed_refusal())
-        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
         self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
@@ -198,7 +201,7 @@ class ReceiptTests(unittest.TestCase):
         for content in (header + json.dumps({**self._signed_refusal(), "detail": "changed after signing"}),
                         header + json.dumps(self._signed_refusal(tool="buddy_answer_inquiry"))):
             with self.subTest(content=content[:60]):
-                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge)
+                tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge, validate_outcome=validate_outcome)
                 self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
                 self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
                 with self.assertRaises(NativeError) as error:
@@ -219,7 +222,7 @@ class ReceiptTests(unittest.TestCase):
         for name, content in malformed.items():
             with self.subTest(case=name):
                 with self.assertRaises(NativeError) as error:
-                    verify_receipt(content, self.bridge)
+                    verify_receipt(content, self.bridge, validate_outcome)
                 self.assertEqual(error.exception.code, "invalid-finish")
                 message = str(error.exception)
                 self.assertTrue(any(fragment in message for fragment in
@@ -227,21 +230,21 @@ class ReceiptTests(unittest.TestCase):
         tampered = json.loads(raw)
         tampered["outcome"] = {**tampered["outcome"], "summary": "forged"}
         with self.assertRaises(NativeError) as error:
-            verify_receipt(json.dumps(tampered), self.bridge)
+            verify_receipt(json.dumps(tampered), self.bridge, validate_outcome)
         self.assertIn("signature verification", str(error.exception))
         rekeyed = json.loads(raw)
         rekeyed.pop("signature")
         rekeyed["identity"] = {**rekeyed["identity"], "attemptId": "other"}
         rekeyed["signature"] = sign_receipt(rekeyed, self.bridge["key"])
         with self.assertRaises(NativeError) as error:
-            verify_receipt(json.dumps(rekeyed), self.bridge)
+            verify_receipt(json.dumps(rekeyed), self.bridge, validate_outcome)
         self.assertIn("attempt-identity binding", str(error.exception))
         reoutcomed = json.loads(raw)
         reoutcomed.pop("signature")
         reoutcomed["outcome"]["disposition"] = "unknown"
         reoutcomed["signature"] = sign_receipt(reoutcomed, self.bridge["key"])
         with self.assertRaises(NativeError) as error:
-            verify_receipt(json.dumps(reoutcomed), self.bridge)
+            verify_receipt(json.dumps(reoutcomed), self.bridge, validate_outcome)
         self.assertIn("outcome validation", str(error.exception))
 
     def _signed_refusal(self, *, tool: str = "buddy_finish_turn", reason: str = "invalid-arguments",
@@ -431,7 +434,7 @@ class RefusalWireBudgetTests(unittest.TestCase):
         self.finish = "mcp__buddy_x__buddy_finish_turn"
 
     def mint(self, detail: str, *, tool: str = "buddy_finish_turn", reason: str = "invalid-arguments") -> str:
-        from hey_my_buddy.buddy.harnesses.zcode.mcp import _refusal
+        from hey_my_buddy.buddy.roles.worker_services import _refusal
         return _refusal(self.bridge, tool, reason, detail)["content"][0]["text"]
 
     def test_pathological_details_mint_envelopes_that_verify_byte_for_byte(self):
@@ -467,7 +470,7 @@ class RefusalWireBudgetTests(unittest.TestCase):
         self.assertIn("correct it and retry", envelope["detail"])
 
     def test_checkpoint_receipts_batch_serialized_overflow_explicitly(self):
-        from hey_my_buddy.buddy.harnesses.zcode.mcp import _checkpoint_batch
+        from hey_my_buddy.buddy.roles.worker_services import _checkpoint_batch
         from hey_my_buddy.buddy.roles.turn_io import canonical_json
         # 32 accepted-but-pathological questions (control characters expand
         # sixfold) cannot fit one receipt: the batch is the longest serialized
@@ -498,7 +501,8 @@ class InquiryEvidenceTests(unittest.TestCase):
             checkpoint_name="mcp__buddy_x__buddy_checkpoint",
             answer_name="mcp__buddy_x__buddy_answer_inquiry",
             on_delivery=lambda receipt, call: self.deliveries.append((receipt, call)),
-            on_answer=lambda receipt, call: self.answers.append((receipt, call)))
+            on_answer=lambda receipt, call: self.answers.append((receipt, call)),
+            validate_outcome=validate_outcome)
 
     def event(self, seq: int, kind: str, payload: dict, **identity) -> None:
         self.tracker.observe({"method": "session/event", "params": {
@@ -657,7 +661,8 @@ class InquiryEvidenceTests(unittest.TestCase):
                 tracker = RootTurnEvidence(
                     "sess-root", "input-root", "mcp__buddy_x__buddy_finish_turn", self.bridge,
                     checkpoint_name="mcp__buddy_x__buddy_checkpoint",
-                    on_delivery=lambda receipt, call: None)
+                    on_delivery=lambda receipt, call: None,
+                    validate_outcome=validate_outcome)
                 tracker.observe({"method": "session/event", "params": {
                     "sessionId": "sess-root", "turnId": "native-turn", "seq": 1, "type": "turn.started",
                     "payload": {"inputId": "input-root"}}}, 1)
@@ -812,7 +817,7 @@ class NativeFailureAttributionTests(unittest.TestCase):
             return {"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
                                                           "seq": 2, "type": kind, "payload": payload}}
 
-        tracker = RootTurnEvidence("sess-root", "input-root", "finish", bridge)
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", bridge, validate_outcome=validate_outcome)
         tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
                         "seq": 1, "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
         with self.assertRaises(NativeError) as error:
@@ -822,7 +827,7 @@ class NativeFailureAttributionTests(unittest.TestCase):
         self.assertIn("rate_limited", str(error.exception))
         # The state.updated prompt_failed envelope exports only a reason string
         # and an opaque patch, so no attribution is manufactured for it.
-        quiet = RootTurnEvidence("sess-root", "input-root", "finish", bridge)
+        quiet = RootTurnEvidence("sess-root", "input-root", "finish", bridge, validate_outcome=validate_outcome)
         quiet.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
                        "seq": 1, "type": "turn.started", "payload": {"inputId": "input-root"}}}, 1)
         with self.assertRaises(NativeError) as prompt_error:

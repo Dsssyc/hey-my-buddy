@@ -25,15 +25,20 @@ from ....errors import BoardError
 from ....private_dirs import ensure_private_dir
 from ..base import ProcessHandle
 from ...runtime.windows_process import owned_popen
-from ...roles.turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
+from ...roles.turn_io import canonical_json, input_hash, private_json, validate_outcome
+from ...roles.worker_services import governed_prompt
 from .config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
-from .protocol import (
-    COOPERATIVE_INQUIRY_NOTE,
+from ..session_receipts import (
     INQUIRY_JOURNAL_VERSION,
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
     MAX_INQUIRY_ID_BYTES,
+    MAX_JOURNAL_BYTES,
     MAX_QUESTION_BYTES,
+    read_shared_snapshot,
+)
+from .protocol import (
+    COOPERATIVE_INQUIRY_NOTE,
     ActivityProjection,
     NativeConnection,
     NativeError,
@@ -41,11 +46,9 @@ from .protocol import (
     ZcodeAttemptUsage,
     decode_json,
     quota_native_code,
-    read_shared_snapshot,
 )
 from .tool_evidence import ZcodeToolFacts
 
-MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
 BRIDGE_PROTOCOL_VERSION = 1
 BRIDGE_WAIT_SECONDS = 5.0
@@ -611,26 +614,6 @@ class InquiryBridge:
         }
 
 
-def governed_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
-                    checkpoint_tool: str | None = None, answer_tool: str | None = None) -> str:
-    """Bounded governed root prompt: scope, inquiry channel, finish contract."""
-    inquiry = (
-        f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
-        f"before finishing to pick up any queued Host questions (an empty list means none). Answer each listed "
-        f"question with {answer_tool} using its exact inquiryId. A completed finish is refused while a question "
-        f"is still unanswered; a withdrawn or explicitly unavailable question no longer blocks it. Checkpointing "
-        "is voluntary and never on a timer, and no input is ever injected into your turn."
-    ) if checkpoint_tool and answer_tool else ""
-    return "\n\n".join([
-        "This is a governed Buddy root turn. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace.",
-        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
-        inquiry,
-        *ASSISTANCE_HINTS,
-        task_text, canonical_json(turn_input),
-    ])
-
-
-
 def selected(snapshot: dict) -> dict:
     value = snapshot.get("settings", {}).get("model", {}).get("current")
     if not isinstance(value, dict) or not value.get("providerId") or not value.get("modelId"):
@@ -1092,6 +1075,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 answer_name=answer_tool if inquiry is not None else None,
                 on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id)) if inquiry is not None else None,
                 on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id)) if inquiry is not None else None,
+                validate_outcome=validate_outcome,
             )
             projection = ActivityProjection(session_id)
             attempt_usage = ZcodeAttemptUsage(session_id, resumed=mode == "native-session")
