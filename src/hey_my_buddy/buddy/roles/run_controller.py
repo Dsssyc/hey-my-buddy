@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
-from ..harnesses.registry import run_seam
+from ..harnesses.registry import adapter, run_seam
 from ..harnesses.run_contract import (
     ResultConfiguration, RunEnd, RunResult, StopEvidence, StopLayer,
     decode_run_request, encode_run_request, encode_run_result,
@@ -21,6 +21,8 @@ from .turn_io import _private_bytes, guard_private_path, private_json
 
 
 def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
+    if control["operation"] == "review" and not adapter(control["harness"]).read_only_structured:
+        raise BoardError("INVALID_ARGUMENT", "The harness has no review carrier")
     module = run_seam(control["harness"])
     if module is None:
         raise BoardError("ROLE_RUN_UNREGISTERED", "The role controller requires a registered run")
