@@ -137,6 +137,12 @@ def result_frame(case, session_id):
                   if case in ("permission", "result-denials") else [],
               "modelUsage": {"claude-opus-5-5[1m]": {"inputTokens": 10}, "claude-haiku-4-5-20251001": {"inputTokens": 2}},
               "total_cost_usd": 0.01}
+    if case == "large-value":
+        # A delivery below the native 8 MiB frame bound but above the run
+        # contract's value bound: the driver must drop the value alone and
+        # keep reporting every other confirmed fact.
+        result["structured_output"] = {"outcome": {**structured["outcome"],
+                                                   "summary": "x" * (600 * 1024)}}
     if case == "failed":
         result.update(is_error=True, subtype="error_during_execution")
     if case == "result-quota":

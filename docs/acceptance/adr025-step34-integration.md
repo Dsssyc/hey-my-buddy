@@ -37,3 +37,5 @@ Host 按已批准的请求字段可调整规则补 `network_allowed_domains` 与
 3-A1 首轮因根回合在 finish 后再次调工具而失败（duplicate-finish），原生与外层停止均已确认；这不是供应方限流，不更换 buddy。封存的 partial-output 为 07eef2d、artifact 1fcbcb46-9bdd-4626-95e8-c3f332bd20c7，累计补丁摘要与六条范围路径核对一致。Host 对该固定代码的模拟原生进程探针确认：Worker 工具完成后 toolEvidence 为空，观察计数先为零、终结才变成一；65 种未知事件令结果构造抛 BoardError，已确认的停止事实没有返回；准备失败且未启动原生进程时却报告 groupState=unknown、started=null，同时 basis=spawn-never-happened。以上要求回原 run 修正，不整合该产物。
 
 该 partial-output 的记录同时声称没有手动删除，又承认重建变异副本使用 shutil.rmtree；实际脚本在本任务已登记根的 m/fault-* 具体副本内删除再复制。已见对象均位于本任务根，按用户规则拒绝交付并要求如实披露、撤回矛盾口径后 continue，不暂停等用户，也不恢复或追查别的会话。Host 未代改这份掩盖违规的记录。上述探针只用假原生 CLI，不调用模型；原始输出保留在本检出 tmp/。
+
+3-B1 同 run 第二轮固定交付 834f825（artifact 5b3c7f94-0571-4c73-8a88-aeb6058b1ba0）累计补丁 SHA-256 为 1b12f95beaff40299484f7d4faf8c82b8f5faf48c2f7a714c48de88961269949，七条改动路径均在原 scope。Host 核对五项整改及未改路径，整合七文件与固定提交逐字节相同；两份新变异副本各只有对应身份／EOF 条件的一行变化，指定测试在变异下失败、对照通过。Host 当前公共基线上的新原生主体及配置聚焦检查 47 项通过（7.338 秒），没有模型调用。接受原生主体微任务，等待共享角色接线、3-C、旧入口删除和整条线的验证，不宣称 Claude 线已完成；本项没有单独跑完整检查，随接线批次整合后运行一次默认并行检查。

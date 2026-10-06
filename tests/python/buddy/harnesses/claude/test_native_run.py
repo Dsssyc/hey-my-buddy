@@ -1,0 +1,609 @@
+"""The unified claude run seam itself: a real native connection, end to end.
+
+These cases drive :func:`hey_my_buddy.buddy.harnesses.claude.native_run.run`
+directly — a real spawned native CLI (the private stream-json fixtures), a
+real frozen :class:`RunRequest`, the role observer contract and one factual
+:class:`RunResult`. Nothing here wraps the old controller entry: the request
+goes through the same initialize, user-message boundary, send/wait/drain
+settlement and conservative stop the governed turn and the read-only call
+always shared, and the legacy adapter path is exercised by its own suites.
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+from unittest import mock
+
+from hey_my_buddy.buddy.harnesses.claude import native_run
+from hey_my_buddy.buddy.harnesses.claude.native_run import run, run_discovery
+from hey_my_buddy.buddy.harnesses.run_contract import (
+    FEEDBACK_CONTINUE,
+    PrivateStatePaths,
+    RunBudget,
+    RunConfiguration,
+    RunContinuation,
+    RunFeedback,
+    RunIdentity,
+    RunRequest,
+    SessionService,
+)
+from hey_my_buddy.buddy.harnesses.registry import run_seam
+from hey_my_buddy.buddy.roles.worker_services import OUTCOME_SCHEMA as WORKER_SCHEMA
+from hey_my_buddy.errors import BoardError
+
+FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
+STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
+USAGE_FIXTURE = Path(__file__).parent / "fixtures/fake_claude_usage.py"
+CONFIGURATION = {"provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "high"}
+READ_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
+               "properties": {"profileId": {"type": "string"}, "reason": {"type": "string"},
+                              "evidence": {"type": "array", "items": {"type": "string"}}}}
+
+
+def flag_value(args: list[str], flag: str) -> str | None:
+    for index, item in enumerate(args):
+        if item == flag and index + 1 < len(args):
+            return args[index + 1]
+        if item.startswith(flag + "="):
+            return item[len(flag) + 1:]
+    return None
+
+
+class NativeRunCase(unittest.TestCase):
+    """The shared fake-CLI harness for direct run-seam calls."""
+
+    def setUp(self):
+        super().setUp()
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-seam-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.cwd = self.base / "checkout"
+        self.cwd.mkdir()
+        FIXTURE.chmod(0o755)
+        STREAM_FIXTURE.chmod(0o755)
+        USAGE_FIXTURE.chmod(0o755)
+        self.state_path = self.base / "fixture.json"
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_"))
+                       and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_DEV_SOURCE="1", BUDDY_CLAUDE_CLI=str(FIXTURE),
+                           BUDDY_CLAUDE_FIXTURE_STATE=str(self.state_path),
+                           BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
+                           BUDDY_STATE_DIR=str(self.base / "state"),
+                           BUDDY_RUNTIME_ROOT=str(self.base / "runtime"))
+        self.patcher = mock.patch.dict(os.environ, environment, clear=True)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+        self.case = "ok"
+
+    def fixture_case(self, case: str):
+        os.environ["BUDDY_CLAUDE_FIXTURE_CASE"] = case
+        self.case = case
+
+    def use_fixture(self, fixture: Path):
+        os.environ["BUDDY_CLAUDE_CLI"] = str(fixture)
+
+    def request(self, *, scope: str = "write", schema=None, timeout: int = 10,
+                continuation=None, network=None, denied=()) -> RunRequest:
+        return RunRequest(
+            identity=RunIdentity(task_id="task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
+                                 generation=1, invocation_id=uuid.uuid4().hex, turn_id="turn-1"),
+            harness="claude",
+            configuration=RunConfiguration(**CONFIGURATION),
+            cwd=str(self.cwd),
+            private_state=PrivateStatePaths(
+                invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
+                native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
+            input_text="fixture governed prompt", tool_scope=scope,
+            output_schema=schema if schema is not None else WORKER_SCHEMA,
+            budget=RunBudget(timeout_seconds=timeout), continuation=continuation,
+            network_allowed_domains=network, additional_denied_tools=denied)
+
+    def execute(self, request: RunRequest, *, observer=None):
+        return run(request, observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
+                   services=None, cancelled=lambda: False)
+
+    def fixture_state(self) -> dict:
+        return json.loads(self.state_path.read_text())
+
+
+class WorkerCarrierTests(NativeRunCase):
+    def test_one_write_run_delivers_the_native_schema_value_and_stop_facts(self):
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNone(result.end.reason_code)
+        self.assertEqual(result.value.mechanism, "native-schema")
+        # The schema verdict is the role's check; the driver reports the
+        # delivered value with its own raw text and parsed form.
+        self.assertEqual(result.value.schema_status, "unknown")
+        self.assertEqual(result.value.parsed.value["outcome"]["disposition"], "completed")
+        self.assertEqual(result.value.raw, json.dumps(result.value.parsed.value,
+                                                     separators=(",", ":"), ensure_ascii=False))
+        completion = result.completion_evidence
+        self.assertEqual(completion.mechanism, "native-schema")
+        self.assertTrue(completion.stream_end)
+        self.assertEqual(completion.native_outcome, "success")
+        self.assertIsNotNone(completion.event_order)
+        self.assertTrue(result.model_started)
+        self.assertEqual(result.model_start_evidence.basis, "input-sent")
+        self.assertEqual(result.model_start_evidence.native_identity.session_id,
+                         flag_value(self.fixture_state()["argv"], "--session-id"))
+        self.assertNotIn("--resume", self.fixture_state()["argv"])
+        self.assertEqual(result.native_identity.session_id,
+                         result.root_identities[0].session_id)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertTrue(result.stop_evidence.native.started)
+
+    def test_the_catalog_check_confirms_only_what_native_readback_proved(self):
+        result = self.execute(self.request())
+        checked = result.configuration.checked
+        self.assertEqual(checked.provider.value, "anthropic")
+        self.assertEqual(checked.provider.basis, "native-readback")
+        self.assertEqual(checked.model.value, CONFIGURATION["model"])
+        self.assertEqual(checked.model.basis, "catalog-membership")
+        self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
+        self.assertEqual(result.configuration.checks,
+                         ("initialize-account-first-party", "catalog-model-effort"))
+
+    def test_a_model_outside_the_catalog_is_refused_before_the_user_message(self):
+        self.fixture_case("ok")
+        request = self.request()
+        broken = request.model_copy(update={"configuration": RunConfiguration(
+            provider="anthropic", model="claude-not-in-catalog", effort="high")})
+        result = self.execute(broken)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        # Nothing is claimed that the run never reached.
+        self.assertFalse(result.model_started)
+        self.assertEqual(result.model_start_evidence.basis, "unknown")
+        self.assertEqual(result.configuration.checks, ())
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
+
+    def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
+        result = self.execute(self.request())
+        activity = result.activity.value
+        self.assertEqual(activity["phase"], "finishing")
+        self.assertEqual(activity["counts"]["modelTurns"], 1)
+        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations")).read_bytes())
+        # The observed model set is a bounded observation, never an identity.
+        self.assertEqual(observations["observedModels"],
+                         ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
+        self.assertEqual(observations["totalCostUsd"], 0.01)
+        self.assertEqual(observations["sessionModel"], CONFIGURATION["model"])
+        turn_facts = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "native-turn-facts")).read_bytes())
+        self.assertEqual(turn_facts["structuredOutputSource"], "json-schema")
+        self.assertTrue(turn_facts["initObserved"])
+        self.assertTrue(turn_facts["backgroundSettled"])
+        self.assertIn("native-stderr", {ref.kind for ref in result.evidence_refs})
+
+    def test_usage_comes_from_the_native_records_only(self):
+        self.use_fixture(USAGE_FIXTURE)
+        self.fixture_case("usage-ok")
+        request = self.request(timeout=20).model_copy(update={"configuration": RunConfiguration(
+            provider="anthropic", model="claude-fixture-5", effort="high")})
+        result = self.execute(request)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        usage = result.usage.value
+        self.assertEqual(usage["source"], "claude/stream-json-result-usage")
+        self.assertEqual(usage["completeness"], "complete")
+        # The native prompt count excludes cached input; the canonical attempt
+        # total adds the cache back instead of undercounting it.
+        self.assertEqual(usage["inputTokens"], 88000)
+        self.assertEqual(usage["cachedInputTokens"], 73000)
+        self.assertEqual(usage["outputTokens"], 350)
+        self.assertEqual(usage["reasoningOutputTokens"], 25)
+        self.assertEqual(result.last_assistant_message.value["sourceId"], "msg-fixture-0002")
+        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations")).read_bytes())
+        self.assertEqual(observations["observedModels"], ["claude-fixture-5"])
+        # The unified-windows fractions convert to percentage windows; an
+        # out-of-range or missing value would contribute no window.
+        quota = observations["quota"]
+        self.assertEqual(quota["source"], "claude/stream-json-rate-limit-event")
+        windows = {window["name"]: window["usedPercent"] for window in quota["windows"]}
+        self.assertEqual(windows, {"five_hour": 42.0, "seven_day": 90.0})
+
+    def test_a_denied_native_permission_is_a_reported_fact_not_an_outcome(self):
+        self.fixture_case("permission")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(len(result.denied_interactions), 1)
+        denied = result.denied_interactions[0]
+        self.assertEqual((denied.method, denied.action, denied.reason),
+                         ("can_use_tool", "deny", "WebFetch"))
+        records = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                       if ref.kind == "denied-interactions")).read_bytes())
+        self.assertEqual(records["records"][0]["requestId"], "perm-1")
+        # The outcome rewrite is the role's assembly; the delivered value keeps
+        # its own completed fact for the role to judge.
+        self.assertEqual(result.value.parsed.value["outcome"]["disposition"], "completed")
+
+    def test_background_work_must_settle_before_the_result_is_usable(self):
+        self.fixture_case("bg-running")
+        unsettled = self.execute(self.request())
+        self.assertEqual(unsettled.end.status, "error")
+        self.assertEqual(unsettled.end.reason_code, "background-work-unsettled")
+        self.assertIsNone(unsettled.completion_evidence)
+        self.fixture_case("bg-settled")
+        settled = self.execute(self.request())
+        self.assertEqual(settled.end.status, "ok", settled.end.message)
+        self.assertTrue(settled.completion_evidence.stream_end)
+
+
+class ReadCarrierTests(NativeRunCase):
+    #: The review-read posture the role passes explicitly: offline plus the
+    #: session-wide denials the old review call derived from its schema.
+    REVIEW_DENIALS = ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task")
+
+    def argv_and_settings(self, result):
+        argv = self.fixture_state()["argv"]
+        settings = json.loads(Path(flag_value(argv, "--settings")).read_bytes())
+        return argv, settings
+
+    def test_one_review_read_takes_the_role_requested_posture_and_reports_it(self):
+        result = self.execute(self.request(scope="read", schema=READ_SCHEMA,
+                                           network=(), denied=self.REVIEW_DENIALS))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.parsed.value["profileId"], "legal")
+        policy = result.effective_policy.tools
+        self.assertEqual(policy.enforcement, "native")
+        self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read"])
+        self.assertEqual(policy.requested.value["permissionMode"], "default")
+        # The denials and the offline allowlist are the request's own values.
+        self.assertEqual(policy.requested.value["disallowedTools"],
+                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write", *self.REVIEW_DENIALS])
+        self.assertEqual(policy.requested.value["sandboxNetworkAllowedDomains"], [])
+        self.assertEqual(result.effective_policy.filesystem.enforcement, "native")
+        argv, settings = self.argv_and_settings(result)
+        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], [])
+        self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
+                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write", *self.REVIEW_DENIALS])
+
+    def test_an_ordinary_worker_read_keeps_the_native_default_posture(self):
+        # No controls requested: the read scope alone must not tighten the
+        # network allowlist or add the review denials.
+        result = self.execute(self.request(scope="read"))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        policy = result.effective_policy.tools.requested.value
+        self.assertEqual(policy["disallowedTools"],
+                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
+        from hey_my_buddy.buddy.harnesses.claude.config import PACKAGE_REGISTRY_DOMAINS
+        self.assertEqual(policy["sandboxNetworkAllowedDomains"], list(PACKAGE_REGISTRY_DOMAINS))
+        _argv, settings = self.argv_and_settings(result)
+        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"],
+                         list(PACKAGE_REGISTRY_DOMAINS))
+
+    def test_the_unified_postures_match_the_legacy_three_paths_exactly(self):
+        # The unified run's argv/settings must equal what the three legacy
+        # call shapes produce for the same posture: worker-write and
+        # worker-read derive nothing extra, the review shape's suffix is what
+        # the role now passes explicitly. Each run's argv is captured from the
+        # fixture state immediately, before the next run overwrites it.
+        from hey_my_buddy.buddy.harnesses.claude.config import (
+            execution_args,
+            sandbox_settings,
+        )
+
+        def normalized(argv):
+            return [flag_value(argv, flag) if flag in argv else None
+                    for flag in ("--tools", "--permission-mode", "--disallowedTools")]
+
+        session = "00000000-0000-4000-8000-000000000000"
+        postures = (
+            ("worker-write", {}, execution_args(session_id=session, model="m", effort="high",
+                                                settings_path="/s.json", read_only=False),
+             sandbox_settings()),
+            ("worker-read", {"scope": "read"},
+             execution_args(session_id=session, model="m", effort="high",
+                            settings_path="/s.json", read_only=True),
+             sandbox_settings()),
+            ("review", {"scope": "read", "schema": READ_SCHEMA, "network": (),
+                        "denied": self.REVIEW_DENIALS},
+             execution_args(session_id=session, model="m", effort="high",
+                            settings_path="/s.json", read_only=True, output_schema=READ_SCHEMA),
+             sandbox_settings(())),
+        )
+        for name, request_values, legacy_argv, legacy_settings in postures:
+            with self.subTest(posture=name):
+                result = self.execute(self.request(**request_values))
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                argv, settings = self.argv_and_settings(result)
+                self.assertEqual(normalized(argv), normalized(legacy_argv))
+                self.assertEqual(settings, legacy_settings)
+
+    def test_a_write_run_keeps_the_registry_allowlist_and_its_subagent_tools(self):
+        result = self.execute(self.request(scope="write"))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        policy = result.effective_policy.tools.requested.value
+        self.assertIn("Agent", policy["tools"])
+        self.assertNotIn("mcp__*", policy["disallowedTools"])
+        _argv, settings = self.argv_and_settings(result)
+        self.assertTrue(settings["sandbox"]["network"]["allowedDomains"])
+
+    def test_the_shared_send_wait_drain_serves_both_carriers(self):
+        # The same fixture run under both scopes settles through the same
+        # primitive: both report the observed session, the explicit success
+        # criteria and a stream complete only at the observed end.
+        for scope in ("write", "read"):
+            with self.subTest(scope=scope):
+                result = self.execute(self.request(scope=scope))
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertTrue(result.completion_evidence.stream_end)
+                self.assertEqual(result.native_event_count, result.completion_evidence.event_order)
+
+
+class RequestGateTests(NativeRunCase):
+    def test_this_harness_declares_no_no_tool_service_or_resume_capability(self):
+        with self.assertRaises(BoardError):
+            self.execute(self.request(scope="none"))
+        request = self.request()
+        with self.assertRaises(BoardError):
+            run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                services=object(), cancelled=lambda: False)
+        with self.assertRaises(BoardError):
+            self.execute(request.model_copy(update={"session_services": (
+                SessionService(tool_names=["mcp__x__y"]),)}))
+        with self.assertRaises(BoardError):
+            self.execute(self.request(continuation=RunContinuation(mode="native-session",
+                                                                  previous_session_id="00000000-0000-4000-8000-000000000000")))
+        # The reconstruction mode stays legal and never resumes natively.
+        self.fixture_case("ok")
+        reconstructed = self.execute(self.request(
+            continuation=RunContinuation(mode="reconstructed-new-session",
+                                         previous_session_id=str(uuid.uuid4()))))
+        self.assertEqual(reconstructed.end.status, "ok", reconstructed.end.message)
+        self.assertFalse(reconstructed.continuation.resumable)
+        self.assertNotIn("--resume", self.fixture_state()["argv"])
+
+    def test_the_module_declares_the_request_controls_it_consumes(self):
+        self.assertEqual(native_run.supported_request_controls,
+                         ("network_allowed_domains", "additional_denied_tools"))
+
+    def test_the_module_is_not_yet_registered_and_claims_no_seam(self):
+        # 3-B1 delivers the native body only; the registry keeps the legacy
+        # entry until the wiring microtask switches the callers.
+        self.assertIsNone(run_seam("claude"))
+
+    def test_third_party_provider_overrides_are_refused_before_spawn(self):
+        os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "third-party-provider")
+        self.assertEqual(result.stop_evidence.native.observation_basis, "spawn-never-happened")
+        self.assertIsNone(result.stop_evidence.native.started)
+        self.assertFalse(self.state_path.exists())
+
+    def test_an_unsupported_settings_policy_is_refused(self):
+        os.environ["BUDDY_CLAUDE_SETTINGS_POLICY"] = "inherit"
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "settings-policy-unsupported")
+
+
+class SettlementGuardTests(NativeRunCase):
+    def test_model_output_before_the_user_message_is_rejected_with_its_facts_kept(self):
+        self.use_fixture(STREAM_FIXTURE)
+        # The premature frame is written before the initialize response, so
+        # the boundary rejection follows from pipe order, not thread timing.
+        self.fixture_case("early-before-response")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-turn-started-early")
+        # The premature tool fact was projected before the boundary rejection.
+        package = result.tool_evidence.value
+        self.assertEqual(package["events"][0]["toolName"], "Read")
+        self.assertFalse(package["streamComplete"])
+
+    def test_the_native_identity_is_published_only_after_native_confirmation(self):
+        # An unconfirmed handshake leaves the preallocated id out of the
+        # native identity; the identity the stream did report stays in the
+        # fact packages, never masquerading as this run's root.
+        self.fixture_case("invalid-json")
+        broken = self.execute(self.request(timeout=20))
+        self.assertEqual(broken.end.status, "error")
+        self.assertIsNone(broken.native_identity)
+        self.assertIsNone(broken.model_start_evidence.native_identity)
+        self.assertEqual(broken.root_identities, ())
+        self.assertTrue(broken.model_started, "the input send itself is still a fact")
+        self.assertEqual(broken.model_start_evidence.basis, "input-sent")
+        self.fixture_case("init-wrong-session")
+        foreign = self.execute(self.request())
+        self.assertEqual(foreign.end.status, "error")
+        self.assertEqual(foreign.end.reason_code, "wrong-native-session")
+        self.assertIsNone(foreign.native_identity)
+        # The foreign identity the native stream actually reported.
+        self.assertEqual([identity.session_id for identity in foreign.root_identities],
+                         ["not-the-allocation"])
+        self.assertIsNone(foreign.continuation)
+
+    def test_a_native_failure_keeps_the_observed_stream_end(self):
+        # The transport's own EOF is a fact of the stream: an explicit native
+        # failure does not erase it, and the business verdict travels in the
+        # end status, the group disappearance in the stop evidence.
+        self.fixture_case("failed")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        self.assertTrue(result.tool_evidence.value["streamComplete"])
+        self.assertIsNone(result.completion_evidence)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+
+    def test_wrong_session_and_duplicate_results_are_rejected(self):
+        for case, reason in (("wrong-session", "wrong-native-session"),
+                             ("duplicate-result", "invalid-protocol"),
+                             ("no-result", "transport-error")):
+            with self.subTest(case=case):
+                self.fixture_case(case)
+                result = self.execute(self.request())
+                self.assertEqual(result.end.status, "error", result.end.message)
+                self.assertEqual(result.end.reason_code, reason)
+
+    def test_an_oversized_delivered_value_drops_alone_and_keeps_every_confirmed_fact(self):
+        # A 600 KiB structured delivery — under the native 8 MiB frame bound,
+        # over the run contract's value bound — must cost the value alone:
+        # the confirmed stop, the checked configuration, the usage and the
+        # completion evidence all still reach the caller.
+        self.fixture_case("large-value")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNone(result.value)
+        self.assertIsNotNone(result.completion_evidence)
+        self.assertTrue(result.completion_evidence.stream_end)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertEqual(result.configuration.checked.model.value, CONFIGURATION["model"])
+        self.assertIsNotNone(result.last_assistant_message)
+
+    def test_a_quota_rejection_is_infrastructure_not_a_model_result(self):
+        self.fixture_case("quota-rejected")
+        result = self.execute(self.request(timeout=20))
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "quota-rejected")
+        self.assertIn("ADAPTER_UNAVAILABLE", result.end.message)
+        failure = result.native_failure.value
+        self.assertEqual(failure["nativeCode"], "five_hour")
+        self.assertEqual(failure["source"], "claude/stream-json-rate-limit-event")
+        self.assertIsNone(result.value)
+        self.assertTrue(result.stop_evidence.interrupt.requested)
+        self.assertTrue(self.fixture_state()["interrupted"])
+
+    def test_cancellation_interrupts_the_native_run(self):
+        self.fixture_case("hang")
+        result = run(self.request(timeout=20), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=None, cancelled=lambda: True)
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertEqual(result.end.reason_code, "user-cancel")
+        self.assertTrue(result.stop_evidence.interrupt.requested)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertTrue(self.fixture_state()["interrupted"])
+
+    def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
+        from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+        self.fixture_case("ok")
+        observed: list[ProcessHandle] = []
+
+        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            observed.append(handle)
+            return False
+
+        with mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
+            result = self.execute(self.request())
+        native = result.stop_evidence.native
+        self.assertEqual(native.group_state, "unknown")
+        self.assertEqual(native.observation_basis, "owned-process-group")
+        self.assertIsNotNone(native.exit_code)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+        # The EOF the drain already observed and the group's disappearance are
+        # separate facts: an unconfirmed stop never back-infers the stream end.
+        self.assertTrue(result.completion_evidence.stream_end)
+        self.assertTrue(result.tool_evidence.value["streamComplete"])
+        # No orphan: the halt really terminated the fake CLI's group.
+        handle = observed[0]
+        self.assertIsNotNone(handle.process.poll())
+        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
+
+    def test_a_late_unrepresentable_package_keeps_every_other_observed_fact(self):
+        self.fixture_case("ok")
+        with mock.patch("hey_my_buddy.buddy.harnesses.claude.protocol.TurnEvidence.token_usage",
+                        return_value={"inputTokens": "not-a-number"}):
+            result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNone(result.usage)
+        self.assertEqual(result.value.mechanism, "native-schema")
+        self.assertTrue(result.completion_evidence.receipt_verified is None)
+
+
+class ObserverContractTests(NativeRunCase):
+    def stopping_observer(self):
+        seen: list[dict] = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            if int(facts.get("toolCalls") or 0) > 0:
+                return RunFeedback(action="stop")
+            return FEEDBACK_CONTINUE
+        return observer, seen
+
+    def test_a_tool_fact_stops_the_run_through_the_observer_feedback(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("clean")
+        observer, seen = self.stopping_observer()
+        result = self.execute(self.request(), observer=observer)
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertEqual(result.end.reason_code, "observer-interrupt")
+        self.assertTrue(result.stop_evidence.interrupt.requested)
+        package = result.tool_evidence.value
+        self.assertFalse(package["streamComplete"])
+        self.assertTrue(package["events"])
+        # The cumulative counts reached the role before the stop; unknown
+        # events stay the honest absence this harness never classified.
+        self.assertTrue(any(facts["toolCalls"] > 0 for facts in seen))
+        self.assertTrue(all(facts["unknownEvents"] is None for facts in seen))
+
+    def test_a_denied_interaction_reaches_the_role_before_further_waiting(self):
+        self.fixture_case("permission")
+        observer, seen = self.stopping_observer()
+
+        def denied_watcher(facts):
+            seen.append(dict(facts))
+            if int(facts.get("deniedInteractions") or 0) > 0:
+                return RunFeedback(action="stop")
+            return FEEDBACK_CONTINUE
+        result = self.execute(self.request(), observer=denied_watcher)
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertEqual(result.end.reason_code, "observer-interrupt")
+        self.assertTrue(any(facts["deniedInteractions"] > 0 for facts in seen))
+        # The peer received its deny answer before the stop took effect.
+        self.assertEqual(self.fixture_state()["permissionReply"]["behavior"], "deny")
+
+    def test_a_correction_is_refused_this_harness_takes_none(self):
+        self.fixture_case("ok")
+
+        def correcting(_facts):
+            return RunFeedback(action="correct", input_text="again")
+        with self.assertRaises(BoardError) as caught:
+            self.execute(self.request(), observer=correcting)
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(self.fixture_state()["userTurns"], 1)
+
+
+class DiscoveryTests(NativeRunCase):
+    def test_discovery_initializes_only_and_never_sends_a_user_message(self):
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discover-invocation",
+                                native_root=self.base / "discover-native", timeout_seconds=25,
+                                cancelled=lambda: False)
+        models = [model["id"] for model in catalog["providers"][0]["models"]]
+        self.assertIn(CONFIGURATION["model"], models)
+        # The default alias never becomes a catalog identity.
+        self.assertTrue(all(model != "default" for model in models))
+        state = self.fixture_state()
+        self.assertFalse(state["userTurns"])
+        self.assertTrue(state["initialize"])
+        self.assertIn("--no-session-persistence", state["argv"])
+        self.assertTrue((self.base / "discover-invocation" / "native.stderr.log").is_file())
+
+    def test_discovery_refuses_third_party_overrides_and_bad_cli(self):
+        os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
+        with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+            run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d2",
+                          native_root=self.base / "d2n", timeout_seconds=25, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "third-party-provider")
+        del os.environ["ANTHROPIC_BASE_URL"]
+        os.environ["BUDDY_CLAUDE_CLI"] = str(self.base / "missing-cli")
+        with self.assertRaises(native_run.ClaudeUnavailable):
+            run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d3",
+                          native_root=self.base / "d3n", timeout_seconds=25, cancelled=lambda: False)
+
+
+if __name__ == "__main__":
+    unittest.main()

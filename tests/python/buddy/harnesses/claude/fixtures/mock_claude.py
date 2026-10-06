@@ -108,6 +108,12 @@ def handle_control(frame, case):
         state = read_state()
         state["initialize"] = True
         write_state(state)
+        if case == "early-before-response":
+            # Written before the initialize response, so the controller's
+            # reader queues it first: the frame is provably delivered while
+            # the pre-user buffer is still installed, making the boundary
+            # rejection a matter of pipe order, never of thread timing.
+            send(assistant_tool("Read", "toolu_early_1"))
         send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
                                                        "response": {"models": DEFAULT_MODELS,
                                                                     "account": {"apiProvider": "firstParty",
