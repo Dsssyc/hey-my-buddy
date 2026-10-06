@@ -1,4 +1,11 @@
-"""Codex adapter lifecycle against a private protocol fixture, with no model calls."""
+"""Codex worker and review lifecycle through the registered role seam, with no model calls.
+
+The governed Worker turn runs through the shared role controller and the
+registered Codex run module (``worker_executor("codex")``); the review calls go
+through ``start_router_preparation`` exactly as the Router's DecisionAdapter
+starts them. The offline ``mock_codex.py`` App Server stands in for the native
+process; no paid model is reached.
+"""
 from __future__ import annotations
 
 import json
@@ -11,10 +18,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation, worker_executor
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
+SOURCE = Path(__file__).resolve().parents[5] / "src"
 
 
 class CodexAdapterTests(unittest.TestCase):
@@ -22,7 +31,8 @@ class CodexAdapterTests(unittest.TestCase):
         developer_source = mock.patch.dict(os.environ, {'BUDDY_DEV_SOURCE': '1'})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-test-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"
@@ -35,8 +45,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CODEX_CLI=str(FIXTURE), BUDDY_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 CODEX_HOME=str(self.home), HOME=str(self.root),
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                                BUDDY_DEV_SOURCE="1")
-        self.adapter = CodexAdapter()
+                                BUDDY_DEV_SOURCE="1",
+                                PYTHONPATH=str(SOURCE) + os.pathsep + self.environment.get("PYTHONPATH", ""))
+        self.adapter = worker_executor("codex")
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8):
         turn_input = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,
@@ -54,6 +65,20 @@ class CodexAdapterTests(unittest.TestCase):
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
+
+    def review(self, case, *, index, budget_options=None, capture=True):
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+        context = self.context(case, index=index)
+        context.turn = None
+        context.agent_credential = None
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
+                                            {**budget(), **(budget_options or {})}, capture_evidence=capture)
+        handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
+                                                            (None, self.cwd, "fixture-digest")))
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
+        return collect(handle), context
 
     def test_completed_native_turn_has_structured_provenance_and_activity(self):
         context = self.context()
@@ -116,8 +141,14 @@ class CodexAdapterTests(unittest.TestCase):
     def test_selected_worker_account_never_falls_back_to_native_credentials(self):
         from hey_my_buddy.private_dirs import account_root
         from hey_my_buddy.blackboard.catalog.accounts import WorkerAccountProvider, using_provider
-        provider = WorkerAccountProvider(capabilities={'workerAccount': True}, environment=lambda state, account, environment, purpose:
-                                         {**environment, 'CODEX_HOME': str(account_root(state, 'codex'))})
+
+        def environment(state, account, environment, purpose):
+            # The production provider binds the private home and serializes the
+            # frozen selection; the run-side credential source reads exactly this.
+            return {**environment, 'CODEX_HOME': str(account_root(state, 'codex')),
+                    'BUDDY_ACCOUNT_SELECTION': json.dumps(account, separators=(',', ':'))}
+
+        provider = WorkerAccountProvider(capabilities={'workerAccount': True}, environment=environment)
         approved = using_provider('codex', provider)
         approved.__enter__()
         self.addCleanup(approved.__exit__, None, None, None)
@@ -136,13 +167,28 @@ class CodexAdapterTests(unittest.TestCase):
         second_context.runtime['workerAccount'] = dict(context.runtime['workerAccount'])
         second = self.execute(second_context)
         self.assertEqual(second.status, 'ok', second.to_report())
-        control = json.loads((second_context.directory / 'codex-control.json').read_text())
-        self.assertEqual(control['credentialSource']['home'], str(root))
         changed = self.context(index=3, previous=second.result['sessionId'])
         changed.runtime['workerAccount'] = {'source': 'worker', 'revision': 2}
         third = self.execute(changed)
         self.assertEqual(third.result['code'], 'native-resume-unavailable')
         self.assertEqual((root / 'auth.json').read_text(), 'worker login')
+
+    def test_worker_selection_resolves_the_private_account_home_in_run_services(self):
+        from hey_my_buddy.private_dirs import account_root
+        from hey_my_buddy.buddy.harnesses.codex.native_run import prepare_run_services
+        root = account_root(self.root, 'codex')
+        root.mkdir(mode=0o700, parents=True)
+        environment = {**self.environment, 'CODEX_HOME': str(root),
+                       'BUDDY_STATE_DIR': str(self.root),
+                       'BUDDY_ACCOUNT_SELECTION': json.dumps({'adapter': 'codex', 'source': 'worker',
+                                                               'revision': 1, 'credentialRevision': 1})}
+        with mock.patch.dict(os.environ, environment):
+            services = prepare_run_services(invocation_root=self.root / 'invocation',
+                                            native_root=self.root / 'native', activity_dir=self.root / 'attempt',
+                                            account=None)
+        self.assertEqual(services.credential_source['home'], str(root))
+        self.assertEqual(services.credential_source['source'], 'worker')
+        self.assertEqual(services.credential_source['credentialRevision'], 1)
 
     def test_previous_unsettled_auth_is_retained_and_cannot_be_replaced(self):
         from hey_my_buddy.private_dirs import native_root
@@ -168,9 +214,9 @@ class CodexAdapterTests(unittest.TestCase):
         home = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1') / 'codex-home'
         # A native refresh can replace a login link with an attempt-private file.
         (home / 'auth.json').write_text('refreshed private login')
-        result = json.loads(Path(handle.log_paths['stdout']).read_text())
-        result['processState']['shutdownConfirmed'] = False
-        Path(handle.log_paths['stdout']).write_text(json.dumps(result))
+        frame = json.loads(Path(handle.log_paths['stdout']).read_text())
+        frame['stopEvidence']['native']['groupState'] = 'unknown'
+        Path(handle.log_paths['stdout']).write_text(json.dumps(frame))
         outcome = self.adapter.collect(handle, context)
         self.assertFalse(outcome.shutdown_confirmed)
         self.assertTrue((home / 'auth.json').exists())
@@ -221,23 +267,17 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertEqual(source.read_text(), 'source login')
 
     def test_known_native_launch_failure_cleans_the_current_private_auth(self):
-        import threading
-        from hey_my_buddy.buddy.harnesses.codex import runner as codex_runner
+        import stat as stat_module
         from hey_my_buddy.private_dirs import native_root
         (self.home / 'auth.json').write_text('source login')
+        broken = self.root / 'broken-codex'
+        broken.write_text('not an executable payload')
+        broken.chmod(stat_module.S_IXUSR | stat_module.S_IRUSR)
         context = self.context()
-        self.adapter.prepare(context)
-        control = json.loads((context.directory / 'codex-control.json').read_text())
-        with mock.patch.dict(os.environ, context.environment, clear=True), \
-             mock.patch.object(codex_runner, 'owned_popen', side_effect=OSError('not started')):
-            payload, code = codex_runner._run(control, threading.Event())
-        self.assertEqual(code, 1)
-        self.assertFalse(payload['modelStarted'])
-        self.assertTrue(payload['processState']['shutdownConfirmed'])
-        Path(context.log_paths()['stdout']).write_text(json.dumps(payload))
-        fake = mock.Mock(process=mock.Mock(returncode=1), log_paths=context.log_paths())
-        fake.shutdown_confirmed.return_value = True
-        outcome = self.adapter.collect(fake, context)
+        context.environment["BUDDY_CODEX_CLI"] = str(broken)
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, 'failed', outcome.to_report())
+        self.assertIs(outcome.result['modelStarted'], False)
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertFalse((native_root(Path(context.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1') / 'codex-home/auth.json').is_symlink())
         self.assertEqual((self.home / 'auth.json').read_text(), 'source login')
@@ -292,7 +332,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_changed_native_history_is_not_resumed_after_invalid_result(self):
         first = self.execute(self.context("invalid-json"))
-        state_path = Path(self.environment["BUDDY_CODEX_FIXTURE_STATE"])
+        state_path = Path(self.environment['BUDDY_CODEX_FIXTURE_STATE'])
         state = json.loads(state_path.read_text())
         state["threads"][first.result["sessionId"]]["turns"].append({"id": "foreign-turn", "status": "completed"})
         state_path.write_text(json.dumps(state))
@@ -327,7 +367,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_complete_empty_native_catalog_is_not_a_discovery_failure(self):
         with mock.patch.dict(os.environ, {**self.environment, "BUDDY_CODEX_FIXTURE_CASE": "empty-catalog"}, clear=True):
-            catalog = self.adapter.discover_models()
+            catalog = CodexAdapter().discover_models()
         self.assertEqual(catalog["providers"][0]["models"], [])
         self.assertFalse((self.root / "fixture.json").exists(), "discovery must not start a thread")
 
@@ -366,7 +406,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(provenance["nativeRequestTurnId"], provenance["nativeTurnId"])
         self.assertEqual(provenance["nativeRequestMethod"], "item/commandExecution/requestApproval")
         forged = {**turn, "provenance": {**provenance, "nativeRequestTurnId": "unrelated-turn"}}
-        self.assertIsNotNone(self.adapter.validate_turn_provenance(forged))
+        from hey_my_buddy.buddy.harnesses.codex.native_run import validate_turn_provenance
+        self.assertIsNotNone(validate_turn_provenance(forged))
 
     def test_denied_request_with_failed_native_turn_is_not_a_completed_attention(self):
         outcome = self.execute(self.context("approval-failed"))
@@ -422,75 +463,49 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-
     def test_read_only_refuses_an_unacknowledged_policy_before_model_input(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        context = self.context('readonly-policy-mismatch')
-        context.turn = None
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'No model work before policy acknowledgement', answer_schema(['legal']), budget(), capture_evidence=True)
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        result = collect(handle)
+        result, _context = self.review('readonly-policy-mismatch', index=41)
         self.assertEqual(result.status, 'failed')
         self.assertEqual(result.result['code'], 'readonly-policy-unverified')
         self.assertIn('nativeConfigPolicy', result.result)
+        # The retained readback is the native side's actual answer, retained
+        # before the verdict: it carries the refused networkAccess fact, never
+        # the requested policy dressed up as an acknowledged one.
         self.assertIn('nativePolicy', result.result)
+        self.assertIs(result.result['nativePolicy']['sandbox']['networkAccess'], True)
         self.assertIs(result.result['modelStarted'], False)
         self.assertTrue(result.shutdown_confirmed)
 
     def test_failed_config_readback_survives_without_a_model_call(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        context = self.context('readonly-config-mismatch')
-        context.turn = None
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'No model input before verified policy', answer_schema(['legal']), budget(), capture_evidence=True)
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        result = collect(handle)
+        result, _context = self.review('readonly-config-mismatch', index=42)
         self.assertEqual(result.result['code'], 'readonly-policy-unverified')
         self.assertIs(result.result['modelStarted'], False)
         self.assertIs(result.result['nativeConfigPolicy']['features']['apps'], True)
         self.assertTrue(result.shutdown_confirmed)
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        context = self.context()
-        context.turn = None
-        context.agent_credential = "must-not-reach-native"
-        context.environment["BUDDY_AGENT_CREDENTIAL"] = "must-not-reach-native"
-        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        result = collect(handle)
+        result, _context = self.review('ok', index=43, capture=False)
         self.assertEqual(result.status, "ok", result.result)
         self.assertTrue(result.shutdown_confirmed)
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
         self.assertEqual(answer["profileId"], "legal")
         self.assertIsNone(result.result["usage"]["bytesRead"])
-        self.assertFalse(context.turn_output_file().exists())
+        self.assertFalse((self.root / "attempt-43" / "turn-output.json").exists())
 
     def test_read_only_shutdown_removes_only_private_auth_link(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         account_home = self.root / 'account-home'
         account_home.mkdir()
         source_auth = account_home / 'auth.json'
         source_auth.write_text('private fixture auth')
-        context = self.context(index=42)
+        context = self.context(index=44)
         context.turn = None
         context.environment['CODEX_HOME'] = str(account_home)
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
-        handle = self.adapter.start_read_only_structured(context, request)
+        handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
+                                                            (None, self.cwd, "fixture-digest")))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(20))
         result = collect(handle)
@@ -501,7 +516,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(source_auth.read_text(), 'private fixture auth')
 
     def test_auth_cleanup_preserves_a_regular_file(self):
-        from hey_my_buddy.buddy.harnesses.codex.runner import _remove_private_auth
+        from hey_my_buddy.buddy.harnesses.codex.native_run import _remove_private_auth
         home = self.root / 'native/codex-home'
         home.mkdir(parents=True)
         auth = home / 'auth.json'
@@ -509,58 +524,29 @@ class CodexAdapterTests(unittest.TestCase):
         _remove_private_auth(self.root / 'native')
         self.assertEqual(auth.read_text(), 'retain regular file')
 
-
     def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        context = self.context('readonly-budget')
-        context.turn = None
-        # A zero-call budget interrupts the fixture's first native tool call.
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']),
-                                             {**budget(), 'toolCalls': 0}, capture_evidence=True)
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        outcome = collect(handle)
-        self.assertEqual(outcome.status, 'failed', outcome.result)
-        self.assertEqual(outcome.result['code'], 'readonly-budget-exhausted')
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertTrue(outcome.result['nativeInterruptAcknowledged'])
-        self.assertIsNone(outcome.result['usage']['bytesRead'])
-        self.assertEqual(outcome.result['usage']['toolCalls'], 1)
+        result, _context = self.review('readonly-budget', index=45, budget_options={'toolCalls': 0})
+        self.assertEqual(result.status, 'failed', result.result)
+        self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
+        self.assertTrue(result.shutdown_confirmed)
+        # The interrupt facts are the run's own: the request happened and the
+        # native side acknowledged it — never inferred from the confirmed stop.
+        self.assertIs(result.result['nativeInterruptRequested'], True)
+        self.assertTrue(result.result['nativeInterruptAcknowledged'])
+        self.assertIsNone(result.result['usage']['bytesRead'])
+        self.assertEqual(result.result['usage']['toolCalls'], 1)
 
     def test_denied_raw_tool_call_still_consumes_router_budget(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        context = self.context('readonly-denied-budget')
-        context.turn = None
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']),
-                                             {**budget(), 'toolCalls': 0}, capture_evidence=True)
-        handle = self.adapter.start_read_only_structured(context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        result = collect(handle)
+        result, _context = self.review('readonly-denied-budget', index=46, budget_options={'toolCalls': 0})
         self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
         self.assertEqual(result.result['usage']['toolCalls'], 1)
         self.assertTrue(result.shutdown_confirmed)
         self.assertEqual(result.result['nativeRawToolEvents'][0]['params']['item']['call_id'], 'denied-1')
 
-
     def test_readonly_repairs_format_once_in_same_thread_but_not_bounds(self):
-        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
-        from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        for index, (case, calls) in enumerate((('readonly-repair', 2), ('readonly-outside', 1)), 1):
+        for index, (case, calls) in enumerate((('readonly-repair', 2), ('readonly-outside', 1)), 47):
             with self.subTest(case=case):
-                context = self.context(case, index=index)
-                context.turn = None
-                request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
-                handle = self.adapter.start_read_only_structured(context, request)
-                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.2) if h.group_alive() else None)
-                self.assertIsNotNone(handle.wait(20))
-                result = collect(handle)
+                result, _context = self.review(case, index=index, capture=False)
                 self.assertEqual(result.status, 'ok', result.result)
                 self.assertEqual(result.result['correctionCount'], calls - 1)
                 state = json.loads((self.root / 'fixture.json').read_text())

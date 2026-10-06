@@ -1,18 +1,23 @@
 """Failed native observations preserve context without importing an outcome."""
+import hashlib
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
+from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.harnesses.codex.protocol import native_checkpoint
+from hey_my_buddy.buddy.roles.controller import worker_executor
+from hey_my_buddy.buddy.roles.turn_io import input_hash
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
 class CodexContinuationTests(WorkflowTestCase):
     def test_controller_failure_to_workflow_continue_keeps_the_native_thread(self):
-        self.executors["codex"] = adapter = CodexAdapter()
+        # The board's continuation checks read the description; the run itself
+        # goes through the registered role executor.
+        self.executors["codex"] = CodexAdapter()
+        adapter = worker_executor("codex")
         board = self.board()
         board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
         submitted = self.submit(board, adapter="codex", provider="openai", model="fixture-model", effort="low")
@@ -26,7 +31,13 @@ class CodexContinuationTests(WorkflowTestCase):
                                BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"),
                                BUDDY_CODEX_CLI=str(Path(__file__).parent / "fixtures/mock_codex.py"),
                                BUDDY_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
-                               BUDDY_CODEX_FIXTURE_CASE=case)
+                               BUDDY_CODEX_FIXTURE_CASE=case,
+                               PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
+            # The check runner sets this for every test subprocess; a standalone
+            # run of this module needs the same developer-source selection.
+            patch_env = mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1"})
+            patch_env.start()
+            self.addCleanup(patch_env.stop)
             context = ExecutionContext(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
                                        generation=attempt["generation"], spec=claim["task"]["spec"],
                                        directory=self.directory / attempt["attemptId"], runtime={},
@@ -60,17 +71,23 @@ class CodexContinuationTests(WorkflowTestCase):
         submitted = self.submit(board, adapter="codex", provider="openai", model="fixture-model", effort="low")
         first = self.claim(board)
         document = first["claim"]["turn"]["input"]
-        evidence = SimpleNamespace(thread_id="native-session-1", turn_id="native-turn-1", started=True,
-                                   completed={"status": native_status}, event_seq=3,
-                                   final_item={"id": "final-1", "text": "上一轮已经完成的调研内容。"})
-        checkpoint = native_checkpoint(evidence, document)
-        checkpoint["bindingSaved"] = native_status == "completed"
+        text = "上一轮已经完成的调研内容。"
+        message = {"itemId": "final-1", "text": text, "phase": "final_answer",
+                   "sourceBytes": len(text.encode()),
+                   "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                   "truncated": False}
+        checkpoint = {"version": 1, **{key: document[key] for key in ("taskId", "attemptId", "generation", "turnId")},
+                      "inputSha256": input_hash(document), "sessionId": "native-session-1",
+                      "nativeTurnId": "native-turn-1", "nativeTurnStarted": True,
+                      "nativeTurnStatus": native_status, "eventSeq": 3,
+                      "bindingSaved": native_status == "completed", "lastAssistantMessage": message}
         if corrupt:
             checkpoint["attemptId"] = "foreign-attempt"
 
         def payload(result):
             result.pop("turn")
-            result.update(sessionId=evidence.thread_id, nativeTurnId=evidence.turn_id, nativeCheckpoint=checkpoint,
+            result.update(sessionId=checkpoint["sessionId"], nativeTurnId=checkpoint["nativeTurnId"],
+                          nativeCheckpoint=checkpoint,
                           processState={"shutdownConfirmed": True, "nativeExitCode": 0},
                           nativeSession={'adapter': 'codex', 'storageOwner': 'buddy-goal'},
                           harnessAttempts=[{"harness": {"version": "previous-version"}}])

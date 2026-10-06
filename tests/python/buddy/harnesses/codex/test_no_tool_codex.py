@@ -1,19 +1,24 @@
-"""Codex fast Router uses a private native catalog and verifies the full stream."""
+"""Codex fast Router uses a private native catalog and verifies the full stream.
+
+Every case runs through the registered role seam — the same
+``start_router_preparation`` entry the Router's DecisionAdapter uses — so the
+no-tool parameters, the policy layers readback and the EOF drain are asserted
+on the production path with the offline ``no_tool_codex.py`` App Server.
+"""
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
-from hey_my_buddy.buddy.harnesses.codex.no_tool import _format_correction, prepare_home
+from hey_my_buddy.buddy.harnesses.codex.config import prepare_no_tool_home
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
-from hey_my_buddy.buddy.roles.structured_call import collect
+from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
+from hey_my_buddy.buddy.roles.structured_call import collect, correction_code
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "no_tool_codex.py"
@@ -24,7 +29,8 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profile
 
 class NoToolCodexTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-no-tool-codex-")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-no-tool-codex-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.runtime = self.root / 'empty-runtime'
@@ -41,33 +47,32 @@ class NoToolCodexTests(unittest.TestCase):
         self.cwd.mkdir(mode=0o700)
 
     def run_case(self, case="ok", timeout=3):
+        """One fast call through the registered role controller; returns the outcome and its directory."""
         directory = self.root / ("run-" + case)
         directory.mkdir(mode=0o700)
-        control = {"directory": str(directory), "nativeRoot": str(directory / "native"),
-                   "cwd": str(self.cwd), "timeoutSeconds": timeout,
-                   "taskId": "router-task", "attemptId": "router-attempt", "generation": 7,
-                   "spec": {"provider": "openai", "model": "fixture-model", "effort": "low"},
-                   "noToolRequest": {"prompt": "Pick a profile", "outputSchema": SCHEMA}}
-        control_path = directory / "control.json"
-        control_path.write_text(json.dumps(control))
-        env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-        env.update(HOME=str(self.root), CODEX_HOME=str(self.home),
-                   PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
-                   BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.runtime),
-                   BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
-                   BUDDY_CODEX_FIXTURE_CASE=case, BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
-        process = subprocess.run([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.codex.runner", "--control", str(control_path)],
-                                 cwd=self.cwd, env=env, capture_output=True, text=True, timeout=12)
-        return process, json.loads(process.stdout), directory
+        environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
+        environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
+                           PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
+                           BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.runtime),
+                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
+                           BUDDY_CODEX_FIXTURE_CASE=case, BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
+        context = ExecutionContext("router-task", "router-attempt", 7,
+                                   {"provider": "openai", "model": "fixture-model", "effort": "low",
+                                    "cwd": str(self.cwd), "timeoutSeconds": timeout}, directory, {}, environment)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, timeout_seconds=timeout)
+        handle = start_router_preparation(FastPreparation("codex", CodexAdapter(), request, context, self.cwd))
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
+        return collect(handle), handle.role_run_control, directory
 
     def test_capability_and_empty_native_tool_configuration(self):
         self.assertTrue(CodexAdapter().no_tool_structured)
-        process, result, directory = self.run_case()
-        self.assertEqual(process.returncode, 0, result)
-        self.assertTrue(result["zeroToolVerified"])
-        self.assertEqual(result["usage"]["toolCalls"], 0)
-        self.assertEqual(json.loads(result["rawAnswer"]), {"profileId": "legal"})
-        evidence = result["toolEvidence"]
+        outcome, control, directory = self.run_case()
+        self.assertEqual(outcome.status, "ok", outcome.result)
+        self.assertTrue(outcome.result["zeroToolVerified"])
+        self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
+        self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"profileId": "legal"})
+        evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": "router-task",
                                                "attemptId": "router-attempt", "generation": 7})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "turn-1"}])
@@ -86,24 +91,25 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(private["experimental_supported_tools"], [])
         self.assertEqual(private["tool_mode"], "direct")
         self.assertIsNone(private["multi_agent_version"])
-        self.assertFalse((directory / "native/codex-home/auth.json").is_symlink())
+        self.assertFalse((Path(control["nativeRoot"]) / "codex-home/auth.json").is_symlink())
         self.assertTrue((self.home / "auth.json").is_file())
 
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "adapter"
-        env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-        env.update(HOME=str(self.root), CODEX_HOME=str(self.home),
-                   PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
-                   BUDDY_RUNTIME_ROOT=str(self.runtime),
-                   BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
-                   BUDDY_STATE_DIR=str(self.root / "state"),
-                   BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
+        environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
+        environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
+                           PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
+                           BUDDY_RUNTIME_ROOT=str(self.runtime),
+                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
+                           BUDDY_STATE_DIR=str(self.root / "state"),
+                           BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "timeoutSeconds": 3}, directory, {}, env)
-        handle = CodexAdapter().start_no_tool_structured(context,
-                  NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, 3))
-        self.assertEqual(handle.wait(6), 0)
+                                    "cwd": str(self.cwd), "timeoutSeconds": 3}, directory, {}, environment)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, 3)
+        handle = start_router_preparation(FastPreparation("codex", CodexAdapter(), request, context, self.cwd))
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(8))
         outcome = collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.shutdown_confirmed)
@@ -112,19 +118,19 @@ class NoToolCodexTests(unittest.TestCase):
                          {"adapter": "codex", "taskId": "task", "attemptId": "attempt", "generation": 1})
 
     def test_native_metadata_notifications_do_not_hide_tools_or_break_the_turn(self):
-        process, result, _directory = self.run_case('native-metadata')
-        self.assertEqual(process.returncode, 0, result)
-        self.assertTrue(result['zeroToolVerified'])
+        outcome, _control, _directory = self.run_case('native-metadata')
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        self.assertTrue(outcome.result['zeroToolVerified'])
 
     def test_compatible_cache_from_another_client_version_and_private_instructions(self):
         cache = self.home / 'models_cache.json'
         data = json.loads(cache.read_text())
         data['client_version'] = '0.158.0'
         cache.write_text(json.dumps(data))
-        process, result, directory = self.run_case()
-        self.assertEqual(process.returncode, 0, result)
+        outcome, control, _directory = self.run_case()
+        self.assertEqual(outcome.status, 'ok', outcome.result)
         import tomllib
-        config = tomllib.loads((directory / 'native/codex-home/config.toml').read_text())
+        config = tomllib.loads((Path(control['nativeRoot']) / 'codex-home/config.toml').read_text())
         self.assertEqual(config['project_doc_max_bytes'], 0)
         self.assertFalse(config['skills']['include_instructions'])
         self.assertFalse(config['skills']['bundled']['enabled'])
@@ -132,24 +138,26 @@ class NoToolCodexTests(unittest.TestCase):
     def test_every_tool_shape_and_late_tool_fails_closed(self):
         for case in ("typed", "collab", "raw", "raw-no-id", "turn-item", "late", "request"):
             with self.subTest(case=case):
-                process, result, _ = self.run_case(case)
-                self.assertNotEqual(process.returncode, 0)
-                self.assertEqual(result["code"], "no-tool-violation", result)
-                self.assertFalse(result["zeroToolVerified"])
+                outcome, _control, _directory = self.run_case(case)
+                self.assertEqual(outcome.status, 'failed', outcome.result)
+                self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.result)
+                # The failure receipt states its explicit zero-tool fact; it is
+                # never silently absent on a refused fast call.
+                self.assertIs(outcome.result["zeroToolVerified"], False)
 
     def test_projected_facts_survive_rejections_and_corrections_add_roots(self):
         for case, tool_name in (("typed", "commandExecution"), ("collab", "collabAgentToolCall"),
                                 ("raw", "exec_command"), ("late", "custom_tool_call_output")):
             with self.subTest(case=case):
-                process, result, _ = self.run_case(case)
-                evidence = result["toolEvidence"]
+                outcome, _control, _directory = self.run_case(case)
+                evidence = outcome.result["toolEvidence"]
                 self.assertFalse(evidence["streamComplete"])
                 self.assertTrue(any(event["toolName"] == tool_name for event in evidence["events"]),
                                 (case, evidence["events"]))
                 self.assertEqual(evidence["binding"]["taskId"], "router-task")
-        process, result, _directory = self.run_case("format")
-        self.assertEqual(process.returncode, 0, result)
-        evidence = result["toolEvidence"]
+        outcome, _control, _directory = self.run_case("format")
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        evidence = outcome.result["toolEvidence"]
         self.assertEqual([identity["turnId"] for identity in evidence["nativeIdentity"]], ["turn-1", "turn-2"])
         self.assertEqual(evidence["events"], [])
         self.assertTrue(evidence["streamComplete"])
@@ -157,47 +165,58 @@ class NoToolCodexTests(unittest.TestCase):
     def test_unknown_partial_and_eof_rejected(self):
         for case in ("unknown", "truncated", "eof"):
             with self.subTest(case=case):
-                process, result, _ = self.run_case(case)
-                self.assertNotEqual(process.returncode, 0)
-                self.assertFalse(result["zeroToolVerified"])
+                outcome, _control, _directory = self.run_case(case)
+                self.assertEqual(outcome.status, 'failed', outcome.result)
+                self.assertIs(outcome.result["zeroToolVerified"], False)
+
+    def test_unconfirmed_interrupt_is_reported_without_a_fabricated_ack(self):
+        outcome, _control, _directory = self.run_case("late")
+        self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.result)
+        # The drain already closed the native input, so the interrupt request
+        # is a real fact while its acknowledgement never arrived: the true key
+        # for the request is kept and no acknowledgement key is invented.
+        self.assertIs(outcome.result["nativeInterruptRequested"], True)
+        self.assertNotIn("nativeInterruptAcknowledged", outcome.result)
 
     def test_one_format_correction_but_no_out_of_bounds_retry(self):
-        process, result, directory = self.run_case("format")
-        self.assertEqual(process.returncode, 0, result)
-        self.assertEqual(result["correctionCount"], 1)
+        outcome, _control, directory = self.run_case("format")
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        self.assertEqual(outcome.result["correctionCount"], 1)
         self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 2)
-        process, result, directory = self.run_case("outside")
-        self.assertEqual(process.returncode, 0, result)
-        self.assertFalse(result["answerValid"])
+        outcome, _control, directory = self.run_case("outside")
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        self.assertFalse(outcome.result["answerValid"])
         self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 1)
         bounded = {"type": "object", "additionalProperties": False, "required": ["reason"],
                    "properties": {"reason": {"type": "string", "maxLength": 2}}}
-        self.assertEqual(_format_correction('{"reason":"too long"}', bounded), 'answer-shape')
+        self.assertEqual(correction_code('{"reason":"too long"}', bounded), 'answer-shape')
 
     def test_policy_and_deadline(self):
         for case in ("config-mismatch", "wrong-model"):
             with self.subTest(case=case):
-                process, result, _ = self.run_case(case)
-                self.assertNotEqual(process.returncode, 0)
-                self.assertEqual(result["code"], "no-tool-policy-unverified")
-        process, result, _ = self.run_case("hang", timeout=1)
-        self.assertNotEqual(process.returncode, 0)
-        self.assertEqual(result["code"], "deadline")
-        self.assertFalse(result["zeroToolVerified"])
-        self.assertTrue(result["processState"]["shutdownConfirmed"])
-        self.assertFalse((self.root / "run-hang/native/codex-home/auth.json").is_symlink())
+                outcome, _control, _directory = self.run_case(case)
+                self.assertEqual(outcome.status, 'failed', outcome.result)
+                self.assertEqual(outcome.result["code"], "no-tool-policy-unverified")
+                self.assertIs(outcome.result["zeroToolVerified"], False)
+        outcome, control, _directory = self.run_case("hang", timeout=1)
+        self.assertEqual(outcome.status, 'failed', outcome.result)
+        self.assertEqual(outcome.result["code"], "deadline")
+        self.assertIs(outcome.result["zeroToolVerified"], False)
+        self.assertIs(outcome.result["nativeInterruptRequested"], True)
+        self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
+        self.assertFalse((Path(control["nativeRoot"]) / "codex-home/auth.json").is_symlink())
 
     def test_missing_or_mismatched_native_metadata_refused(self):
-        cache = self.home / "models_cache.json"
+        cache = self.home / 'models_cache.json'
         cache.unlink()
         with self.assertRaises(CodexProtocolError) as caught:
-            prepare_home(self.root / "private", {"CODEX_HOME": str(self.home)},
-                         {"model": "fixture-model", "effort": "low"})
+            prepare_no_tool_home(self.root / "private", {"CODEX_HOME": str(self.home)},
+                                 {"model": "fixture-model", "effort": "low"})
         self.assertEqual(caught.exception.code, "no-tool-policy-unverified")
-        process, result, _directory = self.run_case('missing-metadata')
-        self.assertNotEqual(process.returncode, 0)
-        self.assertFalse(result['modelStarted'])
-        self.assertTrue(result['processState']['shutdownConfirmed'])
+        outcome, _control, _directory = self.run_case('missing-metadata')
+        self.assertEqual(outcome.status, 'failed', outcome.result)
+        self.assertIs(outcome.result['modelStarted'], False)
+        self.assertTrue(outcome.result['processState']['shutdownConfirmed'])
 
 
 if __name__ == "__main__":

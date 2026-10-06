@@ -15,6 +15,7 @@ from ..roles.router import DecisionAdapter
 from .dsh.adapter import DshAdapter
 from .zcode.adapter import ZcodeAdapter
 from .zcode import native_run as zcode_run
+from .codex import native_run as codex_run
 
 BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
@@ -117,6 +118,7 @@ def live_binding(name: str):
 # Switching a harness is atomic here: the registered native body and the
 # role executor replace its removed carrier entries in the same change.
 register_run_seam("zcode", zcode_run)
+register_run_seam("codex", codex_run)
 
 #: ``external`` is a first-class adapter whose execution is owned by the caller's
 #: own agent, not by a built-in worker. That agent claims the task through the

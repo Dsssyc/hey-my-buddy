@@ -143,6 +143,9 @@ def main():
             else:
                 send({"id": ident, "result": RATE_LIMITS_READ})
         elif method == "model/list":
+            if case == "bad-catalog":
+                send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
+                continue
             send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",
                 "displayName": "Fixture", "description": "fixture", "hidden": False, "isDefault": True,
                 "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],

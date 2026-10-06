@@ -243,8 +243,9 @@ class HandleBindingTests(unittest.TestCase):
                                        "directory": str(self.directory)})
         # A control naming an unextracted harness keeps the caller on its
         # existing facilities; it is not a binding failure of this run.
-        self.assertEqual(role_live.handle_live_binding(changed),
-                         (role_live.LIVE_UNEXTRACTED, None))
+        with mock.patch.dict(RUN_SEAMS, {"codex": None}):
+            self.assertEqual(role_live.handle_live_binding(changed),
+                             (role_live.LIVE_UNEXTRACTED, None))
         name_only = self.handle()
         name_only.role_run_control = {"operation": "worker", "harness": "zcode"}
         self.assertEqual(role_live.handle_live_binding(name_only),

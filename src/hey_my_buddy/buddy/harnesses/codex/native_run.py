@@ -23,9 +23,12 @@ correction on the same thread, process and total deadline.
 
 Model discovery (:func:`run_discovery`) is a separate no-prompt metadata
 operation over the same spawn and handshake primitives; it never masquerades
-as a model run. This module is not registered yet: registration, role wiring
-and the deletion of the legacy ``runner`` entries belong to the following
-microtask on this line.
+as a model run. The role-facing seam operations beside it —
+:func:`check_preparation`, :func:`prepare_run_services`,
+:func:`validate_turn_provenance`, :func:`session_facts`,
+:func:`cleanup_after_run`, :func:`native_evidence` and
+:func:`bind_live_channel` — carry this harness's own narrow facts to the
+shared role executor, which owns every prompt, completion rule and observer.
 """
 from __future__ import annotations
 
@@ -48,7 +51,7 @@ from pydantic import TypeAdapter
 
 from ....errors import BoardError
 from ....private_dirs import account_root, ensure_private_dir
-from ...roles.turn_io import canonical_json, private_json
+from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ...runtime.windows_process import owned_popen
 from ..base import ProcessHandle
 from ..run_contract import (
@@ -74,6 +77,7 @@ from ..run_contract import (
     RunConfiguration,
     RunEnd,
     RunFeedback,
+    RunIdentity,
     RunRequest,
     RunResult,
     RunValue,
@@ -83,10 +87,15 @@ from ..run_contract import (
     UnknownEvents,
     UsagePackage,
 )
-from .config import CodexUnavailable, cli_command, native_environment, policy_matches, read_only_config
-from .no_tool import prepare_home
+from .config import (
+    CodexUnavailable,
+    cli_command,
+    native_environment,
+    policy_matches,
+    prepare_no_tool_home,
+    read_only_config,
+)
 from .protocol import (
-    MAX_CHECKPOINT_MESSAGE_BYTES,
     CodexProtocolError,
     Connection,
     TurnEvidence,
@@ -105,6 +114,8 @@ from .tool_evidence import (
 )
 
 _NATIVE_STDERR_FILE = "native.stderr.log"
+#: The checkpoint's retained root assistant message bound, in serialized bytes.
+MAX_CHECKPOINT_MESSAGE_BYTES = 65536
 _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
                     "report attention in the structured outcome")
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
@@ -346,6 +357,16 @@ class _RunState:
     quota: dict | None = None
     quota_failure: dict | None = None
     capture: dict | None = None
+    native_turn_facts: dict | None = None
+    #: The review thread/start receipt as the native side actually answered it,
+    #: retained before any verdict over it.
+    review_receipt: dict | None = None
+    #: The Worker coding home this run really prepared, and the review
+    #: config/read result observed before any policy verdict: each is a real
+    #: preparation fact, never back-derived from a process id or a mode label.
+    coding_home_prepared: bool = False
+    coding_home: Path | None = None
+    review_config: dict | None = None
 
 
 @dataclasses.dataclass
@@ -362,6 +383,7 @@ class _Preparation:
     cwd: str
     home: Path | None = None
     version: str | None = None
+    coding_home_prepared: bool = False
 
 
 @dataclasses.dataclass
@@ -444,8 +466,9 @@ def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparat
         raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
     environment = native_environment(incoming)
     home = None
+    prepared = False
     if mode == "fast":
-        home = prepare_home(native_root, environment, _spec(request))
+        home = prepare_no_tool_home(native_root, environment, _spec(request))
         environment["CODEX_HOME"] = str(home)
     elif mode == "review":
         home = _review_home(native_root, environment, request.cwd)
@@ -457,11 +480,13 @@ def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparat
         # Command overrides keep repository config from redirecting native state.
         command = [*command, "-c", "sqlite_home=" + json.dumps(str(home)),
                    "-c", 'cli_auth_credentials_store="file"']
+        prepared = True
     return _Preparation(command=command, environment=environment, native_root=native_root,
                         invocation_root=invocation_root,
                         stderr_path=invocation_root / _NATIVE_STDERR_FILE,
                         deadline=execution_deadline(request.budget.timeout_seconds),
-                        incoming=incoming, cwd=request.cwd, home=home)
+                        incoming=incoming, cwd=request.cwd, home=home,
+                        coding_home_prepared=prepared)
 
 
 # -- phase 2: initialization (version probe, owned spawn, handshake) ---------------
@@ -708,6 +733,10 @@ def _configure_review(connection: Connection, request: RunRequest,
     cwd, spec = request.cwd, _spec(request)
     expected = tomllib.loads(read_only_config(cwd))
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
+    if isinstance(configured, dict):
+        # The observed readback is retained before any verdict, so a mismatch
+        # run still carries the configuration it actually read.
+        state.review_config = configured
     # The retained policy evidence is the acknowledged native state, never the
     # run's own proposal.
     profile = (configured.get("permissions") or {}).get("buddy-router") or {}
@@ -727,6 +756,10 @@ def _configure_review(connection: Connection, request: RunRequest,
     acknowledged = {"activePermissionProfile": receipt_profile, "sandbox": sandbox,
                     "approvalPolicy": response.get("approvalPolicy"), "model": response.get("model"),
                     "modelProvider": response.get("modelProvider"), "cwd": response.get("cwd")}
+    # The acknowledged receipt is retained before any verdict over it, so a
+    # policy-mismatch run still carries the native readback it actually got —
+    # never the requested policy dressed up as the readback.
+    state.review_receipt = acknowledged
     if (receipt_profile.get("id") != "buddy-router" or response.get("approvalPolicy") != "never"
             or sandbox.get("type") != "readOnly" or sandbox.get("networkAccess", False) is not False):
         raise CodexProtocolError("readonly-policy-unverified",
@@ -1017,6 +1050,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     review_policy: dict | None = None
     try:
         prep = _prepare(request, services, mode)
+        state.coding_home_prepared = prep.coding_home_prepared
+        state.coding_home = prep.home if prep.coding_home_prepared else None
         prep.version = _probe_version(prep.command, prep.environment, request.cwd, prep.deadline, mode)
         state.version = prep.version
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
@@ -1132,17 +1167,23 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
 
     chain.bind(carrier)
     activity.write(evidence, "waiting-model")
-    while evidence.completed is None:
-        connection.pump()
-    native_turn = evidence.completed
-    if evidence.final_item is None and isinstance(native_turn.get("items"), list):
-        finals = [item for item in native_turn["items"] if isinstance(item, dict)
-                  and item.get("type") == "agentMessage" and item.get("phase") == "final_answer"]
-        if len(finals) == 1:
-            evidence.final_item = finals[0]
-    state.checkpoint = _checkpoint(request, evidence)
-    state.event_count = evidence.event_seq
-    state.token_usage = attempt_token_usage(evidence)
+    try:
+        while evidence.completed is None:
+            connection.pump()
+        native_turn = evidence.completed
+        if evidence.final_item is None and isinstance(native_turn.get("items"), list):
+            finals = [item for item in native_turn["items"] if isinstance(item, dict)
+                      and item.get("type") == "agentMessage" and item.get("phase") == "final_answer"]
+            if len(finals) == 1:
+                evidence.final_item = finals[0]
+    finally:
+        # Even a transport failure or a deadline can leave a completed root
+        # assistant message; the retained checkpoint permits reconstruction,
+        # never resume without a completed native turn.
+        state.checkpoint = _checkpoint(request, evidence)
+        state.event_count = evidence.event_seq
+        state.token_usage = attempt_token_usage(evidence)
+    state.quota = _observe_quota(connection, evidence)
     state.quota = _observe_quota(connection, evidence)
     failure_code = turn_failure_code(native_turn)
     if failure_code is not None:
@@ -1153,6 +1194,20 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     if native_turn.get("status") != "completed" or not evidence.started:
         raise CodexProtocolError("native-turn-failed", "Codex turn did not complete successfully")
     item = evidence.final_item
+    # The native half of the governed turn's provenance, exactly as the legacy
+    # record carried it; the role's completion policy adds its own verdict keys
+    # on top and decides over these facts.
+    state.native_turn_facts = {
+        "adapter": "codex", "nativeThreadId": thread_id, "nativeTurnId": turn_id,
+        "finalItemId": item.get("id") if isinstance(item, dict) else None,
+        "finalMessageCompleted": isinstance(item, dict), "nativeTurnStarted": evidence.started,
+        "nativeTurnCompleted": True, "eventSeq": evidence.event_seq}
+    correlated = next((record for record in chain.facts.denied
+                       if record.get("threadId") == thread_id and record.get("turnId") == turn_id), None)
+    if correlated is not None:
+        state.native_turn_facts.update(nativeRequestMethod=correlated["method"],
+                                       nativeRequestThreadId=correlated["threadId"],
+                                       nativeRequestTurnId=correlated["turnId"])
     state.raw_answer = item.get("text") if isinstance(item, dict) and isinstance(item.get("text"), str) else None
     state.status = "ok"
     _settle_feedback(observer, chain,
@@ -1308,7 +1363,10 @@ def _interrupt(connection: Connection, state: _RunState) -> None:
         connection.call("turn/interrupt", {"threadId": state.thread_id, "turnId": state.turn_id})
         state.interrupt_requested = True
         state.interrupt_basis = "native-turn-interrupt-ack"
-    except CodexProtocolError:
+    except (CodexProtocolError, OSError, ValueError):
+        # A closed input (the fast drain already ended the stream) or a failed
+        # control write is an unconfirmed interrupt, never a crash and never a
+        # claim that the native turn was interrupted.
         state.interrupt_requested = True
         state.interrupt_basis = "native-turn-interrupt-unconfirmed"
 
@@ -1480,7 +1538,7 @@ def _effective_policy(request: RunRequest, state: _RunState, mode: str,
             tools=PolicyFact(enforcement="native",
                              requested=_json_package({"configuration": "private-no-tool",
                                                       "environments": [], "dynamicTools": [],
-                                                      "modelCatalog": str(home or "")}),
+                                                      "modelCatalog": str(home / "no-tool-models.json") if home else ""}),
                              basis="codex/no-tool-layers-readback"))
     return EffectivePolicy(
         tools=PolicyFact(enforcement="native",
@@ -1534,8 +1592,23 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         retain("quota-snapshot", invocation_root / "quota-snapshot.json", state.quota)
     if state.capture is not None:
         retain("review-captured-events", invocation_root / "review-captured-events.json", state.capture)
+    if state.native_turn_facts is not None:
+        retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
+    if state.review_config is not None:
+        retain("review-config-readback", invocation_root / "review-config-readback.json",
+               {"config": state.review_config})
+    if state.review_receipt is not None:
+        retain("review-thread-receipt", invocation_root / "review-thread-receipt.json",
+               state.review_receipt)
     if state.checkpoint is not None:
         retain("native-checkpoint", invocation_root / "native-checkpoint.json", state.checkpoint)
+    if state.coding_home_prepared:
+        # The Worker run's own preparation fact: the home it really created in
+        # this native root. The outer cleanup reads exactly this marker, never
+        # an inference from a pid or a mode label.
+        retain("coding-home", invocation_root / "coding-home.json",
+               {"adapter": "codex", "nativeRoot": str(Path(request.private_state.native_root)),
+                "home": str(state.coding_home) if state.coding_home is not None else None})
     stderr = invocation_root / _NATIVE_STDERR_FILE
     if stderr.is_file():
         raw = stderr.read_bytes()
@@ -1561,12 +1634,14 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
     else:
         roots = []
     tool_package = None
-    if projector is not None and state.thread_opened:
+    if projector is not None and (state.thread_opened or mode == "review"):
         # Stream facts record the observed ends — the completed root turns
         # (worker: the governed turn's own native receipt; review: every
         # observed round) and the real EOF (fast) — never the run's business
         # status and never the group's stop, which a conservative halt must
-        # not overwrite.
+        # not overwrite. The review carrier keeps its incomplete package even
+        # before any turn: the binding and the empty stream are the receipt's
+        # own facts, exactly as the legacy review summary carried them.
         if mode == "fast":
             stream_complete = state.drained is True
         elif mode == "review":
@@ -1656,7 +1731,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
                         stderr_path=invocation_root / _NATIVE_STDERR_FILE,
                         deadline=deadline, incoming=incoming, cwd=cwd, version=version)
     spawn = _spawn_app_server(prep, cancel, [])
-    error: CodexProtocolError | None = None
+    error: Exception | None = None
     catalog_value = None
     try:
         connection = spawn.connection
@@ -1669,7 +1744,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             raise CodexProtocolError("account-plan-required",
                                      "Codex requires an existing ChatGPT account-plan login")
         catalog_value = _catalog(connection, version)
-    except CodexProtocolError as caught:
+    except Exception as caught:
         error = caught
     finally:
         shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
@@ -1678,11 +1753,241 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         except OSError:
             pass
     if error is not None:
+        # The stop fact of the process this run really owned, handed to the
+        # role controller beside the original reason: never inferred from an
+        # error code, and an unconfirmed halt stays False.
+        error.discovery_shutdown_confirmed = shutdown is True
         raise error
     if not shutdown or spawn.process.returncode != 0:
-        raise CodexProtocolError("native-shutdown-failed",
-                                 "the native app server did not exit normally with confirmed group shutdown")
+        failure = CodexProtocolError("native-shutdown-failed",
+                                     "the native app server did not exit normally with confirmed group shutdown")
+        failure.discovery_shutdown_confirmed = shutdown is True
+        raise failure
     return catalog_value
+
+
+# -- the registered seam's role-facing operations ----------------------------------
+
+
+def check_preparation(spec: dict, environment: dict) -> None:
+    """Confirm the native command and the one provider this harness runs.
+
+    This is the harness's own share of the Worker and fast preparation: the
+    command selection without a spawn and the native-provider rule. Every
+    governed-turn, resume-mode and private-state rule belongs to the shared
+    role executor and is not repeated here.
+    """
+    try:
+        cli_command(environment)
+    except CodexUnavailable as error:
+        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
+    if spec.get("provider") != "openai":
+        raise BoardError("INVALID_ARGUMENT",
+                         "Codex account-plan execution requires the native OpenAI provider", adapter="codex")
+
+
+def _incoming_worker_selection(environment: dict, state: Path) -> dict | None:
+    """The checked Worker selection the account environment already bound."""
+    if not environment.get("BUDDY_ACCOUNT_SELECTION"):
+        return None
+    try:
+        selected = decode_json(environment["BUDDY_ACCOUNT_SELECTION"])
+        if (isinstance(selected, dict) and selected.get("adapter") == "codex"
+                and selected.get("source") == "worker"
+                and environment.get("CODEX_HOME") == str(account_root(state, "codex"))):
+            return selected
+    except (ValueError, TypeError, AttributeError, OSError):
+        pass
+    return None
+
+
+def prepare_run_services(*, invocation_root: Path, native_root: Path,
+                         activity_dir, account: dict | None, tool_scope: str = "write") -> RunServices:
+    """Bind this harness's narrow run services from the controller process.
+
+    The Worker (``write``) coding home's credential source is resolved exactly
+    as the legacy carrier did: the service-frozen account when one is bound,
+    else the checked Worker selection the account environment already carries
+    — never a native fallback for a bound selection. The structured calls
+    (``none`` and ``read``) bind only the frozen account identity and this
+    attempt's activity directory: no coding home is prepared and no coding
+    credential source exists on those carriers. Only paths and identities
+    enter the binding; no credential content is read.
+    """
+    if tool_scope in ("none", "read"):
+        return RunServices(account=account if isinstance(account, dict) else None,
+                           activity_dir=str(activity_dir))
+    if tool_scope != "write":
+        raise BoardError("INVALID_ARGUMENT",
+                         "codex binds its native services for the none, read and write tool scopes",
+                         adapter="codex")
+    environment = dict(os.environ)
+    state = environment.get("BUDDY_STATE_DIR")
+    if not state:
+        raise BoardError("INVALID_ARGUMENT",
+                         "a governed codex turn requires the owning private state directory", adapter="codex")
+    frozen = account if isinstance(account, dict) else None
+    if frozen is None:
+        frozen = _incoming_worker_selection(environment, Path(state))
+    from .home import credential_source
+    source = credential_source(Path(state), environment, account=frozen)
+    # The write carrier's account gate reads the credential source, which is
+    # always present and always preferred here; the account field belongs to
+    # the structured calls alone.
+    return RunServices(credential_source=source, activity_dir=str(activity_dir))
+
+
+def validate_turn_provenance(record: dict) -> str | None:
+    """The governed turn record's native-source checks, and nothing else.
+
+    Only the native provenance is validated here: whether the record's claimed
+    native completion, identity correlation and resume identity hold. The
+    business outcome decision stays with the role's completion policy.
+    """
+    p = record.get("provenance")
+    expected = {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
+                "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True}
+    if not isinstance(p, dict):
+        return "the Codex turn lacks native provenance"
+    controller_attention = p.get("controllerAttention") is True
+    if controller_attention:
+        expected = {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": False,
+                    "nativeTurnStarted": True, "nativeTurnCompleted": True, "controllerAttention": True}
+        outcome = record.get("outcome")
+        if (not isinstance(outcome, dict) or outcome.get("disposition") != "attention"
+                or not isinstance(p.get("nativeRequestMethod"), str) or not p["nativeRequestMethod"]
+                or p.get("nativeRequestThreadId") != record.get("sessionId")
+                or p.get("nativeRequestTurnId") != p.get("nativeTurnId")):
+            return "the Codex controller attention is not bound to a native request"
+    if any(type(p.get(key)) is not type(value) or p.get(key) != value for key, value in expected.items()):
+        return "the Codex turn lacks native completion and structured-result evidence"
+    if p.get("nativeThreadId") != record.get("sessionId") or not isinstance(p.get("nativeTurnId"), str) or not p["nativeTurnId"]:
+        return "the Codex native thread or turn identity is missing"
+    if p.get("nativeRequestMethod") is not None and (
+            p.get("nativeRequestThreadId") != record.get("sessionId") or p.get("nativeRequestTurnId") != p["nativeTurnId"]
+    ):
+        return "the Codex native request is not correlated with this thread and turn"
+    if not controller_attention and (not isinstance(p.get("finalItemId"), str) or not p["finalItemId"]):
+        return "the Codex final message has no native item identity"
+    if type(p.get("eventSeq")) is not int or p["eventSeq"] < 2:
+        return "the Codex final message has no native item or event sequence"
+    mode, previous = record.get("resumeMode"), record.get("previousSessionId")
+    if mode == "native-session" and isinstance(previous, str) and record["sessionId"] == previous:
+        return None
+    if mode == "initial" and previous is None:
+        return None
+    if mode == "reconstructed-new-session" and record["sessionId"] != previous:
+        return None
+    return "the Codex native resume identity is invalid"
+
+
+def session_facts(native_root: Path, session_id: str | None) -> dict:
+    """The native thread's storage and visibility facts; the role decides reuse."""
+    captured = isinstance(session_id, str) and bool(session_id)
+    return {
+        "adapter": "codex",
+        "sessionId": session_id if captured else None,
+        "captured": captured,
+        "storageScope": "buddy-goal-private",
+        "storageOwner": "buddy-goal",
+        "nativeAppVisibility": "not-listed-in-native-app",
+        "note": ("The native thread stays in this goal's private CODEX_HOME. Native continuation rechecks "
+                 "the goal, home, credential source, checkout, configuration and last completed turn "
+                 "binding; live App visibility requires native verification."),
+    }
+
+
+def cleanup_after_run(native_root: Path, result: RunResult) -> dict:
+    """Remove the Worker coding home's private auth link after a confirmed stop.
+
+    The caller has confirmed both stop layers. The coding-home marker is this
+    run's own SHA-verified preparation fact, so a preparation that failed, a
+    foreign native root or a fast/review run removes nothing and reports no
+    credential fact.
+    """
+    marker = _read_evidence_ref(result, "coding-home")
+    if not isinstance(marker, dict) or marker.get("nativeRoot") != str(native_root):
+        return {}
+    from .home import remove_coding_auth
+    removed = remove_coding_auth(Path(native_root))
+    return {"codingHomePrepared": True, "credentialCleanup": {"complete": True, "removed": removed}}
+
+
+def native_evidence(result: RunResult) -> dict:
+    """Project this run's real native evidence; no missing fact is invented.
+
+    The fast posture comes from the public policy fact; the review
+    acknowledgment and configuration readback come from this run's verified
+    evidence references, retained as the native side actually answered — a
+    policy that failed verification keeps its real readback and is never
+    dressed up as enforced. The interrupt facts keep the legacy true keys and
+    appear only when a real request (and a real acknowledgement) happened; an
+    acknowledgement is never inferred from a confirmed stop. Keys this run
+    never produced are absent, never filled with a placeholder.
+    """
+    projection: dict = {}
+    receipt = _read_evidence_ref(result, "review-thread-receipt")
+    if isinstance(receipt, dict):
+        projection["nativePolicy"] = receipt
+    else:
+        policy = result.effective_policy.tools
+        requested = policy.requested.value if policy is not None and policy.requested is not None else None
+        if isinstance(requested, dict):
+            projection["nativePolicy"] = requested
+    config = _read_evidence_ref(result, "review-config-readback")
+    if config is not None and isinstance(config.get("config"), dict):
+        projection["nativeConfigPolicy"] = config["config"]
+    capture = _read_evidence_ref(result, "review-captured-events")
+    if capture is not None:
+        projection["nativeToolEvents"] = capture.get("toolEvents")
+        projection["nativeRawToolEvents"] = capture.get("rawToolEvents")
+        projection["nativeTurns"] = capture.get("turns")
+        projection["nativeDeniedRequests"] = capture.get("deniedRequests")
+        projection["nativeEvidenceTruncated"] = capture.get("truncated") is True
+    interrupt = result.stop_evidence.interrupt
+    if interrupt is not None and interrupt.requested is True:
+        projection["nativeInterruptRequested"] = True
+        if interrupt.basis == "native-turn-interrupt-ack":
+            projection["nativeInterruptAcknowledged"] = True
+    return projection
+
+
+def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
+                      activity_path: Path):
+    """The existing activity sidecar is this harness's only live facility.
+
+    Inquiry delivery stays unsupported: no question channel is wired and none
+    is simulated, and the identity binding itself stays with the role's live
+    seam, which hands over the stored run request's own identity.
+    """
+    from ..live import EXISTING_CAPABILITIES, ExistingLiveChannel
+    from ....protocol import activity as activity_protocol
+
+    def read_activity():
+        # The existing attempt-bound sidecar reader — validation, binding and
+        # throttling belong to it; a foreign attempt's file reads as nothing.
+        return activity_protocol.read_sidecar(Path(activity_path),
+                                              task_id=identity.task_id,
+                                              attempt_id=identity.attempt_id,
+                                              generation=identity.generation)
+
+    return ExistingLiveChannel(identity, EXISTING_CAPABILITIES["codex"], read_activity=read_activity)
+
+
+def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
+    """One verified evidence reference of this run, or None when absent."""
+    from ..controller import STRICT_RESULT_BYTES
+    for ref in result.evidence_refs:
+        if ref.kind != kind:
+            continue
+        with guard_private_path(Path(ref.location)).open("rb") as stream:
+            raw = stream.read(STRICT_RESULT_BYTES + 1)
+        if (len(raw) > STRICT_RESULT_BYTES or ref.size_bytes != len(raw)
+                or ref.sha256 != hashlib.sha256(raw).hexdigest()):
+            raise BoardError("INVALID_ARGUMENT", "The native evidence reference no longer matches its content")
+        value = decode_json(raw)
+        return value if isinstance(value, dict) else None
+    return None
 
 
 #: The request controls this driver really consumes. The resume checkpoint's
@@ -1692,5 +1997,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
 supported_request_controls = ("resume_checkpoint",)
 
 __all__ = [
-    "RunServices", "execution_deadline", "run", "run_discovery",
+    "RunServices", "bind_live_channel", "check_preparation", "cleanup_after_run",
+    "execution_deadline", "native_evidence", "prepare_run_services", "run",
+    "run_discovery", "session_facts", "validate_turn_provenance",
 ]

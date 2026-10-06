@@ -26,7 +26,8 @@ from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.home import remove_coding_auth
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
-from hey_my_buddy.buddy.harnesses.codex.protocol import OUTCOME_SCHEMA
+from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
@@ -47,6 +48,8 @@ from hey_my_buddy.errors import BoardError
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 FAST_FIXTURE = Path(__file__).parent / "fixtures/no_tool_codex.py"
+#: The output schema the registered native-schema Worker format really sends.
+OUTCOME_SCHEMA = worker_format("codex").schema
 FAST_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
                "properties": {"profileId": {"type": "string", "enum": ["legal"]}}}
 REVIEW_SCHEMA = answer_schema(["legal"])
@@ -708,12 +711,22 @@ class WorkerSeamTests(CodexSeamCase):
 
 
 class DiscoverySeamTests(SeamCase):
-    def test_discovery_reads_the_catalog_without_a_prompt_or_turn(self):
+    def setUp(self):
+        super().setUp()
         FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
         os.environ["BUDDY_CODEX_CLI"] = str(FIXTURE)
-        trace = self.base / "discovery-trace.json"
-        os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(trace)
+        os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "discovery-trace.json")
+        self.addCleanup(os.environ.pop, "BUDDY_CODEX_FIXTURE_CASE", None)
+
+    def discover(self, marker: str):
+        self.set_case("bad-catalog")
+        return run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{marker}",
+                             native_root=self.base / f"discovery-native-{marker}",
+                             timeout_seconds=10, cancelled=lambda: False)
+
+    def test_discovery_reads_the_catalog_without_a_prompt_or_turn(self):
+        self.set_case("ok")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
                                 timeout_seconds=10, cancelled=lambda: False)
@@ -723,7 +736,22 @@ class DiscoverySeamTests(SeamCase):
         self.assertEqual([model["id"] for model in models], ["fixture-model"])
         self.assertEqual(models[0]["efforts"], ["low", "high"])
         # No thread was ever created: discovery reads metadata only.
-        self.assertFalse(trace.exists())
+        self.assertFalse((self.base / "discovery-trace.json").exists())
+
+    def test_discovery_failure_carries_the_halt_s_own_stop_fact(self):
+        # A metadata error after the App Server was owned: the original reason
+        # is kept and the exception carries the halt's actual confirmation —
+        # True only for a group whose disappearance was observed, False when
+        # the stop could not be proven. Nothing is inferred from the code.
+        with self.assertRaises(CodexProtocolError) as confirmed:
+            self.discover("confirmed")
+        self.assertEqual(confirmed.exception.code, "invalid-catalog")
+        self.assertIs(confirmed.exception.discovery_shutdown_confirmed, True)
+        with self.halt_reported_unconfirmed():
+            with self.assertRaises(CodexProtocolError) as unknown:
+                self.discover("unknown")
+        self.assertEqual(unknown.exception.code, "invalid-catalog")
+        self.assertIs(unknown.exception.discovery_shutdown_confirmed, False)
 
 
 if __name__ == "__main__":
