@@ -93,3 +93,9 @@ Host 在固定源码副本补跑 17 项受沙箱权限限制的套接字测试�
 Host 没有修改交付代码或测试。Worker 已披露其检出内自动生成 15 个字节码目录、随后改用私有副本验证；没有手动清理或删其他会话材料，此披露保留，后续依已记录工作区回收。Host 的补验使用任务目录内固定副本；对套接字测试在默认短路径创建的目录作创建时登记，尚未手动清理。整步完整检查、真实冒烟与 2-C2/2-D 仍未开始。
 
 安装版在 attention 边界拒绝 `acknowledge(verdict=rejected)`，返回 `NOT_READY`；这条失败请求未把交付记为通过。Host 将拒绝、固定 artifact 与具体修正写入原 run 的 `continue`，continuation 为 `aeec89b2-fbb8-44ee-979f-e6ea4a1df8aa`，仍用已授权 Codex 配置。没有取消后另开，也没有为了形成 completed 再让 Worker 跑一次只改记录的回合。
+
+## 2-D0：只读盘点未能开工
+
+为并行准备后续格式删减，只读微任务 `96880c60-2c19-4e43-b347-a6f994413a9c` 固定在 `1488c00`，不修改源码。首次提交未指定 buddy；路由 `dec-8df50d77-c9f6-4c55-b6bb-c0d625e88553` 自动选择 `codex/openai/gpt-6.1-sol/max`。开工前可用性核对失败，报告 `HARNESS_UNAVAILABLE / ADAPTER_UNAVAILABLE`，账户状态为 `ACCOUNT_NOT_CHECKED`，没有模型会话、代码或盘点交付，停止已确认。此处没有证据说明是供应方限流或登录失效，不使用限流例外强行换配置。
+
+Host 仅做一次限定 Codex 的 `adapters {refresh:true, adapter:codex}` 无模型刷新，仍报告 unhealthy / ACCOUNT_NOT_CHECKED，没有取得更具体的失败原因；未重试执行、未改登录、用户配置或运行时。这条辅助盘点记为未执行，实际删减与最终使用方核对仍须完成；不影响已运行中的 2-C1 修正回合。任务根 `/private/tmp/a252d0-f_ed9mkp` 已在创建时登记，尚未回收。
