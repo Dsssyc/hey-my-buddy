@@ -193,3 +193,5 @@ Host 按实际 TSV 行重算并更正 4-C 表尾和摘要的分类计数：54 co
 4-D1 最终固定 dc4a2d9、artifact 60ca94de-2773-45e1-aafe-bcc8470a0226、累计补丁 636388eaa3b5352107f77a59ae1cbdbdf5f2c1d78d3e715b52f7b0862e524ffe，7 条 scope 路径含两条删除均与封存字节一致。Host 在 6abecc0 + 固定 scope 的新副本运行真实 daemon/supervisor/Worker/C-Two/CLI 的 9 项，通过（57.781 秒）。末轮改为 BUDDY_DSH_CLI 直接指向 Python fixture，由目录 fixture 明确前置同一解释器；已恢复会话来源、无冲突及侧车已写入断言。两项旧 argv 见证迁至现有目录/环境/活动见证，其余 9 个编号不变。
 
 Worker 第一轮保留了两份注入脚本但未提供独立末轮失败日志；Host 因此在新固定组合重放这两个单项见证并留原始输出：外来 attemptId 使实际侧车读取拒绝、命中 sidecar is None（7.336 秒），将机器码改为 SUSPENDED 使 quotaFailure 为 None、命中机器码断言（7.499 秒）。未重跑其他故障矩阵，未运行安装版或模型。第一轮与两次继续的公共接缝原因均保留，未取消另开、未覆盖路由选择。
+
+最终 Python 编号收集无装载错误、无重复：第三步 2,790 → 本批 2,785，175 个模块；2,730 个编号未变，60 个旧编号离开、55 个新编号进入（包括改名），去向逐项见 adr025-step4-test-ids.tsv。移除变化两侧后集合完全相等，表内可解析的 Python 目标编号均存在于实际加载集合。Node 110 项的 101 行展开表另留原文件；本步以后 Node suite 从检查器退役，相关失败/空计数/收尾仍由 Python 子模块调度见证，不称为空 Node suite 通过。
