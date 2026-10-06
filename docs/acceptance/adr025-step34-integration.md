@@ -169,3 +169,7 @@ Host 按第四步结束前清除无生产读取方格式的要求统一精简共
 第四步真实核对已完成 DSH Worker 2 次、只读命令写入 1 次、不给工具 1 次，另做 1 次免模型公开配置导出。第一次 Worker 已签收并有用量，但 Host 探针错误地把输出目录中的 .codex 也替换成 .dsh，收集后保存摘要失败，外层停止布尔值未落盘；原件保留，不算完整通过。修正为实际检出路径并加目录/输出存在性前置断言后，第二次 5.208 秒通过，身份一致、签收有效、read 工具 1 次、原生组 gone、控制器及组合停止均 true，完整 token 计数可读。只读运行 4.035 秒，原生 bash 工具实际尝试 printf 重定向，记录返回 Operation not permitted 与 read-only mode，目标文件不存在；不给工具运行工具计数 0、目标文件不存在，三次完整运行均组停止确认。具体次数、原始材料和边界在本步原生记录中列明。
 
 原生只读探针暴露共享词表尚未登记 DSH 实际的 bash 名称，仍投成 other。Host 在公共 protocol.tool_evidence 加入真实观测名称 bash→execute，未更改 DSH 的 systemSandbox 能力或黑板放行规则；既有名称映射见证增加此项，DSH 投影见证同时确认它在无沙盒审阅判定下仍拒绝。两模块 45 项通过（0.021 秒），无需为纯事实映射重跑模型。AGENTS/docs 索引只删除已退役目录、更新测试路径；launcher 仅去掉无任何执行方的 BUDDY_RUNNER_PATH 白名单，BUDDY_NODE 仍为现有 ZCode 安装入口定位所用。参考页中旧 Node 流程的叙述按用户文档边界未重写，交外部 Host 审阅时列明。
+
+4-D1（run b48f1f86-23ac-4f7f-9fe1-0f310fa7d9b7）与 4-D2（run 7d2f88ed-b7e0-41e6-b082-1bd6179e702c）首次均走路由，决定分别为 dec-d7b66319-f85d-4dd0-8ccd-a2588be6cdd4、dec-f8910a7e-060c-4186-8ec6-e241b79e5757，均选 zcode / zai-api / GLM-5.3-Flash / max；没有配置覆盖。两项范围分别为黑板流程测试/旧夹具与四个原生测试文件，不改公共源码；各自短任务根已登记，Worker 不回收材料、不建分支。Host 另直接把 4-C 当前记录里的系统临时根写法改为占位符，原确切路径仍在 tmp 台账，属于已知事实的路径表述更正，不影响验证结论。
+
+新分发包在 6a800c2 的私有运行时验证通过：冻结锁安装、注册 DSH 模块可加载、pydantic 2.13.5 与 zstandard 0.25.0、仅 console.assets 资源、旧 runner/YAML bridge 不存在、sourceLeaks=[]。未调用模型或启动服务，日常运行时没有安装或升级。

@@ -1,0 +1,19 @@
+model	step2_unconsumed_fields	step4_disposition	reason_or_production_reader
+RunEnd (RunResult.end)	signal	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+ModelStartEvidence (RunResult.model_start_evidence)	basis/native_identity	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+ResultConfiguration (RunResult.configuration)	checks	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+CheckedValue (configuration.checked.*)	basis/source	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+RunValue (RunResult.value)	validation_basis	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+RunValue (RunResult.value)	mechanism	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+CompletionEvidence (RunResult.completion_evidence)	native_identity	removed	完成回合读取 RunResult.native_identity.turn_id；会话/回合不再复制，工具事实内原始身份集合不动
+CompletionEvidence (RunResult.completion_evidence)	mechanism	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+CompletionEvidence (RunResult.completion_evidence)	call_id/event_order/receipt_ref/receipt_verified/native_outcome	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+DeniedInteraction (RunResult.denied_interactions)	method/action/reason	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+UnknownEvents (RunResult.unknown_events)	counts/total	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+EffectivePolicy (RunResult.effective_policy)	filesystem	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+PolicyFact (effective_policy.tools/filesystem)	enforcement/requested/basis	removed enforcement/basis and filesystem.requested; kept tools.requested	native_evidence 仍读取 tools.requested；只删除未消费的两个字段及整个 filesystem 分支
+NativeIdentity (同上四处)	thread_id/input_id/call_id	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+RunResult	root_identities	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+ContinuationFacts (RunResult.continuation)	native_session_ref/binding_ref/basis	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+StopLayer (RunResult.stop_evidence.native)	started/leader_exited/exit_code/observation_basis	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
+InterruptEvidence (stop_evidence.interrupt)	requested/basis	kept	codex.native_run.native_evidence 读取 requested/basis，按原生中断事实投影

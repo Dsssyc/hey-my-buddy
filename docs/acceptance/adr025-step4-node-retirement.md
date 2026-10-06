@@ -5,7 +5,7 @@
 ## 边界与方法
 
 - 全程零模型调用、零安装版 DSH 启动：全部验证经本 harness 的假 ACP 程序与私有 HOME/DSH_HOME；没有运行完整检查套件（按任务书归 Host 整合后统一执行）。未写 ADR、SKILL、Host 指南、README/参考文档；未动 pyproject/lock、packaging、cli.checks、roles、registry、discovery（这些归 Host，见整合清单）。
-- 任务根 `/private/tmp/a254c-t_qbfwd4/`（Host 创建登记）；所有命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指其 `t/`，本轮一次性材料全部在新目录 `m/`（`m/ids-before.json`、`m/ids-after.json`、`m/node-baseline/`、`m/node-leaf-tap.txt`、`m/mirror4c/`、`m/mutation-a/`、`m/mutation-b/`），未覆盖任何旧实验，未手动删除任何对象（含任务根内），未使用 rsync --delete 或 rm 清理材料；记录中路径均为仓库相对、`~` 或占位。
+- 任务根 `<4-C 任务根>/`（Host 创建登记）；所有命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指其 `t/`，本轮一次性材料全部在新目录 `m/`（`m/ids-before.json`、`m/ids-after.json`、`m/node-baseline/`、`m/node-leaf-tap.txt`、`m/mirror4c/`、`m/mutation-a/`、`m/mutation-b/`），未覆盖任何旧实验，未手动删除任何对象（含任务根内），未使用 rsync --delete 或 rm 清理材料；记录中路径均为仓库相对、`~` 或占位。
 - 解释器是本检出自己的 `uv run --frozen` 环境（基线 `68c03c0` 的 pyproject/uv.lock，本任务未改）；正式证据一律来自全新构造的组合副本（下节），检出内运行只作发育期快跑。
 
 ## 交付内容（删除清单）

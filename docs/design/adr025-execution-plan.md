@@ -437,3 +437,5 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 接线补充：原生schema的路径服务工厂为prepare_run_services(*, invocation_root, native_root, activity_dir, account, tool_scope)，由公共角色对Worker、fast、review调用。tool_scope只表示原生工具范围，使Codex仅在write路径选择coding home凭据来源；冻结账户与活动目录不放入RunRequest，也不传递整个角色控制文件。session-tool载体沿用已有prepare_services。
 
 第四步接线取舍：DSH 本次保留原有 native_resume=false，支持重建新会话的继续；ACP 的 session/load 方法存在不等于真实回合续接已经验证，不为本次重构启用该可选新能力。带 reconstructed-new-session 的运行请求应建立新会话，native-session 明确拒绝。既有完成、检查点与问询使用从 ZCode 搬出的公共合作检查点桥，传入各 harness 的原生事件到元数据映射和原生错误构造，禁止为 DSH 复制队列、journal 或 socket 服务器。第五步再按已批准顺序把这一共同后端换成 C-Two。
+
+第四步收尾按可独立验收成果拆为 4-D1 与 4-D2：4-D1 只迁移两份黑板 Worker 流程测试及它们的旧 Node 夹具，保留真实 daemon/supervisor/Worker/签收/封存路径；4-D2 在 Host 提交共享格式精简后，只迁移四份 harness 原生测试中的旧字段断言，以仍被使用的工具事实、observer 和带摘要原始证据承接原保护。两项各自受管 worktree、首次走路由且不指定 buddy、唯一可写路径写入任务书。Host 负责公共格式与组装、跨目录适配、原生冒烟、分发验证和两项交付整合后的一次默认完整检查，完成第四步记录后停等外部验收。
