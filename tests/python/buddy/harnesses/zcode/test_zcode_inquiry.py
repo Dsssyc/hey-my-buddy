@@ -1134,7 +1134,7 @@ class NativeCatalogEmptyTests(ZcodeFixtureCase):
         from unittest import mock
 
         with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "catalog-empty"}, clear=True):
-            result = self.adapter.discover_models()
+            result = self.description.discover_models()
         # A successful native snapshot with no usable provider is a complete
         # observation, so the service can retire missing profiles instead of
         # preserving them as unknown forever.

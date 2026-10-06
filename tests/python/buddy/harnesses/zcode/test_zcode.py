@@ -11,7 +11,8 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.roles.controller import worker_executor
+from hey_my_buddy.buddy.harnesses.registry import adapter
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
 
@@ -33,7 +34,8 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
-        self.adapter = ZcodeAdapter()
+        self.adapter = worker_executor("zcode")
+        self.description = adapter("zcode")
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, timeout=10, effort="low"):
         # Concurrent private suites can use the same short socket fallback;
@@ -60,7 +62,7 @@ class ZcodeFixtureCase(unittest.TestCase):
 class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
         with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "slow-version"}, clear=True):
-            result = self.adapter.discover_models()
+            result = self.description.discover_models()
         self.assertEqual(result["harnessVersion"], "unknown")
         self.assertEqual(result["providers"][0]["models"][0]["id"], "fixture-model")
 
@@ -87,8 +89,8 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         # for delivery at the root's own checkpoint inside the one admitted
         # native turn, never through an injected send. The session facts stay
         # separate from the Git workspace facts.
-        self.assertIn("observe", self.adapter.capabilities)
-        self.assertIn("inquiry", self.adapter.capabilities)
+        self.assertIn("observe", self.description.capabilities)
+        self.assertIn("inquiry", self.description.capabilities)
         self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
         self.assertTrue(outcome.result["inquiry"]["supported"])
         self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")
@@ -195,7 +197,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(first.status, "failed", first.to_report())
         self.assertNotIn("turn", first.result)
         from hey_my_buddy.private_dirs import context_root
-        root = Path(json.loads((context_root(first_context, "zcode") / "zcode-control.json").read_text())["nativeRoot"])
+        root = Path(json.loads((context_root(first_context, "zcode") / "role-run-control.json").read_text())["nativeRoot"])
         prior_session = json.loads((root / "sessions.fixture.json").read_text())["sessionId"]
         _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
         self.assertEqual(second.status, "ok", second.to_report())
@@ -220,7 +222,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertNotEqual(turn["sessionId"], previous)
         self.assertEqual(reconstructed.result["resolved"]["effort"], "high")
         reused = {**turn, "sessionId": previous, "provenance": {**turn["provenance"], "nativeSessionId": previous}}
-        self.assertIsNotNone(self.adapter.validate_turn_provenance(reused))
+        self.assertIsNotNone(self.description.validate_turn_provenance(reused))
 
     def test_missing_native_resume_never_starts_fresh(self):
         _, outcome = self.execute(self.context(previous="sess-missing"))
@@ -324,7 +326,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_catalog_omits_models_without_native_effort_options(self):
         with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "no-effort"}, clear=True):
-            result = self.adapter.discover_models()
+            result = self.description.discover_models()
         self.assertEqual(result["providers"], [])
         self.assertTrue(any("effort" in warning for warning in result["warnings"]))
 
@@ -344,7 +346,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_catalog_uses_native_efforts_without_a_turn_or_credentials(self):
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            result = self.adapter.discover_models()
+            result = self.description.discover_models()
         self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
         self.assertEqual(result["providers"][0]["adapter"], "zcode")
         self.assertEqual(result["providers"][0]["packageVersion"], "fixture-0.16.9")

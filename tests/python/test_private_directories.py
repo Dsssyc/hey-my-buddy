@@ -16,6 +16,19 @@ from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_role_control_cleanup_matches_exact_private_filenames(self):
+        state = self.directory.resolve()
+        root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'zcode', 'goal', 'attempt'))
+        names = ('role-run-control.json', 'role-run-request.json', 'role-run-verdict.json')
+        for name in names:
+            (root / name).write_text('private')
+        (root / 'role-run-results.json').write_text('retain unknown filename')
+        removed = private_dirs.cleanup_attempt_credentials(state, 'zcode', 'goal', 'attempt')
+        self.assertEqual(removed['count'], len(names))
+        for name in names:
+            self.assertFalse((root / name).exists())
+        self.assertEqual((root / 'role-run-results.json').read_text(), 'retain unknown filename')
+
     def test_explicit_state_and_reparse_guard(self):
         context = SimpleNamespace(environment={}, spec={'adapter': 'codex'}, task_id='goal', attempt_id='attempt')
         with self.assertRaises(BoardError) as caught:

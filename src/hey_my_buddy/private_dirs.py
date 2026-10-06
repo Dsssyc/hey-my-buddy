@@ -18,6 +18,7 @@ _REPARSE_POINT = 0x400
 _CREDENTIAL_FILES = frozenset({
     'agent-credential.json', 'inquiry.json', 'finish-bridge.json',
     'zcode-control.json', 'builtin-provider.json', 'personal-provider.json',
+    'role-run-control.json', 'role-run-request.json', 'role-run-verdict.json',
     'auth.json', 'patch.json', 'settings.json', 'inquiry.sock',
 })
 

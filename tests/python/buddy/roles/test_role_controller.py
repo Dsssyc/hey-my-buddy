@@ -66,6 +66,9 @@ class FakeHarnessRun:
                 return self._result(request, status="cancelled", interrupt=False)
         return self._result(request, status="ok")
 
+    def run_discovery(self, **kwargs):
+        return {"providers": []}
+
 
     @staticmethod
     def _result(request, *, status, interrupt=False):
@@ -95,6 +98,11 @@ def run_request(root: Path) -> RunRequest:
 
 
 class RunSeamRegistrationTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_registered_harness_run_is_the_only_seam_entry(self):
         module = FakeHarnessRun()
         register_run_seam("zcode", module)
@@ -140,6 +148,9 @@ class RunSeamRegistrationTests(unittest.TestCase):
 
 class RunCallPointTests(unittest.TestCase):
     def setUp(self):
+        patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-roles-seam-",
                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
@@ -190,6 +201,11 @@ class RunCallPointTests(unittest.TestCase):
 
 
 class WorkerSeamTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_worker_executor_selects_only_through_the_registry(self):
         self.assertIsInstance(controller.worker_executor("command"), CommandAdapter)
         self.assertIsInstance(controller.worker_executor("dsh"), DshAdapter)
@@ -198,9 +214,10 @@ class WorkerSeamTests(unittest.TestCase):
     def test_a_registered_seam_never_falls_through_to_the_legacy_carrier(self):
         register_run_seam("zcode", FakeHarnessRun())
         self.addCleanup(RUN_SEAMS.pop, "zcode")
-        with self.assertRaises(BoardError) as caught:
-            controller.worker_executor("zcode")
-        self.assertEqual(caught.exception.code, "ROLE_RUN_NOT_MIGRATED")
+        executor = controller.worker_executor("zcode")
+        self.assertIs(executor.module, run_seam("zcode"))
+        self.assertEqual(executor.name, "zcode")
+        self.assertFalse(hasattr(executor.description, "start"))
         # Unregistered harnesses and command keep their legacy carrier.
         self.assertIsInstance(controller.worker_executor("dsh"), DshAdapter)
         self.assertIsInstance(controller.worker_executor("command"), CommandAdapter)
@@ -320,12 +337,13 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertIs(request, preparation.request)
 
     def test_a_registered_seam_refuses_the_legacy_router_entry(self):
-        preparation = self.preparation("fast")
         register_run_seam("dsh", FakeHarnessRun())
         self.addCleanup(RUN_SEAMS.pop, "dsh")
-        with self.assertRaises(BoardError) as caught:
-            controller.start_router_preparation(preparation)
-        self.assertEqual(caught.exception.code, "ROLE_RUN_NOT_MIGRATED")
+        preparation = self.preparation("fast")
+        with mock.patch("hey_my_buddy.buddy.roles.run_execution.start_fast", return_value="run-handle") as start:
+            self.assertEqual(controller.start_router_preparation(preparation), "run-handle")
+        start.assert_called_once_with(run_seam("dsh"), "dsh", preparation.context, preparation.request)
+        self.assertEqual(preparation.native.calls, [])
 
     def test_unknown_preparations_are_refused(self):
         class Stranger:

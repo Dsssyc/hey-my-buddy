@@ -20,7 +20,7 @@ Independent supervisor process -- C-Two --> daemon
   Worker.run() executes inside this supervisor process
     | owns the child process handle, optional deadline and local receipt
     +-- dsh adapter ------> harnesses/dsh/scripts/run.mjs -> dsh (Node)
-    +-- zcode adapter ----> hey_my_buddy.buddy.harnesses.zcode.runner -> zcode app-server
+    +-- zcode adapter ----> hey_my_buddy.buddy.roles.run_controller -> zcode app-server
     +-- codex adapter ----> hey_my_buddy.buddy.harnesses.codex.runner -> codex app-server
     +-- claude adapter ---> hey_my_buddy.buddy.harnesses.claude.runner -> claude -p (P1 candidate)
     +-- decision adapter -> hey_my_buddy.buddy.roles.structured_call -> generic native read-only structured call (Codex verified on macOS)

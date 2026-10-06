@@ -19,6 +19,8 @@ from pathlib import Path
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
+from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
 from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
 from hey_my_buddy.json_codec import canonical_json
@@ -54,7 +56,9 @@ for line in sys.stdin:
         reply = json.loads(sys.stdin.readline())
         assert reply['result']['nativeSearchEnhancementsEnabled'] is (case in ('write-final', 'write-post-close'))
     if method == 'session/create':
-        if case in ('write-final', 'write-post-close'):
+        if case == 'discovery':
+            assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False
+        elif case in ('write-final', 'write-post-close'):
             assert p.get('mode') == 'yolo' and p['mcpServers'] == [] and p['titleGenerationEnabled'] is False
         else:
             assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False and p['mcpServers'] == []
@@ -71,6 +75,7 @@ for line in sys.stdin:
         assert p['deliveryKind'] == 'web-remote-replayable' and p['includeSnapshot'] is False
         subscribed = True
     elif method == 'session/send':
+        assert case != 'discovery', 'discovery must never send an input'
         assert subscribed
         assert 'Return only one JSON value matching this schema:' in p['content']
         if case == 'reverse-before-send-reply':
@@ -488,13 +493,13 @@ class FakeAppServerTests(unittest.TestCase):
              "timeoutSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, timeout_seconds=timeout)
-        handle = ZcodeAdapter().start_no_tool_structured(context, request)
+        handle = start_router_preparation(FastPreparation("zcode", ZcodeAdapter(), request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         if cancel:
             time.sleep(0.2)
             handle.terminate(grace_seconds=2)
         self.assertIsNotNone(handle.wait(timeout + 8))
-        outcome = ZcodeAdapter().collect(handle, context)
+        outcome = collect(handle)
         if outcome.result.get("code") == "invalid-native-result":
             self.fail(f"controller emitted no result: {Path(handle.log_paths['stderr']).read_text()}")
         return outcome

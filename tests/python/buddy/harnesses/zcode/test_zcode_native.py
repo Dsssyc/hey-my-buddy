@@ -137,7 +137,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertFalse(failed.turn_output_file().exists())
         self.assertTrue(any(request["missingRequestRejected"] for request in self.requests))
         from hey_my_buddy.private_dirs import context_root
-        root = Path(json.loads((context_root(failed, "zcode") / "zcode-control.json").read_text())["nativeRoot"])
+        root = Path(json.loads((context_root(failed, "zcode") / "role-run-control.json").read_text())["nativeRoot"])
         previous = next(json.loads(path.read_text())["sessionId"] for path in root.glob("*.json"))
         self.omit_first_request = False
         recovered = self.context(index=2, mode="reconstructed-new-session", effort="high", timeout=30)
@@ -153,7 +153,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
 
     def test_native_catalog_has_per_model_efforts_without_model_requests(self):
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            discovered = self.adapter.discover_models()
+            discovered = self.description.discover_models()
         provider = next(x for x in discovered["providers"] if x["provider"] == "fixture-api")
         model = next(x for x in provider["models"] if x["id"] == "GLM-5.3-Flash")
         self.assertEqual(model["efforts"], ["low", "high", "max"])
@@ -172,7 +172,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
         self.personal.write_text(json.dumps(value))
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            discovered = self.adapter.discover_models()
+            discovered = self.description.discover_models()
         self.assertEqual(discovered["providers"], [])
         self.assertEqual(discovered["discoveries"], [{"adapter": "zcode", "status": "complete"}])
         self.assertTrue(any("empty" in warning for warning in discovered["warnings"]), discovered["warnings"])

@@ -43,7 +43,7 @@ from ....errors import BoardError
 from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
-from ..base import ProcessHandle
+from ..base import BoundSessionServices, ProcessHandle
 from ...runtime.windows_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..run_contract import (
@@ -72,12 +72,13 @@ from ..run_contract import (
     RunFeedback,
     RunRequest,
     RunResult,
+    SessionService,
     RunValue,
     StopEvidence,
     StopLayer,
     UnknownEvents,
 )
-from .config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
+from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths, snapshot_provider_files
 from .live_bridge import InquiryBridge
 from .protocol import (
     ActivityProjection,
@@ -280,6 +281,86 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
 
 
 # -- the normalized facts the role observer sees ---------------------------------
+
+
+def check_preparation(spec: dict, environment: dict) -> None:
+    """Confirm native capability and the selected provider without spawning."""
+    try:
+        cli_command(environment)
+        access = provider_access_types(*provider_paths(environment))
+    except NativeError as error:
+        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="zcode") from None
+    if access.get(spec["provider"]) not in SUPPORTED_ACCESS:
+        raise BoardError("ADAPTER_UNAVAILABLE", "the requested ZCode provider is not a supported API-key provider", adapter="zcode")
+
+
+def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str,
+                     attention_path: Path, session_tools, completion_tool: str,
+                     validate_outcome, inquiry: dict | None, inquiry_tools: tuple[str, ...],
+                     activity_dir: str, native_stderr: str) -> BoundSessionServices:
+    """Expose only the binding the role actually consumes, without a process."""
+    mount = prepare_session_service(
+        invocation_root=invocation_root, identity=identity, input_sha256=input_sha256,
+        attention_path=attention_path, session_tools=session_tools, completion_tool=completion_tool,
+        inquiry=inquiry, inquiry_tools=inquiry_tools)
+    return BoundSessionServices(
+        description=SessionService(
+            service_id=mount.server_name, kind="session-tools",
+            tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools),
+            input_schema=next(tool["inputSchema"] for tool in session_tools if tool["name"] == completion_tool),
+            delivery_mode="in-turn"),
+        completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
+        answer_tool=mount.answer_tool,
+        services=SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=inquiry,
+                                 activity_dir=activity_dir, native_stderr=native_stderr))
+
+
+def session_facts(native_root: Path, session_id: str | None) -> dict:
+    """Report native storage and binding existence; the role decides reuse."""
+    binding = native_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json") if session_id else None
+    return {
+        "adapter": "zcode", "sessionId": session_id, "captured": session_id is not None,
+        "storageScope": "task-private", "storageOwner": "buddy-goal",
+        "nativeAppVisibility": "not-listed-in-native-app",
+        "bindingPresent": binding is not None and binding.is_file(),
+        "note": (
+            "the root session is stored in this goal's private ZCode native root (ZCODE_SESSION_DB_PATH/"
+            "ZCODE_STORAGE_DIR); the installed ZCode app lists only sessions in its own user home, so the "
+            "checkable entrypoint is this attempt's activity, tool summary and fixed artifacts"),
+    }
+
+
+def validate_turn_provenance(record: dict) -> str | None:
+    p = record.get("provenance") or {}
+    expected = {"adapter": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed",
+                "rootSessionMatched": True, "receiptVerified": True, "toolResultSuccess": True,
+                "toolResultTruncated": False, "turnResultType": "success", "settlement": "session-closed"}
+    if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()) or "flush" in p:
+        return "the ZCode turn lacks its native tool and session-close evidence"
+    if p.get("nativeSessionId") != record.get("sessionId"):
+        return "the ZCode native root session does not match the turn record"
+    for key in ("inputId", "nativeTurnId", "toolCallId", "receiptId"):
+        if not isinstance(p.get(key), str) or not p[key]:
+            return f"the ZCode turn lacks {key}"
+    identity = {key: record.get(key) for key in ("taskId", "attemptId", "generation", "turnId")}
+    expected_input = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
+    if p["inputId"] != expected_input:
+        return "the ZCode native input does not match the authorized attempt"
+    for keys in (("turnStartSeq", "toolCallSeq", "toolResultSeq", "turnEndSeq"),
+                 ("turnCompletedOrdinal", "promptCompletedOrdinal", "sessionCloseOrdinal")):
+        values = [p.get(k) for k in keys]
+        if any(type(v) is not int or v < 0 for v in values) or any(a >= b for a, b in zip(values, values[1:])):
+            return "the ZCode native evidence is out of order"
+    mode, previous = record.get("resumeMode"), record.get("previousSessionId")
+    if mode == "native-session" and record.get("sessionId") == previous and previous:
+        return None
+    if mode == "initial" and previous is None:
+        return None
+    if mode == "reconstructed-new-session" and (
+        previous is None or isinstance(previous, str) and previous.strip() and record.get("sessionId") != previous
+    ):
+        return None
+    return "the ZCode native resume identity is invalid"
 
 
 class _RunFacts:
@@ -1536,6 +1617,18 @@ def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, reso
     )
 
 
+def native_evidence(result: RunResult) -> dict:
+    """Project observed native settings and EOF without a role policy guess."""
+    policy = result.effective_policy.tools
+    requested = policy.requested.value if policy is not None and policy.requested is not None else None
+    settings = requested if isinstance(requested, dict) else {}
+    completion = result.completion_evidence
+    return {"eventCount": result.native_event_count,
+            "toolAllowlist": settings.get("toolAllowlist"),
+            "titleGenerationEnabled": settings.get("titleGenerationEnabled"),
+            "streamEof": completion.stream_end if completion is not None else None}
+
+
 def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout_seconds: int,
                   cancelled: Callable[[], bool]) -> dict:
     """One no-prompt native catalog read over the same spawn and handshake.
@@ -1543,13 +1636,19 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     Discovery never sends a turn, never mounts a session service and never
     configures a model; it creates one bare session, reads the native
     available-model snapshot and stops the owned process conservatively. The
-    return value is the legacy catalog result shape the current callers keep
-    until step 2-C re-places discovery through the Host.
+    return value is the catalog receipt shape consumed by the current callers.
     """
     deadline = execution_deadline(timeout_seconds)
     cancel = _CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(invocation_root))
     native_root = ensure_private_dir(Path(native_root))
+    # Discovery's empty workspace retains the native project-input switches
+    # formerly prepared by the outer descriptor. This is native configuration,
+    # not a role prompt or a synthetic run request.
+    ensure_private_dir(Path(cwd) / ".zcode")
+    private_json(Path(cwd) / ".zcode/config.json", {
+        "plugins": {"enabled": False},
+        "features": {"mcp": False, "memory": False, "skill": False, "subagent": False}})
     stderr_path = invocation_root / _NATIVE_STDERR_FILE
     spawn = _spawn_app_server(cwd=cwd, invocation_root=invocation_root, native_root=native_root,
                               deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=True)
@@ -1583,5 +1682,6 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
 __all__ = [
     "NoToolProtocol", "SessionServiceMount", "SessionServices", "catalog", "configure_session",
-    "execution_deadline", "prepare_session_service", "run", "run_discovery", "selected",
+    "execution_deadline", "prepare_session_service", "prepare_services", "check_preparation",
+    "session_facts", "validate_turn_provenance", "native_evidence", "run", "run_discovery", "selected",
 ]

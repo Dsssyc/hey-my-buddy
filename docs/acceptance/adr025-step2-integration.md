@@ -99,3 +99,11 @@ Host 没有修改交付代码或测试。Worker 已披露其检出内自动生�
 为并行准备后续格式删减，只读微任务 `96880c60-2c19-4e43-b347-a6f994413a9c` 固定在 `1488c00`，不修改源码。首次提交未指定 buddy；路由 `dec-8df50d77-c9f6-4c55-b6bb-c0d625e88553` 自动选择 `codex/openai/gpt-6.1-sol/max`。开工前可用性核对失败，报告 `HARNESS_UNAVAILABLE / ADAPTER_UNAVAILABLE`，账户状态为 `ACCOUNT_NOT_CHECKED`，没有模型会话、代码或盘点交付，停止已确认。此处没有证据说明是供应方限流或登录失效，不使用限流例外强行换配置。
 
 Host 仅做一次限定 Codex 的 `adapters {refresh:true, adapter:codex}` 无模型刷新，仍报告 unhealthy / ACCOUNT_NOT_CHECKED，没有取得更具体的失败原因；未重试执行、未改登录、用户配置或运行时。这条辅助盘点记为未执行，实际删减与最终使用方核对仍须完成；不影响已运行中的 2-C1 修正回合。任务根 `/private/tmp/a252d0-f_ed9mkp` 已在创建时登记，尚未回收。
+
+## 2-C1：固定修正的内部验收
+
+固定输出 `57ee836cbbe4a73545394f8b78fcff67d4006a1c`、artifact `85d22b25-1245-4052-b99b-c7321f4cc2fc` 的累计补丁 SHA-256 为 `df47318746654f1f8fa704dc3d9b502e9a7dffeb74d251b9a312dd6c129241b5`。Host 核对累计 23 个路径的固定字节与范围，第二轮只改四个已授权文件。原生专有事实现在由注册模块机械投影，通用角色保留完整身份并按 capture_evidence 发布；问询与 attention 报告逐份验证、独立保留，外层停止未知或来源损坏仍拒绝业务交付。缺失 attention 事实保留为未知，不推断成零次请求。
+
+Worker 的 17 项聚焦验证、两组拒绝源码红测及六项配对绿测已核对。Host 在第二份独立固定副本实跑 `buddy.roles.test_registered_run_wiring` 的 14 项，全部通过，0 failure/error/skip，耗时 5.925 秒；原始结果为本步 `tmp/` 的 `2c1-host-correction-results.json` 与日志。此前 17 项 socket 补验涉及的实现未因本轮修正改变，未重复整批。全部使用 Python fixture，没有安装版原生程序或模型调用。完整编号为 169 模块、2,577 个，原 2,571 个全部保留，新增 6 个；相对 2-B 的 2,562 个累计新增 15 个，无删除或改名。
+
+本份固定交付通过内部审查，按累计补丁原样整合；Host 没有代改生产代码、测试或 Worker 记录，只追加本整合登记与审查证据。原 buddy、替代 buddy 和路由编号沿用前文的用户授权记录。黑板最终 acknowledge 与任务目录、工作区回收仍在整步完整检查后办理；2-C2 实时生产接线和 2-D 删减、整步验证继续进行。本内部结论不替代第二步的 Claude Code Host 验收。

@@ -13,7 +13,7 @@ from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.buddy.harnesses.dsh import runner as dsh_runner
 from hey_my_buddy.buddy.roles import structured_call as read_only
-from hey_my_buddy.buddy.harnesses.zcode import runner as zcode_runner
+from hey_my_buddy.buddy.roles import run_controller, router as router_role
 from hey_my_buddy.errors import BoardError
 
 
@@ -39,18 +39,17 @@ class DeferredReviewTests(unittest.TestCase):
                     self.assertTrue(item.no_tool_structured)
                     self.assertEqual(item.local_read_only_check()['reasonCode'], 'readonly-worker-carrier-unimplemented')
                     with self.assertRaises(BoardError):
-                        item.start_read_only_structured(context, request)
+                        router_role.prepare_router_review({}, {}, item, context)
                     with self.assertRaises(BoardError):
                         read_only.start(item.name, context, request)
 
     def test_manually_supplied_controller_review_request_is_refused_before_launch(self):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
-            result, code = zcode_runner.run({'readOnlyRequest': {}}, threading.Event())
-            self.assertEqual(code, 1)
-            self.assertEqual(result['code'], 'readonly-worker-carrier-unimplemented')
-            self.assertFalse(result['modelStarted'])
-            self.assertTrue(result['processState']['shutdownConfirmed'])
+            with self.assertRaises(BoardError) as caught:
+                run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event())
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+            self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.zcode.runner'))
             with tempfile.TemporaryDirectory(prefix='deferred-controller-') as directory:
                 control = Path(directory) / 'control.json'
                 control.write_text(json.dumps({'readOnlyRequest': {}}))
