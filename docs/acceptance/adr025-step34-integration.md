@@ -45,3 +45,7 @@ Host 补共享审阅角色接线：ReviewPreparation 冻结登记的运行模块
 共享审阅新增 3 项测试，以真实 Python 假 CLI 经角色控制器执行、实际请求和结果帧核对、工具预算停止、纠正与已有行为对照。第一轮 68 项中 67 项通过；Host 新测试用了不存在的read夹具名而没有触发工具，改为已有budget夹具后发现停止期间真实收到第二条已排队工具事实，遂按该夹具设预算1并断言第二次触发，3项通过（0.172秒）；其余源码未因此改动。之后角色控制器的聚焦模块再通过。预算>临时变为>=的一行变异被测试抓住；首次Host变异探针错误地解析了虚拟环境解释器的符号链接，因缺依赖而导入失败，不算变异证据；改用同一锁定虚拟环境的入口后得到指定断言失败。没有模型调用；这些公共文件由Host负责，完整检查留给接线批次。
 
 3-B1 的整合编号 int-6abe0a6b-037a-4808-83e5-dc9dec6c0dfe 已verified并accepted。回收读取到现有已applied计划 cln-f4f2dc80-cec9-4d6e-a8e6-408dc8520074，removed=true，实际检出消失，不重复手工删检出。Host 留存九项具名证据与摘要后，按创建时登记的确切任务根整体删除，没有通配符或忽略错误。3-C 从02b1f76首次走路由，run 29e6d180-8d6e-41ea-b51e-1c5dc35c29d2，只修改Claude范围；其任务书再次明确受管检出不切分支、Worker不删除、一次性材料用新目录和公共文件归Host。
+
+4-B1 在约两小时执行预算后结束，终态cancelled、cancellation为空，原生与外层停止都已确认；没有供应方限流，不能按限流例外更换buddy。封存partial-output为cb9dfbc、artifact 97e40606-dadc-4b96-9f9e-9f8e50b2cbcd，累计摘要1dfc416c46a043c2407104887e8c9cf8102695918bc2945ff0bb974b1f8556cf及六条scope路径核对一致，未整合、未验收。初稿none工具清单为空，usage恒为None，并建议Host补解压依赖；同一记录先称零安装版启动，随后承认旧入口测试回退安装版DSH。Host已核对至少一个复现的DSH_HOME明确在本任务私有根、以MISSING_CREDENTIAL退出，尚不声称准确启动总数，后续须由原run纠正验证结论。
+
+DSH初稿另把F-D2探针关闭标题模型和遥测的patch应用于全部运行。当前旧Worker入口没有这项强制关闭，旧快速路由有；这超出已接受的三项行为差异。按用户的暂停条件，Host停止DSH线并请求选择：恢复Worker原profile行为（推荐），或明确接受全部关闭并登记。Codex与Claude的独立工作继续。Python解压库属于项目依赖的待处理缺口，未因此更改日常运行时；初稿建议的zstandard>=1.5,<2混用了libzstd和Python包版本，官方PyPI显示Python包为0.25.0，后续依赖选择须按Python包版本核定（https://pypi.org/project/zstandard/）。
