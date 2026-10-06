@@ -451,6 +451,9 @@ class FakeAgent:
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
         sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
+        if self.stop_reason:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": self.stop_reason}})
+            return
         from hey_my_buddy.buddy.roles import worker_services
         configuration = json.loads(Path(self.bridge_config).read_text())
         if self.governed_permission:

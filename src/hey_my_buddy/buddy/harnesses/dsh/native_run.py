@@ -1564,10 +1564,10 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         # A cancelled turn owes no finish receipt; the reason, not a missing
         # tool, is what the turn's end means.
         raise NativeError("native-cancelled", "the native root turn stopped cancelled")
-    evidence.settle(state.event_count, value.get("stopReason"))
     failure = _settle_stop_reason(state, value.get("stopReason"))
     if failure is not None:
         raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
+    evidence.settle(state.event_count, value.get("stopReason"))
     if inquiry_bridge is not None:
         # Stop accepting questions the instant the root turn settled: an idle
         # or finished agent is never woken for an inquiry.

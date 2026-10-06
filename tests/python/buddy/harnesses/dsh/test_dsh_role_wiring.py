@@ -170,6 +170,24 @@ class DescriptionSeamTests(DshRoleCase):
 
 
 class WorkerRegisteredRunTests(DshRoleCase):
+    def test_a_noncompleted_native_turn_keeps_its_reason_without_a_finish_receipt(self):
+        for reason in ("max_tokens", "refusal"):
+            with self.subTest(reason=reason):
+                context = self.context(attempt="stop-" + reason)
+                self.governed_record(context)
+                record = json.loads(self.record.read_text())
+                record["dsh"]["command"] += ["--stop-reason", reason]
+                self.record.write_text(json.dumps(record))
+                executor = worker_executor("dsh")
+                handle = executor.start(context)
+                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.2) if h.group_alive() else None)
+                self.assertIsNotNone(handle.wait(30))
+                outcome = executor.collect(handle, context)
+                self.assertEqual(outcome.status, "failed")
+                self.assertEqual(outcome.result["code"], "native-" + reason.replace("_", "-"))
+                self.assertTrue(outcome.shutdown_confirmed)
+                self.assertNotIn("turn", outcome.result)
+
     def test_worker_consumes_frames_and_publishes_the_role_record(self):
         context = self.context()
         handle, outcome = self.execute(context)

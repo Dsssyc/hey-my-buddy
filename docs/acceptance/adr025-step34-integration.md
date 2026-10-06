@@ -157,3 +157,7 @@ Host 公共退役接线移除 Node 套件发现/调度/计数，保持原默认�
 Node 意图表核对方法：源码提取到 101 个静态 test/t.test 标题，四组参数化循环分别展开 3、2、4、4 个用例，合计 110 项；固定表覆盖其全部标题及显式变体。表的实际类别是 covered 54、covered/retired 7、covered/差异 1、migrated 1、retired 38（合计 101 行，另有两行注释），原记录部分数字重复计入迁移行，Host 在此更正。Worker 的 node-leaf-tap.txt 是有失败的旧 Node 收集试跑（仅列顶层），node-report.json 为空，不能当 Node 基线通过证明；Host 的 bd4324e 完整检查已有 Node 110 项通过，且到本任务基线 68c03c0 的 Node 树/yaml_bridge 字节未变。本轮 Node 基线通过的依据只来自那份 Host 证据。代码整合未改 Worker 范围内容。
 
 4-C 内部签收后仍有 Host 公共邻接迁移、无生产消费者精简、真实冒烟与整步完整检查。治理回合非 end_turn 被 missing-finish 遮蔽的观察属于其禁止写入的 native_run/protocol 面，由 Host 结合共享角色收据补齐。
+
+Host 已使治理回合在缺少完成回执时优先保留真实非 end_turn 原因：先记录/处理原生 max_tokens/refusal，再校验正常完成回执。新的真实假 ACP Worker 见证覆盖两种原生停止、禁止发布 turn 且两层停止仍确认；共享帮助提示改用唯一 governed_prompt 的既有见证，删除仅比对已删 Node 源文本的重复项。PyYAML 的唯一生产使用方 yaml_bridge 已删除，项目依赖与 uv.lock 通过 uv lock --offline 同步移除 pyyaml 6.0.3；没有安装或升级日常运行时。
+
+余下真实黑板流程的两个 Node mock 由新微任务 4-D1 迁到 Python 假 ACP，唯一写入为两份黑板测试、专属夹具和记录，所有 src 与公共接口仍归 Host。首次提交不指定 buddy，基线 3c042df；其原 task/attempt/封存/配额/同 run 继续/配置锁/跨 harness 重建意图须保留，缺公共接口只报告，不削弱断言。Host 并行精简无业务读取字段并准备已授权原生检查，最后统一完整检查。

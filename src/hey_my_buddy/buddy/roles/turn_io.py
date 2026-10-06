@@ -24,9 +24,8 @@ MAX_RECORD_BYTES = 98304
 #: Bounded, shared capability hints. A coding harness prompt carries exactly these
 #: trigger conditions so a Worker ends its turn with assistance/attention instead of
 #: silently overreaching, and so it asks the Host for an authorized helper/reviewer
-#: rather than creating a peer Buddy itself. The DSH prompt section
-#: (harnesses/dsh/plugins/turn-result.mjs) states the same triggers in the agent's
-#: own system prompt; this tuple is the harness-neutral wording both sides keep.
+#: rather than creating a peer Buddy itself. The shared governed prompt and the
+#: native-schema Worker prompt both embed this harness-neutral wording.
 ASSISTANCE_HINTS = (
     "End your turn with assistance or attention instead of guessing when any of these is true: "
     "the work needs files or permissions outside the authorized scope; validation keeps failing and "

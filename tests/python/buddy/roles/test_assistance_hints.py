@@ -4,20 +4,16 @@ ADR-010 requires every Worker prompt to state the trigger conditions for ending 
 turn with assistance/attention, to ask the Host for an authorized helper/reviewer
 with the required artifacts and acceptance, to never create a peer Buddy task, and
 to keep internal subagents available. These tests pin the shared wording on the
-Python side (ZCode prompt and MCP tool text) and verify the DSH system-prompt
-section states the same triggers, without duplicating provider credentials or
+Python side (the shared DSH/ZCode prompt and MCP tool text), without duplicating provider credentials or
 unbounded text.
 """
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION, governed_prompt
 
-ROOT = Path(__file__).resolve().parents[4]
-TURN_RESULT = ROOT / "harnesses/dsh/plugins/turn-result.mjs"
 TURN_TOOL = "mcp__srv123__buddy_finish_turn"
 
 
@@ -30,7 +26,7 @@ class AssistanceHintTests(unittest.TestCase):
             self.assertIn(phrase, text, phrase)
         self.assertLessEqual(len(text.encode()), 4096)
 
-    def test_zcode_prompt_embeds_the_bounded_hints_verbatim(self):
+    def test_governed_prompt_embeds_the_bounded_hints_verbatim(self):
         prompt = governed_prompt("task text", {"resumeMode": "initial"}, TURN_TOOL)
         for hint in turn_io.ASSISTANCE_HINTS:
             self.assertIn(hint, prompt)
@@ -48,17 +44,6 @@ class AssistanceHintTests(unittest.TestCase):
         self.assertIn("does not dispatch other tasks", FINISH_DESCRIPTION)
         self.assertIn("attention", ATTENTION_REFUSAL)
 
-    def test_dsh_prompt_section_states_the_same_triggers(self):
-        source = TURN_RESULT.read_text()
-        for phrase in ("neededWork", "acceptance", "expectedArtifacts", "assistance or attention",
-                       "peer job", "internal subagents", "outside the authorized scope",
-                       "review condition", "Host decides"):
-            self.assertIn(phrase, source, phrase)
-        section = source.split("systemPrompt.section(", 1)[1].split("});", 1)[0]
-        self.assertLessEqual(len(section.encode()), 8192, "the governed prompt section must stay bounded")
-        # The Host decides help; neither prompt may tell the Worker to create another task.
-        for directive in ("create a Buddy task", "dispatch a Buddy", "create a peer"):
-            self.assertNotIn(directive, source)
 
 
 if __name__ == "__main__":
