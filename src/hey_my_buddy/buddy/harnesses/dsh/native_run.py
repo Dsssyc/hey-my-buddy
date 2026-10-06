@@ -75,12 +75,10 @@ from ..run_contract import (
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
-    DeniedInteraction,
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
     LastAssistantMessagePackage,
-    ModelStartEvidence,
     NativeFailurePackage,
     NativeIdentity,
     PolicyFact,
@@ -96,7 +94,6 @@ from ..run_contract import (
     StopEvidence,
     StopLayer,
     ToolEvidencePackage,
-    UnknownEvents,
     UsagePackage,
 )
 from ..runtime_selection import command_for
@@ -598,7 +595,6 @@ class _RunState:
     reason: str | None = None
     error_text: str | None = None
     model_started: bool = False
-    model_start_basis: str = "unknown"
     harness_version: str | None = None
     session_opened: bool = False
     configured: bool = False
@@ -627,16 +623,6 @@ class _RunState:
 
 def _remaining(deadline: float) -> float:
     return deadline - time.monotonic()
-
-
-def _signal_name(exit_code: int | None) -> str | None:
-    if exit_code is None or exit_code >= 0:
-        return None
-    import signal
-    try:
-        return signal.Signals(-exit_code).name
-    except ValueError:
-        return f"signal-{-exit_code}"
 
 
 def _launch_agent(*, cwd: str, native_root: Path, invocation_root: Path, dsh_home: Path,
@@ -1183,7 +1169,6 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
         evidence.observe(message, state.event_count)
     if kind in MODEL_ACTIVITY_KINDS and not state.model_started:
         state.model_started = True
-        state.model_start_basis = "native-start"
     activity.note(message, state.event_count)
     if inquiry_bridge is not None:
         inquiry_bridge.note_event(message, activity.phase)
@@ -1339,7 +1324,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
     record = session_record_facts(dsh_home, sessions) if sessions else None
-    return _build_result(request, state=state, facts=facts, tools=tools, client=client,
+    return _build_result(request, state=state, tools=tools, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
                          correction_count=correction_count, drained=drained,
                          invocation_root=invocation_root, record=record,
@@ -1393,7 +1378,7 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     interrupted = False
     interrupted_at: float | None = None
     denied_seen = -1
-    
+
     while thread.is_alive() or not pump.empty():
         if not interrupted and (cancel.is_set() or _remaining(deadline) <= 0):
             if _remaining(deadline) <= 0:
@@ -1436,10 +1421,9 @@ def _settle_stop_reason(state: _RunState, stop_reason: object) -> str | None:
     state.prompt_stop_reason = stop_reason
     if stop_reason == "end_turn":
         # The native stop reason is itself the model turn's end fact; turn
-        # activity observed earlier already set the native-start basis.
+        # Earlier native activity may already have confirmed this fact.
         if not state.model_started:
             state.model_started = True
-            state.model_start_basis = "input-admitted"
         return None
     if stop_reason == "cancelled":
         return "native-cancelled"
@@ -1706,7 +1690,7 @@ _quota_package = _guard(NativeFailurePackage)
 _message_package = _guard(LastAssistantMessagePackage)
 
 
-def _build_result(request: RunRequest, *, state: _RunState, facts: _RunFacts,
+def _build_result(request: RunRequest, *, state: _RunState,
                   tools: DshToolFacts, client: AcpClient | None, sessions: list,
                   evidence: RootTurnEvidence | None, raw_answer: str | None,
                   correction_count: int, drained: bool | None,
@@ -1715,14 +1699,10 @@ def _build_result(request: RunRequest, *, state: _RunState, facts: _RunFacts,
     """Assemble the factual result; every field reports what actually happened."""
     stop = state.stop
     session_id = sessions[-1] if sessions else None
-    finish_call = evidence.call_id if evidence is not None else None
     identity_fields: dict = {}
     if session_id:
         identity_fields["session_id"] = session_id
-    if finish_call:
-        identity_fields["call_id"] = finish_call
     native_identity = _identity_or_none(identity_fields) if identity_fields else None
-    root_identities = tuple(_identity_or_none({"session_id": s}) for s in sessions if s)
     if state.status == "ok" and sessions and not stop.get("shutdown"):
         state.status = "error"
         state.reason = "native-shutdown-failed"
@@ -1736,43 +1716,29 @@ def _build_result(request: RunRequest, *, state: _RunState, facts: _RunFacts,
         if client is not None:
             observed = stop.get("group_observed")
             group_state = "gone" if stop.get("shutdown") else ("alive" if observed == "alive" else "unknown")
-            stop_native = StopLayer(group_state=group_state, started=True,
-                                    leader_exited=stop.get("leader_exited"),
-                                    exit_code=stop.get("exit_code"),
-                                    observation_basis="owned-acp-process-group")
+            stop_native = StopLayer(group_state=group_state)
         elif state.spawn_failure is not None:
             spawn = state.spawn_failure
             observed = spawn.get("groupObserved")
             group_state = ("gone" if spawn.get("shutdownConfirmed")
                            else "alive" if observed == "alive" else "unknown")
-            stop_native = StopLayer(group_state=group_state, started=True,
-                                    leader_exited=spawn.get("leaderExited"),
-                                    exit_code=spawn.get("leaderExitCode"),
-                                    observation_basis="launch-bookkeeping-finalize")
+            stop_native = StopLayer(group_state=group_state)
         else:
-            stop_native = StopLayer(group_state="gone", observation_basis="spawn-never-happened")
+            stop_native = StopLayer(group_state="gone")
     else:
         observed = stop.get("group_observed")
         group_state = "gone" if stop.get("shutdown") else ("alive" if observed == "alive" else "unknown")
-        stop_native = StopLayer(group_state=group_state, started=True,
-                                leader_exited=stop.get("leader_exited"),
-                                exit_code=stop.get("exit_code"),
-                                observation_basis="owned-acp-process-group")
+        stop_native = StopLayer(group_state=group_state)
     interrupt = InterruptEvidence(
         requested=True if state.interrupt_requested else None,
         basis=state.interrupt_basis)
     checked_config = CheckedConfiguration()
-    checks: tuple = ()
     if state.configured and state.checked is not None:
         checked = state.checked
         checked_config = CheckedConfiguration(
-            provider=CheckedValue(value=checked["provider"], basis="native-readback",
-                                  source="dsh/session-set_config_option"),
-            model=CheckedValue(value=checked["model"], basis="native-readback",
-                               source="dsh/session-set_config_option"),
-            effort=CheckedValue(value=checked["effort"], basis="native-readback",
-                                source="dsh/session-set_config_option"))
-        checks = ("declared-option-membership", "set_config_option-readback")
+            provider=CheckedValue(value=checked["provider"]),
+            model=CheckedValue(value=checked["model"]),
+            effort=CheckedValue(value=checked["effort"]))
     # The stream is complete on its own evidence: EOF read to the end without a
     # dropped frame or an observer cut, and the opened root turn reached its
     # native end. The business verdict and the group stop are separate facts
@@ -1780,35 +1746,26 @@ def _build_result(request: RunRequest, *, state: _RunState, facts: _RunFacts,
     stream_complete = bool(drained is True and sessions and state.prompt_stop_reason)
     exclude = evidence.verified_delivery() if evidence is not None else frozenset()
     tool_package = tools.finish(stream_complete, exclude_calls=exclude) if state.session_opened else None
-    value, completion = _value_and_completion(state, evidence, native_identity, raw_answer,
+    value, completion = _value_and_completion(evidence, raw_answer,
                                               correction_count, stream_complete)
-    unknown = None
-    if facts.unknown_counts:
-        unknown = UnknownEvents(counts=tuple(facts.unknown_counts.items()),
-                                total=sum(facts.unknown_counts.values()))
     record_failure = record.get("failure") if record else None
     return RunResult(
         identity=request.identity, harness="dsh",
         end=RunEnd(status=state.status, reason_code=state.reason,
                    native_exit_code=stop.get("exit_code"),
-                   signal=_signal_name(stop.get("exit_code")),
                    message=state.error_text),
         harness_version=state.harness_version,
         native_event_count=state.event_count or None,
         model_started=True if state.model_started else None,
-        model_start_evidence=ModelStartEvidence(basis=state.model_start_basis,
-                                                native_identity=native_identity)
-        if state.model_started else ModelStartEvidence(basis="unknown"),
         configuration=ResultConfiguration(
             requested=RunConfiguration(provider=request.configuration.provider,
                                        model=request.configuration.model,
                                        effort=request.configuration.effort),
-            checked=checked_config, checks=checks),
-        native_identity=native_identity, root_identities=root_identities,
+            checked=checked_config),
+        native_identity=native_identity,
         value=value, completion_evidence=completion,
         tool_evidence=_dsh_tool_package(tool_package),
-        denied_interactions=_denied_interactions(client),
-        unknown_events=unknown, effective_policy=_effective_policy(request, state),
+        effective_policy=_effective_policy(request, state),
         usage=_usage_package(record.get("usage")) if record else None,
         native_failure=(_quota_package({"nativeCode": record_failure["code"],
                                         "source": "dsh/session-turn-end"})
@@ -1819,32 +1776,25 @@ def _build_result(request: RunRequest, *, state: _RunState, facts: _RunFacts,
         continuation=None,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),
         evidence_refs=_evidence_refs(client, invocation_root, state,
-                                     record=record, stderr_mirror=stderr_mirror),
-    )
+                                     record=record, stderr_mirror=stderr_mirror))
 
 
-def _value_and_completion(state: _RunState, evidence: RootTurnEvidence | None,
-                          native_identity, raw_answer: str | None, correction_count: int,
+def _value_and_completion(evidence: RootTurnEvidence | None,
+                          raw_answer: str | None, correction_count: int,
                           stream_complete: bool) -> tuple:
     """The final value and its completion evidence, per the bound carrier."""
     if evidence is not None:
         if evidence.receipt is None:
             return None, None
-        completion = CompletionEvidence(
-            mechanism="completion-tool", stream_end=stream_complete,
-            native_identity=native_identity, call_id=evidence.call_id,
-            receipt_ref=evidence.receipt["receiptId"], receipt_verified=True,
-            event_order=evidence.result_ordinal, native_outcome=state.prompt_stop_reason)
-        return (RunValue(schema_status="valid", mechanism="completion-tool",
+        completion = CompletionEvidence(stream_end=stream_complete)
+        return (RunValue(schema_status="valid",
                          parsed=_json_package(evidence.receipt["outcome"]),
-                         validation_basis="signed-receipt-role-validator", correction_count=0),
+                         correction_count=0),
                 completion)
     if raw_answer is None:
         return None, None
-    completion = CompletionEvidence(
-        mechanism="final-message", stream_end=stream_complete,
-        native_identity=native_identity, native_outcome=state.prompt_stop_reason)
-    return (RunValue(schema_status="unknown", mechanism="final-message", raw=raw_answer,
+    completion = CompletionEvidence(stream_end=stream_complete)
+    return (RunValue(schema_status="unknown", raw=raw_answer,
                      correction_count=correction_count), completion)
 
 
@@ -1855,38 +1805,11 @@ def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
     if request.tool_scope == "none":
         requested = {"disabledRows": [*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW, *_ALWAYS_DISABLED_ROWS]}
         return EffectivePolicy(
-            tools=PolicyFact(enforcement="native", requested=_json_package(requested),
-                             basis="dsh-launch-patch"),
-            filesystem=PolicyFact(enforcement="unknown"))
+            tools=PolicyFact(requested=_json_package(requested)))
     if request.tool_scope == "read":
         return EffectivePolicy(
-            tools=PolicyFact(enforcement="native", requested=_json_package({"permissionMode": READ_ONLY_MODE}),
-                             basis="dsh-permission-preset"),
-            filesystem=PolicyFact(enforcement="unknown",
-                                  basis="readonly-command-write-smoke-pending"))
-    return EffectivePolicy(
-        tools=PolicyFact(enforcement="unrestricted", basis="dsh-default-workspace-write-preset"),
-        filesystem=PolicyFact(enforcement="unrestricted",
-                              basis="dsh-default-workspace-write-preset"))
-
-
-def _denied_interactions(client: AcpClient | None) -> tuple:
-    """Every refused native interaction, metadata only, the refusal triple."""
-    if client is None:
-        return ()
-    connection_facts = client.facts()
-    denied = [DeniedInteraction(method=item.get("method") or "unknown",
-                                action="refused-with-jsonrpc-error", reason=None)
-              for item in connection_facts.get("deniedInteractions") or [] if isinstance(item, dict)]
-    for decision in connection_facts.get("permissionDecisions") or []:
-        if not isinstance(decision, dict):
-            continue
-        outcome = decision.get("outcome")
-        denied.append(DeniedInteraction(
-            method="session/request_permission",
-            action="permission-refused",
-            reason=(outcome.get("basis") if isinstance(outcome, dict) else None)))
-    return tuple(denied[:64])
+            tools=PolicyFact(requested=_json_package({"permissionMode": READ_ONLY_MODE})))
+    return EffectivePolicy(tools=PolicyFact())
 
 
 def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunState,

@@ -161,3 +161,7 @@ Node 意图表核对方法：源码提取到 101 个静态 test/t.test 标题，
 Host 已使治理回合在缺少完成回执时优先保留真实非 end_turn 原因：先记录/处理原生 max_tokens/refusal，再校验正常完成回执。新的真实假 ACP Worker 见证覆盖两种原生停止、禁止发布 turn 且两层停止仍确认；共享帮助提示改用唯一 governed_prompt 的既有见证，删除仅比对已删 Node 源文本的重复项。PyYAML 的唯一生产使用方 yaml_bridge 已删除，项目依赖与 uv.lock 通过 uv lock --offline 同步移除 pyyaml 6.0.3；没有安装或升级日常运行时。
 
 余下真实黑板流程的两个 Node mock 由新微任务 4-D1 迁到 Python 假 ACP，唯一写入为两份黑板测试、专属夹具和记录，所有 src 与公共接口仍归 Host。首次提交不指定 buddy，基线 3c042df；其原 task/attempt/封存/配额/同 run 继续/配置锁/跨 harness 重建意图须保留，缺公共接口只报告，不削弱断言。Host 并行精简无业务读取字段并准备已授权原生检查，最后统一完整检查。
+
+4-C 内部签收后的回收计划 cln-5ba3864f-461f-4ceb-bc1a-74ebd0317f54 已由黑板应用，Host 回查 removed=true 且受管检出不存在；留存 11 份具名编号、Node 原始输出、变异摘要与镜像路径材料及摘要后，仅整体删除创建时登记的 4-C 任务根。空的 node-report.json 也原样保留；未把该材料当作 Node 基线通过证据。第一次回收脚本因台账键名断言退出、未删除；更正为实际 path 键后执行。没有通配符、没有屏蔽删除错误。
+
+Host 按第四步结束前清除无生产读取方格式的要求统一精简共享值与四个组装方：删除 ModelStartEvidence、DeniedInteraction、UnknownEvents 及第三步使用表中未消费的来源/策略/停止冗余字段；NativeIdentity 只保留实际会话与回合，完成载体的回合投影读取同一结果身份。工具事实本身的完整身份集合、observer 的未知事件计数、角色消费的拒绝/签收/用量证据文件均保留，公开 CLI schemas 未改。run_contract.py 从 716 行到 622 行。格式与 schema-worker 38 项通过（0.360 秒）；扩展共享接缝 82 项首次为 3 errors/1 failure（28.589 秒）：DSH 已注册后旧合成 Router fixture 需要私有注册表，身份断言仍指向已删合成字段。Host 修复这两项共享测试，受影响 30 项通过（17.316 秒）；其余 52 项此前已通过。各 harness 的旧字段断言尚待独立微任务迁移，当前不是第四步全量通过。

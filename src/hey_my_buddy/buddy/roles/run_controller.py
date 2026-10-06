@@ -60,8 +60,7 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
             configuration=ResultConfiguration(requested=request.configuration), model_started=False,
-            stop_evidence=StopEvidence(native=StopLayer(group_state="gone", started=False,
-                observation_basis="role-input-rejected-before-native-run")))
+            stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
     verdict = {
         "stopReason": correction.stop_reason if correction is not None else None,
         "elapsedMs": round((time.monotonic() - started) * 1000),

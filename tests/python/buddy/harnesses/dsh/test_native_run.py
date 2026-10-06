@@ -954,10 +954,10 @@ class RoleSeamFunctionTests(unittest.TestCase):
         base = dict(identity=identity, harness="dsh", end=RunEnd(status="ok"))
         result = RunResult(
             **base,
-            value=RunValue(mechanism="final-message", schema_status="unknown", raw="{}"),
-            completion_evidence=CompletionEvidence(mechanism="final-message", stream_end=True),
+            value=RunValue( schema_status="unknown", raw="{}"),
+            completion_evidence=CompletionEvidence( stream_end=True),
             effective_policy=EffectivePolicy(tools=PolicyFact(
-                enforcement="native", requested=run_contract.FrozenJson.from_value(
+                 requested=run_contract.FrozenJson.from_value(
                     {"disabledRows": ["tool-bash", "plan-mode"]}, "policy", maximum=MAX_SCHEMA_BYTES))))
         self.assertEqual(native_run.native_evidence(result),
                          {"eventCount": None, "disabledRows": ["tool-bash", "plan-mode"], "streamEof": True})

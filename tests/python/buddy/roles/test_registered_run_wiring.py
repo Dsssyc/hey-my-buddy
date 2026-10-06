@@ -44,32 +44,30 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
         result = rc.RunResult(
             identity=request.identity, harness="zcode", end=rc.RunEnd(status="ok"),
             native_identity=native_identity, native_event_count=event_count,
-            value=rc.RunValue(mechanism="final-message", schema_status="unknown", raw='{"answer":"value"}'),
+            value=rc.RunValue( schema_status="unknown", raw='{"answer":"value"}'),
             completion_evidence=completion,
             effective_policy=rc.EffectivePolicy(tools=policy))
         with mock.patch("subprocess.Popen", side_effect=AssertionError("native projection spawned")):
             return run_execution._fast_result(result, request, {"stopReason": None, "elapsedMs": 1})
 
-    def test_native_evidence_preserves_different_settings_eof_and_all_identity_fields(self):
+    def test_native_evidence_preserves_settings_eof_and_the_consumed_native_identity(self):
         projected = self.project(
-            policy=rc.PolicyFact(enforcement="unknown",
+            policy=rc.PolicyFact(
                                  requested={"toolAllowlist": ["Read"], "titleGenerationEnabled": True}),
-            completion=rc.CompletionEvidence(mechanism="final-message", stream_end=False),
-            native_identity=rc.NativeIdentity(session_id="actual-session", thread_id="actual-thread",
-                                              turn_id="actual-turn", input_id="actual-input", call_id="actual-call"),
+            completion=rc.CompletionEvidence( stream_end=False),
+            native_identity=rc.NativeIdentity(session_id="actual-session",
+                                              turn_id="actual-turn", ),
             event_count=3)
         self.assertEqual(projected["nativeEvidence"], {"eventCount": 3, "toolAllowlist": ["Read"],
                                                      "titleGenerationEnabled": True, "streamEof": False})
-        self.assertEqual(projected["nativeIdentity"], {"sessionId": "actual-session", "threadId": "actual-thread",
-                                                     "turnId": "actual-turn", "inputId": "actual-input",
-                                                     "callId": "actual-call"})
+        self.assertEqual(projected["nativeIdentity"], {"sessionId": "actual-session", "turnId": "actual-turn"})
 
     def test_missing_native_settings_or_completion_remain_unknown(self):
         for policy, completion, title in (
             (None, None, None),
-            (rc.PolicyFact(enforcement="native"),
-             rc.CompletionEvidence(mechanism="final-message"), None),
-            (rc.PolicyFact(enforcement="unknown", requested={"titleGenerationEnabled": True}), None, True),
+            (rc.PolicyFact(),
+             rc.CompletionEvidence(), None),
+            (rc.PolicyFact( requested={"titleGenerationEnabled": True}), None, True),
         ):
             with self.subTest(policy=policy):
                 projected = self.project(policy=policy, completion=completion)
@@ -106,7 +104,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
         result = rc.RunResult(
             identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
             native_identity=rc.NativeIdentity(session_id="thread-1", turn_id="turn-1"),
-            value=rc.RunValue(mechanism="native-schema", schema_status="unknown", parsed={"outcome": {
+            value=rc.RunValue( schema_status="unknown", parsed={"outcome": {
                 "disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
                 "artifacts": [], "request": {}}}))
         payload = run_execution._worker_facts(result)

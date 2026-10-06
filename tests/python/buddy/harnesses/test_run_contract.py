@@ -53,8 +53,7 @@ def full_request(tmp: Path) -> rc.RunRequest:
                                      "properties": {"answer": {"type": "string"}}}),
         budget=rc.RunBudget(timeout_seconds=60),
         session_services=(rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"]),),
-        capture_evidence=True,
-    )
+        capture_evidence=True)
 
 
 def full_result() -> rc.RunResult:
@@ -62,33 +61,24 @@ def full_result() -> rc.RunResult:
         identity=identity(), harness="zcode",
         end=rc.RunEnd(status="ok", native_exit_code=0),
         harness_version="0.42.0", model_started=True,
-        model_start_evidence=rc.ModelStartEvidence(basis="input-admitted",
-                                                   native_identity=rc.NativeIdentity(session_id="s1")),
+
         configuration=rc.ResultConfiguration(
             requested=rc.RunConfiguration(provider="fixture-provider", model="fixture-model", effort="off"),
-            checked=rc.CheckedConfiguration(model=rc.CheckedValue(value="fixture-model",
-                                                                 basis="native-readback",
-                                                                 source="zcode/session-snapshot")),
-            checks=("catalog-membership", "native-readback")),
-        native_identity=rc.NativeIdentity(session_id="s1", input_id="buddy-x"),
-        root_identities=(rc.NativeIdentity(session_id="s1"),),
-        value=rc.RunValue(schema_status="valid", mechanism="completion-tool", parsed=rc.FrozenJson({"a": 1}),
-                          validation_basis="zcode-signed-receipt", correction_count=0),
-        completion_evidence=rc.CompletionEvidence(mechanism="completion-tool", stream_end=True,
-                                                  call_id="call-1", event_order=7, receipt_ref="/tmp/r",
-                                                  receipt_verified=True, native_outcome="turn.completed"),
+            checked=rc.CheckedConfiguration(model=rc.CheckedValue(value="fixture-model"))),
+        native_identity=rc.NativeIdentity(session_id="s1"),
+
+        value=rc.RunValue(schema_status="valid",  parsed=rc.FrozenJson({"a": 1}),
+                           correction_count=0),
+        completion_evidence=rc.CompletionEvidence( stream_end=True),
         tool_evidence=rc.FrozenJson({"version": 1,
                                      "binding": {"adapter": "zcode", "taskId": "task-fixture",
                                                  "attemptId": "attempt-fixture", "generation": 1},
                                      "nativeIdentity": [{"sessionId": "s1"}], "streamComplete": True,
                                      "events": [], "toolCalls": 0, "unsettledToolCalls": 0, "truncated": False}),
-        denied_interactions=(rc.DeniedInteraction(method="permission.requested", action="denied",
-                                                  reason="the session refused the request"),),
-        unknown_events=rc.UnknownEvents(counts=(("native.note", 2),), total=2),
+
         effective_policy=rc.EffectivePolicy(
-            tools=rc.PolicyFact(enforcement="native",
-                                requested=rc.FrozenJson({"toolAllowlist": []}),
-                                basis="zcode/session-snapshot")),
+            tools=rc.PolicyFact(
+                                requested=rc.FrozenJson({"toolAllowlist": []}))),
         activity=rc.FrozenJson({"phase": "streaming-model", "eventSeq": 3}),
         usage=rc.FrozenJson({"version": 1, "inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2,
                              "inputBasis": "includes-cached", "source": "fixture", "scope": "attempt",
@@ -98,14 +88,11 @@ def full_result() -> rc.RunResult:
         last_assistant_message=rc.FrozenJson({
             "version": 1, "text": "done", "source": "fixture", "sourceId": "m1", "sourceBytes": 4,
             "sha256": hashlib.sha256(b"done").hexdigest(), "truncated": False}),
-        continuation=rc.ContinuationFacts(resumable=None, native_session_ref="s1"),
-        stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone", started=True,
-                                                          leader_exited=True, exit_code=0,
-                                                          observation_basis="owned-process-group"),
+        continuation=rc.ContinuationFacts(resumable=None),
+        stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone"),
                                       interrupt=rc.InterruptEvidence(requested=False)),
         evidence_refs=(rc.EvidenceRef(kind="runner-stdout", location=str(Path("/tmp") / "runner.log"),
-                                      size_bytes=120, sha256="c" * 64),),
-    )
+                                      size_bytes=120, sha256="c" * 64),))
 
 
 class CodecRoundtripTests(unittest.TestCase):
@@ -177,7 +164,6 @@ class CodecRoundtripTests(unittest.TestCase):
     def test_unknown_stays_unknown_in_a_minimal_result(self):
         result = rc.RunResult(identity=identity(), harness="codex", end=rc.RunEnd(status="cancelled"))
         self.assertIsNone(result.model_started)
-        self.assertEqual(result.model_start_evidence.basis, "unknown")
         self.assertIsNone(result.configuration.requested)
         self.assertIsNone(result.usage)
         self.assertIsNone(result.native_identity)
@@ -209,10 +195,10 @@ class CodecRoundtripTests(unittest.TestCase):
                                                     "observed": {"model": "fixture-model"}}})
 
     def test_signal_terminations_and_windows_codes_roundtrip(self):
-        for end, layer in ((rc.RunEnd(status="cancelled", native_exit_code=-15, signal="SIGTERM"),
-                            rc.StopLayer(group_state="gone", exit_code=-9)),
+        for end, layer in ((rc.RunEnd(status="cancelled", native_exit_code=-15),
+                            rc.StopLayer(group_state="gone")),
                            (rc.RunEnd(status="error", native_exit_code=4294967295),
-                            rc.StopLayer(group_state="gone", exit_code=259))):
+                            rc.StopLayer(group_state="gone"))):
             result = rc.RunResult(identity=identity(), harness="codex", end=end)
             result = rc.RunResult(
                 identity=identity(), harness="codex", end=end,
@@ -220,8 +206,6 @@ class CodecRoundtripTests(unittest.TestCase):
                                               interrupt=rc.InterruptEvidence()))
             decoded = rc.decode_run_result(rc.encode_run_result(result))
             self.assertEqual(decoded.end.native_exit_code, end.native_exit_code)
-            self.assertEqual(decoded.end.signal, end.signal)
-            self.assertEqual(decoded.stop_evidence.native.exit_code, layer.exit_code)
         with self.assertRaises(BoardError):
             rc.RunEnd(status="error", native_exit_code=2**33)
 
@@ -269,28 +253,20 @@ class CodecRoundtripTests(unittest.TestCase):
                 rc.decode_run_request(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
         for path in ("stopEvidence.native.groupState", "configuration.checked.model",
-                     "end.signal", "modelStartEvidence.nativeIdentity"):
+                     "end.message", "completionEvidence.streamEnd"):
             self.assertIsInstance(
                 rc.decode_run_result(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
         with self.assertRaises(BoardError):
             rc.decode_run_request({**request, "identity": {**request["identity"], "extra": 1}})
         with self.assertRaises(BoardError):
             rc.decode_run_result({**result, "end": {"status": "ok", "reasonCode": None,
-                                                    "nativeExitCode": 0, "signal": None, "extra": 1}})
+                                                    "nativeExitCode": 0, "extra": 1}})
         # The subset rule of the native identity keeps working: one key is
         # enough, an unknown key and an empty object are not.
         self.assertEqual(rc.NativeIdentity.from_payload({"sessionId": "s1"}).session_id, "s1")
         for broken in ({}, {"bogus": "x"}):
             with self.assertRaises(BoardError):
                 rc.NativeIdentity.from_payload(broken)
-
-        counts = rc.UnknownEvents(counts=(("foo", 1),), total=1)
-        self.assertEqual(counts.to_payload()["countsByType"], {"foo": 1})
-        array_counts = {"countsByType": [["foo", 1]], "total": 1}
-        with self.assertRaises(BoardError):
-            rc.UnknownEvents.from_payload(array_counts)
-        with self.assertRaises(BoardError):
-            rc.decode_run_result({**result, "unknownEvents": array_counts})
 
     def test_the_new_bounds_hold_the_old_allowed_sets(self):
         # The role-assembled input follows the board's 1 MiB task text bound, so
@@ -302,10 +278,10 @@ class CodecRoundtripTests(unittest.TestCase):
             edited(request, input_text="x" * (rc.MAX_INPUT_TEXT_BYTES + 1))
         # The final value keeps the old strict 512 KiB controller-read range.
         raw = " " * 70000 + '{"answer": 1}'
-        value = rc.RunValue(schema_status="valid", mechanism="final-message", raw=raw)
+        value = rc.RunValue(schema_status="valid",  raw=raw)
         self.assertEqual(len(value.raw), 70000 + len('{"answer": 1}'))
         with self.assertRaises(BoardError):
-            rc.RunValue(schema_status="valid", mechanism="final-message", raw="x" * (rc.MAX_VALUE_BYTES + 1))
+            rc.RunValue(schema_status="valid",  raw="x" * (rc.MAX_VALUE_BYTES + 1))
         # The fact-package bound holds a maximal legal tool-evidence package
         # (128 events at the spec's own field bounds), which the old strict
         # read could carry.
@@ -336,8 +312,6 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertEqual(paths.invocation_root, "C:\\private\\inv")
         unc = rc.PrivateStatePaths(invocation_root="\\\\host\\share\\inv", native_root="/tmp/native")
         self.assertTrue(unc.invocation_root.startswith("\\\\"))
-        layer = rc.StopLayer(group_state="gone", exit_code=4294967295)
-        self.assertEqual(layer.exit_code, 4294967295)
         with self.assertRaises(BoardError):
             rc.PrivateStatePaths(invocation_root="relative/inv", native_root="/tmp/native")
 
@@ -476,7 +450,7 @@ class FreezingTests(unittest.TestCase):
 
     def test_a_dict_parsed_value_is_frozen_on_construction(self):
         mutable = {"list": [1]}
-        value = rc.RunValue(schema_status="unknown", mechanism="final-message", parsed=mutable)
+        value = rc.RunValue(schema_status="unknown",  parsed=mutable)
         self.assertIsInstance(value.parsed, rc.FrozenJson)
         with self.assertRaises(TypeError):
             value.parsed["list"].append(2)  # not subscriptable, not mutable

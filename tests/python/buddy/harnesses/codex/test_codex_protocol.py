@@ -35,7 +35,7 @@ class StructuredOutcomeTests(unittest.TestCase):
     format = worker_format("codex")
 
     def deliver(self, raw: str):
-        result = SimpleNamespace(value=RunValue(schema_status="unknown", mechanism="native-schema",
+        result = SimpleNamespace(value=RunValue(schema_status="unknown",
                                                 raw=raw, correction_count=0))
         return self.format.delivery(result, {})[0]
 

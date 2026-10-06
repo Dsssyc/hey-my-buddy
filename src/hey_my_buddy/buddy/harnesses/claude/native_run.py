@@ -62,18 +62,15 @@ from ....protocol.activity import ActivitySidecar
 from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
 from ..base import ProcessHandle
-from ..controller import signal_name
 from ...runtime.windows_process import owned_popen
 from ..run_contract import (
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
-    DeniedInteraction,
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
-    ModelStartEvidence,
     NativeIdentity,
     PolicyFact,
     ResultConfiguration,
@@ -781,8 +778,7 @@ def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
                  "disallowedTools": disallowed_value.split(",") if disallowed_value else [],
                  "sandboxNetworkAllowedDomains": list(preparation.network_domains)}
     return EffectivePolicy(
-        tools=PolicyFact(enforcement="native", requested=requested, basis="claude-execution-args"),
-        filesystem=PolicyFact(enforcement="native", basis="claude-restricted-tools-and-sandbox"))
+        tools=PolicyFact(requested=requested))
 
 
 def _representable_value(structured) -> RunValue | None:
@@ -796,7 +792,7 @@ def _representable_value(structured) -> RunValue | None:
     the confirmed facts around it.
     """
     try:
-        return RunValue(schema_status="unknown", mechanism="native-schema",
+        return RunValue(schema_status="unknown",
                         raw=canonical_json(structured), parsed=structured)
     except BoardError:
         return None
@@ -809,8 +805,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     from ....protocol.usage import (
         normalize_last_assistant_message,
         normalize_quota_failure,
-        normalize_token_usage,
-    )
+        normalize_token_usage)
     from ..run_contract import _validated_tool_evidence
 
     evidence = collector.evidence if collector is not None else None
@@ -841,13 +836,6 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         # never an ordinary task tool.
         tool_package = _usable(_validated_tool_evidence, collector.tools.finish(
             stream_complete=stream_ended, exclude_calls=verified_delivery))
-    root_identities: tuple[NativeIdentity, ...] = ()
-    if tool_package is not None:
-        for root in tool_package.get("nativeIdentity") or []:
-            if root.get("sessionId"):
-                identity = _identity_or_none({"session_id": root["sessionId"]})
-                if identity is not None:
-                    root_identities += (identity,)
     value = None
     completion = None
     if native_result is not None and "structured_output" in native_result:
@@ -855,17 +843,10 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if state.terminal_ok and native_result is not None:
         # The delivery facts report what the transport and the terminal checks
         # each observed on their own: the stream's end is the drain's fact,
-        # never back-inferred from the process-group stop. The call id names
-        # the built-in delivery call the final value proved; an unverified
-        # turn keeps it null and its call counted in the tool facts.
-        completion = CompletionEvidence(
-            mechanism="native-schema", stream_end=stream_ended,
-            native_identity=native_identity,
-            call_id=verified_delivery[-1][1] if verified_delivery else None,
-            event_order=evidence.event_seq if evidence else None,
-            native_outcome="success")
+        # never back-inferred from the process-group stop. A verified built-in delivery call stays excluded from
+        # tool facts; an unverified call remains counted there.
+        completion = CompletionEvidence(stream_end=stream_ended)
     checked = CheckedConfiguration()
-    checks: tuple[str, ...] = ()
     if state.catalog_checked:
         # The checked block restates the requested values the native checks
         # confirmed: the account readback proved the first-party provider, the
@@ -873,21 +854,13 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         # applied-effort readback exists in the native result, so none is
         # claimed for it.
         checked = CheckedConfiguration(
-            provider=CheckedValue(value=request.configuration.provider, basis="native-readback",
-                                  source="claude/initialize-account"),
-            model=CheckedValue(value=request.configuration.model, basis="catalog-membership",
-                               source="claude/initialize-models"),
-            effort=CheckedValue(value=request.configuration.effort, basis="catalog-membership",
-                                source="claude/initialize-models"))
-        checks = ("initialize-account-first-party", "catalog-model-effort")
+            provider=CheckedValue(value=request.configuration.provider),
+            model=CheckedValue(value=request.configuration.model),
+            effort=CheckedValue(value=request.configuration.effort))
     effective = _effective_policy(preparation) if preparation is not None else EffectivePolicy()
     continuation = None
     if session_confirmed and session_id is not None:
-        continuation = ContinuationFacts(resumable=False, native_session_ref=session_id,
-                                         basis="harness-user-store")
-    denied_interactions = tuple(DeniedInteraction(method="can_use_tool", action="deny",
-                                                  reason=item["toolName"])
-                                for item in (collector.denied if collector is not None else []))
+        continuation = ContinuationFacts(resumable=False)
     evidence_refs: list[EvidenceRef] = []
     if spawn is not None and collector is not None:
         invocation_root = preparation.invocation_root
@@ -900,8 +873,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         if collector.denied:
             # The refused interactions' own full records — native request and
             # tool identities included — stay as their clearly-sourced evidence
-            # reference; the common result carries the method/action/reason
-            # triple.
+            # reference consumed by the role.
             _retain(evidence_refs, invocation_root, "denied-interactions", "denied-interactions.json",
                     {"records": collector.denied})
         if evidence is not None or state.interrupt_requested:
@@ -913,17 +885,13 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if spawn is None:
         if owned_spawn and isinstance(owned_spawn[0], dict):
             created = owned_spawn[0]
-            stop_native = StopLayer(group_state="gone" if created["shutdown"] else "unknown",
-                                    started=True, leader_exited=True, exit_code=created["exit_code"],
-                                    observation_basis="owned-group-stopped-in-spawn")
+            stop_native = StopLayer(group_state="gone" if created["shutdown"] else "unknown")
         else:
             # No process object ever existed: the holding side itself confirms
             # the spawn never happened, the one honest "gone" without a process.
-            stop_native = StopLayer(group_state="gone", observation_basis="spawn-never-happened")
+            stop_native = StopLayer(group_state="gone")
     else:
-        stop_native = StopLayer(group_state="gone" if state.shutdown else "unknown", started=True,
-                                leader_exited=state.exit_code is not None, exit_code=state.exit_code,
-                                observation_basis="owned-process-group")
+        stop_native = StopLayer(group_state="gone" if state.shutdown else "unknown")
     interrupt = InterruptEvidence(
         requested=True if state.interrupt_requested else None,
         basis="claude/control-request-interrupt" if state.interrupt_requested else None)
@@ -932,24 +900,21 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         return RunResult(
             identity=request.identity, harness="claude",
             end=RunEnd(status=state.status, reason_code=state.reason,
-                       native_exit_code=state.exit_code, signal=signal_name(state.exit_code),
+                       native_exit_code=state.exit_code,
                        message=state.error_text),
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             model_started=True if user_sent else None,
-            model_start_evidence=ModelStartEvidence(basis="input-sent", native_identity=native_identity)
-            if user_sent else ModelStartEvidence(basis="unknown"),
             configuration=ResultConfiguration(
                 requested=RunConfiguration(provider=request.configuration.provider,
                                            model=request.configuration.model,
                                            effort=request.configuration.effort),
-                checked=checked, checks=checks),
-            native_identity=native_identity, root_identities=root_identities,
+                checked=checked),
+            native_identity=native_identity,
             value=value if packages else None,
             completion_evidence=completion if packages else None,
             tool_evidence=tool_package if packages else None,
-            denied_interactions=denied_interactions,
-            unknown_events=None, effective_policy=effective,
+            effective_policy=effective,
             activity=_usable(normalize_activity,
                              collector.last_activity) if collector is not None and packages else None,
             usage=_usable(normalize_token_usage, state.token_usage) if packages else None,

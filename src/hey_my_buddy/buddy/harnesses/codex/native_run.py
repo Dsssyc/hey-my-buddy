@@ -60,7 +60,6 @@ from ..run_contract import (
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
-    DeniedInteraction,
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
@@ -68,7 +67,6 @@ from ..run_contract import (
     MAX_SCHEMA_BYTES,
     MAX_UNKNOWN_EVENT_TYPES,
     MAX_VALUE_BYTES,
-    ModelStartEvidence,
     NativeFailurePackage,
     NativeIdentity,
     OptionalFrozenJsonAt,
@@ -84,7 +82,6 @@ from ..run_contract import (
     StopEvidence,
     StopLayer,
     ToolEvidencePackage,
-    UnknownEvents,
     UsagePackage,
 )
 from .config import (
@@ -342,7 +339,6 @@ class _RunState:
     requested: dict | None = None
     shutdown: bool = False
     exit_code: int | None = None
-    spawn_basis: str = "spawn-never-happened"
     interrupt_requested: bool = False
     interrupt_basis: str | None = None
     correction_count: int = 0
@@ -1384,14 +1380,12 @@ def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparat
             # The spawn helper itself stopped the child it had created.
             state.shutdown = bool(created["shutdown"])
             state.exit_code = created["exit_code"]
-            state.spawn_basis = "owned-group-stopped-in-spawn"
         else:
             # No process object ever existed: the holding side itself confirms
             # the spawn never happened — a known not-started fact, never an
             # unknown, and never inferred from a missing pid after a spawn.
             state.shutdown = True
             state.exit_code = None
-            state.spawn_basis = "spawn-never-happened"
         if mode in ("fast", "review"):
             _remove_private_auth(prep.native_root if prep is not None
                                  else Path(request.private_state.native_root))
@@ -1399,7 +1393,6 @@ def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparat
     shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, prep.deadline)
     state.shutdown = shutdown
     state.exit_code = spawn.process.returncode
-    state.spawn_basis = "owned-process-group"
     try:
         spawn.process.stdout.close()
     except OSError:
@@ -1443,16 +1436,6 @@ def _remove_private_auth(native_root: Path) -> None:
 # -- the factual result --------------------------------------------------------------
 
 
-def _signal_name(exit_code: int | None) -> str | None:
-    if exit_code is None or exit_code >= 0:
-        return None
-    import signal
-    try:
-        return signal.Signals(-exit_code).name
-    except ValueError:
-        return f"signal-{-exit_code}"
-
-
 def _identity_or_none(fields: dict) -> NativeIdentity | None:
     try:
         return NativeIdentity(**fields)
@@ -1492,61 +1475,38 @@ def _bounded(value: str | None, limit: int) -> str | None:
 
 def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> ResultConfiguration:
     checked = CheckedConfiguration()
-    checks: list[str] = []
     if state.configured:
-        catalog_model = CheckedValue(value=request.configuration.model, basis="catalog-membership",
-                                     source="codex/model-list")
-        catalog_effort = CheckedValue(value=request.configuration.effort, basis="catalog-membership",
-                                      source="codex/model-list")
-        checks.append("native-catalog-membership")
+        catalog_model = CheckedValue(value=request.configuration.model)
+        catalog_effort = CheckedValue(value=request.configuration.effort)
         if mode == "worker":
             checked = CheckedConfiguration(
-                provider=CheckedValue(value=request.configuration.provider, basis="native-readback",
-                                      source="codex/thread-start-modelProvider"),
+                provider=CheckedValue(value=request.configuration.provider),
                 model=catalog_model, effort=catalog_effort)
-            checks.append("thread-provider-readback")
         else:
             checked = CheckedConfiguration(
-                provider=CheckedValue(value=request.configuration.provider, basis="native-readback",
-                                      source="codex/thread-start-readback"),
-                model=CheckedValue(value=request.configuration.model, basis="native-readback",
-                                   source="codex/thread-start-readback"),
+                provider=CheckedValue(value=request.configuration.provider),
+                model=CheckedValue(value=request.configuration.model),
                 effort=catalog_effort)
-            checks.append("thread-start-readback")
-            if mode == "review":
-                checks.append("config-policy-readback")
     return ResultConfiguration(
         requested=RunConfiguration(provider=request.configuration.provider,
                                    model=request.configuration.model,
                                    effort=request.configuration.effort),
-        checked=checked, checks=tuple(checks))
+        checked=checked)
 
 
-def _effective_policy(request: RunRequest, state: _RunState, mode: str,
+def _effective_policy(state: _RunState, mode: str,
                       review_policy: dict | None, home: Path | None) -> EffectivePolicy:
     if not state.configured:
         return EffectivePolicy()
     if mode == "worker":
-        return EffectivePolicy(
-            filesystem=PolicyFact(enforcement="unknown",
-                                  requested=_json_package({"type": "workspaceWrite",
-                                                           "writableRoots": [request.cwd],
-                                                           "networkAccess": False}),
-                                  basis="codex/turn-start-sandbox-request"))
+        return EffectivePolicy()
     if mode == "fast":
         return EffectivePolicy(
-            tools=PolicyFact(enforcement="native",
-                             requested=_json_package({"configuration": "private-no-tool",
+            tools=PolicyFact(requested=_json_package({"configuration": "private-no-tool",
                                                       "environments": [], "dynamicTools": [],
-                                                      "modelCatalog": str(home / "no-tool-models.json") if home else ""}),
-                             basis="codex/no-tool-layers-readback"))
+                                                      "modelCatalog": str(home / "no-tool-models.json") if home else ""})))
     return EffectivePolicy(
-        tools=PolicyFact(enforcement="native",
-                         requested=_json_package(review_policy["acknowledged"] if review_policy else {}),
-                         basis="codex/thread-start-readback"),
-        filesystem=PolicyFact(enforcement="native",
-                              requested=_json_package(review_policy["filesystem"] if review_policy else {}),
-                              basis="codex/config-read-fs-map"))
+        tools=PolicyFact(requested=_json_package(review_policy["acknowledged"] if review_policy else {})))
 
 
 def _last_assistant_message(checkpoint: dict | None) -> dict | None:
@@ -1564,10 +1524,7 @@ def _last_assistant_message(checkpoint: dict | None) -> dict | None:
 def _continuation_facts(state: _RunState, mode: str) -> ContinuationFacts | None:
     if mode != "worker" or state.thread_id is None:
         return None
-    return ContinuationFacts(resumable=True if state.binding_saved else None,
-                             native_session_ref=state.thread_id,
-                             binding_ref=str(state.binding_path) if state.binding_path else None,
-                             basis="private-goal-binding")
+    return ContinuationFacts(resumable=True if state.binding_saved else None)
 
 
 def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> tuple[EvidenceRef, ...]:
@@ -1626,13 +1583,6 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         if state.turn_id:
             fields["turn_id"] = state.turn_id
         native_identity = _identity_or_none(fields)
-    if projector is not None:
-        roots = [_identity_or_none({"session_id": root["sessionId"], "turn_id": root["turnId"]})
-                 for root in projector.roots]
-    elif native_identity is not None and state.turn_id is not None:
-        roots = [native_identity]
-    else:
-        roots = []
     tool_package = None
     if projector is not None and (state.thread_opened or mode == "review"):
         # Stream facts record the observed ends — the completed root turns
@@ -1653,38 +1603,24 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         tool_package = projector.finish(stream_complete)
     value = None
     if _bounded(state.raw_answer, MAX_VALUE_BYTES) is not None:
-        value = RunValue(schema_status="unknown", mechanism="native-schema",
+        value = RunValue(schema_status="unknown",
                          raw=state.raw_answer, correction_count=state.correction_count)
     completion = None
     if state.turn_id is not None:
-        completed = state.rounds_complete or (state.checkpoint or {}).get("nativeTurnStatus") == "completed"
-        completion = CompletionEvidence(
-            mechanism="native-schema", stream_end=state.drained if mode == "fast" else None,
-            native_identity=native_identity, native_outcome="completed" if completed else None)
-    unknown = None
-    if facts.unknown_counts:
-        unknown = UnknownEvents(counts=tuple(facts.unknown_counts.items()),
-                                total=sum(facts.unknown_counts.values()))
+        completion = CompletionEvidence(stream_end=state.drained if mode == "fast" else None)
     return RunResult(
         identity=request.identity, harness="codex",
         end=RunEnd(status=state.status, reason_code=state.reason,
-                   native_exit_code=state.exit_code, signal=_signal_name(state.exit_code),
+                   native_exit_code=state.exit_code,
                    message=_bounded(state.error_text, 512)),
         harness_version=state.version,
         native_event_count=state.event_count or None,
         model_started=True if state.model_started else None,
-        model_start_evidence=ModelStartEvidence(basis="input-sent", native_identity=native_identity)
-        if state.model_started else ModelStartEvidence(basis="unknown"),
         configuration=_checked_configuration(request, state, mode),
         native_identity=native_identity,
-        root_identities=tuple(root for root in roots if root is not None),
         value=value, completion_evidence=completion,
         tool_evidence=_tool_evidence_package(tool_package),
-        denied_interactions=tuple(DeniedInteraction(
-            method=item.get("method") or "unknown", action="refused-jsonrpc-error",
-            reason=_REFUSAL_MESSAGE) for item in facts.denied),
-        unknown_events=unknown,
-        effective_policy=_effective_policy(request, state, mode, review_policy,
+        effective_policy=_effective_policy(state, mode, review_policy,
                                            prep.home if prep is not None else None),
         activity=_activity_package(activity.last_payload),
         usage=_usage_package(state.token_usage),
@@ -1693,14 +1629,10 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         continuation=_continuation_facts(state, mode),
         stop_evidence=StopEvidence(
             native=StopLayer(
-                group_state="gone" if state.shutdown else "unknown",
-                started=False if state.spawn_basis == "spawn-never-happened" else True,
-                leader_exited=state.exit_code is not None, exit_code=state.exit_code,
-                observation_basis=state.spawn_basis),
+                group_state="gone" if state.shutdown else "unknown"),
             interrupt=InterruptEvidence(requested=True if state.interrupt_requested else None,
                                         basis=state.interrupt_basis)),
-        evidence_refs=_evidence_refs(request, state, facts),
-    )
+        evidence_refs=_evidence_refs(request, state, facts))
 
 
 # -- model discovery -----------------------------------------------------------------

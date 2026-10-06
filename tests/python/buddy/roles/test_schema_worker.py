@@ -96,7 +96,6 @@ class SchemaWorkerTests(NativeRunCase):
         self.assertEqual(code, 1)
         self.assertEqual(result.end.reason_code, "invalid-resume-mode")
         self.assertIs(result.model_started, False)
-        self.assertIs(result.stop_evidence.native.started, False)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertFalse((root / "output.json").exists())
 

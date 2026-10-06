@@ -76,8 +76,8 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         Path(control["requestFile"]).write_text(rc.encode_run_request(frame))
         Path(control["verdictFile"]).write_text(json.dumps({"stopReason": None, "elapsedMs": 1}))
         result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
-            value=rc.RunValue(mechanism="final-message", schema_status="unknown", raw="{}"),
-            stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone", started=True)))
+            value=rc.RunValue( schema_status="unknown", raw="{}"),
+            stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
         Path(handle.log_paths["stdout"]).write_text(rc.encode_run_result(result))
         return context, request, handle
 

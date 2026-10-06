@@ -217,8 +217,8 @@ def _worker_reports(result, payload: dict) -> bool:
 def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload: dict) -> dict:
     if result.end.status == "ok":
         completion = result.completion_evidence
-        if completion is not None and completion.native_identity is not None:
-            payload["nativeTurnId"] = completion.native_identity.turn_id
+        if completion is not None and result.native_identity is not None:
+            payload["nativeTurnId"] = result.native_identity.turn_id
         outcome, provenance = worker_delivery(result)
         if isinstance(outcome, dict) and isinstance(provenance, dict):
             # The governed turn record is this role's document: the attempt

@@ -74,7 +74,7 @@ class FakeHarnessRun:
         return RunResult(
             identity=request.identity, harness=request.harness,
             end=RunEnd(status=status, reason_code=None if status == "ok" else "observer-interrupt"),
-            unknown_events=None,
+
             stop_evidence=StopEvidence(interrupt=InterruptEvidence(requested=interrupt or None)),
         )
 
@@ -277,6 +277,9 @@ class WorkerSeamTests(unittest.TestCase):
 
 class RouterCallPointTests(unittest.TestCase):
     def setUp(self):
+        registrations = mock.patch.dict(RUN_SEAMS, {k: v for k, v in RUN_SEAMS.items() if k != "dsh"}, clear=True)
+        registrations.start()
+        self.addCleanup(registrations.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-roles-router-",
                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
