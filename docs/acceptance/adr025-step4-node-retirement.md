@@ -1,6 +1,6 @@
 # ADR-025 第四步 4-C：删除项目 DSH Node 集成、迁移其验证意图
 
-本记录是 ADR-025 第四步微任务 4-C 的交付材料：在基线 `68c03c0` 的受管 worktree（唯一可写范围为 `harnesses/dsh/`、`src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py`、`tests/python/buddy/harnesses/dsh/` 与本记录及其编号表）内，整树删除 DSH 的 Node 集成（23 个文件、6,634 行：run.mjs 运行器、五个进程内插件、模型目录脚本、共享库与全部 Node 测试及支撑夹具），连同其唯一 Python 消费方 `yaml_bridge.py`（108 行）一并删除，不留兼容层。项目 DSH 集成自此只有 Python：`dsh/acp/`、`dsh/native_run.py`、`dsh/protocol.py`、`dsh/adapter.py`（4-B1/4-B2 已验收并接线的主体），本任务未改其中任何一行生产代码。110 个 Node 叶子测试的意图逐项核定并迁出，见[编号表](adr025-step4-node-retirement-test-ids.tsv)：63 行覆盖（covered/covered-retired/已接受差异）指向实际存在的 Python 新旧见证、38 行随实现细节退役并写明理由、1 行为本轮新增 Python 见证。本微任务不声称第四步整体完成：真实模型冒烟、模型/安装版原生检查、公共面整合（下文清单）归 Host。
+本记录是 ADR-025 第四步微任务 4-C 的交付材料：在基线 `68c03c0` 的受管 worktree（唯一可写范围为 `harnesses/dsh/`、`src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py`、`tests/python/buddy/harnesses/dsh/` 与本记录及其编号表）内，整树删除 DSH 的 Node 集成（23 个文件、6,634 行：run.mjs 运行器、五个进程内插件、模型目录脚本、共享库与全部 Node 测试及支撑夹具），连同其唯一 Python 消费方 `yaml_bridge.py`（108 行）一并删除，不留兼容层。项目 DSH 集成自此只有 Python：`dsh/acp/`、`dsh/native_run.py`、`dsh/protocol.py`、`dsh/adapter.py`（4-B1/4-B2 已验收并接线的主体），本任务未改其中任何一行生产代码。110 个 Node 叶子测试的意图逐项核定并迁出，见[编号表](adr025-step4-node-retirement-test-ids.tsv)：54 行已有覆盖、7 行兼有覆盖与实现细节退役、1 行对应已接受差异、1 行迁到本轮新增 Python 见证、38 行随实现细节退役并写明理由。本微任务不声称第四步整体完成：真实模型冒烟、模型/安装版原生检查、公共面整合（下文清单）归 Host。
 
 ## 边界与方法
 
