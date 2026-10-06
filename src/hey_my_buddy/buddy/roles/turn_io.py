@@ -15,9 +15,9 @@ from ...errors import BoardError
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from ...private_dirs import context_root, ensure_private_dir, linked
 from ..harnesses.base import ExecutionContext
+from ..harnesses.session_receipts import MAX_OUTCOME_BYTES  # noqa: F401 - the shared byte bound
 
 MAX_INPUT_BYTES = 262144
-MAX_OUTCOME_BYTES = 65536
 MAX_RECORD_BYTES = 98304
 
 #: Bounded, shared capability hints. A coding harness prompt carries exactly these

@@ -16,9 +16,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from pydantic import ValidationError
 
+from hey_my_buddy import json_codec
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.errors import BoardError
 
@@ -47,16 +49,10 @@ def full_request(tmp: Path) -> rc.RunRequest:
         cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(invocation_root=str(tmp / "inv"),
                                                                       native_root=str(tmp / "native")),
         input_text="one bounded role-assembled input", tool_scope="read",
-        network=rc.NetworkPolicy(requested=False, allowed_domains=None),
         output_schema=rc.FrozenJson({"type": "object", "required": ["answer"],
                                      "properties": {"answer": {"type": "string"}}}),
-        budget=rc.RunBudget(timeout_seconds=60, max_output_bytes=65536, tool_calls=8),
-        frozen_account=rc.FrozenAccountReference(adapter="zcode", source="native", revision=0,
-                                                 credential_revision=0),
-        session_services=(rc.SessionService(service_id="finish", kind="completion",
-                                            tool_names=["buddy_finish_turn"],
-                                            input_schema=rc.FrozenJson({"type": "object"}),
-                                            delivery_mode="in-turn"),),
+        budget=rc.RunBudget(timeout_seconds=60),
+        session_services=(rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"]),),
         capture_evidence=True,
     )
 
@@ -73,7 +69,6 @@ def full_result() -> rc.RunResult:
             checked=rc.CheckedConfiguration(model=rc.CheckedValue(value="fixture-model",
                                                                  basis="native-readback",
                                                                  source="zcode/session-snapshot")),
-            observed=rc.FrozenJson({"model": "fixture-model"}),
             checks=("catalog-membership", "native-readback")),
         native_identity=rc.NativeIdentity(session_id="s1", input_id="buddy-x"),
         root_identities=(rc.NativeIdentity(session_id="s1"),),
@@ -88,11 +83,12 @@ def full_result() -> rc.RunResult:
                                      "nativeIdentity": [{"sessionId": "s1"}], "streamComplete": True,
                                      "events": [], "toolCalls": 0, "unsettledToolCalls": 0, "truncated": False}),
         denied_interactions=(rc.DeniedInteraction(method="permission.requested", action="denied",
-                                                  native_identity=rc.NativeIdentity(session_id="s1")),),
+                                                  reason="the session refused the request"),),
         unknown_events=rc.UnknownEvents(counts=(("native.note", 2),), total=2),
         effective_policy=rc.EffectivePolicy(
-            tools=rc.PolicyFact(enforcement="native", reported=rc.FrozenJson({"toolAllowlist": []}),
-                                basis="zcode/session-snapshot", limitations=())),
+            tools=rc.PolicyFact(enforcement="native",
+                                requested=rc.FrozenJson({"toolAllowlist": []}),
+                                basis="zcode/session-snapshot")),
         activity=rc.FrozenJson({"phase": "streaming-model", "eventSeq": 3}),
         usage=rc.FrozenJson({"version": 1, "inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2,
                              "inputBasis": "includes-cached", "source": "fixture", "scope": "attempt",
@@ -106,8 +102,6 @@ def full_result() -> rc.RunResult:
         stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone", started=True,
                                                           leader_exited=True, exit_code=0,
                                                           observation_basis="owned-process-group"),
-                                      controller=rc.StopLayer(group_state="gone", started=True,
-                                                              observation_basis="owned-process-group"),
                                       interrupt=rc.InterruptEvidence(requested=False)),
         evidence_refs=(rc.EvidenceRef(kind="runner-stdout", location=str(Path("/tmp") / "runner.log"),
                                       size_bytes=120, sha256="c" * 64),),
@@ -161,23 +155,31 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertIsNone(result.usage)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
-        self.assertEqual(result.stop_evidence.controller.group_state, "unknown")
         self.assertIsNone(result.stop_evidence.interrupt.requested)
         back = rc.decode_run_result(rc.encode_run_result(result))
         self.assertIsNone(back.model_started)
         self.assertIsNone(back.harness_version)
-        self.assertIn('"harnessVersion":"unknown"', rc.encode_run_result(result))
+        # An absent optional text is None/JSON null end to end; the legacy
+        # receipts' literal "unknown" spelling is a role projection, not a
+        # wire form of this format (UnknownableText is gone).
+        self.assertIn('"harnessVersion":null', rc.encode_run_result(result))
 
-    def test_a_decoded_observed_block_is_never_filled_from_the_request(self):
+    def test_a_decoded_requested_block_roundtrips_without_an_observed_key(self):
+        # The requested block survives decode unchanged; the legacy receipts'
+        # ``observed`` key is the role projection's None placeholder, not a
+        # wire field of this format.
         request = full_request(self.root)
         result = rc.RunResult(identity=identity(), harness="zcode", end=rc.RunEnd(status="ok"),
                               configuration=rc.ResultConfiguration(requested=request.configuration))
-        self.assertIsNone(result.configuration.observed)
+        self.assertNotIn("observed", result.configuration.to_payload())
         self.assertEqual(result.configuration.checked, rc.CheckedConfiguration())
         decoded = rc.decode_run_result(result.to_payload())
         self.assertEqual(decoded.configuration.requested, request.configuration)
-        self.assertIsNone(decoded.configuration.observed)
         self.assertEqual(decoded.configuration.checked, rc.CheckedConfiguration())
+        with self.assertRaises(BoardError, msg="observed"):
+            rc.decode_run_result({**result.to_payload(),
+                                  "configuration": {**result.configuration.to_payload(),
+                                                    "observed": {"model": "fixture-model"}}})
 
     def test_signal_terminations_and_windows_codes_roundtrip(self):
         for end, layer in ((rc.RunEnd(status="cancelled", native_exit_code=-15, signal="SIGTERM"),
@@ -187,7 +189,7 @@ class CodecRoundtripTests(unittest.TestCase):
             result = rc.RunResult(identity=identity(), harness="codex", end=end)
             result = rc.RunResult(
                 identity=identity(), harness="codex", end=end,
-                stop_evidence=rc.StopEvidence(native=layer, controller=rc.StopLayer(),
+                stop_evidence=rc.StopEvidence(native=layer,
                                               interrupt=rc.InterruptEvidence()))
             decoded = rc.decode_run_result(rc.encode_run_result(result))
             self.assertEqual(decoded.end.native_exit_code, end.native_exit_code)
@@ -214,10 +216,12 @@ class CodecRoundtripTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rc.decode_run_result(wrong_version)
 
-    def test_every_nesting_level_enforces_its_exact_wire_keys(self):
-        # A default-valued field missing from the wire, a snake_case spelling
-        # and an unknown member are refused at every nesting level, exactly as
-        # the hand-written per-class codecs refused them.
+    def test_every_nesting_level_keeps_the_closed_key_set(self):
+        # Ordinary pydantic semantics since the step 2-B simplification: an
+        # unknown member is refused at every nesting level and a required field
+        # may not be omitted, while a default-valued field may be — the wire
+        # no longer re-implements "defaults are required" (the ContextVar key
+        # set and its snake_case refusal went with it).
         def without(payload: dict, path: str) -> dict:
             node = payload
             *parents, leaf = path.split(".")
@@ -227,24 +231,27 @@ class CodecRoundtripTests(unittest.TestCase):
             return payload
 
         request = full_request(Path("/tmp")).to_payload()
-        for path in ("identity.turnId", "budget.toolCalls", "network.allowedDomains",
-                     "sessionServices.0.deliveryMode", "frozenAccount.nativeLocation"):
+        # Ordinary default semantics since the step 2-B simplification: a
+        # default-valued field may be omitted, a required field may not.
+        for path in ("identity.turnId", "identity.inputSha256", "sessionServices.0.toolNames",
+                     "captureEvidence", "continuation"):
+            decoded = rc.decode_run_request(without(json.loads(json.dumps(request)), path))
+            self.assertIsInstance(decoded, rc.RunRequest, path)
+        for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema"):
             with self.assertRaises(BoardError, msg=path):
                 rc.decode_run_request(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
         for path in ("stopEvidence.native.groupState", "configuration.checked.model",
-                     "end.signal", "modelStartEvidence.eventSequence"):
-            with self.assertRaises(BoardError, msg=path):
-                rc.decode_run_result(without(json.loads(json.dumps(result)), path))
+                     "end.signal", "modelStartEvidence.nativeIdentity"):
+            self.assertIsInstance(
+                rc.decode_run_result(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
         with self.assertRaises(BoardError):
-            rc.decode_run_request({**request, "network": {"requested": False, "allowed_domains": None}})
-        with self.assertRaises(BoardError):
-            rc.decode_run_request({**request, "identity": {**identity().to_payload(), "task_id": "x"}})
+            rc.decode_run_request({**request, "identity": {**request["identity"], "extra": 1}})
         with self.assertRaises(BoardError):
             rc.decode_run_result({**result, "end": {"status": "ok", "reasonCode": None,
                                                     "nativeExitCode": 0, "signal": None, "extra": 1}})
-        # The subset rule of the native identity keeps working beside the exact
-        # rule: one key is enough, an unknown key and an empty object are not.
+        # The subset rule of the native identity keeps working: one key is
+        # enough, an unknown key and an empty object are not.
         self.assertEqual(rc.NativeIdentity.from_payload({"sessionId": "s1"}).session_id, "s1")
         for broken in ({}, {"bogus": "x"}):
             with self.assertRaises(BoardError):
@@ -252,15 +259,11 @@ class CodecRoundtripTests(unittest.TestCase):
 
         counts = rc.UnknownEvents(counts=(("foo", 1),), total=1)
         self.assertEqual(counts.to_payload()["countsByType"], {"foo": 1})
-        array_counts = {"countsByType": [["foo", 1]], "total": 1, "truncated": False}
+        array_counts = {"countsByType": [["foo", 1]], "total": 1}
         with self.assertRaises(BoardError):
             rc.UnknownEvents.from_payload(array_counts)
         with self.assertRaises(BoardError):
             rc.decode_run_result({**result, "unknownEvents": array_counts})
-        for bad_domains in ("", "1", "x", {}):
-            with self.assertRaises(BoardError, msg=repr(bad_domains)):
-                rc.decode_run_request({**request, "network": {"requested": False,
-                                                             "allowedDomains": bad_domains}})
 
     def test_the_new_bounds_hold_the_old_allowed_sets(self):
         # The role-assembled input follows the board's 1 MiB task text bound, so
@@ -312,30 +315,137 @@ class CodecRoundtripTests(unittest.TestCase):
             rc.PrivateStatePaths(invocation_root="relative/inv", native_root="/tmp/native")
 
 
+class WholeFrameGateTests(unittest.TestCase):
+    """The whole-frame bound of the run request and result frames, refused
+    before the parser ever runs.
+
+    Each padded frame carries exactly the payload of a frame one padding
+    shorter that decodes fine — every field stays within its own bound and
+    only the raw JSON frame's byte count is invalid. A refusal message alone
+    proves nothing about the order: a decoder that parsed first and bounded
+    afterwards would refuse the same frames with the same message, so the
+    tests spy on the root package's real :func:`decode_strict_json` call
+    point — an over-limit refusal must reach it zero times, and the legal
+    control must be parsed by it exactly once. A legal canonical request
+    frame can never reach the 16 MiB bound (the worst legal escaping — a
+    2 MiB input of control characters at six bytes each, beside the bounded
+    schemas, services and references — stays below 14 MiB), so only
+    non-canonical padding or oversized raw transport bytes exercise the
+    bound there.
+    """
+
+    def padded_over(self, text: str, maximum: int) -> str:
+        """The same frame with one whitespace run between its first tokens."""
+        padding = maximum - len(text.encode()) + 1024
+        self.assertGreater(padding, 0)
+        return "{" + " " * padding + text[1:]
+
+    def assert_refused_before_parsing(self, decode, frame: object, parser, label: str):
+        with self.assertRaises(BoardError) as raised:
+            decode(frame)
+        self.assertIn("frame", raised.exception.message, label)
+        self.assertIn("byte bound", raised.exception.message, label)
+        parser.assert_not_called()
+
+    def test_an_over_limit_request_frame_is_refused_before_parsing(self):
+        request = full_request(Path("/tmp"))
+        text = rc.encode_run_request(request)
+        self.assertLess(len(text.encode()), rc.MAX_RUN_REQUEST_BYTES)
+        padded = self.padded_over(text, rc.MAX_RUN_REQUEST_BYTES)
+        self.assertGreater(len(padded.encode()), rc.MAX_RUN_REQUEST_BYTES)
+        with mock.patch.object(json_codec, "decode_strict_json",
+                               wraps=json_codec.decode_strict_json) as parser:
+            self.assert_refused_before_parsing(rc.decode_run_request, padded, parser, "text form")
+            # The same raw transport bytes hit the bound before any parsing too.
+            self.assert_refused_before_parsing(rc.decode_run_request, padded.encode(), parser,
+                                               "bytes form")
+            # Without the padding the very same payload is one legal frame.
+            self.assertEqual(rc.decode_run_request(text), request)
+            parser.assert_called_once_with(text)
+
+    def test_an_over_limit_result_frame_is_refused_before_parsing(self):
+        result = full_result()
+        text = rc.encode_run_result(result)
+        self.assertLess(len(text.encode()), rc.MAX_RUN_RESULT_BYTES)
+        padded = self.padded_over(text, rc.MAX_RUN_RESULT_BYTES)
+        self.assertGreater(len(padded.encode()), rc.MAX_RUN_RESULT_BYTES)
+        with mock.patch.object(json_codec, "decode_strict_json",
+                               wraps=json_codec.decode_strict_json) as parser:
+            self.assert_refused_before_parsing(rc.decode_run_result, padded, parser, "text form")
+            self.assert_refused_before_parsing(rc.decode_run_result, padded.encode(), parser,
+                                               "bytes form")
+            self.assertEqual(rc.decode_run_result(text), result)
+            parser.assert_called_once_with(text)
+
+
+class StrictScalarTypeTests(unittest.TestCase):
+    """Ordinary fields keep strict scalar types at both entries (step 2-P).
+
+    The step 1 review confirmed the behavior was right but untested: an int
+    never passes a bool field and a str never passes an int field, on the
+    Python constructor exactly as on the wire decode. The covered fields are
+    the ones whose type is held by the shared strict configuration alone.
+    """
+
+    def test_python_construction_refuses_int_for_bool_and_str_for_int(self):
+        request = full_request(Path("/tmp"))
+        with self.assertRaises(BoardError, msg="capture_evidence"):
+            edited(request, capture_evidence=1)
+        with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
+            edited(request, budget=rc.RunBudget(timeout_seconds="60"))
+        with self.assertRaises(BoardError, msg="identity.generation"):
+            rc.RunIdentity(task_id="task", attempt_id="attempt", generation=True,
+                           invocation_id="invocation")
+        with self.assertRaises(BoardError, msg="end.native_exit_code"):
+            rc.RunEnd(status="ok", native_exit_code="0")
+
+    def test_the_wire_entries_refuse_int_for_bool_and_str_for_int(self):
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["captureEvidence"] = 1
+        with self.assertRaises(BoardError, msg="captureEvidence"):
+            rc.decode_run_request(payload)
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["budget"]["timeoutSeconds"] = "60"
+        with self.assertRaises(BoardError, msg="timeoutSeconds"):
+            rc.decode_run_request(payload)
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["identity"]["generation"] = True
+        with self.assertRaises(BoardError, msg="generation"):
+            rc.decode_run_request(payload)
+        result_payload = full_result().to_payload()
+        result_payload["modelStarted"] = 1
+        with self.assertRaises(BoardError, msg="modelStarted"):
+            rc.decode_run_result(result_payload)
+        result_payload = full_result().to_payload()
+        result_payload["end"]["nativeExitCode"] = "0"
+        with self.assertRaises(BoardError, msg="nativeExitCode"):
+            rc.decode_run_result(result_payload)
+
+
 class FreezingTests(unittest.TestCase):
     def test_mutating_constructor_input_never_changes_the_frozen_value(self):
         mutable_identity = dict(IDENTITY)
         requested = {"provider": "fixture-provider", "model": "fixture-model", "effort": "off"}
         schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
-        domains = ["example.com"]
+        tools = ["mcp__finish__buddy_finish_turn"]
         request = rc.RunRequest(
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
             configuration=rc.RunConfiguration.from_payload(requested), cwd="/tmp/checkout",
             private_state=rc.PrivateStatePaths(invocation_root="/tmp/inv", native_root="/tmp/native"),
             input_text="x",
-            tool_scope="none", network=rc.NetworkPolicy(requested=False, allowed_domains=domains),
-            output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60,
-                                                                     max_output_bytes=1024))
+            tool_scope="none",
+            output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60),
+            session_services=(rc.SessionService(tool_names=tools),))
         mutable_identity["attemptId"] = "changed"
         mutable_identity["inputSha256"] = "f" * 64
         requested["model"] = "changed"
         schema["properties"]["answer"]["type"] = "changed"
-        domains.append("evil.example")
+        tools.append("mcp__finish__buddy_checkpoint")
         self.assertEqual(request.identity.attempt_id, "attempt-fixture")
         self.assertEqual(request.identity.input_sha256, "a" * 64)
         self.assertEqual(request.configuration.model, "fixture-model")
         self.assertEqual(request.output_schema.value["properties"]["answer"]["type"], "string")
-        self.assertEqual(request.network.allowed_domains, ("example.com",))
+        self.assertEqual(request.session_services[0].tool_names, ("mcp__finish__buddy_finish_turn",))
 
     def test_a_dict_parsed_value_is_frozen_on_construction(self):
         mutable = {"list": [1]}
@@ -362,33 +472,99 @@ class FreezingTests(unittest.TestCase):
         request = full_request(Path("/tmp"))
         with self.assertRaises(ValidationError):
             request.budget.timeout_seconds = 1
-        domains = rc.NetworkPolicy(requested=False, allowed_domains=["example.com"])
+        service = rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"])
         with self.assertRaises(TypeError):
-            domains.allowed_domains[0] = "changed.example"
+            service.tool_names[0] = "changed.example"
         with self.assertRaises(AttributeError):
             request.session_services[0].tool_names.append("extra")
+
+
+class NonEmptyInputTests(unittest.TestCase):
+    """The whole-input nonempty bound holds on both entries; NUL still rides."""
+
+    def request(self, **changes):
+        base = full_request(Path("/tmp"))
+        fields = dict(base.__dict__)
+        fields.update(changes)
+        return rc.RunRequest(**fields)
+
+    def test_construction_and_decode_refuse_an_empty_whole_input(self):
+        with self.assertRaises(BoardError):
+            self.request(input_text="")
+        payload = full_request(Path("/tmp")).to_payload()
+        payload["inputText"] = ""
+        with self.assertRaises(BoardError):
+            rc.decode_run_request(payload)
+
+    def test_a_nul_bearing_input_still_roundtrips(self):
+        request = self.request(input_text="line one\x00line two")
+        back = rc.decode_run_request(rc.encode_run_request(request))
+        self.assertEqual(back.input_text, "line one\x00line two")
+
+    def test_a_correction_with_an_empty_input_is_refused_on_both_entries(self):
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="correct", input_text="")
+        payload = rc.RunFeedback(action="correct", input_text="real text").to_payload()
+        payload["inputText"] = ""
+        with self.assertRaises(BoardError):
+            rc.RunFeedback.from_payload(payload)
+
+    def test_a_native_session_continuation_requires_its_previous_session(self):
+        with self.assertRaises(BoardError):
+            rc.RunContinuation(mode="native-session")
+        with self.assertRaises(BoardError):
+            rc.RunContinuation(mode="native-session", previous_session_id="")
+        payload = rc.RunContinuation(mode="reconstructed-new-session").to_payload()
+        self.assertIsNone(rc.RunContinuation.from_payload(payload).previous_session_id)
+        wire = rc.RunContinuation(mode="native-session", previous_session_id="s-1").to_payload()
+        wire["previousSessionId"] = None
+        with self.assertRaises(BoardError):
+            rc.RunContinuation.from_payload(wire)
+
+    def test_the_harness_version_carries_the_real_probe_bound(self):
+        result = rc.RunResult(identity=identity(), harness="zcode",
+                              end=rc.RunEnd(status="ok"), harness_version="v" * 80)
+        self.assertEqual(result.harness_version, "v" * 80)
+        with self.assertRaises(BoardError):
+            rc.RunResult(identity=identity(), harness="zcode",
+                         end=rc.RunEnd(status="ok"), harness_version="v" * 81)
+        self.assertIn("v" * 80, rc.encode_run_result(result))
+
+
+class RunFeedbackTests(unittest.TestCase):
+    """The minimal in-process observer answer of the run seam (step 2-B)."""
+
+    def test_the_three_actions_roundtrip_and_only_a_correction_carries_input(self):
+        continue_feedback = rc.FEEDBACK_CONTINUE
+        stop_feedback = rc.FEEDBACK_STOP
+        correct = rc.RunFeedback(action="correct", input_text="the complete next input")
+        self.assertEqual((continue_feedback.action, stop_feedback.action), ("continue", "stop"))
+        for value, expected in ((continue_feedback, "continue"), (stop_feedback, "stop"), (correct, "correct")):
+            back = rc.RunFeedback.from_payload(value.to_payload())
+            self.assertEqual(back, value)
+            self.assertEqual(back.action, expected)
+        self.assertEqual(correct.input_text, "the complete next input")
+
+    def test_a_correction_without_input_and_a_carrying_continue_are_refused(self):
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="correct")
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="continue", input_text="smuggled")
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="stop", input_text="smuggled")
+        with self.assertRaises(BoardError):
+            rc.RunFeedback(action="restart")
 
 
 class InterfaceSurfaceTests(unittest.TestCase):
     def test_no_role_authority_or_secret_material_fits_the_request(self):
         payload = full_request(Path("/tmp")).to_payload()
         for forbidden in ("role", "routingMode", "agentCredential", "boardClient", "turnInput",
-                          "taskBrief", "database", "controlToken"):
+                          "taskBrief", "database", "controlToken", "frozenAccount", "network"):
             mutated = dict(payload)
             mutated[forbidden] = "anything"
             with self.assertRaises(BoardError, msg=forbidden):
                 rc.decode_run_request(mutated)
-
-    def test_the_frozen_account_is_a_scalar_non_secret_reference(self):
-        with self.assertRaises(BoardError):
-            rc.FrozenAccountReference.from_payload({"adapter": "codex", "source": "native", "revision": 0,
-                                                    "credentialRevision": 0, "identity": None,
-                                                    "nativeLocation": None, "apiKey": "sk-secret"})
-        reference = rc.FrozenAccountReference(adapter="codex", source="native", revision=3,
-                                              credential_revision=2)
-        self.assertEqual(reference.to_payload(),
-                         {"adapter": "codex", "source": "native", "revision": 3,
-                          "credentialRevision": 2, "identity": None, "nativeLocation": None})
 
     def test_a_foreign_usage_package_is_refused_not_dropped(self):
         payload = full_result().to_payload()
@@ -419,9 +595,22 @@ class InterfaceSurfaceTests(unittest.TestCase):
         decoded = rc.decode_run_result(payload)
         self.assertEqual(decoded.tool_evidence.value["nativeIdentity"], [])
         self.assertFalse(decoded.tool_evidence.value["streamComplete"])
+        # The projection's own incomplete event facts — an empty identity and
+        # missing callId/toolName/phase — ride losslessly since the Host's
+        # step 2-B continuation decision; the closed key set, the version and
+        # the category enum stay exactly the collector's.
+        carried = json.loads(json.dumps(package))
+        carried["events"].append({"nativeIdentity": {}, "callId": None, "toolName": None,
+                                  "category": "other", "phase": None})
+        payload = full_result().to_payload()
+        payload["toolEvidence"] = carried
+        decoded = rc.decode_run_result(payload)
+        self.assertIsNone(decoded.tool_evidence.value["events"][-1]["callId"])
         for mutation in ({"version": 2}, {"events": [{"nativeIdentity": {}, "callId": "c",
-                                                      "toolName": "Read", "category": "read",
-                                                      "phase": "start"}]}):
+                                                      "toolName": "Read", "category": "navigate",
+                                                      "phase": "start"}]},
+                          {"events": [{"nativeIdentity": {"bogus": "x"}, "callId": "c",
+                                       "toolName": "Read", "category": "other", "phase": "start"}]}):
             broken = json.loads(json.dumps(package))
             broken.update(mutation)
             payload = full_result().to_payload()

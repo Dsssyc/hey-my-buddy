@@ -9,6 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.registry import run_seam
+
 PROBE_PATH = Path(__file__).resolve().parents[3] / "probes" / "router_readonly.py"
 spec = importlib.util.spec_from_file_location("router_probe", PROBE_PATH)
 probe = importlib.util.module_from_spec(spec)
@@ -43,7 +46,7 @@ class RouterProbeTests(unittest.TestCase):
     def mock_execute(self, *, adapter="codex", mutation=None, timeout=False, stopped=True,
                      shutdown=True, status="ok", payload=None, start_error=None):
         native = Mock(read_only_structured=True)
-        handle = Mock(cancel_requested=False)
+        handle = Mock(spec=ProcessHandle, cancel_requested=False, process=Mock())
         handle.wait.return_value = None if timeout else 0
         handle.shutdown_confirmed.return_value = stopped
         def start(context, request):
@@ -78,13 +81,19 @@ class RouterProbeTests(unittest.TestCase):
             report = probe.run(self.args(adapter, execute=True))
         return report, native, handle
 
+    def start_guard(self, native, adapter):
+        module = run_seam(adapter)
+        if module is not None:
+            return patch.object(module, "run")
+        return patch.object(native, "start_read_only_structured")
+
     def test_prepare_all_harnesses_never_start_any_process_or_network(self):
         for adapter in probe.ADAPTERS:
             with self.subTest(adapter=adapter):
                 self.root = Path(self.temporary.name) / adapter
                 # 使用真实 adapter class，但禁止所有启动入口/目录发现。
                 native = probe.adapter_for(adapter)
-                with patch.object(native, "start_read_only_structured") as start, \
+                with self.start_guard(native, adapter) as start, \
                      patch.object(native, "available") as available, \
                      patch.object(native, "discover_models") as discover, \
                      patch.object(probe, "adapter_for", return_value=native):
@@ -113,7 +122,7 @@ class RouterProbeTests(unittest.TestCase):
             self.root = Path(self.temporary.name) / adapter
             native = probe.adapter_for(adapter)
             with patch.object(native, "read_only_structured", False), \
-                 patch.object(native, "start_read_only_structured") as start, \
+                 self.start_guard(native, adapter) as start, \
                  patch.object(probe, "adapter_for", return_value=native):
                 report = probe.run(self.args(adapter, execute=True))
             self.assertEqual(report["status"], "refused")

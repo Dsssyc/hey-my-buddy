@@ -25,6 +25,7 @@ from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
+from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 import buddy.harnesses.codex.test_no_tool_codex as codex_fast_tests
 import buddy.harnesses.zcode.test_no_tool_zcode as zcode_fast_tests
 import buddy.harnesses.dsh.test_dsh_session_storage as dsh_coding_tests
@@ -290,14 +291,15 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     {"adapter": adapter.name, **spec, "cwd": str(fixture.cwd), "timeoutSeconds": 3},
                     evidence, {}, environment)
                 native = adapter()
-                handle = native.start_no_tool_structured(context,
-                    NoToolStructuredRequest(str(fixture.cwd), "Pick a profile", codex_fast_tests.SCHEMA, 3))
+                request = NoToolStructuredRequest(str(fixture.cwd), "Pick a profile", codex_fast_tests.SCHEMA, 3)
+                handle = start_router_preparation(FastPreparation(native.name, native, request, context, fixture.cwd))
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
                 self.assertEqual(handle.wait(8), 0)
                 from hey_my_buddy.buddy.roles.structured_call import collect
                 outcome = collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                control = json.loads((evidence / "no-tool-control.json").read_text())
+                control = (handle.role_run_control if hasattr(handle, "role_run_control")
+                           else json.loads((evidence / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, adapter.name)))
                 cleanup_attempt_credentials(Path(environment["BUDDY_STATE_DIR"]), adapter.name, "task", "attempt")
                 self.assert_partition(context)
@@ -363,7 +365,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertIsNotNone(handle.wait(8))
                 outcome = DecisionAdapter().collect(handle, context)
                 self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
-                control = json.loads((context.directory / "no-tool-control.json").read_text())
+                control = (handle.role_run_control if hasattr(handle, "role_run_control")
+                           else json.loads((context.directory / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, name)))
                 cleanup_attempt_credentials(Path(env["BUDDY_STATE_DIR"]), name, "task", "attempt")
                 self.assert_partition(context)

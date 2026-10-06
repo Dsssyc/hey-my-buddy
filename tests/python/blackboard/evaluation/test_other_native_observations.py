@@ -20,7 +20,7 @@ from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected, TurnEvidence
-from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeError,
     ZcodeAttemptUsage,
@@ -470,7 +470,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin),
                                 ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
-        self.adapter = ZcodeAdapter()
+        self.adapter = worker_executor("zcode")
 
     def context(self, case: str, *, index: int = 1, previous=None, mode=None, timeout: int = 12,
                 run_id: str = "goal-1") -> ExecutionContext:

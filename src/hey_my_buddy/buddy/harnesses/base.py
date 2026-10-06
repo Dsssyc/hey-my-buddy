@@ -136,6 +136,21 @@ class NoToolStructuredRequest:
     capture_evidence: bool = False
 
 
+@dataclass(frozen=True)
+class BoundSessionServices:
+    """Process-free native binding; the role owns the prompt and business rules.
+
+    Only the description and actual tool names are public values. ``services``
+    stays opaque in the controller process and never enters a run frame.
+    """
+
+    description: Any
+    completion_tool: str
+    checkpoint_tool: str | None
+    answer_tool: str | None
+    services: object
+
+
 class Adapter:
     """Base class for the built-in adapters."""
 

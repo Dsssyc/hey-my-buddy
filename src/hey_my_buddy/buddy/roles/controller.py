@@ -1,14 +1,9 @@
-"""Role preparation and execution entry points.
-
-The existing Worker and Router carriers enter here. The registered run call
-point is retained for the first ZCode consumer in ADR-025 step two; observation
-and session-service policy will be added with that consumer.
-"""
+"""Role preparation and execution entry points over the harness registry."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
 from ..harnesses.base import (
@@ -19,7 +14,10 @@ from ..harnesses.base import (
     ProcessHandle,
     ReadOnlyStructuredRequest,
 )
-from ..harnesses.run_contract import HarnessRun, RunRequest, RunResult
+from ..harnesses.run_contract import HarnessRun, RunFeedback, RunRequest, RunResult
+
+if TYPE_CHECKING:
+    from .run_execution import WorkerRunExecutor
 
 __all__ = [
     'FastPreparation',
@@ -45,58 +43,54 @@ class WorkerPreparation:
     ``reason`` is the adapter's own availability fact and ``error`` its
     ``prepare()`` refusal; both stay ``None`` on a prepared attempt. The runtime
     maps them onto its exact receipts — the seam reports the result, the runtime
-    keeps its receipt, retry and supervision rules.
+    keeps its receipt, retry and supervision rules — and takes the receipt's
+    name from the executor it selected, not from this value.
     """
 
-    name: str
     available: bool
     reason: str | None = None
     error: BoardError | None = None
 
 
-def worker_executor(name: str) -> Adapter:
+def worker_executor(name: str) -> Adapter | WorkerRunExecutor:
     """The Worker runtime's one executor selection point (ADR-025 decision 10).
 
-    A harness extracted by steps two to four runs through its registered run
-    seam and its old carrier entry is deleted in the same step, so a registered
-    name must never fall through to the legacy carrier: this guard makes a
-    half-finished switch loud instead of quietly reviving a deleted entry.
+    An extracted harness uses the generic role executor and its registered
+    native run; it never falls through to a deleted legacy carrier entry.
     ``command`` and ``external`` keep the registry carrier for good, and the
     registry stays the only place any executor is selected.
     """
     from ..harnesses.registry import adapter, run_seam
 
-    if run_seam(name) is not None:
-        raise BoardError(
-            "ROLE_RUN_NOT_MIGRATED",
-            f"{name} has a registered run seam; its role execution must replace this legacy carrier",
-            adapter=name,
-        )
+    module = run_seam(name)
+    if module is not None:
+        from .run_execution import WorkerRunExecutor
+        return WorkerRunExecutor(adapter(name), module)
     return adapter(name)
 
 
-def prepare_worker_run(executor: Adapter, context: ExecutionContext) -> WorkerPreparation:
+def prepare_worker_run(executor: Adapter | WorkerRunExecutor, context: ExecutionContext) -> WorkerPreparation:
     """The adapter's availability fact and its own preparation, as one result."""
     usable, reason = executor.available()
     if not usable:
-        return WorkerPreparation(executor.name, available=False, reason=reason)
+        return WorkerPreparation(available=False, reason=reason)
     try:
         executor.prepare(context)
     except BoardError as error:
-        return WorkerPreparation(executor.name, available=True, error=error)
-    return WorkerPreparation(executor.name, available=True)
+        return WorkerPreparation(available=True, error=error)
+    return WorkerPreparation(available=True)
 
 
-def worker_start(executor: Adapter, context: ExecutionContext) -> ProcessHandle:
-    """Start one legacy-carrier attempt; the runtime keeps the returned handle."""
+def worker_start(executor: Adapter | WorkerRunExecutor, context: ExecutionContext) -> ProcessHandle:
+    """Start one role attempt; the runtime keeps the returned handle."""
     return executor.start(context)
 
 
-def worker_collect(executor: Adapter, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
+def worker_collect(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
     return executor.collect(handle, context)
 
 
-def worker_cancel(executor: Adapter, handle: ProcessHandle, *, grace_seconds: float | None = None) -> None:
+def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *, grace_seconds: float | None = None) -> None:
     """Cancel through the executor; a None grace keeps each adapter's own default."""
     if grace_seconds is None:
         executor.cancel(handle)
@@ -117,12 +111,18 @@ class FastPreparation:
     """
 
     harness: str
-    native: Adapter
+    native: Any
     request: NoToolStructuredRequest
     context: ExecutionContext
     #: The empty owner-private cwd the native call runs in, removed after a
     #: proven stop; unexpected native files are retained for inspection.
     no_tool_cwd: Path
+    run_module: HarnessRun | None = None
+
+    def __post_init__(self):
+        from ..harnesses.registry import run_seam
+        if self.run_module is None:
+            object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
 @dataclass(frozen=True)
@@ -143,27 +143,30 @@ class ReviewPreparation:
 
 
 def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> ProcessHandle:
-    """The one transitional call point of the Router's two structured entries.
+    """Start the prepared role through its run seam or unextracted carrier.
 
-    While a harness is unextracted this starts exactly the carrier the
-    preparation selected — no re-resolution, so eligibility and selection are
-    not recomputed; when its run seam is registered the old entries are deleted
-    and the extracting step replaces this branch with its :func:`run_harness`
-    execution. No third entry and no second carrier exists here.
+    Eligibility and the selected description stay frozen at preparation. A
+    registered harness takes only the generic role controller path.
     """
     from ..harnesses.registry import run_seam
 
-    if run_seam(preparation.harness) is not None:
-        raise BoardError(
-            "ROLE_RUN_NOT_MIGRATED",
-            f"{preparation.harness} has a registered run seam; its Router execution must replace this legacy entry",
-            adapter=preparation.harness,
-        )
+    if not isinstance(preparation, (FastPreparation, ReviewPreparation)):
+        raise BoardError("INVALID_ARGUMENT", "unknown Router preparation", harness=preparation.harness)
+    if isinstance(preparation, FastPreparation):
+        module = preparation.run_module
+        if run_seam(preparation.harness) is not module:
+            raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
+    else:
+        module = run_seam(preparation.harness)
+    if module is not None:
+        if isinstance(preparation, FastPreparation):
+            from .run_execution import start_fast
+            return start_fast(module, preparation.harness, preparation.context, preparation.request)
+        raise BoardError("router-review-unsupported", "Review on the registered Worker carrier is not implemented")
     if isinstance(preparation, FastPreparation):
         return preparation.native.start_no_tool_structured(preparation.context, preparation.request)
     if isinstance(preparation, ReviewPreparation):
         return preparation.native.start_read_only_structured(preparation.context, preparation.request)
-    raise BoardError("INVALID_ARGUMENT", "unknown Router preparation", harness=preparation.harness)
 
 
 # -- the new run seam's one call point ----------------------------------------
@@ -173,7 +176,7 @@ def run_harness(
     module: HarnessRun,
     request: RunRequest,
     *,
-    observer: Callable[[Mapping[str, Any]], bool],
+    observer: Callable[[Mapping[str, Any]], RunFeedback],
     services: object | None,
     cancelled: Callable[[], bool],
 ) -> RunResult:
@@ -183,8 +186,9 @@ def run_harness(
     ``request.harness`` — never an attribute probe result, a look-alike, or an
     unregistered object — so a command adapter or an arbitrary object is never
     mistaken for a run. The observer receives normalized, retained fact mappings
-    and answers whether to continue. The caller owns its session services;
-    this entry point passes them through without defining unused role policy.
+    and answers with one :class:`RunFeedback` (continue, stop, or one in-run
+    correction). The caller owns its session services; this entry point passes
+    them through without defining unused role policy.
     """
     from ..harnesses.registry import run_seam
 

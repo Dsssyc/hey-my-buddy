@@ -95,6 +95,48 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         states = [record["state"] for record in records if record.get("inquiryId") == "q-1"]
         self.assertEqual(states, ["queued", "delivered", "answered"], records)
 
+    def test_an_answer_refusal_recovers_in_the_same_turn_through_the_run(self):
+        # The root answers with an unknown inquiryId first: the answer session
+        # tool refuses through its signed envelope inside the native wrapper's
+        # successful result, and the verified recovery — same tool, exact id —
+        # runs through the whole native run path, not just the verifier unit.
+        import time
+        from pathlib import Path
+
+        from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
+        from hey_my_buddy.private_dirs import context_root
+
+        context = self.context("inquiry-answer-refused", timeout=40)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        credentials_path = context_root(context, "zcode") / "inquiry.json"
+        deadline = time.monotonic() + 20.0
+        credentials = None
+        while time.monotonic() < deadline:
+            if credentials_path.is_file():
+                candidate = json.loads(credentials_path.read_text())
+                observed = inquiry_module.bridge_request(candidate, "observe", {}, timeout_ms=500)
+                if observed.get("ok") and (observed.get("value") or {}).get("ready") is True:
+                    credentials = candidate
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(credentials)
+        asked = inquiry_module.bridge_request(credentials, "ask",
+                                              {"inquiryId": "q-1", "question": "Recover from the wrong answer id?"},
+                                              timeout_ms=4000)
+        self.assertTrue(asked["ok"], asked)
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+        self.assertIsNotNone(handle.wait(40), "controller did not exit")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        turn = outcome.result["turn"]
+        self.assertEqual(turn["outcome"]["disposition"], "completed")
+        self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
+        records = [json.loads(line) for line in Path(credentials["resultsPath"]).read_text().splitlines()
+                   if line.strip()]
+        states = [record["state"] for record in records if record.get("inquiryId") == "q-1"]
+        self.assertEqual(states, ["queued", "delivered", "answered"], records)
+
     def test_forged_refusal_envelope_fails_the_whole_turn(self):
         context = self.context("refusal-forged", timeout=40)
         handle = self.adapter.start(context)

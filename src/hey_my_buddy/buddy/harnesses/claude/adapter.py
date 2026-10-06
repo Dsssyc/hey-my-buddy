@@ -129,7 +129,7 @@ class ClaudeAdapter(Adapter):
             timeout_seconds=context.timeout_seconds, unbounded_deadline=math.inf)
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
-        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=decode_json),
+        collection = collect_controller(handle, read=lambda path: read_strict_result(path),
                                         stop=stop_confirmed)
         payload = collection.payload
         exit_code = collection.exit_code
@@ -279,7 +279,7 @@ def _probe_native_metadata() -> dict:
             log_paths=logs)
         if handle.wait(30) is None:
             handle.terminate(grace_seconds=8)
-        collection = collect_controller(handle, read=lambda path: read_strict_result(path, decode=decode_json),
+        collection = collect_controller(handle, read=lambda path: read_strict_result(path),
                                         stop=stop_confirmed)
         stopped = collection.stop_confirmed
         if not collection.payload or collection.exit_code != 0 or collection.payload.get("status") != "ok" or not stopped:

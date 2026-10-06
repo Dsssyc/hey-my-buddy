@@ -123,7 +123,10 @@ def _account_environment(name: str, context: ExecutionContext, *, purpose: str) 
 
 
 def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
-    if name in ("dsh", "zcode"):
+    from ..harnesses.registry import run_seam
+    if run_seam(name) is not None:
+        raise BoardError("UNSUPPORTED_ADAPTER", "Registered runs use the role execution seam", adapter=name)
+    if name == "dsh":
         raise BoardError("UNSUPPORTED_ADAPTER", "Review on the Worker carrier is not implemented", adapter=name)
     native_environment = _account_environment(name, context, purpose='review')
     ensure_private_dir(context.directory)
@@ -158,6 +161,9 @@ def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredReque
 
 def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructuredRequest) -> ProcessHandle:
     """Start a separate native controller without a workflow turn or agent authority."""
+    from ..harnesses.registry import run_seam
+    if run_seam(name) is not None:
+        raise BoardError("UNSUPPORTED_ADAPTER", "Registered runs use the role execution seam", adapter=name)
     native_environment = _account_environment(name, context, purpose='router')
     cwd = Path(request.cwd)
     if (context.turn is not None or context.agent_credential is not None
@@ -245,7 +251,12 @@ def _collect_result(path: Path) -> dict:
 
 
 def collect(handle: ProcessHandle) -> AdapterOutcome:
-    collection = collect_controller(handle, read=_collect_result, stop=router_stop_confirmed)
+    if hasattr(handle, "role_run_control"):
+        from .run_execution import read_fast_result
+        read = lambda path: read_fast_result(handle, path)
+    else:
+        read = _collect_result
+    collection = collect_controller(handle, read=read, stop=router_stop_confirmed)
     payload = collection.payload
     stopped = collection.stop_confirmed
     status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"

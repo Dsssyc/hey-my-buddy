@@ -343,3 +343,67 @@ Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧�
 2026-10-04 用户补充验收打回的相称性规则，立即适用且覆盖本次 1-D：仅记录中的小措辞或事实更正，在不涉及代码/测试、不需要重跑且 Host 已掌握事实时，由 Host 直接更正，并在整合登记说明改了什么、为什么，不为此打回。代码、测试或行为缺陷仍拒绝并用原 run 的 continue 修正；会改变“做过什么、验证过什么”结论的表述，以及掩盖违规的表述同样仍打回。已经发出的 1-D 文档 continue 收齐后按此规则验收，不再因同类小更正增加回合。
 
 2026-10-05 用户转达第一步整改与后续顺序，取代前述四个 harness 可以在第一步之后同时开始抽取的安排：先完成 pydantic 格式瘦身并停等第一步整步验收；第二步单独做 ZCode，让最小真实运行经过新请求/结果；走通后逐字段、逐类列出没有生产使用方的内容并删除，再等 ZCode 步骤验收，通过后并行接 Codex、Claude Code、DSH。以后每步均登记未使用字段和类，第四步结束时这些模块不得再有无生产使用方内容。执行计划、源码与验收记录承担实施选择和证据，不修改用户维护的 ADR、SKILL 或 Host 指南。
+
+### 2026-10-06：第二步开工与验收后的接口取舍
+
+第一步及 ACP 客户端已由 Claude Code Host 验收，实施分支从 `c48d31c` 开始第二步；依据是 `docs/acceptance/adr025-step1-host-review.md`。第二步只接入 ZCode。内部格式现用 pydantic；本节取代前文冻结 dataclass、默认值在传输时仍必填及四个 harness 同时开始的旧安排。
+
+| 微任务 | 输入与唯一实施范围 | 独立验收与顺序 |
+| --- | --- | --- |
+| 2-P 格式保护与公共解码收尾 | `c48d31c`；公共控制器及三个严格结果读取调用处，格式与控制器的对应测试 | 证明解析前整帧上限及普通严格类型各有失败见证；去掉冗余 `decode` 参数；两个隔离变异被抓住。只跑受影响测试，先于 ZCode 代码接入整合 |
+| 2-A Worker 角色与完成服务 | 2-P 整合后的固定提交；ZCode 的任务提示、完成服务及对应角色文件与测试 | 搬出任务书、六字段 outcome、协助、attention 和未回答问询的规则；原生 root、call、顺序与 HMAC 校验仍有逐项证据。先验收这份交付再开始 2-B |
+| 2-B 单一原生运行 | 2-A 整合提交；ZCode 驱动、原生协议、事实投影及对应测试 | 请求和结果真实穿过 `HarnessRun.run`；一次会话共用 create/resume、configure、subscribe/send、settlement、close 与停止收集。角色通过观察与本次服务提供不同结束要求；缺少公共接口时先提交缺口，由 Host 统一改动后同一 run 继续 |
+| 2-C 角色接线与删除旧入口 | 2-B 整合提交；公共角色调用点、注册表、ZCode 外层及调用测试，公共文件由 Host 统一整合 | Worker 与快速路由调用同一个运行模块；格式纠正、候选限制、六字段结果、检出及封存仍由角色负责；删除旧 ZCode structured 入口和模式控制文件分支，模型发现单独保持无 prompt |
+| 2-D 生产使用核对与第二步验收 | 2-C 整合提交；字段使用清单、必要的删减、迁移与验收记录 | 用新格式完成一次最小真实 ZCode 运行；保留真实结果与停止证据。逐字段、逐类登记生产读写位置并删去没有使用方的内容；故障注入验证搬迁的防护；整合后一次完整检查，提交后停等 Host 验收 |
+
+普通有默认值的字段无需为内部传输另造必填规则：ZCode 接入时删除这项没有生产要求的限制，用 pydantic 默认值行为。数组与不可变序列的转换优先使用 pydantic 的字段配置，保持元素的严格类型；若严格解码后的 Python 值仍需要局部转换，只保留实际使用且经实测证明必要的一处。缺失的可选事实用 `None`/JSON `null`；内部格式不为缺失文本另造 `"unknown"` 拼写转换，已有外部结果需要该拼写时在角色投影处保留。显式的事实枚举（例如进程组状态未知）与可选文本不同，仍按其实际用途处理。三个选择都在第二步记录实际改动、安装版本下的验证和删除的测试编号。
+
+ZCode 原生驱动只保留协议完整性、身份关联和工具/消息事实，角色持有未知事件、完成条件与重试决定；不因统一接口而放宽快速路由对未知事件的拒绝，也不把 Worker 当前可忽略的未知事件升级为失败。只读能力仍报告现有未实现结论，不在本步新增审阅资格。服务的 MCP 承载继续是现有会话内通道，问询继续经现有桥接并接入 `ExistingLiveChannel`，第五步才替换传输。
+
+每个微任务记录固定基线、允许写入的确切文件或目录、公共文件的整合归属，并通过路由选择 buddy。Worker 开始前使用 Host 已记录的短任务目录，`TMPDIR` 和 `BUDDY_CHECKS_TMPDIR` 指向其子目录；Worker 不手动删除材料，交付时报告路径。Host 验收后按这一个确切路径整体回收，检查运行器与普通测试 fixture 自己的生命周期收尾照常。只修记录的回合不重跑；已知且不改变验证结论的小型记录更正由 Host 直接改并登记。各微任务只做聚焦验证，一批整合后的完整检查可兼作本步完整检查。
+
+用户明确授权清理的两份误发会话参数文件由 Host 核对为对应 run 的普通 JSON 后按确切路径删除，原始确认与删除凭据留在本检出的 `tmp/`；不读取它们引用的控制凭据文件，不扩大清理范围。
+
+2-B 的角色反馈需覆盖现有格式纠正：当前 ZCode 快速调用在同一个 app-server 进程里，至多新建第二个会话纠正一次格式。第一步尚未使用的 `observer -> bool` 只能表示继续或停止，无法表达这个已有动作。接入时改为一个最小的进程内反馈值：继续、停止、或携带下一段已组装输入文本的纠正；纠正机会、enum 不重试与文本仍由角色决定，驱动只执行反馈、保留同一进程和总期限并报告次数。反馈不含角色 verdict，不经新 IPC，不让角色自行另启一条原生路径。公共接口由 Host 统一整合，并在本步记录具体类型与使用处。
+
+完成服务的原生工具名属于 harness 的机械绑定；需要完全限定名时，由不启动进程的绑定准备提供给角色，角色据此保留原任务提示文本，再把已组装文本放入 `RunRequest.input_text`。原生驱动随后挂载同一份本次服务并核对调用证据，不在驱动里重新拼接任务书或根据角色名选择提示词。绑定准备不是另一条运行入口，也不读取黑板或产生模型调用。
+
+2-B 首轮真实使用暴露的格式缺口按来源补齐：输入及纠正文本使用允许 NUL 的有界原始文本；工具包允许收集器实际产生的不完整事件；`native_error` 保留厂商已经白名单投影的嵌套归因；拒绝动作容纳现有完整动作名；`RunEnd.message` 保存现有错误文案；`native_event_count` 与原生事件顺序分开；重建会话的先前标识可空。最终字段仍以生产读写位置为准在 2-D 删减。工具范围只控制原生工具设置，完成服务有无决定取值载体；服务业务契约由角色提供，驱动不能以固定 Worker schema 代替请求参数。失败路径只报告已执行、已观察的检查与阶段，证据引用用于原生来源和问询报告，不代替公共结果里已有的事实字段。
+
+### 2-C 的两个可独立验收微任务
+
+2-B 固定交付已内部审查并整合为 `4246d97`。2-C 分为 2-C1 角色运行接线与 2-C2 实时接口消费：二者依次实施，同一份公共注册与角色文件始终只有一个微任务可写，Host 统一整合。这样的边界分别以一次完整的角色运行、一次真实的问询与活动传递验收，避免把调用路径切换与实时格式补足混在同一交付里。
+
+2-C1 用一个通用 Python 角色控制器承接 Worker 与快速路由，运行请求和结果真实经过公共模型的编码与解码，子进程内调用注册表提供的同一个 run。角色持有任务书、完成条件与纠正规则；注册对象提供无进程的原生服务绑定准备、原生来源核对及无输入发现操作，公共角色代码不导入具体 harness 或按厂商另开执行入口。绑定准备可通过注册对象提供本次完全限定工具名和传给 run 的不透明服务对象；只声明当前 ZCode 使用的最小方法，不提前加其他 harness 的空实现。原生会话可续接的绑定事实仍由原生模块提供，是否采用由角色决定。删除 ZCode 旧 start/collect/structured 入口与 runner 模式 CLI，不继承 Adapter 取回已删除入口。发现使用同一通用控制器的无输入操作，保持双层停止与未确认时保留私有目录。Worker 运行时的认领、租约和回执不变，公共 CLI 与其他 harness 原路径不变。
+
+2-C2 把已有 ZCode 问询桥与活动文件的真实消费者接到同一 LiveChannel，后端仍是现有套接字与文件；第五步才改传输和服务至 Worker 的路由。现有 LiveSnapshot/LiveReply 尚不能无损承载生产观察元数据和答案来源，Host 在该微任务提交前给出基于实际读写的最小格式选择；不以大段旧 payload、重复旁路或假消费者保留空字段。两项各只跑受影响测试，整合后 2-D 删除未使用内容并做一次整步完整检查。
+
+第二步余下微任务的限流恢复按用户新授权执行：首次提交仍走路由，不指定 buddy；若被选中的 buddy 遇到供应方不可重试限流，可在同一个 run 用 continue 指定本步已经完成过同类工作的 buddy 的完整配置。每次在整合登记写明被限流的 buddy、替代 buddy 及原路由决定编号。该例外不扩展到之后的步骤，不改变用户共享设置或其他验收、清理规则。
+
+2-D 的只读使用方盘点可作为 2-D0 与 2-C 修正并行：固定已交付的源码快照，只产出外部清单，不修改公共值、角色、注册表或其他源码，不作删除决定。盘点区分实际业务读写、实际向外留存的事实、仅 codec/测试引用和恒定占位；2-C1 的事实投影修正与 2-C2 新消费会改变的条目单列，整合后再复核。因此它不代替 2-C 的验收，不提前实施依赖接线的 2-D 删减。
+
+### 第二步 2-C2 的实际消费者与格式选择
+
+2-C1 已按固定输出 `57ee836` 内部验收并整合为 `e4895fa`。2-C2 以其后的计划提交为固定基线，独占隔离 worktree；Live 格式、角色接缝、注册表、黑板问询及 Worker 活动转报的公共文件本轮只有此微任务可写，Host 统一整合。验收成果是已有 ZCode 活交互的实际消费者经过同一接口，后端仍为现有文件与 Unix socket；不改公开 CLI、数据库、认领/租约/回执规则或其他 harness 行为。
+
+保留 capabilities/request/observe/close 四个方法。observe 增加选择读取 activity、inquiries、observation 的字段集合，省略时全部读取；允许指定单个 inquiry_id 读取原生 answer。这样 Worker 活动轮询只访问 sidecar，等答案只访问对应问询，不额外发原生 observe 或改变传输窗口。新活绑定从角色保存的 role-run-request.json 取得完整身份，核对请求中的 harness、task、attempt、generation、turn、invocation；私有问询凭据仍由绑定持有。close 只关闭绑定，不能当作进程停止证据。已结束旧执行的持久 journal 恢复仍按既有规则读取，不要求历史文件补出不存在的 invocation；它不构成新活运行的第二条通道，也不得唤醒模型。
+
+用严格不可变的 Pydantic 值补齐真实读取的事实：传输 observed/reason/error；问题的 state、reason、delivery 及答案 text/bytes/via/toolCallId/at/truncated；观察 ready、observedAt、sessionId、agentStatus、inbox、lastEvent、recentActivity、activityDropped、replyTool、capability、supported、attention、journal、deliveryMode、limitation、unavailable、error。已有规范化 activity 与最近事件元数据用途不同，分别保留。只增加实际使用的字段，局部已净化元数据可用现有有界 FrozenJson，不把整份旧结果藏进任意 JSON 槽。字符串界以原生生产来源为准，字符界不缩成同数字节界；问题/答案仍是 4,000 字节。LiveReply 与 LiveSnapshot 需保留成功但未接受、排队、送达、已回答、具体终态拒绝的差别；公开答复来源 live-bridge/bridge-journal、journalRejected 与观察降级按原规则投影。无使用方的预留格式由 2-D 删除。
+
+现有 blackboard/tasks/inquiry.py 的 bridge_request 机械移到 protocol/inquiry_transport.py，两侧共用同一份 socket client；ZCode 不再留第二份 bridge_ask 协议。保留原来的帧大小、id、超时、具体 reason/code 与 TERMINAL_BRIDGE_ERRORS 行为。黑板现有 message_post/message_update、等待结束条件与 store 事务不重写；新 ZCode 活运行通过角色及注册模块接缝取得 LiveChannel，泛用消费者不导入具体 harness。终态只读持久证据，Worker 转报继续按 attempt 绑定且只转发更新，不增加模型回合、不延长原生截止时间。
+
+聚焦验证贯穿真实 Python 桥、黑板问询函数和 Worker 转报函数，保留原测试并附变化编号与未变集合证明；用前后公开字段对照及迁移防护的少量故障注入验证答案来源、具体拒绝、身份与活动去重。微任务不跑完整检查、安装版 harness 或模型；整合后一次完整检查覆盖整步。Worker 只使用 Host 创建并记录的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指其 t/，材料放 m/，不手动删除任何对象；普通 fixture 与检查运行器自己的收尾照常，Host 验收后按确切根回收。
+
+### 2-D 的生产用途与删减边界
+
+2-C2 已整合为 `d4f3eaa`，一次真实 ZCode 无工具运行也已通过新格式（见第二步原生冒烟记录）。2-D 只核对和收紧本步新增内部格式，不再增加角色能力或另造消费点。逐字段、逐类区分：实际执行/判定读取；有非占位原生来源并经 `run_controller → runner.stdout → run_execution._artifacts → 黑板产物校验与列表` 对外交付的事实；仅测试、编解码自循环或恒定占位。第二类明确标为事实产物用途，不能写成已有业务判断；单凭 model_dump/to_payload 不算使用方。没有实际用途的字段和类删除，不为后续 harness、提醒收尾或会话内容预留。
+
+已由当前源码确定的删除候选是：未被运行模块读取的 network/frozen_account 请求值及相应类、预算里只有 timeout_seconds 之外的未消费项、续接请求四个未填关联字段、SessionService 除实际工具名以外的元数据；结果中的 quota/observed 恒定空值、model-start 事件序号、checked 值的空 native_identity、value.errors、拒绝事件的空 request_id/native_identity、unknown.truncated、策略 reported/limitations 与恒定未知 network、续接 checkpoint、恒定未知 controller 停止层与 interrupt.acknowledged、没有用途的 evidence retained。实现前按最终源再复核；实际已有非空来源或消费者的候选撤出并列明依据，不以一轮样本恰好为空作为删除理由。旧公开结果里的 observed/quota 等 None 键保持原行为，已有预算、账户环境、网络策略及证据验证不借格式删减改变。
+
+Live 删除未实现的 FinishNoticePayload/finish-notice、finish_notice/session_content 能力位与 ReservedEvents/events；删掉只有测试调用的旧 journal list 形状及 handle_live_channel 包装入口，测试改走实际生产使用的同一接口。现有分页、questionId 关联、答案来源、journal 可用性/拒绝与完整身份仍有生产消费者，不能删。所有新增类型、帮助函数和导出也一并盘点，通用验证继续交给 Pydantic；保留的手写逻辑须是原生投影、跨字段约束或共享三件 JSON 机制确实所需。
+
+2-D 在一个独占 worktree 串行处理公共值、组装方和受影响测试，Host 整合；任何超出这些新格式及机械构造适配的行为变化先报告。微任务只跑受影响聚焦检查，保住 2-P 的普通严格类型与解析前整帧上限见证；只对被移动或重写的防护做小量配对故障，不复跑旧矩阵或原生模型。给出全部测试编号的集合对账，入库只列变更/删除/新增。Host 收齐后跑一次完整检查，完成本步记录并停等外部验收。
+
+2-D 的实际使用核对确认：完整绑定读取的是 RunRequest、LiveRequest 与 channel.identity；幂等表以请求 request_id 为键；黑板分页读取 InquiryState.seq 与 truncated。LiveReply 的身份副本、LiveSnapshot 的身份和 sequence 副本没有参与这些检查，因此“保留身份与分页机制”不要求保留这些无人读取的副本。按用户的删减要求删除它们、三个 live 值上无生产解码用途的 format_version，以及未被运行时读取的 WorkerPreparation.name。请求身份校验、通道绑定、内部必要水位、条目序号和原生 socket 回复关联全部保留。
+
+六个 live 编解码包装只由测试调用，也随本次盘点删除；严格不可变 Pydantic 值和生产分页实际使用的有界编码保留。解析前整帧上限继续在真实生产读取的 RunRequest/RunResult 上受测，原生 inquiry socket 的帧界与回复 id 核对照常；仅为没有生产入口的 live decoder 编写的测试随该入口删除并登记。以后确需传输时以当时的实际消费者确定接口，不在本步保留空入口或增造消费点。

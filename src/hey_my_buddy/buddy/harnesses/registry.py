@@ -14,12 +14,13 @@ from .codex.adapter import CodexAdapter
 from ..roles.router import DecisionAdapter
 from .dsh.adapter import DshAdapter
 from .zcode.adapter import ZcodeAdapter
+from .zcode import native_run as zcode_run
 
 BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
 #: The extracted harness run modules, registered by the ADR-025 step that
 #: extracts each harness (steps two to four). Registration is the only way into
-#: the new seam and is explicit: only an object whose ``run`` is callable may
+#: the new seam and is explicit: only callable run and discovery operations may
 #: enter under a harness name, so no command adapter and no string-shaped
 #: stand-in is ever mistaken for a run. Registering a harness commits the same
 #: step to deleting its legacy structured entries; the role seam refuses to
@@ -31,18 +32,16 @@ RUN_SEAMS: dict[str, HarnessRun] = {}
 def register_run_seam(name: str, module: HarnessRun) -> None:
     """Register one extracted harness's run module under its harness name.
 
-    The capability check is the honest local one: ``run`` must be callable on
-    the registered object, and nothing more — no attribute-shape trust, no
-    static analysis of anyone's package. Model discovery is not part of this
-    step's seam.
+    Qualification confirms callable run and no-input discovery operations,
+    without inspecting vendor code or claiming a native policy is enforced.
     """
     if name not in HARNESS_NAMES:
         raise BoardError("INVALID_ARGUMENT", f"{name!r} is not a harness name", adapter=name)
     if name in RUN_SEAMS:
         raise BoardError("CONFLICT", f"{name} already has a registered run seam", adapter=name)
-    if not callable(getattr(module, "run", None)):
+    if not all(callable(getattr(module, operation, None)) for operation in ("run", "run_discovery")):
         raise BoardError("INVALID_ARGUMENT",
-                         "a run seam must carry a callable run, and nothing about "
+                         "a run seam must carry callable run and discovery operations, and nothing about "
                          "the registration proves more than that", adapter=name)
     RUN_SEAMS[name] = module
 
@@ -50,6 +49,24 @@ def register_run_seam(name: str, module: HarnessRun) -> None:
 def run_seam(name: str) -> HarnessRun | None:
     """The registered run module of one harness, or None while it is unextracted."""
     return RUN_SEAMS.get(name)
+
+
+def live_binding(name: str):
+    """The registered live-channel binding of one harness, or None while it has none.
+
+    A live binding exists only through registration: it must be a callable
+    operation on the registered run module, and nothing is probed or simulated
+    for a harness whose module declares none (ADR-023 principle 8). The
+    declared set stays the minimum the extracted harnesses actually use.
+    """
+    module = RUN_SEAMS.get(name)
+    binding = getattr(module, "bind_live_channel", None)
+    return binding if callable(binding) else None
+
+
+# Switching a harness is atomic here: the registered native body and the
+# role executor replace its removed carrier entries in the same change.
+register_run_seam("zcode", zcode_run)
 
 #: ``external`` is a first-class adapter whose execution is owned by the caller's
 #: own agent, not by a built-in worker. That agent claims the task through the
@@ -59,12 +76,12 @@ def run_seam(name: str) -> HarnessRun | None:
 EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
 
 
-def adapters() -> dict[str, Adapter]:
+def adapters() -> dict[str, Adapter | ZcodeAdapter]:
     return {adapter.name: adapter() for adapter in BUILT_IN}
 
 
-def adapter(name: str) -> Adapter:
-    """The built-in executor for one adapter name.
+def adapter(name: str) -> Adapter | ZcodeAdapter:
+    """The built-in description or unextracted executor for one adapter name.
 
     ``external`` has no built-in executor by design: the caller's agent is the
     executor. The error says exactly that instead of failing obscurely later.
@@ -157,6 +174,7 @@ __all__ = [
     "adapter",
     "adapters",
     "capability_report",
+    "live_binding",
     "local_capabilities",
     "register_run_seam",
     "run_seam",
