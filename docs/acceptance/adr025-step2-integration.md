@@ -139,3 +139,13 @@ Host 在独立固定副本重新执行三组 journal/帧反例并显式核对结
 Host 仅在微任务记录末尾追加两处已知事实更正：历史第零步跨界清单不改，当前新增模块关系在本步登记；本微任务没有真实模型检查，Host 的一次真实无工具冒烟单列范围。当前新增跨界关系是 `blackboard/tasks/inquiry.py → buddy/harnesses/live.py`、`blackboard/tasks/inquiry.py → buddy/roles/live.py`；到既有 registry 的关系不算新增模块边，第一轮到 run_contract 的直接引用已移走。没有改动 ADR、指南或历史验收清单。
 
 本份交付通过内部审查；黑板最终 acknowledge 与工作区/任务根回收仍在整步完整检查后办理，保留原 run 的修正入口。下一项 2-D 核对每个格式字段与类的生产用途，删除没有使用方的内容，整合后跑一次完整检查，再停等 Claude Code Host 验收。
+
+## 2-D：首份固定交付退回
+
+run `c66ad092-3cdf-4d24-bd72-084ffc5a0c6f` 的初次路由 `dec-2023213c-9c3c-4fbe-9fe5-fac5da1aa168` 选择 `zcode/zai-api/GLM-5.3-Flash/max`，没有指定 buddy 或改配置。固定输出 `6813454e3c027774dbcf8c452a1e7dfd06be34b3`、artifact `414c6c2b-8b67-4d4e-8d12-0504aecb5523` 的累计补丁 SHA-256 为 `3c6559ac1bf4d080723acf1daa07dcedfd21ec68f34e404ef972647e955df66e`。Host 核对了 16 个路径的固定字节与范围，没有整合。
+
+退回原因是清理尚未完成：`LiveCapabilities.activity` 只写恒定 True，`LiveReply.delivery_mode` 只转抄能力声明，两者没有生产读取，也不进入 RunResult 的 runner-stdout 产物链；清单却将其列为实际消费。run_contract 还有九个只出现在声明和导出表的枚举常量。使用清单还漏了 NativeIdentity、RunFeedback、三个角色准备值及部分封套和嵌套字段，不能据此宣称已经完成逐字段核对。原生请求身份、分页、journal 拒绝与答案来源继续保留；没有为删减造新的消费点。
+
+验证记录也交原 run 核实：其报告运行整个 ZCode 测试批，却称“未运行安装版 harness”，而其中 InstalledZcodeTests 在当前 skipUnless 条件满足时会运行安装版 ZCode 配 localhost fixture。Host 没有据此推断实际次数，要求依据原命令、跳过数和输出说明；没有留存的原始输出必须如实说明，不能为补历史而重跑。记录的相邻失败名称清单两侧相同，但超时项的基线 traceback 和两组变异输出尚不足以由 Host 独立核对，因此本轮没有确认这些验证结论，也未把它们记成通过。
+
+已正式拒绝并用同一 run、同一 buddy 发出 continue，固定说明 SHA-256 为 `7abc8ccf9d2108bee562901466a23151c322e2ff51b1f6d4bdc2caabf9280e74`。只要求本轮受影响聚焦与必要的小量变异，完整检查仍未运行；Host 未代改范围内代码或测试。任务根仍为创建时登记的 `/private/tmp/a252d-hdvsu84e`，Worker 不手动删除，材料保留供验收后按确切根回收。
