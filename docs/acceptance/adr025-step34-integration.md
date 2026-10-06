@@ -189,3 +189,7 @@ Host 在原生系列验证与私有分发验证完成后，留存 43 份具名�
 4-D1 继续轮固定 8c0e4e8、artifact 1fb7e230-1c90-4fb7-a4bf-dd7207874b32，7 条范围与摘要再次相符，已恢复会话来源及侧车断言。仍需修正 Host 上轮给出的直接可执行文件要求：当前测试创建仅依赖 Unix shebang 的无后缀脚本，原跨进程测试没有 Windows 跳过条件，这会引入明确的平台退化。Host 将公共测试目录 fixture 的直接命令选择细化为：.py 测试程序以当前 sys.executable 为首参数，其余可执行文件形式不变；不需要包装脚本、shell 或 Node 变量。原 run 仅需直接选择既有 Python fixture 并验证同两模块，未要求安装或新增平台环境。此问题由 Host 的公共接口取舍引起，不归为 Worker 擅改公共文件。
 
 Host 按实际 TSV 行重算并更正 4-C 表尾和摘要的分类计数：54 covered、7 covered/retired、1 已接受差异、1 migrated、38 retired，共 101 行；四组参数化展开为 3/2/4/4，共 110 个叶子。此前表尾把 mixed 误写为 9、正文又把含在 63 内的新增迁移行另加一次。仅更正分类叙述，不改变已有 110 项意图映射或任何验证结论，不重跑测试。
+
+4-D1 最终固定 dc4a2d9、artifact 60ca94de-2773-45e1-aafe-bcc8470a0226、累计补丁 636388eaa3b5352107f77a59ae1cbdbdf5f2c1d78d3e715b52f7b0862e524ffe，7 条 scope 路径含两条删除均与封存字节一致。Host 在 6abecc0 + 固定 scope 的新副本运行真实 daemon/supervisor/Worker/C-Two/CLI 的 9 项，通过（57.781 秒）。末轮改为 BUDDY_DSH_CLI 直接指向 Python fixture，由目录 fixture 明确前置同一解释器；已恢复会话来源、无冲突及侧车已写入断言。两项旧 argv 见证迁至现有目录/环境/活动见证，其余 9 个编号不变。
+
+Worker 第一轮保留了两份注入脚本但未提供独立末轮失败日志；Host 因此在新固定组合重放这两个单项见证并留原始输出：外来 attemptId 使实际侧车读取拒绝、命中 sidecar is None（7.336 秒），将机器码改为 SUSPENDED 使 quotaFailure 为 None、命中机器码断言（7.499 秒）。未重跑其他故障矩阵，未运行安装版或模型。第一轮与两次继续的公共接缝原因均保留，未取消另开、未覆盖路由选择。

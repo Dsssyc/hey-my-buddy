@@ -7,6 +7,10 @@ from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase, CONFIG
 
 
 class HostQuotaRecoveryTests(GovernedWorkerTestCase):
+    """The shared harness environment already selects the offline quota agent:
+    the fixture dies the quota death on a first turn whose objective is this
+    scenario's, and completes every later turn through the governed finish."""
+
     def setUp(self):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
@@ -14,9 +18,6 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
         store = BoardStore(self.directory)
         store.initialize()
         enable_fixture_configuration(store, {**CONFIGURATION, "effort": "high"})
-
-    def env(self):
-        return {"BUDDY_RUNNER_PATH": str(Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures/mock_quota_turn_runner.mjs")}
 
     def call(self, method, params):
         code, reply = self.cli(method, json.dumps({**params, "output": "full"}), env=self.env())
@@ -39,6 +40,16 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
         self.assertIn("tracked.txt", partial["changedPaths"])
         self.assertTrue(Path(partial["diffPath"]).is_file())
         self.assertIsNone(current["finalArtifactId"])
+        # The quota death keeps its machine classification end to end: the
+        # private session record's turn-end code is the only native failure
+        # source, and only a recognized quota code surfaces as one.
+        receipt = self.call("result", {"runId": submitted["runId"]})
+        failure = (receipt.get("result") or {}).get("quotaFailure")
+        self.assertIsNotNone(failure, "the offline quota death lost its machine code")
+        self.assertEqual(failure["code"], "quota-exceeded")
+        self.assertEqual(failure["nativeCode"], "QUOTA")
+        self.assertEqual(failure["source"], "dsh/session-turn-end")
+        self.assertIsNotNone(current["currentTurn"]["tokenUsage"])
         return submitted, current, partial
 
     def test_quota_failure_seals_then_continues_a_new_configuration_in_the_same_checkout(self):
