@@ -165,3 +165,7 @@ Host 已使治理回合在缺少完成回执时优先保留真实非 end_turn �
 4-C 内部签收后的回收计划 cln-5ba3864f-461f-4ceb-bc1a-74ebd0317f54 已由黑板应用，Host 回查 removed=true 且受管检出不存在；留存 11 份具名编号、Node 原始输出、变异摘要与镜像路径材料及摘要后，仅整体删除创建时登记的 4-C 任务根。空的 node-report.json 也原样保留；未把该材料当作 Node 基线通过证据。第一次回收脚本因台账键名断言退出、未删除；更正为实际 path 键后执行。没有通配符、没有屏蔽删除错误。
 
 Host 按第四步结束前清除无生产读取方格式的要求统一精简共享值与四个组装方：删除 ModelStartEvidence、DeniedInteraction、UnknownEvents 及第三步使用表中未消费的来源/策略/停止冗余字段；NativeIdentity 只保留实际会话与回合，完成载体的回合投影读取同一结果身份。工具事实本身的完整身份集合、observer 的未知事件计数、角色消费的拒绝/签收/用量证据文件均保留，公开 CLI schemas 未改。run_contract.py 从 716 行到 622 行。格式与 schema-worker 38 项通过（0.360 秒）；扩展共享接缝 82 项首次为 3 errors/1 failure（28.589 秒）：DSH 已注册后旧合成 Router fixture 需要私有注册表，身份断言仍指向已删合成字段。Host 修复这两项共享测试，受影响 30 项通过（17.316 秒）；其余 52 项此前已通过。各 harness 的旧字段断言尚待独立微任务迁移，当前不是第四步全量通过。
+
+第四步真实核对已完成 DSH Worker 2 次、只读命令写入 1 次、不给工具 1 次，另做 1 次免模型公开配置导出。第一次 Worker 已签收并有用量，但 Host 探针错误地把输出目录中的 .codex 也替换成 .dsh，收集后保存摘要失败，外层停止布尔值未落盘；原件保留，不算完整通过。修正为实际检出路径并加目录/输出存在性前置断言后，第二次 5.208 秒通过，身份一致、签收有效、read 工具 1 次、原生组 gone、控制器及组合停止均 true，完整 token 计数可读。只读运行 4.035 秒，原生 bash 工具实际尝试 printf 重定向，记录返回 Operation not permitted 与 read-only mode，目标文件不存在；不给工具运行工具计数 0、目标文件不存在，三次完整运行均组停止确认。具体次数、原始材料和边界在本步原生记录中列明。
+
+原生只读探针暴露共享词表尚未登记 DSH 实际的 bash 名称，仍投成 other。Host 在公共 protocol.tool_evidence 加入真实观测名称 bash→execute，未更改 DSH 的 systemSandbox 能力或黑板放行规则；既有名称映射见证增加此项，DSH 投影见证同时确认它在无沙盒审阅判定下仍拒绝。两模块 45 项通过（0.021 秒），无需为纯事实映射重跑模型。AGENTS/docs 索引只删除已退役目录、更新测试路径；launcher 仅去掉无任何执行方的 BUDDY_RUNNER_PATH 白名单，BUDDY_NODE 仍为现有 ZCode 安装入口定位所用。参考页中旧 Node 流程的叙述按用户文档边界未重写，交外部 Host 审阅时列明。

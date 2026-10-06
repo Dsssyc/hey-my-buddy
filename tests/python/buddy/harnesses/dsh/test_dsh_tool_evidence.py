@@ -27,7 +27,7 @@ def update(session_id="session-1", call_id="call-1", name="read", kind="tool_cal
 
 class DshToolFactsTests(unittest.TestCase):
     def test_known_names_classify_through_the_fixed_table_and_unknown_stay_other(self):
-        for name, category in (("read", "read"), ("glob", "search"), ("run-command", "other")):
+        for name, category in (("read", "read"), ("glob", "search"), ("bash", "execute"), ("run-command", "other")):
             with self.subTest(name=name):
                 collector = DshToolFacts(dict(BINDING))
                 collector.add_root("session-1")
@@ -39,6 +39,11 @@ class DshToolFactsTests(unittest.TestCase):
                 self.assertEqual([event["category"] for event in events], [category, category],
                                  "start and end carry the same fixed category")
                 self.assertEqual(package["toolCalls"], 1)
+                if name == "bash":
+                    # Native classification does not grant sandbox authority.
+                    collector.close_root("session-1")
+                    self.assertEqual(judge_tool_evidence(collector.finish(True), "review", False),
+                                     TOOLS_FORBIDDEN)
 
     def test_a_one_frame_completed_call_carries_start_and_end(self):
         collector = DshToolFacts(dict(BINDING))
