@@ -131,3 +131,9 @@ Codex 接线后的第一次默认并行完整检查在两个模块失败：共�
 第三步最终整合检查基线 bd4324e：uv run --frozen python -m hey_my_buddy.cli.checks，默认并行数、不传 --jobs、清除 BUDDY_CHECKS_JOBS，退出 0；Python 2,790 项（skip 1）／176 个模块全部完成，Node 110 项，用时 459.388 秒。两处代码/同步问题与一处记录路径失败均已闭环，本次同时作为本批整合检查和第三步两条线的整步完整检查，不再重复。代码与测试在检查期间保持该固定版本；之后只补结果记录。Codex、Claude 两条线在此停止等待用户转达 Claude Code Host 验收；DSH 线独立继续，未开始第五步。Claude 私有探针根在所选 CLI 启动前资格拒绝、无 Worker 启动后按登记确切路径回收；所有原始发现摘要保留。
 
 4-B2 首轮在约 7,200 秒窗口后返回 cancelled，黑板 cancellation 为 null、quotaFailure 为 null，原生收据 code=cancelled、nativeExitCode=0，两层停止均已确认；不能把停止确认当作交付。仅有 partial-output 7236ba66-972a-4c73-8bc1-8c44a2f18302，固定 2ded7516，累计补丁 5996ebc63f904ed82cb7607efe55c4d6967e9c377526c4aa2b8794bfb7f7fe01。Host 核对 12 条范围路径和摘要，未整合或签收。初审发现 available/check_preparation 把已有选择记录变成新门槛，丢失原未绑定时的发现路径；正式记录也未提交。原 run 已 continue（revision 5），配置仍为路由决定 dec-1fbe15bd-3790-4df2-af7f-185bf8799b12 选出的 zcode / zai-api / GLM-5.3-Flash / max，没有配置覆盖、没有另开任务。要求局部修复、复用已有聚焦与变异证据、完成编号/偏差记录，公共邻接缺口列给 Host，不反复扩大验证。任务根保留，4-C 尚未开始。
+
+4-B2 固定封存 fb58c7b（Worker 摘要 fca9863）、artifact 206ff77a-07dd-4e4b-94d2-575a74a3d723、累计补丁 e31e46338af8b553a77b972db410d17616c582fc7d670cd805210fc0cda63160，14 条范围路径及删除逐字节一致。Host 前轮 partial 的 61 项检查为 42 errors/8 failures（108.335 秒），主要来自 _launch_agent 删除形参后仍引用 home 的 NameError，已通过当前同 run 问询交回修正。本轮恢复发现回退、移除 home 残留，并把两个子进程夹具的 HOME 钉到各自私有根；Host 在 84236e8 公共文件 + 固定 scope + DSH 注册/合作检查点能力的完整副本运行 DSH 174 项通过（36.414 秒），全部假 ACP，零安装版或模型。
+
+Host 在这份固定组合上重新注入四处故障，journal 外来记录、回执验签、Worker 原生层停止、回合序数均命中见证。验签变异的具体结果是 invalid-inquiry-receipt 变为 invalid-inquiry-evidence：共用桥的另一层核验仍拒绝，测试通过错误码发现第一层校验被移除，不能声称此变异让伪造回执被接受。其余分别多导入 foreign-1、把 unknown 结果接受为 ok、把无序来源接受为合法；原件在 174 项中通过。仅签收接线范围，Node 退役、共享邻接测试、真实冒烟和完整检查仍待本线后续；第四步尚未外部验收。
+
+本轮 Host 只改公共 registry 的 DSH 导入/注册和 live 能力为 cooperative-checkpoint；共享 discovery_shutdown_confirmed 消费已在 1d28a16，不需要另加外层。发现流程的 DSH 版本探针还沿用公共 discovery 环境，Host 会在 4-C 公共整合时为该启动强制私有 DSH_HOME 后再做安装版检查。

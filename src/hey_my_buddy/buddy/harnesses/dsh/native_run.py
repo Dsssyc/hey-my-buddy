@@ -32,6 +32,19 @@ either file. The observed model identity and the per-step usage of a real turn
 live only in DSH's private session record; the optional reader below turns a
 matching record into the shared usage facts with bounded streaming reads, and
 a missing, foreign or unreadable record stays an unknown fact.
+
+The role-facing seams of the shared harness registry live here too, and nowhere
+else in this package: the process-free service binding (:func:`prepare_services`
+and its mount), the no-spawn preparation check (:func:`check_preparation`), the
+turn provenance validator and the storage facts (:func:`validate_turn_provenance`,
+:func:`session_facts`), the fast channel's native evidence projection
+(:func:`native_evidence`), and the registered live binding
+(:func:`bind_live_channel`) over the shared cooperative inquiry bridge. Host
+questions are only ever queued by the bridge and delivered at the root's own
+checkpoint tool call inside the admitted turn; the journal advances only after
+this driver verified the signed root-turn receipt. Native resume stays unwired:
+a ``reconstructed-new-session`` continuation rebuilds a fresh root session, and
+a ``native-session`` continuation is refused explicitly.
 """
 from __future__ import annotations
 
@@ -55,6 +68,7 @@ from ....private_dirs import ensure_private_dir, open_regular_fd
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
 from ..base import BoundSessionServices
+from ..inquiry_bridge import InquiryBridge, bind_live_channel as bind_checkpoint_channel
 from ..run_contract import (
     MAX_SCHEMA_BYTES,
     MAX_UNKNOWN_EVENT_TYPES,
@@ -74,6 +88,7 @@ from ..run_contract import (
     RunConfiguration,
     RunEnd,
     RunFeedback,
+    RunIdentity,
     RunRequest,
     RunResult,
     SessionService,
@@ -399,6 +414,143 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
                                  native_stderr=native_stderr))
 
 
+#: The cooperative-checkpoint delivery fact, stated as this harness's own
+#: limitation: a Host question only reaches the root through the checkpoint tool
+#: the root itself calls inside the one admitted turn. Nothing is injected into
+#: the native turn, no input arrives mid-turn, and only a verified root-turn
+#: receipt advances the journal.
+CHECKPOINT_INQUIRY_NOTE = (
+    "Host questions reach this root only when the root itself calls buddy_checkpoint inside the one "
+    "admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never "
+    "start a new turn, and an answer counts only through buddy_answer_inquiry verified against this "
+    "root turn's own tool evidence"
+)
+
+
+def _inquiry_event_metadata(message: dict) -> dict:
+    """The two native metadata items the bridge's live view keeps: kind and tool name.
+
+    Only the ACP update kind and, for tool frames, the tool title are read —
+    never reasoning, tool arguments, output or any message body.
+    """
+    params = message.get("params") if isinstance(message, dict) else None
+    kind = tool_name = None
+    if isinstance(params, dict):
+        update = params.get("update")
+        if isinstance(update, dict):
+            kind = update.get("sessionUpdate")
+            title = update.get("title")
+            if kind in ("tool_call", "tool_call_update") and isinstance(title, str):
+                tool_name = title
+    return {"kind": kind if isinstance(kind, str) and kind else "event", "toolName": tool_name}
+
+
+def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
+                        attention_path: str | None = None) -> InquiryBridge:
+    """The shared cooperative bridge over this harness's own native error shape."""
+    return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
+                         attention_path=attention_path, error_factory=NativeError,
+                         event_metadata=_inquiry_event_metadata, limitation=CHECKPOINT_INQUIRY_NOTE)
+
+
+def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
+                      activity_path: Path):
+    """The registered live seam: the shared existing-facilities binding under DSH's
+    declared capability. Step five replaces the transport behind this one seam."""
+    from ..live import EXISTING_CAPABILITIES
+    return bind_checkpoint_channel(identity, credentials=credentials, journal_path=journal_path,
+                                   activity_path=activity_path,
+                                   capabilities=EXISTING_CAPABILITIES["dsh"])
+
+
+def check_preparation(spec: dict, environment: dict) -> None:
+    """Confirm the capability: a ready installed dsh command, selected or discoverable.
+
+    A service-selected record is confirmed without spawning. Without one, the
+    same bounded discovery that :func:`command_for` falls back to refreshes the
+    selection first — the harness's own version handshake is the only thing it
+    launches, never a prompt or a model call. A missing or unhealthy command
+    refuses here, before any attempt builds a run.
+    """
+    from ..runtime_selection import selected
+    record = selected("dsh", environment)
+    if record is None:
+        from ..discovery import discover
+        record = discover("dsh", environment=environment)
+    if not isinstance(record, dict) or record.get("status") != "ready" or not record.get("command"):
+        raise BoardError("ADAPTER_UNAVAILABLE",
+                         "the dsh run needs a selected, ready installed dsh command; refresh the harness selection",
+                         adapter="dsh")
+
+
+def session_facts(native_root: Path, session_id: str | None) -> dict:
+    """Storage and visibility facts only; the role decides any reuse.
+
+    This run's rollout is pinned into the attempt's private ``DSH_HOME`` sessions
+    root by the launch patch, and the owning settings and credentials stay in the
+    user's DSH home by path only, so the installed app never lists this session.
+    DSH saves no continuation binding — native resume stays unwired — so the
+    honest binding fact is its absence, and reuse is always a rebuilt session.
+    """
+    return {
+        "adapter": "dsh", "sessionId": session_id, "captured": session_id is not None,
+        "storageScope": "attempt-private-sessions", "storageOwner": "buddy-attempt",
+        "nativeAppVisibility": "not-listed-in-native-app",
+        "credentialsStore": "harness-user-store",
+        "bindingPresent": False,
+        "note": (
+            "this run's session rollout lives under its attempt-private DSH_HOME sessions root; the DSH "
+            "home, settings and credentials store stay with the owning harness by path only, so the "
+            "installed app lists none of it. DSH saves no continuation binding: native resume is not "
+            "wired, and every continuation rebuilds a new session"
+        ),
+    }
+
+
+def validate_turn_provenance(record: dict) -> str | None:
+    """The governed turn needs the ordered finish, settlement and close evidence.
+
+    The expected provenance is exactly what :meth:`RootTurnEvidence.provenance`
+    retains, so a real verified receipt is the only shape that passes; a forged,
+    foreign-session or reordered record fails here before the turn is imported.
+    """
+    p = record.get("provenance")
+    expected = {"version": 1, "adapter": "dsh", "tool": "buddy_finish_turn", "turnEnd": "completed",
+                "stopReason": "end_turn", "rootSessionMatched": True, "receiptVerified": True,
+                "sessionClose": "acknowledged"}
+    if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()):
+        return "the dsh turn lacks its completed finish-tool evidence"
+    if p.get("nativeSessionId") != record.get("sessionId"):
+        return "the dsh native root session does not match the turn record"
+    if not isinstance(p.get("toolCallId"), str) or not p["toolCallId"]:
+        return "the dsh turn carries no finish tool call identity"
+    if not isinstance(p.get("receiptId"), str) or len(p["receiptId"]) != 32:
+        return "the dsh turn carries no verified finish receipt identity"
+    ordinals = [p.get(k) for k in ("callOrdinal", "resultOrdinal", "settledOrdinal", "sessionCloseOrdinal")]
+    if (any(type(value) is not int or value < 0 for value in ordinals)
+            or not ordinals[0] < ordinals[1] <= ordinals[2] <= ordinals[3]):
+        return "the dsh native evidence is out of order"
+    mode, previous = record.get("resumeMode"), record.get("previousSessionId")
+    if mode == "initial" and previous is None:
+        return None
+    if mode == "reconstructed-new-session" and (
+            previous is None or isinstance(previous, str) and previous.strip()
+            and record.get("sessionId") != previous):
+        return None
+    return "the dsh turn resume identity is invalid"
+
+
+def native_evidence(result: RunResult) -> dict:
+    """The none-scope launch configuration and stream end, without any policy guess."""
+    policy = result.effective_policy.tools
+    requested = policy.requested.value if policy is not None and policy.requested is not None else None
+    settings = requested if isinstance(requested, dict) else {}
+    completion = result.completion_evidence
+    return {"eventCount": result.native_event_count,
+            "disabledRows": settings.get("disabledRows"),
+            "streamEof": completion.stream_end if completion is not None else None}
+
+
 def _check_service_descriptions(request: RunRequest, mount: SessionServiceMount) -> None:
     """Verify the mount is exactly what this run describes.
 
@@ -460,6 +612,13 @@ class _RunState:
     update_overflow: bool = False
     prompt_stop_reason: str | None = None
     event_count: int = 0
+    #: The cooperative bridge's own reports, set at settlement; a run without an
+    #: inquiry channel reports neither.
+    inquiry: dict | None = None
+    attention: dict | None = None
+    #: The accepted finish's ordered native evidence, retained for the role's
+    #: turn record; any earlier failure leaves it unset.
+    provenance: dict | None = None
     #: The launch wrapper's own stop evidence when its bookkeeping failed after
     #: the child existed: the process was held, so its group facts are real.
     spawn_failure: dict | None = None
@@ -482,16 +641,16 @@ def _signal_name(exit_code: int | None) -> str | None:
 
 def _launch_agent(*, cwd: str, native_root: Path, invocation_root: Path, dsh_home: Path,
                   scope_rows: list[dict], extra_env: dict[str, str],
-                  permission_policy, home: Path | None = None) -> AcpClient:
+                  permission_policy) -> AcpClient:
     """Spawn the one owned ACP agent through the accepted private-launch wrapper.
 
     ``DSH_HOME`` is always this run's private directory inside the native root,
     the child environment keeps exactly the ``native_environment`` allow-list
     plus the validated homes and the scope's public key, and the whole argv —
     the selected DSH command, the ``acp`` profile and this run's patch — is
-    recorded in the wrapper's launch log. ``HOME`` stays inherited unless the
-    caller explicitly provides this run's private home, which the wrapper
-    validates like ``DSH_HOME``. Every launch of this module carries the same
+    recorded in the wrapper's launch log. ``HOME`` stays inherited; a caller
+    that needs this run's private home names it through the wrapper itself,
+    which validates it like ``DSH_HOME``. Every launch of this module carries the same
     patch order: the owning home's settings/credentials rows first, then the
     private session-record root pin (so a bound setting cannot move the rollout
     out of the private home), then the tool scope's rows, then the two
@@ -511,7 +670,7 @@ def _launch_agent(*, cwd: str, native_root: Path, invocation_root: Path, dsh_hom
     materialize_acp_profile(dsh_home)
     try:
         return AcpClient.start(argv, private_root=native_root, dsh_home=dsh_home,
-                               home=home, extra_env=extra_env or None, cwd=Path(cwd),
+                               extra_env=extra_env or None, cwd=Path(cwd),
                                frame_log=FrameMetaLog(native_root / "logs" / "frames.jsonl"),
                                permission_policy=permission_policy)
     except LaunchOwnershipError as error:
@@ -698,18 +857,25 @@ class _AttentionPolicy:
     The answers come from the shared :class:`PermissionPolicy` — this policy
     never allows an escalation — and every refusal is recorded where the role
     reads attention facts, so the role's own completion rule can refuse a
-    ``completed`` outcome. A write failure is recorded, never fatal: the
+    ``completed`` outcome. With a mounted inquiry bridge the shared bridge owns
+    the attention record and its identity-bound file; without one this policy
+    keeps the file current itself. A write failure is recorded, never fatal: the
     refusal itself already answered.
     """
 
-    def __init__(self, bridge: dict, state: _RunState):
+    def __init__(self, bridge: dict, state: "_RunState",
+                 inquiry_bridge: "InquiryBridge | None" = None):
         self._policy = PermissionPolicy()
         self._bridge = bridge
         self._state = state
+        self._inquiry_bridge = inquiry_bridge
 
     def decide(self, params):
         outcome, basis = self._policy.decide(params)
         record = {"ts": _now(), "outcome": outcome.get("outcome"), "basis": basis[:400]}
+        if self._inquiry_bridge is not None:
+            self._inquiry_bridge.note_attention(record)
+            return outcome, basis
         requests = [record]
         try:
             path = Path(self._bridge["attentionPath"])
@@ -987,12 +1153,15 @@ def session_record_facts(dsh_home: Path, session_ids) -> dict | None:
 
 
 def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: DshToolFacts,
-                 activity: DshActivity, evidence: RootTurnEvidence | None) -> bool:
+                 activity: DshActivity, evidence: RootTurnEvidence | None,
+                 inquiry_bridge: InquiryBridge | None = None) -> bool:
     """Fold one native notification in; return whether a new retained fact appeared.
 
-    Projection precedes every judgment: the tool facts and the unknown-event
-    classification run before the governed evidence, so a foreign or malformed
-    frame still lands in the retained facts. Nothing here fails the run.
+    Projection precedes every judgment: the tool facts, the unknown-event
+    classification and the bridge's bounded live view run before the governed
+    evidence, so a foreign or malformed frame still lands in the retained facts.
+    Nothing here fails the run; a verified receipt inside the evidence advances
+    the journal through the evidence's own callbacks.
     """
     if not isinstance(message, dict):
         facts.note_unknown("non-object-frame")
@@ -1013,6 +1182,8 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
         state.model_started = True
         state.model_start_basis = "native-start"
     activity.note(message, state.event_count)
+    if inquiry_bridge is not None:
+        inquiry_bridge.note_event(message, activity.phase)
     return True
 
 
@@ -1027,9 +1198,12 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     if not governed and request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "the request describes session services but this run mounts none")
-    if request.continuation is not None:
+    # Native resume stays unwired (native_resume=false, an unverified optional
+    # capability): a continuation always rebuilds a new session, and a request
+    # that names the exact previous native session is refused explicitly.
+    if request.continuation is not None and request.continuation.mode != "reconstructed-new-session":
         raise BoardError("INVALID_ARGUMENT",
-                         "dsh native resume is not wired in this module; no continuation is accepted")
+                         "dsh runs no native-session resume; only the reconstruction continuation is accepted")
     if governed:
         _check_service_descriptions(request, services.mount)
     deadline = execution_deadline(request.budget.timeout_seconds)
@@ -1043,6 +1217,19 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
     activity = DshActivity()
+    # The cooperative inquiry bridge lives in this process because only it holds
+    # the native connection; it queues questions for the root's own checkpoint
+    # tool and journals delivered/answered state after the verified receipt.
+    inquiry_bridge: InquiryBridge | None = None
+    if governed and services.inquiry is not None:
+        inquiry_bridge = make_inquiry_bridge(
+            services.inquiry, identity={"taskId": request.identity.task_id,
+                                        "attemptId": request.identity.attempt_id,
+                                        "generation": request.identity.generation,
+                                        "turnId": request.identity.turn_id},
+            journal_path=str(services.inquiry.get("resultsPath") or ""),
+            attention_path=services.mount.bridge.get("attentionPath"))
+        inquiry_bridge.start()
     client: AcpClient | None = None
     sessions: list[str] = []
     evidence: RootTurnEvidence | None = None
@@ -1072,7 +1259,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     def fold(message: object) -> bool:
         state.event_count += 1
         changed = _fold_update(message, state, facts=facts, tools=tools, activity=activity,
-                               evidence=evidence)
+                               evidence=evidence, inquiry_bridge=inquiry_bridge)
         if pump is not None and pump.overflow:
             raise NativeError("invalid-protocol", "the native update queue overflowed; frames were dropped")
         return changed
@@ -1091,7 +1278,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
     try:
         scope_rows, extra_env = tool_scope_launch(request.tool_scope)
-        policy = (_AttentionPolicy(services.mount.bridge, state)
+        policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
                   if governed else PermissionPolicy())
         client = _launch_agent(cwd=request.cwd, native_root=native_root,
                                invocation_root=invocation_root, dsh_home=dsh_home,
@@ -1104,10 +1291,15 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             evidence = RootTurnEvidence(
                 "", mount.finish_tool, mount.bridge,
                 checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
+                on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id))
+                if inquiry_bridge is not None else None,
+                on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id))
+                if inquiry_bridge is not None else None,
                 validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools)
             _governed_round(client=client, pump=pump, request=request, services=services,
                             deadline=deadline, cancel=cancel, state=state, tools=tools,
                             activity=activity, sessions=sessions, evidence=evidence,
+                            inquiry_bridge=inquiry_bridge,
                             fold=fold, notify=notify,
                             denied=denied_count, send_cancel=send_cancel)
             state.status = "ok"
@@ -1136,6 +1328,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     finally:
         drained = _collect(client=client, pump=pump, state=state, tools=tools, sessions=sessions,
                            deadline=deadline, cancel=cancel, fold=fold, notify=notify)
+        if inquiry_bridge is not None:
+            # Closing before the process disappears keeps an after-end question
+            # honest instead of leaving a dangling observation; the reports are
+            # retained as evidence references whatever the run's end was.
+            inquiry_bridge.close()
+            state.inquiry = inquiry_bridge.report()
+            state.attention = inquiry_bridge.attention_report()
     record = session_record_facts(dsh_home, sessions) if sessions else None
     return _build_result(request, state=state, facts=facts, tools=tools, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
@@ -1321,14 +1520,17 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
 def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                     services: SessionServices, deadline: float, cancel: _CancelFlag,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
-                    sessions: list, evidence: RootTurnEvidence, fold, notify,
+                    sessions: list, evidence: RootTurnEvidence,
+                    inquiry_bridge: InquiryBridge | None, fold, notify,
                     denied, send_cancel) -> None:
     """The governed completion-tool carrier: one root turn, one verified receipt.
 
     The same session-open, configuration and prompt sites run with the mounted
     session service; the value is the signed receipt's outcome and nothing else.
     A failed or refused finish call keeps the turn alive for the root's own
-    corrected retry, exactly like the other carrier of this seam.
+    corrected retry, exactly like the other carrier of this seam. The inquiry
+    bridge activates with the root session and closes at settlement: an idle or
+    finished agent is never woken for an inquiry.
     """
     mount = services.mount
     state.round_evidence = evidence
@@ -1336,6 +1538,8 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                                          servers=list(mount.mcp_servers),
                                          state=state, tools=tools, activity=activity,
                                          sessions=sessions)
+    if inquiry_bridge is not None:
+        inquiry_bridge.activate(session_id)
     state.configured = True
     state.checked = _configure(client, session_id, snapshot, request.configuration)
     sidecar = _activity_sidecar(request, services)
@@ -1361,7 +1565,21 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     failure = _settle_stop_reason(state, value.get("stopReason"))
     if failure is not None:
         raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
+    if inquiry_bridge is not None:
+        # Stop accepting questions the instant the root turn settled: an idle
+        # or finished agent is never woken for an inquiry.
+        inquiry_bridge.close()
+    activity.phase = "finishing"
+    if sidecar is not None:
+        try:
+            sidecar.publish(activity.payload())
+        except BoardError:
+            pass
     _close_session(client, session_id)
+    # The close was acknowledged: the accepted finish's ordered native evidence
+    # is complete and is retained for the role's turn record.
+    state.provenance = evidence.provenance(close_ordinal=state.event_count,
+                                           event_count=state.event_count)
 
 
 def _activity_sidecar(request: RunRequest, services: SessionServices):
@@ -1690,6 +1908,15 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
         # this retained fact instead of a look-alike checked value.
         retain("dsh-session-record", "dsh-session-record.json", record)
 
+    if state.provenance is not None:
+        # The accepted finish's ordered native evidence; the role reads it back
+        # through the size- and hash-verified reference to build its turn record.
+        retain("turn-provenance", "native-provenance.json", state.provenance)
+    if state.inquiry is not None:
+        retain("inquiry-report", "inquiry-report.json", state.inquiry)
+    if state.attention is not None:
+        retain("attention-report", "attention-report.json", state.attention)
+
     if state.attention_error:
         # The refused upgrade reached the agent but its attention record could
         # not be written: the fact is retained so the run never loses it.
@@ -1748,8 +1975,7 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
 
 
 def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
-                  timeout_seconds: int, cancelled: Callable[[], bool],
-                  home: Path | None = None) -> dict:
+                  timeout_seconds: int, cancelled: Callable[[], bool]) -> dict:
     """One no-prompt native catalog read over the same spawn and handshake.
 
     Discovery never sends a prompt, never mounts a session service and never
@@ -1767,7 +1993,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     # always-off rows — with no tool-scope rows: it never sends a prompt.
     client = _launch_agent(cwd=cwd, native_root=native_root, invocation_root=invocation_root,
                            dsh_home=dsh_home, scope_rows=[], extra_env={},
-                           permission_policy=PermissionPolicy(), home=home)
+                           permission_policy=PermissionPolicy())
     catalog_value: dict | None = None
     error: NativeError | None = None
     try:
@@ -1785,6 +2011,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         except (AcpRequestError, AcpTimeout) as close_error:
             raise NativeError("session-close-unconfirmed",
                               "the discovery session close was not acknowledged") from close_error
+        except AcpConnectionClosed as close_error:
+            raise NativeError("native-disconnected",
+                              "the native connection ended during the discovery session close") from close_error
     except NativeError as caught:
         error = caught
     except BoardError as caught:
@@ -1792,10 +2021,18 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     finally:
         shutdown = _stop(client)
     if error is not None:
+        # The one stop fact this operation owns, measured from its own stop
+        # collection, carried on the error for the outer layers: anything but
+        # True is unconfirmed, unknown stays False, and a failure before any
+        # process existed carries no stop fact at all. The shared controller's
+        # verbatim publication of it is the remaining integration item.
+        error.discovery_shutdown_confirmed = shutdown.get("shutdownConfirmed") is True
         raise error
     if not shutdown.get("shutdownConfirmed") or client.process.returncode != 0:
-        raise NativeError("native-shutdown-failed",
-                          "the native agent did not exit normally with confirmed group shutdown")
+        failed = NativeError("native-shutdown-failed",
+                             "the native agent did not exit normally with confirmed group shutdown")
+        failed.discovery_shutdown_confirmed = shutdown.get("shutdownConfirmed") is True
+        raise failed
     return catalog_value
 
 
@@ -1858,3 +2095,11 @@ def _catalog(options: list, version: str) -> dict:
             "per-model effort availability and context windows stay unknown until a real session.",
         ],
     }
+
+
+__all__ = [
+    "CHECKPOINT_INQUIRY_NOTE", "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
+    "bind_live_channel", "check_preparation", "execution_deadline", "make_inquiry_bridge",
+    "native_evidence", "prepare_services", "prepare_session_service", "run", "run_discovery",
+    "session_facts", "session_record_facts", "tool_scope_launch", "validate_turn_provenance",
+]

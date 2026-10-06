@@ -1,44 +1,42 @@
-"""DSH native session storage: the session root is execution-private.
+"""DSH native session storage: the session rollout stays execution-private.
 
-The runner used to relocate the whole child ``DSH_HOME`` for private runs,
-which also moved the file-backed credentials store and made every real run fail
-as MISSING_CREDENTIAL before any model work. The repair moves ONLY the JSONL
-session backend's ``root`` through the supported per-run patch overlay, so the
+The ACP run pins the session-record root into the attempt's private ``DSH_HOME``
+through the same supported per-run patch overlay the retired runner used, so the
 DSH home, credentials store and settings document keep resolving in the owning
-harness. ADR-021 decision 18 removed the DSH workspace grouping feature, so
-every run now uses this private root and the grouping flags are gone.
+harness and native auth is never relocated (:func:`.native_run.session_facts`
+reports these storage facts; the role projections are pinned in the role-wiring
+tests). ADR-021 decision 18 removed the DSH workspace grouping feature, so no
+run accepts a workspace switch.
 
-These tests drive the real ``harnesses/dsh/scripts/run.mjs`` with a stub ``dsh``
-launcher: no installed harness, no credentials, no model call. The stub records
-the exact argv, the child ``DSH_HOME`` and the per-run patch document.
-
-A second class binds the reported session identity to the adapter's validated
-turn import: without the removed grouping capture observer, the turn record is
-the only proven id, and a rejected turn must stay uncaptured.
-
-A third class covers the normalized no-deadline sentinel: ``timeoutSeconds=0``
-must reach the runner as ``--timeout 0``, must not stamp an already-expired
-adapter deadline, and must stay cancellable through the owned process group.
+The first class pins the submission rule of that removal in the public spec
+schema. The second class drives the real ``harnesses/dsh/scripts/run.mjs`` with
+a stub ``dsh`` launcher — the Node integration stays until ADR-025 step 4-C
+deletes it, and these are its remaining witnesses. The third class covers the
+normalized no-deadline sentinel (``timeoutSeconds=0``) on the registered run:
+it is an unbounded deadline, it survives a real delay, and it stays cancellable
+through its owned group; the retired Node carriers' equivalent witnesses are
+registered in the wiring disposition table.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import stat
 import subprocess
-import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from pathlib import Path
-from unittest import mock
 
-from hey_my_buddy.buddy.roles import turn_io
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
-from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.dsh.native_run import execution_deadline, run
+from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.protocol.schemas import normalize_spec
+
+from buddy.harnesses.dsh.test_native_run import NativeRunCase
 
 ROOT = Path(__file__).resolve().parents[5]
 RUNNER = ROOT / "harnesses/dsh/scripts/run.mjs"
@@ -92,6 +90,13 @@ class DshWorkspaceDefaultTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node") and RUNNER.is_file(), "Node.js and the dsh runner are required")
 class DshSessionRootTests(unittest.TestCase):
+    """The retired Node runner's private-session-root witnesses (until 4-C).
+
+    These cases exist only for the ``harnesses/dsh/`` Node tree that step 4-C
+    deletes together with them; the registered run's equivalent facts are the
+    launch-patch pins in the native-run tests and :func:`session_facts`.
+    """
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-session-root-")
         self.addCleanup(self.temporary.cleanup)
@@ -209,286 +214,58 @@ class DshSessionRootTests(unittest.TestCase):
 
     def test_the_removed_private_dsh_home_flag_is_rejected(self):
         completed = self.invoke(f"--dsh-home={self.root / 'child-home'}")
-        self.assertEqual(completed.returncode, 2, completed.stdout)
+        self.assertEqual(completed.returncode, 2, completed.stderr)
         self.assertIn("--dsh-home", completed.stderr)
         self.assertFalse((self.artifacts / "argv.txt").exists())
 
 
-TURN_INPUT = {
-    "version": 1,
-    "taskId": "task",
-    "attemptId": "attempt",
-    "generation": 1,
-    "turnId": "turn-1",
-    "resumeMode": "initial",
-    "previousSessionId": None,
-    "context": {},
-    "executionWorkspace": {},
-}
+class NoDeadlineSentinelTests(NativeRunCase):
+    """``timeoutSeconds=0`` is a real unbounded deadline on the registered run.
 
-
-class NativeSessionBindingTests(unittest.TestCase):
-    """The validated turn record binds the id; a rejected turn never invents one."""
-
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-bind-")
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        self.attempt = self.root / "attempt"
-        self.attempt.mkdir()
-        self.checkout = self.root / "checkout"
-        self.checkout.mkdir()
-
-    def collect(self, record: dict | None, *, payload: dict | None = None):
-        context = ExecutionContext(
-            task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30},
-            directory=self.attempt, runtime={},
-            environment={"BUDDY_STATE_DIR": str(self.root / "state")},
-            turn={"turnId": "turn-1", "input": dict(TURN_INPUT)},
-        )
-        if record is not None:
-            context.turn_output_file().write_text(json.dumps(record))
-        stdout = self.attempt / "stdout.log"
-        stdout.write_text(json.dumps(payload if payload is not None else {
-            "status": "ok",
-            "processState": {"shutdownConfirmed": True},
-            "logPaths": {"stdout": str(stdout)},
-            "nativeStorage": {
-                "scope": "task-private-sessions", "sessionRootPrivate": True, "credentialsStore": "harness-user-store",
-                "nativeAppVisibility": "not-listed-in-native-app", "resumeMode": "reconstructed-new-session",
-            },
-        }) + "\n")
-        process = subprocess.Popen([sys.executable, "-c", ""])
-        process.wait()
-        handle = ProcessHandle(process, own_group=False, log_paths={"stdout": str(stdout)})
-        return DshAdapter().collect(handle, context)
-
-    def record(self, *, session_id: str | None = "native-session-1", root_session_matched: bool = True) -> dict:
-        identity = {key: TURN_INPUT[key] for key in
-                    ("taskId", "attemptId", "generation", "turnId", "resumeMode", "previousSessionId")}
-        value = {
-            "version": 1,
-            **identity,
-            "inputSha256": turn_io.input_hash(TURN_INPUT),
-            "outcome": {"disposition": "completed", "summary": "mock turn completed", "remaining": [],
-                        "decisions": [], "artifacts": [], "request": None},
-            "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "flush": "awaited",
-                           "rootSessionMatched": root_session_matched},
-        }
-        if session_id is not None:
-            value["sessionId"] = session_id
-        return value
-
-    def test_a_validated_turn_binds_the_session_id(self):
-        outcome = self.collect(self.record())
-        self.assertEqual(outcome.status, "ok")
-        native = outcome.result["nativeSession"]
-        self.assertEqual(native["sessionId"], "native-session-1")
-        self.assertTrue(native["captured"])
-        self.assertEqual(native["sessionIdSource"], "validated-turn")
-        self.assertNotIn("sessionIdConflict", native)
-        self.assertEqual(native["storageScope"], "task-private-sessions")
-        self.assertEqual(native["storageOwner"], "buddy-attempt")
-        self.assertEqual(native["credentialsStore"], "harness-user-store")
-        self.assertEqual(outcome.result["turn"]["sessionId"], native["sessionId"])
-
-    def test_a_rejected_turn_stays_uncaptured_instead_of_inventing_a_session(self):
-        for record in (self.record(root_session_matched=False), self.record(session_id=None)):
-            with self.subTest(sessionId=record.get("sessionId"), rootSessionMatched=record["provenance"]["rootSessionMatched"]):
-                outcome = self.collect(record)
-                self.assertEqual(outcome.status, "failed")
-                self.assertIsNotNone(outcome.result.get("turnError"))
-                native = outcome.result["nativeSession"]
-                self.assertIsNone(native["sessionId"])
-                self.assertFalse(native["captured"])
-                self.assertEqual(native["sessionIdSource"], "none")
-
-    def test_an_ungoverned_run_reports_no_session_id(self):
-        # With the grouping capture observer gone, a run without a governed
-        # turn record has no proven session identity and reports none.
-        context = ExecutionContext(
-            task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30},
-            directory=self.attempt, runtime={}, environment={}, turn=None,
-        )
-        stdout = self.attempt / "stdout.log"
-        stdout.write_text(json.dumps({
-            "status": "ok", "processState": {"shutdownConfirmed": True},
-            "logPaths": {"stdout": str(stdout)},
-            "nativeStorage": {"scope": "task-private-sessions", "sessionRootPrivate": True},
-        }) + "\n")
-        process = subprocess.Popen([sys.executable, "-c", ""])
-        process.wait()
-        outcome = DshAdapter().collect(ProcessHandle(process, own_group=False, log_paths={"stdout": str(stdout)}), context)
-        native = outcome.result["nativeSession"]
-        self.assertIsNone(native["sessionId"])
-        self.assertFalse(native["captured"])
-        self.assertEqual(native["sessionIdSource"], "none")
-        self.assertEqual(native["storageOwner"], "buddy-attempt")
-
-
-#: Stub dsh that outlives a real delay, then finishes normally. If the adapter or
-#: the runner turned ``timeoutSeconds=0`` into an immediate deadline, this child
-#: is signalled long before it prints, so the run can never report ok.
-DELAY_STUB = textwrap.dedent(
-    """\
-    #!/bin/sh
-    sleep "${MOCK_STUB_SLEEP_SECONDS:-3}"
-    printf 'stub dsh completed\\n'
-    exit 0
-    """
-)
-
-#: Stub dsh that leaves a long-lived descendant in its own group. A cancel that
-#: signalled only the direct child would orphan that descendant, so its death is
-#: the observable proof that the whole owned group was stopped.
-HANG_STUB = textwrap.dedent(
-    """\
-    #!/bin/sh
-    artifact_dir="${MOCK_ARTIFACT_DIR:?}"
-    sleep 300 &
-    printf '%s' "$!" > "$artifact_dir/grandchild.txt"
-    wait
-    """
-)
-
-
-def process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
-@unittest.skipUnless(shutil.which("node") and RUNNER.is_file(), "Node.js and the dsh runner are required")
-class DshNoDeadlineSentinelTests(unittest.TestCase):
-    """``timeoutSeconds=0`` is a real no-deadline attempt, not an expired one.
-
-    These tests drive the real runner through the production adapter with a stub
-    dsh, so the sentinel is proven end to end: it reaches the runner verbatim, no
-    adapter deadline is stamped, a zero-duration attempt survives a real delay,
-    and it stays cancellable through the owned process group.
+    The retired carriers proved the sentinel end to end through the Node runner;
+    the registered run proves it at its own deadline seam: the normalized budget
+    becomes an infinite deadline, a real delay survives it, and the bounded
+    waits inside the ACP connection never turn the infinite budget into an
+    expiry.
     """
 
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="bdd-")
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        self.home = self.root / "home"
-        self.home.mkdir()
-        self.checkout = self.root / "cwd"
-        self.checkout.mkdir()
-        self.artifacts = self.root / "artifacts"
-        self.artifacts.mkdir()
-        self.attempt = self.root / "attempt"
-        self.handles: list[ProcessHandle] = []
-        overrides = mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)})
-        overrides.start()
-        self.addCleanup(overrides.stop)
-
-    def tearDown(self):
-        # A failing assertion must never leave a stub or the runner behind.
-        for handle in self.handles:
-            if handle.process.poll() is None:
-                handle.terminate(grace_seconds=1.0)
-
-    def stub(self, script: str) -> Path:
-        path = self.root / "dsh"
-        path.write_text(script)
-        path.chmod(0o700)
-        return path
-
-    def environment(self) -> dict:
-        env = {key: value for key, value in os.environ.items() if key not in CLEARED_ENV}
-        node_binary = shutil.which("node") or ""
-        env.update({
-            "PATH": os.pathsep.join([str(Path(node_binary).parent), env.get("PATH", "")]),
-            "DSH_HOME": str(self.home),
-            "MOCK_ARTIFACT_DIR": str(self.artifacts),
-            "MOCK_STUB_SLEEP_SECONDS": "3",
-            "BUDDY_PYTHON": sys.executable,
-            "BUDDY_STATE_DIR": str(self.root / "state"),
-            "BUDDY_RUNTIME_ROOT": str(self.root / "runtime"),
-            "PYTHONPATH": os.pathsep.join([str(ROOT / "src"), str(ROOT / "tests" / "python")]),
-        })
-        return env
-
-    def context(self, *, timeout_seconds: int, stub: Path) -> ExecutionContext:
-        return ExecutionContext(
-            task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": TASK, "timeoutSeconds": timeout_seconds},
-            directory=self.attempt, runtime={}, environment={**self.environment(), "DSH_BIN": str(stub)}, turn=None,
-        )
-
-    def start(self, context: ExecutionContext) -> tuple[DshAdapter, ProcessHandle]:
-        adapter = DshAdapter()
-        handle = adapter.start(context)
-        self.handles.append(handle)
-        return adapter, handle
-
-    def wait_for_artifact(self, name: str, timeout: float = 10.0) -> str:
-        deadline = time.monotonic() + timeout
-        path = self.artifacts / name
-        while time.monotonic() < deadline:
-            if path.is_file() and path.read_text().strip():
-                return path.read_text().strip()
-            time.sleep(0.05)
-        self.fail(f"the stub dsh never recorded {name}")
-
-    def test_the_runner_receives_the_zero_sentinel_verbatim(self):
-        arguments = DshAdapter().arguments(
-            self.context(timeout_seconds=0, stub=self.stub(DELAY_STUB)),
-            {"socketPath": "/tmp/unused.sock", "token": "0" * 64, "resultsPath": "/tmp/unused.jsonl", "errorPath": "/tmp/unused.error.json"},
-        )
-        self.assertEqual(arguments[arguments.index("--timeout") + 1], "0")
+    def test_the_normalized_zero_budget_is_an_infinite_deadline(self):
+        self.assertEqual(execution_deadline(0), math.inf)
+        self.assertGreater(execution_deadline(3), time.monotonic())
 
     def test_a_zero_timeout_attempt_survives_a_real_delay_and_completes(self):
-        context = self.context(timeout_seconds=0, stub=self.stub(DELAY_STUB))
-        adapter, handle = self.start(context)
-        self.assertIsNone(handle.deadline, "timeoutSeconds=0 must not stamp an already-expired deadline")
-        time.sleep(0.6)
-        self.assertIsNone(handle.process.poll(), "a 0-deadline attempt must still run after a real delay")
-        self.assertEqual(handle.wait(timeout=30), 0)
-
-        outcome = adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "ok", outcome.error)
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(outcome.result["status"], "ok")
-        self.assertEqual(outcome.result["timeoutSeconds"], 0, "the sentinel is reported verbatim")
-
-    def test_a_positive_timeout_still_stamps_a_future_deadline(self):
-        context = self.context(timeout_seconds=30, stub=self.stub(DELAY_STUB))
-        adapter, handle = self.start(context)
-        stamped = handle.deadline
-        self.assertIsNotNone(stamped)
-        self.assertGreater(stamped, time.monotonic(), "a positive timeout keeps a future deadline")
-        self.assertLessEqual(stamped, time.monotonic() + 31)
-        self.assertEqual(handle.wait(timeout=30), 0)
-
-        outcome = adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "ok", outcome.error)
-        self.assertEqual(outcome.result["timeoutSeconds"], 30)
+        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "session/prompt:2",
+                                 "--final-answer", '{"choice":"a"}']
+        result = run(self.fast_request("prompt", timeout=0),
+                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_a_zero_timeout_attempt_stays_cancellable_through_its_owned_group(self):
-        context = self.context(timeout_seconds=0, stub=self.stub(HANG_STUB))
-        adapter, handle = self.start(context)
-        self.assertIsNone(handle.deadline)
-        grandchild = int(self.wait_for_artifact("grandchild.txt"))
-        self.assertTrue(process_alive(grandchild), "the stub descendant must be running before the cancel")
+        self.extra_agent_args = ["--prompt-mode", "final", "--hang-prompt"]
+        flag = threading.Event()
+        result_holder: list = []
 
-        adapter.cancel(handle)
+        def stop_soon():
+            self.assertTrue(self.wait_for(lambda: any(
+                entry.get("event") == "hanging-prompt" for entry in self.agent_log())))
+            flag.set()
 
-        self.assertTrue(handle.cancel_requested)
-        self.assertIsNotNone(handle.process.poll(), "cancellation stops the owned runner")
-        self.assertTrue(handle.shutdown_confirmed(), "the whole owned group must be confirmed stopped")
-        self.assertFalse(process_alive(grandchild), "a descendant of the owned group must not outlive the cancel")
-        outcome = adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "cancelled", outcome.error)
-        self.assertTrue(outcome.shutdown_confirmed)
+        thread = threading.Thread(target=stop_soon)
+        thread.start()
+        try:
+            result_holder.append(run(self.fast_request("prompt", timeout=0, scope="write"),
+                                     observer=lambda _f: FEEDBACK_CONTINUE,
+                                     services=None, cancelled=flag.is_set))
+        finally:
+            thread.join()
+        result = result_holder[0]
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertTrue(result.stop_evidence.interrupt.requested)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone",
+                         "the cancelled unbounded attempt's group is confirmed gone")
 
 
 if __name__ == "__main__":

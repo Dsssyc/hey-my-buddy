@@ -529,6 +529,34 @@ class RootTurnEvidence:
         identity = canonical_json({"sessionId": self.session_id})
         return frozenset((identity, call_id) for call_id in self.verified_delivery_calls)
 
+    def provenance(self, *, close_ordinal: int, event_count: int) -> dict:
+        """The ordered native evidence of the accepted finish, as one fact dict.
+
+        Every field is evidence this ACP carrier actually produced: the root's
+        finish call, its completed verified result inside the one admitted turn,
+        the prompt settlement, and the acknowledged session close that only
+        happens after all of them. The ACP prompt turn carries no native turn id,
+        so none is claimed; the call identity and the ordinals are the ordered
+        proof. The role owns what this record means, the same way it owns the
+        outcome.
+        """
+        if not (self.receipt and self.stop_reason == "end_turn" and self.call_id
+                and self.call_ordinal is not None and self.result_ordinal is not None
+                and self.settled_ordinal is not None
+                and self.call_ordinal < self.result_ordinal <= self.settled_ordinal <= close_ordinal):
+            raise NativeError("invalid-provenance",
+                              "the native root result lacks ordered tool, turn and session settlement evidence")
+        return {
+            "version": 1,
+            "adapter": ADAPTER, "tool": "buddy_finish_turn", "nativeTool": self.tool_name,
+            "turnEnd": "completed", "stopReason": self.stop_reason, "rootSessionMatched": True,
+            "nativeSessionId": self.session_id, "toolCallId": self.call_id,
+            "receiptId": self.receipt["receiptId"], "receiptVerified": True,
+            "callOrdinal": self.call_ordinal, "resultOrdinal": self.result_ordinal,
+            "settledOrdinal": self.settled_ordinal, "sessionCloseOrdinal": close_ordinal,
+            "nativeEventCount": event_count, "sessionClose": "acknowledged",
+        }
+
     # -- internals -------------------------------------------------------------
     def _schedule_finish(self, call_id: str | None, ordinal: int) -> None:
         if self.receipt is not None:

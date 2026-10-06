@@ -117,6 +117,12 @@ class FakeAgent:
         self.emit_foreign_chunk = args.emit_foreign_chunk
         self.spam_unknown_kinds = args.spam_unknown_kinds
         self.late_tool_update = args.late_tool_update
+        # The cooperative-checkpoint inquiry script (additive): wait for a queued
+        # Host question, checkpoint to deliver it, answer it through the real
+        # session-tool rules, or forge the checkpoint receipt when told to.
+        self.wait_for_inquiry = args.wait_for_inquiry
+        self.answer_inquiry = args.answer_inquiry
+        self.forge_checkpoint = args.forge_checkpoint
         self.last_session_id = None
         self.cancel_event = threading.Event()
         self.prompt_count = 0
@@ -468,14 +474,48 @@ class FakeAgent:
 
         checkpoint_id = "call_checkpoint_1"
         if self.checkpoint_tool:
+            if self.wait_for_inquiry > 0:
+                # Deterministic cooperative delivery: hold the turn open until a
+                # Host question is actually queued (or the bound expires), so a
+                # test's ask can never race the checkpoint.
+                bounded = time.monotonic() + self.wait_for_inquiry
+                while time.monotonic() < bounded:
+                    if worker_services.pending_inquiries(configuration):
+                        break
+                    time.sleep(0.05)
+                log(self.log_path, {"event": "inquiry-wait-done",
+                                    "pending": bool(worker_services.pending_inquiries(configuration))})
             # The MCP protocol passes the bare tool name; the mcp__server__tool
             # composite is the ACP-side presentation only.
             bare = self.checkpoint_tool.rsplit("__", 1)[-1]
             tool_frame(checkpoint_id, self.checkpoint_tool, "in_progress")
             checkpoint_result = worker_services.call_session_tool(bare, {}, configuration)
-            tool_result(checkpoint_id, "completed", checkpoint_result["content"][0]["text"])
+            checkpoint_text = checkpoint_result["content"][0]["text"]
+            if self.forge_checkpoint and "tool-refusal" not in checkpoint_text:
+                # A tampered checkpoint receipt fails its signature verification
+                # controller-side: the id changes under a stale signature.
+                receipt = json.loads(checkpoint_text)
+                if receipt.get("inquiries"):
+                    receipt["inquiries"][0]["inquiryId"] = "forged-inquiry-id"
+                checkpoint_text = json.dumps(receipt)
+            tool_result(checkpoint_id, "completed", checkpoint_text)
             log(self.log_path, {"event": "checkpoint-result",
-                                "refusal": "tool-refusal" in checkpoint_result["content"][0]["text"]})
+                                "refusal": "tool-refusal" in checkpoint_text})
+            if self.answer_inquiry and "tool-refusal" not in checkpoint_text:
+                receipt = json.loads(checkpoint_text)
+                questions = receipt.get("inquiries") or []
+                if questions:
+                    answer_tool = self.checkpoint_tool.rsplit("__", 1)[0] + "__buddy_answer_inquiry"
+                    tool_frame("call_answer_1", answer_tool, "in_progress")
+                    answer_result = worker_services.call_session_tool(
+                        "buddy_answer_inquiry",
+                        {"inquiryId": questions[0]["inquiryId"],
+                         "answer": "the root's bounded answer to the Host question"},
+                        configuration)
+                    answer_text = answer_result["content"][0]["text"]
+                    tool_result("call_answer_1", "completed", answer_text)
+                    log(self.log_path, {"event": "answer-result",
+                                        "refusal": "tool-refusal" in answer_text})
 
         def finish(outcome: dict, call_id: str, *, fail_first: bool = False) -> str:
             tool_frame(call_id, self.finish_tool, "in_progress")
@@ -507,15 +547,25 @@ class FakeAgent:
         if self.finish_fail_then_retry:
             text = finish(completed_outcome, "call_finish_2")
         elif "tool-refusal" in text:
-            attention_outcome = {"disposition": "attention",
-                                 "summary": "the fixture turn needs a Host decision",
-                                 "remaining": [], "decisions": [], "artifacts": [],
-                                 "request": {"summary": "the refused native upgrade request",
-                                             "attempted": "the bounded fixture work",
-                                             "neededWork": "a Host decision on the refused request",
-                                             "expectedArtifacts": [],
-                                             "acceptance": "the Host accepts the attention receipt"}}
-            finish(attention_outcome, "call_finish_2")
+            envelope = json.loads(text)
+            if envelope.get("reason") == "inquiry-pending":
+                # The real root's correction: the answer the driver just verified
+                # reaches the journal moments later; wait for it, then retry the
+                # completed finish inside this same native turn.
+                bounded = time.monotonic() + 5
+                while time.monotonic() < bounded and worker_services.pending_inquiries(configuration):
+                    time.sleep(0.05)
+                text = finish(completed_outcome, "call_finish_2")
+            if "tool-refusal" in text:
+                attention_outcome = {"disposition": "attention",
+                                     "summary": "the fixture turn needs a Host decision",
+                                     "remaining": [], "decisions": [], "artifacts": [],
+                                     "request": {"summary": "the refused native upgrade request",
+                                                 "attempted": "the bounded fixture work",
+                                                 "neededWork": "a Host decision on the refused request",
+                                                 "expectedArtifacts": [],
+                                                 "acceptance": "the Host accepts the attention receipt"}}
+                finish(attention_outcome, "call_finish_3")
         self.notify_client("session/update", {"sessionId": session_id,
                                               "update": {"sessionUpdate": "usage_update",
                                                          "used": 900, "size": 1000000}})
@@ -758,6 +808,12 @@ def main() -> int:
                         help="emit this many distinct unknown sessionUpdate kinds before the answer")
     parser.add_argument("--late-tool-update", action="store_true",
                         help="emit one same-root completed tool pair while the client drains at EOF")
+    parser.add_argument("--wait-for-inquiry", type=float, default=0.0,
+                        help="hold the governed turn until a Host question is queued (bounded seconds)")
+    parser.add_argument("--answer-inquiry", action="store_true",
+                        help="answer the first delivered question through the real session-tool rules")
+    parser.add_argument("--forge-checkpoint", action="store_true",
+                        help="mutate the checkpoint receipt under its stale signature")
     args = parser.parse_args()
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)

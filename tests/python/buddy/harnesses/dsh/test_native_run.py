@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -115,12 +116,14 @@ class NativeRunCase(unittest.TestCase):
                                                              maximum=MAX_SCHEMA_BYTES),
             budget=RunBudget(timeout_seconds=timeout))
 
-    def worker_request(self, *, timeout: int = FAST_TIMEOUT):
+    def worker_request(self, *, timeout: int = FAST_TIMEOUT, inquiry: bool = False,
+                       continuation=None):
         """The governed binding: a real mount, the real role validator and prompt.
 
         The binding is assembled through exactly the shared role controller's
         parameter set, including the activity directory and the stderr mirror
-        path the governed projection consumes.
+        path the governed projection consumes. ``inquiry`` mounts the cooperative
+        channel the same way the role passes this attempt's inquiry paths.
         """
         identity = {"taskId": "task", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                     "generation": 1, "turnId": "turn-1"}
@@ -128,15 +131,31 @@ class NativeRunCase(unittest.TestCase):
                       "generation": 1, "turnId": "turn-1", "context": {}, "executionWorkspace": {}}
         attention = self.base / f"attention-{uuid.uuid4().hex[:8]}.json"
         invocation = self.base / f"worker-invocation-{uuid.uuid4().hex[:8]}"
+        inquiry_credentials = None
+        if inquiry:
+            # The socket must fit the OS sun_path budget even under this suite's
+            # long per-test prefix, so the socket lives in a short directory of
+            # its own beside the per-test root; journal and error stay local.
+            short = Path(os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+            channel = short / f"dsh-sock-{uuid.uuid4().hex[:8]}"
+            channel.mkdir(mode=0o700)
+            self.addCleanup(shutil.rmtree, channel, ignore_errors=True)
+            inquiry_credentials = {"socketPath": str(channel / "s.sock"),
+                                   "resultsPath": str(self.base / f"inquiry-{channel.name[-8:]}.results.jsonl"),
+                                   "errorPath": str(self.base / f"inquiry-{channel.name[-8:]}.error.json"),
+                                   "token": uuid.uuid4().hex + uuid.uuid4().hex}
         bound = native_run.prepare_services(
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention, session_tools=worker_services.session_tools(),
             completion_tool="buddy_finish_turn", validate_outcome=validate_outcome,
-            inquiry=None, inquiry_tools=(), activity_dir=str(self.base / f"activity-{uuid.uuid4().hex[:8]}"),
+            inquiry=inquiry_credentials, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
+            activity_dir=str(self.base / f"activity-{uuid.uuid4().hex[:8]}"),
             native_stderr=str(self.base / f"native-stderr-{uuid.uuid4().hex[:8]}.log"))
         mount = bound.services.mount
-        prompt = worker_services.governed_prompt("fixture task", turn_input, mount.finish_tool,
-                                                 checkpoint_tool=None, answer_tool=None)
+        prompt = worker_services.governed_prompt(
+            "fixture task", turn_input, mount.finish_tool,
+            checkpoint_tool=mount.checkpoint_tool if inquiry else None,
+            answer_tool=mount.answer_tool if inquiry else None)
         request = RunRequest(
             identity=RunIdentity(task_id=identity["taskId"], attempt_id=identity["attemptId"],
                                  generation=1, invocation_id=uuid.uuid4().hex,
@@ -149,6 +168,7 @@ class NativeRunCase(unittest.TestCase):
             output_schema=run_contract.FrozenJson.from_value(worker_services.OUTCOME_SCHEMA,
                                                              "schema", maximum=MAX_SCHEMA_BYTES),
             budget=RunBudget(timeout_seconds=timeout),
+            continuation=continuation,
             session_services=(SessionService(
                 tool_names=[f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools]),))
         return request, bound, mount
@@ -680,7 +700,7 @@ class MountTests(NativeRunCase):
         with self.assertRaises(BoardError):
             native_run._check_service_descriptions(wrong_schema, mount)
 
-    def test_the_seam_refuses_foreign_harnesses_services_and_continuations(self):
+    def test_the_seam_refuses_foreign_harnesses_services_and_native_resume(self):
         request, bound, _mount = self.worker_request()
         services = bound.services
         with self.assertRaises(BoardError):
@@ -688,9 +708,10 @@ class MountTests(NativeRunCase):
                 observer=worker_observer, services=services, cancelled=lambda: False)
         with self.assertRaises(BoardError):
             run(request, observer=worker_observer, services=object(), cancelled=lambda: False)
-        continuation = run_contract.RunContinuation(mode="reconstructed-new-session")
+        native_resume = run_contract.RunContinuation(mode="native-session",
+                                                     previous_session_id="previous-session")
         with self.assertRaises(BoardError):
-            run(self.variant_of(request, continuation=continuation),
+            run(self.variant_of(request, continuation=native_resume),
                 observer=worker_observer, services=services, cancelled=lambda: False)
 
     @staticmethod
@@ -841,6 +862,275 @@ class WorkerSeamTests(NativeRunCase):
             run(described, observer=worker_observer, services=None, cancelled=lambda: False)
 
 
+class ContinuationTests(NativeRunCase):
+    """Native resume stays unwired; a reconstruction rebuilds a new session."""
+
+    def test_a_reconstructed_new_session_continuation_runs_a_fresh_root(self):
+        request, bound, mount = self.worker_request(
+            continuation=run_contract.RunContinuation(mode="reconstructed-new-session",
+                                                      previous_session_id="previous-native-session"))
+        self.governed_agent_args(mount)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNotNone(result.native_identity.session_id)
+        self.assertNotEqual(result.native_identity.session_id, "previous-native-session",
+                            "the continuation rebuilds, never resumes the previous session")
+        self.assertEqual(result.root_identities,
+                         result.root_identities[:1], "exactly one fresh root was opened")
+        self.assertIsNone(result.continuation, "dsh saves no continuation binding facts")
+        reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
+        provenance = json.loads(Path(reference.location).read_text())
+        record = {"version": 1, "resumeMode": "reconstructed-new-session",
+                  "previousSessionId": "previous-native-session",
+                  "sessionId": result.native_identity.session_id, "provenance": provenance}
+        self.assertIsNone(native_run.validate_turn_provenance(record),
+                          "the rebuilt session passes the provenance validator")
+
+
+class RoleSeamFunctionTests(unittest.TestCase):
+    """The module-level seams the shared role and registry consume, without a process."""
+
+    def test_check_preparation_confirms_a_selected_or_discoverable_command(self):
+        from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
+        record = {"status": "ready", "command": ["/installed/dsh"]}
+        with mock.patch.object(runtime_selection, "selected", return_value=record):
+            self.assertIsNone(native_run.check_preparation({}, {}))
+        # The unbound path reuses the same bounded discovery command_for falls
+        # back to: a discoverable installed command keeps the harness usable
+        # without a pinned selection, and a failed scan still refuses here.
+        detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}
+        with mock.patch.object(runtime_selection, "selected", return_value=None), \
+                mock.patch.object(discovery, "discover", return_value=detected) as scan:
+            self.assertIsNone(native_run.check_preparation({}, {}))
+        scan.assert_called_once_with("dsh", environment={})
+        cases = ((None, {"status": "missing", "available": False, "remedy": "install dsh",
+                         "reasonCode": "not-found"}),
+                 ({"status": "missing"}, None),
+                 ({"status": "ready", "command": []}, None))
+        for selected, detected_result in cases:
+            with mock.patch.object(runtime_selection, "selected", return_value=selected), \
+                    mock.patch.object(discovery, "discover", return_value=detected_result) as scan:
+                with self.assertRaises(BoardError) as caught:
+                    native_run.check_preparation({}, {})
+                self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+            self.assertEqual(scan.call_count, 1 if selected is None else 0,
+                             "a bound record decides without a discovery scan")
+
+    def test_session_facts_report_private_storage_and_no_binding(self):
+        facts = native_run.session_facts(Path("/private/native-root"), "session-1")
+        self.assertTrue(facts["captured"])
+        self.assertEqual(facts["storageOwner"], "buddy-attempt")
+        self.assertEqual(facts["nativeAppVisibility"], "not-listed-in-native-app")
+        self.assertEqual(facts["credentialsStore"], "harness-user-store")
+        self.assertFalse(facts["bindingPresent"], "native resume is unwired; no binding is saved")
+        absent = native_run.session_facts(Path("/private/native-root"), None)
+        self.assertFalse(absent["captured"])
+        self.assertIsNone(absent["sessionId"])
+
+    def test_native_evidence_projects_the_launch_scope_and_stream_end(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            CompletionEvidence, EffectivePolicy, PolicyFact, RunEnd, RunIdentity, RunResult, RunValue)
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                               invocation_id="invocation")
+        base = dict(identity=identity, harness="dsh", end=RunEnd(status="ok"))
+        result = RunResult(
+            **base,
+            value=RunValue(mechanism="final-message", schema_status="unknown", raw="{}"),
+            completion_evidence=CompletionEvidence(mechanism="final-message", stream_end=True),
+            effective_policy=EffectivePolicy(tools=PolicyFact(
+                enforcement="native", requested=run_contract.FrozenJson.from_value(
+                    {"disabledRows": ["tool-bash", "plan-mode"]}, "policy", maximum=MAX_SCHEMA_BYTES))))
+        self.assertEqual(native_run.native_evidence(result),
+                         {"eventCount": None, "disabledRows": ["tool-bash", "plan-mode"], "streamEof": True})
+        bare = RunResult(**base)
+        self.assertEqual(native_run.native_evidence(bare),
+                         {"eventCount": None, "disabledRows": None, "streamEof": None})
+
+    def test_turn_provenance_accepts_only_the_verified_order(self):
+        provenance = {"version": 1, "adapter": "dsh", "tool": "buddy_finish_turn",
+                      "turnEnd": "completed", "stopReason": "end_turn", "rootSessionMatched": True,
+                      "receiptVerified": True, "sessionClose": "acknowledged",
+                      "nativeSessionId": "session-1", "toolCallId": "call_finish_1",
+                      "receiptId": "a" * 32, "callOrdinal": 3, "resultOrdinal": 5,
+                      "settledOrdinal": 6, "sessionCloseOrdinal": 7}
+        def record(**overrides):
+            value = {**provenance, **overrides.pop("provenance", {})}
+            return {"version": 1, "resumeMode": overrides.pop("resumeMode", "initial"),
+                    "previousSessionId": overrides.pop("previousSessionId", None),
+                    "sessionId": overrides.pop("sessionId", "session-1"), "provenance": value}
+        self.assertIsNone(native_run.validate_turn_provenance(record()))
+        self.assertIsNone(native_run.validate_turn_provenance(
+            record(resumeMode="reconstructed-new-session", previousSessionId="previous-session",
+                   provenance={})))
+        for mutated in ({"nativeSessionId": "foreign-session"}, {"turnEnd": "failed"},
+                        {"receiptVerified": False}, {"sessionClose": "unacknowledged"},
+                        {"receiptId": "short"}, {"toolCallId": None},
+                        {"callOrdinal": 5}, {"settledOrdinal": 4}):
+            with self.subTest(mutated=mutated):
+                error = native_run.validate_turn_provenance(record(provenance=mutated))
+                self.assertIsInstance(error, str)
+        # A reconstructed record that claims the previous session's identity is invalid.
+        self.assertIsInstance(native_run.validate_turn_provenance(
+            record(resumeMode="reconstructed-new-session", previousSessionId="session-1")), str)
+        self.assertIsInstance(native_run.validate_turn_provenance(
+            record(resumeMode="native-session", previousSessionId="session-1")), str)
+
+
+class InquirySeamTests(NativeRunCase):
+    """The cooperative checkpoint channel end to end, over the registered binding."""
+
+    QUESTION = "What is the bounded state of the private checkout?"
+
+    def inquiry_worker(self, *, extra=(), timeout: int = FAST_TIMEOUT):
+        request, bound, mount = self.worker_request(inquiry=True, timeout=timeout)
+        self.governed_agent_args(mount)
+        self.extra_agent_args += list(extra)
+        credentials = bound.services.inquiry
+        channel = native_run.bind_live_channel(
+            request.identity, credentials=dict(credentials),
+            journal_path=credentials["resultsPath"],
+            activity_path=Path(bound.services.activity_dir) / "activity.json")
+        return request, bound, credentials, channel
+
+    def ask_when_ready(self, channel):
+        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        self.assertTrue(self.wait_for(
+            lambda: any(entry.get("event") == "startup" for entry in self.agent_log())))
+        request = LiveRequest(identity=channel.identity, request_id="live-1", kind="inquiry",
+                              payload=InquiryPayload(question_id="inq-1", question=self.QUESTION))
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            reply = channel.request(request, timeout_ms=1000)
+            if reply.status != "unavailable":
+                return reply
+            time.sleep(0.05)
+        return reply
+
+    def journal_records(self, path: Path) -> list[dict]:
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def test_an_asked_question_is_delivered_at_the_checkpoint_and_answered(self):
+        request, bound, credentials, channel = self.inquiry_worker(
+            extra=("--wait-for-inquiry", "12", "--answer-inquiry"))
+        replies: list = []
+        asking = threading.Thread(target=lambda: replies.append(self.ask_when_ready(channel)))
+        asking.start()
+        try:
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        finally:
+            asking.join()
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(replies[0].status, "queued",
+                         "the ask is committed as queued; only the checkpoint delivers")
+        self.assertEqual(result.value.parsed.value["disposition"], "completed",
+                         "the answered question no longer blocks the completed finish")
+        records = self.journal_records(Path(credentials["resultsPath"]))
+        states = [record.get("state") for record in records if record.get("inquiryId") == "inq-1"]
+        self.assertEqual(states, ["queued", "delivered", "answered"])
+        answered = records[-1]
+        self.assertEqual(answered["answer"]["text"], "the root's bounded answer to the Host question")
+        report = json.loads(Path(next(ref for ref in result.evidence_refs
+                                      if ref.kind == "inquiry-report").location).read_text())
+        self.assertEqual(report["answered"], 1)
+        self.assertEqual(report["requested"], 1)
+        self.assertEqual(report["deliveryMode"], "cooperative-checkpoint")
+        self.assertIn("checkpoint", report["limitation"])
+        self.assertIn("attention-report",
+                      [ref.kind for ref in result.evidence_refs])
+        reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
+        provenance = json.loads(Path(reference.location).read_text())
+        self.assertEqual(provenance["nativeSessionId"], result.native_identity.session_id)
+        # The refused completed finish was corrected in the same native turn; the
+        # provenance names the finish call whose receipt was actually accepted.
+        self.assertRegex(provenance["toolCallId"], r"call_finish_\d")
+        self.assertTrue(provenance["receiptVerified"])
+        self.assertLess(provenance["callOrdinal"], provenance["resultOrdinal"])
+        self.assertLessEqual(provenance["settledOrdinal"], provenance["sessionCloseOrdinal"])
+
+    def test_a_delivered_but_unanswered_question_turns_completion_into_attention(self):
+        request, bound, credentials, channel = self.inquiry_worker(
+            extra=("--wait-for-inquiry", "12"))
+        replies: list = []
+        asking = threading.Thread(target=lambda: replies.append(self.ask_when_ready(channel)))
+        asking.start()
+        try:
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        finally:
+            asking.join()
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(replies[0].status, "queued")
+        self.assertEqual(result.value.parsed.value["disposition"], "attention",
+                         "a completed outcome is refused while the delivered question is unanswered")
+        report = json.loads(Path(next(ref for ref in result.evidence_refs
+                                      if ref.kind == "inquiry-report").location).read_text())
+        self.assertEqual(report["refused"], 1,
+                         "settlement terminalized the delivered-but-unanswered question")
+        self.assertEqual(report["answered"], 0)
+        records = self.journal_records(Path(credentials["resultsPath"]))
+        self.assertEqual(records[-1]["state"], "unavailable",
+                         "settlement is the honest end of the answer window")
+
+    def test_a_foreign_journal_record_never_binds_this_attempt(self):
+        request, bound, credentials, channel = self.inquiry_worker(
+            extra=("--wait-for-inquiry", "12", "--answer-inquiry"))
+        journal = Path(credentials["resultsPath"])
+        foreign = {"version": 1, "taskId": "task", "attemptId": "another-attempt",
+                   "generation": 1, "turnId": "turn-1", "inquiryId": "foreign-1",
+                   "state": "queued", "question": "a foreign attempt's question",
+                   "questionSha256": "b" * 64, "askedAt": "2026-10-07T00:00:00Z"}
+        journal.write_text(json.dumps(foreign) + "\n")
+        replies: list = []
+        asking = threading.Thread(target=lambda: replies.append(self.ask_when_ready(channel)))
+        asking.start()
+        try:
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        finally:
+            asking.join()
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        records = self.journal_records(journal)
+        self.assertEqual([record.get("inquiryId") for record in records],
+                         ["foreign-1", "inq-1", "inq-1", "inq-1"],
+                         "the foreign record is untouched; only this attempt's question flows")
+        report = json.loads(Path(next(ref for ref in result.evidence_refs
+                                      if ref.kind == "inquiry-report").location).read_text())
+        self.assertEqual(report["journalEntries"], 1, "only the bound question is counted")
+
+    def test_a_forged_checkpoint_receipt_fails_the_turn(self):
+        request, bound, credentials, channel = self.inquiry_worker(
+            extra=("--wait-for-inquiry", "12", "--forge-checkpoint"))
+        replies: list = []
+        asking = threading.Thread(target=lambda: replies.append(self.ask_when_ready(channel)))
+        asking.start()
+        try:
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        finally:
+            asking.join()
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-inquiry-receipt",
+                         "a receipt whose id changed under a stale signature is forgery")
+        records = self.journal_records(Path(credentials["resultsPath"]))
+        self.assertNotIn("delivered", [record.get("state") for record in records],
+                         "nothing is journaled delivered without a verified root receipt")
+
+    def test_the_live_binding_declares_the_registered_capability_and_binds_identity(self):
+        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES, InquiryPayload, LiveRequest
+        _, _, credentials, channel = self.inquiry_worker()
+        self.assertIs(channel.capabilities(), EXISTING_CAPABILITIES["dsh"],
+                      "the binding carries the declared capability fact, whatever the registry states")
+        foreign_identity = LiveRequest(
+            identity=type(channel.identity).from_payload(
+                {**channel.identity.to_payload(), "attemptId": "another-attempt"}),
+            request_id="foreign-1", kind="inquiry",
+            payload=InquiryPayload(question_id="q", question=self.QUESTION))
+        reply = channel.request(foreign_identity, timeout_ms=200)
+        self.assertFalse(reply.observed, "a foreign execution identity is refused before the bridge")
+
+
 class DiscoveryTests(NativeRunCase):
     """The no-prompt discovery: declared selectors only, never a model call."""
 
@@ -869,6 +1159,37 @@ class DiscoveryTests(NativeRunCase):
         rows = json.loads(patch_path.read_text())
         self.assertEqual([row["id"] for row in rows],
                          ["session-persistence-jsonl", *native_run._ALWAYS_DISABLED_ROWS])
+
+    def discover(self, **kwargs):
+        return native_run.run_discovery(
+            cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
+            native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False, **kwargs)
+
+    def test_a_discovery_failure_carries_its_own_unconfirmed_stop_fact(self):
+        # The error carries this operation's own stop fact for the outer layers:
+        # an unobservable group stays False instead of being guessed from the
+        # error code or the leader exit. (The shared controller's verbatim
+        # publication of the fact is the remaining integration item.)
+        self.extra_agent_args = ["--prompt-mode", "final", "--die-before-answer", "initialize"]
+        unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
+                       "leaderExited": True, "leaderExitCode": 0}
+        with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
+                mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        self.assertEqual(caught.exception.code, "native-disconnected")
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, False,
+                     "an unobservable group is never a confirmed stop")
+
+    def test_a_confirmed_stop_keeps_the_stop_fact_true_on_a_late_failure(self):
+        self.extra_agent_args = ["--prompt-mode", "final", "--die-before-answer", "session/close"]
+        with self.assertRaises(native_run.NativeError) as caught:
+            self.discover()
+        self.assertEqual(caught.exception.code, "native-disconnected")
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True,
+                      "the operation's own confirmed group stop is the fact")
+        self.assertTrue(self.wait_for(lambda: any(
+            entry.get("event") == "dying-before-answer" for entry in self.agent_log())))
 
 
 class SourceBindingTests(NativeRunCase):

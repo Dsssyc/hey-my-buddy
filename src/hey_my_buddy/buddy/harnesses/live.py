@@ -100,7 +100,7 @@ EXISTING_CAPABILITIES = {
     "codex": LiveCapabilities(inquiry_delivery="unsupported"),
     "claude": LiveCapabilities(inquiry_delivery="unsupported"),
     "zcode": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-    "dsh": LiveCapabilities(inquiry_delivery="realtime"),
+    "dsh": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
 }
 
 
