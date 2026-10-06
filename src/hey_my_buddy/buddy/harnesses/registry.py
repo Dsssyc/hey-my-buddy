@@ -90,7 +90,7 @@ def worker_format(name: str):
             prefixes=('This is a governed Buddy root turn executed through Claude Code. Work only inside the allocated checkout and honor the frozen Host scope. Internal subagents may assist. The completion interface for this harness is ONLY the supplied structured-output schema: emit {outcome: ...} exactly once as the final structured result. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.',),
             schema=outcome_schema(suggested_profile=True),
             validation_key="structuredOutputValidated", display_name="Claude", interaction_kind="permissions",
-            follow_workspace_access=True, native_quota_failure=True)
+            follow_workspace_access=True, native_quota_failure=True, reject_previous_on_initial=True)
     return None
 
 

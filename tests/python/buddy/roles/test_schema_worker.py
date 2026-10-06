@@ -16,12 +16,12 @@ from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase
 
 
 class SchemaWorkerTests(NativeRunCase):
-    def worker(self, case="ok"):
+    def worker(self, case="ok", *, previous=None):
         self.fixture_case(case)
         root = self.base / uuid.uuid4().hex
         root.mkdir(mode=0o700)
         turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
-                "resumeMode": "initial", "previousSessionId": None,
+                "resumeMode": "initial", "previousSessionId": previous,
                 "executionWorkspace": {"access": "read"}}
         (root / "input.json").write_text(canonical_json(turn))
         (root / "task.txt").write_text("Do this bounded task")
@@ -89,6 +89,32 @@ class SchemaWorkerTests(NativeRunCase):
         self.assertEqual(verdict["workerError"]["code"], "invalid-role-result")
         self.assertEqual(result.end.status, "ok")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_an_initial_turn_with_a_previous_session_never_reaches_the_native_run(self):
+        with mock.patch.object(native_run, "run", side_effect=AssertionError("native execution")):
+            root, _turn, _control, result, _request, _verdict, code = self.worker(previous="old-session")
+        self.assertEqual(code, 1)
+        self.assertEqual(result.end.reason_code, "invalid-resume-mode")
+        self.assertIs(result.model_started, False)
+        self.assertIs(result.stop_evidence.native.started, False)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertFalse((root / "output.json").exists())
+
+    def test_discovery_errors_need_explicit_boolean_native_stop_evidence(self):
+        control = {"operation": "discover", "harness": "claude", "cwd": str(self.cwd),
+                   "privateRoot": str(self.base), "nativeRoot": str(self.base / "native"), "timeoutSeconds": 1}
+        for stopped in (None, False, True, "true"):
+            with self.subTest(stopped=stopped):
+                error = RuntimeError("tokenSource none")
+                error.discovery_shutdown_confirmed = stopped
+                with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
+                        mock.patch.object(native_run, "run_discovery", side_effect=error):
+                    frame, code = run_controller.execute(control, threading.Event())
+                payload = json.loads(frame)
+                self.assertEqual(code, 1)
+                self.assertEqual(payload["error"], "tokenSource none")
+                self.assertIs(payload["modelStarted"], False)
+                self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_the_moved_schemas_and_prompt_prefixes_equal_the_accepted_baseline(self):
         # Captured from the two old protocol/runner implementations at

@@ -54,6 +54,7 @@ class NativeSchemaWorker:
     native_quota_failure: bool = False
     native_identity_keys: tuple[str, ...] = ()
     validation_error_key: str | None = None
+    reject_previous_on_initial: bool = False
 
     def prompt(self, task_text: str, turn_input: dict) -> str:
         return "\n\n".join([*self.prefixes, *ASSISTANCE_HINTS, task_text, canonical_json(turn_input)])

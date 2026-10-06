@@ -95,3 +95,9 @@ Host 保留各原有结构化收据的字段位置与缺省口径：Codex 快速
 Host 将 ZCode 的合作检查点桥用 git mv 搬到 harnesses/inquiry_bridge.py，供 DSH 共用。队列、journal 持久化/重放、私有 socket、分页读取与 ExistingLiveChannel 保持一份；驱动只传原有错误构造、限制说明和原生事件到元数据的映射。ZCode 的事件映射原样移到 native_run，新增的 make_inquiry_bridge 是实际构造入口；旧 zcode.live_bridge 路径已删除，没有兼容模块。公共能力表中的 DSH 模式留到 DSH 注册时再改，当前旧路径不提前换行为。
 
 桥搬动及实时角色的 93 项聚焦通过（23.886 秒，日志有一条未关闭文件的 ResourceWarning，未据此声称警告为零）；受影响黑板问询 29 项通过（28.170 秒）。把搬后公共桥的 _bound_record 临时改成恒真，原 journal 重放见证按预期因 q-unbound/q-foreign/q-legacy 混入而失败；未变原件已在 93 项中通过。测试函数编号没有改名、增删，完整集合对账随本批整合检查完成。无模型或安装版原生调用。这是两条 harness 共用设施的 Host 整合，没有复制 DSH 专用运行通道。
+
+4-B1 内部验收整合编号 int-7b218b64-344c-4c29-98e5-d1bcb9304c3f 为 verified，随后 accepted。回收计划 cln-32bd1c86-9abc-4490-a0c0-5ee50b1c8663 已应用且检出实际消失；Host 留存 12 份明确命名的编号/组合/变异材料后，只删除创建时登记的 4-B1 确切任务根，无通配符、不屏蔽错误。4-B2 已从 ee0e2f4 首次走路由提交为 ec5ea096-91cc-4b2e-b795-be9b1b053688，拥有独立检出和新短任务根；公共文件与 Node 树不在其写入范围。
+
+3-B2 固定 7b455ea、artifact 71714cad-2de1-4150-ba9b-8665b6b2ead7、累计补丁 02549ce1610c71e74eb8fec1170569e0a097a2ca73108181fce968f0b24602ee 的九条范围路径已核对。Host 首次聚焦错误地传了相对 PYTHONPATH，子进程从可编辑安装回到主检出，引发 28 处失败和 13 处错误；该环境失误不归给 Worker。改为固定验证副本的绝对 PYTHONPATH 后，165 项全部通过（53.003 秒）。五个新旧模拟 Worker 对照的状态、错误、停止相符，旧配额两字段保留；原中断确认事实仍缺失。固定交付尚未整合。
+
+Host 恢复 Claude 旧的非法 initial/previousSessionId 预拒绝，将角色输入校验留在共享角色，在已存下公共请求后、调用原生 run 前返回 invalid-resume-mode 和确实未启动的停止事实，避免已知非法回合进入模型。无输入发现的失败也经同一外层返回有界原因；只采信驱动在异常上明确附带的 discovery_shutdown_confirmed=True，缺失、false 或字符串均不能作原生停止确认。原生包负责给出实际停止事实，Host 不按错误码猜测。共享层另保留 native-observations 中严格布尔的原生中断请求/确认字段。角色、既有 ZCode 和两个新增回归共 37 项通过（5.535 秒）。Claude 的发现接线、原生错误停止事实、中断回读与无调用方的旧 schema/校验器由原 3-B2 run 修正；这些公共修改不代改其范围内代码。

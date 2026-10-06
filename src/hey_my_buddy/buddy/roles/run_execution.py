@@ -149,7 +149,8 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     facts = _worker_facts(result)
     if _worker_reports(result, facts):
         payload.update(status="error", code="invalid-native-result")
-    for key in ("tokenUsage", "quota", "quotaFailure", "lastAssistantMessage", "rateLimitObservations"):
+    for key in ("tokenUsage", "quota", "quotaFailure", "lastAssistantMessage", "rateLimitObservations",
+                "nativeInterruptRequested", "nativeInterruptAcknowledged"):
         if key in facts:
             payload[key] = facts[key]
     tools = result.tool_evidence.value if result.tool_evidence is not None else None
@@ -197,6 +198,9 @@ def _worker_reports(result, payload: dict) -> bool:
                         payload[field] = report[field]
                 if report.get("unsupportedNativeRequests"):
                     payload["unsupportedNativeRequests"] = report["unsupportedNativeRequests"]
+                for field in ("nativeInterruptRequested", "nativeInterruptAcknowledged"):
+                    if type(report.get(field)) is bool:
+                        payload[field] = report[field]
             elif "permissionDenials" in report:
                 payload["nativeAttention"] = {
                     "requests": len(report.get("deniedControlRequestIds") or []),
@@ -301,7 +305,10 @@ def worker_request(control: dict, module):
         continuation=continuation,
         session_services=descriptions,
     )
-    return request, services, worker_observer
+    error = None
+    if format is not None and format.reject_previous_on_initial and mode == "initial" and previous is not None:
+        error = BoardError("invalid-resume-mode", f"an initial {format.display_name} turn must not carry a previous session")
+    return request, services, worker_observer, error
 
 
 def _native_services(control: dict, module, tool_scope: str):
@@ -691,7 +698,10 @@ def discover_models(name: str) -> dict:
         collection = collect_controller(handle, read=read_strict_result, stop=stop_confirmed)
         stopped = collection.stop_confirmed
         if not collection.payload or collection.exit_code != 0 or collection.payload.get("status") != "ok" or not stopped:
-            raise BoardError("ADAPTER_UNAVAILABLE", "Native model discovery did not settle successfully", adapter=name)
+            message = (collection.payload or {}).get("error")
+            if not isinstance(message, str) or not message or len(message) > 512:
+                message = "Native model discovery did not settle successfully"
+            raise BoardError("ADAPTER_UNAVAILABLE", message, adapter=name)
         return collection.payload["catalog"]
     finally:
         if stopped:
