@@ -175,3 +175,5 @@ ZCode 失败是 2-D 范围内遗漏：分页元数据见证仍导入已删除的
 Router 探针测试不在 2-P、2-C1 或其他微任务的写入范围，由 Host 处理并在此登记：原无约束 Mock 会凭空提供 role_run_control，因而走入新的运行结果读取；另两处仍给已删除的 ZCode start_read_only_structured 打补丁。Host 将句柄 fixture 限定为 ProcessHandle 表面，并让启动防护对已抽取 harness 监视注册模块的 run、其余仍监视原入口。只改 tests/python/blackboard/routing/test_router_probe.py，生产代码、探针行为和测试编号不变。17 项聚焦测试全部通过；在原探针调用前注入 ZCode 注册运行入口的调用，两项“不启动”见证失败，恢复后两项通过。原始命令脚本、红绿日志和零模型调用摘要存本步 `tmp/` 的 host-router-probe 文件。两份修正收齐后再做一次必要的完整检查；此前未失败的微任务不重复聚焦矩阵。
 
 2-D 同 run 的修正交付为 `0edbb963105bb72f0c4c6f86bc8ea812bc5b2020`、artifact `5912edfb-08a9-4ad6-8dff-ee2014513339`，累计补丁 SHA-256 为 `e9df782c8a19f2ad4c09acd3e4b4e42c4b68d0f7f1c047f99c2ecb78b439bdb1`。Host 核对累计摘要、固定字节和本轮仅两个文件的差异；原字节界、页数、完整答案和拒绝条数断言均保留。单项及所属 LiveBindingTests 的 11 项通过，原始日志已核对。按相对已整合 `38c2a59` 的固定差异应用，没有代改测试；生产实现未变，编号不变。此前 TSV 的 Host 小更正继续保留。至此两份针对完整检查失败的修正收齐，准备对新整合提交重跑完整检查。
+
+第二次完整检查在 `f583a8b` 上通过：退出码 0，用时 777.339 秒，Python 2,628 项（跳过 1）/171 个模块，Node 110 项。两次日志分别保留；原有超时与相邻 adapter 的净化环境失败在正常完整检查环境均通过。修正后再次只收集编号，与修正前集合逐项相等。第二步汇总与完整编号对照见 [本步验收记录](adr025-step2.md)。后续只办理微任务最终确认和确切路径回收，然后停等 Claude Code Host，不开始后续 harness。
