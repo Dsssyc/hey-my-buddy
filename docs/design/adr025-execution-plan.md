@@ -381,3 +381,15 @@ ZCode 原生驱动只保留协议完整性、身份关联和工具/消息事实�
 第二步余下微任务的限流恢复按用户新授权执行：首次提交仍走路由，不指定 buddy；若被选中的 buddy 遇到供应方不可重试限流，可在同一个 run 用 continue 指定本步已经完成过同类工作的 buddy 的完整配置。每次在整合登记写明被限流的 buddy、替代 buddy 及原路由决定编号。该例外不扩展到之后的步骤，不改变用户共享设置或其他验收、清理规则。
 
 2-D 的只读使用方盘点可作为 2-D0 与 2-C 修正并行：固定已交付的源码快照，只产出外部清单，不修改公共值、角色、注册表或其他源码，不作删除决定。盘点区分实际业务读写、实际向外留存的事实、仅 codec/测试引用和恒定占位；2-C1 的事实投影修正与 2-C2 新消费会改变的条目单列，整合后再复核。因此它不代替 2-C 的验收，不提前实施依赖接线的 2-D 删减。
+
+### 第二步 2-C2 的实际消费者与格式选择
+
+2-C1 已按固定输出 `57ee836` 内部验收并整合为 `e4895fa`。2-C2 以其后的计划提交为固定基线，独占隔离 worktree；Live 格式、角色接缝、注册表、黑板问询及 Worker 活动转报的公共文件本轮只有此微任务可写，Host 统一整合。验收成果是已有 ZCode 活交互的实际消费者经过同一接口，后端仍为现有文件与 Unix socket；不改公开 CLI、数据库、认领/租约/回执规则或其他 harness 行为。
+
+保留 capabilities/request/observe/close 四个方法。observe 增加选择读取 activity、inquiries、observation 的字段集合，省略时全部读取；允许指定单个 inquiry_id 读取原生 answer。这样 Worker 活动轮询只访问 sidecar，等答案只访问对应问询，不额外发原生 observe 或改变传输窗口。新活绑定从角色保存的 role-run-request.json 取得完整身份，核对请求中的 harness、task、attempt、generation、turn、invocation；私有问询凭据仍由绑定持有。close 只关闭绑定，不能当作进程停止证据。已结束旧执行的持久 journal 恢复仍按既有规则读取，不要求历史文件补出不存在的 invocation；它不构成新活运行的第二条通道，也不得唤醒模型。
+
+用严格不可变的 Pydantic 值补齐真实读取的事实：传输 observed/reason/error；问题的 state、reason、delivery 及答案 text/bytes/via/toolCallId/at/truncated；观察 ready、observedAt、sessionId、agentStatus、inbox、lastEvent、recentActivity、activityDropped、replyTool、capability、supported、attention、journal、deliveryMode、limitation、unavailable、error。已有规范化 activity 与最近事件元数据用途不同，分别保留。只增加实际使用的字段，局部已净化元数据可用现有有界 FrozenJson，不把整份旧结果藏进任意 JSON 槽。字符串界以原生生产来源为准，字符界不缩成同数字节界；问题/答案仍是 4,000 字节。LiveReply 与 LiveSnapshot 需保留成功但未接受、排队、送达、已回答、具体终态拒绝的差别；公开答复来源 live-bridge/bridge-journal、journalRejected 与观察降级按原规则投影。无使用方的预留格式由 2-D 删除。
+
+现有 blackboard/tasks/inquiry.py 的 bridge_request 机械移到 protocol/inquiry_transport.py，两侧共用同一份 socket client；ZCode 不再留第二份 bridge_ask 协议。保留原来的帧大小、id、超时、具体 reason/code 与 TERMINAL_BRIDGE_ERRORS 行为。黑板现有 message_post/message_update、等待结束条件与 store 事务不重写；新 ZCode 活运行通过角色及注册模块接缝取得 LiveChannel，泛用消费者不导入具体 harness。终态只读持久证据，Worker 转报继续按 attempt 绑定且只转发更新，不增加模型回合、不延长原生截止时间。
+
+聚焦验证贯穿真实 Python 桥、黑板问询函数和 Worker 转报函数，保留原测试并附变化编号与未变集合证明；用前后公开字段对照及迁移防护的少量故障注入验证答案来源、具体拒绝、身份与活动去重。微任务不跑完整检查、安装版 harness 或模型；整合后一次完整检查覆盖整步。Worker 只使用 Host 创建并记录的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指其 t/，材料放 m/，不手动删除任何对象；普通 fixture 与检查运行器自己的收尾照常，Host 验收后按确切根回收。
