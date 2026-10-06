@@ -137,3 +137,5 @@ Codex 接线后的第一次默认并行完整检查在两个模块失败：共�
 Host 在这份固定组合上重新注入四处故障，journal 外来记录、回执验签、Worker 原生层停止、回合序数均命中见证。验签变异的具体结果是 invalid-inquiry-receipt 变为 invalid-inquiry-evidence：共用桥的另一层核验仍拒绝，测试通过错误码发现第一层校验被移除，不能声称此变异让伪造回执被接受。其余分别多导入 foreign-1、把 unknown 结果接受为 ok、把无序来源接受为合法；原件在 174 项中通过。仅签收接线范围，Node 退役、共享邻接测试、真实冒烟和完整检查仍待本线后续；第四步尚未外部验收。
 
 本轮 Host 只改公共 registry 的 DSH 导入/注册和 live 能力为 cooperative-checkpoint；共享 discovery_shutdown_confirmed 消费已在 1d28a16，不需要另加外层。发现流程的 DSH 版本探针还沿用公共 discovery 环境，Host 会在 4-C 公共整合时为该启动强制私有 DSH_HOME 后再做安装版检查。
+
+按用户记录更正的相称性规则，Host 直接澄清 4-B2 三处记录，未改代码或测试、未重跑：发现异常停止字段在 1d28a16 已有公共消费；525d4cb 的 DSH live 基线为 realtime，验证组合实际含 cooperative-checkpoint 改动；“未删除任何对象”过宽，新组合构造用 rsync --delete 同步了已授权删除的两条源码。Host 对比 base-patched 与 comb 的 DSH 两棵源码树，仅 catalog.py 与 runner.py 缺席；这是在全新镜像中复现已授权的源码删除，不是回收旧实验材料，原方法明确保留，措辞缩窄为未回收旧实验/任务根。原始 applied-activation.txt 的基线误记保留在 tmp，当前公共文件与 Worker 验证组合已独立逐字核对一致，174 项验证结论不变。

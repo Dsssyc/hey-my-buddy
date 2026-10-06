@@ -6,14 +6,14 @@
 
 - 可用性回退恢复（Host 指出的非批准行为差异）：`DshAdapter.available` 与 `native_run.check_preparation` 在无绑定选择记录时不再直接拒绝，而是走 `runtime_selection.command_for` 同款的既有有界 `discover("dsh")`（与启动路径同一机制，不新增第二个发现外层、不做厂商静态证明），绑定记录仍按 ready+command 判定、坏选择仍拒；Node runner 要求与 runner_path 检查随载体删除一并去除。
 - 上一轮取消时留下的半成品补齐（Host 问询 `adr025-4b2-partial-home-nameerror` 独立复核的同一缺陷）：`_launch_agent` 签名已去 `home` 形参但 `AcpClient.start` 调用残留 `home=home`，这一公用启动点上的 NameError 使 partial `2ded7516` 的任何原生启动（run、发现、假程序）都不可运行；已移除该残留并以真实假 ACP 启动见证修复（见"验证证据"，全部十模块经该启动点）。`AcpClient.start`/`launch` 的 home 能力保留，属已验收启动包装面且有 ACP 测试消费；4-B1 记录曾标记 `run_discovery` 的 `home` 覆盖参数仅测试消费，该参数连同 `_launch_agent` 的透传已一并删除。
-- `run_discovery` 失败携带的 `discovery_shutdown_confirmed` 事实的注释改为如实：事实由本操作自己的停止收集产生并随错误携带，共享控制器的逐字发布是待接线项（见公共整合清单第一条），不再预称已接线。
+- `run_discovery` 失败携带的 `discovery_shutdown_confirmed` 事实的注释改为如实：事实由本操作自己的停止收集产生并随错误携带，共享控制器在 1d28a16 已消费该事实；本轮固定组合仍包含该消费方，Host 据当前源码更正原记录的待接线判断。
 - 测试可复现性缺口（本轮发现并修复）：`test_no_tool_dsh` 与 `test_dsh_role_wiring` 的子进程链继承调用方 shell 的 `HOME`，假 ACP 程序的强制私有 HOME 绊线随之误触（agent exit 3）；前轮组合副本运行仅在外层钉私有 HOME 时可复现。两个夹具现已像进程内用例一样把 `HOME` 钉到各自私有根，套件自洽，任何调用环境可复现（两基线均验证：不钉必失败、钉后全绿）。
 
 ## 边界与方法
 
 - 全程零模型调用、零安装版 DSH 启动：原生行为全部由本 harness 的假 ACP 程序覆盖；真实冒烟（只读命令写文件、Worker 用量不倒退、实际生效工具集）按任务书由 Host 在接线后执行。配置与凭据仅指路径不读内容；用户日常 DSH 不受影响。
-- 任务根 `/private/tmp/a254b2-5vbuva5_/`；所有命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指其 `t/`，本轮材料在新目录 `m/final-comb/`；未覆盖任何旧实验（前轮 `m/build2/comb`、`m/fault-m1..m4`、`m/ids/` 原样保留），未手动删除任何对象。
-- 正式验证副本 `m/final-comb/`：`base-patched` = Host 基线 `525d4cb` archive 加仅 DSH 激活两处；`comb` = `base-patched` 加本任务 scope 覆盖（`rsync --delete`，副本内 `dsh/runner.py`、`dsh/catalog.py` 确认不存在，scope 树与检出逐字节相等）。1d28a16 版 Host 补丁上下文已不匹配 525d4cb（Host 期间自行激活了 codex/claude 同一 seam），按"仅 DSH 激活两处"在副本内应用等价编辑——registry 导入+注册各一行；`live.py` 在 525d4cb 已是 cooperative-checkpoint 无需改动（留存说明 `m/final-comb/applied-activation.txt`，Host 原补丁文件未动）。
+- 任务根 `/private/tmp/a254b2-5vbuva5_/`；所有命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指其 `t/`，本轮材料在新目录 `m/final-comb/`；未覆盖任何旧实验（前轮 `m/build2/comb`、`m/fault-m1..m4`、`m/ids/` 原样保留），未回收此前实验或任务根；新组合镜像为复现范围内源码删除，使用 rsync --delete 移除了旧 catalog.py 与 runner.py（两棵源码树经 Host 对比确认）。
+- 正式验证副本 `m/final-comb/`：`base-patched` = Host 基线 `525d4cb` archive 加仅 DSH 激活两处；`comb` = `base-patched` 加本任务 scope 覆盖（`rsync --delete`，副本内 `dsh/runner.py`、`dsh/catalog.py` 确认不存在，scope 树与检出逐字节相等）。1d28a16 版 Host 补丁上下文已不匹配 525d4cb（Host 期间自行激活了 codex/claude 同一 seam），按"仅 DSH 激活两处"在副本内应用等价编辑——registry 导入+注册各一行；原基线 525d4cb 的 `live.py` 仍是 realtime，验证组合实际改为 cooperative-checkpoint（Host 逐字核对）；原说明把组合状态误记成基线状态（留存说明 `m/final-comb/applied-activation.txt`，Host 原补丁文件未动）。
 - 解释器用 Host 实施检出 `~/.codex/worktrees/adr025-run-module/hey-my-buddy/.venv/bin/python`，不解析符号链接；作者检出内快跑用任务 `m/iter/registered_unittest.py`（进程内镜像两处激活），正式证据一律以真实补丁副本为准。
 
 ## 验证证据
@@ -35,11 +35,11 @@
 ## 行为差异与声明边界
 
 - 五项已接受差异不变：检查点送达、fast 多出 DSH 系统提示词、原生续接为未接线的新能力（本次仍拒绝）、所有 hey-my-buddy 启动关闭 session-title-llm、关闭 session-telemetry-otel（后两项不影响用户交互 DSH）；未知停止不报 gone；除五项外本轮未发现需报告的新行为差异。
-- 未验证（不因测试通过而声称）：只读预设下"用命令写文件"的原生强制、真实会话记录上的 Worker 用量不倒退、实际生效工具集，均待 Host 接线后计划内冒烟；`run_discovery` 的停止事实尚无共享控制器消费方（见下）。
+- 未验证（不因测试通过而声称）：只读预设下"用命令写文件"的原生强制、真实会话记录上的 Worker 用量不倒退、实际生效工具集，均待 Host 接线后计划内冒烟；`run_discovery` 的停止事实由已有共享控制器消费。
 
 ## 公共整合清单（Host / 4-C）
 
-- `roles/run_controller.py` discover 分支：成功路径硬编码 `processState.shutdownConfirmed=True`（因 `run_discovery` 只在确认停止且退出码 0 后返回，事实成立），失败路径落通用 `role-controller-failed`/False，未消费错误携带的 `discovery_shutdown_confirmed`；最小接法是在 `execute` 的 discover 分支捕获该错误并逐字发布此字段——本任务不写公共文件，留 Host。
+- `roles/run_controller.py` discover 分支已在 1d28a16 捕获异常，只采信 `error.discovery_shutdown_confirmed is True`，并返回有界错误原因；正式组合与 Host 当前代码相同，无额外待接线项。本任务没有修改这个公共文件。
 - 两个不可装载的邻接测试模块（comb 上 load_errors，生产 src 无同引用）：`tests/python/blackboard/routing/test_stage2_review_scope.py` 第 14 行 `from ...dsh import runner as dsh_runner`（模块已删，其三项"未接线即拒"见证待 Host 按注册 seam 重写）；`tests/python/buddy/harnesses/test_adapter_usage.py` 第 22 行 `from ...dsh.adapter import ... native_usage_sidecar_path`（符号已随记录读模型迁移，其 8 项 DSH 用量见证的意图由未变集合中的记录读模型见证承载、5 项 Codex 见证为连带，Host 重接导入后编号自动回归）。
 - 两个邻接模块的 4 个旧接缝用例在 comb 上失败：`tests/python/buddy/harnesses/test_private_adapter_invariants.py` 的 `test_dsh_coding_and_reconstructed_claude_continuation`、`test_mock_dsh_fast_router_and_command_leave_only_evidence`（引用已删 adapter 面），`tests/python/buddy/harnesses/test_controller.py` 的 `DshCallerFdBoundaryTests` 两项（旧 runner fd 行为）；均属 Host/4-C 重接范围，本任务未代改。
 - 打包与 Node 树（4-C）：`packaging/runtime-assets.json` 的 `dsh.runner`/`dsh.catalog` 资源行、`harnesses/dsh/scripts`、`harnesses/dsh/plugins` 目录与 `yaml.bridge` 行，随 Node 树整体删除。
@@ -47,7 +47,7 @@
 
 ## 无生产使用方与实现说明
 
-- 本轮删除的无消费方项：`_launch_agent`/`run_discovery` 的 `home` 透传参数（4-B1 记录在案的唯一测试消费方，残留引用一并清理）；除此之外本轮 diff 未发现新的无读写方字段或类；`discovery_shutdown_confirmed` 目前仅测试消费，属上面第一条待接线项，事实本身保留。
+- 本轮删除的无消费方项：`_launch_agent`/`run_discovery` 的 `home` 透传参数（4-B1 记录在案的唯一测试消费方，残留引用一并清理）；除此之外本轮 diff 未发现新的无读写方字段或类；`discovery_shutdown_confirmed` 已由共享控制器生产读取，事实保留。
 - 源码行数：`dsh/native_run.py` 2105、`dsh/adapter.py` 66、`dsh/protocol.py` 677；测试 `test_native_run.py` 1257、`test_dsh_role_wiring.py` 359（新模块）、`test_no_tool_dsh.py` 160、编号表 70 行。删除的 `dsh/runner.py`、`dsh/catalog.py` 为整文件删除，无兼容层。
 
 ## 清理与环境偏差
@@ -55,4 +55,4 @@
 - 偏差一：1d28a16 版激活补丁不适用于 525d4cb（上下文移动），按 Host 指示在副本内应用等价两处编辑（见"边界与方法"），未写任何受管公共文件，Host 原补丁与旧副本未动。
 - 偏差二：前轮子进程套件只有在外层调用环境钉私有 HOME 时才可复现（本轮定位并修复夹具，两基线对照实验存于本轮后台命令输出，结论已入"本轮整改"）；前轮 `m/fault-injection-summary.md` 的"原件 OK"结论在本轮同 scope 同基线材料上可复现（需钉 HOME 或用本轮后夹具）。
 - 偏差三：`m/final-comb/comb` 内存在首轮测试运行写入的 `__pycache__` 目录（此后运行均设 `PYTHONDONTWRITEBYTECODE=1`）；按"不手动删除"保留，组合清单（`m/final-comb/combined-manifest.txt`，find+sha256，排除 `__pycache__`）如实排除。
-- 本记录提交即本线固定交付（提交哈希随结构化结果报告）；任务根 `/private/tmp/a254b2-5vbuva5_/` 未做任何手动删除，等 Host 验收后按该确切根整体回收；记录中路径均为仓库相对、`~` 或占位。
+- 本记录提交即本线固定交付（提交哈希随结构化结果报告）；任务根 `<task-root>` 未回收；新组合镜像同步两条已授权源码删除的事实见上，旧实验保留，等 Host 验收后按登记确切根整体回收；记录中路径均为仓库相对、`~` 或占位。
