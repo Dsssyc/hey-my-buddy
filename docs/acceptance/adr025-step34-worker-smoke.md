@@ -1,6 +1,6 @@
 # ADR-025 第三、四步准备：真实 ZCode Worker 回合
 
-2026-10-06，Host 在固定源码 `90900d7` 上直接调用共享 `worker_executor("zcode")` 的 prepare/start/collect，使用安装的 ZCode 0.16.9，配置为 `zai-api / GLM-5.3-Flash / max`。这是一次真实 Worker 角色回合，走 `hey_my_buddy.buddy.roles.run_controller` 和登记的运行模块；没有另启动黑板宏任务，因而不把本次签收写成黑板的权威验收。模型运行 1 次，耗时 41.351 秒；该项属于用户已批准的计划内冒烟。
+2026-10-06，Host 在固定源码 `90900d7` 上直接调用共享 `worker_executor("zcode")` 的 prepare/start/collect，使用安装的 ZCode 0.16.9，配置为 `zai-api / GLM-5.3-Flash / max`。这是一次真实 Worker 角色回合，走 `hey_my_buddy.buddy.roles.run_controller` 和登记的运行模块；没有另启动黑板宏任务，因而不把本次签收写成黑板的权威验收。ZCode 原生 Worker 运行 1 次，耗时 41.351 秒；该项属于用户已批准的计划内冒烟。
 
 任务是在本次私有目录读取唯一的 `smoke.txt`，确认内容 `ADR025_WORKER_SMOKE_OK`，完成检查点后调用本次完成工具。实际完成的六字段结果为 `disposition=completed`、上述短摘要、空 remaining/decisions/artifacts 与 `request=null`。RunRequest、RunResult 和持有者冻结的完整 identity 三者相等，结果由公共格式真实编码与解码。
 
