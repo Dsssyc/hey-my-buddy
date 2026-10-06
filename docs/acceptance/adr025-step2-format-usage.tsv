@@ -97,9 +97,8 @@ run_execution 控制(私有)	account	C	prepare/start_fast 写入	无（原仅供
 LiveCapabilities	inquiry_delivery	A	EXISTING_CAPABILITIES 四处声明	ExistingLiveChannel.request 的 unsupported 判定；消费方能力事实	kept	渠道实际读取的能力声明
 LiveCapabilities	activity	C	EXISTING_CAPABILITIES 四处写常量 True	无（生产与渠道均不读取）	deleted	continue-1 删除：仅声明、无读取的能力位；活动读取是绑定设施而非声明位
 LiveCapabilities	finish_notice/session_content	C	无生产写入（恒默认 False）	无	deleted	未实现预留能力位
-LiveRequest	format_version	A	黑板 inquiry 构造	decode_live_request 帧边界见证	kept	内部帧信封；帧格式为本步内部格式（ADR-025 决议 6）
 LiveRequest	identity	A	黑板以 channel.identity 构造	request.identity != channel 绑定身份即拒（identity-mismatch）；board _live_channel 再以存储请求完整身份核对	kept	完整请求身份绑定（保留项）
-LiveRequest	format_version	C	无生产写入（原默认 LIVE_FORMAT_VERSION）	无（原仅供已删除的帧编解码；生产无解码入口）	deleted	continue-2 删除：帧信封无消费者；LiveRequest 保留 identity/request_id/kind/payload 的真实绑定与去重
+LiveRequest	format_version	C	无生产写入（原默认 LIVE_FORMAT_VERSION）	无（原仅供已删除的帧编解码；生产无解码入口）	deleted	continue-2 删除：帧信封无消费者；LiveRequest 保留 identity/request_id/kind/payload 的真实绑定与去重；Host 按最终固定源码去掉重复且陈旧的 kept 行，不改变代码或验证结论
 LiveRequest	request_id	A	黑板以 inquiry_id 构造	渠道去重/冲突记忆的键（self._requests/_replies）	kept	幂等去重绑定（保留项）
 LiveRequest	kind	A	黑板构造 inquiry	进入 requestId 摘要（kind/payload digest）	kept	幂等摘要组成部分
 LiveRequest	payload	A	黑板构造 InquiryPayload	渠道透传 question_id/question 给桥	kept	问询内容载体
@@ -118,7 +117,7 @@ InquiryJournalRejection	question_id/reason	A	渠道按身份绑定拒绝写	黑�
 LiveJournal	available/reason/entries/rejections	A	渠道由绑定 fact 写	黑板 journal 可用性与拒绝投影	kept	生产消费者保留
 LiveSnapshot	format_version/identity	C	渠道曾按绑定身份写	无生产字段级读取（黑板/Worker 只读语义字段）	deleted	continue-2 Host 取舍：信封不参与真实绑定/分页（绑定在 LiveRequest 与存储请求核对），删除
 LiveSnapshot	sequence	C	observe/_observe_answer 曾由水位或页游标派生	无生产字段级读取（黑板分页用 entry.seq+truncated 推进）	deleted	continue-2 Host 取舍：最终无消费的派生值删除；通道内部真实水位（_sequence/_next_seq）与 InquiryState.seq 分页机制保留，分页/去重含义不变
-LiveSnapshot	activity/inquiries/observation/journal/unavailable/truncated/observed/reason/error	A	渠道按实际读取写	黑板 observe 投影与 Worker activity 转报（fields=("activity",)）	kept	分页、降级与传输事实保留
+LiveSnapshot	activity/inquiries/observation/journal/unavailable/truncated/observed/reason/error	A	渠道按实际读取写	"黑板 observe 投影与 Worker activity 转报（fields=(""activity"",)）"	kept	分页、降级与传输事实保留
 roles.live	handle_live_channel	C	无生产调用（仅测试）	无	deleted	测试改走 handle_live_binding（runtime/worker.py 的生产入口）
 live 模块	LIVE_KINDS/INQUIRY_DELIVERY_MODES/LIVE_REPLY_STATUSES/INQUIRY_STATES/REPLY_STATES/MAX_WAIT_MS	C	无生产引用	无	deleted	孤立导出；wait 上限真实执行点在黑板 tasks/inquiry.py
 live 模块	encode_live_request/decode_live_request/encode_live_reply/decode_live_reply/encode_live_snapshot/decode_live_snapshot	C	无生产调用方	仅测试调用	deleted	continue-2 Host 取舍：仅 codec/测试用途的包装入口删除；observe 实际调用的 _bounded_frame 分页界、规范化编码预算与 json_codec 严格解码/解析前帧界保留，live 帧无生产解码入口故其独立 parser 见证随入口删除
