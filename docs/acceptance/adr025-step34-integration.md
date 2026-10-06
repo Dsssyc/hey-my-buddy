@@ -119,3 +119,11 @@ Codex 接线后的第一次默认并行完整检查在两个模块失败：共�
 3-B2 修正后固定封存 4930dab（Worker 摘要提交 522e229）、artifact aa007546-aa9e-4999-b5d4-47691d146405、累计补丁 acd8b80166a5ac5b5c0392aa7660fd6b836b65f1d9bfc20b7b8ad99c96df9396，14 条范围路径及删除均已核对。Host 在 ef856ef 加固定范围和 Claude 注册的无旧入口副本独立运行 165 项通过（58.148 秒）。中断确认恒真、发现停止恒真、不写中断事实三份变异逐字核对到固定源码的单处替换，再独立重跑见证，分别因 True≠False、True≠False、None≠True 失败；原件同见证已在 165 项通过。
 
 本轮恢复真实原生中断回复、共享发现外层与保守停止事实、非法 initial 的模型前拒绝；删除无生产调用方的 Claude OUTCOME_SCHEMA、parse_structured_output 与 config 默认回退。Host 只激活公共注册，范围文件逐字节合入。记录所称“Host 实施检出缺 pydantic”实际指另一个 Desktop 检出；本任务实施检出的 uv 环境已独立跑通上述 165 项，Worker 使用同锁冻结环境的验证事实保留。此处以整合登记澄清检出归属，不改变其做过的检查。共享完整检查、真实冒烟与整线外部验收仍待。
+
+3-B2 内部签收编号 int-b806afb4-84f4-4da2-a4a4-41de2cee8a5d 为 verified，回收计划 cln-02d86000-8309-41c0-9fbe-87cd339717a3 最终 applied/removed，实际检出消失。一次显式 apply 因缺 confirmPath 被校验拒绝，未执行删除；随后的只读回查确认黑板已自动应用。Host 留存 14 份指定材料与摘要后，仅整体删除创建时登记的 3-B2 根，不用通配符、不屏蔽报错。
+
+第二次默认并行完整检查基线 5a83d06，466.878 秒，退出 1；176 个 Python 模块中只失败 cli.test_repository_hygiene，原因是 3-B2 记录含本机项目目录层级。其余 175 个模块运行 2,785 项（skip 1），Node 110 项通过；不是整步通过。Host 把该一处路径替换为 <other-desktop-checkout>，只改记录路径表示，不改代码、测试或验证结论，按用户相称性规则直接更正，不为此 continue；此项是内部签收后的记录调整。
+
+本批全量编号按同一 python_test_modules 加 unittest 加载器收集为 2,790 个、176 个模块，加载错误 0、重复 0。相对第二步 2,628 个：2,619 个编号不变，7 个改类/改名有对应，2 个重复 Claude schema/解析器测试随唯一旧使用方删除，由共享 schema-worker 的 schema 哈希与严格业务值校验覆盖；净新增编号 164 个。已列变化两侧从原始集合减去后集合完全相等。[编号表](adr025-step3-test-ids.tsv) 只列变化，原始清单留 tmp；其中包含并行已合入的 DSH 原生主体 42 项，不能把这一共存计数冒充 DSH 接线验收。
+
+[格式使用表](adr025-step3-format-usage.tsv) 复核第二步的 18 组 B 项：InterruptEvidence.requested/basis 已有 Codex native_evidence 的实际读取；3 组部分投影/部分读取；14 组仍没有业务读取。整帧存下与测试断言不算业务使用方。ModelStartEvidence、DeniedInteraction、UnknownEvents 三个格式类当前只有构造/序列化，连同表中其余未消费字段在第四步结束前删除或明确真实读取；不为保留它们造消费者。本步新增的角色参数、网络/拒绝工具请求字段、路径服务绑定均有实际调用。真实检查见[原生冒烟记录](adr025-step3-native-smokes.md)：Codex Worker 1 次通过，Claude 1 次无模型发现遇登录条件，Worker 0 次、未验证、不重试。
