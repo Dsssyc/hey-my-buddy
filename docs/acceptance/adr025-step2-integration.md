@@ -165,3 +165,11 @@ run `c66ad092-3cdf-4d24-bd72-084ffc5a0c6f` 的初次路由 `dec-2023213c-9c3c-4f
 Host 核对了本轮分页变异原始日志：让变更条目沿用旧序号，两条实际分页见证失败；恢复后同两项通过。Worker 的本轮聚焦结果为 live 44、角色 53、Worker 不变量 11、问询 29 项通过；先前两组 strict/journal 红绿实现未再变化，不重复运行。完整测试将在本批整合后执行，最终 acknowledge 仍待它通过。
 
 Host 对清单作一处已知事实的小更正：最终代码已删除 LiveRequest.format_version，但 TSV 同时保留旧 kept 与最终 deleted 两行，现去掉旧行并说明来源，未改代码或测试。语义展开同源合并行后，清单覆盖三个模块的 191 个当前字段（运行格式 117、实时格式 60、角色准备值 14），没有缺项；RunRequest/RunResult 的 format_version 在真实生产解码边界使用，继续保留。另澄清历史计数：continue-1 的 live 字段数应为 67，原文 68 是计数笔误；本轮最终 60 的 AST 实算正确，不改变验证结论。四份格式/接缝模块合计 2,118→1,974 行；清理前后 run_contract 的 Pydantic 模型 28→26、字段 154→117，live 模型 11→10、字段 74→60。所有保留字段分为实际执行/投影使用或有来源的 RunResult 事实产物，不以将来需要或测试自用为理由。
+
+## 第一次整步检查与归属处理
+
+在 `e03397d` 上执行完整命令 `uv run --frozen python -m hey_my_buddy.cli.checks --jobs 2`，用时 773.084 秒，退出码 1。检查共调度 171 个 Python 文件和 Node 套件；169 个 Python 文件通过，运行器在这些文件报告 2,575 项（其中跳过 1），Node 110 项通过。失败文件是 blackboard.routing.test_router_probe（17 项中 5 failure、2 error）和 buddy.harnesses.zcode.test_native_run（36 项中 1 error）。原始日志和摘要保留为本步 `tmp/` 的 step2-full-check-attempt1 文件，不把该次检查记为通过。
+
+ZCode 失败是 2-D 范围内遗漏：分页元数据见证仍导入已删除的 encode_live_snapshot。已拒绝原 artifact，继续同一 run 修正该测试与追加记录；不恢复兼容入口，也不由 Host 代改。当前生效的分页、strict、journal 实现没有新变化，要求只跑对应测试或 LiveBindingTests 类，不重复整批。修正说明摘要为 `d3fba0eaa93041fcaccc3049b8d464c8ef020bc2082ac5bafa1a3e3d21ae6da7`。
+
+Router 探针测试不在 2-P、2-C1 或其他微任务的写入范围，由 Host 处理并在此登记：原无约束 Mock 会凭空提供 role_run_control，因而走入新的运行结果读取；另两处仍给已删除的 ZCode start_read_only_structured 打补丁。Host 将句柄 fixture 限定为 ProcessHandle 表面，并让启动防护对已抽取 harness 监视注册模块的 run、其余仍监视原入口。只改 tests/python/blackboard/routing/test_router_probe.py，生产代码、探针行为和测试编号不变。17 项聚焦测试全部通过；在原探针调用前注入 ZCode 注册运行入口的调用，两项“不启动”见证失败，恢复后两项通过。原始命令脚本、红绿日志和零模型调用摘要存本步 `tmp/` 的 host-router-probe 文件。两份修正收齐后再做一次必要的完整检查；此前未失败的微任务不重复聚焦矩阵。
