@@ -59,12 +59,12 @@ class DistributionTests(unittest.TestCase):
                     "hey_my_buddy/_distribution/package/packaging/hatch_build.py",
                     "hey_my_buddy/_distribution/package/src/hey_my_buddy/install/runtime.py",
                     "hey_my_buddy/_distribution/package/src/hey_my_buddy/console/assets/index.html",
-                    "hey_my_buddy/_distribution/package/harnesses/dsh/scripts/run.mjs",
                     "hey_my_buddy/install/package_install.py",
                 }
                 self.assertFalse(expected - wheel_files, expected - wheel_files)
                 self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/references/") for name in wheel_files))
-                self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/package/harnesses/dsh/plugins/") for name in wheel_files))
+                self.assertFalse(any(name.startswith("hey_my_buddy/_distribution/package/harnesses/dsh/")
+                                     for name in wheel_files))
                 self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/package/src/hey_my_buddy/console/assets/assets/") for name in wheel_files))
                 entry = next(name for name in wheel_files if name.endswith(".dist-info/entry_points.txt"))
                 self.assertIn("hey-my-buddy = hey_my_buddy.install.package_install:main", archive.read(entry).decode())
@@ -77,7 +77,7 @@ class DistributionTests(unittest.TestCase):
                 for suffix in ("packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
                                "skills/buddy/SKILL.md", "docs/reference/architecture.md",
                                "src/hey_my_buddy/install/runtime.py", "src/hey_my_buddy/console/assets/index.html",
-                               "harnesses/dsh/scripts/run.mjs", "src/hey_my_buddy/build-info.json"):
+                               "src/hey_my_buddy/build-info.json"):
                     self.assertTrue(any(name.endswith("/" + suffix) for name in names), suffix)
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in names))
                 # The sdist carries the source commit for a later Git-less wheel build.

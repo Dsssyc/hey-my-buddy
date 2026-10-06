@@ -22,7 +22,7 @@ build-backend = "hatchling.build"
 packages = ["src/hey_my_buddy"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/LICENSE", "/pyproject.toml", "/uv.lock", "/packaging/hatch_build.py", "/packaging/runtime-assets.json", "/src/hey_my_buddy", "/harnesses/dsh/scripts", "/harnesses/dsh/plugins", "/skills/buddy/SKILL.md", "/skills/buddy/scripts", "/docs/reference"]
+include = ["/LICENSE", "/pyproject.toml", "/uv.lock", "/packaging/hatch_build.py", "/packaging/runtime-assets.json", "/src/hey_my_buddy", "/skills/buddy/SKILL.md", "/skills/buddy/scripts", "/docs/reference"]
 exclude = ["**/__pycache__", "**/*.pyc", "**/node_modules", "**/.venv", "**/_distribution"]
 
 [tool.hatch.build.hooks.custom]

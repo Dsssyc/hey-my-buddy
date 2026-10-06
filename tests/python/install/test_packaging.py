@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "skills" / "buddy" / "scripts" / "buddy"
-REQUIRED_RESOURCES = {"dsh.runner", "dsh.catalog", "yaml.bridge", "console.assets"}
+REQUIRED_RESOURCES = {"console.assets"}
 
 
 def load_build_skill():

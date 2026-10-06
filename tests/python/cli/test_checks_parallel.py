@@ -167,7 +167,7 @@ class ResolveJobsTests(unittest.TestCase):
 
 
 class RunnerTestCase(unittest.TestCase):
-    """A private root, importable fixture modules and a stand-in Node binary."""
+    """A private root and importable fixture modules."""
 
     def setUp(self):
         self.directory = Path(tempfile.mkdtemp(prefix="checks-parallel-"))
@@ -183,26 +183,19 @@ class RunnerTestCase(unittest.TestCase):
         (self.modules / f"{name}.py").write_text(textwrap.dedent(body))
         return name
 
-    def environment(self, node_exit: int = 0, node_summary: str = "") -> dict:
-        node = self.directory / "node"
-        node.write_text(
-            f'#!/bin/sh\n: > "$CHECKS_FIXTURE_MARKERS/node"\nprintf \'%s\\n\' "{node_summary}"\nexit {node_exit}\n'
-        )
-        node.chmod(0o700)
+    def environment(self) -> dict:
         inherited = os.environ.get("PYTHONPATH")
         return {
-            "BUDDY_NODE": str(node),
             "CHECKS_FIXTURE_MARKERS": str(self.markers),
             "PYTHONPATH": os.pathsep.join([str(self.modules)] + ([inherited] if inherited else [])),
         }
 
-    def run_parallel(self, names: list[str], *, jobs: int = 2, node_exit: int = 0,
-                     node_summary: str = "") -> tuple[str | None, str]:
+    def run_parallel(self, names: list[str], *, jobs: int = 2) -> tuple[str | None, str]:
         # Each run owns a fresh private root, exactly as ``main`` creates one per run.
         self.private_root = Path(tempfile.mkdtemp(prefix="root-", dir=self.directory))
         output = io.StringIO()
         with (
-            patch.dict(os.environ, self.environment(node_exit, node_summary)),
+            patch.dict(os.environ, self.environment()),
             patch.object(checks, "python_test_modules", return_value=list(names)),
             contextlib.redirect_stdout(output),
         ):
@@ -233,14 +226,16 @@ class ParallelOutcomeTests(RunnerTestCase):
             """,
         )
 
-    def test_a_passing_run_reports_its_totals_and_runs_the_node_suite(self):
-        failure, output = self.run_parallel([self.passing()], node_summary="ℹ tests 7")
+    def test_a_passing_run_reports_its_python_totals(self):
+        failure, output = self.run_parallel([self.passing()])
         self.assertIsNone(failure, output)
         self.assertIn("hey_my_buddy.cli.checks: python tests run: 2 (skipped 1) in 1 of 1 files", output)
-        self.assertIn("hey_my_buddy.cli.checks: node tests run: 7", output)
-        self.assertTrue((self.markers / "node").exists())
         child_root = Path((self.markers / "root").read_text())
         self.assertEqual(child_root.parent, self.private_root)
+
+    def test_an_empty_python_suite_is_refused(self):
+        failure, _output = self.run_parallel([])
+        self.assertEqual(failure, "python suite has no test modules")
 
     def test_every_kind_of_failing_file_fails_the_run(self):
         names = [
@@ -281,22 +276,8 @@ class ParallelOutcomeTests(RunnerTestCase):
         self.assertIn("a_module_that_does_not_exist", output)
         self.assertIn(f"checksfixture_killed FAILED (exit {-signal.SIGKILL})", output)
 
-    def test_a_failing_node_suite_fails_the_run(self):
-        failure, output = self.run_parallel([self.passing()], node_exit=7)
-        self.assertEqual(failure, "node suite exited with 7")
-        self.assertIn("node suite FAILED (exit 7)", output)
 
-    def test_a_node_suite_that_ran_nothing_fails_the_run(self):
-        failure, _ = self.run_parallel([self.passing()], node_summary="ℹ tests 0")
-        self.assertEqual(failure, "node suite ran no tests")
-        failure, output = self.run_parallel([self.passing()])
-        self.assertIsNone(failure, output)
-        self.assertIn("hey_my_buddy.cli.checks: node tests run: not reported", output)
 
-    def test_a_checkout_without_node_tests_is_refused(self):
-        self.assertTrue(checks.dsh_node_tests(REPOSITORY))
-        with self.assertRaises(SystemExit):
-            checks.dsh_node_tests(self.directory)
 
     def test_a_file_that_reports_no_test_count_fails_the_run(self):
         def silent(root, private_root, directory_name, label, command, live, guard, stop):
@@ -428,7 +409,6 @@ class LeftoverProcessTests(RunnerTestCase):
             self.assertFalse(process_exists(child["pid"]), "an interrupted run left a suite child running")
             self.assertTrue(process_exists(child["leftover"]), "the fixture process must outlive its suite child")
         self.assertFalse((self.markers / f"{names[2]}.json").exists(), "a queued file started after the interrupt")
-        self.assertFalse((self.markers / "node").exists(), "the queued node suite started after the interrupt")
 
 
 if __name__ == "__main__":

@@ -147,3 +147,7 @@ Host 为公共发现的 DSH --version 探针复用已验收的私有启动包装
 跨目录用量测试改为真实假 ACP Worker → 私有 session.v3 记录 → 新运行格式 → 共享收集，而非直接注入旧 Node sidecar。首轮 8 项中发现消息 sourceId 丢失和非配额错误进入 quotaFailure；这是旧公开收据检查与新原生事实/公共投影合并后的缺口，Host 自行整合：记录读取保留实际 message.id 到 lastAssistantMessage.sourceId，角色层对 DSH 只发布已识别配额分类，原始非配额代码继续保留在 RunResult/记录证据。生产两处修改已明确登记，未改用户批准的五项差异。跨 harness 用量与 schema Worker 共 20 项通过（5.576 秒）。
 
 Host 迁移暂缓审阅与私有证据分区的旧 DSH 调用点到同一注册接缝，保留身份、两层停止、私有记录与输出证据分离的原断言意图。退役仅旧 Node 载体消费的 read_last_line_result、legacy_node_stop_confirmed 及五个专属实现见证（两条旧 FD 区域规则、一条末行读取、两条 truthy Node 停止收据）；Node 载体整体移除后没有这些执行区域，公共外层的 FD 收尾、严格帧读取与真实两层停止由保留的共享测试和 4-B2 新见证覆盖。不会为了保留旧 FD 泄漏或 truthy 停止口径而留下兼容代码。原编号与替代覆盖随第四步总账列明。
+
+Host 公共退役接线移除 Node 套件发现/调度/计数，保持原默认并行数、Python 逐模块隔离、失败输出与中断回收，新增空 Python 集合不能绿的见证；三条 Node 调度专属见证随被删分支退役。运行时 manifest 与 sdist 不再声明项目 Node 集成资源；安装用合成 manifest 改用中性 Python/JSON 资源名，目录覆盖、前缀邻居、源码泄漏与冷安装意图不变。检查运行器、清理、运行时与打包批次 72 项中 71 项通过（36.482 秒），唯一失败是 Host 新 wheel 断言把合法 Python harnesses/dsh 包也误算为旧 Node 树；修成精确的 _distribution/package/harnesses/dsh 前缀后，只补跑 distribution 模块通过。范围以外的 Node 源码删除仍由 4-C 完成。
+
+私有分区迁移首轮仅 DSH 会话目录断言失败：假程序默认不写会话记录；配置它写本次合成 session.v3 后，实际记录目录/证据分区见证恢复。删除旧 Node 控制器帮助时 Host 曾误删仍被 Codex 发起顺序测试使用的 runtime_selection 导入，并遗留旧 banner fixture；恢复导入、使通用收集夹具匹配当前严格帧后，共享控制器与这项分区见证 33 项通过（1.613 秒）。这些是 Host 迁移中的失误与修正，原始失败日志保留，没有放宽原分区/FD/收集断言。

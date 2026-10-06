@@ -1,8 +1,8 @@
-"""Run the focused Python integration tests and the dependency-free Node suite.
+"""Run the Python integration tests in isolated processes.
 
-Both suites exercise *this checkout*: ``src`` and ``tests/python`` go first on
-``PYTHONPATH``, the DSH Node tests run from ``harnesses/dsh/tests``, and inherited
-runtime, worker and agent-credential variables are removed before either child starts.
+The tests exercise *this checkout*: ``src`` and ``tests/python`` go first on
+``PYTHONPATH``, and inherited runtime, worker and agent-credential variables are
+removed before each child starts.
 A Worker-pinned production runtime must never leak into a test subprocess, and
 ``BUDDY_DEV_SOURCE=1`` alone cannot override one.
 
@@ -10,7 +10,7 @@ Every child runs inside one private checks root: ``TMPDIR`` points into that roo
 the state and runtime roots each suite creates — including its ``TMPDIR`` fixtures —
 never leave it. With the default worker count the Python suite runs one subprocess per
 test file — each with its own private state, runtime and temp directories below the
-checks root — and the Node suite runs alongside it; ``--jobs 1`` (or
+checks root; ``--jobs 1`` (or
 ``BUDDY_CHECKS_JOBS=1``) restores the original single-process serial run. After the
 suites finish, passing or failing, the runner asks any
 surviving Buddy daemon or supervisor below the private root to stop through its
@@ -210,18 +210,6 @@ def python_test_modules(root: Path) -> list[str]:
     return sorted(modules)
 
 
-def dsh_node_tests(root: Path) -> list[str]:
-    """The DSH Node suites under ``harnesses/dsh/tests``; their fixtures are not tests.
-
-    Browser tests belong to Vitest. An empty list is refused: ``node --test`` without
-    files would discover whatever the working directory holds and still exit 0.
-    """
-    tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
-    if not tests:
-        raise SystemExit("hey_my_buddy.cli.checks: no DSH Node tests found under harnesses/dsh/tests")
-    return tests
-
-
 def _scheduled_test_modules(modules: list[str]) -> list[str]:
     """The baseline-slowest modules first, then the alphabetical remainder."""
     rank = {name: index for index, name in enumerate(SLOWEST_FILES_FIRST)}
@@ -308,7 +296,7 @@ def _report_child_output(outcome: ChildOutcome) -> None:
 
 
 def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None:
-    """One private subprocess per Python test file, with the Node suite alongside.
+    """One private subprocess per Python test file.
 
     Every child gets its own private sub-root below the checks root, so no state,
     runtime or temp directory is shared while the suites run; the whole-root teardown
@@ -316,16 +304,11 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     first. A failing child's captured output is printed in full — unittest's verbose
     listing names the module, class and test — and the failure is summarized by file.
     """
-    node = os.environ.get("BUDDY_NODE") or shutil.which("node")
-    if not node:
-        raise SystemExit("Node.js is required for the dsh process runner")
-    node_tests = dsh_node_tests(root)
-    tasks: list[tuple[str, str, list[str]]] = [
-        *[(f"p{index:03d}", module, [sys.executable, "-m", "unittest", "-v", module])
-          for index, module in enumerate(_scheduled_test_modules(python_test_modules(root)))],
-        ("node", "node suite", [node, "--test", *node_tests]),
-    ]
-    print(f"hey_my_buddy.cli.checks: {len(tasks) - 1} python test files across {jobs} workers, node suite in parallel")
+    tasks = [(f"p{index:03d}", module, [sys.executable, "-m", "unittest", "-v", module])
+             for index, module in enumerate(_scheduled_test_modules(python_test_modules(root)))]
+    if not tasks:
+        return "python suite has no test modules"
+    print(f"hey_my_buddy.cli.checks: {len(tasks)} python test files across {jobs} workers")
     live: set = set()
     guard = threading.Lock()
     stop = threading.Event()
@@ -375,14 +358,14 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     never_ran = sorted(label for _, label, _ in tasks if label not in reported)
     python_failed = sorted(
         outcome.label for outcome in outcomes
-        if outcome.label != "node suite" and outcome.returncode != 0
+        if outcome.returncode != 0
     )
     # A parallel run prints only failing children, so the total must stay visible:
     # every passing file reports how many tests it actually ran and skipped.
     ran_total = skipped_total = 0
     uncounted = []
     for outcome in outcomes:
-        if outcome.label == "node suite" or outcome.returncode != 0:
+        if outcome.returncode != 0:
             continue
         summary = ANSI_STYLE.sub("", outcome.stderr)
         ran = re.search(r"^Ran (\d+) tests? in ", summary, re.MULTILINE)
@@ -392,18 +375,10 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
         ran_total += int(ran.group(1))
         skipped = re.search(r"^OK \(.*?skipped=(\d+)", summary, re.MULTILINE)
         skipped_total += int(skipped.group(1)) if skipped else 0
-    python_files = len(tasks) - 1
+    python_files = len(tasks)
     print(f"hey_my_buddy.cli.checks: python tests run: {ran_total} (skipped {skipped_total}) "
           f"in {python_files - len(python_failed) - len(uncounted)} of {python_files} files")
-    node_outcome = next((outcome for outcome in outcomes if outcome.label == "node suite"), None)
     failures = []
-    if node_outcome is not None and node_outcome.returncode == 0:
-        # The reporter's own summary line; its format belongs to Node, so a missing
-        # line is reported rather than failed, while a counted zero is a failure.
-        counted = re.search(r"^(?:ℹ|#) tests (\d+)", ANSI_STYLE.sub("", node_outcome.stdout), re.MULTILINE)
-        print(f"hey_my_buddy.cli.checks: node tests run: {counted.group(1) if counted else 'not reported'}")
-        if counted and int(counted.group(1)) == 0:
-            failures.append("node suite ran no tests")
     if never_ran:
         failures.append(f"{len(never_ran)} suite(s) never ran: {', '.join(never_ran)}")
     if python_failed:
@@ -412,13 +387,11 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
         failures.append(f"python suite failed in {len(python_failed)} file(s): {', '.join(python_failed)}")
     if uncounted:
         failures.append(f"python suite reported no test count in {len(uncounted)} file(s): {', '.join(sorted(uncounted))}")
-    if node_outcome is not None and node_outcome.returncode != 0:
-        failures.append(f"node suite exited with {node_outcome.returncode}")
     return "; ".join(failures) or None
 
 
 def run_suites_serially(root: Path, private_root: Path) -> str | None:
-    """The original serial run: one Python discovery process, then the Node suite."""
+    """One Python discovery process using the same private environment."""
     env = child_environment(root, private_root)
     python = subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", str(root / "tests" / "python"), "-v"],
@@ -427,12 +400,6 @@ def run_suites_serially(root: Path, private_root: Path) -> str | None:
     )
     if python.returncode != 0:
         return f"python suite exited with {python.returncode}"
-    node = env.get("BUDDY_NODE") or shutil.which("node")
-    if not node:
-        raise SystemExit("Node.js is required for the dsh process runner")
-    result = subprocess.run([node, "--test", *dsh_node_tests(root)], cwd=str(root), env=env)
-    if result.returncode != 0:
-        return f"node suite exited with {result.returncode}"
     return None
 
 
