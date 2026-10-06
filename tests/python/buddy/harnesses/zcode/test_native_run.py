@@ -837,8 +837,11 @@ class LiveBindingTests(NativeRunCase):
         # foreign records produced a 66,713-byte first page that failed to
         # encode. The paging budget now measures the journal fact together with
         # the entries, so every returned page encodes within the 64 KiB bound
-        # and the full answer set stays reachable through the pagination.
-        from hey_my_buddy.buddy.harnesses.live import encode_live_snapshot
+        # and the full answer set stays reachable through the pagination. The
+        # byte check uses the production paging bound itself (_bounded_frame,
+        # the encoder the channel's pager measures pages with) after the
+        # step-only encode/decode wrappers went with 2-D.
+        from hey_my_buddy.buddy.harnesses.live import _bounded_frame
         from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
         from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-frame-",
@@ -868,7 +871,7 @@ class LiveBindingTests(NativeRunCase):
         while True:
             snapshot = channel.observe(after_seq=after, limit=256, timeout_ms=1500,
                                        fields=("inquiries",))
-            encoded = encode_live_snapshot(snapshot)
+            encoded = _bounded_frame(snapshot.to_payload(), "live page")
             self.assertLessEqual(len(encoded.encode()), 64 * 1024,
                                  f"page {pages} must encode within the frame bound")
             entries.extend(snapshot.inquiries)

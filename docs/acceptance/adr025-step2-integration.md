@@ -173,3 +173,5 @@ Host 对清单作一处已知事实的小更正：最终代码已删除 LiveRequ
 ZCode 失败是 2-D 范围内遗漏：分页元数据见证仍导入已删除的 encode_live_snapshot。已拒绝原 artifact，继续同一 run 修正该测试与追加记录；不恢复兼容入口，也不由 Host 代改。当前生效的分页、strict、journal 实现没有新变化，要求只跑对应测试或 LiveBindingTests 类，不重复整批。修正说明摘要为 `d3fba0eaa93041fcaccc3049b8d464c8ef020bc2082ac5bafa1a3e3d21ae6da7`。
 
 Router 探针测试不在 2-P、2-C1 或其他微任务的写入范围，由 Host 处理并在此登记：原无约束 Mock 会凭空提供 role_run_control，因而走入新的运行结果读取；另两处仍给已删除的 ZCode start_read_only_structured 打补丁。Host 将句柄 fixture 限定为 ProcessHandle 表面，并让启动防护对已抽取 harness 监视注册模块的 run、其余仍监视原入口。只改 tests/python/blackboard/routing/test_router_probe.py，生产代码、探针行为和测试编号不变。17 项聚焦测试全部通过；在原探针调用前注入 ZCode 注册运行入口的调用，两项“不启动”见证失败，恢复后两项通过。原始命令脚本、红绿日志和零模型调用摘要存本步 `tmp/` 的 host-router-probe 文件。两份修正收齐后再做一次必要的完整检查；此前未失败的微任务不重复聚焦矩阵。
+
+2-D 同 run 的修正交付为 `0edbb963105bb72f0c4c6f86bc8ea812bc5b2020`、artifact `5912edfb-08a9-4ad6-8dff-ee2014513339`，累计补丁 SHA-256 为 `e9df782c8a19f2ad4c09acd3e4b4e42c4b68d0f7f1c047f99c2ecb78b439bdb1`。Host 核对累计摘要、固定字节和本轮仅两个文件的差异；原字节界、页数、完整答案和拒绝条数断言均保留。单项及所属 LiveBindingTests 的 11 项通过，原始日志已核对。按相对已整合 `38c2a59` 的固定差异应用，没有代改测试；生产实现未变，编号不变。此前 TSV 的 Host 小更正继续保留。至此两份针对完整检查失败的修正收齐，准备对新整合提交重跑完整检查。
