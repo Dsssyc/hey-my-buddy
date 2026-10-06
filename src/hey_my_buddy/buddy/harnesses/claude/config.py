@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .protocol import OUTCOME_SCHEMA, decode_json
+from .protocol import decode_json
 from ...roles.turn_io import canonical_json
 
 #: The effort spelling used for models without native effort levels. Execution
@@ -285,14 +285,14 @@ def discovery_args() -> list[str]:
 
 
 def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
-                   output_schema: dict | None = None, additional_denied_tools=None) -> list[str]:
+                   output_schema: dict, additional_denied_tools=()) -> list[str]:
     """The strict isolated execution invocation; never ``--resume``, never global settings.
 
-    ``additional_denied_tools`` is None for the legacy derivation — the review
-    deny suffix follows the schema's presence, exactly as the three legacy
-    paths always behaved — and an explicit sequence for the unified run
-    module: exactly those names join the session-wide deny list under any
-    scope, and nothing is derived from the schema or the scope.
+    ``output_schema`` is the run's own ending contract and is always explicit:
+    the governed turn passes the shared worker schema, the read-only call the
+    caller's answer schema. ``additional_denied_tools`` is the caller's
+    explicit sequence of extra session-wide denials — empty by default;
+    nothing is ever derived from the schema's presence or the tool scope.
     """
     args = [*base_args(),
             "--safe-mode", "--strict-mcp-config", "--mcp-config", EMPTY_MCP_CONFIG,
@@ -316,19 +316,14 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--permission-mode", "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]
-    if additional_denied_tools is None:
-        if output_schema is not None:
-            # --tools does not limit MCP; keep the native deny layer explicit.
-            index = args.index("--disallowedTools") + 1
-            args[index] += ",mcp__*,WebFetch,WebSearch,Agent,Task"
-    elif additional_denied_tools:
+    if additional_denied_tools:
         values = list(additional_denied_tools)
         if "--disallowedTools" in args:
             index = args.index("--disallowedTools") + 1
             args[index] += "," + ",".join(values)
         else:
             args += ["--disallowedTools", ",".join(values)]
-    args += ["--json-schema", canonical_json(output_schema if output_schema is not None else OUTCOME_SCHEMA)]
+    args += ["--json-schema", canonical_json(output_schema)]
     return args
 
 

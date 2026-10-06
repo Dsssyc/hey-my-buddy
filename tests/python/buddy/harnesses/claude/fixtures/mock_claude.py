@@ -126,13 +126,18 @@ def handle_control(frame, case):
             # the pre-user buffer is still installed, making the boundary
             # rejection a matter of pipe order, never of thread timing.
             send(assistant_tool("Read", "toolu_early_1"))
+        if case == "premature":
+            # Tool output emitted before the controller could send its user
+            # message, and written before the initialize response for the same
+            # pipe-order reason: a frame sent only after the response could
+            # race the controller's own send and deadlock the turn instead of
+            # proving the boundary.
+            send(assistant_tool("Read", "toolu_early_1"))
         send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
                                                        "response": {"models": DEFAULT_MODELS,
                                                                     "account": {"apiProvider": "firstParty",
                                                                                 "tokenSource": "subscription"}}}})
         if case == "premature":
-            # Tool output emitted before the controller sends the user message.
-            send(assistant_tool("Read", "toolu_early_1"))
             for _ in sys.stdin:
                 pass
             sys.exit(0)

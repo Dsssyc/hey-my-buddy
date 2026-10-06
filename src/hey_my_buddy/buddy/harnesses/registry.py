@@ -16,6 +16,7 @@ from .dsh.adapter import DshAdapter
 from .zcode.adapter import ZcodeAdapter
 from .zcode import native_run as zcode_run
 from .codex import native_run as codex_run
+from .claude import native_run as claude_run
 
 BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
@@ -119,6 +120,7 @@ def live_binding(name: str):
 # role executor replace its removed carrier entries in the same change.
 register_run_seam("zcode", zcode_run)
 register_run_seam("codex", codex_run)
+register_run_seam("claude", claude_run)
 
 #: ``external`` is a first-class adapter whose execution is owned by the caller's
 #: own agent, not by a built-in worker. That agent claims the task through the

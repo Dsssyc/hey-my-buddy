@@ -33,7 +33,6 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
     third_party_overrides,
     token_source_missing,
 )
-from hey_my_buddy.buddy.harnesses.claude.protocol import OUTCOME_SCHEMA
 from hey_my_buddy.buddy.roles.turn_io import canonical_json
 
 
@@ -213,8 +212,10 @@ class ClaudeConfigTests(unittest.TestCase):
             self.assertIn(domain, PACKAGE_REGISTRY_DOMAINS)
 
     def test_execution_args_compose_the_strict_isolated_invocation(self):
+        ending = {"type": "object", "additionalProperties": False}
         args = execution_args(session_id="1b2f9c34-1111-4222-8333-444455556666", model="claude-opus-5",
-                              effort="high", settings_path="/private/settings.json", read_only=False)
+                              effort="high", settings_path="/private/settings.json", read_only=False,
+                              output_schema=ending)
         for flag, value in (("-p", None), ("--input-format", "stream-json"), ("--output-format", "stream-json"),
                             ("--verbose", None), ("--safe-mode", None), ("--strict-mcp-config", None),
                             ("--mcp-config", EMPTY_MCP_CONFIG), ("--setting-sources", ""),
@@ -222,7 +223,7 @@ class ClaudeConfigTests(unittest.TestCase):
                             ("--settings", "/private/settings.json"),
                             ("--session-id", "1b2f9c34-1111-4222-8333-444455556666"),
                             ("--model", "claude-opus-5"), ("--effort", "high"),
-                            ("--json-schema", canonical_json(OUTCOME_SCHEMA))):
+                            ("--json-schema", canonical_json(ending))):
             if value is None:
                 self.assertIn(flag, args)
             else:
@@ -237,13 +238,15 @@ class ClaudeConfigTests(unittest.TestCase):
 
     def test_default_effort_omits_the_effort_flag(self):
         args = execution_args(session_id="1b2f9c34-1111-4222-8333-444455556666", model="claude-haiku-4-5",
-                              effort=DEFAULT_EFFORT, settings_path="/s.json", read_only=False)
+                              effort=DEFAULT_EFFORT, settings_path="/s.json", read_only=False,
+                              output_schema={"type": "object"})
         self.assertNotIn("--effort", args)
         self.assertIsNone(flag_value(args, "--effort"))
 
     def test_read_only_execution_denies_writes_through_the_permission_layer(self):
         args = execution_args(session_id="1b2f9c34-1111-4222-8333-444455556666", model="claude-opus-5",
-                              effort="high", settings_path="/s.json", read_only=True)
+                              effort="high", settings_path="/s.json", read_only=True,
+                              output_schema={"type": "object"})
         self.assertEqual(flag_value(args, "--tools"), ",".join(READONLY_TOOLS))
         self.assertEqual(set(READONLY_TOOLS) & {"Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"}, set())
         self.assertEqual(flag_value(args, "--permission-mode"), "default")

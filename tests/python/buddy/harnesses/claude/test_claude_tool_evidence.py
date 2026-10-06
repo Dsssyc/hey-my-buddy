@@ -1,10 +1,11 @@
-"""Claude read-only tool evidence: frame projection and runner receipt wiring.
+"""Claude read-only tool evidence: frame projection and role-run receipt wiring.
 
 No model calls and no board: the collector is driven frame by frame, and the
-dedicated stream fixture (``fixtures/mock_claude.py``) drives the real runner
-subprocess for the receipt-level facts — the finish after the observed stream
-close, the unified collector budget count, and the binding taken from the
-private Python control file.
+dedicated stream fixture (``fixtures/mock_claude.py``) drives the real
+registered role run — the shared role controller over the claude native run —
+for the receipt-level facts: the finish after the observed stream close, the
+unified collector budget count, and the binding taken from the stored public
+run request.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import json
 import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from hey_my_buddy.protocol import tool_evidence
@@ -19,6 +21,9 @@ from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.tool_evidence import ReadOnlyToolEvidence
+from hey_my_buddy.buddy.harnesses.registry import run_seam
+from hey_my_buddy.buddy.roles.run_execution import start_review
+from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.blackboard.routing.router import answer_schema
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
@@ -454,9 +459,12 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          (1, ["toolu_so_2", "toolu_so_2"]))
 
 
+@unittest.skipUnless(run_seam("claude") is not None,
+                     "the claude run seam is registered only in the activated verification copy")
 class RunnerReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-evidence-")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-evidence-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"
@@ -475,38 +483,34 @@ class RunnerReceiptTests(unittest.TestCase):
         self.adapter = ClaudeAdapter()
 
     def context(self, case):
-        return ExecutionContext(task_id="goal-1", attempt_id="attempt-1", generation=1,
+        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
                                 spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "timeoutSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
     def run_read_only(self, case, *, tool_calls=8):
-        from hey_my_buddy.buddy.roles.structured_call import collect
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
                                             {"timeoutSeconds": 20, "toolCalls": tool_calls})
         context = self.context(case)
-        handle = self.adapter.start_read_only_structured(context, request)
+        handle = start_review("claude", context, request)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(30), "the stream fixture controller did not exit")
+        self.assertIsNotNone(handle.wait(30), "the role-run controller did not exit")
         return context, collect(handle)
-
-    def control(self, context):
-        return json.loads((context.directory / "readonly-control.json").read_text())
 
     def test_a_settled_receipt_finishes_evidence_after_the_observed_stream_close(self):
         context, outcome = self.run_read_only("clean")
         self.assertEqual(outcome.status, "ok", outcome.result)
         receipt = outcome.result
-        session = self.control(context)["sessionId"]
-        self.assertEqual(receipt["nativeIdentity"], {"sessionId": session})
+        session = receipt["nativeIdentity"]["sessionId"]
+        uuid.UUID(session, version=4)
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
         self.assertIsNone(receipt["usage"]["bytesRead"])
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
         self.assertEqual(evidence["version"], 1)
         self.assertEqual(evidence["binding"], {"adapter": "claude", "taskId": "goal-1",
-                                               "attemptId": "attempt-1", "generation": 1})
+                                               "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])
         self.assertTrue(evidence["streamComplete"])
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"], evidence["truncated"]), (2, 0, False))
@@ -527,7 +531,7 @@ class RunnerReceiptTests(unittest.TestCase):
         context, outcome = self.run_read_only("subagent")
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        parent_identity = {"sessionId": self.control(context)["sessionId"], "callId": "toolu_parent_9"}
+        parent_identity = {"sessionId": outcome.result["nativeIdentity"]["sessionId"], "callId": "toolu_parent_9"}
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual([event["nativeIdentity"] for event in evidence["events"]],
                          [evidence["nativeIdentity"][0], evidence["nativeIdentity"][0],

@@ -31,7 +31,6 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     RunRequest,
     SessionService,
 )
-from hey_my_buddy.buddy.harnesses.registry import run_seam
 from hey_my_buddy.buddy.roles.worker_services import OUTCOME_SCHEMA as WORKER_SCHEMA
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import tool_evidence
@@ -283,11 +282,11 @@ class ReadCarrierTests(NativeRunCase):
                          list(PACKAGE_REGISTRY_DOMAINS))
 
     def test_the_unified_postures_match_the_legacy_three_paths_exactly(self):
-        # The unified run's argv/settings must equal what the three legacy
-        # call shapes produce for the same posture: worker-write and
-        # worker-read derive nothing extra, the review shape's suffix is what
-        # the role now passes explicitly. Each run's argv is captured from the
-        # fixture state immediately, before the next run overwrites it.
+        # The unified run's argv/settings must equal what the config derives
+        # for the same posture: worker postures pass the worker schema and no
+        # extra denials, the review posture passes the caller's answer schema
+        # and its explicit denial sequence. Each run's argv is captured from
+        # the fixture state immediately, before the next run overwrites it.
         from hey_my_buddy.buddy.harnesses.claude.config import (
             execution_args,
             sandbox_settings,
@@ -300,16 +299,18 @@ class ReadCarrierTests(NativeRunCase):
         session = "00000000-0000-4000-8000-000000000000"
         postures = (
             ("worker-write", {}, execution_args(session_id=session, model="m", effort="high",
-                                                settings_path="/s.json", read_only=False),
+                                                settings_path="/s.json", read_only=False,
+                                                output_schema=WORKER_SCHEMA),
              sandbox_settings()),
             ("worker-read", {"scope": "read"},
              execution_args(session_id=session, model="m", effort="high",
-                            settings_path="/s.json", read_only=True),
+                            settings_path="/s.json", read_only=True, output_schema=WORKER_SCHEMA),
              sandbox_settings()),
             ("review", {"scope": "read", "schema": READ_SCHEMA, "network": (),
                         "denied": self.REVIEW_DENIALS},
              execution_args(session_id=session, model="m", effort="high",
-                            settings_path="/s.json", read_only=True, output_schema=READ_SCHEMA),
+                            settings_path="/s.json", read_only=True, output_schema=READ_SCHEMA,
+                            additional_denied_tools=self.REVIEW_DENIALS),
              sandbox_settings(())),
         )
         for name, request_values, legacy_argv, legacy_settings in postures:
@@ -368,10 +369,21 @@ class RequestGateTests(NativeRunCase):
         self.assertEqual(native_run.supported_request_controls,
                          ("network_allowed_domains", "additional_denied_tools"))
 
-    def test_the_module_is_not_yet_registered_and_claims_no_seam(self):
-        # 3-B1 delivers the native body only; the registry keeps the legacy
-        # entry until the wiring microtask switches the callers.
-        self.assertIsNone(run_seam("claude"))
+    def test_the_module_carries_the_registered_role_surface(self):
+        # 3-B2 delivers the wiring: the one native body also exposes every
+        # operation the shared role executor consumes, and the legacy adapter
+        # entries are gone — registration is the only switch left, and it is
+        # the Host's line in the registry.
+        for operation in ("run", "run_discovery", "check_preparation", "session_facts",
+                          "validate_turn_provenance", "prepare_run_services", "bind_live_channel"):
+            self.assertTrue(callable(getattr(native_run, operation, None)), operation)
+        from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+        description = ClaudeAdapter()
+        self.assertFalse(any(hasattr(description, entry) for entry in
+                             ("prepare", "start", "collect", "cancel",
+                              "start_read_only_structured", "start_no_tool_structured")))
+        self.assertEqual(description.validate_turn_provenance({"provenance": {}}),
+                         "the Claude turn lacks native completion and initialization evidence")
 
     def test_third_party_provider_overrides_are_refused_before_spawn(self):
         os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
@@ -476,6 +488,22 @@ class SettlementGuardTests(NativeRunCase):
         self.assertIsNone(result.value)
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertTrue(self.fixture_state()["interrupted"])
+        # The observations package carries the legacy bounded receipt shape —
+        # the two fields, the original reset value, nothing on a clean run —
+        # and the interrupt pair with the peer's own acknowledgement reply.
+        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations")).read_bytes())
+        self.assertEqual(observations["quotaFailure"],
+                         {"rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"})
+        self.assertIs(observations["nativeInterruptRequested"], True)
+        self.assertIs(observations["nativeInterruptAcknowledged"], True)
+        self.fixture_case("ok")
+        clean = self.execute(self.request())
+        observations = json.loads(Path(next(ref.location for ref in clean.evidence_refs
+                                            if ref.kind == "native-observations")).read_bytes())
+        self.assertNotIn("quotaFailure", observations)
+        self.assertNotIn("nativeInterruptRequested", observations)
+        self.assertNotIn("nativeInterruptAcknowledged", observations)
 
     def test_cancellation_interrupts_the_native_run(self):
         self.fixture_case("hang")
@@ -486,6 +514,10 @@ class SettlementGuardTests(NativeRunCase):
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertTrue(self.fixture_state()["interrupted"])
+        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations")).read_bytes())
+        # The real reply of the interrupted peer, not the later group stop.
+        self.assertIs(observations["nativeInterruptAcknowledged"], True)
 
     def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
@@ -593,6 +625,43 @@ class DiscoveryTests(NativeRunCase):
         self.assertIn("--no-session-persistence", state["argv"])
         self.assertTrue((self.base / "discover-invocation" / "native.stderr.log").is_file())
 
+    def test_discovery_failures_carry_the_actual_native_stop_fact(self):
+        # A pre-spawn refusal never started anything: the known never-started
+        # fact, not a guess from the error code — and no native child exists.
+        os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
+        try:
+            with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+                run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-pre",
+                              native_root=self.base / "ds-pre-n", timeout_seconds=25, cancelled=lambda: False)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+            self.assertFalse(self.state_path.exists(), "no native child may exist for a pre-spawn refusal")
+        finally:
+            del os.environ["ANTHROPIC_BASE_URL"]
+        # A settled refusal after a confirmed stop carries the true fact, and
+        # the outer layer may recycle its directory on it.
+        self.fixture_case("no-auth")
+        with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+            run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-ok",
+                          native_root=self.base / "ds-ok-n", timeout_seconds=25, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "first-party-auth-required")
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def test_discovery_metadata_error_with_an_unknown_stop_reports_false(self):
+        # The metadata refusal itself is real, but an unobserved native stop
+        # must stay false: the outer layer keeps the directory for inspection
+        # instead of trusting the error to mean the group is gone.
+        from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+        self.fixture_case("no-auth")
+        with mock.patch.object(ProcessHandle, "shutdown_confirmed",
+                               side_effect=lambda settle_seconds=2.0: False):
+            with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+                run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-unk",
+                              native_root=self.base / "ds-unk-n", timeout_seconds=25, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "first-party-auth-required")
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+        # The witness is the real fact, never the error code: the same code
+        # carried True when the stop was actually observed.
+
     def test_discovery_refuses_third_party_overrides_and_bad_cli(self):
         os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
         with self.assertRaises(native_run.ClaudeProtocolError) as caught:
@@ -601,9 +670,92 @@ class DiscoveryTests(NativeRunCase):
         self.assertEqual(caught.exception.code, "third-party-provider")
         del os.environ["ANTHROPIC_BASE_URL"]
         os.environ["BUDDY_CLAUDE_CLI"] = str(self.base / "missing-cli")
-        with self.assertRaises(native_run.ClaudeUnavailable):
+        with self.assertRaises(native_run.ClaudeUnavailable) as caught:
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d3",
                           native_root=self.base / "d3n", timeout_seconds=25, cancelled=lambda: False)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+
+class RoleSurfaceTests(NativeRunCase):
+    """The operations the shared role executor consumes beyond the run itself."""
+
+    def test_check_preparation_refuses_before_any_spawn(self):
+        from hey_my_buddy.buddy.harnesses.claude.config import ClaudeUnavailable
+        with self.assertRaises(BoardError) as caught:
+            native_run.check_preparation({"provider": "openai"}, dict(os.environ))
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("first-party Anthropic provider", caught.exception.message)
+        with self.assertRaises(BoardError) as caught:
+            native_run.check_preparation({"provider": "anthropic"},
+                                         {**os.environ, "BUDDY_CLAUDE_SETTINGS_POLICY": "global"})
+        self.assertIn("BUDDY_CLAUDE_SETTINGS_POLICY=isolated", caught.exception.message)
+        with self.assertRaises(BoardError) as caught:
+            native_run.check_preparation({"provider": "anthropic"},
+                                         {**os.environ, "ANTHROPIC_BASE_URL": "https://gw.example"})
+        self.assertIn("ANTHROPIC_BASE_URL", caught.exception.message)
+        self.assertNotIn("gw.example", caught.exception.message)
+        with mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1", "BUDDY_CLAUDE_CLI": str(self.base / "nope")}):
+            with mock.patch.object(native_run, "cli_command", side_effect=ClaudeUnavailable("CLI missing")):
+                with self.assertRaises(BoardError) as caught:
+                    native_run.check_preparation({"provider": "anthropic"}, dict(os.environ))
+        self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertFalse(self.state_path.exists(), "no native child may start from a preparation check")
+        native_run.check_preparation({"provider": "anthropic"}, dict(os.environ))
+
+    def test_the_narrow_path_binding_routes_the_activity_sidecar(self):
+        activity_dir = self.base / "attempt-activity"
+        activity_dir.mkdir()
+        binding = native_run.prepare_run_services(invocation_root=self.base / "inv",
+                                                  native_root=self.base / "nat",
+                                                  activity_dir=activity_dir,
+                                                  account=None, tool_scope="write")
+        self.assertEqual(binding, native_run.BoundRunPaths(activity_dir=activity_dir))
+        result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=binding, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        document = json.loads((activity_dir / "activity.json").read_bytes())
+        self.assertEqual(document["attemptId"], result.identity.attempt_id)
+        self.assertEqual(document["activity"]["phase"], "finishing")
+        # A look-alike binding — the whole control file, a worker input, a bare
+        # dict — is still refused; the run accepts only its own narrow type.
+        with self.assertRaises(BoardError):
+            run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                services={"activity_dir": str(activity_dir)}, cancelled=lambda: False)
+
+    def test_session_facts_report_the_user_store_without_a_binding_claim(self):
+        facts = native_run.session_facts(self.base / "native", "session-x")
+        self.assertEqual(facts["adapter"], "claude")
+        self.assertEqual((facts["sessionId"], facts["captured"]), ("session-x", True))
+        self.assertEqual(facts["storageScope"], "harness-user-store")
+        self.assertEqual(facts["nativeAppVisibility"], "unknown")
+        self.assertNotIn("bindingPresent", facts)
+        empty = native_run.session_facts(self.base / "native", None)
+        self.assertFalse(empty["captured"])
+
+    def test_bind_live_channel_reads_the_identity_bound_activity_sidecar(self):
+        request = self.request()
+        activity_dir = self.base / "live-activity"
+        activity_dir.mkdir()
+        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=native_run.BoundRunPaths(activity_dir=activity_dir),
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        from hey_my_buddy.protocol import activity as activity_protocol
+        channel = native_run.bind_live_channel(request.identity, credentials={}, journal_path=None,
+                                               activity_path=activity_protocol.sidecar_path(activity_dir))
+        self.assertEqual(channel.identity, request.identity)
+        self.assertEqual(channel.capabilities().inquiry_delivery, "unsupported")
+        snapshot = channel.observe(timeout_ms=100, limit=10)
+        self.assertIsNotNone(snapshot.activity)
+        self.assertEqual(snapshot.activity.value["phase"], "finishing")
+        # A foreign attempt's sidecar reads as nothing; the channel never
+        # forwards another execution's activity.
+        foreign = activity_protocol.ActivitySidecar(self.base / "foreign", task_id="other",
+                                                    attempt_id="other", generation=9)
+        foreign.publish({"phase": "starting", "eventSeq": 1, "observedAt": "2026-10-06T00:00:00Z"})
+        stranger = native_run.bind_live_channel(request.identity, credentials={}, journal_path=None,
+                                                activity_path=activity_protocol.sidecar_path(self.base / "foreign"))
+        self.assertIsNone(stranger.observe(timeout_ms=100, limit=10).activity)
 
 
 class StructuredDeliveryTests(NativeRunCase):

@@ -10,12 +10,10 @@ import unittest
 from hey_my_buddy.buddy.harnesses.claude.protocol import (
     ClaudeProtocolError,
     Connection,
-    OUTCOME_SCHEMA,
     QuotaRejected,
     TurnEvidence,
     decode_json,
     model_usage_keys,
-    parse_structured_output,
     rate_limit_observation,
     result_quota_denial,
 )
@@ -44,39 +42,6 @@ class DecodeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_json('{"cost":1e999}')
         self.assertEqual(decode_json('{"a":1}'), {"a": 1})
-
-
-class OutcomeSchemaTests(unittest.TestCase):
-    def test_schema_is_a_nested_union_with_tagged_branches(self):
-        branches = OUTCOME_SCHEMA["properties"]["outcome"]["anyOf"]
-        self.assertEqual(len(branches), 2)
-        completed, requesting = branches
-        self.assertEqual(completed["properties"]["disposition"]["enum"], ["completed"])
-        self.assertEqual(completed["properties"]["request"], {"type": "null"})
-        self.assertEqual(requesting["properties"]["disposition"]["enum"], ["assistance", "attention"])
-        self.assertEqual(sorted(requesting["properties"]["request"]["required"]),
-                         ["acceptance", "attempted", "expectedArtifacts", "neededWork", "summary"])
-        self.assertIn("suggestedProfileId", requesting["properties"]["request"]["properties"])
-
-    def test_parse_structured_output_accepts_and_rejects_strictly(self):
-        completed = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
-                     "artifacts": [], "request": None}
-        self.assertEqual(parse_structured_output({"outcome": completed}), completed)
-        request = {"summary": "need help", "attempted": "tried", "neededWork": "more",
-                   "expectedArtifacts": [], "acceptance": "verified"}
-        for suggested in ("dsh-flash", None):
-            assistance = {"disposition": "assistance", "summary": "stuck", "remaining": [], "decisions": [],
-                          "artifacts": [], "request": {**request, "suggestedProfileId": suggested}}
-            self.assertEqual(parse_structured_output({"outcome": assistance})["request"]["suggestedProfileId"],
-                             suggested)
-        with self.assertRaises(ValueError):
-            parse_structured_output({"outcome": completed, "extra": 1})
-        with self.assertRaises(ValueError):
-            parse_structured_output({"outcome": {**completed, "request": {"summary": "late request"}}})
-        with self.assertRaises(ValueError):
-            parse_structured_output({"outcome": "not-an-object"})
-        with self.assertRaises(ValueError):
-            parse_structured_output("not-an-object")
 
 
 class QuotaParsingTests(unittest.TestCase):

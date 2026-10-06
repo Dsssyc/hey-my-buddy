@@ -1,12 +1,18 @@
-"""Claude adapter lifecycle against a private stream-json fixture, with no model calls."""
+"""Claude role wiring against a private stream-json fixture, with no model calls.
+
+The governed Worker turn drives the shared role executor over the registered
+claude native run; the read-only structured call drives the shared review
+entry. Only the native CLI is simulated. The availability cases run anywhere;
+the execution cases need the Host activation patch that registers the claude
+run seam, because without it this checkout has no claude execution path at
+all — which is exactly what the wiring microtask delivers.
+"""
 from __future__ import annotations
 
 import json
 import math
 import os
 import stat
-import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -19,10 +25,17 @@ from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
-from hey_my_buddy.buddy.harnesses.claude.protocol import OUTCOME_SCHEMA, QUOTA_REJECTED_ERROR
+from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
+from hey_my_buddy.buddy.harnesses.claude.protocol import QUOTA_REJECTED_ERROR
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_dirs import context_root
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
+
+
+def _claude_registered() -> bool:
+    from hey_my_buddy.buddy.harnesses.registry import run_seam
+    return run_seam("claude") is not None
 
 
 def flag_value(args: list[str], flag: str) -> str | None:
@@ -34,9 +47,12 @@ def flag_value(args: list[str], flag: str) -> str | None:
     return None
 
 
-class ClaudeAdapterTests(unittest.TestCase):
+class ClaudeFixtureCase(unittest.TestCase):
+    """The shared fake-CLI harness: private roots, scrubbed environment."""
+
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-test-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"
@@ -65,17 +81,122 @@ class ClaudeAdapterTests(unittest.TestCase):
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
-    def execute(self, context):
-        handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
-        return self.adapter.collect(handle, context)
+
+@unittest.skipUnless(_claude_registered(),
+                     "the claude run seam is registered only in the activated verification copy; "
+                     "the availability probe rides the shared discovery carrier")
+class ClaudeAvailabilityTests(ClaudeFixtureCase):
+    """Capability reads over the cached discovery probe."""
+
+    def test_available_uses_cached_metadata_and_reports_missing_first_party_auth(self):
+        with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}, clear=False):
+            self.assertEqual(self.adapter.available(), (True, None))
+            with mock.patch.dict("os.environ", {"BUDDY_CLAUDE_FIXTURE_CASE": "no-auth"}, clear=False):
+                # Briefly cached: a repeated capability read does not respawn the CLI.
+                self.assertEqual(self.adapter.available(), (True, None))
+                with self.assertRaises(BoardError):
+                    self.adapter.discover_models()
+                usable, reason = self.adapter.available()
+                self.assertFalse(usable)
+                self.assertIn("tokenSource none", reason)
+        with mock.patch.dict("os.environ", {"PATH": str(self.root)}, clear=False):
+            self.assertFalse(self.adapter.available()[0])
+        with mock.patch.dict("os.environ", {**self.environment, "ANTHROPIC_BASE_URL": "https://secret.example.invalid"},
+                             clear=False):
+            usable, reason = self.adapter.available()
+            self.assertFalse(usable)
+            self.assertIn("ANTHROPIC_BASE_URL", reason)
+            self.assertNotIn("secret.example.invalid", reason)
+
+    def test_unauthenticated_failures_are_cached_not_respawned(self):
+        (self.root / "fixture.json").unlink(missing_ok=True)
+        with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "no-auth"}, clear=False):
+            self.assertFalse(self.adapter.available()[0])
+            self.assertFalse(self.adapter.available()[0])
+            self.assertEqual(self.fixture_runs(), 1,
+                             "the unauthenticated failure is cached briefly, not respawned per read")
+
+    def test_concurrent_capability_reads_share_one_metadata_probe(self):
+        from concurrent.futures import ThreadPoolExecutor
+        entered = threading.Event()
+        release = threading.Event()
+
+        def probe():
+            entered.set()
+            self.assertTrue(release.wait(3))
+            raise BoardError("ADAPTER_UNAVAILABLE", "fixture unauthenticated")
+
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+                mock.patch.object(claude_module, "_probe_native_metadata", side_effect=probe) as discover, \
+                ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(self.adapter.available) for _ in range(8)]
+            self.assertTrue(entered.wait(3))
+            release.set()
+            self.assertEqual([future.result(5) for future in futures],
+                             [(False, "fixture unauthenticated")] * 8)
+            self.assertEqual(discover.call_count, 1)
+
+    def test_unverified_auth_status_fails_closed_with_bounded_reasons(self):
+        for proof, expected in (("logged-out", "active first-party login"),
+                                ("third-party", "not first-party"),
+                                ("missing-provider", "not first-party"),
+                                ("malformed", "not valid JSON"),
+                                ("nonzero", "exited nonzero"),
+                                ("timeout", "time bound")):
+            with self.subTest(proof=proof):
+                (self.root / "fixture.json").unlink(missing_ok=True)
+                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "null-token",
+                               "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": proof}
+                with mock.patch.dict("os.environ", environment, clear=False):
+                    claude_module._reset_metadata_cache()
+                    usable, reason = self.adapter.available()
+                self.assertFalse(usable)
+                self.assertIn(expected, reason)
+                self.assertLessEqual(len(reason), 200, "the refusal reason stays bounded")
+                for leak in ("claude.ai", "subscriptionType", "{not json"):
+                    self.assertNotIn(leak, reason)
+                self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def fixture_state(self):
         return json.loads((self.root / "fixture.json").read_text())
 
-    def control(self, index=1):
-        return json.loads((self.root / f"attempt-{index}" / "claude-control.json").read_text())
+    def fixture_runs(self):
+        return self.fixture_state()["runs"]
+
+
+@unittest.skipUnless(_claude_registered(),
+                     "the claude run seam is registered only in the activated verification copy")
+class ClaudeAdapterTests(ClaudeFixtureCase):
+    """The governed turn and the read-only call through the registered run."""
+
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
+        from hey_my_buddy.buddy.roles.controller import worker_executor
+        self.executor = worker_executor("claude")
+        self.adapter = registry_adapter("claude")
+        self.assertTrue(hasattr(self.executor, "start") and hasattr(self.executor, "collect"),
+                        "the registered claude run must execute through the shared role executor")
+        self.assertFalse(any(hasattr(self.adapter, entry) for entry in
+                             ("prepare", "start", "collect", "cancel",
+                              "start_read_only_structured", "start_no_tool_structured")),
+                         "the claude description carries no execution entries")
+
+    def execute(self, context):
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        return self.executor.collect(handle, context)
+
+    def fixture_state(self):
+        return json.loads((self.root / "fixture.json").read_text())
+
+    def control(self, context):
+        """The role's private control binding of one attempt."""
+        return json.loads((context_root(context, "claude") / "role-run-control.json").read_text())
+
+    def stored_request(self, context):
+        return json.loads((context_root(context, "claude") / "role-run-request.json").read_text())
 
     def test_completed_turn_uses_the_preallocated_session_and_never_resumes(self):
         context = self.context()
@@ -84,8 +205,8 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.exit_code, 0)
         turn = outcome.result["turn"]
-        control = self.control()
-        self.assertEqual(turn["sessionId"], control["sessionId"])
+        argv = self.fixture_state()["argv"]
+        self.assertEqual(turn["sessionId"], flag_value(argv, "--session-id"))
         uuid.UUID(turn["sessionId"], version=4)
         self.assertEqual(turn["provenance"]["nativeSessionId"], turn["sessionId"])
         self.assertTrue(turn["provenance"]["structuredOutputValidated"])
@@ -93,8 +214,6 @@ class ClaudeAdapterTests(unittest.TestCase):
         # The init readback is the observed session model; argv is not attestation.
         self.assertEqual(turn["provenance"]["sessionModel"], "claude-opus-5-5[1m]")
         self.assertEqual(outcome.result["sessionModel"], "claude-opus-5-5[1m]")
-        argv = self.fixture_state()["argv"]
-        self.assertEqual(flag_value(argv, "--session-id"), control["sessionId"])
         self.assertNotIn("--resume", argv)
         native_session = outcome.result["nativeSession"]
         self.assertEqual(native_session["storageScope"], "harness-user-store")
@@ -159,13 +278,13 @@ class ClaudeAdapterTests(unittest.TestCase):
 
     def test_missing_controller_receipt_is_not_imported(self):
         context = self.context()
-        handle = self.adapter.start(context)
+        handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(20))
         Path(handle.log_paths["stdout"]).write_text("")
-        outcome = self.adapter.collect(handle, context)
+        outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "failed")
-        self.assertIn("no complete JSON result", outcome.error)
+        self.assertIn("no complete run result", outcome.error)
         self.assertNotIn("turn", outcome.result)
 
     def test_permission_request_denial_becomes_controller_attention(self):
@@ -184,9 +303,9 @@ class ClaudeAdapterTests(unittest.TestCase):
         forged = {**turn, "provenance": {key: value for key, value in provenance.items()
                                          if key != "deniedControlRequestIds"}}
         forged["provenance"]["permissionDenials"] = 0
-        self.assertIsNotNone(self.adapter.validate_turn_provenance(forged))
+        self.assertIsNotNone(validate_turn_provenance(forged))
         unbound = {**turn, "outcome": {**turn["outcome"], "disposition": "completed"}}
-        self.assertIsNotNone(self.adapter.validate_turn_provenance(unbound))
+        self.assertIsNotNone(validate_turn_provenance(unbound))
 
     def test_result_permission_denials_alone_convert_a_completed_outcome(self):
         outcome = self.execute(self.context("result-denials"))
@@ -196,41 +315,43 @@ class ClaudeAdapterTests(unittest.TestCase):
         provenance = turn["provenance"]
         self.assertTrue(provenance["controllerAttention"])
         self.assertEqual(provenance["permissionDenials"], 1)
-        self.assertIsNone(self.adapter.validate_turn_provenance(turn))
+        self.assertIsNone(validate_turn_provenance(turn))
 
     def test_cancel_interrupts_the_native_child_before_stopping_the_group(self):
         context = self.context("hang", timeout=12)
-        handle = self.adapter.start(context)
+        handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         time.sleep(0.3)
-        self.adapter.cancel(handle, grace_seconds=8)
+        self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
-        outcome = self.adapter.collect(handle, context)
+        outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
         self.assertTrue(self.fixture_state()["interrupted"], "the interrupt control request must precede group stop")
-        self.assertTrue(outcome.result.get("nativeInterruptAcknowledged"),
-                        "the receipt must distinguish a native interrupt reply from forced shutdown")
+        self.assertIs(outcome.result.get("nativeInterruptRequested"), True)
+        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True,
+                      "the receipt must distinguish a native interrupt reply from forced shutdown")
 
     def test_deadline_ends_the_native_process_group(self):
         outcome = self.execute(self.context("hang", timeout=1))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "deadline")
         self.assertTrue(outcome.shutdown_confirmed)
+        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True)
 
     def test_quota_event_while_interrupting_does_not_lose_the_stop_receipt(self):
         context = self.context("interrupt-quota", timeout=12)
-        handle = self.adapter.start(context)
+        handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if (self.root / "fixture.json").exists() and self.fixture_state().get("userTurns") == 1:
                 break
             time.sleep(.05)
-        self.adapter.cancel(handle, grace_seconds=8)
+        self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
-        outcome = self.adapter.collect(handle, context)
+        outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
@@ -239,11 +360,11 @@ class ClaudeAdapterTests(unittest.TestCase):
 
     def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
         context = self.context(timeout=0)
-        handle = self.adapter.start(context)
+        handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
-        outcome = self.adapter.collect(handle, context)
+        outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
 
@@ -362,80 +483,15 @@ class ClaudeAdapterTests(unittest.TestCase):
         with mock.patch.dict("os.environ", environment, clear=False):
             with self.assertRaises(BoardError) as caught:
                 self.adapter.discover_models()
-        self.assertIn("tokenSource none", caught.exception.message)
+            self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+            self.assertIn("tokenSource none", caught.exception.message)
+            usable, reason = self.adapter.available()
+        self.assertFalse(usable)
+        self.assertIn("tokenSource none", reason)
         state = self.fixture_state()
         self.assertEqual(state.get("authStatusRuns", 0), 0,
                          "an explicit none is a decision; no auth status readback may run")
         self.assertEqual(state["userTurns"], 0)
-
-    def test_unverified_auth_status_fails_closed_with_bounded_reasons(self):
-        for proof, expected in (("logged-out", "active first-party login"),
-                                ("third-party", "not first-party"),
-                                ("missing-provider", "not first-party"),
-                                ("malformed", "not valid JSON"),
-                                ("nonzero", "exited nonzero"),
-                                ("timeout", "time bound")):
-            with self.subTest(proof=proof):
-                (self.root / "fixture.json").unlink(missing_ok=True)
-                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "null-token",
-                               "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": proof}
-                with mock.patch.dict("os.environ", environment, clear=False):
-                    with self.assertRaises(BoardError) as caught:
-                        self.adapter.discover_models()
-                reason = caught.exception.message
-                self.assertIn(expected, reason)
-                self.assertLessEqual(len(reason), 200, "the refusal reason stays bounded")
-                for leak in ("claude.ai", "subscriptionType", "{not json"):
-                    self.assertNotIn(leak, reason)
-                self.assertEqual(self.fixture_state()["userTurns"], 0)
-
-    def test_available_uses_cached_metadata_and_reports_missing_first_party_auth(self):
-        with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}, clear=False):
-            self.assertEqual(self.adapter.available(), (True, None))
-            with mock.patch.dict("os.environ", {"BUDDY_CLAUDE_FIXTURE_CASE": "no-auth"}, clear=False):
-                # Briefly cached: a repeated capability read does not respawn the CLI.
-                self.assertEqual(self.adapter.available(), (True, None))
-                with self.assertRaises(BoardError):
-                    self.adapter.discover_models()
-                usable, reason = self.adapter.available()
-                self.assertFalse(usable)
-                self.assertIn("tokenSource none", reason)
-        with mock.patch.dict("os.environ", {"PATH": str(self.root)}, clear=False):
-            self.assertFalse(self.adapter.available()[0])
-        with mock.patch.dict("os.environ", {**self.environment, "ANTHROPIC_BASE_URL": "https://secret.example.invalid"},
-                             clear=False):
-            usable, reason = self.adapter.available()
-            self.assertFalse(usable)
-            self.assertIn("ANTHROPIC_BASE_URL", reason)
-            self.assertNotIn("secret.example.invalid", reason)
-
-    def test_unauthenticated_failures_are_cached_not_respawned(self):
-        (self.root / "fixture.json").unlink(missing_ok=True)
-        with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "no-auth"}, clear=False):
-            self.assertFalse(self.adapter.available()[0])
-            self.assertFalse(self.adapter.available()[0])
-            self.assertEqual(self.fixture_state()["runs"], 1,
-                             "the unauthenticated failure is cached briefly, not respawned per read")
-
-    def test_concurrent_capability_reads_share_one_metadata_probe(self):
-        from concurrent.futures import ThreadPoolExecutor
-        entered = threading.Event()
-        release = threading.Event()
-
-        def probe():
-            entered.set()
-            self.assertTrue(release.wait(3))
-            raise BoardError("ADAPTER_UNAVAILABLE", "fixture unauthenticated")
-
-        with mock.patch.dict(os.environ, self.environment, clear=True), \
-                mock.patch.object(claude_module, "_probe_native_metadata", side_effect=probe) as discover, \
-                ThreadPoolExecutor(max_workers=8) as pool:
-            futures = [pool.submit(self.adapter.available) for _ in range(8)]
-            self.assertTrue(entered.wait(3))
-            release.set()
-            self.assertEqual([future.result(5) for future in futures],
-                             [(False, "fixture unauthenticated")] * 8)
-            self.assertEqual(discover.call_count, 1)
 
     def test_default_policy_executes_with_private_settings_and_empty_sources(self):
         context = self.context()
@@ -446,7 +502,6 @@ class ClaudeAdapterTests(unittest.TestCase):
         argv = self.fixture_state()["argv"]
         self.assertEqual(flag_value(argv, "--setting-sources"), "")
         self.assertIn("--strict-mcp-config", argv)
-        from hey_my_buddy.private_dirs import context_root
         self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context_root(context, "claude").resolve()))
 
     def test_unsupported_settings_policy_is_refused_before_any_model_input(self):
@@ -455,7 +510,7 @@ class ClaudeAdapterTests(unittest.TestCase):
                 context = self.context()
                 context.environment["BUDDY_CLAUDE_SETTINGS_POLICY"] = policy
                 with self.assertRaises(BoardError) as caught:
-                    self.adapter.prepare(context)
+                    self.executor.prepare(context)
                 self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
                 self.assertIn("BUDDY_CLAUDE_SETTINGS_POLICY=isolated", caught.exception.message)
         self.assertFalse((self.root / "fixture.json").exists(), "no native child may start with an unsupported policy")
@@ -464,7 +519,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         context = self.context()
         context.environment["ANTHROPIC_BASE_URL"] = "https://secret-gateway.example.invalid"
         with self.assertRaises(BoardError) as caught:
-            self.adapter.prepare(context)
+            self.executor.prepare(context)
         self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
         self.assertIn("ANTHROPIC_BASE_URL", caught.exception.message)
         self.assertNotIn("secret-gateway.example.invalid", caught.exception.message)
@@ -489,13 +544,20 @@ class ClaudeAdapterTests(unittest.TestCase):
 
     def test_native_session_resume_is_refused_and_fresh_sessions_are_allocated(self):
         with self.assertRaises(BoardError) as blocked:
-            self.adapter.prepare(self.context(mode="native-session", previous="old-session"))
-        self.assertIn("never resumes", blocked.exception.message)
+            self.executor.prepare(self.context(mode="native-session", previous="old-session"))
+        self.assertIn("native-session resume", blocked.exception.message)
         with self.assertRaises(BoardError):
-            self.adapter.prepare(self.context(mode="unknown"))
-        carried = self.execute(self.context(mode="initial", previous="old-session"))
+            self.executor.prepare(self.context(mode="unknown"))
+        # A malformed initial turn carrying a previous session is refused by
+        # the role after the request frame, before any native run: the exact
+        # legacy code, no model turn, no invented native start.
+        carried = self.execute(self.context(mode="initial", previous="old-session", index=9))
         self.assertEqual(carried.status, "failed")
         self.assertEqual(carried.result["code"], "invalid-resume-mode")
+        self.assertFalse(carried.result["modelStarted"])
+        self.assertNotIn("turn", carried.result)
+        self.assertFalse((self.root / "fixture.json").exists(),
+                         "an illegal turn must never start a native child")
         first = self.execute(self.context())
         self.assertEqual(first.status, "ok", first.to_report())
         second = self.execute(self.context(index=2, previous=first.result["turn"]["sessionId"]))
@@ -504,7 +566,8 @@ class ClaudeAdapterTests(unittest.TestCase):
         uuid.UUID(second.result["turn"]["sessionId"], version=4)
 
     def test_isolated_settings_and_sandbox_file_are_strict(self):
-        outcome = self.execute(self.context())
+        context = self.context()
+        outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         argv = self.fixture_state()["argv"]
         for flag in ("--safe-mode", "--strict-mcp-config", "--restricted"):
@@ -513,8 +576,9 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(flag_value(argv, "--mcp-config"), '{"mcpServers":{}}')
         self.assertEqual(flag_value(argv, "--permission-prompt-tool"), "stdio")
         self.assertEqual(flag_value(argv, "--permission-mode"), "acceptEdits")
-        self.assertEqual(flag_value(argv, "--json-schema"), turn_io.canonical_json(OUTCOME_SCHEMA))
-        control = self.control()
+        from hey_my_buddy.buddy.harnesses.registry import worker_format
+        self.assertEqual(flag_value(argv, "--json-schema"), turn_io.canonical_json(worker_format("claude").schema))
+        control = self.control(context)
         settings_path = Path(control["nativeRoot"], "settings.json")
         settings = json.loads(settings_path.read_text())
         self.assertTrue(settings["sandbox"]["enabled"])
@@ -536,8 +600,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(flag_value(argv, "--permission-mode"), "default")
         self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
                          ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
-        control = self.control()
-        self.assertEqual(control["access"], "read")
+        self.assertEqual(self.stored_request(context)["toolScope"], "read")
 
     def test_attempt_scoped_credential_stays_private_and_out_of_result(self):
         context = self.context()
@@ -552,27 +615,18 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(state["seenBuddyEnv"], ["BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"])
         self.assertEqual(state["seenAnthropicEnv"], [])
 
-    def test_runner_refuses_overrides_and_unsupported_policy_before_the_native_child(self):
-        control = {"directory": str(self.root / "runner-direct"), "nativeRoot": str(self.root / "runner-direct" / "native"),
-                   "cwd": str(self.cwd), "timeoutSeconds": 5, "sessionId": str(uuid.uuid4()),
-                   "inputFile": str(self.root / "in.json"), "outputFile": str(self.root / "out.json"),
-                   "taskFile": str(self.root / "task.txt"), "taskId": "goal-1", "attemptId": "attempt-9",
-                   "generation": 1, "spec": {"provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"}}
-        path = self.root / "runner-control.json"
-        path.write_text(json.dumps(control))
+    def test_prepared_roles_refuse_overrides_and_unsupported_policy_before_the_native_child(self):
         cases = {"third-party-provider": {"ANTHROPIC_AWS_BASE_URL": "https://aws.example.invalid"},
                  "settings-policy-unsupported": {"BUDDY_CLAUDE_SETTINGS_POLICY": "global"}}
         for code, extra in cases.items():
             with self.subTest(code=code):
-                environment = {**self.environment, **extra}
-                completed = subprocess.run([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.claude.runner",
-                                            "--control", str(path)], capture_output=True, text=True,
-                                           env=environment, timeout=30)
-                payload = json.loads(completed.stdout)
-                self.assertEqual(payload["code"], code)
-                self.assertNotEqual(completed.returncode, 0)
+                context = self.context()
+                context.environment.update(extra)
+                with self.assertRaises(BoardError) as caught:
+                    self.executor.prepare(context)
+                self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
         self.assertFalse((self.root / "fixture.json").exists(),
-                         "the refusal must fire on the incoming environment, before any native child starts")
+                         "the refusal must fire before any native child starts")
 
     def test_activity_file_tracks_the_native_turn(self):
         context = self.context()
@@ -581,11 +635,12 @@ class ClaudeAdapterTests(unittest.TestCase):
         activity = json.loads((context.directory / "activity.json").read_text())
         self.assertEqual(activity["attemptId"], context.attempt_id)
         self.assertEqual(activity["activity"]["phase"], "finishing")
-        self.assertEqual(activity["activity"]["nativeSessionId"], self.control()["sessionId"])
-
+        self.assertEqual(activity["activity"]["nativeSessionId"],
+                         outcome.result["turn"]["sessionId"])
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
         from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.run_execution import start_review
         from hey_my_buddy.buddy.roles.structured_call import collect
         from hey_my_buddy.blackboard.routing.router import answer_schema, budget
         context = self.context()
@@ -593,7 +648,7 @@ class ClaudeAdapterTests(unittest.TestCase):
         context.agent_credential = "must-not-reach-native"
         context.environment["BUDDY_AGENT_CREDENTIAL"] = "must-not-reach-native"
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
-        handle = self.adapter.start_read_only_structured(context, request)
+        handle = start_review("claude", context, request)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(20))
         result = collect(handle)
@@ -607,11 +662,11 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertFalse(context.turn_output_file().exists())
         # The unified receipt: a quiet tool-free stream still binds the frozen
         # attempt identity to a complete zero-tool evidence package.
-        control = json.loads((context.directory / "readonly-control.json").read_text())
         evidence = result.result["toolEvidence"]
         self.assertEqual(evidence["binding"], {"adapter": "claude", "taskId": "goal-1",
-                                               "attemptId": "attempt-1", "generation": 1})
-        self.assertEqual(evidence["nativeIdentity"], [{"sessionId": control["sessionId"]}])
+                                               "attemptId": context.attempt_id, "generation": 1})
+        self.assertEqual(evidence["nativeIdentity"],
+                         [{"sessionId": result.result["nativeIdentity"]["sessionId"]}])
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (0, 0))
         self.assertEqual(evidence["events"], [])
         self.assertTrue(evidence["streamComplete"])
