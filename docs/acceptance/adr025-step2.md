@@ -32,4 +32,10 @@ Worker 与快速路由经注册表调用同一个 ZCode Python 运行模块；�
 
 ## 验收与清理
 
-交付微任务的最终 acknowledge 与托管 worktree、确切任务根的清理在完整检查通过后办理；办理结果追加在本节。清理只针对创建时登记的对象，原始证据已复制到本检出忽略的 tmp/ 并逐字节核对；不会归档含 provider 私有快照的整个原生冒烟根。
+完整检查通过后，2-P、2-A、2-B、2-C1、2-C2、2-D 的固定 artifact 与已验证 integration 均已 acknowledge 为 accepted；2-D0 以 recorded 登记启动前失败的结论。此为微任务内部验收，不代替本步 Claude Code Host 外部验收。2-D 的最终 integration 为 `int-d0b753ec-2041-4708-9466-697a983cd87d`，对应 artifact `5912edfb-08a9-4ad6-8dff-ee2014513339`；其余固定标识保留在整合登记和原始回执。
+
+黑板对 2-A、2-B、2-C1、2-C2、2-D 返回 applied/removed，2-D0 经 plan/apply 回收成功；六个托管 worktree 的目录均已核查不存在，固定 refs、补丁与回执由黑板保留。2-P 是唯一未完成的清理项：两次 cleanup-plan 均以 `unregistered-checkout` 拒绝，而本机 Git 工作树列表仍列出该确切路径，目录也存在。该状态不一致已登记，保留 `~/.local/share/hey-my-buddy/state/workspaces/ws-d12bfeb1adb669e7a5513c966619d577/checkout`，未扩大本步去修复日常黑板或改变其登记。
+
+Host 按创建时台账删除 8 个短任务根和 25 个 Host 测试所建的问询目录，共 33 个确切目录；逐一确认不存在。没有通配符删除，没有屏蔽删除错误，也没有按名字、日期或“无进程引用”推断归属；其他会话目录保持不动。已确认没有这些已登记路径的意外进程引用后执行回收。删除对象与保留的 worktree 逐项见[清理清单](adr025-step2-cleanup.tsv)，命令结果保存在本步 tmp/。原始清单、日志与验证脚本已复制并核对摘要，原生冒烟只保留不含 provider 私有快照的请求、结果与摘要；没有归档整个私有冒烟根。
+
+实施与验证已完成，当前停下等待 Claude Code Host 验收。除上述 2-P 清理状态不一致外，没有待执行的本步微任务或模型运行；后续 harness 的接线待本步外部验收后开始。
