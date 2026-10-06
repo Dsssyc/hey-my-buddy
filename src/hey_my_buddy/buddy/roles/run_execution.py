@@ -120,13 +120,16 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
 
 
 def _worker_facts(result) -> dict:
+    from ..harnesses.registry import worker_format
+
+    format = worker_format(result.harness)
     payload = _base_result(result)
     payload["tokenUsage"] = result.usage.value if result.usage is not None else None
     payload["lastAssistantMessage"] = (result.last_assistant_message.value
                                        if result.last_assistant_message is not None else None)
     if result.native_error is not None:
         payload["nativeFailure"] = result.native_error.value
-    if result.native_failure is not None:
+    if result.native_failure is not None and not (format and format.native_quota_failure):
         payload["quotaFailure"] = result.native_failure.value
     if result.activity is not None:
         activity = result.activity.value
@@ -183,7 +186,8 @@ def _worker_reports(result, payload: dict) -> bool:
                 if key == "nativeCheckpoint" and result.native_identity is not None:
                     payload["nativeTurnId"] = result.native_identity.turn_id
             elif kind == "native-observations":
-                for field in ("sessionModel", "observedModels", "totalCostUsd", "rateLimitObservations", "quota"):
+                for field in ("sessionModel", "observedModels", "totalCostUsd", "rateLimitObservations", "quota",
+                              "quotaFailure"):
                     if field in report:
                         payload[field] = report[field]
                 if report.get("unsupportedNativeRequests"):
@@ -596,9 +600,12 @@ class WorkerRunExecutor:
             except (BoardError, OSError) as error:
                 payload["credentialCleanup"] = {"complete": False,
                     "error": error.code if isinstance(error, BoardError) else "filesystem-error"}
-        for key, normalizer in (("tokenUsage", usage.normalize_token_usage), ("quota", usage.normalize_quota),
-                                ("quotaFailure", usage.normalize_quota_failure)):
+        from ..harnesses.registry import worker_format
+        format = worker_format(self.name)
+        for key, normalizer in (("tokenUsage", usage.normalize_token_usage), ("quota", usage.normalize_quota)):
             payload[key] = normalizer(payload.get(key))
+        if not (format and format.native_quota_failure):
+            payload["quotaFailure"] = usage.normalize_quota_failure(payload.get("quotaFailure"))
         from ..harnesses.registry import worker_message_source
         payload["lastAssistantMessage"] = usage.normalize_last_assistant_message(
             payload.get("lastAssistantMessage"), source=worker_message_source(self.name))

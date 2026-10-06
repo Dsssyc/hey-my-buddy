@@ -232,7 +232,7 @@ class DecisionCapabilityTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
-                mock.patch.object(CodexAdapter, "start_read_only_structured") as start:
+                mock.patch("hey_my_buddy.buddy.roles.controller.start_router_preparation") as start:
             with self.assertRaises(BoardError) as raised:
                 DecisionAdapter().start(context)
         self.assertEqual(raised.exception.code, "router-review-unsupported")

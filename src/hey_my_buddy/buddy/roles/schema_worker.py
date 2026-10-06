@@ -51,6 +51,7 @@ class NativeSchemaWorker:
     interaction_kind: str
     follow_workspace_access: bool = False
     bind_account_environment: bool = False
+    native_quota_failure: bool = False
 
     def prompt(self, task_text: str, turn_input: dict) -> str:
         return "\n\n".join([*self.prefixes, *ASSISTANCE_HINTS, task_text, canonical_json(turn_input)])

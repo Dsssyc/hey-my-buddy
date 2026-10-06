@@ -18,7 +18,7 @@ from pathlib import Path
 
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
-from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter, native_usage_sidecar_path
 
 FIXTURES = Path(__file__).parent
@@ -94,7 +94,7 @@ class CodexUsageContractTests(unittest.TestCase):
                                 BUDDY_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
                                 BUDDY_DEV_SOURCE="1")
-        self.adapter = CodexAdapter()
+        self.adapter = worker_executor("codex")
 
     def context(self, case: str, *, index: int = 1, previous: str | None = None) -> ExecutionContext:
         turn_input = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,

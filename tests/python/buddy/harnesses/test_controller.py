@@ -1,7 +1,7 @@
 """The shared mechanical controller layer, against private model-free fixtures.
 
 One real plain-Python child proves the launch wiring end to end; real callers
-(CodexAdapter.start, structured_call.collect) prove that the baseline's
+(run_execution._launch, structured_call.collect) prove that the baseline's
 evaluation order, log-file creation, descriptor finalization and outer stop
 coercion survive the shared face, including on the failure paths.
 """
@@ -22,7 +22,7 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses import controller
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses import runtime_selection
-from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.controller import (
     ControllerCollection,
@@ -37,6 +37,7 @@ from hey_my_buddy.buddy.harnesses.controller import (
     stop_confirmed,
 )
 from hey_my_buddy.buddy.roles import structured_call
+from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles import turn_io
 
 
@@ -142,7 +143,7 @@ class LaunchControllerTests(unittest.TestCase):
 
 
 class CodexCallerLaunchOrderTests(unittest.TestCase):
-    """The real Codex caller keeps the baseline order on the failure paths too.
+    """The shared caller used by Codex keeps the baseline's FD boundary.
 
     The baseline opened the run's logs first and evaluated the working directory
     and environment only inside the spawn ``try``: an evaluation failure leaves
@@ -171,11 +172,17 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
             opened.extend(pair)
             return pair
 
-        def traced_cwd(_context):
-            trace.append("cwd")
-            if failure == "cwd":
-                raise ValueError("fixture cwd failure")
-            return str(directory)
+        class LaunchControl(dict):
+            def __getitem__(self, key):
+                if key == "cwd":
+                    trace.append("cwd")
+                    if failure == "cwd":
+                        raise ValueError("fixture cwd failure")
+                return super().__getitem__(key)
+
+        control = LaunchControl(privateRoot=str(directory / "private"), cwd=str(directory),
+                                operation="worker", harness="codex", timeoutSeconds=0)
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
 
         def traced_env(*_args, **_kwargs):
             trace.append("env")
@@ -187,14 +194,12 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
             trace.append("spawn")
             raise OSError("fixture spawn failure")
 
-        with mock.patch.object(CodexAdapter, "prepare"), \
-                mock.patch.object(controller, "open_logs", traced_open_logs), \
-                mock.patch.object(turn_io, "workspace_cwd", traced_cwd), \
+        with mock.patch.object(controller, "open_logs", traced_open_logs), \
                 mock.patch.object(runtime_selection, "controller_environment", traced_env), \
                 mock.patch.object(controller, "owned_popen", traced_spawn):
             raised = None
             try:
-                CodexAdapter().start(context)
+                run_execution._launch(control, context, environment={}, identity=identity)
             except (ValueError, OSError) as error:
                 raised = error
         return paths, trace, opened, raised
