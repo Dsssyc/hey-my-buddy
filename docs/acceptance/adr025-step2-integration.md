@@ -113,3 +113,11 @@ Worker 的 17 项聚焦验证、两组拒绝源码红测及六项配对绿测已
 2-C2 以 `ace3e1d` 为基线，通过路由首次提交 run `39a3e7e6-6098-43bb-b7bb-54ec9ffab846`，未指定 buddy。路由 `dec-3b28c670-af57-43a7-a54c-dd2fd9336db2` 选择 `zcode/zai-api/GLM-5.3-Flash/max`，已出现实际原生活动；不是限流后的 Host 配置替换。独占目录 `/private/tmp/a252c2-jy5bpl7e` 已创建登记，公共文件由该微任务串行持有。
 
 Host 同时完成一次计划内的新格式真实冒烟，基线为 `ace3e1d`，harness 为已安装 ZCode 0.16.9、模型为上述已运行的 Flash 配置。1 次模型调用成功，无工具、无纠正，两层停止确认；真实 RunRequest/RunResult 已落盘并通过完整身份与结构核对，详见 `adr025-step2-native-smoke.md`。2-C2 的实时接线不在这次原生证明范围内。第二步完整检查仍待各交付整合及未使用格式删减后执行。
+
+## 2-C2：首份固定交付退回
+
+固定输出 `fbdf58161432afe1af1c9efe0f835f9b738a6d5b`、artifact `893ac504-c870-4505-9c5d-cba654a5f9aa`，累计补丁 SHA-256 `6d61377905449907c1b674d6fad4067d9ae69e9717b84181293c83278e54ff52`。15 个路径字节与范围已核对，共用 socket 函数与基线 AST 相同，Worker 的 140 项聚焦通过记录属实；Host 未整合。
+
+真实 Python 桥、黑板函数与 Worker 转报函数复现四组缺陷：活请求身份不符后仍经旧路径发送/转报，黑板未核对 turn/invocation；缺失 journal 被报可用，外来记录的公开拒绝原因与计数丢失；32 条合法回答只消费第一页的 15 条，最后一问由 answered 变成 queued；已撤回问询重放被报未知桥状态，关闭后的公开原因也没有保持原 limitation 优先规则。原始结果见本步 `tmp/` 的 `2c2-host-probes.json` 与 `2c2-host-terminal-probes.json`。现有新增测试有的反而固定了这些变化，四个变异不能证明消费者行为等价，因此拒绝交付并沿原 run continue 修正。Host 不代改代码或测试。
+
+主探针初稿导入了错误的测试包名，在任何 fixture 执行前失败；Host 只改自身脚本导入后完成有效复现，失败日志保留。主探针中人工扩展的 ask-answer 值并非 ZCode 当前生产 _question_value 的形状，明确不列为缺陷，也不据此增字段。两组有效探针共用本步 Host 私有目录与 Python fixture，未调用安装版 harness 或模型，未跑完整检查。新增跨界导入应在本步登记，保持历史第零步清单原样；此文档口径由 Host 在整合时更正。
