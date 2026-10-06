@@ -169,7 +169,8 @@ def _worker_reports(result, payload: dict) -> bool:
     """Keep each validated report even when another report or delivery fails."""
     invalid = False
     for kind, key in (("inquiry-report", "inquiry"), ("attention-report", "nativeAttention"),
-                      ("quota-snapshot", "quota"), ("native-observations", None), ("native-turn-facts", None)):
+                      ("quota-snapshot", "quota"), ("native-checkpoint", "nativeCheckpoint"),
+                      ("native-observations", None), ("native-turn-facts", None)):
         try:
             report = _evidence(result, kind)
         except (OSError, ValueError, BoardError, RecursionError):
@@ -179,6 +180,8 @@ def _worker_reports(result, payload: dict) -> bool:
                 continue
             if key is not None:
                 payload[key] = report
+                if key == "nativeCheckpoint" and result.native_identity is not None:
+                    payload["nativeTurnId"] = result.native_identity.turn_id
             elif kind == "native-observations":
                 for field in ("sessionModel", "observedModels", "totalCostUsd", "rateLimitObservations", "quota"):
                     if field in report:
@@ -568,11 +571,27 @@ class WorkerRunExecutor:
                 role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
                 payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
                                error=problem.message if role_invalid else "The run's role evidence could not be collected")
+        checkpoint = turn_io.validated_checkpoint(payload, context.turn_input) if shutdown else None
+        if checkpoint is None:
+            payload.pop("nativeCheckpoint", None)
+            if result is not None and any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
+                payload["lastAssistantMessage"] = None
+        cleanup = getattr(self.module, "cleanup_after_run", None)
+        if shutdown and result is not None and callable(cleanup):
+            try:
+                cleanup_facts = cleanup(Path(handle.role_run_control["nativeRoot"]), result)
+                for key in ("codingHomePrepared", "credentialCleanup"):
+                    if key in cleanup_facts:
+                        payload[key] = cleanup_facts[key]
+            except (BoardError, OSError) as error:
+                payload["credentialCleanup"] = {"complete": False,
+                    "error": error.code if isinstance(error, BoardError) else "filesystem-error"}
         for key, normalizer in (("tokenUsage", usage.normalize_token_usage), ("quota", usage.normalize_quota),
                                 ("quotaFailure", usage.normalize_quota_failure)):
             payload[key] = normalizer(payload.get(key))
+        from ..harnesses.registry import worker_message_source
         payload["lastAssistantMessage"] = usage.normalize_last_assistant_message(
-            payload.get("lastAssistantMessage"), source=self.name + "/session-root-assistant-message")
+            payload.get("lastAssistantMessage"), source=worker_message_source(self.name))
         status = "cancelled" if (handle.cancel_requested or payload.get("status") == "cancelled") and shutdown else "failed"
         if not handle.cancel_requested and exit_code == 0 and payload.get("status") == "ok" and shutdown:
             status = "ok"
@@ -589,9 +608,10 @@ class WorkerRunExecutor:
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
-            "resumable": bool(facts["bindingPresent"] and shutdown
-                              and record is not None and result is not None
-                              and result.continuation is not None and result.continuation.resumable is True)}
+            "resumable": bool(facts.get("bindingPresent", True) and shutdown and result is not None
+                              and result.continuation is not None and result.continuation.resumable is True
+                              and (record is not None or checkpoint is not None
+                                   and turn_io.checkpoint_resumable(payload, checkpoint)))}
         if isinstance(getattr(context, "effective_workspace", None), dict):
             payload["workspaceManifest"] = context.effective_workspace
         if error:

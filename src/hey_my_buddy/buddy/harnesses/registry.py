@@ -84,6 +84,13 @@ def worker_format(name: str):
     return None
 
 
+def worker_message_source(name: str) -> str:
+    """The existing receipt's source label for each native message carrier."""
+    return {"codex": "codex/app-server-root-assistant-message",
+            "claude": "claude/stream-json-root-assistant-message"}.get(
+                name, name + "/session-root-assistant-message")
+
+
 def live_binding(name: str):
     """The registered live-channel binding of one harness, or None while it has none.
 
