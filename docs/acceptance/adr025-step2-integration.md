@@ -91,3 +91,5 @@ Host 在固定源码副本补跑 17 项受沙箱权限限制的套接字测试�
 本份交付仍退回原 run。其一，通用角色写死 ZCode 的工具开关与 EOF，且丢掉公共原生身份中的 threadId；纯模型/函数探针确认与提供的事实相矛盾。其二，现有 attention 场景正常记录三次拒绝；只将外层停止观察改为未知，或只篡改一份 turn-provenance 引用，完好的问询与 attention 报告都被丢弃，attentionRequired 错报为 false。后一组用一次现有 Python mock 原生场景复现，没有调用安装版 ZCode 或模型。原始材料在本步 `tmp/` 的 `2c1-host-fact-probes.json`。Host 要求原生特定事实由注册模块机械投影，角色按请求选择发布；各已验证事实独立保留，坏来源仍拒绝、停止未知仍不得发布成功。
 
 Host 没有修改交付代码或测试。Worker 已披露其检出内自动生成 15 个字节码目录、随后改用私有副本验证；没有手动清理或删其他会话材料，此披露保留，后续依已记录工作区回收。Host 的补验使用任务目录内固定副本；对套接字测试在默认短路径创建的目录作创建时登记，尚未手动清理。整步完整检查、真实冒烟与 2-C2/2-D 仍未开始。
+
+安装版在 attention 边界拒绝 `acknowledge(verdict=rejected)`，返回 `NOT_READY`；这条失败请求未把交付记为通过。Host 将拒绝、固定 artifact 与具体修正写入原 run 的 `continue`，continuation 为 `aeec89b2-fbb8-44ee-979f-e6ea4a1df8aa`，仍用已授权 Codex 配置。没有取消后另开，也没有为了形成 completed 再让 Worker 跑一次只改记录的回合。
