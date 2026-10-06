@@ -201,6 +201,9 @@ class RunCallPointTests(unittest.TestCase):
         for changes, expected in (
             ({"networkAllowedDomains": []}, "network_allowed_domains"),
             ({"additionalDeniedTools": ["mcp__*"]}, "additional_denied_tools"),
+            ({"continuation": {"mode": "native-session", "previousSessionId": "previous",
+                               "checkpoint": {"nativeTurnId": "native-turn", "attemptId": "previous-attempt",
+                                              "inputSha256": "a" * 64}}}, "resume_checkpoint"),
         ):
             with self.subTest(control=expected):
                 self.request = decode_run_request(run_request(self.root).to_payload() | changes)

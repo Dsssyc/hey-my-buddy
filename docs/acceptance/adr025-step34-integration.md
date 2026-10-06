@@ -31,3 +31,9 @@ Host 为 DSH 共用既有完成服务，将 `buddy/harnesses/zcode/mcp.py` 用 g
 Host 按已批准的请求字段可调整规则补 `network_allowed_domains` 与 `additional_denied_tools`，并在公共 run 调用点拒绝模块没有声明支持的非默认控制，选择与理由见执行计划补充。它们分别表达原生网络域名和附加禁用工具，不引入角色标签；默认值保留已有路径的行为。字段与共同入口的聚焦检查共 44 项通过（0.051 秒），新增两项测试覆盖 None／空清单区别、JSON 与严格类型、未支持控制不会静默运行。公开 CLI 与 C-Two 契约版本不变。这是 Host 公共接口工作；其 Claude 消费和策略对照由 3-B1 原 run 修正，实际角色接线归后续整合。跨基线验证可在 Worker 的 m/ 下用该 Host 提交与本任务自身文件组成一次性验证副本，不改受管检出的公共文件，不切换分支。
 
 公共控制值提交为 `ae9f943`。Host 另一个窄注入确认：原生回合已停止后，600 KiB 的结构化值在 RunValue 构造处抛出 BoardError，实际停止结果为 `(True, 0)` 却没有 RunResult 返回。连同无依据的 20 ms 消息边界等待和未使用的私有字段，一并列入 3-B1 的固定交付拒绝，原 run 已用 continue 继续（revision 6）；没有取消或新开微任务。Host 自己的冒烟记录也把次数口径明确为“原生 Worker 运行 1 次”，同时保留 4 条原生用量记录，避免把运行次数写成厂商请求次数；这是已知事实的表述更正，无代码或测试变化。
+
+3-A1 报告的续接缺口由 Host 补公共 ResumeCheckpoint 对象，角色只投影黑板已有的 nativeTurnId、attemptId、inputSha256 三项；共同入口拒绝未声明支持的非默认检查点。三个键须同时存在，没有新增角色标签或传递整个输入。公共格式、控制与已接入 ZCode 的聚焦检查共 59 项通过（17.702 秒），新增一项编号，原有一项控制测试增加检查点子用例；Codex 的绑定比较仍由原微任务消费，不能据此声明 Codex 已接入。
+
+3-A1 首轮因根回合在 finish 后再次调工具而失败（duplicate-finish），原生与外层停止均已确认；这不是供应方限流，不更换 buddy。封存的 partial-output 为 07eef2d、artifact 1fcbcb46-9bdd-4626-95e8-c3f332bd20c7，累计补丁摘要与六条范围路径核对一致。Host 对该固定代码的模拟原生进程探针确认：Worker 工具完成后 toolEvidence 为空，观察计数先为零、终结才变成一；65 种未知事件令结果构造抛 BoardError，已确认的停止事实没有返回；准备失败且未启动原生进程时却报告 groupState=unknown、started=null，同时 basis=spawn-never-happened。以上要求回原 run 修正，不整合该产物。
+
+该 partial-output 的记录同时声称没有手动删除，又承认重建变异副本使用 shutil.rmtree；实际脚本在本任务已登记根的 m/fault-* 具体副本内删除再复制。已见对象均位于本任务根，按用户规则拒绝交付并要求如实披露、撤回矛盾口径后 continue，不暂停等用户，也不恢复或追查别的会话。Host 未代改这份掩盖违规的记录。上述探针只用假原生 CLI，不调用模型；原始输出保留在本检出 tmp/。

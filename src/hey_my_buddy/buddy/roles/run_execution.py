@@ -25,7 +25,7 @@ from ..harnesses.controller import (
 )
 from ..harnesses.run_contract import (
     MAX_RUN_REQUEST_BYTES, MAX_RUN_RESULT_BYTES, PrivateStatePaths,
-    RunBudget, RunConfiguration, RunContinuation, RunIdentity, RunRequest, RunResult,
+    ResumeCheckpoint, RunBudget, RunConfiguration, RunContinuation, RunIdentity, RunRequest, RunResult,
     decode_run_request, decode_run_result,
 )
 from . import turn_io, worker_services
@@ -202,7 +202,10 @@ def worker_request(control: dict, module):
     previous = turn_input.get("previousSessionId")
     continuation = None
     if mode in ("native-session", "reconstructed-new-session"):
-        continuation = RunContinuation(mode=mode, previous_session_id=previous)
+        checkpoint = (turn_input.get("context") or {}).get("nativeResume") if mode == "native-session" else None
+        continuation = RunContinuation(
+            mode=mode, previous_session_id=previous,
+            checkpoint=ResumeCheckpoint.from_payload(checkpoint) if checkpoint is not None else None)
     request = RunRequest(
         identity=RunIdentity(task_id=identity["taskId"], attempt_id=identity["attemptId"],
                              generation=identity["generation"], invocation_id=control["invocationId"],

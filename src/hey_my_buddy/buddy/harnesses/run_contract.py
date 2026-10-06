@@ -147,6 +147,14 @@ class RunBudget(InternalModel):
     timeout_seconds: Annotated[int, Field(ge=0, le=86400)]
 
 
+class ResumeCheckpoint(InternalModel):
+    """The three facts the existing Codex continuation binding compares."""
+
+    native_turn_id: Text(512)
+    attempt_id: Identifier
+    input_sha256: Hex64
+
+
 class RunContinuation(InternalModel):
     """A requested continuation; without evidence no native resume is enabled.
 
@@ -157,6 +165,7 @@ class RunContinuation(InternalModel):
 
     mode: ContinuationMode
     previous_session_id: OptionalText(512) = None
+    checkpoint: Optional[ResumeCheckpoint] = None
 
     @model_validator(mode="after")
     def _native_resume_names_its_session(self) -> "RunContinuation":
@@ -704,7 +713,7 @@ __all__ = [
     "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "DeniedInteraction", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "PrivateStatePaths",
-    "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
+    "ResumeCheckpoint", "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "UnknownEvents", "canonical_json",
     "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",

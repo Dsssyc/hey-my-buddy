@@ -200,6 +200,8 @@ def run_harness(
         name for name, requested in (
             ("network_allowed_domains", request.network_allowed_domains is not None),
             ("additional_denied_tools", bool(request.additional_denied_tools)),
+            ("resume_checkpoint", request.continuation is not None
+             and request.continuation.checkpoint is not None),
         ) if requested
     }
     unsupported = requested_controls - set(getattr(module, "supported_request_controls", ()))

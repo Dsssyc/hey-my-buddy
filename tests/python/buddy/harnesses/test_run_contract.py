@@ -109,6 +109,18 @@ def full_result() -> rc.RunResult:
 
 
 class CodecRoundtripTests(unittest.TestCase):
+    def test_a_resume_checkpoint_is_absent_or_carries_all_three_bound_facts(self):
+        fields = {"mode": "native-session", "previousSessionId": "previous",
+                  "checkpoint": {"nativeTurnId": "native-turn", "attemptId": "previous-attempt",
+                                 "inputSha256": "a" * 64}}
+        value = rc.RunContinuation.from_payload(fields)
+        self.assertEqual(value.to_payload(), fields)
+        self.assertIsNone(rc.RunContinuation(mode="native-session", previous_session_id="previous").checkpoint)
+        for missing in fields["checkpoint"]:
+            partial = {k: v for k, v in fields["checkpoint"].items() if k != missing}
+            with self.subTest(missing=missing), self.assertRaises(BoardError):
+                rc.RunContinuation.from_payload(fields | {"checkpoint": partial})
+
     def test_native_default_and_explicit_restrictions_stay_distinct_on_the_wire(self):
         request = full_request(Path("/private/tmp"))
         self.assertIsNone(rc.decode_run_request(rc.encode_run_request(request)).network_allowed_domains)
