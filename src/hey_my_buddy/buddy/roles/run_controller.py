@@ -33,9 +33,9 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
         request, services, observer = run_execution.worker_request(control, module)
         correction = None
     elif control["operation"] == "fast":
-        request, services, observer, correction = run_execution.fast_request(control)
+        request, services, observer, correction = run_execution.fast_request(control, module)
     elif control["operation"] == "review":
-        request, services, observer, correction = run_execution.review_request(control)
+        request, services, observer, correction = run_execution.review_request(control, module)
     else:
         raise BoardError("INVALID_ARGUMENT", "Unknown role operation")
     # The run consumes the actual stored public request frame, rather than a

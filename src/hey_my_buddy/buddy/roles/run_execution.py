@@ -265,11 +265,9 @@ def worker_request(control: dict, module):
         services, descriptions = binding.services, (binding.description,)
         schema, scope = worker_services.OUTCOME_SCHEMA, "write"
     else:
-        services = module.prepare_run_services(
-            invocation_root=invocation_root, native_root=Path(control["nativeRoot"]),
-            activity_dir=Path(control["directory"]), account=control.get("account"))
-        descriptions = ()
         prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, format.tool_scope(turn_input)
+        services = _native_services(control, module, scope)
+        descriptions = ()
     mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
     continuation = None
@@ -297,7 +295,18 @@ def worker_request(control: dict, module):
     return request, services, worker_observer
 
 
-def fast_request(control: dict):
+def _native_services(control: dict, module, tool_scope: str):
+    """Bind native paths and the frozen account, without workflow authority."""
+    factory = getattr(module, "prepare_run_services", None)
+    if factory is None:
+        return None
+    return factory(invocation_root=Path(control["privateRoot"]),
+                   native_root=Path(control["nativeRoot"]),
+                   activity_dir=Path(control["directory"]),
+                   account=control.get("account"), tool_scope=tool_scope)
+
+
+def fast_request(control: dict, module):
     """Project one no-tool control file into the frozen request and observer."""
     invocation_root = Path(control["privateRoot"])
     request_values = control["noToolRequest"]
@@ -316,10 +325,10 @@ def fast_request(control: dict):
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
     correction = FastCorrection(request_values["outputSchema"], base_prompt)
-    return request, None, correction.observer, correction
+    return request, _native_services(control, module, "none"), correction.observer, correction
 
 
-def review_request(control: dict):
+def review_request(control: dict, module):
     from ..harnesses.registry import review_request_controls
 
     values = control["readOnlyRequest"]
@@ -336,7 +345,7 @@ def review_request(control: dict):
         **review_request_controls(control["harness"]))
     observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], values["prompt"],
                               can_correct=control["canCorrect"])
-    return request, None, observer.observer, observer
+    return request, _native_services(control, module, "read"), observer.observer, observer
 
 
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
@@ -442,6 +451,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> Process
     control = {
         "operation": "fast", "harness": name, "privateRoot": str(invocation),
         "directory": str(invocation), "nativeRoot": str(invocation / "native"),
+        "account": context.runtime.get("account"),
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "cwd": str(cwd.resolve()),
         "timeoutSeconds": request.timeout_seconds,

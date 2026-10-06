@@ -433,3 +433,5 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 用户随后明确接受DSH的第四、五项行为差异：所有由hey-my-buddy启动的DSH运行，均通过该次启动的私有patch关闭session-title-llm（第四项）和session-telemetry-otel（第五项）。这包括Worker、快速调用和免模型发现；不改用户配置，用户自己交互使用的DSH不受影响。原有三项已接受差异及其他边界继续有效。第四步使用项目依赖zstandard>=0.25,<1读取本次私有会话记录，不依赖系统zstd命令；源不可读时如实未知，正常Worker回合必须保留既有token用量报告能力后才能验收。
 
 原生schema完成的Worker接线复用同一个请求、控制器、回合导入和停止收集。两份历史提示词前缀、schema的小差异、只读映射及收据校验键由注册处绑定为角色参数；NativeSchemaWorker只处理通用outcome/attention规则，不解析厂商事件或启动原生程序。工具完成仍用已有worker_services。原生模块只补路径/账户服务绑定、native-turn-facts与本harness的来源校验等窄helper；Worker整体输入不会因此传进运行请求。原生运行成功而角色值无效时，运行事实保持原样，角色控制器退出失败，外层在双层停止后才写回合记录。
+
+接线补充：原生schema的路径服务工厂为prepare_run_services(*, invocation_root, native_root, activity_dir, account, tool_scope)，由公共角色对Worker、fast、review调用。tool_scope只表示原生工具范围，使Codex仅在write路径选择coding home凭据来源；冻结账户与活动目录不放入RunRequest，也不传递整个角色控制文件。session-tool载体沿用已有prepare_services。

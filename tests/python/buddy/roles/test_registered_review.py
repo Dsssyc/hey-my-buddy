@@ -22,6 +22,8 @@ class RegisteredReviewTests(NativeRunCase):
             "operation": "review", "harness": "claude", "spec": CONFIGURATION,
             "taskId": "task", "attemptId": "attempt", "generation": 1,
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
+            "directory": str(root),
+            "account": {"adapter": "claude", "source": "native", "revision": 3},
             "nativeRoot": str(root / "native"), "cwd": str(self.cwd), "timeoutSeconds": 10,
             "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json"),
             "canCorrect": False,
@@ -47,6 +49,18 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertTrue(payload["answerValid"])
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_native_binding_keeps_the_frozen_account_and_paths_out_of_the_request(self):
+        with mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True) as bind:
+            _result, request, _payload, code = self.review()
+        self.assertEqual(code, 0)
+        values = bind.call_args.kwargs
+        self.assertEqual(set(values), {"invocation_root", "native_root", "activity_dir", "account", "tool_scope"})
+        self.assertEqual(values["tool_scope"], "read")
+        self.assertEqual(values["account"], {"adapter": "claude", "source": "native", "revision": 3})
+        self.assertEqual(str(values["activity_dir"]), request.private_state.invocation_root)
+        self.assertNotIn("account", request.to_payload())
+        self.assertEqual(request.session_services, ())
 
     def test_a_real_tool_over_budget_is_stopped_by_the_role_and_keeps_its_fact(self):
         self.use_fixture(STREAM_FIXTURE)
