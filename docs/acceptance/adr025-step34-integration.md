@@ -151,3 +151,9 @@ Host 迁移暂缓审阅与私有证据分区的旧 DSH 调用点到同一注册�
 Host 公共退役接线移除 Node 套件发现/调度/计数，保持原默认并行数、Python 逐模块隔离、失败输出与中断回收，新增空 Python 集合不能绿的见证；三条 Node 调度专属见证随被删分支退役。运行时 manifest 与 sdist 不再声明项目 Node 集成资源；安装用合成 manifest 改用中性 Python/JSON 资源名，目录覆盖、前缀邻居、源码泄漏与冷安装意图不变。检查运行器、清理、运行时与打包批次 72 项中 71 项通过（36.482 秒），唯一失败是 Host 新 wheel 断言把合法 Python harnesses/dsh 包也误算为旧 Node 树；修成精确的 _distribution/package/harnesses/dsh 前缀后，只补跑 distribution 模块通过。范围以外的 Node 源码删除仍由 4-C 完成。
 
 私有分区迁移首轮仅 DSH 会话目录断言失败：假程序默认不写会话记录；配置它写本次合成 session.v3 后，实际记录目录/证据分区见证恢复。删除旧 Node 控制器帮助时 Host 曾误删仍被 Codex 发起顺序测试使用的 runtime_selection 导入，并遗留旧 banner fixture；恢复导入、使通用收集夹具匹配当前严格帧后，共享控制器与这项分区见证 33 项通过（1.613 秒）。这些是 Host 迁移中的失误与修正，原始失败日志保留，没有放宽原分区/FD/收集断言。
+
+4-C 固定封存 cbe9242（Worker 摘要 e196971）、artifact b401cac6-a2bb-4bdb-bffa-2acc864aa81c、累计补丁 cac929654c4f792d6a03a301bbad9fa0af16142a3da9f54418502ecdc7fa0845 已核对。API 路径列表有截断标记，Host 从固定 Git 区间取齐 33 条范围路径逐字节核对；23 个 Node 文件、yaml_bridge、三个旧 Python 测试载体/类与零消费方夹具退役。Host 在 3d63901 公共基线加固定范围的副本独立运行 DSH 155 项通过（33.289 秒）；把非 end_turn 当成功、重新放回 yaml_bridge 两项变异独立重跑，分别以 ok≠error、ModuleSpec 非空命中见证，未变原件通过。
+
+Node 意图表核对方法：源码提取到 101 个静态 test/t.test 标题，四组参数化循环分别展开 3、2、4、4 个用例，合计 110 项；固定表覆盖其全部标题及显式变体。表的实际类别是 covered 54、covered/retired 7、covered/差异 1、migrated 1、retired 38（合计 101 行，另有两行注释），原记录部分数字重复计入迁移行，Host 在此更正。Worker 的 node-leaf-tap.txt 是有失败的旧 Node 收集试跑（仅列顶层），node-report.json 为空，不能当 Node 基线通过证明；Host 的 bd4324e 完整检查已有 Node 110 项通过，且到本任务基线 68c03c0 的 Node 树/yaml_bridge 字节未变。本轮 Node 基线通过的依据只来自那份 Host 证据。代码整合未改 Worker 范围内容。
+
+4-C 内部签收后仍有 Host 公共邻接迁移、无生产消费者精简、真实冒烟与整步完整检查。治理回合非 end_turn 被 missing-finish 遮蔽的观察属于其禁止写入的 native_run/protocol 面，由 Host 结合共享角色收据补齐。

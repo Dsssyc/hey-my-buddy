@@ -617,6 +617,24 @@ class FastSeamTests(NativeRunCase):
         self.assertTrue(self.wait_for(
             lambda: any(entry.get("event") == "stdin-eof" for entry in self.agent_log())))
 
+    def test_a_non_end_turn_stop_is_a_real_native_failure_not_an_answer(self):
+        # The old direct-LLM plugin's non-stop finishes stay real failures on
+        # the final-message carrier: a max-tokens stop is never published as a
+        # settled answer, and the native start plus group stop stay honest.
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                 "--stop-reason", "max_tokens"]
+        correction = FastCorrection(SCHEMA, "prompt")
+        result = run(self.fast_request("prompt"), observer=correction.observer,
+                     services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-max-tokens")
+        self.assertIn("max_tokens", result.end.message)
+        self.assertIsNone(result.value, "a non-end turn owes no answer value")
+        self.assertIsNone(result.completion_evidence)
+        self.assertEqual(result.model_started, True)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+
 
 class CancelTests(NativeRunCase):
     def test_a_cancelled_flag_interrupts_the_run_and_reports_the_transport_fact(self):

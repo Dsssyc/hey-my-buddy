@@ -115,6 +115,7 @@ class DescriptionSeamTests(DshRoleCase):
             self.assertFalse(hasattr(description, entry), entry)
         self.assertIsNone(importlib.util.find_spec("hey_my_buddy.buddy.harnesses.dsh.runner"))
         self.assertIsNone(importlib.util.find_spec("hey_my_buddy.buddy.harnesses.dsh.catalog"))
+        self.assertIsNone(importlib.util.find_spec("hey_my_buddy.buddy.harnesses.dsh.yaml_bridge"))
         self.assertIs(description.validate_turn_provenance, run_seam("dsh").validate_turn_provenance)
         module = run_seam("dsh")
         for operation in ("run", "run_discovery", "check_preparation", "prepare_services",

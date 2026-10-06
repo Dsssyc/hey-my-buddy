@@ -108,6 +108,7 @@ class FakeAgent:
         self.finish_fail_then_retry = args.finish_fail_then_retry
         self.no_finish = args.no_finish
         self.forge_receipt = args.forge_receipt
+        self.stop_reason = args.stop_reason
         self.hang_prompt = args.hang_prompt
         self.park_prompt = args.park_prompt
         self.emit_tool_update = args.emit_tool_update
@@ -430,7 +431,8 @@ class FakeAgent:
         self.notify_client("session/update", {"sessionId": session_id,
                                               "update": {"sessionUpdate": "agent_message_chunk",
                                                          "content": {"type": "text", "text": answer}}})
-        self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+        self.send({"jsonrpc": "2.0", "id": request_id,
+                   "result": {"stopReason": self.stop_reason or "end_turn"}})
 
     def run_governed_prompt(self, message: dict) -> None:
         """The governed carrier: real session tools through the role's own rules.
@@ -814,6 +816,8 @@ def main() -> int:
                         help="answer the first delivered question through the real session-tool rules")
     parser.add_argument("--forge-checkpoint", action="store_true",
                         help="mutate the checkpoint receipt under its stale signature")
+    parser.add_argument("--stop-reason", default=None,
+                        help="end the prompt with this stop reason instead of end_turn")
     args = parser.parse_args()
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
