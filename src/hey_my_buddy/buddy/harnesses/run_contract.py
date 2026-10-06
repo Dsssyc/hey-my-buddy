@@ -48,21 +48,12 @@ from ...protocol.internal_models import (
     fail,
 )
 
-from pydantic import AfterValidator, BeforeValidator, Field, field_serializer, model_serializer, model_validator
+from pydantic import BeforeValidator, Field, field_serializer, model_serializer, model_validator
 
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
 
 HARNESS_NAMES = ("codex", "claude", "zcode", "dsh")
-TOOL_SCOPES = ("none", "read", "write")
-END_STATUSES = ("ok", "error", "cancelled")
-MODEL_START_BASES = ("native-start", "input-admitted", "input-sent", "legacy-report", "unknown")
-CHECK_BASES = ("catalog-membership", "native-readback", "unknown")
-SCHEMA_STATUSES = ("valid", "invalid", "unknown")
-VALUE_MECHANISMS = ("native-schema", "completion-tool", "final-message")
-POLICY_ENFORCEMENTS = ("native", "unrestricted", "unknown")
-GROUP_STATES = ("gone", "alive", "unknown")
-CONTINUATION_MODES = ("native-session", "reconstructed-new-session")
 #: The native-provided identifier fields, matching the tool-evidence identity set.
 NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": "turn_id",
                   "inputId": "input_id", "callId": "call_id"}
@@ -103,15 +94,11 @@ MAX_SCHEMA_BYTES = 65536
 #: The final value's raw text and its parsed form hold the old 512 KiB strict
 #: controller-read range; a value within it is never refused or dropped here.
 MAX_VALUE_BYTES = 512 * 1024
-MAX_ERROR_ITEMS = 16
-MAX_ERROR_CHARS = 500
 MAX_DENIED_INTERACTIONS = 64
 MAX_UNKNOWN_EVENT_TYPES = 64
-MAX_POLICY_LIMITATIONS = 8
 MAX_EVIDENCE_REFS = 32
 MAX_SESSION_SERVICES = 8
 MAX_SERVICE_TOOL_NAMES = 16
-MAX_NETWORK_DOMAINS = 64
 MAX_CHECKS = 8
 MAX_ROOT_IDENTITIES = 32
 #: The role-assembled input text keeps the old input allowed set: any bounded
@@ -141,22 +128,6 @@ class RunConfiguration(InternalModel):
     effort: Text(64)
 
 
-class FrozenAccountReference(InternalModel):
-    """A non-secret reference to the frozen account.
-
-    Only scalar references: adapter, source, revisions, an identity string and a
-    native account location reference. No key, token or file content is carried,
-    and the executor never opens the user's credential files.
-    """
-
-    adapter: HarnessName
-    source: OptionalText(64) = None
-    revision: Optional[NonNegativeInt] = None
-    credential_revision: Optional[NonNegativeInt] = None
-    identity: OptionalText(256) = None
-    native_location: OptionalText(1024) = None
-
-
 class PrivateStatePaths(InternalModel):
     """The attempt-private invocation and native roots of one run."""
 
@@ -164,35 +135,28 @@ class PrivateStatePaths(InternalModel):
     native_root: AbsolutePath
 
 
-class NetworkPolicy(InternalModel):
-    """The requested network fact; ``False`` never forbids a model connection."""
-
-    requested: bool
-    allowed_domains: Optional[JsonTuple(Text(255), max_items=MAX_NETWORK_DOMAINS)] = None
-
-
 class RunBudget(InternalModel):
-    """The run budget; ``timeoutSeconds: 0`` keeps the existing unlimited meaning."""
+    """The one budget item the native driver consumes: the overall deadline.
+
+    ``timeoutSeconds: 0`` keeps the existing unlimited meaning. The old output
+    byte, tool-count and read-byte bounds are not parameters of this seam: the
+    harnesses enforce their own existing constants, and the fact packages
+    carry their own bounds.
+    """
 
     timeout_seconds: Annotated[int, Field(ge=0, le=86400)]
-    max_output_bytes: Count
-    tool_calls: Optional[Count] = None
-    bytes_read: Optional[Count] = None
 
 
 class RunContinuation(InternalModel):
     """A requested continuation; without evidence no native resume is enabled.
 
     A native-session resume names the exact previous session it continues; a
-    reconstruction may honestly carry none.
+    reconstruction may honestly carry none. The harness derives every other
+    binding fact from that session identity itself.
     """
 
     mode: ContinuationMode
     previous_session_id: OptionalText(512) = None
-    binding_ref: OptionalText(512) = None
-    previous_native_turn_id: OptionalText(512) = None
-    previous_attempt_id: Optional[Identifier] = None
-    previous_input_sha256: Optional[Hex64] = None
 
     @model_validator(mode="after")
     def _native_resume_names_its_session(self) -> "RunContinuation":
@@ -203,14 +167,15 @@ class RunContinuation(InternalModel):
 
 
 class SessionService(InternalModel):
-    """One in-run service description; its instance stays with the role."""
+    """The fully qualified tool names of one mounted in-run session service.
 
-    service_id: Identifier
-    kind: Text(32)
+    This is the one fact the native driver consumes: the mounted binding it
+    must find and the names the governed prompt cites. The service instance,
+    its schemas and its delivery mode stay with the role and the harness's own
+    mount; they never travel in the request.
+    """
+
     tool_names: JsonTuple(Text(512), max_items=MAX_SERVICE_TOOL_NAMES) = ()
-    input_schema: OptionalFrozenJsonAt(MAX_SCHEMA_BYTES) = None
-    output_schema: OptionalFrozenJsonAt(MAX_SCHEMA_BYTES) = None
-    delivery_mode: OptionalText(32) = None
 
 
 class RunRequest(InternalModel):
@@ -225,10 +190,8 @@ class RunRequest(InternalModel):
     private_state: PrivateStatePaths
     input_text: NonEmptyInputText
     tool_scope: ToolScope
-    network: NetworkPolicy
     output_schema: FrozenJsonAt(MAX_SCHEMA_BYTES)
     budget: RunBudget
-    frozen_account: Optional[FrozenAccountReference] = None
     continuation: Optional[RunContinuation] = None
     session_services: JsonTuple(SessionService, max_items=MAX_SESSION_SERVICES) = ()
     capture_evidence: bool = False
@@ -282,7 +245,6 @@ class ModelStartEvidence(InternalModel):
 
     basis: ModelStartBasis
     native_identity: Optional[NativeIdentity] = None
-    event_sequence: Optional[Count] = None
 
 
 class CheckedValue(InternalModel):
@@ -291,7 +253,6 @@ class CheckedValue(InternalModel):
     value: Text(128)
     basis: CheckBasis
     source: OptionalText(120) = None
-    native_identity: Optional[NativeIdentity] = None
 
 
 class CheckedConfiguration(InternalModel):
@@ -303,23 +264,31 @@ class CheckedConfiguration(InternalModel):
 
 
 class ResultConfiguration(InternalModel):
-    """Requested, checked and observed configuration, kept strictly apart."""
+    """Requested and checked configuration, kept strictly apart.
+
+    The legacy receipts' ``observed`` key stays the role projection's ``None``
+    placeholder; the native readback lands here as checked values with their
+    basis, never as a look-alike observed block.
+    """
 
     requested: Optional[RunConfiguration] = None
     checked: CheckedConfiguration = Field(default_factory=CheckedConfiguration)
-    observed: OptionalFrozenJsonAt(MAX_SCHEMA_BYTES) = None
     checks: JsonTuple(Text(32), max_items=MAX_CHECKS) = ()
 
 
 class RunValue(InternalModel):
-    """The final value of one run and the basis of its schema check."""
+    """The final value of one run and the basis of its schema check.
+
+    ``raw`` keeps the delivery's own text even when it is not the parsed
+    value; schema verdicts stay with the role, so no per-error list travels
+    here.
+    """
 
     schema_status: SchemaStatus
     mechanism: ValueMechanism
     raw: Optional[RawText(MAX_VALUE_BYTES)] = None
     parsed: OptionalFrozenJsonAt(MAX_VALUE_BYTES) = None
     validation_basis: OptionalText(128) = None
-    errors: JsonTuple(Text(MAX_ERROR_CHARS), max_items=MAX_ERROR_ITEMS) = ()
     correction_count: NonNegativeInt = 0
 
 
@@ -339,14 +308,14 @@ class CompletionEvidence(InternalModel):
 class DeniedInteraction(InternalModel):
     """One native interaction the harness refused; no tool arguments are kept.
 
-    ``request_id`` stays ``None`` when the harness's own record carried no
-    native request id; one is never invented for it.
+    This is the common triple of one refusal: the method, the action taken and
+    the reason. The refused interactions' own full records — native request
+    identities and timestamps included — stay in their clearly-sourced
+    evidence reference, never duplicated here.
     """
 
     method: Text(128)
     action: Text(64)
-    request_id: OptionalText(128) = None
-    native_identity: Optional[NativeIdentity] = None
     reason: OptionalText(400) = None
 
 
@@ -373,7 +342,6 @@ class UnknownEvents(InternalModel):
     counts: Annotated[Tuple[Tuple[Text(64), Count], ...], BeforeValidator(_count_pairs)] = Field(
         alias="countsByType", default=(), max_length=MAX_UNKNOWN_EVENT_TYPES)
     total: Count
-    truncated: bool = False
 
     @field_serializer("counts")
     def _counts_object(self, value: Any) -> dict:
@@ -394,17 +362,18 @@ class PolicyFact(InternalModel):
 
     enforcement: PolicyEnforcement
     requested: OptionalFrozenJsonAt(MAX_SCHEMA_BYTES) = None
-    reported: OptionalFrozenJsonAt(MAX_SCHEMA_BYTES) = None
     basis: OptionalText(128) = None
-    limitations: JsonTuple(Text(256), max_items=MAX_POLICY_LIMITATIONS) = ()
 
 
 class EffectivePolicy(InternalModel):
-    """Effective policy per tools, filesystem and network; honesty over neatness."""
+    """Effective policy per tools and filesystem; honesty over neatness.
+
+    The network fact stays out until a harness actually reports one: a
+    constant ``unknown`` placeholder proves nothing and reads nothing.
+    """
 
     tools: Optional[PolicyFact] = None
     filesystem: Optional[PolicyFact] = None
-    network: Optional[PolicyFact] = None
 
 
 class ContinuationFacts(InternalModel):
@@ -413,7 +382,6 @@ class ContinuationFacts(InternalModel):
     resumable: Optional[bool] = None
     native_session_ref: OptionalText(1024) = None
     binding_ref: OptionalText(1024) = None
-    checkpoint_ref: OptionalText(1024) = None
     basis: OptionalText(128) = None
 
 
@@ -434,31 +402,33 @@ class StopLayer(InternalModel):
 
 
 class InterruptEvidence(InternalModel):
-    """A native interrupt: the request and its acknowledgement stay separate.
+    """A native interrupt: the request fact and its basis.
 
-    A missing record stays ``None``/unknown; only an explicit ``True``/``False``
-    from the payload or the collector is a fact.
+    A missing record stays ``None``; only an explicit ``True``/``False`` from
+    the payload or the collector is a fact. An acknowledgement a harness
+    cannot observe is never carried here as a constant.
     """
 
     requested: Optional[bool] = None
-    acknowledged: Optional[bool] = None
     basis: OptionalText(48) = None
 
 
 class StopEvidence(InternalModel):
-    """Two conservative layers plus the interrupt record."""
+    """The native layer's stop facts plus the interrupt record.
+
+    The outer controller's own stop confirmation is the holding side's real
+    process fact, carried by the collector — never a constant second layer.
+    """
 
     native: StopLayer = Field(default_factory=StopLayer)
-    controller: StopLayer = Field(default_factory=StopLayer)
     interrupt: InterruptEvidence = Field(default_factory=InterruptEvidence)
 
 
 class EvidenceRef(InternalModel):
-    """One private evidence file's binding, size, digest and retention fact."""
+    """One private evidence file's binding, size and digest."""
 
     kind: Text(32)
     location: Text(1024)
-    retained: bool = True
     size_bytes: Optional[Count] = None
     sha256: Optional[Hex64] = None
 
@@ -482,8 +452,6 @@ def _normalized_package(kind: str, value: Any) -> Optional[FrozenJson]:
                        reason=str(error.message)[:200]) from None
     elif kind == "usage":
         normalized = usage_protocol.normalize_token_usage(unpacked)
-    elif kind == "quota":
-        normalized = usage_protocol.normalize_quota(unpacked)
     elif kind == "nativeFailure":
         normalized = usage_protocol.normalize_quota_failure(unpacked)
     elif kind == "lastAssistantMessage":
@@ -593,7 +561,6 @@ def _native_error_record(value: Any) -> Optional[FrozenJson]:
 #: One canonical fact package, validated by its own projection on every path.
 ActivityPackage = Annotated[Optional[FrozenJson], BeforeValidator(partial(_normalized_package, "activity"))]
 UsagePackage = Annotated[Optional[FrozenJson], BeforeValidator(partial(_normalized_package, "usage"))]
-QuotaPackage = Annotated[Optional[FrozenJson], BeforeValidator(partial(_normalized_package, "quota"))]
 NativeFailurePackage = Annotated[Optional[FrozenJson],
                                  BeforeValidator(partial(_normalized_package, "nativeFailure"))]
 LastAssistantMessagePackage = Annotated[Optional[FrozenJson],
@@ -670,7 +637,6 @@ class RunResult(InternalModel):
     effective_policy: EffectivePolicy = Field(default_factory=EffectivePolicy)
     activity: ActivityPackage = None
     usage: UsagePackage = None
-    quota: QuotaPackage = None
     native_failure: NativeFailurePackage = None
     native_error: NativeErrorRecord = None
     last_assistant_message: LastAssistantMessagePackage = None
@@ -727,14 +693,14 @@ class HarnessRun(Protocol):
 
 
 __all__ = [
-    "CHECK_BASES", "CONTINUATION_MODES", "END_STATUSES", "FEEDBACK_CONTINUE", "FEEDBACK_STOP",
-    "FORMAT_VERSION", "FrozenAccountReference",
-    "FrozenJson", "GROUP_STATES", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
-    "MAX_RUN_RESULT_BYTES", "MODEL_START_BASES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
+    "FEEDBACK_CONTINUE", "FEEDBACK_STOP",
+    "FORMAT_VERSION",
+    "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
+    "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "DeniedInteraction", "EffectivePolicy", "EvidenceRef",
-    "InterruptEvidence", "NativeIdentity", "NetworkPolicy", "POLICY_ENFORCEMENTS", "PrivateStatePaths",
+    "InterruptEvidence", "NativeIdentity", "PrivateStatePaths",
     "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
-    "RunRequest", "RunResult", "RunValue", "SCHEMA_STATUSES", "SessionService", "StopEvidence",
-    "StopLayer", "TOOL_SCOPES", "UnknownEvents", "VALUE_MECHANISMS", "canonical_json",
+    "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
+    "StopLayer", "UnknownEvents", "canonical_json",
     "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",
 ]

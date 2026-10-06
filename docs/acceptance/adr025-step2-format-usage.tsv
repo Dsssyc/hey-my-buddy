@@ -1,0 +1,129 @@
+model	field	class	production_write	production_read_or_delivery	disposition	reason
+RunRequest	format_version	A	roles/run_execution worker_request/fast_request 默认值	run_controller 编码/解码边界与严格类型见证	kept	内部版本唯一值 1，帧边界的普通 strict 与整帧限额见证实例
+RunRequest	identity	A	worker_request/fast_request 用回合输入与 invocation 构造	_read_run/_read_request 身份相等核对；roles/live stored_run_request/handle_live_binding 完整核对	kept	请求与结果、存储请求与持有方身份绑定的唯一事实
+RunRequest	harness	A	角色按登记名构造	run_controller execute 选 seam；_read_run 核对	kept	执行体选择与结果绑定
+RunRequest	configuration	A	角色从 spec 构造	native_run _spec→configure_session 原生选择与回读	kept	驱动实际读取
+RunRequest	cwd	A	角色已核对的检出目录	_checked_root_session 与原生 workspace 绑定核对	kept	驱动实际读取
+RunRequest	private_state	A	角色构造两根	run() 建私有根；native_root 用于会话绑定与 session_facts	kept	驱动实际读取
+RunRequest	input_text	A	角色组装（Worker governed_prompt/fast no_tool_prompt/纠正文本）	native_run session/send 内容；collect 读 request.input_text 组回合记录 prompt hash	kept	驱动与角色实际读取
+RunRequest	tool_scope	A	角色按操作构造（write/none）	native_run 原生工具设置与 effective_policy 投影	kept	驱动实际读取
+RunRequest	output_schema	A	角色构造（OUTCOME_SCHEMA/fast schema）	_check_service_descriptions 与完成工具契约对照；fast 值校验	kept	签收对照与角色校验实际读取
+RunRequest	budget	A	角色构造	RunBudget.timeout_seconds→execution_deadline	kept	驱动唯一读取的预算项
+RunRequest	continuation	A	worker_request 按 resumeMode 构造	native_run _continuation_of	kept	驱动实际读取
+RunRequest	session_services	A	worker_request 放 binding.description	_check_service_descriptions 挂载一致性核对	kept	驱动实际读取
+RunRequest	capture_evidence	A	fast 按 noToolRequest 构造	_fast_result 决定是否发布 nativeEvidence	kept	角色发布开关实际读取
+RunRequest	network	C	run_execution 两处写常量 requested=False	无（ZCode 驱动不读取）	deleted	无生产消费者；原网络策略/白名单差异在角色与既有投影层不变
+RunRequest	frozen_account	C	run_execution 从控制文件 account 转抄	无（驱动不读取）	deleted	账户环境选择本就经 _account_environment 直取运行时上下文；控制文件两处 account 写入一并删除
+NetworkPolicy	(整类)	C	仅 RunRequest.network	无	deleted	仅构造、无读取的请求值类
+FrozenAccountReference	(整类)	C	仅 RunRequest.frozen_account	无	deleted	仅转抄、无读取的引用类
+RunBudget	max_output_bytes	C	run_execution 写 _STRICT_RESULT_BYTES	无	deleted	原字节上限由各 harness 常量与事实包界限执行
+RunBudget	tool_calls	C	无生产写入（仅测试 fixture）	无	deleted	无来源无消费
+RunBudget	bytes_read	C	无写入	无	deleted	无来源无消费；未知已读字节不估计的原则不变
+RunContinuation	binding_ref	C	无写入	无	deleted	续接绑定由 previous_session_id 派生
+RunContinuation	previous_native_turn_id	C	无写入	无	deleted	未填未读
+RunContinuation	previous_attempt_id	C	无写入	无	deleted	未填未读
+RunContinuation	previous_input_sha256	C	无写入	无	deleted	未填未读
+SessionService	service_id	C	native_run prepare_services 曾写 server_name	无	deleted	仅描述、无读取
+SessionService	kind	C	prepare_services 曾写常量	无	deleted	恒定占位
+SessionService	input_schema	C	prepare_services 曾写完成工具 schema	无	deleted	实际挂载对照走 request.output_schema 与 mount.tool_contracts，保持不变
+SessionService	output_schema	C	无写入	无	deleted	未填未读
+SessionService	delivery_mode	C	prepare_services 曾写常量 in-turn	无	deleted	恒定占位
+SessionService	tool_names	A	prepare_services 写全限定工具名	_check_service_descriptions 集合核对	kept	驱动唯一读取的挂载事实
+run_contract 常量	TOOL_SCOPES/END_STATUSES/MODEL_START_BASES/CHECK_BASES/SCHEMA_STATUSES/VALUE_MECHANISMS/POLICY_ENFORCEMENTS/GROUP_STATES/CONTINUATION_MODES（九个）	C	无生产写入	全仓生产引用仅声明与 __all__；取值由同名 Literal 类型独立承载	deleted	continue-1 删除的孤立导出；HARNESS_NAMES（_validated_tool_evidence）与 NATIVE_ID_KEYS（同处）有真实读取，保留
+RunIdentity	task_id/attempt_id/generation/invocation_id/turn_id/input_sha256	A	角色构造（全六项）	_read_run 身份相等；roles/live 完整身份核对	kept	执行身份绑定
+RunConfiguration	provider/model/effort	A	角色构造	native_run _spec；_base_result requested 投影	kept	驱动与投影实际读取
+PrivateStatePaths	invocation_root/native_root	A	角色构造	run() 建根；native_root 绑定路径派生	kept	驱动实际读取
+RunBudget	timeout_seconds	A	角色构造	control timeoutSeconds→execution_deadline（0 为无限语义）	kept	原有无限/宽限语义不变
+RunContinuation	mode/previous_session_id	A	worker_request 按 resumeMode 构造	_continuation_of 与原生 resume/新建核对	kept	驱动实际读取
+RunResult	format_version	A	驱动/角色默认值	decode_run_result 严格类型见证	kept	内部帧版本
+RunResult	identity/harness	A	_build_result 从请求绑定	_read_run 身份与 harness 相等核对	kept	结果与请求绑定的判定事实
+RunEnd (RunResult.end)	status	A	_build_result 写实际终态	run_controller 退出码选择；_base_result status 投影	kept	原生/协议结束事实
+RunEnd (RunResult.end)	reason_code	A	_build_result 写实际原因	_base_result code 与 transport failureKind 投影；_fast_result observer-interrupt 投影	kept	公开结果原样投影
+RunEnd (RunResult.end)	native_exit_code	A	_build_result 写 process.returncode	_base_result processState.nativeExitCode	kept	公开结果原样投影
+RunEnd (RunResult.end)	message	A	_build_result 写驱动观察到的失败文案	_base_result error 投影	kept	公开结果原样投影
+RunEnd (RunResult.end)	signal	B	_build_result 按 exit code 写信号名	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付（run_execution._artifacts 登记位置/字节/SHA）	kept	真实非占位原生事实的事实产物留存
+RunResult	harness_version	A	_build_result 写版本探测原文	_base_result harnessVersion（空补 legacy unknown 拼写）	kept	公开结果原样投影
+RunResult	native_event_count	A	_build_result 写 canonical 事件计数	_fast_result nativeEventCount；native_evidence eventCount	kept	旧原生事件计数的独立事实
+RunResult	model_started	A	_build_result 按 input-admitted 写	_base_result modelStarted（is True）	kept	公开结果原样投影；send 不冒充模型证明
+ModelStartEvidence (RunResult.model_start_evidence)	basis/native_identity	B	_build_result 写实际依据	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实非占位来源事实
+ResultConfiguration (RunResult.configuration)	requested	A	_build_result 写	_base_result requested	kept	公开结果原样投影
+ResultConfiguration (RunResult.configuration)	checked (CheckedConfiguration.provider/model/effort)	A	_build_result 写原生回读	_base_result resolved（三值全核对才投 resolved；各 value 由 CheckedValue.value 读取）	kept	公开结果原样投影
+ResultConfiguration (RunResult.configuration)	checks	B	_build_result 写实际执行的核对名	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实核对事实留存
+ResultConfiguration (RunResult.configuration)	observed	C	无写入（驱动从不填）	_base_result 读改为常量 None	deleted	恒定占位；公开 observed None 键行为保持
+CheckedValue (configuration.checked.*)	value	A	_build_result 写回读值	_base_result resolved	kept	公开结果原样投影
+CheckedValue (configuration.checked.*)	basis/source	B	_build_result 写实际依据与来源	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实核对依据留存
+CheckedValue (configuration.checked.*)	native_identity	C	无写入	无	deleted	未填未读
+RunValue (RunResult.value)	raw	A	_build_result 写末条原文	_fast_result rawAnswer 与 valid_answer	kept	公开结果原样投影
+RunValue (RunResult.value)	parsed	A	_build_result 写已核对完成值	_worker_result 六字段 outcome 与回合记录	kept	Worker 判定实际读取
+RunValue (RunResult.value)	schema_status	A	_build_result 写实际检查状态	_worker_result 要求 valid	kept	角色判定实际读取
+RunValue (RunResult.value)	validation_basis	B	_build_result 写签名回执依据	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实依据事实留存
+RunValue (RunResult.value)	mechanism	B	_build_result 写实际交付机制	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实机制事实留存
+RunValue (RunResult.value)	correction_count	A	_build_result 写实际纠正次数	_fast_result correctionCount	kept	公开结果原样投影
+RunValue (RunResult.value)	errors	C	无写入	无	deleted	未填未读；schema 判定留角色
+CompletionEvidence (RunResult.completion_evidence)	stream_end	A	_build_result 写实际 EOF 事实	native_evidence streamEof	kept	2-C1 增加的角色读取
+CompletionEvidence (RunResult.completion_evidence)	native_identity	B	_build_result 写根身份	turn_id 由 _worker_result 读作 nativeTurnId；其余随完整 RunResult 经 runner-stdout 产物交付	kept	turn_id 为 A，其余真实来源事实留存
+CompletionEvidence (RunResult.completion_evidence)	mechanism	B	_build_result 写实际交付机制（completion-tool/final-message）	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实机制事实留存（RunValue.mechanism 同源同值）
+CompletionEvidence (RunResult.completion_evidence)	call_id/event_order/receipt_ref/receipt_verified/native_outcome	B	_build_result 写已核实回执事实	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实回执证据留存
+RunResult	tool_evidence	A	_build_result 写投影包（EOF 完整性规则）	_fast_result toolEvidence/zeroToolVerified；黑板统一判定	kept	事实包按既有规范投影校验
+DeniedInteraction (RunResult.denied_interactions)	method/action/reason	B	_build_result 从拒绝记录写三元组	无字段级角色读取（完整记录经 denied-interactions 证据引用交付）	kept	真实拒绝事实留存；完整记录不在本格式重复
+DeniedInteraction (RunResult.denied_interactions)	request_id/native_identity	C	无写入	无	deleted	未填未读；完整记录留在证据引用
+UnknownEvents (RunResult.unknown_events)	counts/total	B	_build_result 写实际未知事件计数	观察者看驱动自带 mapping；结果字段随完整 RunResult 经 runner-stdout 产物交付	kept	真实事实留存
+UnknownEvents (RunResult.unknown_events)	truncated	C	无写入	无	deleted	恒定占位
+EffectivePolicy (RunResult.effective_policy)	tools	A	_build_result 按实际工具设置写	native_evidence 读 PolicyFact.requested	kept	2-C1 增加的角色读取
+EffectivePolicy (RunResult.effective_policy)	filesystem	B	_build_result 如实写 unknown/unrestricted	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	如实声明事实留存
+EffectivePolicy (RunResult.effective_policy)	network	C	_build_result 写常量 enforcement=unknown	无	deleted	恒定未知占位；网络事实如实未知由缺席表达
+PolicyFact (effective_policy.tools/filesystem)	enforcement/requested/basis	B	_build_result 写实际声明	tools.requested 由 native_evidence 读取；其余随完整 RunResult 经 runner-stdout 产物交付	kept	requested 为 A，其余真实声明留存
+PolicyFact (effective_policy.*)	reported/limitations	C	无写入	无	deleted	未填未读
+RunResult	activity/usage/native_failure/native_error/last_assistant_message	A	_build_result 写规范化包	_worker_facts 逐项投 activity/tokenUsage/quotaFailure/nativeFailure/lastAssistantMessage	kept	公开结果原样投影，完整性/去重规则不变
+NativeIdentity (RunResult.native_identity/root_identities/completion_evidence.native_identity/model_start_evidence.native_identity)	session_id	A	_identity_or_none 由原生会话事实构造	_base_result sessionId（result.native_identity.session_id）	kept	公开结果原样投影
+NativeIdentity (同上四处)	turn_id	A	构造时写入（原生 verified root）	_worker_result 读 completion_evidence.native_identity.turn_id 作 nativeTurnId	kept	Worker 判定实际读取
+NativeIdentity (同上四处)	thread_id/input_id/call_id	B	构造时写入（completion 身份含 input_id/call_id）	_fast_result nativeIdentity 经 native_identity.to_payload() 全字段投出；字段级判断读取之外随完整 RunResult 经 runner-stdout 产物交付	kept	完整原生身份事实留存；结构校验拒绝空与未知键
+RunResult	root_identities	B	_build_result 从工具投影 verified roots 构造	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	全部原生根身份事实留存
+ContinuationFacts (RunResult.continuation)	resumable	A	_build_result 按绑定文件与停止写	collect nativeSession.resumable	kept	角色判定实际读取
+ContinuationFacts (RunResult.continuation)	native_session_ref/binding_ref/basis	B	_build_result 写实际会话与私有绑定	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实续接事实留存
+ContinuationFacts (RunResult.continuation)	checkpoint_ref	C	无写入	无	deleted	未填未读
+StopLayer (RunResult.stop_evidence.native)	group_state	A	_build_result 按自有组观察写	_base_result shutdownConfirmed；_role_stop 停止判定	kept	保守停止口径的判定事实
+StopLayer (RunResult.stop_evidence.native)	started/leader_exited/exit_code/observation_basis	B	_build_result 写实际组观测	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实观测事实留存
+StopEvidence (RunResult.stop_evidence)	native	A	_build_result 写 StopLayer	见 stop_evidence.native 各字段行	kept	原生层停止事实载体
+StopEvidence (RunResult.stop_evidence)	interrupt	A	_build_result 写 InterruptEvidence	见 InterruptEvidence 行	kept	中断事实载体
+StopEvidence (RunResult.stop_evidence)	controller	C	无写入（默认恒 unknown）	无	deleted	外层停止由持有方 ProcessHandle 实际确认，不作常量第二层
+InterruptEvidence (stop_evidence.interrupt)	requested/basis	B	_build_result 按实际信号/观察者停止写	无字段级角色读取；随完整 RunResult 经 runner-stdout 产物交付	kept	真实中断事实留存
+InterruptEvidence (stop_evidence.interrupt)	acknowledged	C	_build_result 写常量 None	无	deleted	本原生无可核对回执，常量占位删除
+EvidenceRef (RunResult.evidence_refs)	kind/location/size_bytes/sha256	A	_build_result retain 写并落盘	_evidence 按字节与 SHA 复核读取；_worker_result 读 provenance；collect 失败时保留报告	kept	证据绑定与防篡改核对
+EvidenceRef (RunResult.evidence_refs)	retained	C	无写入（默认 True）	无	deleted	无读取的恒定占位
+RunFeedback	action	A	worker_observer/FastCorrection.observer 构造（FEEDBACK_CONTINUE/STOP/_correct）	native_run notify() 读取并执行（continue/stop/correct 及纠正计数）	kept	观察协议的实际载体
+RunFeedback	input_text	A	FastCorrection 构造纠正文本	native_run 以 feedback.input_text 作为下一轮输入	kept	进程内纠正协议
+run_execution 控制(私有)	account	C	prepare/start_fast 写入	无（原仅供 frozen_account 转抄）	deleted	随 frozen_account 删除的无消费写入；账户环境选择路径不变
+LiveCapabilities	inquiry_delivery	A	EXISTING_CAPABILITIES 四处声明	ExistingLiveChannel.request 的 unsupported 判定；消费方能力事实	kept	渠道实际读取的能力声明
+LiveCapabilities	activity	C	EXISTING_CAPABILITIES 四处写常量 True	无（生产与渠道均不读取）	deleted	continue-1 删除：仅声明、无读取的能力位；活动读取是绑定设施而非声明位
+LiveCapabilities	finish_notice/session_content	C	无生产写入（恒默认 False）	无	deleted	未实现预留能力位
+LiveRequest	format_version	A	黑板 inquiry 构造	decode_live_request 帧边界见证	kept	内部帧信封；帧格式为本步内部格式（ADR-025 决议 6）
+LiveRequest	identity	A	黑板以 channel.identity 构造	request.identity != channel 绑定身份即拒（identity-mismatch）；board _live_channel 再以存储请求完整身份核对	kept	完整请求身份绑定（保留项）
+LiveRequest	format_version	C	无生产写入（原默认 LIVE_FORMAT_VERSION）	无（原仅供已删除的帧编解码；生产无解码入口）	deleted	continue-2 删除：帧信封无消费者；LiveRequest 保留 identity/request_id/kind/payload 的真实绑定与去重
+LiveRequest	request_id	A	黑板以 inquiry_id 构造	渠道去重/冲突记忆的键（self._requests/_replies）	kept	幂等去重绑定（保留项）
+LiveRequest	kind	A	黑板构造 inquiry	进入 requestId 摘要（kind/payload digest）	kept	幂等摘要组成部分
+LiveRequest	payload	A	黑板构造 InquiryPayload	渠道透传 question_id/question 给桥	kept	问询内容载体
+InquiryPayload	question_id/question	A	黑板构造渠道 ask	ExistingLiveChannel._ask 转发桥；字节界 4000 见证	kept	问询内容与身份
+FinishNoticePayload	(整类)	C	无生产构造	无（仅 unsupported 分支）	deleted	未实现预留；kind 收敛为 inquiry
+LiveReply	format_version/identity/request_id	C	渠道曾按绑定身份与请求 id 写	无生产字段级读取（黑板只读语义字段；live 帧编解码无生产调用方）	deleted	continue-2 Host 取舍：封套不参与真实绑定/去重/分页（绑定在 LiveRequest 与渠道身份核对、去重以 _replies 的 request_id 键承载），删除；不弱化任何实际检查
+LiveReply	status/observed/state/reason_code/error_code	A	ExistingLiveChannel 按传输结果与桥状态写	黑板 inquiry reply.observed/state/status/error_code/reason_code（_live_ask_value 与 refusal 投影）	kept	queued 不升格 delivered、withdrawn replay=discarded 等语义保留
+LiveReply	native_correlation	A	渠道携带桥原始关联	黑板 _live_ask_value 读 reason/delivery	kept	答案/送达来源事实
+LiveReply	delivery_mode	C	request() 从能力声明转抄	无生产读取（黑板 _live_ask_value 只读 state/status/native_correlation）	deleted	continue-1 删除：仅转抄、无读取；LiveObservation 的真实 delivery_mode 与 inquiry_delivery 能力判断保留
+InquiryState	question_id/status/seq	A	渠道由 journal/答案投影写	黑板分页游标（entry.seq/after）与逐问投影	kept	分页与状态机保留
+InquiryState	answer/bytes/via/tool_call_id/at/truncated	A	渠道按记录原样写	黑板 _journal_record/_live_answer_value 答案来源投影	kept	答案来源事实逐字段消费
+InquiryState	reason/limitation/delivery	A	渠道按记录原样写	黑板拒绝原因、限制说明与送达记录投影	kept	journal 状态/拒绝语义保留
+LiveEvent	at/kind/tool_name	A	桥 note_event 写（字符截断与生产一致）	LiveObservation.recentActivity/last_event 经 _observation_value 进黑板 live 视图	kept	仅元数据、有界
+LiveObservation	(全部字段，含真实 delivery_mode)	A	桥 snapshot 经 _OBSERVATION_FIELDS 写	黑板 _observation_value 整体交 _live，字段与直读一致	kept	2-C2 逐字段补齐的真实观察
+InquiryJournalRejection	question_id/reason	A	渠道按身份绑定拒绝写	黑板 journalRejected/拒绝投影	kept	外记录如表面化
+LiveJournal	available/reason/entries/rejections	A	渠道由绑定 fact 写	黑板 journal 可用性与拒绝投影	kept	生产消费者保留
+LiveSnapshot	format_version/identity	C	渠道曾按绑定身份写	无生产字段级读取（黑板/Worker 只读语义字段）	deleted	continue-2 Host 取舍：信封不参与真实绑定/分页（绑定在 LiveRequest 与存储请求核对），删除
+LiveSnapshot	sequence	C	observe/_observe_answer 曾由水位或页游标派生	无生产字段级读取（黑板分页用 entry.seq+truncated 推进）	deleted	continue-2 Host 取舍：最终无消费的派生值删除；通道内部真实水位（_sequence/_next_seq）与 InquiryState.seq 分页机制保留，分页/去重含义不变
+LiveSnapshot	activity/inquiries/observation/journal/unavailable/truncated/observed/reason/error	A	渠道按实际读取写	黑板 observe 投影与 Worker activity 转报（fields=("activity",)）	kept	分页、降级与传输事实保留
+roles.live	handle_live_channel	C	无生产调用（仅测试）	无	deleted	测试改走 handle_live_binding（runtime/worker.py 的生产入口）
+live 模块	LIVE_KINDS/INQUIRY_DELIVERY_MODES/LIVE_REPLY_STATUSES/INQUIRY_STATES/REPLY_STATES/MAX_WAIT_MS	C	无生产引用	无	deleted	孤立导出；wait 上限真实执行点在黑板 tasks/inquiry.py
+live 模块	encode_live_request/decode_live_request/encode_live_reply/decode_live_reply/encode_live_snapshot/decode_live_snapshot	C	无生产调用方	仅测试调用	deleted	continue-2 Host 取舍：仅 codec/测试用途的包装入口删除；observe 实际调用的 _bounded_frame 分页界、规范化编码预算与 json_codec 严格解码/解析前帧界保留，live 帧无生产解码入口故其独立 parser 见证随入口删除
+WorkerPreparation	name	C	prepare_worker_run 曾以 executor.name 构造	无生产字段级读取（运行时回执以 executor.name 取名）	deleted	continue-2 Host 取舍：删除；available/reason/error 保留，运行时仍用 executor.name
+WorkerPreparation	available/reason/error	A	prepare_worker_run 写执行体可用性事实	runtime/worker.py _execute_selected 逐字段读取（available/reason/error 三处）并映射精确回执	kept	认领回执判定实际读取
+FastPreparation	harness/native/request/context/run_module	A	router.py prepare_router_fast 构造	start_router_preparation 逐项读取（roles/controller.py fast 分支）；native 为未抽取 harness 的既有载体调用点	kept	单一调用点的冻结选择
+FastPreparation	no_tool_cwd	A	router.py 构造私有空目录	handle.no_tool_cwd（roles/router.py 赋值与收集期 rmdir/保留检查）	kept	无工具 cwd 生命周期的事实载体
+ReviewPreparation	harness/native/request/context/mirror	A	router.py prepare_router_review 构造	start_router_preparation 读取；mirror（roles/router.py 存 handle.router_input）→ router_input.verify 收集期复核	kept	冻结镜像绑定

@@ -66,7 +66,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
     def test_missing_native_settings_or_completion_remain_unknown(self):
         for policy, completion, title in (
             (None, None, None),
-            (rc.PolicyFact(enforcement="native", reported={"toolAllowlist": [], "titleGenerationEnabled": False}),
+            (rc.PolicyFact(enforcement="native"),
              rc.CompletionEvidence(mechanism="final-message"), None),
             (rc.PolicyFact(enforcement="unknown", requested={"titleGenerationEnabled": True}), None, True),
         ):
@@ -119,7 +119,9 @@ class FastRegisteredRunTests(FakeAppServerTests):
         self.assertEqual(request.tool_scope, "none")
         self.assertEqual(request.session_services, ())
         self.assertIsNone(request.identity.turn_id)
-        self.assertIsNone(request.frozen_account)
+        # The internal request frame carries no account reference at all; the
+        # frozen account selection stays an outer environment choice.
+        self.assertNotIn("frozenAccount", request.to_payload())
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(outcome.result["rawAnswer"], result.value.raw)
         self.assertEqual(outcome.result["nativeEvidence"], {"eventCount": result.native_event_count,
@@ -201,7 +203,8 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.tool_scope, "write")
-        self.assertEqual(request.frozen_account.credential_revision, 2)
+        # The runtime holds the account; the request frame carries none of it.
+        self.assertNotIn("frozenAccount", request.to_payload())
         self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
         self.assertEqual(outcome.result["turn"]["outcome"], result.value.parsed.value)
         self.assertEqual(outcome.result["turn"]["provenance"]["nativeTurnId"], result.native_identity.turn_id)

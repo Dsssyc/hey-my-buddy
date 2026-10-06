@@ -36,7 +36,7 @@ LIVE_UNAVAILABLE = "unavailable"
 LIVE_UNEXTRACTED = "unextracted"
 
 __all__ = ["LIVE_BOUND", "LIVE_UNAVAILABLE", "LIVE_UNEXTRACTED", "build_live_channel",
-           "handle_live_binding", "handle_live_channel", "stored_run_request"]
+           "handle_live_binding", "stored_run_request"]
 
 
 def build_live_channel(harness: str, request: RunRequest, *, credentials: Mapping | None,
@@ -138,9 +138,3 @@ def handle_live_binding(handle) -> tuple[str, LiveChannel | None]:
     if channel is None:
         return LIVE_UNAVAILABLE, None
     return LIVE_BOUND, channel
-
-
-def handle_live_channel(handle) -> LiveChannel | None:
-    """The bound live channel of one owned role run, or ``None`` while not bound."""
-    state, channel = handle_live_binding(handle)
-    return channel if state == LIVE_BOUND else None

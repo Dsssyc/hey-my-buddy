@@ -13,15 +13,12 @@ reachable without loss.
 from __future__ import annotations
 
 import unittest
-from unittest import mock
 
-from hey_my_buddy import json_codec
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.blackboard.tasks import inquiry as board_inquiry
 from hey_my_buddy.buddy.harnesses.zcode import protocol as zcode_protocol
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import schemas as board_schemas
 
 
@@ -34,6 +31,16 @@ def inquiry_request(question: str = "what should I check first?", request_id: st
                     question_id: str = "question-1") -> lv.LiveRequest:
     return lv.LiveRequest(identity=identity(), request_id=request_id, kind="inquiry",
                           payload=lv.InquiryPayload(question_id=question_id, question=question))
+
+
+def journal_fact(records: list, *, rejections: list | None = None, available: bool = True,
+                 reason: str | None = None) -> dict:
+    """The availability fact shape the real journal bindings return: the record
+    list beside the reader's own deduplicated per-question count."""
+    return {"available": available, "reason": reason,
+            "entries": len({record["inquiryId"] for record in records}
+                           | {item["questionId"] for item in (rejections or [])}),
+            "records": records, "rejections": list(rejections or [])}
 
 
 class RecordingBridge:
@@ -57,10 +64,12 @@ class CapabilityTests(unittest.TestCase):
                     "zcode": "cooperative-checkpoint", "dsh": "realtime"}
         for harness, delivery in expected.items():
             capabilities = lv.EXISTING_CAPABILITIES[harness]
-            self.assertTrue(capabilities.activity, harness)
             self.assertEqual(capabilities.inquiry_delivery, delivery, harness)
-            self.assertFalse(capabilities.finish_notice, harness)
-            self.assertFalse(capabilities.session_content, harness)
+        # The declared fact is how a question is delivered; the never-read
+        # activity/finish/session bits went with step 2-D.
+        self.assertEqual(sorted(lv.LiveCapabilities.model_fields), ["inquiry_delivery"])
+        for name in ("activity", "finish_notice", "session_content"):
+            self.assertNotIn(name, lv.LiveCapabilities.model_fields, name)
 
     def test_an_unknown_delivery_mode_is_refused(self):
         with self.assertRaises(BoardError):
@@ -82,9 +91,10 @@ class LimitTests(unittest.TestCase):
         self.assertEqual(lv.MAX_ANSWER_BYTES, zcode_protocol.MAX_ANSWER_BYTES)
         self.assertEqual(lv.MIN_TRANSPORT_TIMEOUT_MS, board_inquiry.MIN_TRANSPORT_TIMEOUT_MS)
         self.assertEqual(lv.MAX_TRANSPORT_TIMEOUT_MS, board_inquiry.MAX_TRANSPORT_TIMEOUT_MS)
-        self.assertEqual(lv.MAX_WAIT_MS, board_inquiry.MAX_WAIT_MS)
         self.assertEqual((lv.MIN_TRANSPORT_TIMEOUT_MS, lv.MAX_TRANSPORT_TIMEOUT_MS), (100, 5000))
-        self.assertEqual(lv.MAX_WAIT_MS, 30000)
+        # The wait bound stays owned by the board's inquiry operation, the one
+        # place a wait is actually taken.
+        self.assertEqual(board_inquiry.MAX_WAIT_MS, 30000)
 
     def test_oversized_questions_and_bad_timeouts_are_refused_at_the_value(self):
         with self.assertRaises(BoardError):
@@ -108,7 +118,7 @@ class RequestBindingTests(unittest.TestCase):
             identity(), lv.EXISTING_CAPABILITIES[harness],
             read_activity=(lambda: activity) if activity is not None else None,
             ask=bridge.ask if bridge is not None else None,
-            read_journal=(lambda: journal) if journal is not None else None)
+            read_journal=(lambda: journal_fact(journal)) if journal is not None else None)
 
     def test_request_id_and_question_id_are_independent_facts(self):
         bridge = RecordingBridge({"accepted": True, "state": "queued", "inquiryId": "question-1"})
@@ -144,14 +154,16 @@ class RequestBindingTests(unittest.TestCase):
         self.assertEqual(len(bridge.calls), 1)
 
     def test_a_changed_kind_under_the_same_request_id_conflicts(self):
+        # The only live kind is the inquiry; the kind still rides the request
+        # digest, so a same-id request whose digest differs is a conflict even
+        # though no second kind can be constructed any more.
         bridge = RecordingBridge({"accepted": True, "state": "queued"})
         channel = self.channel(bridge)
         channel.request(inquiry_request(), timeout_ms=1500)
-        notice = lv.LiveRequest(identity=identity(), request_id="request-1", kind="finish-notice",
-                                payload=lv.FinishNoticePayload(notice_id="n-1", message="wrap up"))
-        channel.request(notice, timeout_ms=1500)
-        # finish-notice is unsupported everywhere, but a plain inquiry kind
-        # change under a committed request id is a conflict, not a new ask.
+        changed = inquiry_request(question_id="question-2")
+        reply = channel.request(changed, timeout_ms=1500)
+        self.assertEqual((reply.status, reply.reason_code),
+                         ("unavailable", "request-payload-conflict"))
         self.assertEqual(len(bridge.calls), 1)
 
     def test_a_refused_ask_is_not_remembered_and_stays_retryable(self):
@@ -202,7 +214,6 @@ class RequestBindingTests(unittest.TestCase):
         channel = self.channel(bridge)
         reply = channel.request(inquiry_request(), timeout_ms=1500)
         self.assertEqual(reply.status, "queued")
-        self.assertEqual(reply.delivery_mode, "cooperative-checkpoint")
         # Only the bridge's own committed, journal-backed state may say delivered.
         bridge.replies = [{"accepted": True, "state": "delivered", "inquiryId": "question-1"}]
         later = channel.request(inquiry_request(request_id="request-2"), timeout_ms=1500)
@@ -212,12 +223,6 @@ class RequestBindingTests(unittest.TestCase):
         codex = self.channel(harness="codex")
         reply = codex.request(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.reason_code), ("unsupported", "inquiry-unsupported"))
-        for channel in (codex, self.channel(harness="dsh")):
-            notice = lv.LiveRequest(identity=identity(), request_id="n-1", kind="finish-notice",
-                                    payload=lv.FinishNoticePayload(notice_id="n-1", message="please wrap up"))
-            answered = channel.request(notice, timeout_ms=1500)
-            self.assertEqual((answered.status, answered.reason_code),
-                             ("unsupported", "finish-notice-unsupported"))
 
     def test_a_supported_channel_without_a_wired_bridge_is_unavailable_not_unsupported(self):
         # ZCode supports inquiries natively; a channel with no ask binding is
@@ -260,7 +265,7 @@ class ObserveTests(unittest.TestCase):
         return lv.ExistingLiveChannel(
             identity(), lv.EXISTING_CAPABILITIES["zcode"],
             read_activity=(lambda: activity) if activity is not None else None,
-            read_journal=(lambda: journal) if journal is not None else None)
+            read_journal=(lambda: journal_fact(journal)) if journal is not None else None)
 
     def test_a_front_row_update_during_pagination_never_hides_the_back_rows(self):
         # The Host probe scenario: after page 1 is read, the first question is
@@ -283,11 +288,11 @@ class ObserveTests(unittest.TestCase):
                          [f"question-{index}" for index in range(20, 32)]
                          + ["question-0"], "the update arrives after the untouched back rows")
         self.assertFalse(page3.truncated)
-        # The truncated pages' own sequence is the safe cursor, never the
-        # watermark that would skip undelivered facts.
-        self.assertEqual(page1.sequence, cursor)
-        self.assertEqual(page3.sequence, page3.inquiries[-1].seq)
-        self.assertGreater(page3.sequence, max(entry.seq for entry in page3.inquiries[:-1]))
+        # A truncated page is continued by its own entries' highest seq — the
+        # production cursor — and the update arrives only after the untouched
+        # back rows.
+        self.assertTrue(page1.truncated)
+        self.assertEqual(cursor, max(entry.seq for entry in page1.inquiries))
         # Every answer is reachable, exactly once as latest state.
         seen: dict[str, str] = {}
         for page in (page1, page2, page3):
@@ -302,7 +307,7 @@ class ObserveTests(unittest.TestCase):
         channel = lv.ExistingLiveChannel(
             identity(), lv.EXISTING_CAPABILITIES["zcode"],
             read_activity=lambda: activity["current"],
-            read_journal=lambda: journal)
+            read_journal=lambda: journal_fact(journal))
         activity["current"] = {"phase": "streaming-model", "eventSeq": 1}
         page1 = channel.observe(after_seq=None, limit=5, timeout_ms=1500)
         self.assertEqual(len(page1.inquiries), 5)
@@ -348,7 +353,7 @@ class ObserveTests(unittest.TestCase):
         collected, after, pages = [], None, 0
         while True:
             snapshot = channel.observe(after_seq=after, limit=256, timeout_ms=1500)
-            frame = lv.encode_live_snapshot(snapshot)
+            frame = lv._bounded_frame(snapshot.to_payload(), "live page")
             self.assertLessEqual(len(frame.encode()), lv.MAX_LIVE_FRAME_BYTES,
                                  "every page fits one frame")
             collected.extend(snapshot.inquiries)
@@ -371,20 +376,22 @@ class ObserveTests(unittest.TestCase):
         activity_feed = {"current": {"phase": "waiting-model", "eventSeq": 4}}
         journal_feed = [{"inquiryId": "question-1", "state": "claimed"},
                         {"inquiryId": "question-2", "state": "answered", "answer": "check the tests"}]
-        channel = self.channel(activity=activity_feed["current"], journal=journal_feed)
+        channel = self.channel(activity=activity_feed["current"],
+                               journal=journal_feed)
         first = channel.observe(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual([entry.status for entry in first.inquiries], ["queued", "answered"])
-        stale = channel.observe(after_seq=first.sequence, limit=10, timeout_ms=1500)
-        self.assertEqual(stale.sequence, first.sequence)
+        cursor = max(entry.seq for entry in first.inquiries)
+        stale = channel.observe(after_seq=cursor, limit=10, timeout_ms=1500)
+        self.assertEqual(stale.inquiries, (), "no fact changed, nothing new to page")
         activity_feed["current"] = {"phase": "waiting-model", "eventSeq": 2}
-        self.assertEqual(channel.observe(after_seq=first.sequence, limit=10,
-                                         timeout_ms=1500).sequence, first.sequence)
+        self.assertEqual(channel.observe(after_seq=cursor, limit=10,
+                                         timeout_ms=1500).inquiries, (),
+                         "an activity-only change assigns no fresh entry sequence")
         journal_feed.append({"inquiryId": "question-1", "state": "delivered"})
-        advanced = channel.observe(after_seq=first.sequence, limit=10, timeout_ms=1500)
-        self.assertGreater(advanced.sequence, first.sequence)
-        delivered = [entry for entry in advanced.inquiries if entry.question_id == "question-1"]
-        self.assertEqual(len(delivered), 1, "one state per question, last record wins")
-        self.assertGreater(delivered[0].seq, first.sequence,
+        advanced = channel.observe(after_seq=cursor, limit=10, timeout_ms=1500)
+        self.assertEqual([entry.question_id for entry in advanced.inquiries], ["question-1"])
+        delivered = advanced.inquiries[0]
+        self.assertGreater(delivered.seq, cursor,
                            "a changed question takes a fresh sequence observers can page to")
 
     def test_limit_truncates_and_reports(self):
@@ -413,7 +420,7 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(good.activity.value["phase"], "streaming-model")
         self.assertIsNone(good.unavailable)
         state["fail"] = True
-        broken = channel.observe(after_seq=good.sequence, limit=10, timeout_ms=1500)
+        broken = channel.observe(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual(broken.unavailable, "activity-unavailable")
         self.assertEqual(broken.activity.value["phase"], "streaming-model")
 
@@ -422,52 +429,21 @@ class ObserveTests(unittest.TestCase):
         snapshot = channel.observe(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual(snapshot.inquiries[0].status, "unknown")
 
-    def test_an_oversized_frame_is_refused_explicitly_not_trimmed(self):
-        # A snapshot whose full state exceeds the 64 KiB frame bound (a large
-        # activity beside 32 bounded answers) is refused by the encoder.
-        oversized = lv.LiveSnapshot(
-            identity=identity(), sequence=1, activity={"blob": "x" * 30000},
-            inquiries=tuple(lv.InquiryState(question_id=f"question-{index}", status="answered", answer="x" * 4000, seq=index + 1)
-                            for index in range(32)))
-        with self.assertRaises(BoardError):
-            lv.encode_live_snapshot(oversized)
-        with self.assertRaises(BoardError):
-            lv.decode_live_snapshot("x" * (lv.MAX_LIVE_FRAME_BYTES + 10))
-        # A Mapping form is bounded exactly like the equivalent text form.
-        big = {"formatVersion": 1, "identity": identity().to_payload(), "sequence": 1,
-               "activity": None, "inquiries": [{"questionId": "q", "status": "queued", "answer": None,
-                                                "seq": 1} for _ in range(40)],
-               "events": [], "unavailable": None, "truncated": False}
-        with self.assertRaises(BoardError):
-            lv.decode_live_snapshot(big)
-
-    def test_the_reserved_event_slot_admits_no_content_type(self):
-        with self.assertRaises(BoardError):
-            lv.LiveSnapshot(identity=identity(), sequence=1, events=({"kind": "anything"},))
-        with self.assertRaises(BoardError):
-            lv.decode_live_snapshot({"formatVersion": 1, "identity": identity().to_payload(),
-                                     "sequence": 1, "activity": None, "inquiries": [],
-                                     "events": [{"kind": "anything"}], "unavailable": None,
-                                     "truncated": False})
-        # The empty reserved slot is the normal shape.
-        empty = lv.LiveSnapshot(identity=identity(), sequence=1)
-        self.assertEqual(empty.events, ())
-
-    def test_frames_roundtrip(self):
+    def test_model_payload_roundtrip_on_the_actual_interface(self):
+        # The live models have no separate wire codec; their payload projection
+        # and validation are the model boundary itself. Unknown members (a
+        # former frame envelope key included) are refused there.
         request = inquiry_request()
-        self.assertEqual(lv.decode_live_request(lv.encode_live_request(request)), request)
-        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued", observed=True,
-                             delivery_mode="cooperative-checkpoint",
+        self.assertEqual(lv.LiveRequest.from_payload(request.to_payload()), request)
+        reply = lv.LiveReply(status="queued", observed=True,
                              native_correlation={"inquiryId": "question-1"})
-        self.assertEqual(lv.decode_live_reply(lv.encode_live_reply(reply)), reply)
-        snapshot = lv.LiveSnapshot(identity=identity(), sequence=3, activity={"phase": "finishing"},
+        self.assertEqual(lv.LiveReply.from_payload(reply.to_payload()), reply)
+        snapshot = lv.LiveSnapshot(activity={"phase": "finishing"},
                                    inquiries=(lv.InquiryState(question_id="question-1", status="queued", seq=4),))
-        self.assertEqual(lv.decode_live_snapshot(lv.encode_live_snapshot(snapshot)), snapshot)
-        for wrong_version in (True, 1.0):
-            payload = request.to_payload()
-            payload["formatVersion"] = wrong_version
-            with self.assertRaises(BoardError, msg=repr(wrong_version)):
-                lv.decode_live_request(payload)
+        self.assertEqual(lv.LiveSnapshot.from_payload(snapshot.to_payload()), snapshot)
+        for extra in ("formatVersion", "identity", "sequence"):
+            with self.assertRaises(BoardError, msg=extra):
+                lv.LiveSnapshot.from_payload({**snapshot.to_payload(), extra: 1})
 
 
 class TransportFactTests(unittest.TestCase):
@@ -519,7 +495,6 @@ class TransportFactTests(unittest.TestCase):
         correlation = reply.native_correlation.value
         self.assertEqual(correlation["inquiryId"], "question-1")
         self.assertEqual(correlation["delivery"], delivery)
-        self.assertEqual(reply.delivery_mode, "cooperative-checkpoint")
 
     def test_a_withdrawn_replay_is_an_observed_discarded_success(self):
         # A real replay after withdrawal: the bridge accepts with the committed
@@ -598,7 +573,7 @@ class ObserveSelectionTests(unittest.TestCase):
 
         def read_journal():
             reads["journal"] += 1
-            return [{"inquiryId": "question-1", "state": "queued"}]
+            return journal_fact([{"inquiryId": "question-1", "state": "queued"}])
 
         def read_observation(timeout_ms):
             reads["observation"] += 1
@@ -646,7 +621,7 @@ class ObserveSelectionTests(unittest.TestCase):
 
         def read_journal():
             reads["journal"] += 1
-            return [{"inquiryId": "question-1", "state": "queued"}]
+            return journal_fact([{"inquiryId": "question-1", "state": "queued"}])
 
         def read_observation(timeout_ms):
             reads["observation"] += 1
@@ -684,7 +659,7 @@ class ObserveSelectionTests(unittest.TestCase):
                         "toolCallId": "call-1", "at": "2026-10-06T00:00:02Z", "truncated": False}},
         ]
         channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
-                                         read_journal=lambda: journal)
+                                         read_journal=lambda: journal_fact(journal))
         snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
         entry = snapshot.inquiries[0]
         self.assertEqual((entry.status, entry.answer, entry.bytes, entry.truncated),
@@ -697,7 +672,7 @@ class ObserveSelectionTests(unittest.TestCase):
                  "answerBytes": 21, "via": "tool:buddy_inquiry_reply", "toolCallId": "call-2",
                  "answeredAt": "2026-09-19T05:00:04.000Z", "truncated": True}]
         channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["dsh"],
-                                         read_journal=lambda: bare)
+                                         read_journal=lambda: journal_fact(bare))
         entry = channel.observe(after_seq=None, limit=8, timeout_ms=1500,
                                 fields=("inquiries",)).inquiries[0]
         self.assertEqual((entry.status, entry.answer, entry.bytes, entry.truncated, entry.via,
@@ -750,6 +725,15 @@ class ObserveSelectionTests(unittest.TestCase):
         snapshot = broken.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
         self.assertIsNone(snapshot.journal)
         self.assertIn("journal-unavailable", snapshot.unavailable or "")
+        # The step-one plain record list is no longer a binding shape: only the
+        # availability fact the real bindings return is accepted.
+        plain = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                       read_journal=lambda: [{"inquiryId": "question-1",
+                                                              "state": "queued"}])
+        snapshot = plain.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        self.assertIsNone(snapshot.journal)
+        self.assertEqual(snapshot.inquiries, ())
+        self.assertIn("journal-unavailable", snapshot.unavailable or "")
 
     def test_a_bound_record_keeps_its_limitation_for_the_public_reason(self):
         note = "Host questions are queued by the bridge and delivered only at the root's next checkpoint"
@@ -757,7 +741,7 @@ class ObserveSelectionTests(unittest.TestCase):
                     "reason": "the governed root turn ended before this inquiry was answered",
                     "limitation": note}]
         channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
-                                         read_journal=lambda: journal)
+                                         read_journal=lambda: journal_fact(journal))
         entry = channel.observe(after_seq=None, limit=8, timeout_ms=1500,
                                 fields=("inquiries",)).inquiries[0]
         self.assertEqual((entry.status, entry.reason, entry.limitation),
@@ -777,97 +761,21 @@ class ObserveSelectionTests(unittest.TestCase):
         # A multibyte kind at the character bound is not a byte-bound victim.
         self.assertEqual(event("水" * 80).kind, "水" * 80)
 
-    def test_observation_frames_roundtrip_with_their_new_fields(self):
+    def test_observation_payload_roundtrip_with_their_new_fields(self):
         snapshot = lv.LiveSnapshot(
-            identity=identity(), sequence=2,
             observation=lv.LiveObservation(ready=True, observed_at="2026-10-06T00:00:00Z",
                                            agent_status="running", delivery_mode="cooperative-checkpoint",
                                            recent_activity=(lv.LiveEvent(at="2026-10-06T00:00:00Z",
                                                                          kind="tool.updated",
                                                                          tool_name="read"),)),
             observed=True)
-        self.assertEqual(lv.decode_live_snapshot(lv.encode_live_snapshot(snapshot)), snapshot)
+        self.assertEqual(lv.LiveSnapshot.from_payload(snapshot.to_payload()), snapshot)
         payload = snapshot.to_payload()["observation"]
         self.assertIn("recentActivity", payload)
         self.assertIn("observed", snapshot.to_payload())
-        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="unavailable",
+        reply = lv.LiveReply(status="unavailable",
                              reason_code="bridge-refused", error_code="not-ready")
-        self.assertEqual(lv.decode_live_reply(lv.encode_live_reply(reply)), reply)
-
-
-class WholeFrameGateTests(unittest.TestCase):
-    """The whole-frame bound of the three live frames, refused before the
-    parser ever runs.
-
-    Each refused frame either carries the padded payload of a frame one
-    padding shorter that decodes fine, or — the snapshot — a canonical frame
-    whose every field is within its own bound (32 bounded 4000-byte answers,
-    the set the existing pager really carries); only the raw frame's byte
-    count is invalid. A refusal message alone proves nothing about the order,
-    so the tests spy on the root package's real :func:`decode_strict_json`
-    call point: an over-limit refusal must reach it zero times, and each
-    normal-size control must be parsed by it exactly once. The request and
-    reply frames alone can never reach 64 KiB canonically: their bounded
-    fields sum to a few KiB (a question escapes to at most six times its
-    4000 bytes), so padding or oversized raw transport bytes exercise their
-    bound.
-    """
-
-    def padded_over(self, text: str) -> str:
-        padding = lv.MAX_LIVE_FRAME_BYTES - len(text.encode()) + 1024
-        self.assertGreater(padding, 0)
-        return "{" + " " * padding + text[1:]
-
-    def assert_refused_before_parsing(self, decode, frame, parser, label: str):
-        with self.assertRaises(BoardError) as raised:
-            decode(frame)
-        self.assertIn("frame", raised.exception.message, label)
-        self.assertIn("byte bound", raised.exception.message, label)
-        parser.assert_not_called()
-
-    def spied_parser(self):
-        return mock.patch.object(json_codec, "decode_strict_json",
-                                 wraps=json_codec.decode_strict_json)
-
-    def test_over_limit_request_and_reply_frames_are_refused_before_parsing(self):
-        request = inquiry_request()
-        text = lv.encode_live_request(request)
-        self.assertLess(len(text.encode()), lv.MAX_LIVE_FRAME_BYTES)
-        padded = self.padded_over(text)
-        self.assertGreater(len(padded.encode()), lv.MAX_LIVE_FRAME_BYTES)
-        with self.spied_parser() as parser:
-            self.assert_refused_before_parsing(lv.decode_live_request, padded, parser, "request text")
-            self.assert_refused_before_parsing(lv.decode_live_request, padded.encode(),
-                                               parser, "request bytes")
-            self.assertEqual(lv.decode_live_request(text), request)
-            parser.assert_called_once_with(text)
-        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued", observed=True)
-        reply_text = lv.encode_live_reply(reply)
-        reply_padded = self.padded_over(reply_text)
-        with self.spied_parser() as parser:
-            self.assert_refused_before_parsing(lv.decode_live_reply, reply_padded, parser, "reply text")
-            self.assertEqual(lv.decode_live_reply(reply_text), reply)
-            parser.assert_called_once_with(reply_text)
-
-    def test_a_snapshot_of_legal_bounded_answers_that_exceeds_one_frame_is_refused(self):
-        inquiries = tuple(lv.InquiryState(question_id=f"question-{index:02d}", status="answered",
-                                          answer="x" * lv.MAX_ANSWER_BYTES, seq=index + 1)
-                          for index in range(lv.MAX_INQUIRIES_PER_RUN))
-        snapshot = lv.LiveSnapshot(identity=identity(), sequence=1, inquiries=inquiries)
-        payload = snapshot.to_payload()
-        # Every field is within its own bound; only the whole exceeds one frame.
-        self.assertEqual(len(payload["inquiries"]), lv.MAX_INQUIRIES_PER_RUN)
-        self.assertGreater(len(canonical_json(payload).encode()), lv.MAX_LIVE_FRAME_BYTES)
-        with self.spied_parser() as parser:
-            self.assert_refused_before_parsing(lv.decode_live_snapshot, payload, parser,
-                                               "snapshot mapping")
-            self.assert_refused_before_parsing(lv.decode_live_snapshot,
-                                               canonical_json(payload).encode(), parser,
-                                               "snapshot bytes")
-            # A normal-size snapshot of the same shape still parses, exactly once.
-            small = lv.LiveSnapshot(identity=identity(), sequence=1)
-            self.assertEqual(lv.decode_live_snapshot(small.to_payload()), small)
-            parser.assert_called_once_with(canonical_json(small.to_payload()))
+        self.assertEqual(lv.LiveReply.from_payload(reply.to_payload()), reply)
 
 
 class StrictScalarTypeTests(unittest.TestCase):
@@ -883,22 +791,17 @@ class StrictScalarTypeTests(unittest.TestCase):
         with self.assertRaises(BoardError, msg="inquiry.seq"):
             lv.InquiryState(question_id="question-1", status="queued", seq=True)
 
-    def test_the_wire_entries_refuse_int_for_bool_and_str_for_int(self):
-        snapshot = lv.LiveSnapshot(identity=identity(), sequence=3,
-                                   inquiries=(lv.InquiryState(question_id="question-1",
-                                                              status="queued", seq=4),))
-        payload = snapshot.to_payload()
-        payload["sequence"] = "3"
-        with self.assertRaises(BoardError, msg="sequence"):
-            lv.decode_live_snapshot(payload)
+    def test_the_model_boundary_refuses_int_for_bool_and_str_for_int(self):
+        snapshot = lv.LiveSnapshot(
+            inquiries=(lv.InquiryState(question_id="question-1", status="queued", seq=4),))
         payload = snapshot.to_payload()
         payload["truncated"] = 1
         with self.assertRaises(BoardError, msg="truncated"):
-            lv.decode_live_snapshot(payload)
+            lv.LiveSnapshot.from_payload(payload)
         payload = snapshot.to_payload()
         payload["inquiries"][0]["seq"] = True
         with self.assertRaises(BoardError, msg="seq"):
-            lv.decode_live_snapshot(payload)
+            lv.LiveSnapshot.from_payload(payload)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from ..harnesses.controller import (
     signal_name, stop_confirmed,
 )
 from ..harnesses.run_contract import (
-    MAX_RUN_REQUEST_BYTES, MAX_RUN_RESULT_BYTES, NetworkPolicy, PrivateStatePaths,
+    MAX_RUN_REQUEST_BYTES, MAX_RUN_RESULT_BYTES, PrivateStatePaths,
     RunBudget, RunConfiguration, RunContinuation, RunIdentity, RunRequest, RunResult,
     decode_run_request, decode_run_result,
 )
@@ -62,7 +62,10 @@ def _base_result(result) -> dict:
         "status": result.end.status, "mode": result.harness,
         "harnessVersion": result.harness_version or "unknown",
         "requested": result.configuration.requested.to_payload() if result.configuration.requested else None,
-        "resolved": None, "observed": result.configuration.observed.value if result.configuration.observed else None,
+        # The legacy receipts carry ``observed`` as a None placeholder; the
+        # native readback is the checked block, never a look-alike observed
+        # value, so this key stays a projection constant.
+        "resolved": None, "observed": None,
         "modelStarted": result.model_started is True,
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
@@ -210,12 +213,11 @@ def worker_request(control: dict, module):
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
-        input_text=prompt, tool_scope="write", network=NetworkPolicy(requested=False),
+        input_text=prompt, tool_scope="write",
         output_schema=worker_services.OUTCOME_SCHEMA,
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"], max_output_bytes=_STRICT_RESULT_BYTES),
+        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
         continuation=continuation,
         session_services=(binding.description,),
-        frozen_account=control.get("account"),
     )
     return request, binding.services, worker_observer
 
@@ -234,10 +236,9 @@ def fast_request(control: dict):
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
-        input_text=base_prompt, tool_scope="none", network=NetworkPolicy(requested=False),
-        output_schema=request_values["outputSchema"],
-        frozen_account=control.get("account"), capture_evidence=request_values.get("captureEvidence") is True,
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"], max_output_bytes=_STRICT_RESULT_BYTES),
+        input_text=base_prompt, tool_scope="none",
+        output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
+        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
     correction = FastCorrection(request_values["outputSchema"], base_prompt)
     return request, None, correction.observer, correction
@@ -338,7 +339,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> Process
         "operation": "fast", "harness": name, "privateRoot": str(invocation),
         "directory": str(invocation), "nativeRoot": str(invocation / "native"),
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
-        "account": context.runtime.get("account"), "cwd": str(cwd.resolve()),
+        "cwd": str(cwd.resolve()),
         "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": request_values,
@@ -383,7 +384,7 @@ class WorkerRunExecutor:
         root = ensure_private_dir(native_root(Path(state), self.name, context.task_id))
         inquiry = turn_io.inquiry_paths(context)
         private_json(ensure_private_dir(context_root(context, self.name)) / _CONTROL, {
-            "operation": "worker", "harness": self.name, "account": context.runtime.get("account"),
+            "operation": "worker", "harness": self.name,
             "directory": str(context.directory.resolve()),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,

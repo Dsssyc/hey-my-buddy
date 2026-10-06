@@ -43,10 +43,10 @@ class WorkerPreparation:
     ``reason`` is the adapter's own availability fact and ``error`` its
     ``prepare()`` refusal; both stay ``None`` on a prepared attempt. The runtime
     maps them onto its exact receipts — the seam reports the result, the runtime
-    keeps its receipt, retry and supervision rules.
+    keeps its receipt, retry and supervision rules — and takes the receipt's
+    name from the executor it selected, not from this value.
     """
 
-    name: str
     available: bool
     reason: str | None = None
     error: BoardError | None = None
@@ -73,12 +73,12 @@ def prepare_worker_run(executor: Adapter | WorkerRunExecutor, context: Execution
     """The adapter's availability fact and its own preparation, as one result."""
     usable, reason = executor.available()
     if not usable:
-        return WorkerPreparation(executor.name, available=False, reason=reason)
+        return WorkerPreparation(available=False, reason=reason)
     try:
         executor.prepare(context)
     except BoardError as error:
-        return WorkerPreparation(executor.name, available=True, error=error)
-    return WorkerPreparation(executor.name, available=True)
+        return WorkerPreparation(available=True, error=error)
+    return WorkerPreparation(available=True)
 
 
 def worker_start(executor: Adapter | WorkerRunExecutor, context: ExecutionContext) -> ProcessHandle:

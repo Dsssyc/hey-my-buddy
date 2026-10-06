@@ -21,7 +21,6 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
     FrozenJson,
-    NetworkPolicy,
     PrivateStatePaths,
     RunBudget,
     RunConfiguration,
@@ -91,9 +90,8 @@ def run_request(root: Path) -> RunRequest:
                                         native_root=str(root / "native")),
         input_text="one bounded input",
         tool_scope="none",
-        network=NetworkPolicy(requested=False),
         output_schema=FrozenJson({"type": "object", "additionalProperties": False}),
-        budget=RunBudget(timeout_seconds=60, max_output_bytes=4096),
+        budget=RunBudget(timeout_seconds=60),
     )
 
 

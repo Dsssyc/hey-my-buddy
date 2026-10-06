@@ -18,7 +18,6 @@ import uuid
 from pathlib import Path
 
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    NetworkPolicy,
     RunFeedback,
     PrivateStatePaths,
     RunBudget,
@@ -65,9 +64,9 @@ class NativeRunCase(FakeAppServerTests):
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                                             native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
-            input_text=prompt, tool_scope="none", network=NetworkPolicy(requested=False),
+            input_text=prompt, tool_scope="none",
             output_schema=SCHEMA,
-            budget=RunBudget(timeout_seconds=timeout, max_output_bytes=512 * 1024))
+            budget=RunBudget(timeout_seconds=timeout))
 
 
 class MockNativeCase(ZcodeFixtureCase):
@@ -98,15 +97,12 @@ class MockNativeCase(ZcodeFixtureCase):
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
                                             native_root=str(self.base / "worker-native")),
-            input_text=prompt, tool_scope="write", network=NetworkPolicy(requested=False),
+            input_text=prompt, tool_scope="write",
             output_schema=worker_services.OUTCOME_SCHEMA,
-            budget=RunBudget(timeout_seconds=timeout, max_output_bytes=512 * 1024),
+            budget=RunBudget(timeout_seconds=timeout),
             continuation=continuation,
-            session_services=(SessionService(service_id=mount.server_name, kind="session-tools",
-                                             tool_names=[f"mcp__{mount.server_name}__{name}"
-                                                         for name in mount.bare_tools],
-                                             input_schema=worker_services.OUTCOME_SCHEMA,
-                                             delivery_mode="in-turn"),))
+            session_services=(SessionService(tool_names=[f"mcp__{mount.server_name}__{name}"
+                                                         for name in mount.bare_tools]),))
         services = SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=None)
         return request, services
 
@@ -130,7 +126,9 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.stop_evidence.native.exit_code, 0)
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["toolAllowlist"], [])
-        self.assertIsNone(policy.reported, "sent parameters are not a native policy readback")
+        # The sent create parameters stay the requested block, never a native
+        # readback projection beside it.
+        self.assertNotIn("reported", policy.to_payload())
         self.assertEqual(policy.basis, "zcode/session-create-accepted")
 
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
@@ -155,7 +153,6 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertIsNone(result.stop_evidence.interrupt.acknowledged)
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
@@ -201,7 +198,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.value.mechanism, "final-message")
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         self.assertEqual(result.effective_policy.tools.enforcement, "unrestricted")
-        self.assertIsNone(result.effective_policy.tools.reported)
+        self.assertNotIn("reported", result.effective_policy.tools.to_payload())
 
     def test_a_late_tool_frame_after_settlement_is_the_role_call_not_the_scopes(self):
         # The EOF drain hands a late tool fact to the role observer: a rule that
@@ -246,7 +243,6 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(native.observation_basis, "owned-group-stopped-in-spawn")
         self.assertIsNotNone(native.exit_code)
         # Killing the group proves the process side only; no SDK answered.
-        self.assertIsNone(result.stop_evidence.interrupt.acknowledged)
 
     def test_the_peer_receives_the_refusal_before_the_observer_stop_ends_the_run(self):
         # The refusal answer completes first — the peer reads the reply with
@@ -269,7 +265,6 @@ class FastSeamTests(NativeRunCase):
         # native acknowledgement exists — the basis names the requester.
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
-        self.assertIsNone(result.stop_evidence.interrupt.acknowledged)
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
@@ -289,7 +284,6 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
-        self.assertIsNone(result.stop_evidence.interrupt.acknowledged)
 
     def test_a_late_foreign_tool_frame_reaches_the_role_before_the_protocol_check(self):
         # A late tool frame from a child session keeps its projected fact and
@@ -510,9 +504,7 @@ class WorkerSeamTests(MockNativeCase):
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         broken = request.model_copy(update={"session_services": (
-            SessionService(service_id="other", kind="session-tools",
-                           tool_names=["mcp__other__buddy_finish_turn"],
-                           delivery_mode="in-turn"),)})
+            SessionService(tool_names=["mcp__other__buddy_finish_turn"]),)})
         with self.assertRaises(BoardError):
             run(broken, observer=worker_observer, services=services, cancelled=lambda: False)
 

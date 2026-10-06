@@ -49,16 +49,10 @@ def full_request(tmp: Path) -> rc.RunRequest:
         cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(invocation_root=str(tmp / "inv"),
                                                                       native_root=str(tmp / "native")),
         input_text="one bounded role-assembled input", tool_scope="read",
-        network=rc.NetworkPolicy(requested=False, allowed_domains=None),
         output_schema=rc.FrozenJson({"type": "object", "required": ["answer"],
                                      "properties": {"answer": {"type": "string"}}}),
-        budget=rc.RunBudget(timeout_seconds=60, max_output_bytes=65536, tool_calls=8),
-        frozen_account=rc.FrozenAccountReference(adapter="zcode", source="native", revision=0,
-                                                 credential_revision=0),
-        session_services=(rc.SessionService(service_id="finish", kind="completion",
-                                            tool_names=["buddy_finish_turn"],
-                                            input_schema=rc.FrozenJson({"type": "object"}),
-                                            delivery_mode="in-turn"),),
+        budget=rc.RunBudget(timeout_seconds=60),
+        session_services=(rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"]),),
         capture_evidence=True,
     )
 
@@ -75,7 +69,6 @@ def full_result() -> rc.RunResult:
             checked=rc.CheckedConfiguration(model=rc.CheckedValue(value="fixture-model",
                                                                  basis="native-readback",
                                                                  source="zcode/session-snapshot")),
-            observed=rc.FrozenJson({"model": "fixture-model"}),
             checks=("catalog-membership", "native-readback")),
         native_identity=rc.NativeIdentity(session_id="s1", input_id="buddy-x"),
         root_identities=(rc.NativeIdentity(session_id="s1"),),
@@ -90,11 +83,12 @@ def full_result() -> rc.RunResult:
                                      "nativeIdentity": [{"sessionId": "s1"}], "streamComplete": True,
                                      "events": [], "toolCalls": 0, "unsettledToolCalls": 0, "truncated": False}),
         denied_interactions=(rc.DeniedInteraction(method="permission.requested", action="denied",
-                                                  native_identity=rc.NativeIdentity(session_id="s1")),),
+                                                  reason="the session refused the request"),),
         unknown_events=rc.UnknownEvents(counts=(("native.note", 2),), total=2),
         effective_policy=rc.EffectivePolicy(
-            tools=rc.PolicyFact(enforcement="native", reported=rc.FrozenJson({"toolAllowlist": []}),
-                                basis="zcode/session-snapshot", limitations=())),
+            tools=rc.PolicyFact(enforcement="native",
+                                requested=rc.FrozenJson({"toolAllowlist": []}),
+                                basis="zcode/session-snapshot")),
         activity=rc.FrozenJson({"phase": "streaming-model", "eventSeq": 3}),
         usage=rc.FrozenJson({"version": 1, "inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2,
                              "inputBasis": "includes-cached", "source": "fixture", "scope": "attempt",
@@ -108,8 +102,6 @@ def full_result() -> rc.RunResult:
         stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone", started=True,
                                                           leader_exited=True, exit_code=0,
                                                           observation_basis="owned-process-group"),
-                                      controller=rc.StopLayer(group_state="gone", started=True,
-                                                              observation_basis="owned-process-group"),
                                       interrupt=rc.InterruptEvidence(requested=False)),
         evidence_refs=(rc.EvidenceRef(kind="runner-stdout", location=str(Path("/tmp") / "runner.log"),
                                       size_bytes=120, sha256="c" * 64),),
@@ -163,7 +155,6 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertIsNone(result.usage)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
-        self.assertEqual(result.stop_evidence.controller.group_state, "unknown")
         self.assertIsNone(result.stop_evidence.interrupt.requested)
         back = rc.decode_run_result(rc.encode_run_result(result))
         self.assertIsNone(back.model_started)
@@ -173,16 +164,22 @@ class CodecRoundtripTests(unittest.TestCase):
         # wire form of this format (UnknownableText is gone).
         self.assertIn('"harnessVersion":null', rc.encode_run_result(result))
 
-    def test_a_decoded_observed_block_is_never_filled_from_the_request(self):
+    def test_a_decoded_requested_block_roundtrips_without_an_observed_key(self):
+        # The requested block survives decode unchanged; the legacy receipts'
+        # ``observed`` key is the role projection's None placeholder, not a
+        # wire field of this format.
         request = full_request(self.root)
         result = rc.RunResult(identity=identity(), harness="zcode", end=rc.RunEnd(status="ok"),
                               configuration=rc.ResultConfiguration(requested=request.configuration))
-        self.assertIsNone(result.configuration.observed)
+        self.assertNotIn("observed", result.configuration.to_payload())
         self.assertEqual(result.configuration.checked, rc.CheckedConfiguration())
         decoded = rc.decode_run_result(result.to_payload())
         self.assertEqual(decoded.configuration.requested, request.configuration)
-        self.assertIsNone(decoded.configuration.observed)
         self.assertEqual(decoded.configuration.checked, rc.CheckedConfiguration())
+        with self.assertRaises(BoardError, msg="observed"):
+            rc.decode_run_result({**result.to_payload(),
+                                  "configuration": {**result.configuration.to_payload(),
+                                                    "observed": {"model": "fixture-model"}}})
 
     def test_signal_terminations_and_windows_codes_roundtrip(self):
         for end, layer in ((rc.RunEnd(status="cancelled", native_exit_code=-15, signal="SIGTERM"),
@@ -192,7 +189,7 @@ class CodecRoundtripTests(unittest.TestCase):
             result = rc.RunResult(identity=identity(), harness="codex", end=end)
             result = rc.RunResult(
                 identity=identity(), harness="codex", end=end,
-                stop_evidence=rc.StopEvidence(native=layer, controller=rc.StopLayer(),
+                stop_evidence=rc.StopEvidence(native=layer,
                                               interrupt=rc.InterruptEvidence()))
             decoded = rc.decode_run_result(rc.encode_run_result(result))
             self.assertEqual(decoded.end.native_exit_code, end.native_exit_code)
@@ -234,21 +231,22 @@ class CodecRoundtripTests(unittest.TestCase):
             return payload
 
         request = full_request(Path("/tmp")).to_payload()
-        for path in ("identity.turnId", "budget.toolCalls", "network.allowedDomains",
-                     "sessionServices.0.deliveryMode", "frozenAccount.nativeLocation"):
+        # Ordinary default semantics since the step 2-B simplification: a
+        # default-valued field may be omitted, a required field may not.
+        for path in ("identity.turnId", "identity.inputSha256", "sessionServices.0.toolNames",
+                     "captureEvidence", "continuation"):
             decoded = rc.decode_run_request(without(json.loads(json.dumps(request)), path))
             self.assertIsInstance(decoded, rc.RunRequest, path)
-        for path in ("identity.taskId", "budget.timeoutSeconds"):
+        for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema"):
             with self.assertRaises(BoardError, msg=path):
                 rc.decode_run_request(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
         for path in ("stopEvidence.native.groupState", "configuration.checked.model",
-                     "end.signal", "modelStartEvidence.eventSequence"):
+                     "end.signal", "modelStartEvidence.nativeIdentity"):
             self.assertIsInstance(
                 rc.decode_run_result(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
         with self.assertRaises(BoardError):
-            rc.decode_run_request({**request, "network": {"requested": False, "allowed_domains": None,
-                                                          "extra": 1}})
+            rc.decode_run_request({**request, "identity": {**request["identity"], "extra": 1}})
         with self.assertRaises(BoardError):
             rc.decode_run_result({**result, "end": {"status": "ok", "reasonCode": None,
                                                     "nativeExitCode": 0, "signal": None, "extra": 1}})
@@ -261,15 +259,11 @@ class CodecRoundtripTests(unittest.TestCase):
 
         counts = rc.UnknownEvents(counts=(("foo", 1),), total=1)
         self.assertEqual(counts.to_payload()["countsByType"], {"foo": 1})
-        array_counts = {"countsByType": [["foo", 1]], "total": 1, "truncated": False}
+        array_counts = {"countsByType": [["foo", 1]], "total": 1}
         with self.assertRaises(BoardError):
             rc.UnknownEvents.from_payload(array_counts)
         with self.assertRaises(BoardError):
             rc.decode_run_result({**result, "unknownEvents": array_counts})
-        for bad_domains in ("", "1", "x", {}):
-            with self.assertRaises(BoardError, msg=repr(bad_domains)):
-                rc.decode_run_request({**request, "network": {"requested": False,
-                                                             "allowedDomains": bad_domains}})
 
     def test_the_new_bounds_hold_the_old_allowed_sets(self):
         # The role-assembled input follows the board's 1 MiB task text bound, so
@@ -397,10 +391,8 @@ class StrictScalarTypeTests(unittest.TestCase):
         request = full_request(Path("/tmp"))
         with self.assertRaises(BoardError, msg="capture_evidence"):
             edited(request, capture_evidence=1)
-        with self.assertRaises(BoardError, msg="network.requested"):
-            edited(request, network=rc.NetworkPolicy(requested=1, allowed_domains=None))
         with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
-            edited(request, budget=rc.RunBudget(timeout_seconds="60", max_output_bytes=1024))
+            edited(request, budget=rc.RunBudget(timeout_seconds="60"))
         with self.assertRaises(BoardError, msg="identity.generation"):
             rc.RunIdentity(task_id="task", attempt_id="attempt", generation=True,
                            invocation_id="invocation")
@@ -435,25 +427,25 @@ class FreezingTests(unittest.TestCase):
         mutable_identity = dict(IDENTITY)
         requested = {"provider": "fixture-provider", "model": "fixture-model", "effort": "off"}
         schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
-        domains = ["example.com"]
+        tools = ["mcp__finish__buddy_finish_turn"]
         request = rc.RunRequest(
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
             configuration=rc.RunConfiguration.from_payload(requested), cwd="/tmp/checkout",
             private_state=rc.PrivateStatePaths(invocation_root="/tmp/inv", native_root="/tmp/native"),
             input_text="x",
-            tool_scope="none", network=rc.NetworkPolicy(requested=False, allowed_domains=domains),
-            output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60,
-                                                                     max_output_bytes=1024))
+            tool_scope="none",
+            output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60),
+            session_services=(rc.SessionService(tool_names=tools),))
         mutable_identity["attemptId"] = "changed"
         mutable_identity["inputSha256"] = "f" * 64
         requested["model"] = "changed"
         schema["properties"]["answer"]["type"] = "changed"
-        domains.append("evil.example")
+        tools.append("mcp__finish__buddy_checkpoint")
         self.assertEqual(request.identity.attempt_id, "attempt-fixture")
         self.assertEqual(request.identity.input_sha256, "a" * 64)
         self.assertEqual(request.configuration.model, "fixture-model")
         self.assertEqual(request.output_schema.value["properties"]["answer"]["type"], "string")
-        self.assertEqual(request.network.allowed_domains, ("example.com",))
+        self.assertEqual(request.session_services[0].tool_names, ("mcp__finish__buddy_finish_turn",))
 
     def test_a_dict_parsed_value_is_frozen_on_construction(self):
         mutable = {"list": [1]}
@@ -480,9 +472,9 @@ class FreezingTests(unittest.TestCase):
         request = full_request(Path("/tmp"))
         with self.assertRaises(ValidationError):
             request.budget.timeout_seconds = 1
-        domains = rc.NetworkPolicy(requested=False, allowed_domains=["example.com"])
+        service = rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"])
         with self.assertRaises(TypeError):
-            domains.allowed_domains[0] = "changed.example"
+            service.tool_names[0] = "changed.example"
         with self.assertRaises(AttributeError):
             request.session_services[0].tool_names.append("extra")
 
@@ -568,22 +560,11 @@ class InterfaceSurfaceTests(unittest.TestCase):
     def test_no_role_authority_or_secret_material_fits_the_request(self):
         payload = full_request(Path("/tmp")).to_payload()
         for forbidden in ("role", "routingMode", "agentCredential", "boardClient", "turnInput",
-                          "taskBrief", "database", "controlToken"):
+                          "taskBrief", "database", "controlToken", "frozenAccount", "network"):
             mutated = dict(payload)
             mutated[forbidden] = "anything"
             with self.assertRaises(BoardError, msg=forbidden):
                 rc.decode_run_request(mutated)
-
-    def test_the_frozen_account_is_a_scalar_non_secret_reference(self):
-        with self.assertRaises(BoardError):
-            rc.FrozenAccountReference.from_payload({"adapter": "codex", "source": "native", "revision": 0,
-                                                    "credentialRevision": 0, "identity": None,
-                                                    "nativeLocation": None, "apiKey": "sk-secret"})
-        reference = rc.FrozenAccountReference(adapter="codex", source="native", revision=3,
-                                              credential_revision=2)
-        self.assertEqual(reference.to_payload(),
-                         {"adapter": "codex", "source": "native", "revision": 3,
-                          "credentialRevision": 2, "identity": None, "nativeLocation": None})
 
     def test_a_foreign_usage_package_is_refused_not_dropped(self):
         payload = full_result().to_payload()

@@ -284,7 +284,6 @@ class LiveActivityForwardTests(unittest.TestCase):
 
         from hey_my_buddy.buddy.harnesses.run_contract import (
             FrozenJson,
-            NetworkPolicy,
             PrivateStatePaths,
             RunBudget,
             RunConfiguration,
@@ -310,8 +309,8 @@ class LiveActivityForwardTests(unittest.TestCase):
                 private_state=PrivateStatePaths(invocation_root=str(directory),
                                                 native_root=str(directory / "native")),
                 input_text="the governed turn input", tool_scope="write",
-                network=NetworkPolicy(requested=False), output_schema=FrozenJson({"type": "object"}),
-                budget=RunBudget(timeout_seconds=600, max_output_bytes=1024))
+                output_schema=FrozenJson({"type": "object"}),
+                budget=RunBudget(timeout_seconds=600))
             worker_module.fsync_json(request_file, json.loads(encode_run_request(request)))
         control = {"operation": "worker", "harness": harness, "requestFile": str(request_file),
                    "directory": str(directory),

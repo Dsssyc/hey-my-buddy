@@ -309,10 +309,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
         inquiry=inquiry, inquiry_tools=inquiry_tools)
     return BoundSessionServices(
         description=SessionService(
-            service_id=mount.server_name, kind="session-tools",
-            tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools),
-            input_schema=next(tool["inputSchema"] for tool in session_tools if tool["name"] == completion_tool),
-            delivery_mode="in-turn"),
+            tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools)),
         completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
         answer_tool=mount.answer_tool,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=inquiry,
@@ -1515,12 +1512,10 @@ def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, reso
                                 leader_exited=state.exit_code is not None, exit_code=state.exit_code,
                                 observation_basis="owned-process-group")
     # This harness has no native interrupt acknowledgement: a signal sent or a
-    # group observed gone proves the process side only, never an SDK answer,
-    # so the acknowledgement stays unknown instead of being read off the
-    # group's disappearance.
+    # group observed gone proves the process side only, never an SDK answer, so
+    # no acknowledgement is carried at all instead of a constant.
     interrupt = InterruptEvidence(
         requested=True if state.interrupted else None,
-        acknowledged=None,
         basis="owned-group-signal" if state.signalled else
         ("observer-request" if state.observer_stopped else None))
     checked = CheckedConfiguration()
@@ -1572,13 +1567,11 @@ def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, reso
                 tools=PolicyFact(enforcement="native",
                                  requested=_json_package(state.create_params),
                                  basis="zcode/session-create-accepted"),
-                filesystem=PolicyFact(enforcement="unknown"),
-                network=PolicyFact(enforcement="unknown"))
+                filesystem=PolicyFact(enforcement="unknown"))
         else:
             effective = EffectivePolicy(
                 tools=PolicyFact(enforcement="unrestricted", basis="zcode-yolo-session-default-tools"),
-                filesystem=PolicyFact(enforcement="unrestricted", basis="zcode-yolo-session-default-tools"),
-                network=PolicyFact(enforcement="unknown"))
+                filesystem=PolicyFact(enforcement="unrestricted", basis="zcode-yolo-session-default-tools"))
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(

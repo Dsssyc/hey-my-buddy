@@ -7,11 +7,14 @@ four: it adapts the existing activity sidecar, the existing inquiry bridges and
 the existing durable inquiry journals through narrow read bindings. It never
 upgrades a queued question into a delivered one, never invents a native turn,
 and never touches the native deadline or result ownership: closing the channel
-leaves the run's files and evidence exactly where they were. ``finishNotice``
-and ``sessionContent`` are declared unsupported everywhere; ADR-022 and ADR-024
-come later. The C-Two transport of step five replaces only what sits behind
-this interface. The frame models are described by pydantic through
-:mod:`hey_my_buddy.protocol.internal_models` (ADR-025 decision 6).
+leaves the run's files and evidence exactly where they were. The one live
+interaction of steps one to four is the inquiry: the reserved finish-notice
+kind, its payload, the never-implemented capability bits and the reserved
+event slot went with step 2-D, and ADR-022 and ADR-024 add what they need only
+when a real implementation arrives. The C-Two transport of step five replaces
+only what sits behind this interface. The frame models are described by
+pydantic through :mod:`hey_my_buddy.protocol.internal_models` (ADR-025
+decision 6).
 
 Step 2-C2 wires the real ZCode consumers through this interface. ``observe``
 selects its sources — ``activity``, ``inquiries``, ``observation``, all when
@@ -25,14 +28,13 @@ snapshot's ``activity`` field and is never replaced by event metadata.
 from __future__ import annotations
 
 import hashlib
-from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, Tuple, Union, runtime_checkable
+from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 from ...errors import BoardError
-from ...json_codec import canonical_json, decode_bounded_frame
+from ...json_codec import canonical_json
 from ...protocol.activity import is_newer as _activity_is_newer
 from ...protocol.internal_models import (
     FrozenJson,
-    FormatVersion,
     Identifier,
     InternalModel,
     JsonTuple,
@@ -43,24 +45,8 @@ from ...protocol.internal_models import (
     check_text,
     fail,
 )
-from .run_contract import FORMAT_VERSION, RunIdentity
-from pydantic import BeforeValidator, Field, model_validator
-
-#: The only live frame format version; it never changes a public contract.
-LIVE_FORMAT_VERSION = FORMAT_VERSION
-
-LIVE_KINDS = ("inquiry", "finish-notice")
-INQUIRY_DELIVERY_MODES = ("realtime", "cooperative-checkpoint", "unsupported")
-#: The closed reply statuses. ``discarded`` is a real ask outcome (the bridge
-#: accepted the replay of a withdrawn question); with ``observed`` true it is a
-#: successful observation of that committed state, never a transport refusal.
-LIVE_REPLY_STATUSES = ("queued", "delivered", "answered", "discarded", "unavailable", "unsupported")
-#: The closed set of inquiry states a snapshot may report. ``unknown`` is an
-#: honest state for a journal record this interface does not recognize.
-INQUIRY_STATES = ("queued", "delivered", "answered", "discarded", "unavailable", "unknown")
-#: The bridge's own committed state words a successful ask can project; the
-#: existing mapping folds only ``claimed`` into ``queued``.
-REPLY_STATES = ("queued", "claimed", "delivered", "answered", "discarded")
+from .run_contract import RunIdentity
+from pydantic import Field, model_validator
 
 #: The existing inquiry limits, preserved verbatim: the same byte bounds, the
 #: same per-run count and the same transport windows the current bridges enforce.
@@ -69,7 +55,6 @@ MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES_PER_RUN = 32
 MIN_TRANSPORT_TIMEOUT_MS = 100
 MAX_TRANSPORT_TIMEOUT_MS = 5000
-MAX_WAIT_MS = 30000
 #: The suggested whole-frame bound across runs; it holds every bounded
 #: observation of the existing backends and never widens their own smaller
 #: per-bridge frame limits.
@@ -79,7 +64,7 @@ MAX_REQUEST_ID = 128
 MAX_OBSERVE_LIMIT = 256
 MAX_CLOSE_REASON_BYTES = 200
 
-LiveKind = Literal["inquiry", "finish-notice"]
+LiveKind = Literal["inquiry"]
 InquiryDeliveryMode = Literal["realtime", "cooperative-checkpoint", "unsupported"]
 LiveReplyStatus = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unsupported"]
 ReplyState = Literal["queued", "claimed", "delivered", "answered", "discarded"]
@@ -95,24 +80,27 @@ def _timeout_ms(value: Any, label: str) -> int:
 
 
 class LiveCapabilities(InternalModel):
-    """What one harness's live facilities can do, declared as facts."""
+    """What one harness's live facilities can do, declared as facts.
 
-    activity: bool
+    The one live interaction of steps one to four is the inquiry, and the one
+    declared fact is how its question is delivered. A later step adds
+    capability bits — ADR-022 and ADR-024 included — only when a real
+    implementation arrives; the existing activity reading is a facility of the
+    channel bindings, not an unread declaration bit.
+    """
+
     inquiry_delivery: InquiryDeliveryMode
-    finish_notice: bool = False
-    session_content: bool = False
 
 
 #: What each harness's existing facilities can do today. Codex and Claude Code
-#: carry activity only and refuse questions; ZCode delivers at its session's
-#: cooperative checkpoint; DSH keeps its current Node realtime delivery until
-#: step four moves it to ACP. No harness implements finish notices or session
-#: content yet.
+#: refuse questions; ZCode delivers them at its session's cooperative
+#: checkpoint; DSH keeps its current Node realtime delivery until step four
+#: moves it to ACP.
 EXISTING_CAPABILITIES = {
-    "codex": LiveCapabilities(activity=True, inquiry_delivery="unsupported"),
-    "claude": LiveCapabilities(activity=True, inquiry_delivery="unsupported"),
-    "zcode": LiveCapabilities(activity=True, inquiry_delivery="cooperative-checkpoint"),
-    "dsh": LiveCapabilities(activity=True, inquiry_delivery="realtime"),
+    "codex": LiveCapabilities(inquiry_delivery="unsupported"),
+    "claude": LiveCapabilities(inquiry_delivery="unsupported"),
+    "zcode": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
+    "dsh": LiveCapabilities(inquiry_delivery="realtime"),
 }
 
 
@@ -123,30 +111,13 @@ class InquiryPayload(InternalModel):
     question: Text(MAX_QUESTION_BYTES)
 
 
-class FinishNoticePayload(InternalModel):
-    """One reserved finish-notice payload; no existing facility accepts one."""
-
-    notice_id: Identifier
-    message: Text(MAX_QUESTION_BYTES)
-
-
 class LiveRequest(InternalModel):
     """One live request, bound to the execution identity and its request id."""
-
-    format_version: FormatVersion = LIVE_FORMAT_VERSION
 
     identity: RunIdentity
     request_id: Identifier
     kind: LiveKind
-    payload: Union[InquiryPayload, FinishNoticePayload]
-
-    @model_validator(mode="after")
-    def _payload_matches_kind(self) -> "LiveRequest":
-        if self.kind == "inquiry" and not isinstance(self.payload, InquiryPayload):
-            raise fail("an inquiry request carries an InquiryPayload", field="payload")
-        if self.kind == "finish-notice" and not isinstance(self.payload, FinishNoticePayload):
-            raise fail("a finish-notice request carries a FinishNoticePayload", field="payload")
-        return self
+    payload: InquiryPayload
 
 
 #: A bridge state maps onto a reply status without any upgrade: only the
@@ -161,23 +132,21 @@ _OBSERVED_STATUSES = ("queued", "delivered", "answered", "discarded")
 class LiveReply(InternalModel):
     """One live request's reply fact; ``queued`` is never reported as delivered.
 
-    The transport facts are independent of the committed inquiry state: a
-    withdrawn question's replay is an ``observed`` success whose actual state is
-    ``discarded`` — not an unavailable transport (step 2-C2). ``observed`` must
-    agree with the status, ``state`` carries the bridge's own committed word and
-    only rides an observed interaction, and ``error_code`` is the peer's own
-    refusal code from the bridge's ``BRIDGE_ERRORS`` vocabulary when the reason
-    is the transport classification of a refused ask.
+    The reply answers the request the caller still holds, so it carries only
+    the facts: status, the transport/committed distinction, the bridge's
+    correlation and the refusal reasons. The transport facts are independent
+    of the committed inquiry state: a withdrawn question's replay is an
+    ``observed`` success whose actual state is ``discarded`` — not an
+    unavailable transport (step 2-C2). ``observed`` must agree with the
+    status, ``state`` carries the bridge's own committed word and only rides
+    an observed interaction, and ``error_code`` is the peer's own refusal code
+    from the bridge's ``BRIDGE_ERRORS`` vocabulary when the reason is the
+    transport classification of a refused ask.
     """
 
-    format_version: FormatVersion = LIVE_FORMAT_VERSION
-
-    identity: RunIdentity
-    request_id: Identifier
     status: LiveReplyStatus
     observed: bool = False
     state: Optional[ReplyState] = None
-    delivery_mode: Optional[InquiryDeliveryMode] = None
     native_correlation: OptionalFrozenJsonAt(MAX_LIVE_FRAME_BYTES // 2) = None
     reason_code: OptionalText(128) = None
     error_code: OptionalText(128) = None
@@ -223,20 +192,6 @@ class InquiryState(InternalModel):
         """Everything whose change takes a fresh sequence, ``seq`` itself aside."""
         return (self.status, self.answer, self.bytes, self.via, self.tool_call_id,
                 self.at, self.truncated, self.reason, self.limitation, self.delivery)
-
-
-def _no_events(value: Any) -> Any:
-    """The reserved session-event slot admits no content type in this step
-    (ADR-024 comes later): capacity exists, admission is closed, so any
-    non-empty value is refused instead of being waved through."""
-    items = tuple(value) if isinstance(value, (list, tuple)) else value
-    if items == ():
-        return ()
-    raise fail("session events are reserved and this step admits no event content types", field="events")
-
-
-#: The reserved event slot: empty on the wire is the only legal value.
-ReservedEvents = Annotated[Tuple[FrozenJson, ...], BeforeValidator(_no_events)]
 
 
 class LiveEvent(InternalModel):
@@ -338,21 +293,16 @@ def _observe_fields(fields: Any) -> frozenset:
 class LiveSnapshot(InternalModel):
     """One observation of the run's live facts, bounded to one frame.
 
-    ``sequence`` is the safe cursor of this page: on a truncated page it is
-    the highest returned entry ``seq``, and only a complete page carries the
-    channel watermark, so following ``sequence`` (or the returned entries'
-    own ``seq``) never skips an undelivered fact.
+    Paging runs over the entries' own ``seq`` beside ``truncated``: an
+    observer continues with ``after_seq`` = the highest returned entry
+    ``seq`` and never skips an undelivered fact; the channel's watermark
+    stays internal to that mechanism.
     """
 
-    format_version: FormatVersion = LIVE_FORMAT_VERSION
-
-    identity: RunIdentity
-    sequence: NonNegativeInt
     activity: OptionalFrozenJsonAt(MAX_LIVE_FRAME_BYTES // 2) = None
     inquiries: JsonTuple(InquiryState, max_items=MAX_INQUIRIES_PER_RUN) = ()
     observation: Optional[LiveObservation] = None
     journal: Optional[LiveJournal] = None
-    events: ReservedEvents = ()
     unavailable: OptionalText(128) = None
     truncated: bool = False
     #: The shared transport facts of this snapshot's reads: ``observed`` is
@@ -459,12 +409,8 @@ class ExistingLiveChannel:
             # The identical request replays its recorded reply without a
             # second delivery.
             return recorded
-        if request.kind == "finish-notice":
-            return LiveReply(identity=self._identity, request_id=request.request_id, status="unsupported",
-                             reason_code="finish-notice-unsupported")
         if self._capabilities.inquiry_delivery == "unsupported":
-            return LiveReply(identity=self._identity, request_id=request.request_id, status="unsupported",
-                             delivery_mode="unsupported", reason_code="inquiry-unsupported")
+            return LiveReply(status="unsupported", reason_code="inquiry-unsupported")
         if self._ask is None:
             # The harness supports inquiries but this channel carries no wired
             # bridge binding: an availability fact, not a capability fact.
@@ -503,9 +449,7 @@ class ExistingLiveChannel:
         # The interaction was observed whatever committed state it showed: a
         # withdrawn question's replay carries ``discarded`` as a success fact,
         # never as a transport refusal.
-        reply = LiveReply(identity=self._identity, request_id=request.request_id, status=status,
-                          observed=True, state=state,
-                          delivery_mode=self._capabilities.inquiry_delivery,
+        reply = LiveReply(status=status, observed=True, state=state,
                           native_correlation=correlation or None)
         self._requests[request.request_id] = digest
         self._replies[request.request_id] = reply
@@ -578,46 +522,36 @@ class ExistingLiveChannel:
         for entry in matching:
             if len(page) >= limit:
                 break
-            candidate = LiveSnapshot(identity=self._identity, sequence=self._sequence,
-                                     activity=self._activity,
+            candidate = LiveSnapshot(activity=self._activity,
                                      inquiries=tuple(page + [entry]),
                                      observation=observation, journal=journal)
-            if page and len(canonical_json(candidate.to_payload()).encode()) > MAX_LIVE_FRAME_BYTES:
-                break
+            if page:
+                try:
+                    _bounded_frame(candidate.to_payload(), "live page")
+                except BoardError:
+                    break
             page.append(entry)
         truncated = len(page) < len(matching)
-        # The snapshot's sequence must never let an ordinary caller skip facts
-        # it has not been shown: on a truncated page it is this page's own
-        # cursor (the highest returned entry seq), and only a complete page
-        # carries the channel watermark, by which every fact is delivered.
-        if truncated and page:
-            sequence = max(entry.seq for entry in page)
-        elif truncated:
-            sequence = after_seq or 0
-        else:
-            sequence = self._sequence
-        return LiveSnapshot(identity=self._identity, sequence=sequence, activity=self._activity,
-                            inquiries=tuple(page), observation=observation, journal=journal,
+        # A caller pages by the entries' own ``seq`` beside ``truncated``: a
+        # truncated page is continued with ``after_seq`` = the highest
+        # returned entry seq, which reaches every fact without loss.
+        return LiveSnapshot(activity=self._activity, inquiries=tuple(page),
+                            observation=observation, journal=journal,
                             unavailable="+".join(unavailable) or None,
                             truncated=truncated, observed=observed, reason=reason, error=error)
 
     def _read_journal_fact(self) -> LiveJournal:
         """One journal read folded into entries, returned as its availability fact.
 
-        The binding may return the fact mapping — availability, reason, the
+        The binding returns the fact mapping — availability, reason, the
         reader's own deduplicated record count and the per-question rejections
-        its identity binding produced — or a plain record list, the step-one
-        shape, which counts as an available read whose every record the channel
-        itself deduplicates. Either way the bound records merge into the
-        entries exactly as before; only the availability fact is new.
+        its identity binding produced, exactly the shape the real bindings
+        write. The bound records merge into the entries exactly as before; only
+        the availability fact rides beside them.
         """
         fact = self._read_journal()
         if not (isinstance(fact, Mapping) and "records" in fact):
-            records = fact
-            if not isinstance(records, list):
-                raise fail("the inquiry journal binding must return a list of records")
-            self._merge_journal(_journal_states(records))
-            return LiveJournal(available=True, entries=len(_journal_record_ids(records)))
+            raise fail("the inquiry journal binding must return its availability fact")
         records = fact.get("records")
         if not isinstance(records, list):
             raise fail("the inquiry journal fact's records must be a list")
@@ -675,26 +609,21 @@ class ExistingLiveChannel:
             raise fail("inquiryId must be a nonempty string of at most "
                        f"{MAX_REQUEST_ID} bytes", field="inquiryId")
         if self._closed_reason is not None:
-            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
-                                unavailable="channel-closed")
+            return LiveSnapshot(unavailable="channel-closed")
         if self._read_answer is None:
-            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
-                                observed=False, reason="answer-unavailable")
+            return LiveSnapshot(observed=False, reason="answer-unavailable")
         try:
             result = self._read_answer(inquiry_id, timeout_ms)
         except BoardError:
-            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
-                                observed=False, reason="answer-unavailable")
+            return LiveSnapshot(observed=False, reason="answer-unavailable")
         if isinstance(result, Mapping) and result.get("ok") is False:
             code = result.get("code")
-            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
-                                observed=False,
+            return LiveSnapshot(observed=False,
                                 reason=check_text(str(result.get("reason") or "bridge-write-failed"),
                                                   "bridge reason", maximum=128),
                                 error=code if isinstance(code, str) and code else None)
         value = result.get("value") if isinstance(result, Mapping) and result.get("ok") is True else result
-        return LiveSnapshot(identity=self._identity, sequence=self._sequence,
-                            inquiries=(_answer_state(inquiry_id, value),), observed=True)
+        return LiveSnapshot(inquiries=(_answer_state(inquiry_id, value),), observed=True)
 
     def _merge_journal(self, states: tuple[InquiryState, ...]) -> None:
         """Fold deduplicated journal states into entries with stable seqs.
@@ -730,8 +659,7 @@ class ExistingLiveChannel:
             self._closed_reason = reason
 
     def _unavailable(self, request_id: str, reason_code: str, *, error_code: str | None = None) -> LiveReply:
-        return LiveReply(identity=self._identity, request_id=request_id, status="unavailable",
-                         reason_code=reason_code, error_code=error_code)
+        return LiveReply(status="unavailable", reason_code=reason_code, error_code=error_code)
 
 
 #: Journal record states map onto the closed snapshot set; an unrecognized state
@@ -746,18 +674,6 @@ def _bounded_bytes(value: Any) -> int | None:
 
 def _bounded_word(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
-
-
-def _journal_record_ids(records: list) -> set:
-    """The deduplicated question ids of a record list, the reader's own count."""
-    ids = set()
-    for entry in records:
-        if not isinstance(entry, dict):
-            continue
-        question_id = entry.get("inquiryId") or entry.get("questionId") or entry.get("id")
-        if isinstance(question_id, str) and question_id:
-            ids.add(question_id)
-    return ids
 
 
 def _record_facts(entry: dict) -> dict:
@@ -849,47 +765,21 @@ def _answer_state(inquiry_id: str, value: Any) -> InquiryState:
 
 
 def _bounded_frame(payload: dict, label: str) -> str:
+    """The production paging bound: canonical text of one candidate page,
+    refused over the 64 KiB frame instead of trimmed (called by
+    :meth:`ExistingLiveChannel.observe` while measuring every page)."""
     text = canonical_json(payload)
     if len(text.encode()) > MAX_LIVE_FRAME_BYTES:
         raise fail(f"the {label} frame exceeds its {MAX_LIVE_FRAME_BYTES}-byte bound", field=label)
     return text
 
 
-def encode_live_request(request: LiveRequest) -> str:
-    return _bounded_frame(request.to_payload(), "live request")
-
-
-def decode_live_request(value: str | bytes | Mapping) -> LiveRequest:
-    return LiveRequest.from_payload(
-        decode_bounded_frame(value, label="live request", maximum=MAX_LIVE_FRAME_BYTES))
-
-
-def encode_live_reply(reply: LiveReply) -> str:
-    return _bounded_frame(reply.to_payload(), "live reply")
-
-
-def decode_live_reply(value: str | bytes | Mapping) -> LiveReply:
-    return LiveReply.from_payload(
-        decode_bounded_frame(value, label="live reply", maximum=MAX_LIVE_FRAME_BYTES))
-
-
-def encode_live_snapshot(snapshot: LiveSnapshot) -> str:
-    return _bounded_frame(snapshot.to_payload(), "live snapshot")
-
-
-def decode_live_snapshot(value: str | bytes | Mapping) -> LiveSnapshot:
-    return LiveSnapshot.from_payload(
-        decode_bounded_frame(value, label="live snapshot", maximum=MAX_LIVE_FRAME_BYTES))
-
-
 __all__ = [
-    "EXISTING_CAPABILITIES", "INQUIRY_DELIVERY_MODES", "INQUIRY_STATES", "JOURNAL_REASONS",
-    "LIVE_FIELDS", "LIVE_FORMAT_VERSION", "LIVE_KINDS", "LIVE_REPLY_STATUSES", "LiveCapabilities",
-    "LiveChannel", "ExistingLiveChannel", "FinishNoticePayload", "InquiryJournalRejection",
+    "EXISTING_CAPABILITIES", "JOURNAL_REASONS",
+    "LIVE_FIELDS", "LiveCapabilities",
+    "LiveChannel", "ExistingLiveChannel", "InquiryJournalRejection",
     "InquiryPayload", "InquiryState", "LiveEvent", "LiveJournal", "LiveObservation", "LiveReply",
-    "LiveRequest", "LiveSnapshot", "REPLY_STATES",
+    "LiveRequest", "LiveSnapshot",
     "MAX_ANSWER_BYTES", "MAX_INQUIRIES_PER_RUN", "MAX_LIVE_FRAME_BYTES", "MAX_QUESTION_BYTES",
-    "MAX_TRANSPORT_TIMEOUT_MS", "MAX_WAIT_MS", "MIN_TRANSPORT_TIMEOUT_MS",
-    "decode_live_reply", "decode_live_request", "decode_live_snapshot", "encode_live_reply",
-    "encode_live_request", "encode_live_snapshot",
+    "MAX_TRANSPORT_TIMEOUT_MS", "MIN_TRANSPORT_TIMEOUT_MS",
 ]

@@ -19,7 +19,6 @@ from hey_my_buddy.buddy.harnesses.live import ExistingLiveChannel
 from hey_my_buddy.buddy.harnesses.registry import live_binding
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FrozenJson,
-    NetworkPolicy,
     PrivateStatePaths,
     RunBudget,
     RunConfiguration,
@@ -46,8 +45,8 @@ def request(*, harness="zcode", invocation_id="invocation-live") -> RunRequest:
         cwd="/private/tmp", private_state=PrivateStatePaths(invocation_root="/private/tmp/invocation",
                                                             native_root="/private/tmp/invocation/native"),
         input_text="the governed turn input", tool_scope="write",
-        network=NetworkPolicy(requested=False), output_schema=FrozenJson({"type": "object"}),
-        budget=RunBudget(timeout_seconds=600, max_output_bytes=1024))
+        output_schema=FrozenJson({"type": "object"}),
+        budget=RunBudget(timeout_seconds=600))
 
 
 class LiveBindingRegistryTests(unittest.TestCase):
@@ -103,8 +102,8 @@ class StoredRequestTests(unittest.TestCase):
             cwd="/private/tmp", private_state=PrivateStatePaths(
                 invocation_root=str(self.directory), native_root=str(self.directory / "native")),
             input_text="the governed turn input", tool_scope="write",
-            network=NetworkPolicy(requested=False), output_schema=FrozenJson({"type": "object"}),
-            budget=RunBudget(timeout_seconds=600, max_output_bytes=1024))
+            output_schema=FrozenJson({"type": "object"}),
+            budget=RunBudget(timeout_seconds=600))
         (self.directory / "role-run-request.json").write_text(encode_run_request(request))
         control = {"operation": "worker", "harness": "zcode", "invocationId": invocation,
                    "inputFile": str(self.directory / "turn-input.json")}
@@ -163,7 +162,8 @@ class HandleBindingTests(unittest.TestCase):
             role_run_identity=held if held is not None else identity())
 
     def test_the_owned_request_binds_the_channel(self):
-        channel = role_live.handle_live_channel(self.handle())
+        state, channel = role_live.handle_live_binding(self.handle())
+        self.assertEqual(state, role_live.LIVE_BOUND)
         self.assertIsInstance(channel, ExistingLiveChannel)
         self.assertEqual(channel.identity, identity())
         # No token ever travels in the binding's public materials.
@@ -188,20 +188,27 @@ class HandleBindingTests(unittest.TestCase):
                          (role_live.LIVE_UNAVAILABLE, None))
 
     def test_a_missing_unreadable_or_foreign_request_never_binds(self):
-        self.assertIsNone(role_live.handle_live_channel(SimpleNamespace(role_run_control=None,
-                                                                        role_run_identity=None)))
+        self.assertEqual(role_live.handle_live_binding(SimpleNamespace(role_run_control=None,
+                                                                       role_run_identity=None)),
+                         (role_live.LIVE_UNEXTRACTED, None))
         absent = self.handle()
         absent.role_run_control["requestFile"] = str(self.directory / "absent.json")
-        self.assertIsNone(role_live.handle_live_channel(absent))
+        self.assertEqual(role_live.handle_live_binding(absent),
+                         (role_live.LIVE_UNAVAILABLE, None))
         foreign = self.handle(held=identity(invocation_id="another-invocation"))
-        self.assertIsNone(role_live.handle_live_channel(foreign))
+        self.assertEqual(role_live.handle_live_binding(foreign),
+                         (role_live.LIVE_UNAVAILABLE, None))
         changed = self.handle(control={"operation": "worker", "harness": "codex",
                                        "requestFile": str(self.request_file),
                                        "directory": str(self.directory)})
-        self.assertIsNone(role_live.handle_live_channel(changed))
+        # A control naming an unextracted harness keeps the caller on its
+        # existing facilities; it is not a binding failure of this run.
+        self.assertEqual(role_live.handle_live_binding(changed),
+                         (role_live.LIVE_UNEXTRACTED, None))
         name_only = self.handle()
         name_only.role_run_control = {"operation": "worker", "harness": "zcode"}
-        self.assertIsNone(role_live.handle_live_channel(name_only))
+        self.assertEqual(role_live.handle_live_binding(name_only),
+                         (role_live.LIVE_UNAVAILABLE, None))
 
 
 if __name__ == "__main__":

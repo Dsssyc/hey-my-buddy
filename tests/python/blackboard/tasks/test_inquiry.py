@@ -499,7 +499,6 @@ class ZcodeLiveChannelTests(BoardTestCase):
 
         from hey_my_buddy.buddy.harnesses.run_contract import (
             FrozenJson,
-            NetworkPolicy,
             PrivateStatePaths,
             RunBudget,
             RunConfiguration,
@@ -559,8 +558,8 @@ class ZcodeLiveChannelTests(BoardTestCase):
                 cwd=str(self.workdir()),
                 private_state=PrivateStatePaths(invocation_root=str(private), native_root=str(private / "native")),
                 input_text="the governed turn input", tool_scope="write",
-                network=NetworkPolicy(requested=False), output_schema=FrozenJson({"type": "object"}),
-                budget=RunBudget(timeout_seconds=600, max_output_bytes=1024))
+                output_schema=FrozenJson({"type": "object"}),
+                budget=RunBudget(timeout_seconds=600))
             fsync_json(private / "role-run-request.json", json.loads(encode_run_request(request)))
         return task, attempt, bridge
 
