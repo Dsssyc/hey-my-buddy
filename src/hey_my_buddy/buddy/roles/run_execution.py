@@ -29,7 +29,7 @@ from ..harnesses.run_contract import (
     decode_run_request, decode_run_result,
 )
 from . import turn_io, worker_services
-from .run_observers import FastCorrection, worker_observer
+from .run_observers import FastCorrection, ReviewObserver, worker_observer
 from .structured_call import (
     _NoToolEvidence, _account_environment, no_tool_prompt, valid_answer,
 )
@@ -132,6 +132,30 @@ def _worker_facts(result) -> dict:
         activity = result.activity.value
         payload["activity"] = {"published": True, "phase": activity.get("phase"),
                                "eventSeq": activity.get("eventSeq")}
+    return payload
+
+
+def _review_result(result, request: RunRequest, verdict: dict) -> dict:
+    payload = _base_result(result)
+    tools = result.tool_evidence.value if result.tool_evidence is not None else None
+    payload["usage"] = {"toolCalls": tools.get("toolCalls") if tools else None,
+                        "bytesRead": None, "elapsedMs": verdict["elapsedMs"]}
+    if tools is not None:
+        payload["toolEvidence"] = tools
+    if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):
+        payload.update(status="error", code=verdict["stopReason"], error="Read-only tool budget exhausted")
+    if payload["status"] == "ok":
+        raw = (result.value.parsed.value if result.value.parsed is not None else result.value.raw
+               ) if result.value is not None else None
+        payload.update(rawAnswer=raw, answerValid=valid_answer(raw, request.output_schema.value),
+                       correctionCount=(result.value.correction_count or 0) if result.value is not None else 0)
+        if result.native_identity is not None:
+            payload["nativeIdentity"] = result.native_identity.to_payload()
+    if request.capture_evidence:
+        from ..harnesses.registry import run_seam
+        module = run_seam(result.harness)
+        if callable(getattr(module, "native_evidence", None)):
+            payload.update(module.native_evidence(result))
     return payload
 
 
@@ -247,8 +271,28 @@ def fast_request(control: dict):
     return request, None, correction.observer, correction
 
 
+def review_request(control: dict):
+    from ..harnesses.registry import review_request_controls
+
+    values = control["readOnlyRequest"]
+    request = RunRequest(
+        identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
+                             generation=control["generation"], invocation_id=control["invocationId"]),
+        harness=control["harness"], configuration=RunConfiguration(**control["spec"]),
+        cwd=control["cwd"],
+        private_state=PrivateStatePaths(invocation_root=control["privateRoot"],
+                                        native_root=control["nativeRoot"]),
+        input_text=values["prompt"], output_schema=values["outputSchema"], tool_scope="read",
+        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        capture_evidence=values.get("captureEvidence") is True,
+        **review_request_controls(control["harness"]))
+    observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], values["prompt"],
+                              can_correct=control["canCorrect"])
+    return request, None, observer.observer, observer
+
+
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
-            identity: RunIdentity) -> ProcessHandle:
+            identity: RunIdentity, grace_seconds: float = 0) -> ProcessHandle:
     from ..harnesses.runtime_selection import controller_environment
 
     root = ensure_private_dir(Path(control["privateRoot"]))
@@ -260,9 +304,9 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
         prepare=lambda _environment: (
             [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(path)],
             control["cwd"], controller_environment(context.directory, environment,
-                                                  read_only=control["operation"] == "fast")),
+                                                  read_only=control["operation"] in ("fast", "review"))),
         log_paths=context.log_paths(), timeout_seconds=control["timeoutSeconds"],
-        unbounded_deadline=math.inf)
+        unbounded_deadline=math.inf, grace_seconds=grace_seconds)
     # These bindings are held by the process owner, independent of mutable
     # control files and native evidence written during the run.
     handle.role_run_control = decode_strict_json(canonical_json(control))
@@ -299,6 +343,15 @@ def _role_stop(result: RunResult | None, handle: ProcessHandle) -> bool:
 
 
 def read_fast_result(handle: ProcessHandle, path: Path) -> dict:
+    return _read_structured_result(handle, path, _fast_result,
+                                   (None, "no-tool-violation", "invalid-protocol"))
+
+
+def read_review_result(handle: ProcessHandle, path: Path) -> dict:
+    return _read_structured_result(handle, path, _review_result, (None, "readonly-budget-exhausted"))
+
+
+def _read_structured_result(handle, path, project, allowed_reasons):
     result = _read_run(handle, path)
     if result is None:
         return {"status": "error", "code": "invalid-native-result"}
@@ -307,9 +360,9 @@ def read_fast_result(handle: ProcessHandle, path: Path) -> dict:
         verdict = read_strict_result(Path(handle.role_run_control["verdictFile"]))
         if (not isinstance(verdict, dict) or set(verdict) != {"stopReason", "elapsedMs"}
                 or type(verdict.get("elapsedMs")) is not int or verdict["elapsedMs"] < 0
-                or verdict.get("stopReason") not in (None, "no-tool-violation", "invalid-protocol")):
-            raise BoardError("INVALID_ARGUMENT", "The fast role verdict is missing")
-        return _fast_result(result, request, verdict)
+                or verdict.get("stopReason") not in allowed_reasons):
+            raise BoardError("INVALID_ARGUMENT", "The structured role verdict is missing")
+        return project(result, request, verdict)
     except (OSError, ValueError, BoardError, RecursionError):
         return {**_base_result(result),
                 "status": "error", "code": "invalid-native-result"}
@@ -355,6 +408,32 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> Process
         name, context.task_id, context.attempt_id, context.generation, directory,
         invocation, directory / invocation_name, canonical_json(request_values))
     return handle
+
+
+def start_review(name: str, context: ExecutionContext, request) -> ProcessHandle:
+    """Use the same process owner and run seam over the frozen review mirror."""
+    from ..harnesses.registry import adapter
+
+    environment = _account_environment(name, context, purpose="review")
+    ensure_private_dir(context.directory)
+    private = ensure_private_dir(context_root(context, name) / ("review-" + uuid.uuid4().hex))
+    control = {
+        "operation": "review", "harness": name, "privateRoot": str(private),
+        "directory": str(context.directory),
+        "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
+        "account": context.runtime.get("account"),
+        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
+        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
+        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
+        "canCorrect": adapter(name).read_only_structured_resume,
+        "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
+                            "budget": request.budget, "captureEvidence": request.capture_evidence},
+    }
+    for log_path in context.log_paths().values():
+        guard_private_path(Path(log_path))
+    identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
+                           generation=context.generation, invocation_id=uuid.uuid4().hex)
+    return _launch(control, context, environment=environment, identity=identity, grace_seconds=10)
 
 
 class WorkerRunExecutor:

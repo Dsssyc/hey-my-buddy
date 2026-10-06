@@ -52,9 +52,10 @@ class FastCorrection:
     decision — the driver only reports that the observer interrupted.
     """
 
-    def __init__(self, output_schema: dict, base_prompt: str):
+    def __init__(self, output_schema: dict, base_prompt: str, *, suffix: str = CORRECTION_SUFFIX):
         self.output_schema = output_schema
         self.base_prompt = base_prompt
+        self.suffix = suffix
         self.correction_count = 0
         self.stop_reason: str | None = None
 
@@ -74,7 +75,7 @@ class FastCorrection:
                 self.correction_count = 1
                 return RunFeedback(
                     action="correct",
-                    input_text=f"{self.base_prompt}\n\nFormat correction: {code}{CORRECTION_SUFFIX}")
+                    input_text=f"{self.base_prompt}\n\nFormat correction: {code}{self.suffix}")
         return FEEDBACK_CONTINUE
 
     def _stop(self, reason: str) -> RunFeedback:
@@ -83,4 +84,28 @@ class FastCorrection:
         return FEEDBACK_STOP
 
 
-__all__ = ["CORRECTION_SUFFIX", "FastCorrection", "worker_observer"]
+class ReviewObserver:
+    """Count actual calls against the frozen review budget; optionally correct once."""
+
+    def __init__(self, tool_budget: int, output_schema: dict, prompt: str, *, can_correct: bool):
+        self.tool_budget = tool_budget
+        self.correction = FastCorrection(
+            output_schema, prompt,
+            suffix=". Return exactly the supplied JSON Schema; do not repeat exploration.") if can_correct else None
+        self.stop_reason: str | None = None
+
+    def observer(self, facts: Mapping) -> RunFeedback:
+        # A budget of N permits N calls. Unknown events and denied native
+        # interactions were not early-stop rules in the existing review role.
+        calls = facts.get("toolCalls")
+        if type(calls) is int and calls > self.tool_budget:
+            self.stop_reason = "readonly-budget-exhausted"
+            return FEEDBACK_STOP
+        if self.correction is not None and facts.get("settled"):
+            # Only reuse the format-correction rule, not the fast role's
+            # prohibition on tools. It sees the settled answer alone.
+            return self.correction.observer({"settled": True, "rawAnswer": facts.get("rawAnswer")})
+        return FEEDBACK_CONTINUE
+
+
+__all__ = ["CORRECTION_SUFFIX", "FastCorrection", "ReviewObserver", "worker_observer"]

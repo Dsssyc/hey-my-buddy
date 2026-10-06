@@ -252,8 +252,9 @@ def _collect_result(path: Path) -> dict:
 
 def collect(handle: ProcessHandle) -> AdapterOutcome:
     if hasattr(handle, "role_run_control"):
-        from .run_execution import read_fast_result
-        read = lambda path: read_fast_result(handle, path)
+        from .run_execution import read_fast_result, read_review_result
+        project = read_review_result if handle.role_run_control["operation"] == "review" else read_fast_result
+        read = lambda path: project(handle, path)
     else:
         read = _collect_result
     collection = collect_controller(handle, read=read, stop=router_stop_confirmed)

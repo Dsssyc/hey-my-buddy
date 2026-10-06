@@ -427,3 +427,5 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 3-B1 固定交付审查确认，Claude 的 Worker 只读与审阅原本使用同一组根文件工具，但网络白名单和会话级附加禁用项不同，不能以 tool_scope=read 默默合并。Host 在请求中补两个具体控制值：network_allowed_domains（None 保留原生默认，空序列禁网，非空序列为明确域名清单）与 additional_denied_tools（原生工具名／模式的附加禁用序列，默认空）。普通 Worker 保留默认，审阅明确要求空域名清单和原有附加禁用项；不新增角色或模式标志。模块用 supported_request_controls 声明实际支持的可选控制名，共同调用点在模块未声明时拒绝非默认请求，避免悄悄忽略。该声明只说明本项目存在相应接线，不静态证明厂商执行效果。字段的首个实际消费者是 Claude 原生启动配置，其他 harness 没有被要求启用新策略；本次不改变公开 CLI 或契约版本。
 
 3-A1 报告的 Codex 续接缺口用 RunContinuation.checkpoint 补齐：ResumeCheckpoint 包含必填 native_turn_id、attempt_id、input_sha256 三个严格字段，整个对象可空。黑板当前只生成这三个键；角色从 context.nativeResume 原样投影。采用“整个检查点缺省或三项齐全”的对象，避免三个可选散字段把部分丢失误当成没有检查点。Codex 仍逐项核对私有绑定，再核对 thread/read 的最近完成回合；其他 harness 未声明 resume_checkpoint 控制时由共同入口拒绝该非默认请求。只补现有校验需要的事实，不再把整个 Worker 输入传给运行模块。
+
+审阅公共接线保留原有角色差别为参数：是否允许一次纠正沿用描述中的 read_only_structured_resume，预算规则留在同一个 ReviewObserver；Claude 的既有审阅网络与附加禁用项在注册处绑定，统一角色只传明确控制值。相同控制器执行、帧读写与收集，不为审阅另开运行通道。原有厂商最终值是JSON对象还是文本由已报告的parsed/raw事实保留；不为方便投影改掉原收据的值类型。

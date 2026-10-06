@@ -51,6 +51,20 @@ def run_seam(name: str) -> HarnessRun | None:
     return RUN_SEAMS.get(name)
 
 
+def review_request_controls(name: str) -> dict:
+    """Bind the existing review posture to a registered name.
+
+    The role consumes these parameters through its single implementation;
+    native tool names belong to this wiring, not to its observation rules.
+    """
+    if name == "claude":
+        return {
+            "network_allowed_domains": (),
+            "additional_denied_tools": ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task"),
+        }
+    return {}
+
+
 def live_binding(name: str):
     """The registered live-channel binding of one harness, or None while it has none.
 

@@ -140,6 +140,12 @@ class ReviewPreparation:
     context: ExecutionContext
     #: The frozen input binding the collection re-verifies: (manifest, root, digest).
     mirror: tuple[dict | None, Path, str]
+    run_module: HarnessRun | None = None
+
+    def __post_init__(self):
+        from ..harnesses.registry import run_seam
+        if self.run_module is None:
+            object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
 def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> ProcessHandle:
@@ -152,17 +158,17 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
 
     if not isinstance(preparation, (FastPreparation, ReviewPreparation)):
         raise BoardError("INVALID_ARGUMENT", "unknown Router preparation", harness=preparation.harness)
-    if isinstance(preparation, FastPreparation):
-        module = preparation.run_module
-        if run_seam(preparation.harness) is not module:
-            raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
-    else:
-        module = run_seam(preparation.harness)
+    module = preparation.run_module
+    if run_seam(preparation.harness) is not module:
+        raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
     if module is not None:
         if isinstance(preparation, FastPreparation):
             from .run_execution import start_fast
             return start_fast(module, preparation.harness, preparation.context, preparation.request)
-        raise BoardError("router-review-unsupported", "Review on the registered Worker carrier is not implemented")
+        from .run_execution import start_review
+        if not preparation.native.read_only_structured:
+            raise BoardError("router-review-unsupported", "Review on this registered harness is not implemented")
+        return start_review(preparation.harness, preparation.context, preparation.request)
     if isinstance(preparation, FastPreparation):
         return preparation.native.start_no_tool_structured(preparation.context, preparation.request)
     if isinstance(preparation, ReviewPreparation):
