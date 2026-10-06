@@ -15,6 +15,8 @@ from hey_my_buddy.protocol import attempt_evidence
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses import controller
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
+from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
@@ -25,6 +27,7 @@ from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
+from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 import buddy.harnesses.codex.test_no_tool_codex as codex_fast_tests
 import buddy.harnesses.zcode.test_no_tool_zcode as zcode_fast_tests
@@ -62,12 +65,20 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
         process = SimpleNamespace(returncode=0)
         handle = SimpleNamespace(process=process, log_paths=context.log_paths(), shutdown_confirmed=lambda: True)
+        module = SimpleNamespace(check_preparation=lambda *_args: None, native_evidence=lambda _result: {})
+        self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
         with (mock.patch.object(controller, "owned_popen", return_value=process) as spawn,
               mock.patch.object(controller, "ProcessHandle", return_value=handle)):
-            self.assertIs(read_only.start_no_tool("codex", context, request), handle)
-        self.assertEqual(spawn.call_args.args[0][-2:], ["--control", str(context.directory / "no-tool-control.json")])
-        Path(handle.log_paths["stdout"]).write_text(json.dumps({"status": "ok", "zeroToolVerified": True,
-            "usage": {"toolCalls": 0}, "processState": {"shutdownConfirmed": True}, "rawAnswer": {}}))
+            self.assertIs(run_execution.start_fast(module, "codex", context, request), handle)
+        control = handle.role_run_control
+        self.assertEqual(spawn.call_args.args[0][-2:], ["--control", str(Path(control["privateRoot"]) / "role-run-control.json")])
+        frame, _services, _observer, _correction = run_execution.fast_request(control, module)
+        Path(control["requestFile"]).write_text(rc.encode_run_request(frame))
+        Path(control["verdictFile"]).write_text(json.dumps({"stopReason": None, "elapsedMs": 1}))
+        result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
+            value=rc.RunValue(mechanism="final-message", schema_status="unknown", raw="{}"),
+            stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone", started=True)))
+        Path(handle.log_paths["stdout"]).write_text(rc.encode_run_result(result))
         return context, request, handle
 
     def assert_sentinels(self):
@@ -95,7 +106,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                 original_identity = (context.task_id, context.attempt_id, context.generation, context.directory)
                 malicious = {"directory": str(self.outside), "evidenceRoot": str(self.outside),
                              "noToolRequest": {"prompt": "malicious replacement"}}
-                control_path = context.directory / "no-tool-control.json"
+                control_path = Path(handle.role_run_control["privateRoot"]) / "role-run-control.json"
                 if replace_with_link:
                     control_path.unlink()
                     control_path.symlink_to(self.outside / "control.json")

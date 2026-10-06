@@ -12,13 +12,15 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
 from hey_my_buddy.buddy.harnesses.live import ExistingLiveChannel
-from hey_my_buddy.buddy.harnesses.registry import live_binding
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, live_binding, run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FrozenJson,
+    HARNESS_NAMES,
     PrivateStatePaths,
     RunBudget,
     RunConfiguration,
@@ -51,8 +53,15 @@ def request(*, harness="zcode", invocation_id="invocation-live") -> RunRequest:
 
 class LiveBindingRegistryTests(unittest.TestCase):
     def test_only_registered_modules_carry_a_live_binding(self):
-        self.assertIs(live_binding("zcode"), native_run.bind_live_channel)
-        for name in ("dsh", "codex", "claude", "command", "external", "not-a-harness"):
+        for name in HARNESS_NAMES:
+            with self.subTest(harness=name):
+                module = run_seam(name)
+                if module is None:
+                    self.assertIsNone(live_binding(name))
+                else:
+                    self.assertTrue(callable(module.bind_live_channel))
+                    self.assertIs(live_binding(name), module.bind_live_channel)
+        for name in ("command", "external", "not-a-harness"):
             self.assertIsNone(live_binding(name), name)
 
     def test_a_channel_binds_the_requests_own_complete_identity(self):
@@ -69,8 +78,9 @@ class LiveBindingRegistryTests(unittest.TestCase):
                                          dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")) as directory:
             with self.assertRaises(BoardError):
                 role_live.build_live_channel("codex", request(), credentials={}, activity_dir=directory)
-            self.assertIsNone(role_live.build_live_channel("dsh", request(harness="dsh"),
-                                                           credentials={}, activity_dir=directory))
+            with mock.patch.dict(RUN_SEAMS, {"dsh": None}):
+                self.assertIsNone(role_live.build_live_channel("dsh", request(harness="dsh"),
+                                                               credentials={}, activity_dir=directory))
 
 
 class StoredRequestTests(unittest.TestCase):

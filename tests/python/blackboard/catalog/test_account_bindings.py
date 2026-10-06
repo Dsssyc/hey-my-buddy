@@ -1,5 +1,4 @@
 """Account consumption and native bindings against private protocol fixtures."""
-import json
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -7,6 +6,9 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses.base import NoToolStructuredRequest, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses import controller
 from hey_my_buddy.buddy.harnesses.codex.home import credential_source
+from hey_my_buddy.buddy.harnesses.codex import native_run as codex_run
+from hey_my_buddy.buddy.roles import run_execution
+from hey_my_buddy.private_dirs import native_root
 from hey_my_buddy.buddy.roles import structured_call as read_only
 from hey_my_buddy.errors import BoardError
 import buddy.harnesses.codex.test_codex as codex_tests
@@ -53,16 +55,18 @@ class AccountBindingTests(unittest.TestCase):
         third = self.execute(rebuilt)
         self.assertEqual(third.status, 'ok', third.to_report())
         self.assertNotEqual(third.result['sessionId'], first.result['sessionId'])
-        control = json.loads((rebuilt.directory / 'codex-control.json').read_text())
-        self.assertEqual(control['credentialSource']['credentialRevision'], 1)
+        binding = codex_run._read_binding(native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex',
+                                                      rebuilt.task_id), third.result['sessionId'])
+        self.assertEqual(binding['credentialSource']['credentialRevision'], 1)
 
     def test_service_native_identity_overrides_worker_consumption_seam(self):
         context = self.context()
         context.runtime.update(account=self.account(), workerAccount={'source': 'worker', 'revision': 77})
         result = self.execute(context)
         self.assertEqual(result.status, 'ok', result.to_report())
-        control = json.loads((context.directory / 'codex-control.json').read_text())
-        self.assertEqual(control['credentialSource']['source'], 'native')
+        binding = codex_run._read_binding(native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex',
+                                                      context.task_id), result.result['sessionId'])
+        self.assertEqual(binding['credentialSource']['source'], 'native')
 
     def test_unverified_worker_refuses_coding_review_and_fast_router_before_spawn(self):
         context = self.context()
@@ -76,7 +80,9 @@ class AccountBindingTests(unittest.TestCase):
                                            {'timeoutSeconds': 5})
         fast = NoToolStructuredRequest(str(self.cwd), 'Fixture only', {'type': 'object'}, 5)
         with mock.patch.object(controller, 'owned_popen') as spawn:
-            for call, request in ((read_only.start, review), (read_only.start_no_tool, fast)):
+            for call, request in ((run_execution.start_review, review),
+                                  (lambda name, context, request: run_execution.start_fast(
+                                      codex_run, name, context, request), fast)):
                 with self.assertRaises(BoardError) as refused:
                     call('codex', context, request)
                 self.assertEqual(refused.exception.code, 'ACCOUNT_CAPABILITY_UNVERIFIED')
