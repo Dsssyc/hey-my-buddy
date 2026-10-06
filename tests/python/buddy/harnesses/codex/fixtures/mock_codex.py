@@ -187,6 +187,19 @@ def main():
             if case == "hang":
                 time.sleep(60)
                 continue
+            if case == 'worker-tool':
+                send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "tool-1"}}})
+                send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "tool-1", "exitCode": 0}}})
+            if case == 'worker-unknown':
+                send({"method": "thread/hologram/updated", "params": {"threadId": thread_id, "turnId": turn_id}})
+            if case == 'worker-unknown-flood':
+                # More distinct unclassified types in one turn than the public
+                # result carries: the run must still return a bounded result.
+                for number in range(65):
+                    send({"method": f"native/future/{number}",
+                          "params": {"threadId": thread_id, "turnId": turn_id}})
             if case == "readonly-budget":
                 send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
                       "item": {"type": "commandExecution", "id": "read-1"}}})

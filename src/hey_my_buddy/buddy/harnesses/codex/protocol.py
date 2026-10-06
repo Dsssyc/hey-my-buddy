@@ -43,6 +43,11 @@ class Connection:
         self.pending_ids: set[int] = set()
         self.on_notification = lambda _message: None
         self.on_request = lambda _message: None
+        #: Optional in-process callback invoked after every pump step, the waits
+        #: inside ``call`` included. The unified run seam takes the role
+        #: observer's pending feedback here, so a stop requested on a recorded
+        #: fact takes effect before any further native waiting.
+        self.after_pump = None
         os.set_blocking(process.stdin.fileno(), False)
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -87,6 +92,13 @@ class Connection:
             raise CodexProtocolError("transport-error", "Codex input closed") from None
 
     def pump(self):
+        try:
+            self._pump_one()
+        finally:
+            if self.after_pump is not None:
+                self.after_pump()
+
+    def _pump_one(self):
         remaining = self._remaining()
         try:
             message = self.messages.get(timeout=min(remaining, 0.2))
