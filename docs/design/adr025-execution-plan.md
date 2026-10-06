@@ -403,3 +403,7 @@ ZCode 原生驱动只保留协议完整性、身份关联和工具/消息事实�
 Live 删除未实现的 FinishNoticePayload/finish-notice、finish_notice/session_content 能力位与 ReservedEvents/events；删掉只有测试调用的旧 journal list 形状及 handle_live_channel 包装入口，测试改走实际生产使用的同一接口。现有分页、questionId 关联、答案来源、journal 可用性/拒绝与完整身份仍有生产消费者，不能删。所有新增类型、帮助函数和导出也一并盘点，通用验证继续交给 Pydantic；保留的手写逻辑须是原生投影、跨字段约束或共享三件 JSON 机制确实所需。
 
 2-D 在一个独占 worktree 串行处理公共值、组装方和受影响测试，Host 整合；任何超出这些新格式及机械构造适配的行为变化先报告。微任务只跑受影响聚焦检查，保住 2-P 的普通严格类型与解析前整帧上限见证；只对被移动或重写的防护做小量配对故障，不复跑旧矩阵或原生模型。给出全部测试编号的集合对账，入库只列变更/删除/新增。Host 收齐后跑一次完整检查，完成本步记录并停等外部验收。
+
+2-D 的实际使用核对确认：完整绑定读取的是 RunRequest、LiveRequest 与 channel.identity；幂等表以请求 request_id 为键；黑板分页读取 InquiryState.seq 与 truncated。LiveReply 的身份副本、LiveSnapshot 的身份和 sequence 副本没有参与这些检查，因此“保留身份与分页机制”不要求保留这些无人读取的副本。按用户的删减要求删除它们、三个 live 值上无生产解码用途的 format_version，以及未被运行时读取的 WorkerPreparation.name。请求身份校验、通道绑定、内部必要水位、条目序号和原生 socket 回复关联全部保留。
+
+六个 live 编解码包装只由测试调用，也随本次盘点删除；严格不可变 Pydantic 值和生产分页实际使用的有界编码保留。解析前整帧上限继续在真实生产读取的 RunRequest/RunResult 上受测，原生 inquiry socket 的帧界与回复 id 核对照常；仅为没有生产入口的 live decoder 编写的测试随该入口删除并登记。以后确需传输时以当时的实际消费者确定接口，不在本步保留空入口或增造消费点。
