@@ -151,6 +151,34 @@ class BoundSessionServices:
     services: object
 
 
+def registered_read_only_check(description) -> dict:
+    """Qualification for a description whose execution entries were removed.
+
+    Confirm the project's registered mechanism exists. Native policy readback
+    belongs to the run, and no vendor source is examined here.
+    """
+    from .registry import run_seam
+
+    platforms = description.system_sandbox_platforms
+    sandbox = sys.platform in platforms
+    result = {"eligible": False, "reasonCode": "readonly-not-implemented",
+              "reason": "No implemented native read-only structured call", "systemSandbox": sandbox,
+              "sameAttemptContinuation": description.read_only_structured_resume}
+    if not description.read_only_structured:
+        return result
+    if platforms and not sandbox:
+        return {**result, "reasonCode": "readonly-platform-unsupported",
+                "reason": "The native read-only sandbox is unsupported on this platform"}
+    categories = getattr(description, "read_only_tool_categories", ())
+    if not sandbox and (not categories or set(categories) - {"read", "search"}):
+        return {**result, "reasonCode": "readonly-tools-unrestricted",
+                "reason": "A harness without a system sandbox must restrict tools to read and search"}
+    if not callable(getattr(run_seam(description.name), "run", None)):
+        return {**result, "reasonCode": "readonly-resource-missing",
+                "reason": "The registered native read-only run is missing"}
+    return {**result, "eligible": True, "reasonCode": None, "reason": None}
+
+
 class Adapter:
     """Base class for the built-in adapters."""
 
