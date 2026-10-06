@@ -1,7 +1,5 @@
 """Deferred review carriers are unavailable before any native process starts."""
 import importlib.util
-import io
-import json
 from pathlib import Path
 import tempfile
 import threading
@@ -11,7 +9,6 @@ from unittest.mock import patch
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
-from hey_my_buddy.buddy.harnesses.dsh import runner as dsh_runner
 from hey_my_buddy.buddy.roles import structured_call as read_only
 from hey_my_buddy.buddy.roles import run_controller, router as router_role
 from hey_my_buddy.errors import BoardError
@@ -50,17 +47,10 @@ class DeferredReviewTests(unittest.TestCase):
                 run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event())
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
             self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.zcode.runner'))
-            with tempfile.TemporaryDirectory(prefix='deferred-controller-') as directory:
-                control = Path(directory) / 'control.json'
-                control.write_text(json.dumps({'readOnlyRequest': {}}))
-                output = io.StringIO()
-                with patch('sys.argv', ['dsh_runner', '--control', str(control)]), \
-                     patch('sys.stdout', output), patch.object(dsh_runner.signal, 'signal'):
-                    self.assertEqual(dsh_runner.main(), 1)
-                result = json.loads(output.getvalue())
-                self.assertEqual(result['code'], 'readonly-worker-carrier-unimplemented')
-                self.assertFalse(result['modelStarted'])
-                self.assertTrue(result['processState']['shutdownConfirmed'])
+            self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.dsh.runner'))
+            with self.assertRaises(BoardError) as caught:
+                run_controller.execute({'operation': 'review', 'harness': 'dsh'}, threading.Event())
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
 
 
 if __name__ == '__main__':

@@ -31,7 +31,7 @@ from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.controller import FastPreparation, ReviewPreparation, start_router_preparation
 import buddy.harnesses.codex.test_no_tool_codex as codex_fast_tests
 import buddy.harnesses.zcode.test_no_tool_zcode as zcode_fast_tests
-import buddy.harnesses.dsh.test_dsh_session_storage as dsh_coding_tests
+import buddy.harnesses.dsh.test_dsh_role_wiring as dsh_coding_tests
 import buddy.harnesses.claude.test_claude as claude_tests
 import buddy.harnesses.codex.test_codex as codex_tests
 import buddy.harnesses.dsh.test_no_tool_dsh as dsh_tests
@@ -255,19 +255,18 @@ class PrivateAdapterInvariants(unittest.TestCase):
         fixture = self.fixture(dsh_tests.DshNoToolTests)
         state = Path(fixture.environment["BUDDY_STATE_DIR"])
         evidence = state / "attempts/task/attempt-1"
-        (fixture.root / "case").write_text("ok")
         context = ExecutionContext("task", "attempt-1", 1,
-            {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max",
+            {"adapter": "dsh", **dsh_tests.SPEC,
              "cwd": str(fixture.cwd), "timeoutSeconds": 3}, evidence, {}, fixture.environment)
-        handle = DshAdapter().start_no_tool_structured(context,
-            NoToolStructuredRequest(str(fixture.cwd), "Choose a profile", dsh_tests.SCHEMA, 3))
+        request = NoToolStructuredRequest(str(fixture.cwd), "Choose a profile", dsh_tests.SCHEMA, 3)
+        handle = start_router_preparation(FastPreparation("dsh", DshAdapter(), request, context, fixture.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertEqual(handle.wait(8), 0)
-        outcome = DshAdapter().collect(handle, context)
+        outcome = read_only.collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        control = json.loads((evidence / "no-tool-control.json").read_text())
+        control = handle.role_run_control
         self.assertTrue(Path(control["directory"]).is_relative_to(context_root(context, "dsh")))
-        self.assertTrue((Path(control["evidenceRoot"]) / "call-1/result.json").is_file())
+        self.assertTrue((handle.no_tool_evidence.evidence_root / "call-1/result.json").is_file())
         self.assert_partition(context)
 
         command_evidence = state / "attempts/command-task/attempt-2"
@@ -351,9 +350,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
             with self.subTest(adapter=name):
                 fixture = self.fixture(kind)
                 if name == "dsh":
-                    (fixture.root / "case").write_text("ok")
                     env = fixture.environment
-                    spec = {"provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
+                    spec = dsh_tests.SPEC
                 elif name == "zcode":
                     env = {**fixture.environment, "BUDDY_ZCODE_TEST_CASE": "ok"}
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
@@ -384,25 +382,27 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assert_partition(context)
 
     def test_dsh_coding_and_reconstructed_claude_continuation(self):
-        fixture = self.fixture(dsh_coding_tests.DshNoDeadlineSentinelTests)
-        stub = fixture.stub(dsh_coding_tests.DELAY_STUB)
-        adapter = DshAdapter()
+        fixture = self.fixture(dsh_coding_tests.DshRoleCase)
+        original_record = fixture.governed_record
+        def with_session_record(context, **kwargs):
+            original_record(context, **kwargs)
+            selection = json.loads(fixture.record.read_text())
+            selection["dsh"]["command"] += ["--session-record", "usage"]
+            fixture.record.write_text(json.dumps(selection))
+        fixture.governed_record = with_session_record
         for index in (1, 2):
             with self.subTest(adapter="dsh", attempt=index):
-                context = fixture.context(timeout_seconds=10, stub=stub)
-                context.attempt_id = f"attempt-{index}"
+                context = fixture.context(index=index, attempt=f"attempt-{index}")
                 state = Path(context.environment["BUDDY_STATE_DIR"])
                 context.directory = state / "attempts/task" / context.attempt_id
-                handle = adapter.start(context)
-                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
-                self.assertEqual(handle.wait(20), 0)
-                outcome = adapter.collect(handle, context)
+                handle, outcome = fixture.execute(context)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                self.assertEqual(outcome.result["inquiryBridge"]["errorPath"], str(context.directory / "inquiry.sock.error.json"))
-                self.assertTrue((context_root(context, "dsh") / "sessions").is_dir())
+                control = handle.role_run_control
+                self.assertTrue(Path(control["inquiry"]["errorPath"]).is_relative_to(context.directory))
+                self.assertTrue((Path(control["nativeRoot"]) / "dsh-home/sessions").is_dir())
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)
                 self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
-                self.assertTrue((context.directory / "dsh-run/stdout.log").is_file())
+                self.assertTrue(Path(handle.log_paths["stdout"]).is_file())
                 self.assert_partition(context)
 
         claude = self.fixture(claude_tests.ClaudeAdapterTests)

@@ -136,7 +136,12 @@ def _worker_facts(result) -> dict:
     if result.native_error is not None:
         payload["nativeFailure"] = result.native_error.value
     if result.native_failure is not None and not (format and format.native_quota_failure):
-        payload["quotaFailure"] = result.native_failure.value
+        failure = result.native_failure.value
+        # DSH's record contains every native error code. Its existing public
+        # receipt reports only recognized quota failures in this field; the
+        # complete native fact remains in the run result and retained record.
+        payload["quotaFailure"] = (None if result.harness == "dsh" and failure.get("code") == "unknown"
+                                   else failure)
     if result.activity is not None:
         activity = result.activity.value
         payload["activity"] = {"published": True, "phase": activity.get("phase"),

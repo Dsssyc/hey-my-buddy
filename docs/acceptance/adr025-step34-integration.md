@@ -139,3 +139,11 @@ Host 在这份固定组合上重新注入四处故障，journal 外来记录、�
 本轮 Host 只改公共 registry 的 DSH 导入/注册和 live 能力为 cooperative-checkpoint；共享 discovery_shutdown_confirmed 消费已在 1d28a16，不需要另加外层。发现流程的 DSH 版本探针还沿用公共 discovery 环境，Host 会在 4-C 公共整合时为该启动强制私有 DSH_HOME 后再做安装版检查。
 
 按用户记录更正的相称性规则，Host 直接澄清 4-B2 三处记录，未改代码或测试、未重跑：发现异常停止字段在 1d28a16 已有公共消费；525d4cb 的 DSH live 基线为 realtime，验证组合实际含 cooperative-checkpoint 改动；“未删除任何对象”过宽，新组合构造用 rsync --delete 同步了已授权删除的两条源码。Host 对比 base-patched 与 comb 的 DSH 两棵源码树，仅 catalog.py 与 runner.py 缺席；这是在全新镜像中复现已授权的源码删除，不是回收旧实验材料，原方法明确保留，措辞缩窄为未回收旧实验/任务根。原始 applied-activation.txt 的基线误记保留在 tmp，当前公共文件与 Worker 验证组合已独立逐字核对一致，174 项验证结论不变。
+
+4-B2 回收计划 cln-d95fb583-83d9-44b4-9330-85b1c7cb44eb 已应用，实际受管检出消失；Host 留存 11 份指定材料后，只整体删除创建时登记的 4-B2 确切根。4-C 已从 68c03c0 首次走路由提交 run 7925d6a9-b01d-4a68-964c-6cb6a0d81ffc，决定 dec-92b7b95e-eae5-48c7-9d64-ccd85c9a687a 选择 zcode / zai-api / GLM-5.3-Flash / max；没有配置覆盖，拥有新的短任务根与独立检出。
+
+Host 为公共发现的 DSH --version 探针复用已验收的私有启动包装：包装新增可选 source_environment 与 merge_stderr，默认 ACP 行为不变；版本探针保留调用方 HOME、代理/CA，只强制私有 DSH_HOME，并以自有 handle 核实组停止后回收该次目录，未知则留目录并记录位置。资格仍只做版本握手。发现与暂缓审阅聚焦 22 项通过（5.923 秒），启动包装 20 项通过（0.090 秒）；首次启动包装模块名写错造成一个加载错误，改正后只补跑该模块，原始日志保留。把实际发现分支改回旧非隔离探针，新增见证以 dshHome 等于模拟日常目录失败，恢复原件通过。均为假 CLI，零安装版或模型。
+
+跨目录用量测试改为真实假 ACP Worker → 私有 session.v3 记录 → 新运行格式 → 共享收集，而非直接注入旧 Node sidecar。首轮 8 项中发现消息 sourceId 丢失和非配额错误进入 quotaFailure；这是旧公开收据检查与新原生事实/公共投影合并后的缺口，Host 自行整合：记录读取保留实际 message.id 到 lastAssistantMessage.sourceId，角色层对 DSH 只发布已识别配额分类，原始非配额代码继续保留在 RunResult/记录证据。生产两处修改已明确登记，未改用户批准的五项差异。跨 harness 用量与 schema Worker 共 20 项通过（5.576 秒）。
+
+Host 迁移暂缓审阅与私有证据分区的旧 DSH 调用点到同一注册接缝，保留身份、两层停止、私有记录与输出证据分离的原断言意图。退役仅旧 Node 载体消费的 read_last_line_result、legacy_node_stop_confirmed 及五个专属实现见证（两条旧 FD 区域规则、一条末行读取、两条 truthy Node 停止收据）；Node 载体整体移除后没有这些执行区域，公共外层的 FD 收尾、严格帧读取与真实两层停止由保留的共享测试和 4-B2 新见证覆盖。不会为了保留旧 FD 泄漏或 truthy 停止口径而留下兼容代码。原编号与替代覆盖随第四步总账列明。

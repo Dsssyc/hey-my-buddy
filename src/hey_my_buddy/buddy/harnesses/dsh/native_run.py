@@ -968,6 +968,7 @@ class _RecordAccumulator:
         self.truncated = False
         self.failure: dict | None = None
         self.last_assistant: str | None = None
+        self.last_assistant_id: str | None = None
         self.model: dict | None = None
         self.steps: list[dict] = []
         self.sessions: list[str] = []
@@ -1098,6 +1099,7 @@ def _fold_record(path: Path, session_ids: frozenset, acc: _RecordAccumulator) ->
                 text = _record_text(message.get("content"))
                 if text.strip():
                     acc.last_assistant = text
+                    acc.last_assistant_id = message.get("id") if isinstance(message.get("id"), str) else None
                 if isinstance(source.get("provider"), str) and isinstance(source.get("model"), str):
                     acc.model = {"provider": source["provider"], "model": source["model"]}
         elif kind == "turn/end":
@@ -1145,6 +1147,7 @@ def session_record_facts(dsh_home: Path, session_ids) -> dict | None:
     if usage is None and acc.model is None and acc.last_assistant is None and acc.failure is None:
         return None
     return {"usage": usage, "model": acc.model, "lastAssistant": acc.last_assistant,
+            "lastAssistantSourceId": acc.last_assistant_id,
             "failure": acc.failure, "steps": acc.steps, "sessions": acc.sessions,
             "recordsRead": len(candidates), "truncated": acc.truncated}
 
@@ -1810,7 +1813,8 @@ def _build_result(request: RunRequest, *, state: _RunState, facts: _RunFacts,
         native_failure=(_quota_package({"nativeCode": record_failure["code"],
                                         "source": "dsh/session-turn-end"})
                         if record_failure and record_failure.get("code") else None),
-        last_assistant_message=(_message_package({"text": record["lastAssistant"]})
+        last_assistant_message=(_message_package({"text": record["lastAssistant"],
+                                                  "sourceId": record.get("lastAssistantSourceId")})
                                 if record and record.get("lastAssistant") else None),
         continuation=None,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),

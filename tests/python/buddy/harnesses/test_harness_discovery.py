@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import os
 import signal
 import sys
@@ -182,6 +183,68 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 result = discovery.discover("dsh", manual_path=str(dsh), environment={"PATH": ""})
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["executable"], str(dsh))
+
+    def test_dsh_version_probe_uses_a_private_home_and_preserves_native_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            daily = root / "daily-dsh"
+            daily.mkdir()
+            snapshot = root / "observed.json"
+            cli = self.executable(root / "dsh", (
+                "import json, os, sys\nfrom pathlib import Path\n"
+                "assert sys.argv[1:] == ['--version']\n"
+                "assert sys.stdin.read() == ''\n"
+                f"private = Path(os.environ.get('DSH_HOME', {str(daily)!r}))\n"
+                "assert private.is_dir()\n"
+                "(private / 'probe-marker').write_text('owned')\n"
+                f"Path({str(snapshot)!r}).write_text(json.dumps({{'dshHome': str(private), "
+                "'home': os.environ.get('HOME'), 'proxy': os.environ.get('HTTPS_PROXY'), "
+                "'ca': os.environ.get('SSL_CERT_FILE'), 'keys': sorted(os.environ)}))\n"
+                "print('dsh 1.2.0', file=sys.stderr)\n"))
+            environment = {
+                "PATH": "", "HOME": str(root), "DSH_HOME": str(daily),
+                "HTTPS_PROXY": "https://proxy.invalid", "SSL_CERT_FILE": str(root / "ca.pem"),
+                "OPENAI_API_KEY": "fixture-secret"}
+            with patch.object(discovery, "_home", return_value=root), \
+                 patch.object(discovery, "_common_dirs", return_value=[]), \
+                 patch.object(discovery, "_app_paths", return_value=[]):
+                result = discovery.discover("dsh", manual_path=str(cli), environment=environment)
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["version"], "1.2.0")
+            observed = json.loads(snapshot.read_text())
+            self.assertNotEqual(observed["dshHome"], str(daily))
+            self.assertFalse(Path(observed["dshHome"]).parent.exists())
+            self.assertEqual(observed["home"], str(root))
+            self.assertEqual(observed["proxy"], "https://proxy.invalid")
+            self.assertEqual(observed["ca"], str(root / "ca.pem"))
+            self.assertNotIn("OPENAI_API_KEY", observed["keys"])
+            self.assertEqual(list(daily.iterdir()), [])
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
+    def test_dsh_version_probe_retains_its_directory_when_stop_is_unknown(self):
+        from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            private = root / "probe"
+            private.mkdir()
+            pid_file = root / "pid"
+            cli = self.executable(root / "dsh", (
+                "import os\nfrom pathlib import Path\n"
+                f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+                "print('dsh 1.2.0')\n"))
+            with patch.object(discovery.tempfile, "mkdtemp", return_value=str(private)), \
+                 patch.object(ProcessHandle, "shutdown_confirmed", return_value=False), \
+                 self.assertLogs(discovery.__name__, level="WARNING") as notes:
+                code, output = discovery._probe_dsh_version([str(cli)], {"PATH": ""},
+                                                            time.monotonic() + 5)
+            self.assertEqual((code, output), ("shutdown-unverified", b""))
+            self.assertTrue((private / "dsh-home").is_dir())
+            self.assertIn(str(private), notes.output[0])
+            # The injected uncertainty retains the directory. The test itself
+            # verifies the actual group is gone before its fixture cleans up.
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(int(pid_file.read_text()), 0)
 
     def test_partial_manager_defaults_match_installed_versions_and_direct_root(self):
         with tempfile.TemporaryDirectory() as directory:
