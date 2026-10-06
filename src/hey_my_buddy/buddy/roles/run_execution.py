@@ -643,12 +643,19 @@ class WorkerRunExecutor:
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
+        if self.name == "dsh":
+            # Preserve DSH's published identity rule: only the imported,
+            # validated turn can mark its native session as captured.
+            session_id = (record or {}).get("sessionId")
+            payload["nativeActivity"] = {"sidecarWritten": (context.directory / "activity.json").is_file()}
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
             "resumable": bool(facts.get("bindingPresent", True) and shutdown and result is not None
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
                                    and turn_io.checkpoint_resumable(payload, checkpoint)))}
+        if self.name == "dsh":
+            payload["nativeSession"]["sessionIdSource"] = "validated-turn" if session_id else "none"
         if isinstance(getattr(context, "effective_workspace", None), dict):
             payload["workspaceManifest"] = context.effective_workspace
         if error:

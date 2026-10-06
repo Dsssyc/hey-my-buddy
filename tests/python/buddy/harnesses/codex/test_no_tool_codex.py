@@ -60,7 +60,7 @@ class NoToolCodexTests(unittest.TestCase):
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "timeoutSeconds": timeout}, directory, {}, environment)
         request = NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, timeout_seconds=timeout)
-        handle = start_router_preparation(FastPreparation("codex", CodexAdapter(), request, context, self.cwd))
+        handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
         return collect(handle), handle.role_run_control, directory
@@ -107,7 +107,7 @@ class NoToolCodexTests(unittest.TestCase):
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "timeoutSeconds": 3}, directory, {}, environment)
         request = NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, 3)
-        handle = start_router_preparation(FastPreparation("codex", CodexAdapter(), request, context, self.cwd))
+        handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(8))
         outcome = collect(handle)

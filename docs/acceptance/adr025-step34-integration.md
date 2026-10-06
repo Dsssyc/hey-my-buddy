@@ -175,3 +175,7 @@ Host 按第四步结束前清除无生产读取方格式的要求统一精简共
 新分发包在 6a800c2 的私有运行时验证通过：冻结锁安装、注册 DSH 模块可加载、pydantic 2.13.5 与 zstandard 0.25.0、仅 console.assets 资源、旧 runner/YAML bridge 不存在、sourceLeaks=[]。未调用模型或启动服务，日常运行时没有安装或升级。
 
 Host 在原生系列验证与私有分发验证完成后，留存 43 份具名原始结果、回合、请求、私有 patch、原生帧/会话记录、依赖安装日志和 READY 材料，逐份登记字节数与摘要；随后只整体回收创建时登记的 6 个 Host 探针根。首次 Worker 探针外层停止未落盘的事实不因后续成功或清理而改写。第一次材料脚本因旧台账缺少 owner 键在任何复制/删除前退出；限定到六个已登记 owner 后完成。没有通配符删除或屏蔽错误，4-D1、4-D2 和 Host 整合根继续保留。
+
+收尾静态复核发现 FastPreparation.native 的唯一读取只剩已不可达的旧 Router 分支；Host 删除该字段、旧 start_no_tool_structured/start_read_only_structured 基类入口和角色兜底，缺少已登记运行体时明确拒绝。命令与 decision 执行体仍按原入口；ReviewPreparation.native 仍供真实只读能力判定使用。共享资格检查复用 registered_read_only_check，不查已删 runner 文件。两份原生探针与公共协议 fixture 改为公共 start_review 接缝；各新构造调用只减去已无消费者的 native 参数。第一批 79 项中 1 error/1 failure 是 Host 测试导入遗漏及旧资格 fixture 继承已拒绝只读的 DSH 描述，修正为通用声明 fixture 后受影响 22 项通过（0.084 秒）；新调用点与真实假原生/Router 流程的 75 项通过（62.605 秒）。
+
+4-D1 首轮固定 32f16a8、artifact 65a2620f-625f-48b0-a691-3d09c8aa7a3e、累计补丁 a0d85e065a71e1387bf7d3351fed1aef5001e69face38693e047e7df1ca25bdd 的 7 条路径、摘要与 scope 已核对。审查发现其报告的公共缺口确实存在：目录 fixture 仍只用退役 Node 变量选择 DSH；公共 Worker 收集曾丢 sessionIdSource/nativeActivity，且未验证回合也会捕获 DSH 原生 session。Host 对照旧 DSH collect 的已验证回合规则，恢复这两个实际事实及失败回合不捕获的条件；sessionIdConflict 原本就缺席，旧 assertFalse(get(...)) 应继续保留而非造常量。新增真实假 ACP 运行后拒绝回合导入的见证通过（1 项，0.441 秒），确认原始 sessionId 存在仍不冒充捕获。目录 fixture 统一读 BUDDY_DSH_CLI，开发环境透传同名明确键；需要原 run 恢复断言与改用直接可执行命令后再验收，没有 Host 代改它的两个流程测试或夹具。

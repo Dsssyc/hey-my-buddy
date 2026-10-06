@@ -73,8 +73,9 @@ class RouterProbeTests(unittest.TestCase):
             handle.log_paths = context.log_paths()
             handle.process.returncode = 0 if status == "ok" else 1
             return handle
-        native.start_read_only_structured.side_effect = start
+        native.registered_start.side_effect = lambda _harness, context, request: start(context, request)
         with patch.object(probe, "adapter_for", return_value=native), \
+             patch.object(probe, "start_review", native.registered_start), \
              patch.object(probe, "start_network_control", return_value=(Mock(), {
                  'url': 'http://127.0.0.1:54321/', 'hostStatus': 200,
              })):
@@ -82,10 +83,7 @@ class RouterProbeTests(unittest.TestCase):
         return report, native, handle
 
     def start_guard(self, native, adapter):
-        module = run_seam(adapter)
-        if module is not None:
-            return patch.object(module, "run")
-        return patch.object(native, "start_read_only_structured")
+        return patch.object(probe, "start_review")
 
     def test_prepare_all_harnesses_never_start_any_process_or_network(self):
         for adapter in probe.ADAPTERS:
@@ -132,7 +130,7 @@ class RouterProbeTests(unittest.TestCase):
         for adapter in ("codex", "claude"):
             self.root = Path(self.temporary.name) / adapter
             report, native, handle = self.mock_execute(adapter=adapter)
-            native.start_read_only_structured.assert_called_once()
+            native.registered_start.assert_called_once()
             handle.wait.assert_called_once_with(70)
             handle.terminate.assert_not_called()
             self.assertEqual(report["status"], "unverified")
@@ -143,7 +141,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertEqual(report["checks"][name]["status"], "passed")
             self.assertIsNone(report["checks"]["budgetConsistent"]["evidence"]["bytesRead"])
             self.assertEqual(report["cost"]["maxNativeTurns"], 2 if adapter == "codex" else 1)
-            context, request = native.start_read_only_structured.call_args.args
+            _harness, context, request = native.registered_start.call_args.args
             self.assertIsNone(context.turn)
             self.assertIsNone(context.agent_credential)
             self.assertNotIn("BUDDY_AGENT_CREDENTIAL", context.environment)
@@ -174,7 +172,7 @@ class RouterProbeTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertGreaterEqual(handle.terminate.call_count, 2)
         native.cancel.assert_not_called()
-        native.start_read_only_structured.assert_called_once()
+        native.registered_start.assert_called_once()
         self.assertFalse(report["finalStopEvidence"]["ownedGroupShutdownConfirmed"])
 
     def test_finally_on_collection_error_stops_owned_handle(self):
@@ -182,13 +180,13 @@ class RouterProbeTests(unittest.TestCase):
             report, native, handle = self.mock_execute(stopped=False)
         self.assertEqual(report["status"], "failed")
         handle.terminate.assert_called_once_with(grace_seconds=3)
-        native.start_read_only_structured.assert_called_once()
+        native.registered_start.assert_called_once()
         self.assertTrue((self.root / "report.json").is_file())
 
     def test_start_failure_does_not_retry_or_scan_processes(self):
         report, native, handle = self.mock_execute(start_error=RuntimeError("do not disclose account"))
         self.assertEqual(report["status"], "failed")
-        native.start_read_only_structured.assert_called_once()
+        native.registered_start.assert_called_once()
         handle.terminate.assert_not_called()
         self.assertNotIn("do not disclose", (self.root / "report.json").read_text())
 

@@ -193,37 +193,10 @@ class Adapter:
     no_tool_structured = False
 
     def local_read_only_check(self) -> dict:
-        """Check the shipped mechanism without native calls or certificates.
+        """Confirm only the registered capability; native enforcement is separate."""
+        return registered_read_only_check(self)
 
-        Availability, account/quota and effective native policy are separate
-        facts checked by the blackboard and the existing execution controller.
-        """
-        sandbox = sys.platform in self.system_sandbox_platforms
-        result = {"eligible": False, "reasonCode": "readonly-not-implemented",
-                  "reason": "No implemented native read-only structured call",
-                  "systemSandbox": sandbox, "sameAttemptContinuation": self.read_only_structured_resume}
-        if not self.read_only_structured or type(self).start_read_only_structured is Adapter.start_read_only_structured:
-            return result
-        if self.system_sandbox_platforms and not sandbox:
-            return {**result, "reasonCode": "readonly-platform-unsupported",
-                    "reason": "The native read-only sandbox is unsupported on this platform"}
-        if not sandbox and (not self.read_only_tool_categories or
-                            set(self.read_only_tool_categories) - {"read", "search"}):
-            return {**result, "reasonCode": "readonly-tools-unrestricted",
-                    "reason": "A harness without a system sandbox must restrict tools to read and search"}
-        package = Path(__file__).resolve().parent
-        if not all(path.is_file() for path in (package.parent / "roles" / "structured_call.py",
-                                               package / self.name / "runner.py")):
-            return {**result, "reasonCode": "readonly-resource-missing", "reason": "The native read-only controller is missing"}
-        return {**result, "eligible": True, "reasonCode": None, "reason": None}
 
-    def start_no_tool_structured(self, context: ExecutionContext,
-                                 request: NoToolStructuredRequest) -> "ProcessHandle":
-        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} has no native no-tool structured call")
-
-    def start_read_only_structured(self, context: ExecutionContext,
-                                   request: ReadOnlyStructuredRequest) -> "ProcessHandle":
-        raise BoardError("UNSUPPORTED_ADAPTER", f"{self.name} has no native read-only structured call")
 
     def discover_models(self) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")

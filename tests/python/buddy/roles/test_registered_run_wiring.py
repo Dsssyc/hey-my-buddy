@@ -118,7 +118,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
             self.root / "attempt", {}, self.environment)
         request = NoToolStructuredRequest(str(self.cwd), "Choose", SCHEMA, 3)
-        preparation = FastPreparation("zcode", adapter("zcode"), request, context, self.cwd)
+        preparation = FastPreparation("zcode",  request, context, self.cwd)
         self.assertIs(preparation.run_module, run_seam("zcode"))
         with mock.patch.dict(RUN_SEAMS, {"zcode": object()}), \
                 mock.patch("subprocess.Popen", side_effect=AssertionError("spawn")) as spawn:
@@ -134,7 +134,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, 3,
                                           capture_evidence=capture_evidence)
-        handle = start_router_preparation(FastPreparation("zcode", adapter("zcode"), request, context, self.cwd))
+        handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(11))
         return context, handle, structured_call.collect(handle)
@@ -316,6 +316,26 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
                 self.assertNotIn("turn", refused.result)
                 self.assertNotIn("workspaceSeal", refused.result)
 
+
+
+class DshPublishedReceiptTests(unittest.TestCase):
+    def test_an_unvalidated_dsh_turn_does_not_publish_a_captured_session(self):
+        from buddy.harnesses.dsh.test_dsh_role_wiring import DshRoleCase
+        fixture = DshRoleCase()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        context = fixture.context()
+        # The real driver completes its native root, but the role rejects the
+        # turn binding during import. Raw root identity is not a captured turn.
+        with mock.patch("hey_my_buddy.buddy.roles.turn_io.read_turn", return_value=(None, "untrusted turn")):
+            _handle, outcome = fixture.execute(context)
+        self.assertEqual(outcome.status, "failed")
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertIsNotNone(outcome.result.get("sessionId"))
+        self.assertIsNone(outcome.result["nativeSession"]["sessionId"])
+        self.assertFalse(outcome.result["nativeSession"]["captured"])
+        self.assertEqual(outcome.result["nativeSession"]["sessionIdSource"], "none")
+        self.assertTrue(outcome.result["nativeActivity"]["sidecarWritten"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import shutil
 
 from hey_my_buddy.blackboard.service.daemon import Daemon, main
 from hey_my_buddy.blackboard.service.harness_health import HARNESSES
@@ -18,11 +17,7 @@ def service(daemon):
     with daemon.store.db.write() as db:
         for name in HARNESSES:
             executable = os.environ.get('BUDDY_' + name.upper() + '_CLI')
-            if name == 'dsh':
-                executable = os.environ.get('BUDDY_RUNNER_PATH')
-                command = [os.environ.get('BUDDY_NODE') or shutil.which('node') or 'node', executable or 'fixture-dsh']
-            else:
-                command = [executable or 'fixture-' + name]
+            command = [executable or 'fixture-' + name]
             record = {'adapter': name, 'status': 'ready', 'available': True, 'command': command,
                       'executable': executable, 'version': 'fixture', 'source': 'fixture'}
             db.execute("INSERT OR REPLACE INTO harness_health(adapter,status,record_json) VALUES(?,'ready',?)", (name, json.dumps(record)))

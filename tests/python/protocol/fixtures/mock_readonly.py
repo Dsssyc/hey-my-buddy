@@ -48,8 +48,8 @@ def install(testcase, *, path=None, **options):
         testcase.input_verify.reset_mock()
         return
     testcase._readonly_installed = True
-    testcase.readonly_start = testcase.enterContext(patch.object(
-        DshAdapter, "start_read_only_structured", autospec=True,
+    testcase.readonly_start = testcase.enterContext(patch(
+        "hey_my_buddy.buddy.roles.run_execution.start_review", autospec=True,
         side_effect=lambda _native, context, request: start(
             context, request, testcase._readonly_fixture, testcase._readonly_options),
     ))

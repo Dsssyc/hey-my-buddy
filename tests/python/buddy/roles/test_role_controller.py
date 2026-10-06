@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, CommandAdapter, DecisionAdapter, DshAdapter, register_run_seam, run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import (
     decode_run_request,
@@ -226,7 +226,9 @@ class WorkerSeamTests(unittest.TestCase):
 
     def test_worker_executor_selects_only_through_the_registry(self):
         self.assertIsInstance(controller.worker_executor("command"), CommandAdapter)
-        self.assertIsInstance(controller.worker_executor("dsh"), DshAdapter)
+        with self.assertRaises(BoardError) as caught:
+            controller.worker_executor("dsh")
+        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
         self.assertIsInstance(controller.worker_executor("decision"), DecisionAdapter)
 
     def test_a_registered_seam_never_falls_through_to_the_legacy_carrier(self):
@@ -236,8 +238,10 @@ class WorkerSeamTests(unittest.TestCase):
         self.assertIs(executor.module, run_seam("zcode"))
         self.assertEqual(executor.name, "zcode")
         self.assertFalse(hasattr(executor.description, "start"))
-        # Unregistered harnesses and command keep their legacy carrier.
-        self.assertIsInstance(controller.worker_executor("dsh"), DshAdapter)
+        # A missing harness run is refused; command retains its own executor.
+        with self.assertRaises(BoardError) as caught:
+            controller.worker_executor("dsh")
+        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
         self.assertIsInstance(controller.worker_executor("command"), CommandAdapter)
 
     def test_prepare_worker_run_reports_availability_and_prepare_refusals(self):
@@ -277,7 +281,8 @@ class WorkerSeamTests(unittest.TestCase):
 
 class RouterCallPointTests(unittest.TestCase):
     def setUp(self):
-        registrations = mock.patch.dict(RUN_SEAMS, {k: v for k, v in RUN_SEAMS.items() if k != "dsh"}, clear=True)
+        self.module = FakeHarnessRun()
+        registrations = mock.patch.dict(RUN_SEAMS, {"dsh": self.module})
         registrations.start()
         self.addCleanup(registrations.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-roles-router-",
@@ -290,21 +295,12 @@ class RouterCallPointTests(unittest.TestCase):
 
         name = "dsh"
         no_tool_structured = True
-
-        def __init__(self):
-            self.calls = []
+        read_only_structured = True
 
         def local_read_only_check(self):
             return {"eligible": True, "reasonCode": None, "reason": None,
                     "systemSandbox": False, "sameAttemptContinuation": False}
 
-        def start_no_tool_structured(self, context, request):
-            self.calls.append(("fast", context, request))
-            return "started-handle"
-
-        def start_read_only_structured(self, context, request):
-            self.calls.append(("review", context, request))
-            return "started-handle"
 
     def context(self, **kwargs):
         values = dict(task_id="task-router", attempt_id="attempt-router", generation=1,
@@ -324,20 +320,26 @@ class RouterCallPointTests(unittest.TestCase):
         return prepare_router_review(document, {}, native, context)
 
     def start(self, preparation):
-        with mock.patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=None):
-            return controller.start_router_preparation(preparation)
+        fast = isinstance(preparation, controller.FastPreparation)
+        path = "hey_my_buddy.buddy.roles.run_execution." + ("start_fast" if fast else "start_review")
+        with mock.patch(path, return_value="started-handle") as start, \
+                mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", side_effect=AssertionError("reselected")):
+            result = controller.start_router_preparation(preparation)
+        self.start_call = start.call_args.args
+        return result
 
     def test_fast_preparation_starts_the_selected_instance_without_re_resolution(self):
         native = self.Native()
         preparation = self.preparation("fast", native)
-        self.assertIs(preparation.native, native)
+        self.assertIs(preparation.run_module, self.module)
         self.assertIsNone(preparation.context.turn)
         self.assertIsNone(preparation.context.agent_credential)
         self.assertEqual(preparation.request.cwd, str(preparation.no_tool_cwd))
         self.assertEqual(preparation.request.timeout_seconds, 60)
         self.assertEqual(self.start(preparation), "started-handle")
-        mode, context, request = native.calls[0]
-        self.assertEqual(mode, "fast")
+        module, harness, context, request = self.start_call
+        self.assertIs(module, self.module)
+        self.assertEqual(harness, "dsh")
         self.assertIs(context, preparation.context)
         self.assertIs(request, preparation.request)
 
@@ -353,18 +355,27 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertEqual(len(digest), 64)
         self.assertTrue(router_input.verify(manifest, root, digest)["unchanged"])
         self.assertEqual(self.start(preparation), "started-handle")
-        mode, _context, request = native.calls[0]
-        self.assertEqual(mode, "review")
+        harness, _context, request = self.start_call
+        self.assertEqual(harness, "dsh")
         self.assertIs(request, preparation.request)
 
     def test_a_registered_seam_refuses_the_legacy_router_entry(self):
-        register_run_seam("dsh", FakeHarnessRun())
-        self.addCleanup(RUN_SEAMS.pop, "dsh")
         preparation = self.preparation("fast")
         with mock.patch("hey_my_buddy.buddy.roles.run_execution.start_fast", return_value="run-handle") as start:
             self.assertEqual(controller.start_router_preparation(preparation), "run-handle")
         start.assert_called_once_with(run_seam("dsh"), "dsh", preparation.context, preparation.request)
-        self.assertEqual(preparation.native.calls, [])
+        self.assertFalse(hasattr(controller.FastPreparation, "native"))
+        self.assertFalse(hasattr(Adapter, "start_no_tool_structured"))
+        self.assertFalse(hasattr(Adapter, "start_read_only_structured"))
+
+    def test_a_missing_registered_run_never_falls_back_to_an_old_entry(self):
+        with mock.patch.dict(RUN_SEAMS, {"dsh": None}):
+            preparation = self.preparation("fast")
+            with mock.patch("hey_my_buddy.buddy.roles.run_execution.start_fast") as start:
+                with self.assertRaises(BoardError) as caught:
+                    controller.start_router_preparation(preparation)
+                start.assert_not_called()
+        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
 
     def test_unknown_preparations_are_refused(self):
         class Stranger:

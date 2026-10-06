@@ -259,7 +259,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
             {"adapter": "dsh", **dsh_tests.SPEC,
              "cwd": str(fixture.cwd), "timeoutSeconds": 3}, evidence, {}, fixture.environment)
         request = NoToolStructuredRequest(str(fixture.cwd), "Choose a profile", dsh_tests.SCHEMA, 3)
-        handle = start_router_preparation(FastPreparation("dsh", DshAdapter(), request, context, fixture.cwd))
+        handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertEqual(handle.wait(8), 0)
         outcome = read_only.collect(handle)
@@ -302,7 +302,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     evidence, {}, environment)
                 native = adapter()
                 request = NoToolStructuredRequest(str(fixture.cwd), "Pick a profile", codex_fast_tests.SCHEMA, 3)
-                handle = start_router_preparation(FastPreparation(native.name, native, request, context, fixture.cwd))
+                handle = start_router_preparation(FastPreparation(native.name,  request, context, fixture.cwd))
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
                 self.assertEqual(handle.wait(8), 0)
                 from hey_my_buddy.buddy.roles.structured_call import collect

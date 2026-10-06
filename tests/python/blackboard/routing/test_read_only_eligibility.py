@@ -57,11 +57,10 @@ class LocalEligibilityTests(unittest.TestCase):
             self.assertEqual(CodexAdapter().local_read_only_check()['reasonCode'], 'readonly-resource-missing')
 
     def test_non_sandbox_mechanism_cannot_allow_commands(self):
-        class Restricted(DshAdapter):
+        class Restricted(Adapter):
+            name = "dsh"
             read_only_structured = True
             read_only_tool_categories = ('read', 'search')
-            def start_read_only_structured(self, context, request):
-                raise AssertionError('eligibility must not execute the handler')
         item = Restricted()
         self.assertTrue(item.local_read_only_check()['eligible'])
         with patch.object(item, 'read_only_tool_categories', ('read', 'execute')):

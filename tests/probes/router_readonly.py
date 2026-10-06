@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.buddy.roles.run_execution import start_review
 from hey_my_buddy.blackboard.routing.router import budget
 
 ADAPTERS = ("codex", "claude", "dsh", "zcode")
@@ -309,7 +310,7 @@ def run(args):
             report.update(status="refused", reason="read_only_structured=false；不启动任何子进程。")
         elif args.execute:
             started = time.monotonic()
-            handle = adapter.start_read_only_structured(context, request)
+            handle = start_review(args.adapter, context, request)
             report.update(started=True, modelCalls=None)
             # 不在脚本层重试；格式纠正只由现有 Codex runner 在同 attempt 内完成。
             if handle.wait(limits["timeoutSeconds"] + 10) is None:

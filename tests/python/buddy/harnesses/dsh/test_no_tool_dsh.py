@@ -81,7 +81,7 @@ class FastRegisteredSeamTests(DshNoToolTests):
         request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA,
                                           timeout_seconds=timeout, capture_evidence=capture)
         handle = start_router_preparation(
-            FastPreparation("dsh", adapter("dsh"), request, context, self.cwd))
+            FastPreparation("dsh",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(timeout + 10))
         return context, handle, structured_call.collect(handle)

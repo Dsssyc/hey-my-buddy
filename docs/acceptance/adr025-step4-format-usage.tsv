@@ -17,3 +17,4 @@ RunResult	root_identities	removed	没有业务读取；原生语义在现有签�
 ContinuationFacts (RunResult.continuation)	native_session_ref/binding_ref/basis	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
 StopLayer (RunResult.stop_evidence.native)	started/leader_exited/exit_code/observation_basis	removed	没有业务读取；原生语义在现有签收/工具/观察器/停止路径保留，删除格式冗余
 InterruptEvidence (stop_evidence.interrupt)	requested/basis	kept	codex.native_run.native_evidence 读取 requested/basis，按原生中断事实投影
+FastPreparation	native	removed	四个 harness 登记后只剩不可达旧分支读取；启动只消费冻结 run_module，ReviewPreparation.native 的能力读取仍保留

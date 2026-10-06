@@ -496,7 +496,7 @@ class FakeAppServerTests(unittest.TestCase):
              "timeoutSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, timeout_seconds=timeout)
-        handle = start_router_preparation(FastPreparation("zcode", ZcodeAdapter(), request, context, self.cwd))
+        handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         if cancel:
             # Cancel an active native turn, not a controller still importing.

@@ -37,7 +37,7 @@ def prepare_router_fast(document: dict, profile: dict, native: Adapter,
     request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60,
                                       capture_evidence=document.get("captureEvidence") is True)
     child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
-    return role_seam.FastPreparation(harness=native.name, native=native, request=request, context=child_context,
+    return role_seam.FastPreparation(harness=native.name, request=request, context=child_context,
                                      no_tool_cwd=root)
 
 
