@@ -37,7 +37,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_JOURNAL_BYTES,
     sign_receipt,
 )
-from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
+from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     COOPERATIVE_INQUIRY_NOTE,
     NativeError,
@@ -563,7 +563,7 @@ class JournalBarrierTests(unittest.TestCase):
         fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("BUDDY_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.zcode.mcp", "--config", str(config_path)],
+        process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(config_path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=environment)
 
         def stop():

@@ -17,7 +17,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_TOOL_REFUSAL_PREFIX_BYTES,
     sign_receipt,
 )
-from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
+from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeConnection,
     NativeError,

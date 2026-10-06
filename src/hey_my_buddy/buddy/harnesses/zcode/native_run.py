@@ -270,7 +270,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     bridge_path = root / "finish-bridge.json"
     private_json(bridge_path, bridge, exclusive=True)
     mcp = [{"name": server_name, "command": sys.executable,
-            "args": ["-m", "hey_my_buddy.buddy.harnesses.zcode.mcp", "--config", str(bridge_path)],
+            "args": ["-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(bridge_path)],
             "env": [{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}] if os.environ.get("PYTHONPATH") else [],
             "isolation": "session", "protocolVersion": "legacy"}]
     input_id = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()

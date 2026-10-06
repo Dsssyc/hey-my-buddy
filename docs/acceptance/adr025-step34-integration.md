@@ -17,3 +17,11 @@ Host 将包含第二步验收的 `socu/buddy-core` 合入实施分支：用户�
 Host 单独运行 inquiry transport 模块，8 项通过且专用临时目录零条目。首次 Host 探针经 uv 启动，测试通过，但探针把 uv 自建锁文件误计为 fixture 残留；随后用同一个 uv 管理的锁定解释器直接执行，隔离了启动器锁文件，确认模块本身收尾完整。该修正仅在 Host 一次性探针，没有改微任务代码，也没有重跑变异矩阵。
 
 整合后的全量测试编号为 2,631，原有 2,628 个全部保留，新增 3 个，模块仍为 171 个，加载错误为零；逐个变化见 [编号表](adr025-step34-preparation-test-ids.tsv)，原始集合与计数在 `tmp/`。默认并行完整检查 `uv run --frozen python -m hey_my_buddy.cli.checks` 退出码 0：Python 2,631 项（跳过 1 项）／171 个模块全跑，Node 110 项，用时 441.197 秒，没有传 --jobs。准备阶段真实模型冒烟只有 3-P2 的 ZCode 1 次；微任务本身不另启动模型探针。该次完整检查同时作为准备批次整合检查，不再重复。
+
+3-P1 整合提交 `5d31114`，黑板核对的整合编号 `int-8c06d5a2-a946-4c51-a808-76bff5da95af` 为 verified（四条产物路径 matching，differing/missing/unrecorded 均为空），随后 accepted。回收计划请求曾返回 REVISION_CONFLICT，重新读取已存在的有效计划后按该 planId 应用，结果 removed=true，检出实际消失；没有绕过黑板手工删检出。Host 留存聚焦、变异与编号证据后，整体删除创建时登记的 3-P1 任务根，以及本次冒烟的私有目录和唯一短 socket 目录；删除命令没有通配符，没有屏蔽报错。第一次 Host 清理脚本在删除前因台账首条使用 purpose、其余使用 owner 而报 KeyError，未删除任何对象；修正只核对已登记的确切路径集合后执行完成，原始操作输出保留。Host 总任务根仍供后续整合使用。
+
+## 公共接线与并行原生主体
+
+3-A1 Codex run `19e61256-94a4-418d-975d-bf08695b7d04`、3-B1 Claude Code run `c7af488f-bc57-41e2-a7ec-71c62f34b524`、4-B1 DSH run `eebeeba8-d479-4cb3-a4e2-e4c531845e2c` 同以 `5d31114` 为基线，各自隔离检出、首次提交不指定 buddy。任务书逐项限定本 harness 包／测试及新记录，明确公共值、角色、注册表、共享测试与依赖归 Host，Worker 不切换分支且不删除。三项只是各线第一个原生主体微任务，尚不表示整条线通过。
+
+Host 为 DSH 共用既有完成服务，将 `buddy/harnesses/zcode/mcp.py` 用 git mv 搬到 `buddy/roles/session_mcp.py`；只改相对导入、模块说明、ZCode 的启动模块字符串和两份既有测试的导入／命令。执行体 AST 去掉导入与模块说明后完全相等，没有复制 MCP 载体或完成业务规则。没有新增库或另写协议实现，复用已存在的承载；旧路径不留兼容入口。聚焦 `test_zcode_protocol` 与 `test_zcode_inquiry` 共 88 项通过（10.882 秒），含真实 Python stdio MCP 进程；测试编号无变化，没有原生模型调用。此处属于 Host 公共文件整合，随首批原生主体整合后的完整检查一起覆盖，不单独再跑整步检查。
