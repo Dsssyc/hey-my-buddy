@@ -393,3 +393,13 @@ ZCode 原生驱动只保留协议完整性、身份关联和工具/消息事实�
 现有 blackboard/tasks/inquiry.py 的 bridge_request 机械移到 protocol/inquiry_transport.py，两侧共用同一份 socket client；ZCode 不再留第二份 bridge_ask 协议。保留原来的帧大小、id、超时、具体 reason/code 与 TERMINAL_BRIDGE_ERRORS 行为。黑板现有 message_post/message_update、等待结束条件与 store 事务不重写；新 ZCode 活运行通过角色及注册模块接缝取得 LiveChannel，泛用消费者不导入具体 harness。终态只读持久证据，Worker 转报继续按 attempt 绑定且只转发更新，不增加模型回合、不延长原生截止时间。
 
 聚焦验证贯穿真实 Python 桥、黑板问询函数和 Worker 转报函数，保留原测试并附变化编号与未变集合证明；用前后公开字段对照及迁移防护的少量故障注入验证答案来源、具体拒绝、身份与活动去重。微任务不跑完整检查、安装版 harness 或模型；整合后一次完整检查覆盖整步。Worker 只使用 Host 创建并记录的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指其 t/，材料放 m/，不手动删除任何对象；普通 fixture 与检查运行器自己的收尾照常，Host 验收后按确切根回收。
+
+### 2-D 的生产用途与删减边界
+
+2-C2 已整合为 `d4f3eaa`，一次真实 ZCode 无工具运行也已通过新格式（见第二步原生冒烟记录）。2-D 只核对和收紧本步新增内部格式，不再增加角色能力或另造消费点。逐字段、逐类区分：实际执行/判定读取；有非占位原生来源并经 `run_controller → runner.stdout → run_execution._artifacts → 黑板产物校验与列表` 对外交付的事实；仅测试、编解码自循环或恒定占位。第二类明确标为事实产物用途，不能写成已有业务判断；单凭 model_dump/to_payload 不算使用方。没有实际用途的字段和类删除，不为后续 harness、提醒收尾或会话内容预留。
+
+已由当前源码确定的删除候选是：未被运行模块读取的 network/frozen_account 请求值及相应类、预算里只有 timeout_seconds 之外的未消费项、续接请求四个未填关联字段、SessionService 除实际工具名以外的元数据；结果中的 quota/observed 恒定空值、model-start 事件序号、checked 值的空 native_identity、value.errors、拒绝事件的空 request_id/native_identity、unknown.truncated、策略 reported/limitations 与恒定未知 network、续接 checkpoint、恒定未知 controller 停止层与 interrupt.acknowledged、没有用途的 evidence retained。实现前按最终源再复核；实际已有非空来源或消费者的候选撤出并列明依据，不以一轮样本恰好为空作为删除理由。旧公开结果里的 observed/quota 等 None 键保持原行为，已有预算、账户环境、网络策略及证据验证不借格式删减改变。
+
+Live 删除未实现的 FinishNoticePayload/finish-notice、finish_notice/session_content 能力位与 ReservedEvents/events；删掉只有测试调用的旧 journal list 形状及 handle_live_channel 包装入口，测试改走实际生产使用的同一接口。现有分页、questionId 关联、答案来源、journal 可用性/拒绝与完整身份仍有生产消费者，不能删。所有新增类型、帮助函数和导出也一并盘点，通用验证继续交给 Pydantic；保留的手写逻辑须是原生投影、跨字段约束或共享三件 JSON 机制确实所需。
+
+2-D 在一个独占 worktree 串行处理公共值、组装方和受影响测试，Host 整合；任何超出这些新格式及机械构造适配的行为变化先报告。微任务只跑受影响聚焦检查，保住 2-P 的普通严格类型与解析前整帧上限见证；只对被移动或重写的防护做小量配对故障，不复跑旧矩阵或原生模型。给出全部测试编号的集合对账，入库只列变更/删除/新增。Host 收齐后跑一次完整检查，完成本步记录并停等外部验收。
