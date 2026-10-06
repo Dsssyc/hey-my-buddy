@@ -197,6 +197,23 @@ class RunCallPointTests(unittest.TestCase):
         result = self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None, cancelled=lambda: True)
         self.assertEqual(result.end.status, "cancelled")
 
+    def test_explicit_native_controls_require_the_modules_support(self):
+        for changes, expected in (
+            ({"networkAllowedDomains": []}, "network_allowed_domains"),
+            ({"additionalDeniedTools": ["mcp__*"]}, "additional_denied_tools"),
+        ):
+            with self.subTest(control=expected):
+                self.request = decode_run_request(run_request(self.root).to_payload() | changes)
+                module = FakeHarnessRun()
+                with self.assertRaises(BoardError) as caught:
+                    self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)
+                self.assertEqual(caught.exception.code, "ROLE_RUN_UNSUPPORTED_CONTROL")
+                self.assertEqual(caught.exception.details["controls"], [expected])
+                self.assertEqual(module.requests, [])
+                module.supported_request_controls = (expected,)
+                self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)
+                self.assertIs(module.requests[0], self.request)
+
 
 class WorkerSeamTests(unittest.TestCase):
     def setUp(self):

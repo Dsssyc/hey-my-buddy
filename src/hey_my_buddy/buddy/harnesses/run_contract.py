@@ -190,6 +190,11 @@ class RunRequest(InternalModel):
     private_state: PrivateStatePaths
     input_text: NonEmptyInputText
     tool_scope: ToolScope
+    #: None preserves the native default; () explicitly permits no domains.
+    #: Kept separate from file-tool scope because Claude's two existing read
+    #: callers have different network and session-wide tool restrictions.
+    network_allowed_domains: Optional[JsonTuple(Text(256), max_items=64)] = None
+    additional_denied_tools: JsonTuple(Text(256), max_items=64) = ()
     output_schema: FrozenJsonAt(MAX_SCHEMA_BYTES)
     budget: RunBudget
     continuation: Optional[RunContinuation] = None

@@ -196,4 +196,15 @@ def run_harness(
         raise BoardError("ROLE_RUN_UNREGISTERED",
                          f"the run of {request.harness} must go through its registered run seam",
                          harness=request.harness)
+    requested_controls = {
+        name for name, requested in (
+            ("network_allowed_domains", request.network_allowed_domains is not None),
+            ("additional_denied_tools", bool(request.additional_denied_tools)),
+        ) if requested
+    }
+    unsupported = requested_controls - set(getattr(module, "supported_request_controls", ()))
+    if unsupported:
+        raise BoardError("ROLE_RUN_UNSUPPORTED_CONTROL",
+                         "The registered run does not support the requested native controls",
+                         harness=request.harness, controls=sorted(unsupported))
     return module.run(request, observer=observer, services=services, cancelled=cancelled)

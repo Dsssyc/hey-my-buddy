@@ -109,6 +109,21 @@ def full_result() -> rc.RunResult:
 
 
 class CodecRoundtripTests(unittest.TestCase):
+    def test_native_default_and_explicit_restrictions_stay_distinct_on_the_wire(self):
+        request = full_request(Path("/private/tmp"))
+        self.assertIsNone(rc.decode_run_request(rc.encode_run_request(request)).network_allowed_domains)
+        restricted = rc.decode_run_request(request.to_payload() | {
+            "networkAllowedDomains": [], "additionalDeniedTools": ["mcp__*", "Agent"],
+        })
+        again = rc.decode_run_request(rc.encode_run_request(restricted))
+        self.assertEqual(again.network_allowed_domains, ())
+        self.assertEqual(again.additional_denied_tools, ("mcp__*", "Agent"))
+        for fields in ({"networkAllowedDomains": [False]},
+                       {"additionalDeniedTools": [1]},
+                       {"additionalDeniedTools": "Agent"}):
+            with self.subTest(fields=fields), self.assertRaises(BoardError):
+                rc.decode_run_request(request.to_payload() | fields)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-run-contract-")
         self.addCleanup(self.temporary.cleanup)
