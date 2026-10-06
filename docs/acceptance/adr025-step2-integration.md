@@ -107,3 +107,9 @@ Host 仅做一次限定 Codex 的 `adapters {refresh:true, adapter:codex}` 无�
 Worker 的 17 项聚焦验证、两组拒绝源码红测及六项配对绿测已核对。Host 在第二份独立固定副本实跑 `buddy.roles.test_registered_run_wiring` 的 14 项，全部通过，0 failure/error/skip，耗时 5.925 秒；原始结果为本步 `tmp/` 的 `2c1-host-correction-results.json` 与日志。此前 17 项 socket 补验涉及的实现未因本轮修正改变，未重复整批。全部使用 Python fixture，没有安装版原生程序或模型调用。完整编号为 169 模块、2,577 个，原 2,571 个全部保留，新增 6 个；相对 2-B 的 2,562 个累计新增 15 个，无删除或改名。
 
 本份固定交付通过内部审查，按累计补丁原样整合；Host 没有代改生产代码、测试或 Worker 记录，只追加本整合登记与审查证据。原 buddy、替代 buddy 和路由编号沿用前文的用户授权记录。黑板最终 acknowledge 与任务目录、工作区回收仍在整步完整检查后办理；2-C2 实时生产接线和 2-D 删减、整步验证继续进行。本内部结论不替代第二步的 Claude Code Host 验收。
+
+## 2-C2 开工与新格式原生冒烟
+
+2-C2 以 `ace3e1d` 为基线，通过路由首次提交 run `39a3e7e6-6098-43bb-b7bb-54ec9ffab846`，未指定 buddy。路由 `dec-3b28c670-af57-43a7-a54c-dd2fd9336db2` 选择 `zcode/zai-api/GLM-5.3-Flash/max`，已出现实际原生活动；不是限流后的 Host 配置替换。独占目录 `/private/tmp/a252c2-jy5bpl7e` 已创建登记，公共文件由该微任务串行持有。
+
+Host 同时完成一次计划内的新格式真实冒烟，基线为 `ace3e1d`，harness 为已安装 ZCode 0.16.9、模型为上述已运行的 Flash 配置。1 次模型调用成功，无工具、无纠正，两层停止确认；真实 RunRequest/RunResult 已落盘并通过完整身份与结构核对，详见 `adr025-step2-native-smoke.md`。2-C2 的实时接线不在这次原生证明范围内。第二步完整检查仍待各交付整合及未使用格式删减后执行。
