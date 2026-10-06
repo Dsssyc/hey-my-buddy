@@ -1,15 +1,19 @@
 """The one native Claude Code run: a frozen request in, one factual result out.
 
-ADR-025 step 3-B1. This module is the single native execution body of the
-Claude Code harness: the policy gates, the isolated settings, the owned
-native process, the initialize handshake with the catalog and account check,
-the user-message boundary, the send/wait/drain settlement and the two-layer
-stop evidence happen exactly once here, driven only by the frozen
-:class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`. What differed
-between the governed Worker turn and the read-only structured call is
-expressed by the request (tool scope, output schema) and by the role
+ADR-025 step 3-B1, plus the 3-C StructuredOutput correction. This module is the
+single native execution body of the Claude Code harness: the policy gates, the
+isolated settings, the owned native process, the initialize handshake with the
+catalog and account check, the user-message boundary, the send/wait/drain
+settlement and the two-layer stop evidence happen exactly once here, driven
+only by the frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`.
+What differed between the governed Worker turn and the read-only structured
+call is expressed by the request (tool scope, output schema) and by the role
 observer's feedback, never by a second native path; both carriers share the
-same send/wait/drain primitive.
+same send/wait/drain primitive. The CLI's ``--json-schema`` value carrier — the
+built-in ``StructuredOutput`` tool — is identified by its native facts alone
+(this run's schema command line, the confirmed root, the exact built-in name,
+the call id and the final structured value it delivered) and travels as
+completion evidence, never as an ordinary tool call.
 
 The driver owns protocol integrity only: the preallocated session identity,
 the message boundary, the explicit terminal result criteria, background-task
@@ -183,6 +187,9 @@ class _RunState:
     interrupt_requested: bool = False
     token_usage: dict | None = None
     last_assistant_message: dict | None = None
+    #: The frozen delivery verification, settled once before the role's settled
+    #: facts so the count the role acts on and the package agree (3-C).
+    verified_delivery: tuple = ()
 
 
 def _flag_value(args: list[str], flag: str) -> str | None:
@@ -343,12 +350,14 @@ class _TurnCollector:
     """
 
     def __init__(self, request: RunRequest, sidecar: ActivitySidecar,
-                 observer: Callable[[Mapping[str, Any]], RunFeedback]):
+                 observer: Callable[[Mapping[str, Any]], RunFeedback],
+                 native_schema_delivery: bool = False):
         self._sidecar = sidecar
         self._observer = observer
         self.tools = ReadOnlyToolEvidence({"adapter": "claude", "taskId": request.identity.task_id,
                                            "attemptId": request.identity.attempt_id,
-                                           "generation": request.identity.generation})
+                                           "generation": request.identity.generation},
+                                          native_schema_delivery=native_schema_delivery)
         self.evidence: TurnEvidence | None = None
         self.denied: list[dict] = []
         self.unsupported_requests = 0
@@ -680,13 +689,22 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     session_confirmed = evidence is not None and evidence.init_observed
     native_identity = _identity_or_none({"session_id": session_id}) if session_confirmed and session_id else None
     stream_ended = state.drained is True
+    # The delivery identification froze at settlement, before the role's
+    # settled facts: this run's schema command line armed the collector, the
+    # handshake-confirmed root, the terminal result and the final structured
+    # value it carried proved the call. A turn that never settled counts every
+    # candidate in its package; the frozen tuple is the one classification the
+    # role and the package share.
+    verified_delivery = state.verified_delivery
     tool_package = None
     if spawn is not None and collector is not None:
         # The stream's own observed end is a transport fact, reported exactly
         # as observed: it is never downgraded by the business verdict nor by
-        # the process-group stop, which travel in their own fields.
+        # the process-group stop, which travel in their own fields. The one
+        # exclusion is the verified built-in delivery call — the value carrier,
+        # never an ordinary task tool.
         tool_package = _usable(_validated_tool_evidence, collector.tools.finish(
-            stream_complete=stream_ended))
+            stream_complete=stream_ended, exclude_calls=verified_delivery))
     root_identities: tuple[NativeIdentity, ...] = ()
     if tool_package is not None:
         for root in tool_package.get("nativeIdentity") or []:
@@ -701,10 +719,14 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if state.terminal_ok and native_result is not None:
         # The delivery facts report what the transport and the terminal checks
         # each observed on their own: the stream's end is the drain's fact,
-        # never back-inferred from the process-group stop.
+        # never back-inferred from the process-group stop. The call id names
+        # the built-in delivery call the final value proved; an unverified
+        # turn keeps it null and its call counted in the tool facts.
         completion = CompletionEvidence(
             mechanism="native-schema", stream_end=stream_ended,
-            native_identity=native_identity, event_order=evidence.event_seq if evidence else None,
+            native_identity=native_identity,
+            call_id=verified_delivery[-1][1] if verified_delivery else None,
+            event_order=evidence.event_seq if evidence else None,
             native_outcome="success")
     checked = CheckedConfiguration()
     checks: tuple[str, ...] = ()
@@ -855,7 +877,11 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             ActivitySidecar(preparation.invocation_root, task_id=request.identity.task_id,
                             attempt_id=request.identity.attempt_id,
                             generation=request.identity.generation),
-            observer)
+            observer,
+            # The delivery identification is armed by this run's own command
+            # line carrying the native schema, never by the caller's role or
+            # the tool scope: a run without the flag exempts nothing.
+            native_schema_delivery="--json-schema" in preparation.args)
         spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
                               environment=preparation.environment,
                               invocation_root=preparation.invocation_root, deadline=preparation.deadline,
@@ -868,6 +894,15 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         native_result = _check_terminal(collector.evidence, preparation.session_id)
         state.terminal_ok = True
         state.status = "ok"
+        # The delivery verification freezes here, before the settled facts
+        # reach the role: candidates that did not prove themselves against the
+        # final structured value return to the count now, so a budget stop at
+        # settlement sees exactly the classification the finished package will
+        # publish. Failure paths never settle, and their packages count every
+        # candidate; the settled callback is the one place the role's last
+        # count and the package must not diverge.
+        state.verified_delivery = collector.tools.settle_delivery(
+            native_result.get("structured_output"), {"sessionId": preparation.session_id})
         collector.settled_notify(native_result)
     except _ObserverInterrupt:
         state.status = "cancelled"

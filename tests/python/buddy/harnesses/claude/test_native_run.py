@@ -34,6 +34,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.harnesses.registry import run_seam
 from hey_my_buddy.buddy.roles.worker_services import OUTCOME_SCHEMA as WORKER_SCHEMA
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol import tool_evidence
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
@@ -603,6 +604,210 @@ class DiscoveryTests(NativeRunCase):
         with self.assertRaises(native_run.ClaudeUnavailable):
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d3",
                           native_root=self.base / "d3n", timeout_seconds=25, cancelled=lambda: False)
+
+
+class StructuredDeliveryTests(NativeRunCase):
+    """The CLI's built-in StructuredOutput delivery is completion evidence, not a tool call.
+
+    Every case drives the real run seam with the stream fixture's scripted
+    native frames; the identification is the projection's own native facts —
+    this run's schema command line, the confirmed root, the exact built-in
+    name, the call id and the final structured value it delivered.
+    """
+
+    def delivered(self):
+        return {"profileId": "legal", "reason": "Read-only stream fixture", "evidence": []}
+
+    def review_request(self, **kwargs):
+        return self.request(scope="read", schema=READ_SCHEMA, network=(),
+                            denied=ReadCarrierTests.REVIEW_DENIALS, **kwargs)
+
+    def package_of(self, result):
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        return result.tool_evidence.value
+
+    def test_a_verified_delivery_is_completion_evidence_and_never_a_tool_call(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-clean")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        # The real Read call counts and settles; the delivery and its
+        # tool_result pairing are gone from the ordinary tool facts.
+        self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
+                         [("Read", "start"), ("Read", "end")])
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
+        self.assertTrue(package["streamComplete"])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        # The delivery itself travels as completion evidence with its call id.
+        self.assertEqual(result.completion_evidence.mechanism, "native-schema")
+        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        self.assertTrue(result.completion_evidence.stream_end)
+        self.assertEqual(result.value.parsed.value, self.delivered())
+
+    def test_a_zero_tool_budget_accepts_a_structured_review(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-only")
+        seen: list[dict] = []
+
+        def budget_observer(facts):
+            seen.append(dict(facts))
+            if int(facts.get("toolCalls") or 0) > 0:
+                return RunFeedback(action="stop")
+            return FEEDBACK_CONTINUE
+        result = self.execute(self.review_request(), observer=budget_observer)
+        package = self.package_of(result)
+        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        # The role's cumulative count never charged the value carrier.
+        self.assertTrue(all(facts["toolCalls"] == 0 for facts in seen))
+        self.assertTrue(any(facts["settled"] for facts in seen))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+
+    def test_a_zero_budget_unqualified_delivery_stops_the_run_at_settlement(self):
+        # The unverified candidate waits for its association mid-run, but the
+        # settlement that precedes the role's settled facts releases it: the
+        # role's budget stop fires on the same count the package publishes.
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-unverified")
+        seen: list[dict] = []
+
+        def budget_observer(facts):
+            seen.append(dict(facts))
+            if int(facts.get("toolCalls") or 0) > 0:
+                return RunFeedback(action="stop")
+            return FEEDBACK_CONTINUE
+        result = self.execute(self.review_request(), observer=budget_observer)
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertEqual(result.end.reason_code, "observer-interrupt")
+        self.assertTrue(any(facts["settled"] and facts["toolCalls"] == 1 for facts in seen))
+        package = result.tool_evidence.value
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual(len(package["events"]), 2)
+        self.assertIsNone(result.completion_evidence.call_id)
+
+    def shared_review_observer(self, budget: int):
+        try:
+            from hey_my_buddy.buddy.roles.run_observers import ReviewObserver
+        except ImportError:
+            self.skipTest("the shared ReviewObserver is not in this baseline; its "
+                          "authoritative run is the 3-C validation copy")
+        return ReviewObserver(budget, READ_SCHEMA, "review the frozen packet", can_correct=False)
+
+    def test_the_shared_review_observer_stops_an_unqualified_zero_budget_delivery(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-unverified")
+        review = self.shared_review_observer(0)
+        result = self.execute(self.review_request(), observer=review.observer)
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertEqual(result.end.reason_code, "observer-interrupt")
+        self.assertEqual(review.stop_reason, "readonly-budget-exhausted")
+        package = result.tool_evidence.value
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_the_shared_review_observer_accepts_a_legal_zero_budget_delivery(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-only")
+        review = self.shared_review_observer(0)
+        result = self.execute(self.review_request(), observer=review.observer)
+        package = self.package_of(result)
+        self.assertIsNone(review.stop_reason)
+        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+
+    def test_a_conflicting_full_input_on_one_call_refuses_the_exemption(self):
+        for case in ("structured-conflict-ab", "structured-conflict-ba"):
+            with self.subTest(case=case):
+                self.use_fixture(STREAM_FIXTURE)
+                self.fixture_case(case)
+                result = self.execute(self.review_request())
+                package = self.package_of(result)
+                self.assertEqual(package["toolCalls"], 1)
+                self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
+                                 [("StructuredOutput", "start"), ("StructuredOutput", "end")])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                                 tool_evidence.TOOLS_FORBIDDEN)
+                self.assertIsNone(result.completion_evidence.call_id)
+
+    def test_an_evicted_first_input_still_refuses_a_conflicting_second(self):
+        # Nine delivery uses exhaust the input retention bound; the first
+        # call's later, different complete input matches the final value, but
+        # the conflict its first input recorded survives the eviction: all
+        # nine distinct calls stay counted and none is exempted.
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-evict-conflict")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        self.assertEqual(package["toolCalls"], 9)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        self.assertIsNone(result.completion_evidence.call_id)
+
+    def test_an_evicted_input_reproves_the_value_when_the_same_input_returns(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-evict-same")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        # The consistent repeat re-proves c1's delivery after the bound evicted
+        # its first full text; the eight mismatched calls stay counted.
+        self.assertEqual(package["toolCalls"], 8)
+        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_duplicate_stream_and_assistant_projections_exclude_one_call(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-dupes")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
+                         (0, 0, []))
+        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+
+    def test_a_bare_name_without_the_value_association_stays_an_ordinary_tool_call(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-unverified")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        # The turn still completed; the call simply proves no delivery.
+        self.assertEqual(result.completion_evidence.call_id, None)
+
+    def test_a_mounted_same_name_mcp_tool_is_never_exempted(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-mcp")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual([event["toolName"] for event in package["events"]],
+                         ["mcp__server__StructuredOutput"] * 2)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        self.assertEqual(result.completion_evidence.call_id, None)
+
+    def test_a_subagent_substream_same_name_call_keeps_its_own_facts(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("structured-subagent")
+        result = self.execute(self.review_request())
+        package = self.package_of(result)
+        # The root's delivery is excluded; the subagent's look-alike call stays
+        # a fact under its parent-call identity and fails the root check.
+        self.assertEqual(package["toolCalls"], 1)
+        subagent_events = [event for event in package["events"]
+                           if event["toolName"] == "StructuredOutput"]
+        self.assertEqual(len(subagent_events), 2)
+        self.assertTrue(all("callId" in event["nativeIdentity"] for event in subagent_events))
+        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        # The look-alike call settles as a disallowed other call; its foreign
+        # identity is kept in the facts on top of that.
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
 
 
 if __name__ == "__main__":

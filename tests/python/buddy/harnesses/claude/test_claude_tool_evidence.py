@@ -74,6 +74,28 @@ def project(frames, stream_complete=True):
     return collector, collector.finish(stream_complete)
 
 
+def structured_use(call_id, value, session="session-root", parent=None):
+    block = {"type": "tool_use", "id": call_id, "name": "StructuredOutput", "input": value}
+    fields = {}
+    if session is not None:
+        fields["session_id"] = session
+    if parent is not None:
+        fields["parent_tool_use_id"] = parent
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "delivering"}, block]}, **fields}
+
+
+def armed(frames):
+    """An armed collector over the frames: this run's schema command line is on."""
+    collector = ReadOnlyToolEvidence(dict(BINDING), native_schema_delivery=True)
+    for frame in frames:
+        collector.observe_frame(frame)
+    return collector
+
+
+DELIVERED = {"profileId": "legal", "reason": "the delivered value", "evidence": ["one"]}
+
+
 def settled_stream():
     return [init_frame(),
             assistant_tool("Read", "toolu_1"), tool_result("toolu_1"),
@@ -225,6 +247,211 @@ class ProjectionTests(unittest.TestCase):
         foreign_roots = ReadOnlyToolEvidence(dict(BINDING))
         foreign_roots.observe_frame(assistant_tool("Read", "toolu_1", session="session-root"))
         self.assertEqual(foreign_roots.finish(True)["nativeIdentity"], [])
+
+
+class StructuredDeliveryProjectionTests(unittest.TestCase):
+    """The built-in StructuredOutput delivery identified by its native facts only."""
+
+    def delivery_key(self, call_id="toolu_so_1", identity=None):
+        from hey_my_buddy.json_codec import canonical_json
+        return (canonical_json(identity or ROOT), call_id)
+
+    def test_the_root_delivery_is_verified_and_excluded_from_the_package(self):
+        collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED),
+                           tool_result("toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), (self.delivery_key(),))
+        # The one settlement is frozen; a second call returns the same answer.
+        self.assertEqual(collector.settle_delivery({"profileId": "other"}, ROOT),
+                         (self.delivery_key(),))
+        self.assertEqual(collector.tool_calls, 0)
+        package = collector.finish(True, exclude_calls=collector.settle_delivery(DELIVERED, ROOT))
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
+                         (0, 0, []))
+        self.assertTrue(package["streamComplete"])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+
+    def test_the_live_budget_count_holds_the_candidate_before_verification(self):
+        armed_collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED)])
+        self.assertEqual(armed_collector.tool_calls, 0)
+        # The same frames under a run without the schema command line keep the
+        # ordinary-tool projection: the call counts as one ordinary start.
+        disarmed = ReadOnlyToolEvidence(dict(BINDING))
+        for frame in (init_frame(), structured_use("toolu_so_1", DELIVERED)):
+            disarmed.observe_frame(frame)
+        self.assertEqual(disarmed.tool_calls, 1)
+        self.assertEqual(disarmed.settle_delivery(DELIVERED, ROOT), ())
+
+    def test_settlement_releases_unverified_candidates_before_the_role_sees_the_count(self):
+        # A candidate whose input never matches the final value is held while
+        # it waits for its association, but the settlement that precedes the
+        # role's settled facts releases it: the last count the role may act on
+        # and the finished package report the same classification.
+        collector = armed([init_frame(),
+                           structured_use("toolu_so_1", {"profileId": "forged"}), tool_result("toolu_so_1")])
+        self.assertEqual(collector.tool_calls, 0)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+
+    def test_a_missing_final_value_settles_to_no_verification(self):
+        collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(None, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+
+    def test_stream_and_assistant_duplicate_projections_verify_as_one_call(self):
+        collector = armed([init_frame(),
+                           stream_start("StructuredOutput", "toolu_so_1"), block_stop(),
+                           structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1")])
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        self.assertEqual(verified, (self.delivery_key(),))
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+
+    def test_a_value_mismatch_verifies_nothing_and_keeps_the_call_counted(self):
+        collector = armed([init_frame(),
+                           structured_use("toolu_so_1", {"profileId": "forged"}), tool_result("toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
+        other = {"profileId": "conflict", "reason": "a different complete input", "evidence": []}
+        for name, first, second in (("delivered-first", DELIVERED, other), ("conflict-first", other, DELIVERED)):
+            with self.subTest(order=name):
+                collector = armed([init_frame(), structured_use("toolu_so_1", first),
+                                   structured_use("toolu_so_1", second), tool_result("toolu_so_1")])
+                # The conflicted candidate is never held out of a count, and
+                # the final value — whichever input it matches — verifies none.
+                self.assertEqual(collector.tool_calls, 1)
+                self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+                self.assertEqual(collector.tool_calls, 1)
+                package = collector.finish(True)
+                self.assertEqual(package["toolCalls"], 1)
+                self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
+                                 [("StructuredOutput", "start"), ("StructuredOutput", "end")])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                                 tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_an_incomplete_fact_on_the_call_refuses_the_exemption(self):
+        # A nameless end before the start is a broken fact on the same native
+        # call: the shared exclusion guard refuses such a call, so the
+        # candidate is never held or verified even with a matching input.
+        broken_end = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_so_1"}]}, "session_id": "session-root"}
+        collector = armed([init_frame(), broken_end,
+                           structured_use("toolu_so_1", DELIVERED)])
+        self.assertEqual(collector.tool_calls, 1)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertFalse(package["streamComplete"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_subagent_foreign_and_mounted_lookalikes_are_not_candidates(self):
+        collector = armed([init_frame(),
+                           structured_use("toolu_sub", DELIVERED, parent="toolu_parent_9"),
+                           tool_result("toolu_sub", parent="toolu_parent_9"),
+                           structured_use("toolu_foreign", DELIVERED, session="session-other"),
+                           tool_result("toolu_foreign", session="session-other"),
+                           assistant_tool("mcp__server__StructuredOutput", "toolu_mcp"),
+                           tool_result("toolu_mcp")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 3)
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 3)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_a_conflicting_start_name_on_the_same_call_refuses_the_exemption(self):
+        collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED),
+                           assistant_tool("Read", "toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True)
+        self.assertEqual(len(package["events"]), 2)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_a_candidate_on_an_unconfirmed_root_verifies_nothing(self):
+        foreign = armed([init_frame(session="session-other"),
+                         structured_use("toolu_so_1", DELIVERED, session="session-other"),
+                         tool_result("toolu_so_1", session="session-other")])
+        # The handshake confirmed another session: this run's root identity can
+        # never verify the delivery of a run rooted elsewhere, and the one
+        # settlement is frozen with that answer.
+        self.assertEqual(foreign.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(foreign.tool_calls, 1)
+        own = armed([init_frame(), structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1")])
+        self.assertEqual(own.settle_delivery(DELIVERED, ROOT), (self.delivery_key(),))
+
+    def test_repeated_deliveries_settle_consistently_under_the_input_bound(self):
+        frames = [init_frame()]
+        for index in range(10):
+            frames += [structured_use(f"toolu_so_{index}", DELIVERED), tool_result(f"toolu_so_{index}")]
+        collector = armed(frames)
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        # The input retention bound keeps the most recent eight candidates; the
+        # two oldest keep their facts but can no longer prove their value, and
+        # the settled count releases them exactly as the finished package does.
+        self.assertEqual([call_id for _identity, call_id in verified],
+                         [f"toolu_so_{index}" for index in range(2, 10)])
+        self.assertEqual(collector.tool_calls, 2)
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual((package["toolCalls"], len(package["events"])), (2, 4))
+
+    def test_an_evicted_first_input_still_refuses_a_conflicting_second(self):
+        # The Host probe's shape: c1 first carries {"answer": "first"}; c2..c9
+        # each carry a different complete input and the eight-slot bound evicts
+        # c1's full text; c1 then carries the delivered {"answer": "conflict"}.
+        # The first input's fingerprint survives the eviction, so the conflict
+        # refuses the exemption and all nine distinct calls stay counted.
+        frames = [init_frame(), structured_use("toolu_so_1", {"answer": "first"})]
+        for index in range(2, 10):
+            frames.append(structured_use(f"toolu_so_{index}", {"answer": f"different-{index}"}))
+        frames.append(structured_use("toolu_so_1", {"answer": "conflict"}))
+        collector = armed(frames)
+        # Pre-settlement only the conflicted call charges the count; the eight
+        # consistent candidates still wait for their final association.
+        self.assertEqual(collector.tool_calls, 1)
+        self.assertEqual(collector.settle_delivery({"answer": "conflict"}, ROOT), ())
+        self.assertEqual(collector.tool_calls, 9)
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 9)
+
+    def test_an_evicted_input_reproves_the_value_when_the_same_input_returns(self):
+        frames = [init_frame(), structured_use("toolu_so_1", DELIVERED)]
+        for index in range(2, 10):
+            frames.append(structured_use(f"toolu_so_{index}", {"answer": f"different-{index}"}))
+        frames.append(structured_use("toolu_so_1", DELIVERED))
+        collector = armed(frames)
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        # The same input returning after the eviction is a consistent repeat:
+        # its recaptured full text re-proves the value, the eight mismatched
+        # calls stay counted, and the settled count and package agree.
+        self.assertEqual(verified, (self.delivery_key("toolu_so_1"),))
+        self.assertEqual(collector.tool_calls, 8)
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual(package["toolCalls"], 8)
+
+    def test_a_mixed_candidate_field_settles_to_one_agreed_count(self):
+        collector = armed([init_frame(),
+                           structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1"),
+                           structured_use("toolu_so_2", {"profileId": "forged"}), tool_result("toolu_so_2")])
+        self.assertEqual(collector.tool_calls, 0)
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        self.assertEqual(verified, (self.delivery_key("toolu_so_1"),))
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual((package["toolCalls"], [event["callId"] for event in package["events"]]),
+                         (1, ["toolu_so_2", "toolu_so_2"]))
 
 
 class RunnerReceiptTests(unittest.TestCase):
