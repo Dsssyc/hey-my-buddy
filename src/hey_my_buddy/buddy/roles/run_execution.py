@@ -137,6 +137,12 @@ def _worker_facts(result) -> dict:
 
 def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     payload = _base_result(result)
+    facts = _worker_facts(result)
+    if _worker_reports(result, facts):
+        payload.update(status="error", code="invalid-native-result")
+    for key in ("tokenUsage", "quota", "quotaFailure", "lastAssistantMessage", "rateLimitObservations"):
+        if key in facts:
+            payload[key] = facts[key]
     tools = result.tool_evidence.value if result.tool_evidence is not None else None
     payload["usage"] = {"toolCalls": tools.get("toolCalls") if tools else None,
                         "bytesRead": None, "elapsedMs": verdict["elapsedMs"]}
@@ -162,14 +168,28 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
 def _worker_reports(result, payload: dict) -> bool:
     """Keep each validated report even when another report or delivery fails."""
     invalid = False
-    for kind, key in (("inquiry-report", "inquiry"), ("attention-report", "nativeAttention")):
+    for kind, key in (("inquiry-report", "inquiry"), ("attention-report", "nativeAttention"),
+                      ("quota-snapshot", "quota"), ("native-observations", None), ("native-turn-facts", None)):
         try:
             report = _evidence(result, kind)
         except (OSError, ValueError, BoardError, RecursionError):
             invalid = True
         else:
-            if report is not None:
+            if report is None:
+                continue
+            if key is not None:
                 payload[key] = report
+            elif kind == "native-observations":
+                for field in ("sessionModel", "observedModels", "totalCostUsd", "rateLimitObservations", "quota"):
+                    if field in report:
+                        payload[field] = report[field]
+                if report.get("unsupportedNativeRequests"):
+                    payload["unsupportedNativeRequests"] = report["unsupportedNativeRequests"]
+            elif "permissionDenials" in report:
+                payload["nativeAttention"] = {
+                    "requests": len(report.get("deniedControlRequestIds") or []),
+                    "resultDenials": report["permissionDenials"],
+                }
     return invalid
 
 
@@ -178,11 +198,7 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
         completion = result.completion_evidence
         if completion is not None and completion.native_identity is not None:
             payload["nativeTurnId"] = completion.native_identity.turn_id
-        provenance = _evidence(result, "turn-provenance")
-        outcome = result.value.parsed.value if result.value is not None and result.value.parsed else None
-        if (result.value is None or result.value.schema_status != "valid"
-                or validate_outcome(outcome) is not None or not isinstance(provenance, dict)):
-            raise BoardError("INVALID_ARGUMENT", "The Worker run did not deliver its valid outcome and provenance")
+        outcome, provenance = worker_delivery(result)
         if isinstance(outcome, dict) and isinstance(provenance, dict):
             # The governed turn record is this role's document: the attempt
             # identity, input hash and prompt hash are the role's own facts,
@@ -202,6 +218,24 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
     return payload
 
 
+def worker_delivery(result) -> tuple[dict, dict]:
+    """Judge the role's delivery once through the selected completion policy."""
+    from ..harnesses.registry import worker_format
+
+    format = worker_format(result.harness)
+    if format is not None:
+        facts = _evidence(result, "native-turn-facts")
+        if not isinstance(facts, dict):
+            raise BoardError("invalid-result", "The native run has no correlated completion facts")
+        return format.delivery(result, facts)
+    provenance = _evidence(result, "turn-provenance")
+    outcome = result.value.parsed.value if result.value is not None and result.value.parsed else None
+    if (result.value is None or result.value.schema_status != "valid"
+            or validate_outcome(outcome) is not None or not isinstance(provenance, dict)):
+        raise BoardError("INVALID_ARGUMENT", "The Worker run did not deliver its valid outcome and provenance")
+    return outcome, provenance
+
+
 def worker_request(control: dict, module):
     """Project one governed control file into the frozen request and services."""
     invocation_root = Path(control["privateRoot"])
@@ -211,17 +245,28 @@ def worker_request(control: dict, module):
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
-    binding = module.prepare_services(
-        invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
-        attention_path=attention_path,
-        session_tools=worker_services.session_tools(), completion_tool="buddy_finish_turn",
-        inquiry=inquiry, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
-        validate_outcome=validate_outcome, activity_dir=control["directory"],
-        native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
     task_text = Path(control["taskFile"]).read_text()
-    prompt = worker_services.governed_prompt(
-        task_text, turn_input, binding.completion_tool,
-        checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
+    from ..harnesses.registry import worker_format
+    format = worker_format(control["harness"])
+    if format is None:
+        binding = module.prepare_services(
+            invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
+            attention_path=attention_path,
+            session_tools=worker_services.session_tools(), completion_tool="buddy_finish_turn",
+            inquiry=inquiry, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
+            validate_outcome=validate_outcome, activity_dir=control["directory"],
+            native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
+        prompt = worker_services.governed_prompt(
+            task_text, turn_input, binding.completion_tool,
+            checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
+        services, descriptions = binding.services, (binding.description,)
+        schema, scope = worker_services.OUTCOME_SCHEMA, "write"
+    else:
+        services = module.prepare_run_services(
+            invocation_root=invocation_root, native_root=Path(control["nativeRoot"]),
+            activity_dir=Path(control["directory"]), account=control.get("account"))
+        descriptions = ()
+        prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, format.tool_scope(turn_input)
     mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
     continuation = None
@@ -240,13 +285,13 @@ def worker_request(control: dict, module):
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
-        input_text=prompt, tool_scope="write",
-        output_schema=worker_services.OUTCOME_SCHEMA,
+        input_text=prompt, tool_scope=scope,
+        output_schema=schema,
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
         continuation=continuation,
-        session_services=(binding.description,),
+        session_services=descriptions,
     )
-    return request, binding.services, worker_observer
+    return request, services, worker_observer
 
 
 def fast_request(control: dict):
@@ -449,6 +494,10 @@ class WorkerRunExecutor:
 
     def prepare(self, context: ExecutionContext) -> None:
         context.private_adapter = self.name
+        from ..harnesses.registry import worker_format
+        format = worker_format(self.name)
+        if format is not None and format.bind_account_environment:
+            context.environment = _account_environment(self.name, context, purpose="execution")
         if any(not isinstance(context.spec.get(key), str) or not context.spec[key].strip()
                for key in ("provider", "model", "effort")):
             raise BoardError("INVALID_ARGUMENT", "Coding requires a complete provider, model and effort after routing", adapter=self.name)
@@ -457,13 +506,17 @@ class WorkerRunExecutor:
             raise BoardError("INVALID_ARGUMENT", "Coding requires a governed turn input", adapter=self.name)
         if context.turn_input.get("resumeMode") not in ("initial", "native-session", "reconstructed-new-session"):
             raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", adapter=self.name)
+        if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:
+            raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", adapter=self.name)
         state = context.environment.get("BUDDY_STATE_DIR")
         if not state:
             raise BoardError("INVALID_ARGUMENT", "Coding requires the owning private state directory", adapter=self.name)
         if context.turn_output_file().exists():
             raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", adapter=self.name)
         turn_io.prepare_turn(context)
-        root = ensure_private_dir(native_root(Path(state), self.name, context.task_id))
+        root = ensure_private_dir(native_root(Path(state), self.name, context.task_id)
+                                  if self.description.native_resume else
+                                  context_root(context, self.name) / (self.name + "-private"))
         inquiry = turn_io.inquiry_paths(context)
         private_json(ensure_private_dir(context_root(context, self.name)) / _CONTROL, {
             "operation": "worker", "harness": self.name,
@@ -473,6 +526,7 @@ class WorkerRunExecutor:
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("socketPath", "resultsPath", "errorPath", "token")},
+            "account": context.runtime.get("account"),
             "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         })
 
@@ -489,17 +543,31 @@ class WorkerRunExecutor:
         result, exit_code, shutdown = collection.payload, collection.exit_code, collection.stop_confirmed
         payload = {"status": "invalid-result", "error": "the role controller produced no complete run result"}
         if result is not None:
-            payload = _worker_facts(result)
-            reports_invalid = _worker_reports(result, payload)
+            payload = _base_result(result)
             try:
+                payload = _worker_facts(result)
+                reports_invalid = _worker_reports(result, payload)
                 request = _read_request(handle)
                 if reports_invalid:
                     raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
                 if shutdown:
+                    from ..harnesses.registry import worker_format
+                    if worker_format(self.name) is not None:
+                        verdict = read_strict_result(Path(handle.role_run_control["verdictFile"]))
+                        if not isinstance(verdict, dict):
+                            raise BoardError("INVALID_ARGUMENT", "The Worker role verdict is missing")
+                        error = verdict.get("workerError")
+                        if error is not None:
+                            if (not isinstance(error, dict) or set(error) != {"code", "message"}
+                                    or error["code"] not in ("invalid-result", "invalid-role-result")
+                                    or not isinstance(error["message"], str) or len(error["message"]) > 1024):
+                                raise BoardError("INVALID_ARGUMENT", "The Worker role error is invalid")
+                            raise BoardError(error["code"], error["message"])
                     _worker_result(result, handle.role_run_control, context.turn_input, request.input_text, payload)
-            except (OSError, ValueError, BoardError, RecursionError):
-                payload.update(status="error", code="invalid-role-result",
-                               error="The run's role evidence could not be collected")
+            except (OSError, ValueError, BoardError, RecursionError) as problem:
+                role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
+                payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
+                               error=problem.message if role_invalid else "The run's role evidence could not be collected")
         for key, normalizer in (("tokenUsage", usage.normalize_token_usage), ("quota", usage.normalize_quota),
                                 ("quotaFailure", usage.normalize_quota_failure)):
             payload[key] = normalizer(payload.get(key))
@@ -511,7 +579,7 @@ class WorkerRunExecutor:
         record, error = turn_io.read_turn(context, shutdown, exit_code, self.module.validate_turn_provenance)
         attention = payload.get("nativeAttention") if isinstance(payload.get("nativeAttention"), dict) else {}
         attention_requests = attention.get("requests")
-        payload["attentionRequired"] = (attention_requests > 0
+        payload["attentionRequired"] = (attention_requests + (attention.get("resultDenials") or 0) > 0
                                         if type(attention_requests) is int and attention_requests >= 0 else None)
         if payload["attentionRequired"] is True and record is not None and record["outcome"]["disposition"] == "completed":
             error = ("a native interactive request was refused during this turn; a completed outcome "

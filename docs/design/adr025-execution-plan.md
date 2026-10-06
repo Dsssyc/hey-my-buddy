@@ -431,3 +431,5 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 审阅公共接线保留原有角色差别为参数：是否允许一次纠正沿用描述中的 read_only_structured_resume，预算规则留在同一个 ReviewObserver；Claude 的既有审阅网络与附加禁用项在注册处绑定，统一角色只传明确控制值。相同控制器执行、帧读写与收集，不为审阅另开运行通道。原有厂商最终值是JSON对象还是文本由已报告的parsed/raw事实保留；不为方便投影改掉原收据的值类型。
 
 用户随后明确接受DSH的第四、五项行为差异：所有由hey-my-buddy启动的DSH运行，均通过该次启动的私有patch关闭session-title-llm（第四项）和session-telemetry-otel（第五项）。这包括Worker、快速调用和免模型发现；不改用户配置，用户自己交互使用的DSH不受影响。原有三项已接受差异及其他边界继续有效。第四步使用项目依赖zstandard>=0.25,<1读取本次私有会话记录，不依赖系统zstd命令；源不可读时如实未知，正常Worker回合必须保留既有token用量报告能力后才能验收。
+
+原生schema完成的Worker接线复用同一个请求、控制器、回合导入和停止收集。两份历史提示词前缀、schema的小差异、只读映射及收据校验键由注册处绑定为角色参数；NativeSchemaWorker只处理通用outcome/attention规则，不解析厂商事件或启动原生程序。工具完成仍用已有worker_services。原生模块只补路径/账户服务绑定、native-turn-facts与本harness的来源校验等窄helper；Worker整体输入不会因此传进运行请求。原生运行成功而角色值无效时，运行事实保持原样，角色控制器退出失败，外层在双层停止后才写回合记录。

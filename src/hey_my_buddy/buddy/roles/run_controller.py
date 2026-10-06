@@ -44,12 +44,24 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
     _private_bytes(request_path, encode_run_request(request).encode(), exclusive=True)
     request = decode_run_request(request_path.read_bytes())
     result = run_harness(module, request, observer=observer, services=services, cancelled=cancelled.is_set)
-    private_json(Path(control["verdictFile"]), {
+    verdict = {
         "stopReason": correction.stop_reason if correction is not None else None,
         "elapsedMs": round((time.monotonic() - started) * 1000),
-    }, exclusive=True)
+    }
+    code = 0 if result.end.status == "ok" else 1
+    if control["operation"] == "worker" and code == 0:
+        from ..harnesses.registry import worker_format
+        if worker_format(control["harness"]) is not None:
+            try:
+                run_execution.worker_delivery(result)
+            except (BoardError, OSError, ValueError, RecursionError) as error:
+                verdict["workerError"] = ({"code": error.code, "message": error.message}
+                    if isinstance(error, BoardError) else
+                    {"code": "invalid-role-result", "message": "The run's role evidence could not be collected"})
+                code = 1
+    private_json(Path(control["verdictFile"]), verdict, exclusive=True)
     # Stdout is one RunResult frame; the owning role decodes and projects it.
-    return encode_run_result(result), 0 if result.end.status == "ok" else 1
+    return encode_run_result(result), code
 
 
 def main() -> int:
