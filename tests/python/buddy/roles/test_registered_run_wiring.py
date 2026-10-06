@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -80,6 +81,37 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
         with mock.patch.object(run_seam("zcode"), "native_evidence", side_effect=AssertionError("not requested")):
             projected = self.project(capture=False)
         self.assertNotIn("nativeEvidence", projected)
+
+    def test_codex_policy_survives_without_capture_and_keeps_the_old_receipt_level(self):
+        fields = full_request(Path("/private/tmp")).to_payload()
+        fields.update(harness="codex", toolScope="none", sessionServices=[], captureEvidence=False)
+        request = decode_run_request(fields)
+        policy = {"configuration": "private-no-tool", "tools": []}
+        module = SimpleNamespace(native_evidence=lambda _result: {"nativePolicy": policy})
+        with mock.patch.dict(RUN_SEAMS, {"codex": module}):
+            for status in ("ok", "error"):
+                result = rc.RunResult(identity=request.identity, harness="codex", end=rc.RunEnd(status=status))
+                payload = run_execution._fast_result(result, request, {"stopReason": None, "elapsedMs": 1})
+                self.assertEqual(payload["nativePolicy"], policy)
+                self.assertNotIn("nativeEvidence", payload)
+                if status == "error":
+                    self.assertIs(payload["zeroToolVerified"], False)
+            fields["toolScope"] = "read"
+            review = run_execution._review_result(result, decode_run_request(fields),
+                                                   {"stopReason": None, "elapsedMs": 1})
+            self.assertEqual(review["nativePolicy"], policy)
+
+    def test_codex_worker_receipt_keeps_identity_and_the_bounded_validation_reason(self):
+        request = full_request(Path("/private/tmp"))
+        result = rc.RunResult(
+            identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
+            native_identity=rc.NativeIdentity(session_id="thread-1", turn_id="turn-1"),
+            value=rc.RunValue(mechanism="native-schema", schema_status="unknown", parsed={"outcome": {
+                "disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
+                "artifacts": [], "request": {}}}))
+        payload = run_execution._worker_facts(result)
+        self.assertEqual(payload["nativeIdentity"], {"sessionId": "thread-1", "turnId": "turn-1"})
+        self.assertEqual(payload["outcomeValidationError"], "a completed outcome requires request: null")
 
 
 class FastRegisteredRunTests(FakeAppServerTests):

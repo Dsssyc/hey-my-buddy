@@ -435,3 +435,5 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 原生schema完成的Worker接线复用同一个请求、控制器、回合导入和停止收集。两份历史提示词前缀、schema的小差异、只读映射及收据校验键由注册处绑定为角色参数；NativeSchemaWorker只处理通用outcome/attention规则，不解析厂商事件或启动原生程序。工具完成仍用已有worker_services。原生模块只补路径/账户服务绑定、native-turn-facts与本harness的来源校验等窄helper；Worker整体输入不会因此传进运行请求。原生运行成功而角色值无效时，运行事实保持原样，角色控制器退出失败，外层在双层停止后才写回合记录。
 
 接线补充：原生schema的路径服务工厂为prepare_run_services(*, invocation_root, native_root, activity_dir, account, tool_scope)，由公共角色对Worker、fast、review调用。tool_scope只表示原生工具范围，使Codex仅在write路径选择coding home凭据来源；冻结账户与活动目录不放入RunRequest，也不传递整个角色控制文件。session-tool载体沿用已有prepare_services。
+
+第四步接线取舍：DSH 本次保留原有 native_resume=false，支持重建新会话的继续；ACP 的 session/load 方法存在不等于真实回合续接已经验证，不为本次重构启用该可选新能力。带 reconstructed-new-session 的运行请求应建立新会话，native-session 明确拒绝。既有完成、检查点与问询使用从 ZCode 搬出的公共合作检查点桥，传入各 harness 的原生事件到元数据映射和原生错误构造，禁止为 DSH 复制队列、journal 或 socket 服务器。第五步再按已批准顺序把这一共同后端换成 C-Two。

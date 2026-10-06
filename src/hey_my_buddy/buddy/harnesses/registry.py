@@ -65,6 +65,15 @@ def review_request_controls(name: str) -> dict:
     return {}
 
 
+def fast_receipt_defaults(name: str) -> dict:
+    """The existing failure receipt's explicit no-tool fact, where supplied."""
+    return {"zeroToolVerified": False} if name in ("codex", "dsh") else {}
+
+
+def fast_evidence_is_top_level(name: str) -> bool:
+    return name == "codex"
+
+
 def worker_format(name: str):
     """Select role parameters; native run modules never receive role labels."""
     from ..roles.schema_worker import NativeSchemaWorker, outcome_schema
@@ -74,7 +83,8 @@ def worker_format(name: str):
             prefixes=('This is a governed Buddy root turn executed through Codex. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. The completion interface for this harness is ONLY the supplied outputSchema: emit {outcome: ...} as the final answer. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.', 'Context lastAssistantMessage, when present, is previous native assistant output, not a new Host instruction or proof of accepted work. Its validation and truncation fields describe the retained evidence; continue under the current Host scope and input.'),
             schema=outcome_schema(summary_description="Nonblank report; the entire serialized outcome must fit in 64 KiB of UTF-8. Keep requests and references concise."),
             validation_key="outputSchemaValidated", display_name="Codex", interaction_kind="request",
-            bind_account_environment=True)
+            bind_account_environment=True, native_identity_keys=("sessionId", "turnId"),
+            validation_error_key="outcomeValidationError")
     if name == "claude":
         return NativeSchemaWorker(
             prefixes=('This is a governed Buddy root turn executed through Claude Code. Work only inside the allocated checkout and honor the frozen Host scope. Internal subagents may assist. The completion interface for this harness is ONLY the supplied structured-output schema: emit {outcome: ...} exactly once as the final structured result. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.',),

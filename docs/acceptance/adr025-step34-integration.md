@@ -87,3 +87,7 @@ Host 另修公共收集的 Claude 旧配额事实形状：角色参数 native_qu
 4-B1 修正后固定 c77112f、artifact 749b6ab3-856e-4c65-8cbc-767f1c71d58d、累计补丁 b30a43f2961deeda7c7ecc6bcaa78d11eef6c6b2bd83e1fbd1afbc8995efbec6，六条 scope 路径与摘要已核对，整合文件逐字节一致。Host 聚焦 42 项通过（5.819 秒），并重放四个前轮探针：无会话但持有进程保持 unknown；迟到工具到达观察者并拒绝；外来根文本被隔离；65 种未知事件有界聚合且返回真实停止事实。四个探针的真实组最终均消失，均为假 ACP，无安装版或模型。Worker 两份新变异的源码各只有一处替换；未发现独立原始失败日志，Host 独立重跑对应两个见证，分别以 gone!=unknown 和 ok!=cancelled 失败，未变原件已在 42 项中通过。接收原生主体，注册、公共角色接线、原生续接取舍、旧入口删除和真实冒烟留在本线后续微任务，整条 DSH 线尚未验收。
 
 这份固定代码的 git diff --check 指出 native_run.py 一处空白行尾空格；它不影响 Python 语义，未为此增加往返或由 Host 修改范围内代码。完整检查尚待整批接线收齐。本轮 DSH 真实模型运行 0 次，免模型安装版启动 0 次；前轮已登记的至少一次意外安装版启动及准确次数未知的记录保留。
+
+3-A2 固定 2fb8f27（摘要 3f04956，tree 相同）、artifact 2d79698a-0497-41ee-b5c4-48ea4e32c49d、累计补丁 d9044238539c119f776793f1d4b982bda0dc88b207ace4037bc2ac9a0ff1aeed 的 15 条 scope 路径已核对。Host 验证副本完全不含已删除的 runner.py/no_tool.py，加当前公共文件、Codex 注册与两处 workflow 导入适配后，Codex 129 项通过（53.771 秒）。Host 对已验收基线和新代码各跑五个模拟 Worker 场景，状态、错误、停止、续接与用量相符；发现公共投影遗漏 nativeIdentity 和 outcomeValidationError，并额外增加 Codex 原没有的 attentionRequired，均由 Host 修正。未知时间值与私有路径未作相等断言，原始结果留 tmp。
+
+Host 保留各原有结构化收据的字段位置与缺省口径：Codex 快速调用的 nativePolicy 在顶层，审阅 nativePolicy/nativeConfigPolicy 不受可选 capture 开关影响；Codex/DSH 的快速失败仍有 zeroToolVerified=false，ZCode 的既有缺键口径不变。NativeSchemaWorker 通过实际使用的收据参数保留 Codex 原生身份与有界业务校验原因，Claude 的 attentionRequired 缺计数时仍为 false。两处黑板 checkpoint 导入切到已机械搬定的 roles.turn_io。新增两个公共投影回归，与既有角色/ZCode 聚焦共 25 项通过（5.875 秒）。Codex 驱动对失败 thread/start 回读的保留、原中断收据事实及被削弱的旧断言，仍由 3-A2 原 run 修正；未由 Host 代改其代码或测试。

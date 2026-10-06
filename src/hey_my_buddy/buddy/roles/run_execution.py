@@ -85,7 +85,9 @@ def _base_result(result) -> dict:
 
 
 def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
-    payload = _base_result(result)
+    from ..harnesses.registry import fast_evidence_is_top_level, fast_receipt_defaults, run_seam
+
+    payload = {**_base_result(result), **fast_receipt_defaults(result.harness)}
     if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):
         # The role observer stopped this run; its own recorded reason is the
         # legacy channel code, and the projection keeps the legacy shape of an
@@ -106,14 +108,16 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
             payload["nativeIdentity"] = result.native_identity.to_payload()
         payload["nativeEventCount"] = result.native_event_count
         payload["zeroToolVerified"] = calls == 0
-        if request.capture_evidence:
-            from ..harnesses.registry import run_seam
-            module = run_seam(result.harness)
-            if module is None or not callable(getattr(module, "native_evidence", None)):
-                raise BoardError("ROLE_RUN_UNREGISTERED", "The registered run has no native evidence projection")
-            payload["nativeEvidence"] = module.native_evidence(result)
-    else:
-        payload.pop("zeroToolVerified", None)
+    top_level = fast_evidence_is_top_level(result.harness)
+    if top_level or request.capture_evidence and payload["status"] == "ok":
+        module = run_seam(result.harness)
+        if module is None or not callable(getattr(module, "native_evidence", None)):
+            raise BoardError("ROLE_RUN_UNREGISTERED", "The registered run has no native evidence projection")
+        evidence = module.native_evidence(result)
+        if top_level:
+            payload.update(evidence)
+        else:
+            payload["nativeEvidence"] = evidence
     if tools:
         payload["toolEvidence"] = tools
     return payload
@@ -124,6 +128,8 @@ def _worker_facts(result) -> dict:
 
     format = worker_format(result.harness)
     payload = _base_result(result)
+    if format is not None:
+        payload.update(format.receipt_fields(result))
     payload["tokenUsage"] = result.usage.value if result.usage is not None else None
     payload["lastAssistantMessage"] = (result.last_assistant_message.value
                                        if result.last_assistant_message is not None else None)
@@ -160,11 +166,10 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
                        correctionCount=(result.value.correction_count or 0) if result.value is not None else 0)
         if result.native_identity is not None:
             payload["nativeIdentity"] = result.native_identity.to_payload()
-    if request.capture_evidence:
-        from ..harnesses.registry import run_seam
-        module = run_seam(result.harness)
-        if callable(getattr(module, "native_evidence", None)):
-            payload.update(module.native_evidence(result))
+    from ..harnesses.registry import run_seam
+    module = run_seam(result.harness)
+    if callable(getattr(module, "native_evidence", None)):
+        payload.update(module.native_evidence(result))
     return payload
 
 
@@ -615,9 +620,12 @@ class WorkerRunExecutor:
         record, error = turn_io.read_turn(context, shutdown, exit_code, self.module.validate_turn_provenance)
         attention = payload.get("nativeAttention") if isinstance(payload.get("nativeAttention"), dict) else {}
         attention_requests = attention.get("requests")
-        payload["attentionRequired"] = (attention_requests + (attention.get("resultDenials") or 0) > 0
-                                        if type(attention_requests) is int and attention_requests >= 0 else None)
-        if payload["attentionRequired"] is True and record is not None and record["outcome"]["disposition"] == "completed":
+        if format is None:
+            payload["attentionRequired"] = (attention_requests + (attention.get("resultDenials") or 0) > 0
+                                            if type(attention_requests) is int and attention_requests >= 0 else None)
+        elif format.interaction_kind == "permissions":
+            payload["attentionRequired"] = bool((attention_requests or 0) + (attention.get("resultDenials") or 0))
+        if payload.get("attentionRequired") is True and record is not None and record["outcome"]["disposition"] == "completed":
             error = ("a native interactive request was refused during this turn; a completed outcome "
                      "cannot stand in for the Host attention that request requires")
         seal_error = None

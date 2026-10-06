@@ -52,6 +52,8 @@ class NativeSchemaWorker:
     follow_workspace_access: bool = False
     bind_account_environment: bool = False
     native_quota_failure: bool = False
+    native_identity_keys: tuple[str, ...] = ()
+    validation_error_key: str | None = None
 
     def prompt(self, task_text: str, turn_input: dict) -> str:
         return "\n\n".join([*self.prefixes, *ASSISTANCE_HINTS, task_text, canonical_json(turn_input)])
@@ -60,8 +62,8 @@ class NativeSchemaWorker:
         workspace = turn_input.get("executionWorkspace") or {}
         return "read" if self.follow_workspace_access and workspace.get("access") == "read" else "write"
 
-    def delivery(self, result, facts: dict) -> tuple[dict, dict]:
-        """Validate the role value, retaining the old denied-request decision."""
+    def parse_value(self, result) -> tuple[dict | None, str | None]:
+        """Use the same outcome validator for the decision and its diagnostic."""
         outcome = None
         error = "no completed final message"
         value = result.value
@@ -75,6 +77,23 @@ class NativeSchemaWorker:
                     outcome = wrapper["outcome"]
             except (ValueError, TypeError, RecursionError) as problem:
                 error = str(problem)[:500]
+        return outcome, error
+
+    def receipt_fields(self, result) -> dict:
+        fields = {}
+        if result.native_identity is not None and self.native_identity_keys:
+            identity = result.native_identity.to_payload()
+            if all(identity.get(key) is not None for key in self.native_identity_keys):
+                fields["nativeIdentity"] = {key: identity[key] for key in self.native_identity_keys}
+        if self.validation_error_key and result.end.status == "ok" and result.value is not None:
+            _outcome, error = self.parse_value(result)
+            if error is not None:
+                fields[self.validation_error_key] = error
+        return fields
+
+    def delivery(self, result, facts: dict) -> tuple[dict, dict]:
+        """Validate the role value, retaining the old denied-request decision."""
+        outcome, error = self.parse_value(result)
         if self.interaction_kind == "request":
             denied = bool(facts.get("nativeRequestMethod"))
         else:
