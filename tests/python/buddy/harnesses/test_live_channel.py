@@ -358,7 +358,10 @@ class ObserveTests(unittest.TestCase):
             self.assertTrue(snapshot.inquiries, "a truncated page always carries progress")
             after = max(entry.seq for entry in snapshot.inquiries)
             self.assertLess(pages, 40)
-        self.assertEqual(pages, 2)
+        # Step 2-C2 entries carry their answer's source fields, so the set
+        # pages into more frames than the bare text did; the pinned invariant
+        # is complete reachability under the per-frame bound, not the count.
+        self.assertGreaterEqual(pages, 2)
         self.assertEqual(len(collected), 32)
         self.assertEqual({entry.question_id for entry in collected},
                          {f"question-{index}" for index in range(32)})
@@ -453,7 +456,7 @@ class ObserveTests(unittest.TestCase):
     def test_frames_roundtrip(self):
         request = inquiry_request()
         self.assertEqual(lv.decode_live_request(lv.encode_live_request(request)), request)
-        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued",
+        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued", observed=True,
                              delivery_mode="cooperative-checkpoint",
                              native_correlation={"inquiryId": "question-1"})
         self.assertEqual(lv.decode_live_reply(lv.encode_live_reply(reply)), reply)
@@ -465,6 +468,331 @@ class ObserveTests(unittest.TestCase):
             payload["formatVersion"] = wrong_version
             with self.assertRaises(BoardError, msg=repr(wrong_version)):
                 lv.decode_live_request(payload)
+
+
+class TransportFactTests(unittest.TestCase):
+    """The shared transport facts of a request reply and a snapshot (step 2-C2).
+
+    A binding may hand the channel the shared bridge transport's result fact
+    directly: an ``{"ok": False}`` refusal keeps its reason and its specific
+    peer code beside each other, an ``{"ok": True}`` result unwraps its value,
+    and an observation read that fails or carries an invalid value is reported
+    as a fact instead of being reshaped into look-alike metadata.
+    """
+
+    def channel(self, *, ask=None, observation=None, answer=None) -> lv.ExistingLiveChannel:
+        return lv.ExistingLiveChannel(
+            identity(), lv.EXISTING_CAPABILITIES["zcode"],
+            ask=ask, read_observation=observation, read_answer=answer)
+
+    def test_a_transport_refusal_keeps_reason_and_the_specific_code(self):
+        class TransportBridge:
+            def __init__(self):
+                self.result = {"ok": False, "reason": "bridge-refused", "code": "not-ready"}
+                self.calls = 0
+
+            def ask(self, question_id, question, timeout_ms):
+                self.calls += 1
+                return self.result
+
+        bridge = TransportBridge()
+        channel = self.channel(ask=bridge.ask)
+        reply = channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual((reply.status, reply.reason_code, reply.error_code),
+                         ("unavailable", "bridge-refused", "not-ready"))
+        # A refused transport result is not remembered: the identical ask retries.
+        bridge.result = {"ok": True, "value": {"accepted": True, "state": "queued"}}
+        retried = channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual(retried.status, "queued")
+        self.assertEqual(bridge.calls, 2)
+
+    def test_an_ok_transport_result_unwraps_its_value_with_its_metadata(self):
+        delivery = {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint"}
+        bridge_result = {"ok": True, "value": {"accepted": True, "state": "delivered",
+                                               "inquiryId": "question-1", "duplicate": False,
+                                               "delivery": delivery}}
+        channel = self.channel(ask=lambda q, t, m: bridge_result)
+        reply = channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual(reply.status, "delivered")
+        self.assertIs(reply.observed, True)
+        self.assertEqual(reply.state, "delivered")
+        correlation = reply.native_correlation.value
+        self.assertEqual(correlation["inquiryId"], "question-1")
+        self.assertEqual(correlation["delivery"], delivery)
+        self.assertEqual(reply.delivery_mode, "cooperative-checkpoint")
+
+    def test_a_withdrawn_replay_is_an_observed_discarded_success(self):
+        # A real replay after withdrawal: the bridge accepts with the committed
+        # ``discarded`` state. That is an observed interaction projecting its
+        # actual state and the native withdrawal reason — never an unavailable
+        # transport and never a lost reason.
+        bridge_result = {"ok": True, "value": {"accepted": True, "state": "discarded",
+                                               "inquiryId": "question-1", "duplicate": True,
+                                               "reason": "withdrawn by the asking side; "
+                                                         "it no longer blocks turn completion"}}
+        channel = self.channel(ask=lambda q, t, m: bridge_result)
+        reply = channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual((reply.status, reply.observed, reply.state),
+                         ("discarded", True, "discarded"))
+        self.assertIsNone(reply.error_code)
+        projected = reply.native_correlation.value
+        self.assertEqual(projected["reason"],
+                         "withdrawn by the asking side; it no longer blocks turn completion")
+
+    def test_observed_must_agree_with_the_status(self):
+        with self.assertRaises(BoardError, msg="queued without observed"):
+            lv.LiveReply(identity=identity(), request_id="r", status="queued")
+        with self.assertRaises(BoardError, msg="unavailable with observed"):
+            lv.LiveReply(identity=identity(), request_id="r", status="unavailable", observed=True,
+                         reason_code="bridge-unreachable")
+        with self.assertRaises(BoardError, msg="state without observed"):
+            lv.LiveReply(identity=identity(), request_id="r", status="unavailable", state="discarded")
+
+    def test_an_unreachable_transport_reads_as_a_fact_on_request_and_snapshot(self):
+        channel = self.channel(
+            ask=lambda q, t, m: {"ok": False, "reason": "bridge-unreachable"},
+            observation=lambda timeout: {"ok": False, "reason": "bridge-timeout"})
+        reply = channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual((reply.status, reply.reason_code, reply.error_code),
+                         ("unavailable", "bridge-unreachable", None))
+        snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=1500,
+                                   fields=("observation",))
+        self.assertIs(snapshot.observed, False)
+        self.assertEqual(snapshot.reason, "bridge-timeout")
+        self.assertIsNone(snapshot.error)
+        self.assertIsNone(snapshot.observation)
+
+    def test_an_invalid_observation_value_is_unavailable_not_reshaped(self):
+        channel = self.channel(observation=lambda timeout: {"ok": True, "value": {"ready": "yes"}})
+        snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=1500,
+                                   fields=("observation",))
+        self.assertIs(snapshot.observed, False)
+        self.assertEqual(snapshot.reason, "observation-unavailable")
+
+    def test_a_refused_answer_point_query_keeps_its_transport_fact(self):
+        channel = self.channel(answer=lambda inquiry_id, timeout: {"ok": False, "reason": "bridge-refused",
+                                                                   "code": "not-ready"})
+        snapshot = channel.observe(inquiry_id="question-1", timeout_ms=1500)
+        self.assertIs(snapshot.observed, False)
+        self.assertEqual((snapshot.reason, snapshot.error), ("bridge-refused", "not-ready"))
+        self.assertEqual(snapshot.inquiries, ())
+
+
+class ObserveSelectionTests(unittest.TestCase):
+    """The source selection and the single-answer point query (step 2-C2).
+
+    An omitted selection reads everything, exactly as every step-one caller
+    did; a selection narrows the reads; and an ``inquiry_id`` point query
+    reads only that one native answer — neither the sidecar nor the journal —
+    so an answer wait costs exactly the one roundtrip the direct path cost.
+    The defaults and every real call site are pinned here and by the consumer
+    tests (blackboard inquiry, worker forwarding).
+    """
+
+    def counting_channel(self) -> tuple[lv.ExistingLiveChannel, dict]:
+        reads = {"activity": 0, "journal": 0, "observation": 0}
+
+        def read_activity():
+            reads["activity"] += 1
+            return {"phase": "streaming-model", "eventSeq": 3}
+
+        def read_journal():
+            reads["journal"] += 1
+            return [{"inquiryId": "question-1", "state": "queued"}]
+
+        def read_observation(timeout_ms):
+            reads["observation"] += 1
+            return {"ok": True, "value": {"ready": True, "observedAt": "2026-10-06T00:00:00Z",
+                                          "agentStatus": "running"}}
+
+        channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                         read_activity=read_activity, read_journal=read_journal,
+                                         read_observation=read_observation)
+        return channel, reads
+
+    def test_an_omitted_selection_reads_everything_and_selections_narrow_it(self):
+        channel, reads = self.counting_channel()
+        everything = channel.observe(after_seq=None, limit=8, timeout_ms=1500)
+        self.assertEqual(reads, {"activity": 1, "journal": 1, "observation": 1})
+        self.assertIsNotNone(everything.activity)
+        self.assertEqual(everything.inquiries[0].question_id, "question-1")
+        self.assertIsNotNone(everything.observation)
+        channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("activity",))
+        self.assertEqual(reads, {"activity": 2, "journal": 1, "observation": 1})
+        channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("observation",))
+        self.assertEqual(reads, {"activity": 2, "journal": 1, "observation": 2})
+        channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        self.assertEqual(reads, {"activity": 2, "journal": 2, "observation": 2})
+        # An empty selection is the omitted one, and anything else is refused.
+        channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=())
+        self.assertEqual(reads, {"activity": 3, "journal": 3, "observation": 3})
+        for bad in (("activity", "events"), "activity", ("activity", 1)):
+            with self.assertRaises(BoardError, msg=repr(bad)):
+                channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=bad)
+
+    def test_a_selection_that_names_an_absent_source_reports_it_honestly(self):
+        channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["codex"])
+        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1500,
+                                   fields=("observation",))
+        self.assertIs(snapshot.observed, False)
+        self.assertEqual(snapshot.reason, "observation-unavailable")
+
+    def test_the_single_answer_point_query_reads_neither_activity_nor_journal(self):
+        reads = {"activity": 0, "journal": 0, "observation": 0}
+
+        def read_activity():
+            reads["activity"] += 1
+            return {"phase": "streaming-model", "eventSeq": 3}
+
+        def read_journal():
+            reads["journal"] += 1
+            return [{"inquiryId": "question-1", "state": "queued"}]
+
+        def read_observation(timeout_ms):
+            reads["observation"] += 1
+            return {"ok": True, "value": {"ready": True}}
+
+        def read_answer(inquiry_id, timeout_ms):
+            return {"ok": True, "value": {"state": "answered",
+                                          "answer": {"available": True, "text": "42",
+                                                     "bytes": 2, "via": "tool:buddy_answer_inquiry",
+                                                     "toolCallId": "call-9",
+                                                     "at": "2026-10-06T00:00:01Z",
+                                                     "truncated": False}}}
+
+        channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                         read_activity=read_activity, read_journal=read_journal,
+                                         read_observation=read_observation, read_answer=read_answer)
+        snapshot = channel.observe(inquiry_id="question-9", timeout_ms=1500)
+        self.assertEqual(reads, {"activity": 0, "journal": 0, "observation": 0})
+        entry = snapshot.inquiries[0]
+        self.assertEqual((entry.status, entry.answer, entry.tool_call_id, entry.bytes, entry.truncated),
+                         ("answered", "42", "call-9", 2, False))
+        self.assertEqual(entry.via, "tool:buddy_answer_inquiry")
+        self.assertTrue(entry.at)
+        # A malformed inquiry id is refused at the value.
+        for bad in ("", "x" * (lv.MAX_REQUEST_ID + 1)):
+            with self.assertRaises(BoardError):
+                channel.observe(inquiry_id=bad, timeout_ms=1500)
+
+    def test_journal_source_fields_and_delivery_survive_the_projection(self):
+        journal = [
+            {"inquiryId": "question-1", "state": "queued",
+             "delivery": {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint"}},
+            {"inquiryId": "question-1", "state": "answered",
+             "answer": {"text": "the answer", "bytes": 10, "via": "tool:buddy_answer_inquiry",
+                        "toolCallId": "call-1", "at": "2026-10-06T00:00:02Z", "truncated": False}},
+        ]
+        channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                         read_journal=lambda: journal)
+        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        entry = snapshot.inquiries[0]
+        self.assertEqual((entry.status, entry.answer, entry.bytes, entry.truncated),
+                         ("answered", "the answer", 10, False))
+        self.assertEqual(entry.tool_call_id, "call-1")
+        self.assertIsNotNone(entry.delivery, "the queued record's delivery survives later records")
+        self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
+        # The bare-text journal shape (the Node bridge's) carries its siblings.
+        bare = [{"inquiryId": "question-2", "state": "answered", "answer": "from the node journal",
+                 "answerBytes": 21, "via": "tool:buddy_inquiry_reply", "toolCallId": "call-2",
+                 "answeredAt": "2026-09-19T05:00:04.000Z", "truncated": True}]
+        channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["dsh"],
+                                         read_journal=lambda: bare)
+        entry = channel.observe(after_seq=None, limit=8, timeout_ms=1500,
+                                fields=("inquiries",)).inquiries[0]
+        self.assertEqual((entry.status, entry.answer, entry.bytes, entry.truncated, entry.via,
+                          entry.tool_call_id, entry.at),
+                         ("answered", "from the node journal", 21, True, "tool:buddy_inquiry_reply",
+                          "call-2", "2026-09-19T05:00:04.000Z"))
+
+    def test_the_journal_fact_reports_availability_count_and_rejections(self):
+        # The binding's fact shape: a missing journal keeps the direct reader's
+        # own reason, the count covers every well-formed record (rejected ones
+        # included, exactly what the file reader counted), and a refused record
+        # surfaces under its own question id instead of being a silent loss.
+        def fact_binding(payload):
+            return lambda: payload
+
+        missing = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                         read_journal=fact_binding(
+                                             {"available": False, "reason": "journal-not-written",
+                                              "entries": 0, "records": [], "rejections": []}))
+        snapshot = missing.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        self.assertEqual((snapshot.journal.available, snapshot.journal.reason, snapshot.journal.entries),
+                         (False, "journal-not-written", 0))
+        self.assertEqual(snapshot.inquiries, ())
+        foreign = {"version": 1, "taskId": "other", "attemptId": "other", "generation": 0,
+                   "turnId": "other", "inquiryId": "question-foreign", "state": "answered",
+                   "answer": {"text": "belongs elsewhere"}}
+        bound = {"version": 1, "taskId": "task-fixture", "attemptId": "attempt-fixture",
+                 "generation": 1, "turnId": "turn-fixture", "inquiryId": "question-1",
+                 "state": "queued"}
+        mixed = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                       read_journal=fact_binding(
+                                           {"available": True, "reason": None, "entries": 2,
+                                            "records": [bound],
+                                            "rejections": [{"questionId": "question-foreign",
+                                                            "reason": "the journal record belongs "
+                                                                      "to another task"}]}))
+        snapshot = mixed.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        self.assertEqual((snapshot.journal.available, snapshot.journal.entries), (True, 2))
+        self.assertEqual([item.question_id for item in snapshot.journal.rejections],
+                         ["question-foreign"])
+        self.assertEqual(snapshot.journal.rejections[0].reason,
+                         "the journal record belongs to another task")
+        self.assertEqual([entry.question_id for entry in snapshot.inquiries], ["question-1"],
+                         "only bound records are projected")
+        # An unknown availability reason is refused, never waved through.
+        broken = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                        read_journal=fact_binding(
+                                            {"available": False, "reason": "mysterious",
+                                             "entries": 0, "records": [], "rejections": []}))
+        snapshot = broken.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        self.assertIsNone(snapshot.journal)
+        self.assertIn("journal-unavailable", snapshot.unavailable or "")
+
+    def test_a_bound_record_keeps_its_limitation_for_the_public_reason(self):
+        note = "Host questions are queued by the bridge and delivered only at the root's next checkpoint"
+        journal = [{"inquiryId": "question-1", "state": "unavailable",
+                    "reason": "the governed root turn ended before this inquiry was answered",
+                    "limitation": note}]
+        channel = lv.ExistingLiveChannel(identity(), lv.EXISTING_CAPABILITIES["zcode"],
+                                         read_journal=lambda: journal)
+        entry = channel.observe(after_seq=None, limit=8, timeout_ms=1500,
+                                fields=("inquiries",)).inquiries[0]
+        self.assertEqual((entry.status, entry.reason, entry.limitation),
+                         ("unavailable", "the governed root turn ended before this inquiry was answered",
+                          note))
+
+    def test_live_event_bounds_are_the_producers_character_truncations(self):
+        def event(kind: str, tool_name: str | None = None):
+            return lv.LiveEvent(at="2026-10-06T00:00:00Z", kind=kind, tool_name=tool_name)
+        self.assertEqual(event("k" * 80, "t" * 120).tool_name, "t" * 120)
+        with self.assertRaises(BoardError):
+            event("k" * 81)
+        with self.assertRaises(BoardError):
+            event("k", "t" * 121)
+        with self.assertRaises(BoardError):
+            event("")
+        # A multibyte kind at the character bound is not a byte-bound victim.
+        self.assertEqual(event("水" * 80).kind, "水" * 80)
+
+    def test_observation_frames_roundtrip_with_their_new_fields(self):
+        snapshot = lv.LiveSnapshot(
+            identity=identity(), sequence=2,
+            observation=lv.LiveObservation(ready=True, observed_at="2026-10-06T00:00:00Z",
+                                           agent_status="running", delivery_mode="cooperative-checkpoint",
+                                           recent_activity=(lv.LiveEvent(at="2026-10-06T00:00:00Z",
+                                                                         kind="tool.updated",
+                                                                         tool_name="read"),)),
+            observed=True)
+        self.assertEqual(lv.decode_live_snapshot(lv.encode_live_snapshot(snapshot)), snapshot)
+        payload = snapshot.to_payload()["observation"]
+        self.assertIn("recentActivity", payload)
+        self.assertIn("observed", snapshot.to_payload())
+        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="unavailable",
+                             reason_code="bridge-refused", error_code="not-ready")
+        self.assertEqual(lv.decode_live_reply(lv.encode_live_reply(reply)), reply)
 
 
 class WholeFrameGateTests(unittest.TestCase):
@@ -513,7 +841,7 @@ class WholeFrameGateTests(unittest.TestCase):
                                                parser, "request bytes")
             self.assertEqual(lv.decode_live_request(text), request)
             parser.assert_called_once_with(text)
-        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued")
+        reply = lv.LiveReply(identity=identity(), request_id="request-1", status="queued", observed=True)
         reply_text = lv.encode_live_reply(reply)
         reply_padded = self.padded_over(reply_text)
         with self.spied_parser() as parser:

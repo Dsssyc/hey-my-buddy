@@ -9,6 +9,7 @@ daemon, no harness and no model.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -241,6 +242,163 @@ class PreparationBoardErrorTests(unittest.TestCase):
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["terminationReason"], TERMINATION_COMPLETED)
         self.assertEqual(len(report["result"]["harnessAttempts"]), 2)
+
+
+class LiveActivityForwardTests(unittest.TestCase):
+    """Activity forwarding through the registered live seam (ADR-025 step 2-C2).
+
+    A registered harness's attempt activity reaches the board through its live
+    channel, bound to the stored public run request's identity; the same
+    sidecar is never forwarded twice, a foreign attempt's sidecar is never
+    forwarded at all, and an unavailable channel says nothing about the native
+    process. A harness without a registered live binding keeps the original
+    sidecar path.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-worker-live-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.state = self.root / "state"
+        self.work = self.root / "work"
+        self.work.mkdir()
+
+    class RecordingClient:
+        def __init__(self):
+            self.progress_calls = []
+
+        def progress(self, worker_id, attempt_id, generation, nonce, message=None, phase=None, data=None):
+            self.progress_calls.append({"attemptId": attempt_id, "generation": generation, "data": data})
+            return {}
+
+        def call(self, method, params):
+            return {"task": {}}
+
+        def renew(self, *args, **kwargs):
+            return {}
+
+    def renewal(self, *, with_request=True, harness="zcode", task_id="task-live",
+                attempt_id="attempt-live", generation=1):
+        import types
+
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            FrozenJson,
+            NetworkPolicy,
+            PrivateStatePaths,
+            RunBudget,
+            RunConfiguration,
+            RunIdentity,
+            RunRequest,
+            encode_run_request,
+        )
+        worker = Worker("w-live", self.state, client=self.RecordingClient(), log=silent)
+        claim = {"attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": generation},
+                 "task": {"taskId": task_id,
+                          "spec": {"adapter": harness, "cwd": str(self.work), "task": "live activity",
+                                   "timeoutSeconds": 30}}}
+        directory = self.state / "attempts" / task_id / attempt_id
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        identity = RunIdentity(task_id=task_id, attempt_id=attempt_id, generation=generation,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        request_file = directory / "role-run-request.json"
+        if with_request:
+            request = RunRequest(
+                identity=identity, harness=harness,
+                configuration=RunConfiguration(provider="fixture-zcode", model="fixture-glm", effort="low"),
+                cwd=str(self.work),
+                private_state=PrivateStatePaths(invocation_root=str(directory),
+                                                native_root=str(directory / "native")),
+                input_text="the governed turn input", tool_scope="write",
+                network=NetworkPolicy(requested=False), output_schema=FrozenJson({"type": "object"}),
+                budget=RunBudget(timeout_seconds=600, max_output_bytes=1024))
+            worker_module.fsync_json(request_file, json.loads(encode_run_request(request)))
+        control = {"operation": "worker", "harness": harness, "requestFile": str(request_file),
+                   "directory": str(directory),
+                   "inquiry": {"socketPath": str(self.root / "absent.sock"), "token": "a" * 64,
+                               "resultsPath": str(directory / "inquiry.results.jsonl")}}
+        handle = types.SimpleNamespace(role_run_control=control, role_run_identity=identity,
+                                       cancel_requested=False)
+        return worker_module._Renewal(worker, claim, handle, implementation=object()), directory
+
+    def sidecar_write(self, directory: Path, *, task_id="task-live", attempt_id="attempt-live",
+                      generation=1, event_seq=1):
+        from hey_my_buddy.protocol.activity import ActivitySidecar
+
+        sidecar = ActivitySidecar(directory, task_id=task_id, attempt_id=attempt_id, generation=generation)
+        self.assertTrue(sidecar.publish({"phase": "streaming-model", "eventSeq": event_seq,
+                                         "counts": {"modelTurns": 1, "toolCalls": 0}}))
+
+    def test_activity_flows_through_the_channel_and_never_repeats(self):
+        renewal, directory = self.renewal()
+        renewal._forward_activity()
+        self.assertEqual(renewal.worker.client.progress_calls, [], "nothing is published before any sidecar")
+        self.sidecar_write(directory, event_seq=3)
+        renewal._forward_activity()
+        calls = renewal.worker.client.progress_calls
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["attemptId"], "attempt-live")
+        self.assertEqual(calls[0]["data"]["activity"]["eventSeq"], 3)
+        renewal._forward_activity()
+        self.assertEqual(len(renewal.worker.client.progress_calls), 1, "the same sidecar never repeats")
+        self.sidecar_write(directory, event_seq=4)
+        renewal._forward_activity()
+        self.assertEqual(len(renewal.worker.client.progress_calls), 2)
+
+    def test_a_foreign_attempts_sidecar_is_never_forwarded(self):
+        renewal, directory = self.renewal()
+        self.sidecar_write(directory, attempt_id="another-attempt", event_seq=9)
+        renewal._forward_activity()
+        self.assertEqual(renewal.worker.client.progress_calls, [])
+
+    def test_a_stored_request_of_another_invocation_never_binds_or_bypasses(self):
+        renewal, directory = self.renewal()
+        self.sidecar_write(directory, event_seq=3)
+        request_path = Path(renewal.handle.role_run_control["requestFile"])
+        original = request_path.read_text()
+        # Tamper the stored request after the handle was issued: its invocation
+        # no longer matches the held identity, so no channel binds — and the
+        # extracted live path has no sidecar fallback. The sidecar sits there
+        # unread: nothing is forwarded this tick.
+        request = json.loads(original)
+        request["identity"]["invocationId"] = "foreign-invocation"
+        request_path.write_text(json.dumps(request))
+        renewal._forward_activity()
+        self.assertEqual(renewal.worker.client.progress_calls, [])
+        self.assertIsNone(renewal._activity_channel)
+        # The binding is retried, not cached as absent: once the stored request
+        # is whole again, the very next tick binds and forwards.
+        request_path.write_text(original)
+        renewal._forward_activity()
+        calls = renewal.worker.client.progress_calls
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["data"]["activity"]["eventSeq"], 3)
+
+    def test_an_unextracted_harness_keeps_the_original_sidecar_path(self):
+        renewal, directory = self.renewal(with_request=False, harness="command")
+        renewal.handle.role_run_control = {"operation": "worker", "harness": "command"}
+        state, channel = renewal._attempt_activity_binding()
+        self.assertEqual(state, "unextracted")
+        self.assertIsNone(channel)
+        self.sidecar_write(directory, event_seq=3)
+        renewal._forward_activity()
+        calls = renewal.worker.client.progress_calls
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["data"]["activity"]["eventSeq"], 3)
+
+    def test_a_channel_unavailability_is_not_a_stop(self):
+        renewal, directory = self.renewal()
+        self.sidecar_write(directory, event_seq=3)
+        # A channel whose reads fail is an availability fact, never a stop: the
+        # forwarding loop swallows it, forwards nothing and keeps running.
+        state, channel = renewal._attempt_activity_binding()
+        self.assertEqual(state, "bound")
+        with mock.patch.object(channel, "observe", side_effect=BoardError("INTERNAL", "unreadable")):
+            renewal._forward_activity()
+        self.assertEqual(renewal.worker.client.progress_calls, [])
+        # The same sidecar still forwards once the channel reads again.
+        renewal._forward_activity()
+        self.assertEqual(len(renewal.worker.client.progress_calls), 1)
 
 
 if __name__ == "__main__":

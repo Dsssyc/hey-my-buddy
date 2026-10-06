@@ -129,3 +129,13 @@ Host 同时完成一次计划内的新格式真实冒烟，基线为 `ace3e1d`�
 Host 在独立固定源码用真实基线函数对照，仍发现三处 R2/R3 范围内的问题：现有空 journal 被误报超限；同一问题早先的外来记录仍压过后来合法的回答，使 answered 变成 queued；分页预算没有包含 journal 等实际返回元数据，16 条各 3,500 字节的合法回答与 16 条拒绝元数据形成 66,713 字节的 snapshot，超过 65,536 字节上限，实际编码器拒绝。证据为本步 `tmp/` 的 `2c2-host-correction-review.py/.json/.log`。没有模型或安装版 harness 调用、没有完整检查。
 
 上轮探针用 `_live_channel=None` 走基线旁路，该方式在修正后已失效，现在返回 channel-unbound；这些脚本本来也没有“全部通过”的断言。Host 改用从 `ace3e1d` 导出的真实 `inquiry.observe` 作为基线，未修改交付代码。Worker 对“Host 探针全部转绿、与直连逐项相同”的记录需在同 run 修正时撤回并澄清，这涉及验证结论，不按小措辞更正处理。三处代码修正继续退回原 run，Host 不代改。
+
+## 2-C2：固定修正的内部验收与整合
+
+固定输出 `f502de01cad597586c09347d248a7214b40992a1`、artifact `bac278a5-0148-4c57-9355-f3d33fd7c6ba`，累计补丁 SHA-256 `cd2eb3460eaee5667448d39119e0e0fa44758000698982b3e9aedeed51ee4d4d`。Host 核对全部 15 个路径的固定字节与写入范围。代码与测试按累计补丁原样整合，没有代改；运行请求/结果字段及其他 harness 行为未在本项改动。
+
+Host 在独立固定副本重新执行三组 journal/帧反例并显式核对结果：空文件与真实 `ace3e1d` 基线均为 available/0；后来的合法记录清除旧拒绝并得到 answered；带拒绝元数据的页都能在 65,536 字节内编码。另跑黑板 ZCode 实际接线、Worker 转报、角色完整绑定和四个最新 journal/分页回归，共 31 项全过，0 failure/error/skip，unittest 报 16.985 秒。原始材料为本步 `tmp/` 的 `2c2-host-final-probes.json` 与 `2c2-host-final-focused.log`，均是 Python fixture，没有安装版 harness 或模型调用。Worker 的 113 项聚焦与三组配对变异记录亦已核对，未重复整批。
+
+Host 仅在微任务记录末尾追加两处已知事实更正：历史第零步跨界清单不改，当前新增模块关系在本步登记；本微任务没有真实模型检查，Host 的一次真实无工具冒烟单列范围。当前新增跨界关系是 `blackboard/tasks/inquiry.py → buddy/harnesses/live.py`、`blackboard/tasks/inquiry.py → buddy/roles/live.py`；到既有 registry 的关系不算新增模块边，第一轮到 run_contract 的直接引用已移走。没有改动 ADR、指南或历史验收清单。
+
+本份交付通过内部审查；黑板最终 acknowledge 与工作区/任务根回收仍在整步完整检查后办理，保留原 run 的修正入口。下一项 2-D 核对每个格式字段与类的生产用途，删除没有使用方的内容，整合后跑一次完整检查，再停等 Claude Code Host 验收。

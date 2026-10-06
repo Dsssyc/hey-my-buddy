@@ -889,6 +889,13 @@ class _Renewal(threading.Thread):
         #: The last native activity this thread forwarded, so a repeated sidecar is
         #: not published twice and the projection only moves forward.
         self._activity: dict | None = None
+        #: The attempt's live channel through the registered role seam (ADR-025
+        #: step 2-C2), bound once its stored public request verifies. An
+        #: unextracted harness keeps the existing sidecar read; an extracted
+        #: harness whose binding is pending or refused has no update this tick
+        #: and never falls back to a direct read beside its channel.
+        self._activity_channel: Any = None
+        self._activity_unextracted = False
 
     #: How often the durable cancel intent is checked with a read-only call. This is
     #: deliberately independent of the lease renewal period: a committed cancel must
@@ -1018,15 +1025,55 @@ class _Renewal(threading.Thread):
         )
         return True
 
+    def _attempt_activity_binding(self) -> tuple[str, Any]:
+        """This attempt's live binding state over the registered role seam.
+
+        ``bound`` carries the channel whose stored public request verified
+        against the identity this worker received with the handle;
+        ``unextracted`` (cached as final) means the harness's registered run
+        module declares no live binding and the existing sidecar path applies;
+        ``unavailable`` — a pending, unreadable or foreign request — is never
+        cached, so the next tick retries the binding and this tick reports no
+        update instead of reading around its own channel.
+        """
+        if self._activity_channel is not None:
+            return "bound", self._activity_channel
+        if self._activity_unextracted:
+            return "unextracted", None
+        from ..roles import live as role_live
+
+        state, channel = role_live.handle_live_binding(self.handle)
+        if state == role_live.LIVE_BOUND:
+            self._activity_channel = channel
+        elif state == role_live.LIVE_UNEXTRACTED:
+            self._activity_unextracted = True
+        return state, channel
+
     def _forward_activity(self) -> None:
         """Forward one changed, attempt-bound native activity receipt, never a heartbeat."""
-        directory = self.worker.attempt_directory(self.attempt.get("taskId"), self.attempt["attemptId"])
-        payload = activity_module.read_sidecar(
-            activity_module.sidecar_path(directory),
-            task_id=self.attempt["taskId"],
-            attempt_id=self.attempt["attemptId"],
-            generation=self.attempt["generation"],
-        )
+        state, channel = self._attempt_activity_binding()
+        if state == "bound":
+            try:
+                snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=1500,
+                                           fields=("activity",))
+            except BoardError:
+                # A channel failure says nothing about the native process: the
+                # owned child keeps running and the next tick reads again.
+                return
+            payload = snapshot.activity.value if snapshot.activity is not None else None
+        elif state == "unextracted":
+            directory = self.worker.attempt_directory(self.attempt.get("taskId"), self.attempt["attemptId"])
+            payload = activity_module.read_sidecar(
+                activity_module.sidecar_path(directory),
+                task_id=self.attempt["taskId"],
+                attempt_id=self.attempt["attemptId"],
+                generation=self.attempt["generation"],
+            )
+        else:
+            # An extracted harness with an unbound channel: no update this
+            # tick, the binding retried next tick — never a stop and never a
+            # second reader beside the channel.
+            return
         if payload is None or not activity_module.is_newer(payload, self._activity):
             return
         try:

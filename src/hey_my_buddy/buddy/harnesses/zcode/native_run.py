@@ -20,7 +20,11 @@ decides whether an unknown event or a tool fact fails the run.
 
 Model discovery (:func:`run_discovery`) is a separate no-prompt metadata
 operation that reuses the same spawn and handshake primitives; it never
-masquerades as a model run.
+masquerades as a model run. The live channel binding
+(:func:`bind_live_channel`) is the registered module's live seam operation of
+step 2-C2: the blackboard and the Worker runtime reach this harness's live
+facilities only through the registry, never by importing this package
+directly.
 """
 from __future__ import annotations
 
@@ -79,7 +83,7 @@ from ..run_contract import (
     UnknownEvents,
 )
 from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths, snapshot_provider_files
-from .live_bridge import InquiryBridge
+from .live_bridge import InquiryBridge, bind_live_channel
 from .protocol import (
     ActivityProjection,
     NativeConnection,
@@ -1681,7 +1685,8 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
 
 __all__ = [
-    "NoToolProtocol", "SessionServiceMount", "SessionServices", "catalog", "configure_session",
-    "execution_deadline", "prepare_session_service", "prepare_services", "check_preparation",
-    "session_facts", "validate_turn_provenance", "native_evidence", "run", "run_discovery", "selected",
+    "NoToolProtocol", "SessionServiceMount", "SessionServices", "bind_live_channel", "catalog",
+    "configure_session", "execution_deadline", "prepare_session_service", "prepare_services",
+    "check_preparation", "session_facts", "validate_turn_provenance", "native_evidence", "run",
+    "run_discovery", "selected",
 ]

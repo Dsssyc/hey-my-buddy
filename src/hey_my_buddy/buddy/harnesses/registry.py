@@ -51,6 +51,19 @@ def run_seam(name: str) -> HarnessRun | None:
     return RUN_SEAMS.get(name)
 
 
+def live_binding(name: str):
+    """The registered live-channel binding of one harness, or None while it has none.
+
+    A live binding exists only through registration: it must be a callable
+    operation on the registered run module, and nothing is probed or simulated
+    for a harness whose module declares none (ADR-023 principle 8). The
+    declared set stays the minimum the extracted harnesses actually use.
+    """
+    module = RUN_SEAMS.get(name)
+    binding = getattr(module, "bind_live_channel", None)
+    return binding if callable(binding) else None
+
+
 # Switching a harness is atomic here: the registered native body and the
 # role executor replace its removed carrier entries in the same change.
 register_run_seam("zcode", zcode_run)
@@ -161,6 +174,7 @@ __all__ = [
     "adapter",
     "adapters",
     "capability_report",
+    "live_binding",
     "local_capabilities",
     "register_run_seam",
     "run_seam",

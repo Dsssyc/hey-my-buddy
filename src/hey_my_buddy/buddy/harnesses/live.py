@@ -12,6 +12,15 @@ and ``sessionContent`` are declared unsupported everywhere; ADR-022 and ADR-024
 come later. The C-Two transport of step five replaces only what sits behind
 this interface. The frame models are described by pydantic through
 :mod:`hey_my_buddy.protocol.internal_models` (ADR-025 decision 6).
+
+Step 2-C2 wires the real ZCode consumers through this interface. ``observe``
+selects its sources — ``activity``, ``inquiries``, ``observation``, all when
+omitted — or answers one ``inquiry_id`` point query, so a worker activity poll
+reads only the sidecar and an answer wait reads only that one native answer,
+exactly the I/O the direct paths had. The observation carries the fields the
+board's ``live`` view already reads, with the bridge's recent-event metadata
+under ``recentActivity``; the normalized activity sidecar remains the
+snapshot's ``activity`` field and is never replaced by event metadata.
 """
 from __future__ import annotations
 
@@ -35,17 +44,23 @@ from ...protocol.internal_models import (
     fail,
 )
 from .run_contract import FORMAT_VERSION, RunIdentity
-from pydantic import BeforeValidator, model_validator
+from pydantic import BeforeValidator, Field, model_validator
 
 #: The only live frame format version; it never changes a public contract.
 LIVE_FORMAT_VERSION = FORMAT_VERSION
 
 LIVE_KINDS = ("inquiry", "finish-notice")
 INQUIRY_DELIVERY_MODES = ("realtime", "cooperative-checkpoint", "unsupported")
-LIVE_REPLY_STATUSES = ("queued", "delivered", "answered", "unavailable", "unsupported")
+#: The closed reply statuses. ``discarded`` is a real ask outcome (the bridge
+#: accepted the replay of a withdrawn question); with ``observed`` true it is a
+#: successful observation of that committed state, never a transport refusal.
+LIVE_REPLY_STATUSES = ("queued", "delivered", "answered", "discarded", "unavailable", "unsupported")
 #: The closed set of inquiry states a snapshot may report. ``unknown`` is an
 #: honest state for a journal record this interface does not recognize.
 INQUIRY_STATES = ("queued", "delivered", "answered", "discarded", "unavailable", "unknown")
+#: The bridge's own committed state words a successful ask can project; the
+#: existing mapping folds only ``claimed`` into ``queued``.
+REPLY_STATES = ("queued", "claimed", "delivered", "answered", "discarded")
 
 #: The existing inquiry limits, preserved verbatim: the same byte bounds, the
 #: same per-run count and the same transport windows the current bridges enforce.
@@ -66,7 +81,8 @@ MAX_CLOSE_REASON_BYTES = 200
 
 LiveKind = Literal["inquiry", "finish-notice"]
 InquiryDeliveryMode = Literal["realtime", "cooperative-checkpoint", "unsupported"]
-LiveReplyStatus = Literal["queued", "delivered", "answered", "unavailable", "unsupported"]
+LiveReplyStatus = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unsupported"]
+ReplyState = Literal["queued", "claimed", "delivered", "answered", "discarded"]
 InquiryStateValue = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unknown"]
 
 
@@ -133,17 +149,46 @@ class LiveRequest(InternalModel):
         return self
 
 
+#: A bridge state maps onto a reply status without any upgrade: only the
+#: bridge's own committed, journal-backed state can report ``delivered``.
+_REPLY_STATE_STATUSES = {"queued": "queued", "claimed": "queued", "delivered": "delivered",
+                         "answered": "answered", "discarded": "discarded"}
+
+#: The statuses that mean the bridge interaction itself was observed.
+_OBSERVED_STATUSES = ("queued", "delivered", "answered", "discarded")
+
+
 class LiveReply(InternalModel):
-    """One live request's reply fact; ``queued`` is never reported as delivered."""
+    """One live request's reply fact; ``queued`` is never reported as delivered.
+
+    The transport facts are independent of the committed inquiry state: a
+    withdrawn question's replay is an ``observed`` success whose actual state is
+    ``discarded`` — not an unavailable transport (step 2-C2). ``observed`` must
+    agree with the status, ``state`` carries the bridge's own committed word and
+    only rides an observed interaction, and ``error_code`` is the peer's own
+    refusal code from the bridge's ``BRIDGE_ERRORS`` vocabulary when the reason
+    is the transport classification of a refused ask.
+    """
 
     format_version: FormatVersion = LIVE_FORMAT_VERSION
 
     identity: RunIdentity
     request_id: Identifier
     status: LiveReplyStatus
+    observed: bool = False
+    state: Optional[ReplyState] = None
     delivery_mode: Optional[InquiryDeliveryMode] = None
     native_correlation: OptionalFrozenJsonAt(MAX_LIVE_FRAME_BYTES // 2) = None
     reason_code: OptionalText(128) = None
+    error_code: OptionalText(128) = None
+
+    @model_validator(mode="after")
+    def _observed_agrees_with_status(self) -> "LiveReply":
+        if self.observed != (self.status in _OBSERVED_STATUSES):
+            raise fail("observed must agree with the reply status", field="observed")
+        if self.state is not None and not self.observed:
+            raise fail("a state projection needs an observed interaction", field="state")
+        return self
 
 
 class InquiryState(InternalModel):
@@ -153,12 +198,31 @@ class InquiryState(InternalModel):
     keeps the sequence number it was created with and takes a fresh, higher one
     whenever its state changes, so an observer that has read up to ``after_seq``
     can fetch exactly the entries it has not seen yet.
+
+    The answer's and the delivery record's own source facts ride beside the
+    text exactly as the producing bridge wrote them — the byte count, the reply
+    or checkpoint tool evidence, the timestamp, the truncation flag, the
+    bridge's own bounded reason and its delivery record. A field the record
+    never carried stays ``None``; nothing here derives or backfills one.
     """
 
     question_id: Identifier
     status: InquiryStateValue
     answer: OptionalText(MAX_ANSWER_BYTES) = None
     seq: NonNegativeInt = 0
+    bytes: Optional[NonNegativeInt] = None
+    via: OptionalText(512) = None
+    tool_call_id: OptionalText(512) = None
+    at: OptionalText(64) = None
+    truncated: Optional[bool] = None
+    reason: OptionalText(400) = None
+    limitation: OptionalText(2048) = None
+    delivery: OptionalFrozenJsonAt(1024) = None
+
+    def _carried_facts(self) -> tuple:
+        """Everything whose change takes a fresh sequence, ``seq`` itself aside."""
+        return (self.status, self.answer, self.bytes, self.via, self.tool_call_id,
+                self.at, self.truncated, self.reason, self.limitation, self.delivery)
 
 
 def _no_events(value: Any) -> Any:
@@ -173,6 +237,102 @@ def _no_events(value: Any) -> Any:
 
 #: The reserved event slot: empty on the wire is the only legal value.
 ReservedEvents = Annotated[Tuple[FrozenJson, ...], BeforeValidator(_no_events)]
+
+
+class LiveEvent(InternalModel):
+    """One bounded, metadata-only native event the existing bridge keeps.
+
+    The bounds are the producing bridge's own truncations, kept as character
+    bounds exactly where it truncates characters: ``kind`` is cut at 80
+    characters and ``toolName`` at 120. Only event metadata is carried — never
+    tool arguments or output.
+    """
+
+    at: Text(64)
+    kind: Annotated[str, Field(min_length=1, max_length=80)]
+    tool_name: Annotated[Optional[str], Field(min_length=1, max_length=120)] = None
+
+
+class LiveObservation(InternalModel):
+    """The bridge's own live observation, in the board ``live`` view's fields.
+
+    These are exactly the fields the existing public ``live`` projection
+    consumes (step 2-C2); the small sanitized metadata objects keep their
+    bounded JSON form. The recent-event metadata is ``recentActivity`` — the
+    normalized activity sidecar remains the snapshot's ``activity`` field and
+    is never replaced by this metadata. A field the native bridge does not
+    report stays absent or ``None``; nothing is fabricated.
+    """
+
+    ready: bool
+    observed_at: OptionalText(64) = None
+    session_id: OptionalText(512) = None
+    agent_status: OptionalText(32) = None
+    inbox: OptionalFrozenJsonAt(1024) = None
+    last_event: Optional[LiveEvent] = None
+    recent_activity: JsonTuple(LiveEvent, max_items=20) = ()
+    activity_dropped: NonNegativeInt = 0
+    reply_tool: OptionalFrozenJsonAt(1024) = None
+    capability: OptionalText(32) = None
+    supported: Optional[bool] = None
+    attention: OptionalFrozenJsonAt(4096) = None
+    journal: OptionalFrozenJsonAt(1024) = None
+    delivery_mode: Optional[InquiryDeliveryMode] = None
+    limitation: OptionalText(2048) = None
+    unavailable: JsonTuple(Text(64), max_items=16) = ()
+    error: OptionalText(512) = None
+
+
+#: The observation sources one ``observe`` may select; an omitted selection
+#: reads them all (step 2-C2).
+LIVE_FIELDS = ("activity", "inquiries", "observation")
+
+#: The journal availability reasons the existing direct reader published, kept
+#: verbatim so the channel's projection stays lossless against it.
+JOURNAL_REASONS = ("no-journal-path", "journal-not-written", "journal-exceeds-limit",
+                   "journal-unreadable", "journal-unavailable")
+
+JournalReason = Literal["no-journal-path", "journal-not-written", "journal-exceeds-limit",
+                        "journal-unreadable", "journal-unavailable"]
+
+
+class InquiryJournalRejection(InternalModel):
+    """One question's journal record the identity binding refused, and why.
+
+    The reason is the public string the direct reader's own mismatch check
+    produced; nothing here invents a different vocabulary.
+    """
+
+    question_id: Identifier
+    reason: Text(128)
+
+
+class LiveJournal(InternalModel):
+    """One journal projection's availability fact (step 2-C2).
+
+    ``entries`` is the producing reader's own deduplicated count over every
+    well-formed record — rejected ones included — exactly the count the direct
+    file reader always published. ``rejections`` names the questions whose
+    records the version/identity binding refused, so a foreign record surfaces
+    as the public fact it always was instead of a silent loss. The raw records
+    never travel here; only the bound records are projected as inquiry states.
+    """
+
+    available: bool
+    reason: Optional[JournalReason] = None
+    entries: NonNegativeInt = 0
+    rejections: JsonTuple(InquiryJournalRejection, max_items=MAX_INQUIRIES_PER_RUN) = ()
+
+
+def _observe_fields(fields: Any) -> frozenset:
+    if fields is None:
+        return frozenset(LIVE_FIELDS)
+    if isinstance(fields, str) or not isinstance(fields, (list, tuple, set, frozenset)):
+        raise fail(f"fields must be a selection of {', '.join(LIVE_FIELDS)}", field="fields")
+    selected = frozenset(fields)
+    if not selected <= frozenset(LIVE_FIELDS):
+        raise fail(f"fields must be a selection of {', '.join(LIVE_FIELDS)}", field="fields")
+    return selected or frozenset(LIVE_FIELDS)
 
 
 class LiveSnapshot(InternalModel):
@@ -190,20 +350,37 @@ class LiveSnapshot(InternalModel):
     sequence: NonNegativeInt
     activity: OptionalFrozenJsonAt(MAX_LIVE_FRAME_BYTES // 2) = None
     inquiries: JsonTuple(InquiryState, max_items=MAX_INQUIRIES_PER_RUN) = ()
+    observation: Optional[LiveObservation] = None
+    journal: Optional[LiveJournal] = None
     events: ReservedEvents = ()
     unavailable: OptionalText(128) = None
     truncated: bool = False
+    #: The shared transport facts of this snapshot's reads: ``observed`` is
+    #: whether the requested native observation read succeeded (``None`` when
+    #: the field selection did not read one), ``reason`` the failed read's
+    #: transport classification and ``error`` the peer's specific refusal code.
+    observed: Optional[bool] = None
+    reason: OptionalText(128) = None
+    error: OptionalText(128) = None
 
 
 @runtime_checkable
 class LiveChannel(Protocol):
-    """The one live interface of every harness (ADR-025 execution plan §5)."""
+    """The one live interface of every harness (ADR-025 execution plan §5).
+
+    ``identity`` is the complete execution identity the channel is bound to —
+    the real run request's own, never a fabricated one (step 2-C2).
+    """
+
+    @property
+    def identity(self) -> RunIdentity: ...
 
     def capabilities(self) -> LiveCapabilities: ...
 
     def request(self, request: LiveRequest, *, timeout_ms: int) -> LiveReply: ...
 
-    def observe(self, *, after_seq: int | None, limit: int, timeout_ms: int) -> LiveSnapshot: ...
+    def observe(self, *, after_seq: int | None = None, limit: int | None = None, timeout_ms: int,
+                fields: Any = None, inquiry_id: str | None = None) -> LiveSnapshot: ...
 
     def close(self, *, reason: str) -> None: ...
 
@@ -215,8 +392,11 @@ class ExistingLiveChannel:
     one validated activity payload (or ``None``), ``ask`` queues one question
     through the existing inquiry bridge within the requested transport window
     (``ask(question_id, question, timeout_ms)``) and returns its committed
-    reply value (raising :class:`BoardError` with the bridge's error code), and
-    ``read_journal`` returns the durable inquiry journal's records. Nothing
+    reply value — or the shared bridge transport's result fact, whose
+    ``{"ok": False}`` refusals keep their reason and specific code — ``read_journal``
+    returns the durable inquiry journal's records, ``read_observation(timeout_ms)``
+    returns the bridge's own observation value (or its transport result fact)
+    and ``read_answer(inquiry_id, timeout_ms)`` one native answer view. Nothing
     here starts a native turn, holds a process handle or touches a deadline;
     closing the channel changes no result ownership.
 
@@ -231,7 +411,9 @@ class ExistingLiveChannel:
     def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, *,
                  read_activity: Callable[[], Mapping[str, Any] | None] | None = None,
                  ask: Callable[[str, str, int], Mapping[str, Any]] | None = None,
-                 read_journal: Callable[[], list[Mapping[str, Any]]] | None = None):
+                 read_journal: Callable[[], list[Mapping[str, Any]]] | None = None,
+                 read_observation: Callable[[int], Any] | None = None,
+                 read_answer: Callable[[str, int], Any] | None = None):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(capabilities, LiveCapabilities):
@@ -241,6 +423,8 @@ class ExistingLiveChannel:
         self._read_activity = read_activity
         self._ask = ask
         self._read_journal = read_journal
+        self._read_observation = read_observation
+        self._read_answer = read_answer
         self._sequence = 0
         self._next_seq = 1
         self._activity: FrozenJson | None = None
@@ -248,6 +432,11 @@ class ExistingLiveChannel:
         self._requests: dict[str, str] = {}
         self._replies: dict[str, LiveReply] = {}
         self._closed_reason: str | None = None
+
+    @property
+    def identity(self) -> RunIdentity:
+        """The complete execution identity this channel is bound to."""
+        return self._identity
 
     def capabilities(self) -> LiveCapabilities:
         return self._capabilities
@@ -286,6 +475,16 @@ class ExistingLiveChannel:
             # A refused ask is never remembered: the asking side may retry the
             # identical request, exactly as the existing bridges allow.
             return self._unavailable(request.request_id, str(error.code)[:64])
+        if isinstance(value, Mapping) and value.get("ok") is False:
+            # The shared transport's refusal fact: the transport classification
+            # and the peer's own specific code are carried beside each other
+            # instead of the code being folded into one generic refusal.
+            return self._unavailable(
+                request.request_id,
+                check_text(str(value.get("reason") or "bridge-write-failed"), "bridge reason", maximum=64),
+                error_code=value.get("code") if isinstance(value.get("code"), str) else None)
+        if isinstance(value, Mapping) and value.get("ok") is True:
+            value = value.get("value")
         state = value.get("state") if isinstance(value, dict) else None
         accepted = isinstance(value, dict) and value.get("accepted") is True
         if not accepted:
@@ -298,17 +497,30 @@ class ExistingLiveChannel:
                 status = "queued"
             else:
                 return self._unavailable(request.request_id, "unknown-bridge-state")
-        correlation = {key: value[key] for key in ("inquiryId", "questionSha256", "state", "duplicate")
+        correlation = {key: value[key] for key in ("inquiryId", "questionSha256", "state", "duplicate",
+                                                   "delivery", "reason")
                        if isinstance(value, dict) and value.get(key) is not None}
+        # The interaction was observed whatever committed state it showed: a
+        # withdrawn question's replay carries ``discarded`` as a success fact,
+        # never as a transport refusal.
         reply = LiveReply(identity=self._identity, request_id=request.request_id, status=status,
+                          observed=True, state=state,
                           delivery_mode=self._capabilities.inquiry_delivery,
                           native_correlation=correlation or None)
         self._requests[request.request_id] = digest
         self._replies[request.request_id] = reply
         return reply
 
-    def observe(self, *, after_seq: int | None, limit: int, timeout_ms: int) -> LiveSnapshot:
-        """One bounded page of the run's live facts.
+    def observe(self, *, after_seq: int | None = None, limit: int | None = None, timeout_ms: int,
+                fields: Any = None, inquiry_id: str | None = None) -> LiveSnapshot:
+        """One bounded page of the run's live facts, over the selected sources.
+
+        With ``fields`` the caller selects which sources this read touches —
+        ``activity``, ``inquiries``, ``observation`` — and an omitted selection
+        reads them all, as every step-one caller did. With ``inquiry_id`` the
+        read is a point query for that one question's native answer and nothing
+        else is read, so an answer wait costs exactly the one socket roundtrip
+        the direct path cost (step 2-C2).
 
         Entries carry their own ``seq``; a page holds the entries after
         ``after_seq`` up to ``limit`` and up to what one frame holds. When
@@ -318,15 +530,23 @@ class ExistingLiveChannel:
         entry because pages can always continue.
         """
         _timeout_ms(timeout_ms, "timeoutMs")
+        selected = _observe_fields(fields)
+        if inquiry_id is not None:
+            return self._observe_answer(inquiry_id, timeout_ms)
         if after_seq is not None and (isinstance(after_seq, bool) or not isinstance(after_seq, int)
                                       or after_seq < 0):
             raise fail("afterSeq must be null or a nonnegative integer", field="afterSeq")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_OBSERVE_LIMIT:
             raise fail(f"limit must be an integer between 1 and {MAX_OBSERVE_LIMIT}", field="limit")
         unavailable: list[str] = []
+        observed: bool | None = None
+        reason: str | None = None
+        error: str | None = None
+        observation: LiveObservation | None = None
+        journal: LiveJournal | None = None
         if self._closed_reason is not None:
             unavailable.append("channel-closed")
-        if self._read_activity is not None and self._closed_reason is None:
+        if "activity" in selected and self._read_activity is not None and self._closed_reason is None:
             try:
                 payload = self._read_activity()
             except BoardError:
@@ -337,16 +557,21 @@ class ExistingLiveChannel:
                     self._activity = FrozenJson(payload)
                     self._sequence = self._next_seq
                     self._next_seq += 1
-        if self._read_journal is not None and self._closed_reason is None:
+        if "inquiries" in selected and self._read_journal is not None and self._closed_reason is None:
             try:
-                entries = self._read_journal()
+                journal = self._read_journal_fact()
             except BoardError:
                 unavailable.append("journal-unavailable")
+        if "observation" in selected and self._closed_reason is None:
+            if self._read_observation is None:
+                observed, reason = False, "observation-unavailable"
             else:
-                self._merge_journal(_journal_states(entries))
-        # Page the unseen entries: every page fits one frame, and what does not
-        # fit stays reachable through the next after_seq instead of being
-        # dropped.
+                observed, reason, error, observation = self._read_observation_facts(timeout_ms)
+        # Page the unseen entries: every page fits one frame with the metadata
+        # it will actually return — the journal fact and the observation ride
+        # in the candidate, so a page is never encoded over the bound it was
+        # measured without (step 2-C2) — and what does not fit stays reachable
+        # through the next after_seq instead of being dropped.
         matching = [entry for entry in self._entries
                     if after_seq is None or entry.seq > after_seq]
         page: list[InquiryState] = []
@@ -355,7 +580,8 @@ class ExistingLiveChannel:
                 break
             candidate = LiveSnapshot(identity=self._identity, sequence=self._sequence,
                                      activity=self._activity,
-                                     inquiries=tuple(page + [entry]))
+                                     inquiries=tuple(page + [entry]),
+                                     observation=observation, journal=journal)
             if page and len(canonical_json(candidate.to_payload()).encode()) > MAX_LIVE_FRAME_BYTES:
                 break
             page.append(entry)
@@ -371,14 +597,110 @@ class ExistingLiveChannel:
         else:
             sequence = self._sequence
         return LiveSnapshot(identity=self._identity, sequence=sequence, activity=self._activity,
-                            inquiries=tuple(page), unavailable="+".join(unavailable) or None,
-                            truncated=truncated)
+                            inquiries=tuple(page), observation=observation, journal=journal,
+                            unavailable="+".join(unavailable) or None,
+                            truncated=truncated, observed=observed, reason=reason, error=error)
+
+    def _read_journal_fact(self) -> LiveJournal:
+        """One journal read folded into entries, returned as its availability fact.
+
+        The binding may return the fact mapping — availability, reason, the
+        reader's own deduplicated record count and the per-question rejections
+        its identity binding produced — or a plain record list, the step-one
+        shape, which counts as an available read whose every record the channel
+        itself deduplicates. Either way the bound records merge into the
+        entries exactly as before; only the availability fact is new.
+        """
+        fact = self._read_journal()
+        if not (isinstance(fact, Mapping) and "records" in fact):
+            records = fact
+            if not isinstance(records, list):
+                raise fail("the inquiry journal binding must return a list of records")
+            self._merge_journal(_journal_states(records))
+            return LiveJournal(available=True, entries=len(_journal_record_ids(records)))
+        records = fact.get("records")
+        if not isinstance(records, list):
+            raise fail("the inquiry journal fact's records must be a list")
+        self._merge_journal(_journal_states(records))
+        raw_rejections = fact.get("rejections")
+        if raw_rejections is None:
+            raw_rejections = []
+        if not isinstance(raw_rejections, list):
+            raise fail("the inquiry journal fact's rejections must be a list")
+        rejections = tuple(InquiryJournalRejection(question_id=item["questionId"], reason=item["reason"])
+                           if isinstance(item, dict) else fail("a journal rejection must be an object")
+                           for item in raw_rejections)
+        entries = fact.get("entries")
+        if isinstance(entries, bool) or not isinstance(entries, int) or entries < 0:
+            raise fail("the inquiry journal fact's entries must be a nonnegative integer",
+                       field="entries")
+        reason = fact.get("reason")
+        if reason is not None and reason not in JOURNAL_REASONS:
+            raise fail("the inquiry journal fact carries an unknown availability reason",
+                       field="reason")
+        return LiveJournal(available=fact.get("available") is True,
+                           reason=reason, entries=entries, rejections=rejections)
+
+    def _read_observation_facts(self, timeout_ms: int) -> tuple[bool, str | None, str | None,
+                                                                LiveObservation | None]:
+        """One observation read and its shared transport facts.
+
+        A refused or failed read is a fact, never an invented observation: the
+        transport classification lands in ``reason`` and the peer's own code in
+        ``error``; a read whose value the strict model refuses is reported as
+        ``observation-unavailable`` instead of being reshaped into look-alike
+        metadata.
+        """
+        try:
+            result = self._read_observation(timeout_ms)
+        except BoardError:
+            return False, "observation-unavailable", None, None
+        if isinstance(result, Mapping) and result.get("ok") is False:
+            code = result.get("code")
+            return (False,
+                    check_text(str(result.get("reason") or "bridge-write-failed"), "bridge reason", maximum=128),
+                    code if isinstance(code, str) and code else None,
+                    None)
+        value = result.get("value") if isinstance(result, Mapping) and result.get("ok") is True else result
+        if not isinstance(value, Mapping):
+            return False, "observation-unavailable", None, None
+        try:
+            return True, None, None, LiveObservation.from_payload(dict(value))
+        except BoardError:
+            return False, "observation-unavailable", None, None
+
+    def _observe_answer(self, inquiry_id: str, timeout_ms: int) -> LiveSnapshot:
+        """One native answer point query: that inquiry only, nothing else read."""
+        if len(inquiry_id.encode()) > MAX_REQUEST_ID or not inquiry_id:
+            raise fail("inquiryId must be a nonempty string of at most "
+                       f"{MAX_REQUEST_ID} bytes", field="inquiryId")
+        if self._closed_reason is not None:
+            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
+                                unavailable="channel-closed")
+        if self._read_answer is None:
+            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
+                                observed=False, reason="answer-unavailable")
+        try:
+            result = self._read_answer(inquiry_id, timeout_ms)
+        except BoardError:
+            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
+                                observed=False, reason="answer-unavailable")
+        if isinstance(result, Mapping) and result.get("ok") is False:
+            code = result.get("code")
+            return LiveSnapshot(identity=self._identity, sequence=self._sequence,
+                                observed=False,
+                                reason=check_text(str(result.get("reason") or "bridge-write-failed"),
+                                                  "bridge reason", maximum=128),
+                                error=code if isinstance(code, str) and code else None)
+        value = result.get("value") if isinstance(result, Mapping) and result.get("ok") is True else result
+        return LiveSnapshot(identity=self._identity, sequence=self._sequence,
+                            inquiries=(_answer_state(inquiry_id, value),), observed=True)
 
     def _merge_journal(self, states: tuple[InquiryState, ...]) -> None:
         """Fold deduplicated journal states into entries with stable seqs.
 
-        A question keeps its sequence while its state is unchanged and takes a
-        fresh, higher one whenever the journal shows a new state, so observers
+        A question keeps its sequence while every carried fact is unchanged and
+        takes a fresh, higher one whenever any of them changes, so observers
         that have read up to a sequence see exactly the changes after it.
         """
         replaced: list[InquiryState] = []
@@ -386,11 +708,15 @@ class ExistingLiveChannel:
         previous = {entry.question_id: entry for entry in self._entries}
         for state in states:
             old = previous.get(state.question_id)
-            if old is not None and (old.status, old.answer) == (state.status, state.answer):
+            if old is not None and old._carried_facts() == state._carried_facts():
                 replaced.append(old)
                 continue
             replaced.append(InquiryState(question_id=state.question_id, status=state.status,
-                                         answer=state.answer, seq=self._next_seq))
+                                         answer=state.answer, bytes=state.bytes, via=state.via,
+                                         tool_call_id=state.tool_call_id, at=state.at,
+                                         truncated=state.truncated, reason=state.reason,
+                                         limitation=state.limitation, delivery=state.delivery,
+                                         seq=self._next_seq))
             self._next_seq += 1
             changed = True
         if changed:
@@ -403,15 +729,10 @@ class ExistingLiveChannel:
         if self._closed_reason is None:
             self._closed_reason = reason
 
-    def _unavailable(self, request_id: str, reason_code: str) -> LiveReply:
+    def _unavailable(self, request_id: str, reason_code: str, *, error_code: str | None = None) -> LiveReply:
         return LiveReply(identity=self._identity, request_id=request_id, status="unavailable",
-                         reason_code=reason_code)
+                         reason_code=reason_code, error_code=error_code)
 
-
-#: A bridge state maps onto a reply status without any upgrade: only the
-#: bridge's own committed, journal-backed state can report ``delivered``.
-_REPLY_STATE_STATUSES = {"queued": "queued", "claimed": "queued", "delivered": "delivered",
-                         "answered": "answered"}
 
 #: Journal record states map onto the closed snapshot set; an unrecognized state
 #: stays ``unknown`` instead of being silently promoted.
@@ -419,11 +740,63 @@ _JOURNAL_STATE_STATUSES = {"queued": "queued", "claimed": "queued", "delivered":
                            "answered": "answered", "discarded": "discarded", "unavailable": "unavailable"}
 
 
+def _bounded_bytes(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _bounded_word(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _journal_record_ids(records: list) -> set:
+    """The deduplicated question ids of a record list, the reader's own count."""
+    ids = set()
+    for entry in records:
+        if not isinstance(entry, dict):
+            continue
+        question_id = entry.get("inquiryId") or entry.get("questionId") or entry.get("id")
+        if isinstance(question_id, str) and question_id:
+            ids.add(question_id)
+    return ids
+
+
+def _record_facts(entry: dict) -> dict:
+    """One journal record's carried facts, exactly as the record states them.
+
+    The answer's own source fields come from the answer object when the record
+    carries one and from the record's own sibling fields when it carries a bare
+    answer text — the two shapes the existing bridges write. Anything the
+    record never stated stays ``None``.
+    """
+    answer = entry.get("answer")
+    nested = isinstance(answer, dict)
+    source = answer if nested else entry
+    text = answer.get("text") if nested else answer
+    facts: dict[str, Any] = {
+        "answer": text if isinstance(text, str) and text else None,
+        "bytes": _bounded_bytes(source.get("bytes") if nested else entry.get("answerBytes")),
+        "via": _bounded_word(source.get("via")),
+        "tool_call_id": _bounded_word(source.get("toolCallId")),
+        "at": _bounded_word(source.get("at") if nested else entry.get("answeredAt")),
+        "truncated": (source.get("truncated") if isinstance(source.get("truncated"), bool)
+                      else (entry.get("truncated") is True if not nested else None)),
+        "reason": _bounded_word(entry.get("reason")),
+        "limitation": _bounded_word(entry.get("limitation")),
+        "delivery": entry.get("delivery") if isinstance(entry.get("delivery"), dict) else None,
+    }
+    return facts
+
+
 def _journal_states(entries: Any) -> tuple[InquiryState, ...]:
-    """Deduplicate journal records into one state per question, last record wins."""
+    """Deduplicate journal records into one state per question, last record wins.
+
+    A later record overwrites what it carries; a source field it does not
+    carry keeps the earlier record's value, the way the producing bridge merges
+    its own entries. Only whole facts move forward — nothing is inferred.
+    """
     if not isinstance(entries, list):
         raise fail("the inquiry journal binding must return a list of records")
-    states: dict[str, InquiryState] = {}
+    states: dict[str, dict] = {}
     order: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -433,15 +806,46 @@ def _journal_states(entries: Any) -> tuple[InquiryState, ...]:
         if not isinstance(question_id, str) or not question_id or len(question_id.encode()) > MAX_REQUEST_ID:
             raise fail("an inquiry journal record carries no bounded question id")
         status = _JOURNAL_STATE_STATUSES.get(state, "unknown")
-        answer = entry.get("answer")
-        answer = answer if isinstance(answer, str) and answer else None
         if question_id not in states:
             order.append(question_id)
-        states[question_id] = InquiryState(question_id=question_id, status=status, answer=answer)
+            states[question_id] = {"status": status, **_record_facts(entry)}
+            continue
+        merged = {"status": status, **_record_facts(entry)}
+        for key, value in states[question_id].items():
+            if key != "status" and merged.get(key) is None:
+                merged[key] = value
+        states[question_id] = merged
     if len(states) > MAX_INQUIRIES_PER_RUN:
         raise fail("the inquiry journal carries more than "
                     f"{MAX_INQUIRIES_PER_RUN} questions")
-    return tuple(states[question_id] for question_id in order)
+    return tuple(InquiryState(question_id=question_id, **states[question_id])
+                 for question_id in order)
+
+
+def _answer_state(inquiry_id: str, value: Any) -> InquiryState:
+    """One native answer view mapped onto the closed inquiry-state set.
+
+    The existing ``answer`` binding's value shape is kept: an available answer
+    carries its text with its own source fields, an unavailable one the
+    bridge's reason. An unrecognized state stays ``unknown``.
+    """
+    state = value.get("state") if isinstance(value, dict) else None
+    status = _JOURNAL_STATE_STATUSES.get(state, "unknown")
+    answer = value.get("answer") if isinstance(value, dict) else None
+    fields: dict[str, Any] = {"answer": None, "bytes": None, "via": None, "tool_call_id": None,
+                              "at": None, "truncated": None, "reason": None}
+    if isinstance(answer, dict):
+        text = answer.get("text")
+        if isinstance(text, str) and text and answer.get("available") is not False:
+            fields["answer"] = text
+            fields["bytes"] = _bounded_bytes(answer.get("bytes"))
+            fields["via"] = _bounded_word(answer.get("via"))
+            fields["tool_call_id"] = _bounded_word(answer.get("toolCallId"))
+            fields["at"] = _bounded_word(answer.get("at"))
+            fields["truncated"] = answer.get("truncated") if isinstance(answer.get("truncated"), bool) else None
+        else:
+            fields["reason"] = _bounded_word(answer.get("reason"))
+    return InquiryState(question_id=inquiry_id, status=status, **fields)
 
 
 def _bounded_frame(payload: dict, label: str) -> str:
@@ -479,9 +883,11 @@ def decode_live_snapshot(value: str | bytes | Mapping) -> LiveSnapshot:
 
 
 __all__ = [
-    "EXISTING_CAPABILITIES", "INQUIRY_DELIVERY_MODES", "INQUIRY_STATES", "LIVE_FORMAT_VERSION",
-    "LIVE_KINDS", "LIVE_REPLY_STATUSES", "LiveCapabilities", "LiveChannel", "ExistingLiveChannel",
-    "FinishNoticePayload", "InquiryPayload", "InquiryState", "LiveReply", "LiveRequest", "LiveSnapshot",
+    "EXISTING_CAPABILITIES", "INQUIRY_DELIVERY_MODES", "INQUIRY_STATES", "JOURNAL_REASONS",
+    "LIVE_FIELDS", "LIVE_FORMAT_VERSION", "LIVE_KINDS", "LIVE_REPLY_STATUSES", "LiveCapabilities",
+    "LiveChannel", "ExistingLiveChannel", "FinishNoticePayload", "InquiryJournalRejection",
+    "InquiryPayload", "InquiryState", "LiveEvent", "LiveJournal", "LiveObservation", "LiveReply",
+    "LiveRequest", "LiveSnapshot", "REPLY_STATES",
     "MAX_ANSWER_BYTES", "MAX_INQUIRIES_PER_RUN", "MAX_LIVE_FRAME_BYTES", "MAX_QUESTION_BYTES",
     "MAX_TRANSPORT_TIMEOUT_MS", "MAX_WAIT_MS", "MIN_TRANSPORT_TIMEOUT_MS",
     "decode_live_reply", "decode_live_request", "decode_live_snapshot", "encode_live_reply",

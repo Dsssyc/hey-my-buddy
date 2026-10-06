@@ -11,9 +11,11 @@ for the channel contract.
 
 :func:`bind_live_channel` is the real narrow binding of ADR-025's
 :class:`~hey_my_buddy.buddy.harnesses.live.ExistingLiveChannel` over these
-current facilities: questions go through the bridge socket with the attempt's
-token, activity comes from the attempt's published sidecar and inquiry states
-from the durable journal. Step five replaces what sits behind that interface;
+current facilities: questions, native observations and answer views go through
+the shared bridge transport (:mod:`hey_my_buddy.protocol.inquiry_transport`,
+the one socket client of this protocol — this harness keeps no second copy),
+activity comes from the attempt's published sidecar and inquiry states from
+the durable journal. Step five replaces what sits behind that interface;
 until then this is the one binding, and it never starts a native turn or
 touches the native deadline.
 """
@@ -22,7 +24,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import socket
 import stat
 import threading
@@ -32,6 +33,7 @@ from pathlib import Path
 from .... import locking
 from ....errors import BoardError
 from ....json_codec import canonical_json
+from ....protocol.inquiry_transport import bridge_request
 from ...roles.turn_io import private_json
 from ..live import (
     EXISTING_CAPABILITIES,
@@ -606,72 +608,69 @@ class InquiryBridge:
         }
 
 
-def bridge_ask(credentials: dict, question_id: str, question: str, timeout_ms: int) -> dict:
-    """One client ask over the bridge socket, in the bridge's own frame format.
+#: The bridge snapshot's fields the channel observation carries — exactly the
+#: fields the board's ``live`` view reads. The bridge's own ``limits`` and its
+#: start timestamp stay behind: they are dropped here, never hidden in a JSON
+#: slot, and the recent-event metadata is renamed to ``recentActivity`` so the
+#: snapshot's ``activity`` field keeps meaning the normalized sidecar.
+_OBSERVATION_FIELDS = ("ready", "observedAt", "sessionId", "agentStatus", "inbox", "lastEvent",
+                       "activityDropped", "replyTool", "capability", "supported", "attention",
+                       "journal", "deliveryMode", "limitation", "unavailable", "error")
 
-    This is the live binding's narrow client for the existing socket transport
-    (the blackboard service reaches the same server through its own copy of the
-    frame; the driver-side binding cannot import across that boundary). The
-    caller's transport window is the socket's own timeout — connect, send and
-    receive alike — and the reply must answer this frame's id; a refused,
-    foreign or unreachable bridge surfaces as the bridge's error code in one
-    :class:`BoardError`, classified exactly as the existing callers classify
-    them.
+
+def _observation_view(value: dict) -> dict:
+    view = {key: value[key] for key in _OBSERVATION_FIELDS if key in value}
+    if "activity" in value:
+        view["recentActivity"] = value["activity"]
+    return view
+
+
+def _bridge_call(credentials: dict, method: str, payload: dict, timeout_ms: int):
+    """One observe/answer roundtrip through the shared bridge transport.
+
+    The transport's result fact returns as it is: ``{"ok": True, "value": …}``
+    carries the bridge's value, ``{"ok": False, "reason": …, "code": …}`` the
+    refusal with its specific code. A successful reply that carries no object
+    value is refused here, so the channel reports an honest unavailability
+    instead of projecting a look-alike observation.
     """
-    frame_id = secrets.token_hex(8)
-    frame = canonical_json({"version": BRIDGE_PROTOCOL_VERSION, "id": frame_id,
-                            "token": credentials.get("token"), "method": "ask",
-                            "inquiryId": question_id, "question": question}).encode()
-    if len(frame) > MAX_BRIDGE_FRAME_BYTES:
-        raise BoardError("INVALID_ARGUMENT", "the question exceeds the bridge frame bound")
-    window = max(0.001, min(timeout_ms / 1000.0, BRIDGE_WAIT_SECONDS))
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(window)
-            client.connect(str(credentials.get("socketPath") or ""))
-            client.sendall(frame + b"\n")
-            raw = bytearray()
-            while b"\n" not in raw:
-                block = client.recv(4096)
-                if not block:
-                    break
-                raw.extend(block)
-                if len(raw) > MAX_BRIDGE_FRAME_BYTES:
-                    raise BoardError("BRIDGE_UNREACHABLE", "the inquiry bridge reply exceeded its frame bound")
-    except socket.timeout:
-        raise BoardError("BRIDGE_TIMEOUT",
-                         "the inquiry bridge did not answer within its transport window") from None
-    except OSError as error:
-        raise BoardError("BRIDGE_UNREACHABLE",
-                         f"the inquiry bridge could not be reached ({error.__class__.__name__})") from None
-    if not raw:
-        raise BoardError("BRIDGE_UNREACHABLE", "the inquiry bridge closed without a reply")
-    try:
-        reply = json.loads(bytes(raw).split(b"\n", 1)[0])
-    except ValueError:
-        raise BoardError("BRIDGE_UNREACHABLE", "the inquiry bridge reply was not JSON") from None
-    if not isinstance(reply, dict) or reply.get("id") != frame_id:
-        raise BoardError("BRIDGE_UNREACHABLE", "the inquiry bridge reply carried a foreign id")
-    if reply.get("ok") is not True:
-        raise BoardError("BRIDGE_REFUSED", f"the inquiry bridge refused the ask ({reply.get('error')})")
-    value = reply.get("value")
-    if not isinstance(value, dict):
-        raise BoardError("BRIDGE_UNREACHABLE", "the inquiry bridge reply carried no value")
-    return value
+    result = bridge_request(credentials, method, payload, timeout_ms=timeout_ms)
+    if result.get("ok") is True and not isinstance(result.get("value"), dict):
+        raise BoardError("INVALID_ARGUMENT", "the inquiry bridge reply carried no value")
+    return result
 
 
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str,
+#: The rejection strings of the direct reader's own mismatch check, kept
+#: verbatim; a record that carries neither field was never foreign to it, so a
+#: binding refusal on such a record says exactly what it is.
+_UNBOUND_REASON = "the journal record is not bound to this execution"
+
+
+def _journal_rejection_reason(record: dict, bound: dict) -> str:
+    for key, label in (("taskId", "task"), ("attemptId", "attempt")):
+        value = record.get(key)
+        if value in (None, ""):
+            continue
+        if not isinstance(value, str) or value != bound[key]:
+            return f"the journal record belongs to another {label}"
+    return _UNBOUND_REASON
+
+
+def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
                       activity_path: Path) -> ExistingLiveChannel:
     """The real existing-facilities live binding of one governed zcode run.
 
-    ``ask`` queues through the bridge socket inside its own transport window,
-    activity reads the attempt's published sidecar, and inquiry states replay
-    the durable journal through the shared-locked snapshot read. Nothing here
+    ``ask`` queues through the shared bridge transport inside its own transport
+    window and returns the transport's result fact, ``read_observation`` and
+    ``read_answer`` read the same socket through the same one client, activity
+    reads the attempt's published sidecar, and inquiry states replay the
+    durable journal through the shared-locked snapshot read. Nothing here
     upgrades a queued question, starts a native turn or touches the deadline.
     """
 
-    def ask(question_id: str, question: str, timeout_ms: int) -> dict:
-        return bridge_ask(credentials, question_id, question, timeout_ms)
+    def ask(question_id: str, question: str, timeout_ms: int):
+        return bridge_request(credentials, "ask",
+                              {"inquiryId": question_id, "question": question}, timeout_ms=timeout_ms)
 
     def read_activity():
         # The existing attempt-bound sidecar reader — validation, binding and
@@ -682,15 +681,49 @@ def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path:
                                               attempt_id=identity.attempt_id,
                                               generation=identity.generation)
 
-    def read_journal() -> list[dict]:
-        # The same attempt binding the bridge's own replay enforces: only the
-        # current journal version and this execution's identity replay.
+    def read_journal():
+        """The journal as one availability fact over the shared-locked snapshot read.
+
+        The availability reasons follow the direct reader's own semantics,
+        decided by a minimal state check beside the shared-locked read: no
+        path, not written (the state check itself fails), unreadable (the state
+        check passed but the locked open did not), actually over the byte cap,
+        and — a real, readable file — empty with zero entries. ``entries`` is
+        the reader's own deduplicated per-question count over every
+        well-formed record, rejected ones included.
+
+        Each question's fact follows its final effective record, the same
+        last-record-per-id rule the direct reader applies: a latest legal
+        record clears the id's older rejection and contributes its bound
+        records (their source continuity intact), a latest foreign record
+        contributes exactly one rejection with its own reason — never an
+        accumulation of every historical refusal, and never an assumption that
+        the last write was legal.
+        """
+        if not journal_path:
+            return {"available": False, "reason": "no-journal-path", "entries": 0,
+                    "records": [], "rejections": []}
+        try:
+            info = os.stat(journal_path)
+        except OSError:
+            return {"available": False, "reason": "journal-not-written", "entries": 0,
+                    "records": [], "rejections": []}
+        if not stat.S_ISREG(info.st_mode):
+            return {"available": False, "reason": "journal-unreadable", "entries": 0,
+                    "records": [], "rejections": []}
+        if info.st_size > MAX_JOURNAL_BYTES:
+            return {"available": False, "reason": "journal-exceeds-limit", "entries": 0,
+                    "records": [], "rejections": []}
         raw = read_shared_snapshot(journal_path, MAX_JOURNAL_BYTES)
         if raw is None:
-            return []
+            # The state check passed and the locked open still failed: the
+            # direct reader called this unreadable, not missing.
+            return {"available": False, "reason": "journal-unreadable", "entries": 0,
+                    "records": [], "rejections": []}
         bound = {"taskId": identity.task_id, "attemptId": identity.attempt_id,
                  "generation": identity.generation, "turnId": identity.turn_id}
-        records = []
+        bound_records: dict[str, list[dict]] = {}
+        rejection: dict[str, str] = {}
         for line in raw.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
@@ -699,26 +732,48 @@ def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path:
                 record = json.loads(line)
             except ValueError:
                 continue  # a torn line is ignored, never fatal
-            if not isinstance(record, dict) or record.get("version") != INQUIRY_JOURNAL_VERSION:
+            if not isinstance(record, dict):
                 continue
-            if any(key not in record or record[key] != bound[key]
-                   for key in ("taskId", "attemptId", "generation", "turnId")):
+            question_id = record.get("inquiryId")
+            if not isinstance(question_id, str) or not question_id:
                 continue
-            # The bridge journals an answered record as ``{text, via, toolCallId,
-            # …}`` under ``answer``; the channel's answer fact is that verified
-            # text, and the journal file itself keeps every source field.
-            answer = record.get("answer")
-            if isinstance(answer, dict) and isinstance(answer.get("text"), str):
-                record = {**record, "answer": answer["text"]}
-            records.append(record)
-        return records
+            if record.get("version") != INQUIRY_JOURNAL_VERSION or any(
+                    key not in record or record[key] != bound[key]
+                    for key in ("taskId", "attemptId", "generation", "turnId")):
+                rejection[question_id] = _journal_rejection_reason(record, bound)
+                continue
+            # This legal record is the id's latest fact: it clears any older
+            # rejection and keeps the id's valid-record source continuity.
+            bound_records.setdefault(question_id, []).append(record)
+            rejection.pop(question_id, None)
+        # The final effective record per id decides, exactly like the direct
+        # reader's last-record rule: an id whose latest record was foreign
+        # contributes its one rejection and none of its earlier records.
+        records = [record for question_id, question_records in bound_records.items()
+                   if question_id not in rejection
+                   for record in question_records]
+        rejections = [{"questionId": question_id, "reason": rejection[question_id]}
+                      for question_id in rejection]
+        return {"available": True, "reason": None,
+                "entries": len(bound_records.keys() | rejection.keys()),
+                "records": records, "rejections": rejections}
+
+    def read_observation(timeout_ms: int):
+        result = _bridge_call(credentials, "observe", {}, timeout_ms)
+        if result.get("ok") is True:
+            return {"ok": True, "value": _observation_view(result["value"])}
+        return result
+
+    def read_answer(inquiry_id: str, timeout_ms: int):
+        return _bridge_call(credentials, "answer", {"inquiryId": inquiry_id}, timeout_ms)
 
     capabilities: LiveCapabilities = EXISTING_CAPABILITIES["zcode"]
     return ExistingLiveChannel(
-        identity, capabilities, ask=ask, read_activity=read_activity, read_journal=read_journal)
+        identity, capabilities, ask=ask, read_activity=read_activity, read_journal=read_journal,
+        read_observation=read_observation, read_answer=read_answer)
 
 
 __all__ = [
     "ANSWERABLE_STATES", "ANSWERED_STATES", "BRIDGE_PROTOCOL_VERSION", "BRIDGE_WAIT_SECONDS",
-    "InquiryBridge", "MAX_BRIDGE_FRAME_BYTES", "bind_live_channel", "bridge_ask",
+    "InquiryBridge", "MAX_BRIDGE_FRAME_BYTES", "bind_live_channel",
 ]

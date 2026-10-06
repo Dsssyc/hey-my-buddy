@@ -34,6 +34,7 @@ from hey_my_buddy.buddy.harnesses.zcode.native_run import (
     prepare_session_service,
     run,
 )
+from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import no_tool_prompt
@@ -744,43 +745,350 @@ class LiveBindingTests(NativeRunCase):
         self.assertIsNone(snapshot.activity)
         self.assertEqual(snapshot.inquiries, ())
 
-    def test_a_foreign_reply_id_and_a_silent_socket_are_refused_and_bounded(self):
-        import socket as socket_module
-        import threading
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bridge_ask
-        from hey_my_buddy.errors import BoardError
-        listener = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
-        listener.bind(str(Path(tempfile.mkdtemp(prefix="buddy-zcode-live-s-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))) / "s.sock"))
-        listener.listen(2)
+    def test_journal_states_follow_the_direct_reader_semantics(self):
+        """Empty is available, over-limit and unreadable keep their own reasons."""
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-j-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        journal = temp / "inquiry.results.jsonl"
+        channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
+                                    journal_path=str(journal), activity_path=temp / "activity.json")
 
-        def serve(kind: str) -> None:
-            connection, _ = listener.accept()
-            if kind == "wrong-id":
-                connection.sendall(b'{"version":1,"id":"not-ours","ok":true,"value":{}}\n')
-            else:
-                time.sleep(2.0)  # accept, read nothing, answer nothing
-            connection.close()
+        def fact():
+            return channel.observe(after_seq=None, limit=8, timeout_ms=200,
+                                   fields=("inquiries",)).journal
 
-        wrong = threading.Thread(target=serve, args=("wrong-id",), daemon=True)
-        wrong.start()
-        with self.assertRaises(BoardError) as caught:
-            bridge_ask({"socketPath": listener.getsockname(), "token": "a" * 64},
-                       "i-1", "hello", timeout_ms=1000)
-        self.assertIn("foreign id", caught.exception.message)
-        wrong.join(timeout=2)
+        # Nothing written yet: the direct reader's missing reason.
+        self.assertEqual((fact().available, fact().reason, fact().entries),
+                         (False, "journal-not-written", 0))
+        # An empty existing file is a real, readable journal: available, zero.
+        journal.write_bytes(b"")
+        self.assertEqual((fact().available, fact().reason, fact().entries), (True, None, 0))
+        # Actually over the byte cap keeps its own reason, not the empty one.
+        journal.write_bytes(b"x" * (1024 * 1024 + 1))
+        self.assertEqual((fact().available, fact().reason), (False, "journal-exceeds-limit"))
+        # Unreadable is its own fact, never reported as missing: the state check
+        # passes and the locked open is what fails.
+        journal.write_bytes(b"")
+        journal.chmod(0)
+        self.addCleanup(journal.chmod, 0o644)
+        try:
+            self.assertEqual((fact().available, fact().reason), (False, "journal-unreadable"))
+        except AssertionError:
+            raise
+        finally:
+            journal.chmod(0o644)
 
-        silent = threading.Thread(target=serve, args=("silent",), daemon=True)
-        silent.start()
-        started = time.monotonic()
-        with self.assertRaises(BoardError) as timed:
-            bridge_ask({"socketPath": listener.getsockname(), "token": "a" * 64},
-                       "i-2", "hello", timeout_ms=200)
-        self.assertIn("transport window", timed.exception.message)
-        self.assertLess(time.monotonic() - started, 1.5,
-                        "the caller's timeout did not reach the socket")
-        silent.join(timeout=2)
-        listener.close()
+    def test_the_latest_legal_record_clears_an_older_rejection(self):
+        # The Host's superseded-foreign-record case: the same question's first
+        # line is foreign, its second line fully bound with an owned answer.
+        # The final effective record decides: the answer imports, the stale
+        # rejection is gone, and the reader's count covers the question once.
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-sup-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        journal = temp / "inquiry.results.jsonl"
+        foreign = {"version": 1, "taskId": "other-task", "attemptId": "other-attempt",
+                   "generation": 0, "turnId": "other-turn", "inquiryId": "q-last",
+                   "state": "answered", "answer": {"text": "foreign"}}
+        valid = {"version": 1, "taskId": "task", "attemptId": "attempt-live", "generation": 1,
+                 "turnId": "turn-live", "inquiryId": "q-last", "state": "answered",
+                 "answer": {"text": "owned answer", "bytes": 12,
+                            "via": "tool:buddy_answer_inquiry"}}
+        journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n")
+        channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
+                                    journal_path=str(journal), activity_path=temp / "activity.json")
+        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=200, fields=("inquiries",))
+        self.assertEqual([(entry.question_id, entry.status, entry.answer) for entry in snapshot.inquiries],
+                         [("q-last", "answered", "owned answer")])
+        self.assertEqual((snapshot.journal.available, snapshot.journal.entries), (True, 1))
+        self.assertEqual(snapshot.journal.rejections, ())
+
+    def test_the_latest_foreign_record_rejects_once_per_question(self):
+        # The mirror case plus dedup: a legal record followed by foreign ones
+        # leaves exactly one rejection for that id — never an accumulation of
+        # every historical refusal — and no bound record is projected for it.
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-rej-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        journal = temp / "inquiry.results.jsonl"
+        valid = {"version": 1, "taskId": "task", "attemptId": "attempt-live", "generation": 1,
+                 "turnId": "turn-live", "inquiryId": "q-last", "state": "queued"}
+        foreign = {"version": 1, "taskId": "other-task", "attemptId": "other-attempt",
+                   "generation": 0, "turnId": "other-turn", "inquiryId": "q-last",
+                   "state": "answered", "answer": {"text": "foreign"}}
+        journal.write_text("".join(json.dumps(record) + "\n" for record in
+                                   [valid, foreign, foreign, foreign]))
+        channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
+                                    journal_path=str(journal), activity_path=temp / "activity.json")
+        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=200, fields=("inquiries",))
+        self.assertEqual(snapshot.inquiries, (), "the final foreign record refuses the id")
+        self.assertEqual((snapshot.journal.entries, len(snapshot.journal.rejections)), (1, 1))
+        self.assertEqual(snapshot.journal.rejections[0].question_id, "q-last")
+        self.assertEqual(snapshot.journal.rejections[0].reason,
+                         "the journal record belongs to another task")
+
+    def test_the_page_budget_counts_the_metadata_it_returns(self):
+        # The Host's frame-bound case: 16 bound answers of 3500 bytes beside 16
+        # foreign records produced a 66,713-byte first page that failed to
+        # encode. The paging budget now measures the journal fact together with
+        # the entries, so every returned page encodes within the 64 KiB bound
+        # and the full answer set stays reachable through the pagination.
+        from hey_my_buddy.buddy.harnesses.live import encode_live_snapshot
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-frame-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                               invocation_id="invocation", turn_id="turn")
+        journal = temp / "journal.jsonl"
+        rows = []
+        for index in range(16):
+            rows.append({"version": 1, "taskId": "task", "attemptId": "attempt", "generation": 1,
+                         "turnId": "turn", "inquiryId": f"q{index}", "state": "answered",
+                         "answer": {"text": "x" * 3500, "bytes": 3500,
+                                    "via": "tool:buddy_answer_inquiry", "toolCallId": f"call-{index}",
+                                    "at": "2026-10-06T00:00:00Z", "truncated": False},
+                         "limitation": COOPERATIVE_INQUIRY_NOTE})
+        for index in range(16, 32):
+            rows.append({"version": 1, "taskId": "other-task", "attemptId": "other-attempt",
+                         "generation": 1, "turnId": "other-turn", "inquiryId": f"q{index}",
+                         "state": "queued"})
+        journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
+                                    journal_path=str(journal), activity_path=temp / "activity.json")
+        self.addCleanup(channel.close, reason="probe-finished")
+        entries, rejections, pages, after = [], 0, 0, None
+        while True:
+            snapshot = channel.observe(after_seq=after, limit=256, timeout_ms=1500,
+                                       fields=("inquiries",))
+            encoded = encode_live_snapshot(snapshot)
+            self.assertLessEqual(len(encoded.encode()), 64 * 1024,
+                                 f"page {pages} must encode within the frame bound")
+            entries.extend(snapshot.inquiries)
+            if snapshot.journal is not None:
+                rejections = len(snapshot.journal.rejections)
+            pages += 1
+            if not snapshot.truncated:
+                break
+            self.assertTrue(snapshot.inquiries, "a truncated page always carries progress")
+            after = max(entry.seq for entry in snapshot.inquiries)
+            self.assertLess(pages, 40)
+        self.assertEqual(pages, 2, "the metadata-bearing pages break earlier than before")
+        self.assertEqual({entry.question_id for entry in entries}, {f"q{i}" for i in range(16)})
+        self.assertTrue(all(entry.answer == "x" * 3500 for entry in entries))
+        self.assertEqual(rejections, 16)
+
+    def test_the_channel_projection_keeps_the_answer_source_and_delivery_facts(self):
+        # The answered journal chain replays with its own source fields, and
+        # the queued record's delivery fact survives the later records that
+        # lack it — the projection never flattens the answer away.
+        import hashlib as _hashlib
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-s-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64,
+                       "resultsPath": str(temp / "inquiry.results.jsonl")}
+        journal = temp / "inquiry.results.jsonl"
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+                                                      "generation": 1, "turnId": "turn-live"},
+                               journal_path=str(journal))
+        bridge.start()
+        self.addCleanup(bridge.close)
+        bridge.activate("sess-live")
+        question = "what is the answer?"
+        digest = _hashlib.sha256(question.encode()).hexdigest()
+        self.assertTrue(bridge.handle({"version": 1, "id": "r-1", "token": credentials["token"],
+                                       "method": "ask", "inquiryId": "i-1", "question": question})["ok"])
+        bridge.deliver_inquiries({"inquiries": [{"inquiryId": "i-1", "questionSha256": digest}]},
+                                 "call-checkpoint")
+        bridge.record_answer({"inquiryId": "i-1", "questionSha256": digest,
+                              "answer": "the verified answer"}, "call-answer")
+        channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
+                                    activity_path=temp / "activity.json")
+        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1000, fields=("inquiries",))
+        entry = snapshot.inquiries[0]
+        self.assertEqual(entry.status, "answered")
+        self.assertEqual(entry.answer, "the verified answer")
+        self.assertEqual(entry.tool_call_id, "call-answer")
+        self.assertEqual(entry.via, "tool:buddy_answer_inquiry")
+        self.assertTrue(entry.at)
+        self.assertEqual(entry.bytes, len("the verified answer".encode()))
+        self.assertIs(entry.truncated, False)
+        # The queued record's delivery dict survives the later records, and so
+        # does its limitation — the board's public unavailable reason prefers
+        # it, exactly as the direct reader always did.
+        self.assertIsNotNone(entry.delivery)
+        self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
+        self.assertEqual(entry.limitation, COOPERATIVE_INQUIRY_NOTE)
+        # The journal fact: available, the reader's own deduplicated count and
+        # no rejections for this bound journal.
+        self.assertIsNotNone(snapshot.journal)
+        self.assertEqual((snapshot.journal.available, snapshot.journal.reason,
+                          snapshot.journal.entries, snapshot.journal.rejections),
+                         (True, None, 1, ()))
+
+    def test_the_observation_reads_the_real_bridge_view_with_its_own_bounds(self):
+        from hey_my_buddy.buddy.harnesses.live import LiveObservation
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-o-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+                                                      "generation": 1, "turnId": "turn-live"},
+                               journal_path=str(temp / "inquiry.results.jsonl"))
+        bridge.start()
+        self.addCleanup(bridge.close)
+        bridge.activate("sess-live")
+        # The bridge's own truncations are the observation's bounds: an 80-char
+        # kind and a 120-char tool name pass, and the model refuses more.
+        bridge.note_event({"method": "session/event",
+                           "params": {"type": "k" * 80, "payload": {"toolName": "t" * 120}}}, "running")
+        channel = bind_live_channel(identity, credentials=credentials, journal_path=None,
+                                    activity_path=temp / "activity.json")
+        snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=1000, fields=("observation",))
+        self.assertIs(snapshot.observed, True)
+        observation = snapshot.observation
+        self.assertIsInstance(observation, LiveObservation)
+        self.assertIs(observation.ready, True)
+        self.assertEqual(observation.session_id, "sess-live")
+        self.assertEqual(observation.agent_status, "running")
+        self.assertEqual(observation.delivery_mode, "cooperative-checkpoint")
+        self.assertEqual(observation.reply_tool.value["name"], "buddy_answer_inquiry")
+        self.assertEqual(observation.journal.value["enabled"], True)
+        self.assertEqual(observation.recent_activity[0].kind, "k" * 80)
+        self.assertEqual(observation.recent_activity[0].tool_name, "t" * 120)
+        self.assertEqual(observation.unavailable,
+                         ("nativeReasoning", "toolArguments", "toolOutput", "providerCredentials",
+                          "immediateDelivery"))
+        # The producing bridge's truncations are upper bounds: a kind one
+        # character longer is refused by the strict model, and the read is
+        # reported as an unavailable observation, never reshaped into
+        # look-alike metadata.
+        bridge_snapshot = bridge.snapshot()
+
+        def oversized_snapshot():
+            value = dict(bridge_snapshot)
+            value["lastEvent"] = {"at": observation.observed_at, "kind": "k" * 81}
+            return value
+
+        bridge.snapshot = oversized_snapshot
+        broken = channel.observe(after_seq=None, limit=1, timeout_ms=1000, fields=("observation",))
+        self.assertIs(broken.observed, False)
+        self.assertEqual(broken.reason, "observation-unavailable")
+
+    def test_the_answer_point_query_reads_one_native_answer_only(self):
+        import hashlib as _hashlib
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a2-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+                                                      "generation": 1, "turnId": "turn-live"},
+                               journal_path=str(temp / "inquiry.results.jsonl"))
+        bridge.start()
+        self.addCleanup(bridge.close)
+        bridge.activate("sess-live")
+        channel = bind_live_channel(identity, credentials=credentials, journal_path=str(temp / "inquiry.results.jsonl"),
+                                    activity_path=temp / "activity.json")
+        # No such question: the bridge refuses the point query with its own
+        # code, carried as the transport fact — never an invented answer.
+        empty = channel.observe(inquiry_id="i-none", timeout_ms=1000)
+        self.assertIs(empty.observed, False)
+        self.assertEqual((empty.reason, empty.error), ("bridge-refused", "not-ready"))
+        self.assertEqual(empty.inquiries, ())
+        question = "what is the answer?"
+        digest = _hashlib.sha256(question.encode()).hexdigest()
+        self.assertTrue(bridge.handle({"version": 1, "id": "r-1", "token": credentials["token"],
+                                       "method": "ask", "inquiryId": "i-1", "question": question})["ok"])
+        bridge.record_answer({"inquiryId": "i-1", "questionSha256": digest,
+                              "answer": "the point answer"}, "call-answer")
+        # The channel's journal binding is pointed at a stale, older-state
+        # journal: the point query must answer from the native answer view,
+        # not from the journal projection — it reads neither the sidecar nor
+        # the journal, exactly the direct path's single roundtrip.
+        stale = temp / "stale.results.jsonl"
+        stale.write_text(json.dumps({
+            "version": 1, "taskId": "task", "attemptId": "attempt-live", "generation": 1,
+            "turnId": "turn-live", "inquiryId": "i-1", "state": "queued", "question": question,
+            "questionSha256": digest, "askedAt": "now"}) + "\n")
+        stale_bound = bind_live_channel(identity, credentials=credentials, journal_path=str(stale),
+                                        activity_path=temp / "activity.json")
+        view = stale_bound.observe(inquiry_id="i-1", timeout_ms=1000)
+        entry = view.inquiries[0]
+        self.assertEqual(entry.status, "answered")
+        self.assertEqual(entry.answer, "the point answer")
+        self.assertEqual(entry.tool_call_id, "call-answer")
+        self.assertEqual(entry.via, "tool:buddy_answer_inquiry")
+        self.assertEqual(entry.bytes, len("the point answer".encode()))
+        self.assertIs(entry.truncated, False)
+        self.assertTrue(entry.at)
+
+    def test_a_refused_ask_carries_the_transport_fact_and_the_specific_code(self):
+        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-r-",
+                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(managed.cleanup)
+        temp = Path(managed.name)
+        credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
+        identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
+                               invocation_id="invocation-live", turn_id="turn-live")
+        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+                                                      "generation": 1, "turnId": "turn-live"},
+                               journal_path=str(temp / "inquiry.results.jsonl"))
+        bridge.start()
+        self.addCleanup(bridge.close)
+        channel = bind_live_channel(identity, credentials=credentials, journal_path=None,
+                                    activity_path=temp / "activity.json")
+        request = LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
+                              payload=InquiryPayload(question_id="i-1", question="anybody there?"))
+        # The bridge is mounted but the turn is not admitted: the peer refuses
+        # with its own code, and the reply keeps both the transport fact and
+        # the specific code instead of folding them into one generic refusal.
+        refused = channel.request(request, timeout_ms=1000)
+        self.assertEqual((refused.status, refused.reason_code, refused.error_code),
+                         ("unavailable", "bridge-refused", "not-ready"))
+        # An unreachable socket keeps its own transport classification.
+        gone = bind_live_channel(identity, credentials={"socketPath": str(temp / "absent.sock"),
+                                                        "token": credentials["token"]},
+                                 journal_path=None, activity_path=temp / "activity.json")
+        unreachable = gone.request(request, timeout_ms=1000)
+        self.assertEqual((unreachable.status, unreachable.reason_code, unreachable.error_code),
+                         ("unavailable", "bridge-unreachable", None))
+        # A wrong token is a refused ask whose code is the peer's own.
+        foreign = bind_live_channel(identity, credentials={"socketPath": credentials["socketPath"],
+                                                           "token": "b" * 64},
+                                    journal_path=None, activity_path=temp / "activity.json")
+        unauthorized = foreign.request(request, timeout_ms=1000)
+        self.assertEqual((unauthorized.status, unauthorized.reason_code, unauthorized.error_code),
+                         ("unavailable", "bridge-refused", "unauthorized"))
 
 
 if __name__ == "__main__":
