@@ -117,7 +117,6 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNone(result.end.reason_code)
-        self.assertEqual(result.value.mechanism, "native-schema")
         # The schema verdict is the role's check; the driver reports the
         # delivered value with its own raw text and parsed form.
         self.assertEqual(result.value.schema_status, "unknown")
@@ -125,31 +124,25 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(result.value.raw, json.dumps(result.value.parsed.value,
                                                      separators=(",", ":"), ensure_ascii=False))
         completion = result.completion_evidence
-        self.assertEqual(completion.mechanism, "native-schema")
         self.assertTrue(completion.stream_end)
-        self.assertEqual(completion.native_outcome, "success")
-        self.assertIsNotNone(completion.event_order)
         self.assertTrue(result.model_started)
-        self.assertEqual(result.model_start_evidence.basis, "input-sent")
-        self.assertEqual(result.model_start_evidence.native_identity.session_id,
+        # The confirmed root is the session the CLI was actually launched with.
+        self.assertEqual(result.native_identity.session_id,
                          flag_value(self.fixture_state()["argv"], "--session-id"))
         self.assertNotIn("--resume", self.fixture_state()["argv"])
-        self.assertEqual(result.native_identity.session_id,
-                         result.root_identities[0].session_id)
+        self.assertEqual(result.tool_evidence.value["nativeIdentity"],
+                         [{"sessionId": result.native_identity.session_id}])
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
-        self.assertTrue(result.stop_evidence.native.started)
+        self.assertEqual(result.end.native_exit_code, 0)
 
     def test_the_catalog_check_confirms_only_what_native_readback_proved(self):
         result = self.execute(self.request())
         checked = result.configuration.checked
+        # The checked block restates exactly the requested values the native
+        # checks confirmed; no per-check ledger travels beside it.
         self.assertEqual(checked.provider.value, "anthropic")
-        self.assertEqual(checked.provider.basis, "native-readback")
         self.assertEqual(checked.model.value, CONFIGURATION["model"])
-        self.assertEqual(checked.model.basis, "catalog-membership")
         self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
-        self.assertEqual(result.configuration.checks,
-                         ("initialize-account-first-party", "catalog-model-effort"))
 
     def test_a_model_outside_the_catalog_is_refused_before_the_user_message(self):
         self.fixture_case("ok")
@@ -161,8 +154,10 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "invalid-configuration")
         # Nothing is claimed that the run never reached.
         self.assertFalse(result.model_started)
-        self.assertEqual(result.model_start_evidence.basis, "unknown")
-        self.assertEqual(result.configuration.checks, ())
+        checked = result.configuration.checked
+        self.assertIsNone(checked.provider)
+        self.assertIsNone(checked.model)
+        self.assertIsNone(checked.effort)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
@@ -215,13 +210,13 @@ class WorkerCarrierTests(NativeRunCase):
         self.fixture_case("permission")
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(len(result.denied_interactions), 1)
-        denied = result.denied_interactions[0]
-        self.assertEqual((denied.method, denied.action, denied.reason),
-                         ("can_use_tool", "deny", "WebFetch"))
+        # The refused interaction's own full record — native request and tool
+        # identities included — travels in the retained evidence reference.
         records = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                       if ref.kind == "denied-interactions")).read_bytes())
-        self.assertEqual(records["records"][0]["requestId"], "perm-1")
+                                       if ref.kind == "denied-interactions")).read_bytes())["records"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual((records[0]["toolName"], records[0]["requestId"]),
+                         ("WebFetch", "perm-1"))
         # The outcome rewrite is the role's assembly; the delivered value keeps
         # its own completed fact for the role to judge.
         self.assertEqual(result.value.parsed.value["outcome"]["disposition"], "completed")
@@ -254,14 +249,12 @@ class ReadCarrierTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["profileId"], "legal")
         policy = result.effective_policy.tools
-        self.assertEqual(policy.enforcement, "native")
         self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read"])
         self.assertEqual(policy.requested.value["permissionMode"], "default")
         # The denials and the offline allowlist are the request's own values.
         self.assertEqual(policy.requested.value["disallowedTools"],
                          ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write", *self.REVIEW_DENIALS])
         self.assertEqual(policy.requested.value["sandboxNetworkAllowedDomains"], [])
-        self.assertEqual(result.effective_policy.filesystem.enforcement, "native")
         argv, settings = self.argv_and_settings(result)
         self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], [])
         self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
@@ -339,7 +332,8 @@ class ReadCarrierTests(NativeRunCase):
                 result = self.execute(self.request(scope=scope))
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertTrue(result.completion_evidence.stream_end)
-                self.assertEqual(result.native_event_count, result.completion_evidence.event_order)
+                # The observed native event count is a real count of this run.
+                self.assertGreaterEqual(result.native_event_count, 1)
 
 
 class RequestGateTests(NativeRunCase):
@@ -390,8 +384,10 @@ class RequestGateTests(NativeRunCase):
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "third-party-provider")
-        self.assertEqual(result.stop_evidence.native.observation_basis, "spawn-never-happened")
-        self.assertIsNone(result.stop_evidence.native.started)
+        # Nothing was ever spawned: the confirmed never-spawned fact and no
+        # native exit code.
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertIsNone(result.end.native_exit_code)
         self.assertFalse(self.state_path.exists())
 
     def test_an_unsupported_settings_policy_is_refused(self):
@@ -423,18 +419,17 @@ class SettlementGuardTests(NativeRunCase):
         broken = self.execute(self.request(timeout=20))
         self.assertEqual(broken.end.status, "error")
         self.assertIsNone(broken.native_identity)
-        self.assertIsNone(broken.model_start_evidence.native_identity)
-        self.assertEqual(broken.root_identities, ())
+        # No native root was ever confirmed, and the package lists none.
+        self.assertEqual(broken.tool_evidence.value["nativeIdentity"], [])
         self.assertTrue(broken.model_started, "the input send itself is still a fact")
-        self.assertEqual(broken.model_start_evidence.basis, "input-sent")
         self.fixture_case("init-wrong-session")
         foreign = self.execute(self.request())
         self.assertEqual(foreign.end.status, "error")
         self.assertEqual(foreign.end.reason_code, "wrong-native-session")
         self.assertIsNone(foreign.native_identity)
         # The foreign identity the native stream actually reported.
-        self.assertEqual([identity.session_id for identity in foreign.root_identities],
-                         ["not-the-allocation"])
+        self.assertEqual(foreign.tool_evidence.value["nativeIdentity"],
+                         [{"sessionId": "not-the-allocation"}])
         self.assertIsNone(foreign.continuation)
 
     def test_a_native_failure_keeps_the_observed_stream_end(self):
@@ -448,7 +443,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertTrue(result.tool_evidence.value["streamComplete"])
         self.assertIsNone(result.completion_evidence)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertEqual(result.end.native_exit_code, 0)
 
     def test_wrong_session_and_duplicate_results_are_rejected(self):
         for case, reason in (("wrong-session", "wrong-native-session"),
@@ -472,7 +467,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertIsNotNone(result.completion_evidence)
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertEqual(result.end.native_exit_code, 0)
         self.assertEqual(result.configuration.checked.model.value, CONFIGURATION["model"])
         self.assertIsNotNone(result.last_assistant_message)
 
@@ -532,8 +527,7 @@ class SettlementGuardTests(NativeRunCase):
             result = self.execute(self.request())
         native = result.stop_evidence.native
         self.assertEqual(native.group_state, "unknown")
-        self.assertEqual(native.observation_basis, "owned-process-group")
-        self.assertIsNotNone(native.exit_code)
+        self.assertIsNotNone(result.end.native_exit_code)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
         # The EOF the drain already observed and the group's disappearance are
@@ -552,8 +546,10 @@ class SettlementGuardTests(NativeRunCase):
             result = self.execute(self.request())
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNone(result.usage)
-        self.assertEqual(result.value.mechanism, "native-schema")
-        self.assertTrue(result.completion_evidence.receipt_verified is None)
+        self.assertEqual(result.value.parsed.value["outcome"]["disposition"], "completed")
+        # No completion-tool receipt exists on this carrier; the native
+        # schema's own stream-end fact is what completion evidence carries.
+        self.assertTrue(result.completion_evidence.stream_end)
 
 
 class ObserverContractTests(NativeRunCase):
@@ -790,9 +786,9 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertTrue(package["streamComplete"])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
-        # The delivery itself travels as completion evidence with its call id.
-        self.assertEqual(result.completion_evidence.mechanism, "native-schema")
-        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        # The verified delivery is excluded from the tool facts by its call
+        # identity and delivered as the run's own value.
+        self.assertNotIn("StructuredOutput", [event["toolName"] for event in package["events"]])
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.value.parsed.value, self.delivered())
 
@@ -809,7 +805,8 @@ class StructuredDeliveryTests(NativeRunCase):
         result = self.execute(self.review_request(), observer=budget_observer)
         package = self.package_of(result)
         self.assertEqual((package["toolCalls"], package["events"]), (0, []))
-        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        # The delivery is the run's own value, never a charged tool call.
+        self.assertEqual(result.value.parsed.value, self.delivered())
         # The role's cumulative count never charged the value carrier.
         self.assertTrue(all(facts["toolCalls"] == 0 for facts in seen))
         self.assertTrue(any(facts["settled"] for facts in seen))
@@ -835,7 +832,9 @@ class StructuredDeliveryTests(NativeRunCase):
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(len(package["events"]), 2)
-        self.assertIsNone(result.completion_evidence.call_id)
+        # The unqualified call is no one's delivery: it stays an ordinary
+        # counted tool fact under its own native call id.
+        self.assertEqual([event["callId"] for event in package["events"]], ["toolu_so_1"] * 2)
 
     def shared_review_observer(self, budget: int):
         try:
@@ -866,7 +865,7 @@ class StructuredDeliveryTests(NativeRunCase):
         package = self.package_of(result)
         self.assertIsNone(review.stop_reason)
         self.assertEqual((package["toolCalls"], package["events"]), (0, []))
-        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        self.assertEqual(result.value.parsed.value, self.delivered())
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
 
     def test_a_conflicting_full_input_on_one_call_refuses_the_exemption(self):
@@ -881,7 +880,6 @@ class StructuredDeliveryTests(NativeRunCase):
                                  [("StructuredOutput", "start"), ("StructuredOutput", "end")])
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
                                  tool_evidence.TOOLS_FORBIDDEN)
-                self.assertIsNone(result.completion_evidence.call_id)
 
     def test_an_evicted_first_input_still_refuses_a_conflicting_second(self):
         # Nine delivery uses exhaust the input retention bound; the first
@@ -895,7 +893,6 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertEqual(package["toolCalls"], 9)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
                          tool_evidence.TOOLS_FORBIDDEN)
-        self.assertIsNone(result.completion_evidence.call_id)
 
     def test_an_evicted_input_reproves_the_value_when_the_same_input_returns(self):
         self.use_fixture(STREAM_FIXTURE)
@@ -903,9 +900,10 @@ class StructuredDeliveryTests(NativeRunCase):
         result = self.execute(self.review_request())
         package = self.package_of(result)
         # The consistent repeat re-proves c1's delivery after the bound evicted
-        # its first full text; the eight mismatched calls stay counted.
+        # its first full text; the eight mismatched calls stay counted and the
+        # re-proved delivery alone is the run's own value.
         self.assertEqual(package["toolCalls"], 8)
-        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        self.assertEqual(result.value.parsed.value, self.delivered())
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
                          tool_evidence.TOOLS_FORBIDDEN)
 
@@ -916,7 +914,9 @@ class StructuredDeliveryTests(NativeRunCase):
         package = self.package_of(result)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
                          (0, 0, []))
-        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
+        # The one verified delivery is excluded from the facts and delivered
+        # as the run's own value.
+        self.assertEqual(result.value.parsed.value, self.delivered())
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
 
     def test_a_bare_name_without_the_value_association_stays_an_ordinary_tool_call(self):
@@ -929,7 +929,7 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
                          tool_evidence.TOOLS_FORBIDDEN)
         # The turn still completed; the call simply proves no delivery.
-        self.assertEqual(result.completion_evidence.call_id, None)
+        self.assertEqual([event["callId"] for event in package["events"]], ["toolu_so_1"] * 2)
 
     def test_a_mounted_same_name_mcp_tool_is_never_exempted(self):
         self.use_fixture(STREAM_FIXTURE)
@@ -941,7 +941,6 @@ class StructuredDeliveryTests(NativeRunCase):
                          ["mcp__server__StructuredOutput"] * 2)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
                          tool_evidence.TOOLS_FORBIDDEN)
-        self.assertEqual(result.completion_evidence.call_id, None)
 
     def test_a_subagent_substream_same_name_call_keeps_its_own_facts(self):
         self.use_fixture(STREAM_FIXTURE)
@@ -955,7 +954,6 @@ class StructuredDeliveryTests(NativeRunCase):
                            if event["toolName"] == "StructuredOutput"]
         self.assertEqual(len(subagent_events), 2)
         self.assertTrue(all("callId" in event["nativeIdentity"] for event in subagent_events))
-        self.assertEqual(result.completion_evidence.call_id, "toolu_so_1")
         # The look-alike call settles as a disallowed other call; its foreign
         # identity is kept in the facts on top of that.
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),

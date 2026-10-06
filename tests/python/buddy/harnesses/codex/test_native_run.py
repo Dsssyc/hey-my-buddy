@@ -12,6 +12,7 @@ Worker and review carriers, ``no_tool_codex.py`` the fast no-tool carrier.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -139,30 +140,30 @@ class FastSeamTests(SeamCase):
             "multi_agent_version": "v2"}]}
         (self.home / "models_cache.json").write_text(json.dumps(cache))
 
-    def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 6):
+    def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 6,
+                 observer=None):
         self.set_case(case)
         prompt = "Pick a profile"
         return run(self.request(tool_scope="none", output_schema=FAST_SCHEMA,
                                 prompt=prompt, timeout=timeout),
-                   observer=correction.observer, services=None, cancelled=lambda: False)
+                   observer=observer or correction.observer, services=None,
+                   cancelled=lambda: False)
 
     def test_a_settled_no_tool_answer_is_a_final_value_fact(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
         result = self.fast_run("ok", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.mechanism, "native-schema")
         self.assertEqual(result.value.raw, '{"profileId": "legal"}')
         self.assertEqual(result.value.schema_status, "unknown")
         self.assertEqual(result.value.correction_count, 0)
         self.assertIsNone(correction.stop_reason)
-        self.assertEqual(result.model_start_evidence.basis, "input-sent")
+        self.assertTrue(result.model_started)
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertEqual(result.end.native_exit_code, 0)
         policy = result.effective_policy.tools
-        self.assertEqual(policy.enforcement, "native")
         self.assertEqual(policy.requested.value["configuration"], "private-no-tool")
         self.assertIs(result.completion_evidence.stream_end, True)
 
@@ -172,7 +173,8 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(result.value.raw, '{"profileId": "legal"}')
-        self.assertEqual(len(result.root_identities), 2)
+        # Both root turns are listed as native roots of this one run.
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual([turn["input"][0]["text"] for turn in trace["turns"]],
                          ["Pick a profile",
@@ -191,11 +193,20 @@ class FastSeamTests(SeamCase):
 
     def test_unknown_events_stop_as_invalid_protocol_through_the_observer(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
-        result = self.fast_run("unknown", correction)
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return correction.observer(facts)
+
+        result = self.fast_run("unknown", correction, observer=observer)
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "invalid-protocol")
-        self.assertEqual(result.unknown_events.counts, (("futureThing", 1),))
+        # The unknown event's own count is the observer statistics' fact.
+        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"futureThing": 1},
+                                                      "total": 1} for facts in seen),
+                        [facts["unknownEvents"] for facts in seen])
 
     def test_a_denied_interaction_is_refused_then_stops_the_run(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
@@ -203,12 +214,17 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
-        self.assertEqual(len(result.denied_interactions), 1)
-        self.assertEqual(result.denied_interactions[0].action, "refused-jsonrpc-error")
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "denied-interactions"))
-        records = json.loads(retained.read_text())
-        self.assertEqual(records["records"][0]["method"], "item/commandExecution/requestApproval")
+        raw = retained.read_bytes()
+        self.assertEqual(len(raw), next(ref.size_bytes for ref in result.evidence_refs
+                                        if ref.kind == "denied-interactions"))
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         next(ref.sha256 for ref in result.evidence_refs
+                              if ref.kind == "denied-interactions"))
+        records = json.loads(raw)["records"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["method"], "item/commandExecution/requestApproval")
 
     def test_a_drained_fast_stream_keeps_its_eof_fact_without_a_confirmed_stop(self):
         # The observed EOF is a stream fact of its own: an unknown group must
@@ -221,9 +237,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.native_exit_code, 0)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown")
-        self.assertTrue(stop.started)
         self.assertIs(result.completion_evidence.stream_end, True)
-        self.assertEqual(result.completion_evidence.native_outcome, "completed")
         self.assertTrue(result.tool_evidence.value["streamComplete"])
         self.assertIsNone(result.stop_evidence.interrupt.requested)
 
@@ -249,7 +263,8 @@ class FastSeamTests(SeamCase):
         # says the interrupt went out unconfirmed.
         self.assertEqual(result.stop_evidence.interrupt.basis, "native-turn-interrupt-unconfirmed")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.end.signal, "SIGTERM")
+        # The native SIGTERM survives as its own exit-code fact.
+        self.assertEqual(result.end.native_exit_code, -15)
         self.assertFalse((Path(request.private_state.native_root) / "codex-home" / "auth.json").is_symlink())
 
     def test_mismatched_no_tool_policy_is_refused_before_model_input(self):
@@ -277,9 +292,7 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.model_started)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "gone")
-        self.assertEqual(stop.observation_basis, "spawn-never-happened")
-        self.assertIs(stop.started, False)
-        self.assertFalse(stop.leader_exited)
+        self.assertIsNone(result.end.native_exit_code)
         self.assertFalse((Path(request.private_state.native_root) / "codex-home" / "auth.json").is_symlink())
 
     def test_a_preparation_failure_reports_known_not_started_facts(self):
@@ -292,12 +305,9 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "no-tool-policy-unverified")
         self.assertIsNone(result.model_started)
-        self.assertEqual(result.model_start_evidence.basis, "unknown")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "gone")
-        self.assertIs(stop.started, False)
-        self.assertIsNone(stop.exit_code)
-        self.assertEqual(stop.observation_basis, "spawn-never-happened")
+        self.assertIsNone(result.end.native_exit_code)
         self.assertNotIn("native-stderr", {ref.kind for ref in result.evidence_refs})
 
 
@@ -378,20 +388,17 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.end.native_exit_code, 0)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown")
-        self.assertTrue(stop.started)
-        self.assertEqual(stop.exit_code, 0)
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 0)
-        self.assertEqual(result.completion_evidence.native_outcome, "completed")
-        self.assertEqual(len(result.root_identities), 1)
+        self.assertEqual(len(package["nativeIdentity"]), 1)
 
     def test_a_review_stream_without_a_final_state_stays_incomplete(self):
         result = self.review_run("no-final")
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-turn-failed")
         self.assertFalse(result.tool_evidence.value["streamComplete"])
-        self.assertIsNone(result.completion_evidence.native_outcome)
+        self.assertIsNone(result.completion_evidence.stream_end)
 
     def test_a_review_call_reports_policy_readback_roots_and_raw_answer(self):
         result = self.review_run("ok")
@@ -399,17 +406,20 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.value.raw,
                          json.dumps({"profileId": "legal", "reason": "Read-only fixture", "evidence": []}))
         self.assertEqual(result.value.correction_count, 0)
-        self.assertEqual(len(result.root_identities), 1)
-        self.assertEqual(result.native_identity.session_id, result.root_identities[0].session_id)
+        package = result.tool_evidence.value
+        self.assertEqual(len(package["nativeIdentity"]), 1)
+        self.assertEqual(result.native_identity.session_id,
+                         package["nativeIdentity"][0]["sessionId"])
         policy = result.effective_policy.tools
-        self.assertEqual(policy.enforcement, "native")
         self.assertEqual(policy.requested.value["activePermissionProfile"]["id"], "buddy-router")
-        filesystem = result.effective_policy.filesystem
-        self.assertEqual(filesystem.enforcement, "native")
-        self.assertIn(str(self.cwd.resolve()), filesystem.requested.value)
-        self.assertTrue(result.tool_evidence.value["streamComplete"])
-        self.assertEqual(result.tool_evidence.value["binding"]["taskId"], "goal-1")
-        self.assertIn("config-policy-readback", result.configuration.checks)
+        # The read-back native configuration — the acknowledged state, with its
+        # own filesystem grant for this checkout — is the retained evidence.
+        retained = {ref.kind: ref for ref in result.evidence_refs}
+        readback = json.loads(Path(retained["review-config-readback"].location).read_text())
+        filesystem = readback["config"]["permissions"]["buddy-router"]["filesystem"]
+        self.assertEqual(filesystem[str(self.cwd.resolve())], "read")
+        self.assertTrue(package["streamComplete"])
+        self.assertEqual(package["binding"]["taskId"], "goal-1")
 
     def test_review_tool_facts_stop_through_the_observer_and_interrupt_natively(self):
         rule = ReviewCorrection(REVIEW_SCHEMA, "Select from the frozen packet")
@@ -429,12 +439,12 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(rule.correction_count, 1)
-        self.assertEqual(len(result.root_identities), 2)
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
         outside = ReviewCorrection(REVIEW_SCHEMA, "Select from the frozen packet")
         result = self.review_run("readonly-outside", observer=outside.observer)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 0)
-        self.assertEqual(len(result.root_identities), 1)
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 1)
         self.assertEqual(outside.correction_count, 0)
 
     def test_review_policy_mismatch_is_refused_before_model_input(self):
@@ -467,7 +477,8 @@ class WorkerSeamTests(CodexSeamCase):
                              if ref.kind == "native-checkpoint"))
         checkpoint = json.loads(retained.read_text())
         self.assertTrue(checkpoint["bindingSaved"])
-        self.assertTrue(Path(result.continuation.binding_ref).is_file())
+        # The saved binding is the fact ``resumable`` reports: the run says
+        # resumable exactly when its binding was saved.
         self.assertIs(result.continuation.resumable, True)
         self.assertIsNotNone(result.last_assistant_message.value)
         self.assertGreaterEqual(result.native_event_count, 2)
@@ -495,37 +506,58 @@ class WorkerSeamTests(CodexSeamCase):
     def test_denied_native_requests_are_facts_on_a_completed_worker_turn(self):
         result = self.worker_run("approval")
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(len(result.denied_interactions), 1)
-        self.assertEqual(result.denied_interactions[0].method, "item/commandExecution/requestApproval")
         # The attention conversion is the role's judgment at wiring; the driver
         # reports the completed native turn and the refusal facts as they were.
         self.assertEqual(json.loads(result.value.raw)["outcome"]["disposition"], "completed")
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "denied-interactions"))
-        records = json.loads(retained.read_text())
-        self.assertEqual(records["records"][0]["turnId"], "native-turn-1")
+        raw = retained.read_bytes()
+        self.assertEqual(len(raw), next(ref.size_bytes for ref in result.evidence_refs
+                                        if ref.kind == "denied-interactions"))
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         next(ref.sha256 for ref in result.evidence_refs
+                              if ref.kind == "denied-interactions"))
+        records = json.loads(raw)["records"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["method"], "item/commandExecution/requestApproval")
+        self.assertEqual(records[0]["turnId"], "native-turn-1")
         remove_coding_auth(self.base / "worker-native")
 
     def test_worker_unknown_events_are_counted_never_failed(self):
-        result = self.worker_run("worker-unknown")
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = self.worker_run("worker-unknown", observer=observer)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.unknown_events.counts, (("thread/hologram/updated", 1),))
-        self.assertEqual(result.unknown_events.total, 1)
+        # The unknown event's own count is the observer statistics' fact.
+        self.assertEqual(seen[-1]["unknownEvents"],
+                         {"countsByType": {"thread/hologram/updated": 1}, "total": 1})
         remove_coding_auth(self.base / "worker-native")
 
     def test_unknown_event_types_merge_at_the_public_bound(self):
         # More distinct unclassified types in one real turn than the public
         # result carries: the run still settles with a bounded, exact-total
-        # merge instead of failing result construction.
-        result = self.worker_run("worker-unknown-flood")
+        # merge instead of failing result construction, and the observer's own
+        # cumulative statistics carry the same bounded mapping.
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = self.worker_run("worker-unknown-flood", observer=observer)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        counts = result.unknown_events.counts
+        counts = seen[-1]["unknownEvents"]["countsByType"]
+        total = seen[-1]["unknownEvents"]["total"]
+        self.assertEqual(total, 65)
+        self.assertEqual(sum(counts.values()), 65)
         self.assertEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
-        self.assertEqual(result.unknown_events.total, 65)
-        self.assertEqual(sum(count for _name, count in counts), 65)
-        self.assertEqual([name for name, _count in counts[:MAX_UNKNOWN_EVENT_TYPES - 1]],
+        self.assertEqual(list(counts)[:MAX_UNKNOWN_EVENT_TYPES - 1],
                          [f"native/future/{number}" for number in range(MAX_UNKNOWN_EVENT_TYPES - 1)])
-        self.assertEqual(counts[-1], ("(unlisted-native-events)", 2))
+        self.assertEqual(counts["(unlisted-native-events)"], 2)
 
     def test_worker_tool_facts_are_live_public_evidence(self):
         seen = []
@@ -549,9 +581,10 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
         self.assertEqual([event["toolName"] for event in package["events"]],
                          ["commandExecution", "commandExecution"])
-        self.assertEqual(len(result.root_identities), 1)
-        self.assertEqual(result.root_identities[0].session_id, result.native_identity.session_id)
-        self.assertEqual(result.root_identities[0].turn_id, "native-turn-1")
+        # This run's one root turn is the package's own native root.
+        self.assertEqual(package["nativeIdentity"],
+                         [{"sessionId": result.native_identity.session_id,
+                           "turnId": "native-turn-1"}])
         remove_coding_auth(self.base / "worker-native")
 
     def test_worker_tool_facts_count_in_activity(self):
@@ -674,12 +707,10 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown")
-        self.assertEqual(stop.observation_basis, "owned-process-group")
-        self.assertTrue(stop.started)
-        self.assertTrue(stop.leader_exited)
         # The governed turn's observed completion is a stream fact of its own;
         # the unknown group must not overwrite it — and still never saves a
-        # resumable binding.
+        # resumable binding. (The halt's real handle below shows the leader
+        # reaped: the reappearance is that handle's fact.)
         self.assertTrue(result.tool_evidence.value["streamComplete"])
         self.assertIsNone(result.continuation.resumable)
         # No orphan: the halt really stopped the group it owned.
@@ -706,7 +737,8 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "user-cancel")
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertEqual(result.stop_evidence.interrupt.basis, "native-turn-interrupt-unconfirmed")
-        self.assertEqual(result.end.signal, "SIGTERM")
+        # The native SIGTERM survives as its own exit-code fact.
+        self.assertEqual(result.end.native_exit_code, -15)
         remove_coding_auth(self.base / "worker-native")
 
 

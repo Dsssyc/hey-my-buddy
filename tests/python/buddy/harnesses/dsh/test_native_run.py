@@ -14,6 +14,7 @@ the stdio MCP carrier.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -213,21 +214,26 @@ class FastSeamTests(NativeRunCase):
     def test_a_settled_answer_is_a_final_message_fact(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
         correction = FastCorrection(SCHEMA, "prompt")
-        result = run(self.fast_request("prompt"), observer=correction.observer,
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return correction.observer(facts)
+
+        result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.mechanism, "final-message")
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         self.assertEqual(result.value.schema_status, "unknown")
         self.assertEqual(result.value.correction_count, 0)
-        self.assertIsNone(result.unknown_events)
+        # The observer's own cumulative statistics carry the unknown-event
+        # count; a clean run saw none.
+        self.assertTrue(all(facts["unknownEvents"]["total"] == 0 for facts in seen))
         self.assertEqual(result.model_started, True)
-        self.assertEqual(result.model_start_evidence.basis, "native-start")
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertEqual(result.end.native_exit_code, 0)
         self.assertIsNone(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.completion_evidence.native_outcome, "end_turn")
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertIsNone(result.usage, "no record exists, so the usage stays unknown, never zero")
         package = result.tool_evidence.value
@@ -344,7 +350,8 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        self.assertEqual(len(result.root_identities), 2)
+        # Both root sessions are listed as native roots of this one run.
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
         self.assertEqual(correction.correction_count, 1)
         started = [entry for entry in self.agent_log() if entry.get("event") == "startup"]
         self.assertEqual(1, len(started), "the correction reuses the one process")
@@ -372,12 +379,20 @@ class FastSeamTests(NativeRunCase):
         self.extra_agent_args = ["--prompt-mode", "final", "--emit-unknown-update",
                                  "--final-answer", '{"choice":"a"}']
         correction = FastCorrection(SCHEMA, "prompt")
-        result = run(self.fast_request("prompt"), observer=correction.observer,
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return correction.observer(facts)
+
+        result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(correction.stop_reason, "invalid-protocol")
-        self.assertEqual(result.unknown_events.total, 1)
-        self.assertEqual(dict(result.unknown_events.counts).get("buddy_probe_unknown"), 1)
+        # The unknown event's own count is the observer statistics' fact.
+        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"buddy_probe_unknown": 1},
+                                                      "total": 1} for facts in seen),
+                        [facts["unknownEvents"] for facts in seen])
 
     def test_a_write_scope_without_a_service_takes_the_final_message_path(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -387,9 +402,14 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        self.assertEqual(result.effective_policy.tools.enforcement, "unrestricted")
-        self.assertEqual(result.effective_policy.filesystem.enforcement, "unrestricted")
-        self.assertEqual(result.effective_policy.tools.basis, "dsh-default-workspace-write-preset")
+        # The write scope sends no native policy request of its own (the
+        # default workspace preset runs) — the fact reports exactly that
+        # emptiness, and the launch record carries the patch that was sent.
+        self.assertIsNotNone(result.effective_policy.tools)
+        self.assertIsNone(result.effective_policy.tools.requested)
+        record = self.launch_records()[-1]
+        self.assertIn("--patch", record["argv"])
+        self.assertNotIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
 
     def test_a_read_scope_reports_the_preset_and_injects_only_its_key(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -399,10 +419,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         policy = result.effective_policy
-        self.assertEqual(policy.tools.enforcement, "native")
         self.assertEqual(policy.tools.requested.value, {"permissionMode": "read-only"})
-        self.assertEqual(policy.filesystem.enforcement, "unknown",
-                         "the command-write smoke is the Host's post-wiring run")
         record = self.launch_records()[-1]
         self.assertIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
         self.assertTrue(record["dshHome"].startswith(str(self.root)),
@@ -429,7 +446,6 @@ class FastSeamTests(NativeRunCase):
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
         self.assertTrue(pin["config"]["root"].endswith("/sessions"))
         policy = result.effective_policy.tools
-        self.assertEqual(policy.enforcement, "native")
         self.assertEqual(policy.requested.value["disabledRows"],
                          [row["id"] for row in rows[1:]])
 
@@ -449,7 +465,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "scope-configuration-unconfirmed")
         self.assertIsNone(result.model_started)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.observation_basis, "spawn-never-happened")
+        self.assertIsNone(result.end.native_exit_code)
 
     def test_a_spawn_failure_reports_an_unavailable_agent_and_no_started_model(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -461,7 +477,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "adapter-unavailable")
         self.assertIsNone(result.model_started)
-        self.assertEqual(result.stop_evidence.native.observation_basis, "spawn-never-happened")
+        self.assertIsNone(result.end.native_exit_code)
         self.assertIsNone(result.harness_version)
 
     def test_an_agent_lost_before_any_session_never_claims_spawn_never_happened(self):
@@ -477,9 +493,12 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "native-disconnected")
         self.assertIsNone(result.model_started)
         stop = result.stop_evidence.native
-        self.assertTrue(stop.started, "the process was held, so the run started one")
+        # The process was held, so the run started one: the held connection's
+        # own facts are retained, and the leader's real exit is the end's code.
+        self.assertTrue(any(ref.kind in ("acp-connection-facts", "acp-frame-log")
+                            for ref in result.evidence_refs), result.evidence_refs)
+        self.assertIsNotNone(result.end.native_exit_code)
         self.assertEqual(stop.group_state, "gone")
-        self.assertEqual(stop.observation_basis, "owned-acp-process-group")
 
     def test_an_unobserved_agent_before_any_session_stays_unknown(self):
         # The direct regression for the rejected delivery: a held process whose
@@ -498,8 +517,6 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "native-disconnected")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown", "an unobservable group is never gone")
-        self.assertTrue(stop.started)
-        self.assertEqual(stop.observation_basis, "owned-acp-process-group")
         self.assertIsNone(result.model_started)
 
     def test_launch_bookkeeping_failure_keeps_the_wrapper_stop_evidence(self):
@@ -517,8 +534,6 @@ class FastSeamTests(NativeRunCase):
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown",
                          "the wrapper's own finalize evidence rules, not the session count")
-        self.assertTrue(stop.started)
-        self.assertEqual(stop.observation_basis, "launch-bookkeeping-finalize")
         self.assertIsNone(result.model_started)
 
     def test_a_late_tool_fact_reaches_the_role_and_stops_the_run(self):
@@ -558,26 +573,41 @@ class FastSeamTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
                                  "--emit-foreign-chunk"]
-        result = run(self.fast_request("prompt"), observer=lambda _f: FEEDBACK_CONTINUE,
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw, '{"choice":"a"}', "only this run's own root answers")
-        self.assertEqual(dict(result.unknown_events.counts).get("foreign-root-text"), 1,
-                         "the foreign chunk stays an isolated unknown-origin fact")
-        self.assertEqual(result.unknown_events.total, 1)
+        # The foreign chunk stays an isolated unknown-origin fact in the
+        # observer's own statistics.
+        self.assertTrue(any(facts["unknownEvents"].get("countsByType", {}).get("foreign-root-text") == 1
+                            and facts["unknownEvents"]["total"] == 1 for facts in seen),
+                        [facts["unknownEvents"] for facts in seen])
 
     def test_sixty_five_unknown_kinds_stay_bounded_and_keep_the_total(self):
         # The shared contract bounds the distinct kinds; the surplus folds into
         # one bucket so an over-wide classification can no longer cost the run
-        # its result or its stop facts.
+        # its result or its stop facts. The observer's cumulative statistics
+        # carry the same bounded mapping.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
                                  "--spam-unknown-kinds", "65"]
-        result = run(self.fast_request("prompt"), observer=lambda _f: FEEDBACK_CONTINUE,
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.unknown_events.total, 65)
-        self.assertLessEqual(len(result.unknown_events.counts),
+        self.assertEqual(seen[-1]["unknownEvents"]["total"], 65)
+        self.assertLessEqual(len(seen[-1]["unknownEvents"]["countsByType"]),
                              run_contract.MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
@@ -597,7 +627,6 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
         self.assertEqual(result.stop_evidence.native.group_state, "unknown",
                          "an unavailable observation is never a stop proof")
-        self.assertTrue(result.stop_evidence.native.leader_exited)
         self.assertTrue(result.tool_evidence.value["streamComplete"],
                         "the drained stream and the ended turn prove the stream itself, "
                         "even while the group stop stays unknown")
@@ -633,7 +662,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNone(result.completion_evidence)
         self.assertEqual(result.model_started, True)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
+        self.assertEqual(result.end.native_exit_code, 0)
 
 
 class CancelTests(NativeRunCase):
@@ -750,20 +779,10 @@ class WorkerSeamTests(NativeRunCase):
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.mechanism, "completion-tool")
         self.assertEqual(result.value.schema_status, "valid")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
-        self.assertEqual(result.value.validation_basis, "signed-receipt-role-validator")
-        self.assertTrue(result.completion_evidence.receipt_verified)
-        self.assertEqual(result.completion_evidence.call_id, "call_finish_1")
-        self.assertEqual(result.completion_evidence.native_outcome, "end_turn")
         self.assertTrue(result.completion_evidence.stream_end)
-        self.assertEqual(result.native_identity.call_id, "call_finish_1")
-        self.assertEqual(result.model_start_evidence.basis, "native-start")
-        checked = result.configuration.checked
-        self.assertEqual(checked.model.basis, "native-readback")
-        self.assertEqual(checked.model.value, "m1")
-        self.assertEqual(checked.effort.value, "high")
+        self.assertTrue(result.model_started)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
@@ -773,6 +792,21 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(package["nativeIdentity"],
                          [{"sessionId": result.native_identity.session_id}])
+        # The signed receipt the finish call received is the retained
+        # provenance's own fact, read back through the checked reference.
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
+        raw = Path(ref.location).read_bytes()
+        self.assertEqual(len(raw), ref.size_bytes)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
+        provenance = json.loads(raw)
+        self.assertTrue(provenance["receiptVerified"])
+        self.assertIsNotNone(provenance["receiptId"])
+        self.assertEqual(provenance["toolCallId"], "call_finish_1")
+        self.assertEqual(provenance["stopReason"], "end_turn")
+        self.assertEqual(provenance["nativeSessionId"], result.native_identity.session_id)
+        checked = result.configuration.checked
+        self.assertEqual(checked.model.value, "m1")
+        self.assertEqual(checked.effort.value, "high")
 
     def test_a_worker_turn_reports_the_record_usage_and_mirrors_its_stderr(self):
         # The Worker token-usage capability: a governed turn whose native record
@@ -811,12 +845,15 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(len(attention["requests"]), 1)
         self.assertIn("reject_once", attention["requests"][0]["basis"],
                       "the reject-only policy selects the reject option")
-        denied = result.denied_interactions
-        self.assertTrue(any(item.method == "session/request_permission"
-                            and item.action == "permission-refused" for item in denied))
+        # The refused upgrade is a permission decision: its own record — the
+        # request's options and the chosen reject outcome — travels in the
+        # permission-decisions reference (the denied-interactions reference
+        # only carries non-permission reverse requests, and this run has none).
         refs = [ref for ref in result.evidence_refs if ref.kind == "permission-decisions"]
         self.assertEqual(len(refs), 1)
+        self.assertNotIn("denied-interactions", {ref.kind for ref in result.evidence_refs})
         decisions = json.loads(Path(refs[0].location).read_text())["records"]
+        self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["outcome"].get("optionId"), "opt-reject",
                          "the escalation request was answered with the reject option")
 
@@ -826,7 +863,12 @@ class WorkerSeamTests(NativeRunCase):
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.completion_evidence.call_id, "call_finish_2")
+        # The natively failed finish stays a task-tool fact; only the verified
+        # retry — the call whose receipt the provenance names — is the delivery
+        # evidence.
+        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance")).read_bytes())
+        self.assertEqual(provenance["toolCallId"], "call_finish_2")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1,
@@ -894,8 +936,8 @@ class ContinuationTests(NativeRunCase):
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertNotEqual(result.native_identity.session_id, "previous-native-session",
                             "the continuation rebuilds, never resumes the previous session")
-        self.assertEqual(result.root_identities,
-                         result.root_identities[:1], "exactly one fresh root was opened")
+        # Exactly one fresh root was opened.
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 1)
         self.assertIsNone(result.continuation, "dsh saves no continuation binding facts")
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
         provenance = json.loads(Path(reference.location).read_text())
