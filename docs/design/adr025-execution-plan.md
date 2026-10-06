@@ -429,3 +429,5 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 3-A1 报告的 Codex 续接缺口用 RunContinuation.checkpoint 补齐：ResumeCheckpoint 包含必填 native_turn_id、attempt_id、input_sha256 三个严格字段，整个对象可空。黑板当前只生成这三个键；角色从 context.nativeResume 原样投影。采用“整个检查点缺省或三项齐全”的对象，避免三个可选散字段把部分丢失误当成没有检查点。Codex 仍逐项核对私有绑定，再核对 thread/read 的最近完成回合；其他 harness 未声明 resume_checkpoint 控制时由共同入口拒绝该非默认请求。只补现有校验需要的事实，不再把整个 Worker 输入传给运行模块。
 
 审阅公共接线保留原有角色差别为参数：是否允许一次纠正沿用描述中的 read_only_structured_resume，预算规则留在同一个 ReviewObserver；Claude 的既有审阅网络与附加禁用项在注册处绑定，统一角色只传明确控制值。相同控制器执行、帧读写与收集，不为审阅另开运行通道。原有厂商最终值是JSON对象还是文本由已报告的parsed/raw事实保留；不为方便投影改掉原收据的值类型。
+
+用户随后明确接受DSH的第四、五项行为差异：所有由hey-my-buddy启动的DSH运行，均通过该次启动的私有patch关闭session-title-llm（第四项）和session-telemetry-otel（第五项）。这包括Worker、快速调用和免模型发现；不改用户配置，用户自己交互使用的DSH不受影响。原有三项已接受差异及其他边界继续有效。第四步使用项目依赖zstandard>=0.25,<1读取本次私有会话记录，不依赖系统zstd命令；源不可读时如实未知，正常Worker回合必须保留既有token用量报告能力后才能验收。

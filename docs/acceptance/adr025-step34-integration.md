@@ -49,3 +49,7 @@ Host 补共享审阅角色接线：ReviewPreparation 冻结登记的运行模块
 4-B1 在约两小时执行预算后结束，终态cancelled、cancellation为空，原生与外层停止都已确认；没有供应方限流，不能按限流例外更换buddy。封存partial-output为cb9dfbc、artifact 97e40606-dadc-4b96-9f9e-9f8e50b2cbcd，累计摘要1dfc416c46a043c2407104887e8c9cf8102695918bc2945ff0bb974b1f8556cf及六条scope路径核对一致，未整合、未验收。初稿none工具清单为空，usage恒为None，并建议Host补解压依赖；同一记录先称零安装版启动，随后承认旧入口测试回退安装版DSH。Host已核对至少一个复现的DSH_HOME明确在本任务私有根、以MISSING_CREDENTIAL退出，尚不声称准确启动总数，后续须由原run纠正验证结论。
 
 DSH初稿另把F-D2探针关闭标题模型和遥测的patch应用于全部运行。当前旧Worker入口没有这项强制关闭，旧快速路由有；这超出已接受的三项行为差异。按用户的暂停条件，Host停止DSH线并请求选择：恢复Worker原profile行为（推荐），或明确接受全部关闭并登记。Codex与Claude的独立工作继续。Python解压库属于项目依赖的待处理缺口，未因此更改日常运行时；初稿建议的zstandard>=1.5,<2混用了libzstd和Python包版本，官方PyPI显示Python包为0.25.0，后续依赖选择须按Python包版本核定（https://pypi.org/project/zstandard/）。
+
+用户已明确同意所有hey-my-buddy启动的DSH运行关闭session-title-llm和session-telemetry-otel，分别登记为第四、五项已接受行为差异；私有启动patch不影响用户自己交互使用的DSH。DSH暂停条件解除，按原run继续，不更换buddy。Host按官方Python包版本增加项目依赖zstandard>=0.25,<1，uv.lock固定0.25.0；uv sync --frozen只更新实施检出的项目虚拟环境，锁定解压库的压缩/解压往返通过，未安装或升级日常运行时。
+
+F-D2记录所指原始none patch在当前留存路径及其旧受管检出已不可读，不能声称逐字节复用了旧清单。Host用私有HOME/DSH_HOME执行两次免模型dump-config，重新读取当前公开组合面：16个tool-前缀行中，tool-result-pruner是上下文剪枝行，其余15个是工具提供行（包含两种平台shell）；不是照历史数字盲填14。第一次脚本用safe_load处理!!js数据标签失败，发生在子进程communicate和finalize之后，原始stdout保留，但其停止返回没有单独保存；第二次先保存停止证据，再用BaseLoader把表达式仅作为字符串读取，exit0且groupObserved=gone。随后对明确15项工具行、plan-mode及两项已批准关闭行做一次免模型ACP初始化/新会话/关闭核对，结果见tmp下dsh-none-boot-summary.json。仅证明当前组合能启动；没有prompt，实际有效工具集仍要在本线最小真实冒烟从本次私有记录核对，未来清单外新行不得被当作已限制。以上Host免模型原生启动共3次、模型prompt0次，均经已验收的私有启动包装。
