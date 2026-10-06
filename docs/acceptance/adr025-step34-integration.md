@@ -127,3 +127,5 @@ Codex 接线后的第一次默认并行完整检查在两个模块失败：共�
 本批全量编号按同一 python_test_modules 加 unittest 加载器收集为 2,790 个、176 个模块，加载错误 0、重复 0。相对第二步 2,628 个：2,619 个编号不变，7 个改类/改名有对应，2 个重复 Claude schema/解析器测试随唯一旧使用方删除，由共享 schema-worker 的 schema 哈希与严格业务值校验覆盖；净新增编号 164 个。已列变化两侧从原始集合减去后集合完全相等。[编号表](adr025-step3-test-ids.tsv) 只列变化，原始清单留 tmp；其中包含并行已合入的 DSH 原生主体 42 项，不能把这一共存计数冒充 DSH 接线验收。
 
 [格式使用表](adr025-step3-format-usage.tsv) 复核第二步的 18 组 B 项：InterruptEvidence.requested/basis 已有 Codex native_evidence 的实际读取；3 组部分投影/部分读取；14 组仍没有业务读取。整帧存下与测试断言不算业务使用方。ModelStartEvidence、DeniedInteraction、UnknownEvents 三个格式类当前只有构造/序列化，连同表中其余未消费字段在第四步结束前删除或明确真实读取；不为保留它们造消费者。本步新增的角色参数、网络/拒绝工具请求字段、路径服务绑定均有实际调用。真实检查见[原生冒烟记录](adr025-step3-native-smokes.md)：Codex Worker 1 次通过，Claude 1 次无模型发现遇登录条件，Worker 0 次、未验证、不重试。
+
+第三步最终整合检查基线 bd4324e：uv run --frozen python -m hey_my_buddy.cli.checks，默认并行数、不传 --jobs、清除 BUDDY_CHECKS_JOBS，退出 0；Python 2,790 项（skip 1）／176 个模块全部完成，Node 110 项，用时 459.388 秒。两处代码/同步问题与一处记录路径失败均已闭环，本次同时作为本批整合检查和第三步两条线的整步完整检查，不再重复。代码与测试在检查期间保持该固定版本；之后只补结果记录。Codex、Claude 两条线在此停止等待用户转达 Claude Code Host 验收；DSH 线独立继续，未开始第五步。Claude 私有探针根在所选 CLI 启动前资格拒绝、无 Worker 启动后按登记确切路径回收；所有原始发现摘要保留。
