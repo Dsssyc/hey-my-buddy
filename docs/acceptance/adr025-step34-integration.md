@@ -91,3 +91,7 @@ Host 另修公共收集的 Claude 旧配额事实形状：角色参数 native_qu
 3-A2 固定 2fb8f27（摘要 3f04956，tree 相同）、artifact 2d79698a-0497-41ee-b5c4-48ea4e32c49d、累计补丁 d9044238539c119f776793f1d4b982bda0dc88b207ace4037bc2ac9a0ff1aeed 的 15 条 scope 路径已核对。Host 验证副本完全不含已删除的 runner.py/no_tool.py，加当前公共文件、Codex 注册与两处 workflow 导入适配后，Codex 129 项通过（53.771 秒）。Host 对已验收基线和新代码各跑五个模拟 Worker 场景，状态、错误、停止、续接与用量相符；发现公共投影遗漏 nativeIdentity 和 outcomeValidationError，并额外增加 Codex 原没有的 attentionRequired，均由 Host 修正。未知时间值与私有路径未作相等断言，原始结果留 tmp。
 
 Host 保留各原有结构化收据的字段位置与缺省口径：Codex 快速调用的 nativePolicy 在顶层，审阅 nativePolicy/nativeConfigPolicy 不受可选 capture 开关影响；Codex/DSH 的快速失败仍有 zeroToolVerified=false，ZCode 的既有缺键口径不变。NativeSchemaWorker 通过实际使用的收据参数保留 Codex 原生身份与有界业务校验原因，Claude 的 attentionRequired 缺计数时仍为 false。两处黑板 checkpoint 导入切到已机械搬定的 roles.turn_io。新增两个公共投影回归，与既有角色/ZCode 聚焦共 25 项通过（5.875 秒）。Codex 驱动对失败 thread/start 回读的保留、原中断收据事实及被削弱的旧断言，仍由 3-A2 原 run 修正；未由 Host 代改其代码或测试。
+
+Host 将 ZCode 的合作检查点桥用 git mv 搬到 harnesses/inquiry_bridge.py，供 DSH 共用。队列、journal 持久化/重放、私有 socket、分页读取与 ExistingLiveChannel 保持一份；驱动只传原有错误构造、限制说明和原生事件到元数据的映射。ZCode 的事件映射原样移到 native_run，新增的 make_inquiry_bridge 是实际构造入口；旧 zcode.live_bridge 路径已删除，没有兼容模块。公共能力表中的 DSH 模式留到 DSH 注册时再改，当前旧路径不提前换行为。
+
+桥搬动及实时角色的 93 项聚焦通过（23.886 秒，日志有一条未关闭文件的 ResourceWarning，未据此声称警告为零）；受影响黑板问询 29 项通过（28.170 秒）。把搬后公共桥的 _bound_record 临时改成恒真，原 journal 重放见证按预期因 q-unbound/q-foreign/q-legacy 混入而失败；未变原件已在 93 项中通过。测试函数编号没有改名、增删，完整集合对账随本批整合检查完成。无模型或安装版原生调用。这是两条 harness 共用设施的 Host 整合，没有复制 DSH 专用运行通道。

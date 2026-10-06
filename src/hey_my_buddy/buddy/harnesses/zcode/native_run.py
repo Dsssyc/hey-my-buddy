@@ -51,6 +51,7 @@ from ..base import BoundSessionServices, ProcessHandle
 from ...runtime.windows_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..run_contract import (
+    RunIdentity,
     ActivityPackage,
     MAX_SCHEMA_BYTES,
     CheckedConfiguration,
@@ -83,8 +84,9 @@ from ..run_contract import (
     UnknownEvents,
 )
 from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths, snapshot_provider_files
-from .live_bridge import InquiryBridge, bind_live_channel
+from ..inquiry_bridge import InquiryBridge, bind_live_channel as bind_checkpoint_channel
 from .protocol import (
+    COOPERATIVE_INQUIRY_NOTE,
     ActivityProjection,
     NativeConnection,
     NativeError,
@@ -286,6 +288,31 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
 
 # -- the normalized facts the role observer sees ---------------------------------
 
+
+
+def _inquiry_event_metadata(message: dict) -> dict:
+    params = message.get("params") if isinstance(message, dict) else None
+    method = message.get("method") if isinstance(message, dict) else None
+    kind = params.get("type") if isinstance(params, dict) else None
+    if method == "state.updated":
+        kind = f"state:{str((params or {}).get('reason'))[:40]}"
+    data = (params or {}).get("payload") if isinstance(params, dict) else None
+    return {"kind": kind or method or "event",
+            "toolName": data.get("toolName") if isinstance(data, dict) else None}
+
+
+def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
+                        attention_path: str | None = None) -> InquiryBridge:
+    return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
+                         attention_path=attention_path, error_factory=NativeError,
+                         event_metadata=_inquiry_event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE)
+
+
+def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
+                      activity_path: Path):
+    from ..live import EXISTING_CAPABILITIES
+    return bind_checkpoint_channel(identity, credentials=credentials, journal_path=journal_path,
+                                   activity_path=activity_path, capabilities=EXISTING_CAPABILITIES["zcode"])
 
 def check_preparation(spec: dict, environment: dict) -> None:
     """Confirm native capability and the selected provider without spawning."""
@@ -1173,7 +1200,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     return
 
             if services.inquiry is not None:
-                inquiry_bridge = InquiryBridge(services.inquiry,
+                inquiry_bridge = make_inquiry_bridge(services.inquiry,
                                                identity=_bridge_identity(request),
                                                journal_path=str(services.inquiry.get("resultsPath") or ""),
                                                attention_path=mount.bridge.get("attentionPath"))

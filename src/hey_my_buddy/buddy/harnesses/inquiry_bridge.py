@@ -4,10 +4,10 @@ The bridge lives inside the driver process because only that process holds the
 native connection. A Host question is only ever *queued* here; it reaches the
 root exclusively through the session-private ``buddy_checkpoint`` tool inside
 the one admitted native turn, and only the driver — after verifying that turn's
-own ``tool.updated`` evidence and the signed receipt — journals ``delivered``
+own native tool evidence and the signed receipt — journals ``delivered``
 or ``answered`` state. Nothing here injects input, and no MCP handler writes
-this journal. See :data:`hey_my_buddy.buddy.harnesses.zcode.protocol.COOPERATIVE_INQUIRY_NOTE`
-for the channel contract.
+this journal. The driver supplies its existing limitation text, native error
+constructor and metadata projection; this bridge has no native protocol parser.
 
 :func:`bind_live_channel` is the real narrow binding of ADR-025's
 :class:`~hey_my_buddy.buddy.harnesses.live.ExistingLiveChannel` over these
@@ -30,18 +30,17 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .... import locking
-from ....errors import BoardError
-from ....json_codec import canonical_json
-from ....protocol.inquiry_transport import bridge_request
-from ...roles.turn_io import private_json
-from ..live import (
-    EXISTING_CAPABILITIES,
+from ... import locking
+from ...errors import BoardError
+from ...json_codec import canonical_json, decode_strict_json as decode_json
+from ...protocol.inquiry_transport import bridge_request
+from ..roles.turn_io import private_json
+from .live import (
     ExistingLiveChannel,
     LiveCapabilities,
     RunIdentity,
 )
-from ..session_receipts import (
+from .session_receipts import (
     INQUIRY_JOURNAL_VERSION,
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
@@ -50,7 +49,6 @@ from ..session_receipts import (
     MAX_QUESTION_BYTES,
     read_shared_snapshot,
 )
-from .protocol import COOPERATIVE_INQUIRY_NOTE, NativeError, decode_json
 
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
 BRIDGE_PROTOCOL_VERSION = 1
@@ -67,7 +65,7 @@ def _now() -> str:
 
 
 class InquiryBridge:
-    """Owner-private cooperative inquiry bridge for one governed ZCode root turn.
+    """Owner-private cooperative inquiry bridge for one governed root turn.
 
     The journal is attempt-private transport evidence. A committed question keeps
     its identity, question hash and delivery record across state changes, so a
@@ -77,7 +75,11 @@ class InquiryBridge:
     lock guards every entry, journal and state transition.
     """
 
-    def __init__(self, credentials: dict, *, identity: dict, journal_path: str, attention_path: str | None = None):
+    def __init__(self, credentials: dict, *, identity: dict, journal_path: str,
+                 error_factory, event_metadata, limitation: str, attention_path: str | None = None):
+        self.error_factory = error_factory
+        self.event_metadata = event_metadata
+        self.limitation = limitation
         self.credentials = credentials
         self.identity = identity
         self.journal_path = path = Path(journal_path)
@@ -156,7 +158,7 @@ class InquiryBridge:
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
                                    "unavailableAt": _now(),
                                    "reason": "the governed root turn ended before this inquiry was answered",
-                                   "limitation": COOPERATIVE_INQUIRY_NOTE})
+                                   "limitation": self.limitation})
             listener, self.listener = self.listener, None
         if listener is not None:
             try:
@@ -324,7 +326,7 @@ class InquiryBridge:
                 inquiry_id = item["inquiryId"]
                 entry = self.entries.get(inquiry_id)
                 if entry is None or entry.get("questionSha256") != item["questionSha256"]:
-                    raise NativeError("invalid-inquiry-evidence",
+                    raise self.error_factory("invalid-inquiry-evidence",
                                       "a checkpoint receipt referenced an inquiry this attempt never committed")
                 if entry.get("state") == "queued":
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "delivered",
@@ -349,13 +351,13 @@ class InquiryBridge:
         with self.lock:
             entry = self.entries.get(inquiry_id)
             if entry is None or entry.get("questionSha256") != receipt["questionSha256"]:
-                raise NativeError("invalid-inquiry-evidence",
+                raise self.error_factory("invalid-inquiry-evidence",
                                   "an answer receipt referenced an inquiry this attempt never committed")
             if entry.get("state") == "answered":
                 recorded = (entry.get("answer") or {}).get("text")
                 if recorded == answer:
                     return  # an identical binding replay changes nothing
-                raise NativeError("conflicting-inquiry-answer",
+                raise self.error_factory("conflicting-inquiry-answer",
                                   "a different answer was already recorded for this inquiry")
             if entry.get("state") in ("discarded", "unavailable"):
                 # A valid root answer racing a Host withdrawal or settlement is
@@ -370,16 +372,12 @@ class InquiryBridge:
     # -- observation ---------------------------------------------------------
     def note_event(self, message: dict, phase: str) -> None:
         """Keep a bounded, metadata-only live view of the native turn."""
-        params = message.get("params") if isinstance(message, dict) else None
-        method = message.get("method") if isinstance(message, dict) else None
-        kind = params.get("type") if isinstance(params, dict) else None
-        if method == "state.updated":
-            kind = f"state:{str((params or {}).get('reason'))[:40]}"
-        last_event = {"at": _now(), "kind": (kind or method or "event")[:80]}
+        metadata = self.event_metadata(message)
+        last_event = {"at": _now(), "kind": metadata["kind"][:80]}
         entry = {"at": last_event["at"], "kind": last_event["kind"]}
-        data = (params or {}).get("payload") if isinstance(params, dict) else None
-        if isinstance(data, dict) and isinstance(data.get("toolName"), str) and data["toolName"]:
-            entry["toolName"] = data["toolName"][:120]
+        tool_name = metadata.get("toolName")
+        if isinstance(tool_name, str) and tool_name:
+            entry["toolName"] = tool_name[:120]
         with self.lock:
             self.last_event = last_event
             self.activity.append(entry)
@@ -415,7 +413,7 @@ class InquiryBridge:
             "capability": "inquiry",
             "supported": True,
             "deliveryMode": "cooperative-checkpoint",
-            "limitation": COOPERATIVE_INQUIRY_NOTE,
+            "limitation": self.limitation,
             "limits": {"maxQuestionBytes": MAX_QUESTION_BYTES, "maxAnswerBytes": MAX_ANSWER_BYTES,
                        "maxInquiriesPerRun": MAX_INQUIRIES, "maxFrameBytes": MAX_BRIDGE_FRAME_BYTES,
                        "inquiry": "cooperative-checkpoint", "deliveryMode": "cooperative-checkpoint",
@@ -436,7 +434,7 @@ class InquiryBridge:
             "supported": True,
             "inquiry": "cooperative-checkpoint",
             "deliveryMode": "cooperative-checkpoint",
-            "limitation": COOPERATIVE_INQUIRY_NOTE,
+            "limitation": self.limitation,
             "requested": len(entries),
             "queued": counts["queued"],
             "delivered": counts["delivered"],
@@ -544,7 +542,7 @@ class InquiryBridge:
 
         No native command is ever sent: the question waits in this bridge until
         the root calls ``buddy_checkpoint`` inside the one admitted turn (see
-        ``COOPERATIVE_INQUIRY_NOTE``). The first question is journaled once with
+        the supplied limitation). The first question is journaled once with
         its committed text, question hash and delivery record; an identical
         replay returns the current committed state as a duplicate and a changed
         question under the same id is a conflict. Before the turn is admitted
@@ -570,7 +568,7 @@ class InquiryBridge:
                         "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": _now()}
             if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
                                   "question": question, "questionSha256": digest, "askedAt": _now(),
-                                  "delivery": delivery, "limitation": COOPERATIVE_INQUIRY_NOTE}):
+                                  "delivery": delivery, "limitation": self.limitation}):
                 # Never report a queued question the journal did not durably
                 # record: the MCP tools could not read it back.
                 return response(False, error="journal-unavailable")
@@ -657,8 +655,8 @@ def _journal_rejection_reason(record: dict, bound: dict) -> str:
 
 
 def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path) -> ExistingLiveChannel:
-    """The real existing-facilities live binding of one governed zcode run.
+                      activity_path: Path, capabilities: LiveCapabilities) -> ExistingLiveChannel:
+    """The real existing-facilities live binding of one governed run.
 
     ``ask`` queues through the shared bridge transport inside its own transport
     window and returns the transport's result fact, ``read_observation`` and
@@ -675,7 +673,7 @@ def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path:
     def read_activity():
         # The existing attempt-bound sidecar reader — validation, binding and
         # throttling belong to it; a foreign attempt's file reads as nothing.
-        from ....protocol import activity as activity_protocol
+        from ...protocol import activity as activity_protocol
         return activity_protocol.read_sidecar(Path(activity_path),
                                               task_id=identity.task_id,
                                               attempt_id=identity.attempt_id,
@@ -767,7 +765,6 @@ def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path:
     def read_answer(inquiry_id: str, timeout_ms: int):
         return _bridge_call(credentials, "answer", {"inquiryId": inquiry_id}, timeout_ms)
 
-    capabilities: LiveCapabilities = EXISTING_CAPABILITIES["zcode"]
     return ExistingLiveChannel(
         identity, capabilities, ask=ask, read_activity=read_activity, read_journal=read_journal,
         read_observation=read_observation, read_answer=read_answer)

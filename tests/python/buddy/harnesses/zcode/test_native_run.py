@@ -664,7 +664,7 @@ class NoToolReverseRequestTests(unittest.TestCase):
 class LiveBindingTests(NativeRunCase):
     def test_the_existing_live_channel_binds_ask_activity_and_journal(self):
         from hey_my_buddy.buddy.harnesses.live import ExistingLiveChannel
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         from hey_my_buddy.protocol import activity as activity_protocol
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
@@ -674,7 +674,7 @@ class LiveBindingTests(NativeRunCase):
         journal = temp / "inquiry.results.jsonl"
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                        "generation": 1, "turnId": "turn-live"},
                                journal_path=str(journal))
         bridge.start()
@@ -712,7 +712,7 @@ class LiveBindingTests(NativeRunCase):
         # null where the structured answer object stood.
         import hashlib as _hashlib
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -723,7 +723,7 @@ class LiveBindingTests(NativeRunCase):
                                invocation_id="invocation-live", turn_id="turn-live")
         bridge_identity = {"taskId": "task", "attemptId": "attempt-live",
                            "generation": 1, "turnId": "turn-live"}
-        bridge = InquiryBridge(credentials, identity=bridge_identity, journal_path=str(journal))
+        bridge = make_inquiry_bridge(credentials, identity=bridge_identity, journal_path=str(journal))
         bridge.start()
         self.addCleanup(bridge.close)
         bridge.activate("sess-live")
@@ -753,7 +753,7 @@ class LiveBindingTests(NativeRunCase):
         self.assertEqual(answered["answer"]["toolCallId"], "call-answer")
 
     def test_foreign_activity_and_journal_records_read_as_nothing(self):
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-f-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -781,7 +781,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_journal_states_follow_the_direct_reader_semantics(self):
         """Empty is available, over-limit and unreadable keep their own reasons."""
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-j-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -822,7 +822,7 @@ class LiveBindingTests(NativeRunCase):
         # line is foreign, its second line fully bound with an owned answer.
         # The final effective record decides: the answer imports, the stale
         # rejection is gone, and the reader's count covers the question once.
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-sup-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -850,7 +850,7 @@ class LiveBindingTests(NativeRunCase):
         # The mirror case plus dedup: a legal record followed by foreign ones
         # leaves exactly one rejection for that id — never an accumulation of
         # every historical refusal — and no bound record is projected for it.
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-rej-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -884,7 +884,7 @@ class LiveBindingTests(NativeRunCase):
         # the encoder the channel's pager measures pages with) after the
         # step-only encode/decode wrappers went with 2-D.
         from hey_my_buddy.buddy.harnesses.live import _bounded_frame
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-frame-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
@@ -935,7 +935,7 @@ class LiveBindingTests(NativeRunCase):
         # the queued record's delivery fact survives the later records that
         # lack it — the projection never flattens the answer away.
         import hashlib as _hashlib
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-s-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -945,7 +945,7 @@ class LiveBindingTests(NativeRunCase):
         journal = temp / "inquiry.results.jsonl"
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(journal))
         bridge.start()
@@ -985,7 +985,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_the_observation_reads_the_real_bridge_view_with_its_own_bounds(self):
         from hey_my_buddy.buddy.harnesses.live import LiveObservation
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-o-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -993,7 +993,7 @@ class LiveBindingTests(NativeRunCase):
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(temp / "inquiry.results.jsonl"))
         bridge.start()
@@ -1038,7 +1038,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_the_answer_point_query_reads_one_native_answer_only(self):
         import hashlib as _hashlib
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a2-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -1046,7 +1046,7 @@ class LiveBindingTests(NativeRunCase):
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(temp / "inquiry.results.jsonl"))
         bridge.start()
@@ -1089,7 +1089,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_a_refused_ask_carries_the_transport_fact_and_the_specific_code(self):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-r-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -1097,7 +1097,7 @@ class LiveBindingTests(NativeRunCase):
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(temp / "inquiry.results.jsonl"))
         bridge.start()

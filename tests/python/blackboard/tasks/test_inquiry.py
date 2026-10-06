@@ -506,7 +506,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
             RunRequest,
             encode_run_request,
         )
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge
         from hey_my_buddy.buddy.roles.turn_io import input_hash
         from hey_my_buddy.buddy.runtime.worker import fsync_json
 
@@ -531,7 +531,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
             "errorPath": str(directory / "inquiry.sock.error.json"),
             "token": secrets_module.token_hex(32),
         }
-        bridge = InquiryBridge({"socketPath": credentials["socketPath"], "token": credentials["token"]},
+        bridge = make_inquiry_bridge({"socketPath": credentials["socketPath"], "token": credentials["token"]},
                                identity=bridge_identity,
                                journal_path=credentials["resultsPath"])
         bridge.start()
