@@ -139,6 +139,36 @@ class StoredRequestTests(unittest.TestCase):
         self.assertIsNone(role_live.stored_run_request(corrupt))
         self.assertIsNone(role_live.stored_run_request(self.directory / "nowhere"))
 
+    def test_one_request_identity_component_mismatch_refuses_alone(self):
+        # Each identity component verifies on its own: for every component
+        # exactly one valid-typed value changes in the REQUEST alone — the real
+        # governed turn input file and its correct digest stay untouched — so
+        # only that component's comparison can refuse the stored pair and no
+        # other failing check can mask the gap.
+        changes = {
+            "task_id": {"task_id": "other-task"},
+            "attempt_id": {"attempt_id": "other-attempt"},
+            "generation": {"generation": 2},
+            "turn_id": {"turn_id": "other-turn"},
+            "invocation_id": {"invocation_id": "other-invocation"},
+            "input_sha256": {"input_sha256": input_hash({"taskId": "task", "altered": True})},
+        }
+        for component, update in changes.items():
+            with self.subTest(component=component):
+                stored = self.write_stored()
+                baseline = decode_run_request((stored / "role-run-request.json").read_bytes())
+                altered = baseline.model_copy(update={"identity": baseline.identity.model_copy(update=update)})
+                (stored / "role-run-request.json").write_text(encode_run_request(altered))
+                self.assertIsNone(role_live.stored_run_request(stored), component)
+        # The harness pair verifies as its own check too: the control keeps
+        # naming zcode while the stored request claims another harness.
+        with self.subTest(component="harness"):
+            stored = self.write_stored()
+            baseline = decode_run_request((stored / "role-run-request.json").read_bytes())
+            altered = baseline.model_copy(update={"harness": "codex"})
+            (stored / "role-run-request.json").write_text(encode_run_request(altered))
+            self.assertIsNone(role_live.stored_run_request(stored))
+
 
 class HandleBindingTests(unittest.TestCase):
     def setUp(self):
@@ -209,6 +239,30 @@ class HandleBindingTests(unittest.TestCase):
         name_only.role_run_control = {"operation": "worker", "harness": "zcode"}
         self.assertEqual(role_live.handle_live_binding(name_only),
                          (role_live.LIVE_UNAVAILABLE, None))
+
+    def test_each_held_identity_component_and_harness_must_match_the_request(self):
+        # The held identity is compared as a whole against the stored request:
+        # every single component differing alone — one valid-typed change, all
+        # other components equal — refuses the binding, and so does a control
+        # harness the stored request does not carry.
+        changes = {
+            "task_id": {"task_id": "other-task"},
+            "attempt_id": {"attempt_id": "other-attempt"},
+            "generation": {"generation": 2},
+            "turn_id": {"turn_id": "other-turn"},
+            "invocation_id": {"invocation_id": "other-invocation"},
+            "input_sha256": {"input_sha256": input_hash({"taskId": "task", "held": True})},
+        }
+        for component, update in changes.items():
+            with self.subTest(component=component):
+                held = identity().model_copy(update=update)
+                self.assertEqual(role_live.handle_live_binding(self.handle(held=held)),
+                                 (role_live.LIVE_UNAVAILABLE, None))
+        with self.subTest(component="harness"):
+            binding = self.handle()
+            self.request_file.write_text(encode_run_request(request(harness="codex")))
+            self.assertEqual(role_live.handle_live_binding(binding),
+                             (role_live.LIVE_UNAVAILABLE, None))
 
 
 if __name__ == "__main__":

@@ -244,6 +244,48 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNotNone(native.exit_code)
         # Killing the group proves the process side only; no SDK answered.
 
+    def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
+        # The run module's own stop collection through the real run path: the
+        # narrow stop-observation point (ProcessHandle.shutdown_confirmed) is
+        # denied confirmation, so the halt still closes stdin, waits and
+        # terminates the real fake app-server while the reported group state
+        # stays the honest unknown — a factually reaped leader never becomes
+        # confirmed-gone evidence, and the settlement is refused without it.
+        from unittest import mock as _mock
+        from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+        observed: list[ProcessHandle] = []
+
+        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            observed.append(handle)
+            return False
+
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        correction = FastCorrection(SCHEMA, prompt)
+        with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
+            result = run(self.fast_request(prompt), observer=correction.observer,
+                         services=None, cancelled=lambda: False)
+        native = result.stop_evidence.native
+        self.assertEqual(native.group_state, "unknown")
+        self.assertEqual(native.observation_basis, "owned-process-group")
+        self.assertTrue(native.started)
+        self.assertIsNotNone(native.exit_code)
+        self.assertTrue(native.leader_exited)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+        # The halt really signalled: the pre-terminate check and the final
+        # confirmation were both denied for this run's own one handle.
+        self.assertEqual(len(observed), 2)
+        self.assertTrue(result.stop_evidence.interrupt.requested)
+        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
+        # No orphan: with the patch gone, the run's own captured handle shows
+        # the leader reaped and the whole group confirmed gone by the real
+        # observation the halt performed.
+        handle = observed[0]
+        self.assertIsNotNone(handle.process.poll())
+        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
+        self.assertFalse(handle.group_alive())
+
     def test_the_peer_receives_the_refusal_before_the_observer_stop_ends_the_run(self):
         # The refusal answer completes first — the peer reads the reply with
         # the same id and records it — and only then does the role's stop take
