@@ -5,13 +5,14 @@ import { historyView } from "./draft";
 import type { Editor } from "./use-editor";
 import type { Snapshot } from "./types";
 import { Empty, Icon } from "./ui";
-import { familyKey, modelFamilies } from "./console-data";
+import { familyKey, familyPending, modelFamilies } from "./console-data";
 import { MAX_HISTORY_PROFILES, PROFILE_PAGE_SIZE, useProfileHistory } from "./use-profile-history";
 import { SplitView } from "./SplitView";
 import { EvaluationHistory } from "./EvaluationHistory";
 import { FamilyDetail, effortTagId } from "./FamilyDetail";
 import { RoutingStatusBar } from "./RoutingStatusBar";
 import { familySearchText, harnessGroups, harnessUnavailableText } from "./buddy-display";
+import { pendingMark } from "./profile-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { HarnessStatus } from "./HarnessStatus";
 import { BuddyStatusBar } from "./BuddyStatusBar";
@@ -209,7 +210,12 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
             const unavailableMark = unavailable.length === g.profiles.length
               ? "不可用" : `不可用 ${unavailable.length}/${g.profiles.length}`;
             const isNew = fresh.has(g.key) || g.profiles.some(profile => profile.newlyDiscovered);
+            // The family's one aggregated pending mark carries the board's
+            // first-absence time; the board owns the state, this row only shows it.
+            const pendingState = familyPending(g.profiles);
+            const pendingText = pendingState.pending ? pendingMark({ pendingSince: pendingState.since }) : "";
             const label = [g.name, `已启用 ${enabled}/${g.profiles.length}`, hasRouter ? "Router" : "",
+              pendingText,
               unavailableShown ? (unavailableText ? `${unavailableMark}（${unavailableText}）` : unavailableMark) : "",
               isNew ? "新" : ""].filter(Boolean).join("，");
             return <li key={g.key}>
@@ -218,6 +224,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
                 onClick={() => { setHistoryOpen(false); setSelected(g.key); }}>
                 <span className="row-between"><strong>{g.name}</strong>
                   <span className="family-row-marks">
+                    {pendingText && <span className="family-pending-mark">{pendingText}</span>}
                     {isNew && <span className="family-new-mark">新</span>}
                     {hasRouter && <span className="router-mark" title="Router 所在家族">Router</span>}
                     <span className="small muted">{enabled}/{g.profiles.length}</span>

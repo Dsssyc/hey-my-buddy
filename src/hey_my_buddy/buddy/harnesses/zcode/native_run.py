@@ -163,9 +163,13 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
         # profiles that are missing from it instead of leaving them unknown
         # forever. The explicit ``discoveries`` status states that boundary.
         warnings.append("The native app server returned no API-key provider; this complete empty observation retires missing ZCode profiles")
+    warnings.append("The account status is not applicable to this reading: this adapter reads only "
+                    "API-key providers out of the user's own configured native snapshot, and the "
+                    "no-prompt read carries no separate account check")
     return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
-            "discoveries": [{"adapter": "zcode", "status": "complete"}], "warnings": warnings}
+            "discoveries": [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}],
+            "warnings": warnings}
 
 
 # -- the role-facing service binding -------------------------------------------

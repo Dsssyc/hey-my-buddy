@@ -323,6 +323,10 @@ class _RunState:
     coding_home_prepared: bool = False
     coding_home: Path | None = None
     review_config: dict | None = None
+    #: Whether the on-the-spot native catalog listed the selected model. ADR-027
+    #: rule 5: an absent model is handed to the native turn under its own name,
+    #: the absence becomes this run's public fact, and the native answer decides.
+    selected_model_listed: bool | None = None
 
 
 @dataclasses.dataclass
@@ -517,10 +521,16 @@ def _catalog(connection: Connection, version: str | None) -> dict:
             raise CodexProtocolError("invalid-catalog", "Codex model cursor is invalid")
         seen.add(cursor)
     models, warnings = [], []
+    listed_ids: set[str] = set()
     for item in data:
         if not isinstance(item, dict) or item.get("hidden") is True:
             continue
         model_id = item.get("model")
+        if isinstance(model_id, str) and model_id:
+            # The native identity the on-the-spot read listed, kept beside the
+            # publishable rows: a listed row with no legal effort still names
+            # its model, and execution must see that fact (ADR-027 rule 5).
+            listed_ids.add(model_id)
         efforts = [e.get("reasoningEffort") for e in item.get("supportedReasoningEfforts", []) if isinstance(e, dict)]
         efforts = list(dict.fromkeys(e for e in efforts if isinstance(e, str) and e))
         if not isinstance(model_id, str) or not model_id or not efforts:
@@ -529,11 +539,12 @@ def _catalog(connection: Connection, version: str | None) -> dict:
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
                        "inputModalities": item.get("inputModalities") or ["text"], "available": True})
-    return {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
-            "discoveredAt": datetime.now(timezone.utc).isoformat(),
-            "providers": [{"adapter": "codex", "provider": "openai", "displayName": "OpenAI ChatGPT plan",
-                           "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
-            "warnings": list(dict.fromkeys(warnings))}
+    catalog = {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
+               "discoveredAt": datetime.now(timezone.utc).isoformat(),
+               "providers": [{"adapter": "codex", "provider": "openai", "displayName": "OpenAI ChatGPT plan",
+                              "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
+               "warnings": list(dict.fromkeys(warnings))}
+    return catalog, listed_ids
 
 
 def _account_binding(prep: _Preparation, services: RunServices) -> dict:
@@ -555,9 +566,36 @@ def _account_binding(prep: _Preparation, services: RunServices) -> dict:
     return {}
 
 
+def _discovery_account_status(account, independent: bool) -> str:
+    """The same session's account fact, reported and never judged (ADR-027).
+
+    A chatgpt account whose plan the readback does not name — the field
+    missing, empty or ``unknown`` — stays an unknown account; type alone never
+    confirms it. An independent worker's apiKey binding keeps its existing
+    rule; the board decides whether to trust any reading.
+    """
+    if not isinstance(account, dict) or account.get("type") not in (
+            ("chatgpt", "apiKey") if independent else ("chatgpt",)):
+        return "unknown"
+    if account.get("type") == "chatgpt":
+        plan = account.get("planType")
+        if not isinstance(plan, str) or not plan or plan == "unknown":
+            return "unknown"
+    return "confirmed"
+
+
 def _initialize(connection: Connection, prep: _Preparation, services: RunServices,
-                mode: str, spec: dict) -> dict:
-    """Initialization phase: handshake, account check, catalog and membership."""
+                mode: str, spec: dict) -> bool:
+    """Initialization phase: handshake, account check, catalog and membership.
+
+    The provider gate stays exact. The listed/unlisted fact comes from every
+    non-hidden identity this model/list read named, even a row whose efforts
+    are empty or invalid: a listed model without the selected effort is
+    refused here and never reaches a thread or turn, while a model this read
+    did not name never fails here (ADR-027 rule 5) — the selected name is
+    handed to the native turn as usual, the caller records the absence as
+    this run's public fact, and the real native error decides the failure.
+    """
     experimental = {"capabilities": {"experimentalApi": True}} if mode in ("fast", "review") else {}
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
@@ -567,13 +605,18 @@ def _initialize(connection: Connection, prep: _Preparation, services: RunService
             (("chatgpt", "apiKey") if independent else ("chatgpt",))):
         raise CodexProtocolError("account-plan-required",
                                  "Codex requires an existing ChatGPT account-plan login")
-    catalog = _catalog(connection, prep.version)
-    if spec.get("provider") != "openai" or not any(
-            model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
-            for model in catalog["providers"][0]["models"]):
+    catalog, listed_ids = _catalog(connection, prep.version)
+    if spec.get("provider") != "openai":
         raise CodexProtocolError("invalid-configuration",
                                  "the selected Codex model and effort are not in the current native catalog")
-    return catalog
+    if spec.get("model") not in listed_ids:
+        return False
+    listed = next((model for model in catalog["providers"][0]["models"]
+                   if model["id"] == spec.get("model")), None)
+    if listed is None or spec.get("effort") not in listed["efforts"]:
+        raise CodexProtocolError("invalid-configuration",
+                                 "the selected Codex model and effort are not in the current native catalog")
+    return True
 
 
 # -- phase 3: configuration (one thread per carrier) -------------------------------
@@ -1002,7 +1045,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
         _wire(connection, chain, facts, observer, request, state, mode)
-        _initialize(connection, prep, services, mode, configuration_spec(request))
+        state.selected_model_listed = _initialize(connection, prep, services, mode, configuration_spec(request))
         if mode == "worker":
             thread_id = _configure_worker(connection, request, services, prep, state)
             _worker_turn(connection, chain, request, state, thread_id, observer, activity)
@@ -1473,6 +1516,15 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         retain("quota-snapshot", invocation_root / "quota-snapshot.json", state.quota)
     if state.capture is not None:
         retain("review-captured-events", invocation_root / "review-captured-events.json", state.capture)
+    if state.selected_model_listed is False:
+        # The on-the-spot absence of the selected model, with the selected
+        # identity kept beside it: this run's own public fact (ADR-027 rule 5),
+        # never a refusal verdict and never a substitute for the native answer.
+        retain("model-check", invocation_root / "model-check.json",
+               {"adapter": "codex", "selectedModelListed": False,
+                "selected": {"provider": request.configuration.provider,
+                             "model": request.configuration.model,
+                             "effort": request.configuration.effort}})
     if state.native_turn_facts is not None:
         retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
     if state.review_config is not None:
@@ -1568,8 +1620,12 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
 
     Discovery never sends a turn, never prepares a private home and never
     configures a model; it performs the account check and the native model
-    list read and stops the owned process conservatively. The return value is
-    the catalog receipt shape the current callers consume.
+    list read in the same session and stops the owned process conservatively.
+    The account fact is reported, never judged (ADR-027 rule 1): a session
+    whose ``account/read`` answer is missing, failed or unrecognized still
+    reports the models it read, marked ``unknown``, and the board decides
+    whether to trust the reading. The return value is the catalog receipt
+    shape the current callers consume.
     """
     deadline = execution_deadline(timeout_seconds)
     cancel = CancelFlag(cancelled)
@@ -1593,13 +1649,19 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         connection = spawn.connection
         connection.call("initialize", _INIT_CLIENT)
         connection.send({"method": "initialized", "params": {}})
-        account = connection.call("account/read", {"refreshToken": False}).get("account")
+        try:
+            account = connection.call("account/read", {"refreshToken": False}).get("account")
+        except CodexProtocolError:
+            account = None
         independent = _account_binding(prep, RunServices()).get("source") == "worker"
-        if (not isinstance(account, dict) or account.get("type") not in
-                (("chatgpt", "apiKey") if independent else ("chatgpt",))):
-            raise CodexProtocolError("account-plan-required",
-                                     "Codex requires an existing ChatGPT account-plan login")
-        catalog_value = _catalog(connection, version)
+        account_status = _discovery_account_status(account, independent)
+        catalog_value, _listed_ids = _catalog(connection, version)
+        catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
+                                         "accountStatus": account_status}]
+        if account_status == "unknown":
+            catalog_value["warnings"] = [*catalog_value["warnings"],
+                                         "The discovery session could not confirm the Codex account; "
+                                         "whether to trust this reading is the board's judgment"]
     except Exception as caught:
         error = caught
     finally:
@@ -1775,8 +1837,10 @@ def native_evidence(result: RunResult) -> dict:
     policy that failed verification keeps its real readback and is never
     dressed up as enforced. The interrupt facts keep the legacy true keys and
     appear only when a real request (and a real acknowledgement) happened; an
-    acknowledgement is never inferred from a confirmed stop. Keys this run
-    never produced are absent, never filled with a placeholder.
+    acknowledgement is never inferred from a confirmed stop. A model the
+    on-the-spot catalog did not list keeps its ``selectedModelListed`` fact
+    and the selected identity beside it. Keys this run never produced are
+    absent, never filled with a placeholder.
     """
     projection: dict = {}
     receipt = _read_evidence_ref(result, "review-thread-receipt")
@@ -1802,6 +1866,11 @@ def native_evidence(result: RunResult) -> dict:
         projection["nativeInterruptRequested"] = True
         if interrupt.basis == "native-turn-interrupt-ack":
             projection["nativeInterruptAcknowledged"] = True
+    check = _read_evidence_ref(result, "model-check")
+    if isinstance(check, dict) and check.get("selectedModelListed") is False:
+        projection["selectedModelListed"] = False
+        if isinstance(check.get("selected"), dict):
+            projection["selectedModel"] = check["selected"]
     return projection
 
 

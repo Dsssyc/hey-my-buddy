@@ -1,6 +1,6 @@
 # hey-my-buddy
 
-Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and owns it, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority, which are not implemented yet.
+Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and owns it, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority, which are not implemented yet. [ADR-027](docs/decisions/027-model-catalog-trust.md) adds the model catalog and its pending state, which are not implemented yet.
 
 ## Language
 
@@ -74,6 +74,10 @@ A native agent product in which a buddy runs, such as DSH, ZCode, Codex or Claud
 
 **adapter**:
 The connector through which one harness takes part in the blackboard in one role.
+
+**模型目录 / model catalog**:
+The blackboard's record of the models and reasoning efforts a harness reported it can provide, and so of which buddies exist in that harness. It is a reading taken at one moment, not a fact about the harness: a buddy whose model is missing from a later reading is pending, still usable, until a further reading confirms the absence.
+_Avoid_: model list (for the blackboard's record; the model list is what the harness itself returns)
 
 **Worker 运行时 / Worker runtime**:
 The hey-my-buddy-managed execution host that claims attempts, owns the processes executing them (a Worker or Router buddy's harness, or a plain command) and reports their stop evidence. Its liveness and state are not a buddy's.

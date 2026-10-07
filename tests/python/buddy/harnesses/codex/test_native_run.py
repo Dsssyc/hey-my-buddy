@@ -310,6 +310,27 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.end.native_exit_code)
         self.assertFalse((Path(request.private_state.native_root) / "codex-home" / "auth.json").is_symlink())
 
+    def test_an_unlisted_model_still_reaches_the_no_tool_turn(self):
+        # The no-tool carrier shares the one relaxed initialization check: the
+        # selected name reaches the native thread and turn, and the native
+        # rejection is the failure; the absence fact stays on the run result.
+        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        self.set_case("unlisted-model")
+        result = run(self.request(tool_scope="none", output_schema=FAST_SCHEMA,
+                                  prompt="Pick a profile", timeout=6),
+                     observer=correction.observer, services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-rpc-error")
+        # The bounded native refusal message rides beside the machine code.
+        self.assertEqual(result.end.message,
+                         "Codex rejected turn/start: model not found")
+        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        self.assertEqual(trace["thread"]["model"], "fixture-model")
+        evidence = native_run.native_evidence(result)
+        self.assertIs(evidence["selectedModelListed"], False)
+        self.assertEqual(evidence["selectedModel"],
+                         {"provider": "openai", "model": "fixture-model", "effort": "low"})
+
     def test_a_preparation_failure_reports_known_not_started_facts(self):
         # The Host probe's shape: the private no-tool home cannot be prepared,
         # no process is ever spawned, and the stop facts say so — a known
@@ -901,6 +922,163 @@ class DiscoverySeamTests(SeamCase):
                 self.discover("unknown")
         self.assertEqual(unknown.exception.code, "invalid-catalog")
         self.assertIs(unknown.exception.discovery_shutdown_confirmed, False)
+
+
+class CatalogTrustTests(CodexSeamCase):
+    """ADR-027: the discovery's account fact and the relaxed execution check."""
+
+    def test_discovery_reports_the_same_session_s_confirmed_account_fact(self):
+        self.set_case("ok")
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native",
+                                timeout_seconds=10, cancelled=lambda: False)
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}])
+        self.assertEqual(catalog["warnings"], [])
+
+    def test_discovery_reports_models_with_an_unknown_account_fact(self):
+        # The account fact is reported, never judged: a session whose account
+        # readback is unrecognized still reports the models it read, marked
+        # unknown, and whether to trust the reading is the board's decision.
+        self.set_case("account-unknown")
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native",
+                                timeout_seconds=10, cancelled=lambda: False)
+        self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
+                         ["fixture-model"])
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "codex", "status": "complete", "accountStatus": "unknown"}])
+        self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
+                        catalog["warnings"])
+
+    def test_a_chatgpt_account_without_a_usable_plan_stays_unknown(self):
+        # Type alone never confirms the account: a chatgpt readback whose plan
+        # is missing, null or "unknown" keeps the reading unknown, with the
+        # models still reported beside the fact.
+        for case in ("account-plan-missing", "account-plan-null", "account-plan-unknown"):
+            with self.subTest(case=case):
+                self.set_case(case)
+                catalog = run_discovery(cwd=str(self.cwd),
+                                        invocation_root=self.base / f"discovery-{case}",
+                                        native_root=self.base / f"discovery-native-{case}",
+                                        timeout_seconds=10, cancelled=lambda: False)
+                self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
+                                 ["fixture-model"])
+                self.assertEqual(catalog["discoveries"],
+                                 [{"adapter": "codex", "status": "complete",
+                                   "accountStatus": "unknown"}])
+                self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
+                                catalog["warnings"])
+
+    def _model_check_ref(self, result):
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "model-check")
+        raw = Path(ref.location).read_bytes()
+        self.assertEqual(len(raw), ref.size_bytes)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
+        return json.loads(raw)
+
+    def test_an_unlisted_model_still_reaches_the_native_turn(self):
+        result = self.worker_run("unlisted-model")
+        # The relaxed check did not refuse: the selected name went to the
+        # native thread and turn under its own identity, and the native
+        # rejection — not a catalog reading — is the failure, with the
+        # native refusal message retained beside the machine code.
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-rpc-error")
+        self.assertEqual(result.end.message,
+                         "Codex rejected turn/start: model not found: fixture-model")
+        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        thread = next(iter(state["threads"].values()))
+        self.assertEqual(thread["model"], "fixture-model")
+        self.assertEqual(thread["rejectedTurns"],
+                         [{"model": "fixture-model", "effort": "low"}])
+        # The absence is this run's own public fact, with the selected
+        # identity kept beside it.
+        self.assertEqual(self._model_check_ref(result),
+                         {"adapter": "codex", "selectedModelListed": False,
+                          "selected": {"provider": "openai", "model": "fixture-model", "effort": "low"}})
+        evidence = native_run.native_evidence(result)
+        self.assertEqual(evidence["selectedModelListed"], False)
+        self.assertEqual(evidence["selectedModel"],
+                         {"provider": "openai", "model": "fixture-model", "effort": "low"})
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_a_long_multibyte_native_error_still_reaches_the_run_result(self):
+        # A native reason of repeated three-byte CJK plus four-byte characters
+        # is far past the public UTF-8 byte budget: the message travels cut on
+        # byte safety with the prefix and a readable reason, never erased to
+        # None by the bound.
+        result = self.worker_run("long-native-error")
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-rpc-error")
+        message = result.end.message
+        self.assertIsNotNone(message)
+        raw = message.encode("utf-8")
+        self.assertLessEqual(len(raw), 512)
+        self.assertTrue(raw.startswith("Codex rejected turn/start: 模型不可用".encode()),
+                        message)
+        self.assertNotIn("\N{REPLACEMENT CHARACTER}", message)
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_a_listed_model_with_an_unlisted_effort_is_still_refused(self):
+        # The fixture catalog lists fixture-model with low/high only: a listed
+        # model whose effort the reading does not list keeps its refusal.
+        marker = uuid.uuid4().hex[:8]
+        turn_input = {"taskId": "goal-1", "attemptId": "attempt-check", "generation": 7,
+                      "turnId": "turn-check"}
+        result = run(RunRequest(
+            identity=RunIdentity(task_id="goal-1", attempt_id=f"attempt-{marker}",
+                                 generation=1, invocation_id=uuid.uuid4().hex,
+                                 turn_id="turn-check", input_sha256=input_hash(turn_input)),
+            harness="codex",
+            configuration=RunConfiguration(provider="openai", model="fixture-model", effort="medium"),
+            cwd=str(self.cwd),
+            private_state=PrivateStatePaths(
+                invocation_root=str(self.base / f"invocation-{marker}"),
+                native_root=str(self.base / "worker-native")),
+            input_text="fixture governed task", tool_scope="write", output_schema=OUTCOME_SCHEMA,
+            budget=RunBudget(timeout_seconds=12)),
+            observer=lambda _facts: FEEDBACK_CONTINUE,
+            services=self.worker_services(), cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertIn("not in the current native catalog", result.end.message)
+        # The refusal precedes any native thread, and records no absence fact.
+        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
+            if Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
+        self.assertEqual(state["threads"], {})
+        self.assertIsNone(result.model_started)
+        self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_a_listed_model_without_a_legal_effort_is_refused_before_any_turn(self):
+        # The read names the selected model's identity but offers no legal
+        # effort for it: the publishable catalog omits the row, yet execution
+        # still sees the model as listed and refuses the effort here — it
+        # never reaches a thread or turn, and never counts as an absence.
+        result = self.worker_run("no-efforts-row")
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertIn("not in the current native catalog", result.end.message)
+        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
+            if Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
+        self.assertEqual(state["threads"], {})
+        self.assertIsNone(result.model_started)
+        self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_discovery_omits_a_row_without_a_legal_effort(self):
+        # The discovery receipt stays publishable: the effort-less row is
+        # omitted with its warning, never emitted as an illegal catalog model.
+        self.set_case("no-efforts-row")
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native",
+                                timeout_seconds=10, cancelled=lambda: False)
+        self.assertEqual(catalog["providers"][0]["models"], [])
+        self.assertTrue(any("omitted" in warning for warning in catalog["warnings"]),
+                        catalog["warnings"])
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}])
 
 
 if __name__ == "__main__":

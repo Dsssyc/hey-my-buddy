@@ -1163,7 +1163,7 @@ class NativeCatalogEmptyTests(ZcodeFixtureCase):
         # observation, so the service can retire missing profiles instead of
         # preserving them as unknown forever.
         self.assertEqual(result["providers"], [])
-        self.assertEqual(result["discoveries"], [{"adapter": "zcode", "status": "complete"}])
+        self.assertEqual(result["discoveries"], [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
         self.assertTrue(any("empty" in warning for warning in result["warnings"]), result["warnings"])
         self.assertNotIn("fixture-secret-never-public", json.dumps(result))
 

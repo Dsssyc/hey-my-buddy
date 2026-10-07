@@ -131,7 +131,12 @@ def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, d
 
     ``verify_login`` is the bounded auth-status fallback for the one eligible
     shape (first-party provider, tokenSource absent or null); any other account
-    problem, or a failed readback, is refused with its bounded reason.
+    problem, or a failed readback, is refused with its bounded reason. The
+    discovery receipt's account fact comes from that same validation: reaching
+    the model list means this session's account readback (or its one bounded
+    readback) proved the first-party login, so the entry is ``confirmed``; a
+    refused account produces no reading at all, and its reason travels on the
+    error for the board to treat as an unknown reading.
     """
     account = initialize.get("account")
     problem = account_problem(account)
@@ -174,6 +179,8 @@ def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, d
                "providers": [{"adapter": "claude", "provider": "anthropic",
                               "displayName": "Anthropic Claude (first-party)", "packageName": "claude-code",
                               "packageVersion": version, "models": models}],
+               "discoveries": [{"adapter": "claude", "status": "complete",
+                                "accountStatus": "confirmed"}],
                "warnings": list(dict.fromkeys(warnings))}
     return catalog, {"apiProvider": account.get("apiProvider"), "tokenSource": account.get("tokenSource")}
 

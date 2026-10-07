@@ -132,6 +132,14 @@ def _worker_facts(result) -> dict:
     payload = _base_result(result)
     if format is not None:
         payload.update(format.receipt_fields(result))
+    # The governed receipt carries the on-the-spot model fact with the same
+    # verified-evidence rule as every other reference: a reference that no
+    # longer matches its content fails the collection, never silently.
+    check = _evidence(result, "model-check")
+    if isinstance(check, dict) and check.get("selectedModelListed") is False \
+            and isinstance(check.get("selected"), dict):
+        payload["selectedModelListed"] = False
+        payload["selectedModel"] = check["selected"]
     payload["tokenUsage"] = result.usage.value if result.usage is not None else None
     payload["lastAssistantMessage"] = (result.last_assistant_message.value
                                        if result.last_assistant_message is not None else None)

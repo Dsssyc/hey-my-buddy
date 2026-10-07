@@ -133,8 +133,18 @@ def main():
                 configured['features']['apps'] = True
             send({'id': ident, 'result': {'config': configured}})
         elif method == "account/read":
-            send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
-                                                            "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
+            if case == "account-unknown":
+                account = {"type": "unrecognized"}
+            elif case == "account-plan-missing":
+                account = {"type": "chatgpt", "email": None}
+            elif case == "account-plan-null":
+                account = {"type": "chatgpt", "email": None, "planType": None}
+            elif case == "account-plan-unknown":
+                account = {"type": "chatgpt", "email": None, "planType": "unknown"}
+            else:
+                account = {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
+                           "email": None, "planType": "plus"}
+            send({"id": ident, "result": {"account": account, "requiresOpenaiAuth": True}})
         elif method == "account/rateLimits/read":
             if case in ("usage", "quota-failure"):
                 # The rolling notifications already carried the quota; a failed
@@ -146,6 +156,21 @@ def main():
             if case == "bad-catalog":
                 send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
                 continue
+            if case in ("unlisted-model", "long-native-error"):
+                send({"id": ident, "result": {"data": [{"model": "other-model", "displayName": "Other",
+                    "description": "not the selected model", "hidden": False, "isDefault": True,
+                    "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
+                    "nextCursor": None}})
+                continue
+            if case == "no-efforts-row":
+                # The read lists the selected model's identity but offers no
+                # legal effort for it: the discovery omits the row, and the
+                # execution must still see the model as listed.
+                send({"id": ident, "result": {"data": [{"model": "fixture-model", "displayName": "Fixture",
+                    "description": "listed with no legal efforts", "hidden": False, "isDefault": True,
+                    "defaultReasoningEffort": "low", "supportedReasoningEfforts": []}],
+                    "nextCursor": None}})
+                continue
             send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",
                 "displayName": "Fixture", "description": "fixture", "hidden": False, "isDefault": True,
                 "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
@@ -155,6 +180,7 @@ def main():
             thread_id = f"thread-{state['next']}"
             state["next"] += 1
             state["threads"][thread_id] = {"cwd": params["cwd"], "turns": [],
+                                         'model': params['model'],
                                          'codexHome': os.environ.get('CODEX_HOME'),
                                          'sqliteHome': os.environ.get('CODEX_SQLITE_HOME')}
             write_state(state)
@@ -184,6 +210,19 @@ def main():
             state = read_state()
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
+            if case in ("unlisted-model", "long-native-error"):
+                # The native answer, not the adapter's catalog reading, decides:
+                # the server rejects the turn under the selected model's own
+                # name. The long case carries a native reason of repeated
+                # three-byte CJK plus four-byte characters, far past the
+                # public UTF-8 byte budget.
+                state['threads'][thread_id].setdefault('rejectedTurns', []).append(
+                    {'model': params['model'], 'effort': params['effort']})
+                write_state(state)
+                native_reason = ("模型不可用" * 80 + "\U0001D11E" * 10) if case == "long-native-error" \
+                    else f"model not found: {params['model']}"
+                send({"id": ident, "error": {"code": -32000, "message": native_reason}})
+                continue
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send_usage(case, thread_id, turn_id, turn_index)

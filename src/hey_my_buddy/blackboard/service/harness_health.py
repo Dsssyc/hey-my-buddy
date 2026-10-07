@@ -104,7 +104,10 @@ class HarnessHealth:
             for name in HARNESSES:
                 if db.execute('SELECT 1 FROM harness_health WHERE adapter=?', (name,)).fetchone() is None:
                     db.execute('INSERT INTO harness_health(adapter) VALUES(?)', (name,))
-                    db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED' WHERE adapter=?", (name,))
+                    from ..catalog.catalog import CATALOG_FACT_REASONS
+                    db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
+                               ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                               (name, *CATALOG_FACT_REASONS))
 
     def get(self, name):
         with self.board.db.read() as db:
@@ -119,7 +122,13 @@ class HarnessHealth:
             if row['revision'] != revision:
                 return row
             db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json({**row, "reasonCode": reason, "available": False}), name))
-            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE adapter=?', (reason, name))
+            # ADR-027: a health failure must not erase catalog facts. Rows a
+            # confirmed absence or an effort retirement already grounded stay
+            # with their own reason; health only grounds the rest.
+            from ..catalog.catalog import CATALOG_FACT_REASONS
+            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                       ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                       (reason, name, *CATALOG_FACT_REASONS))
             self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason})
             head = self.board._head_of(db)
         self.board._notify(head)
@@ -138,7 +147,10 @@ class HarnessHealth:
             if expected_revision is not None and expected_revision != old['revision']:
                 raise BoardError('REVISION_CONFLICT', 'Harness settings changed; reread before saving')
             db.execute("INSERT INTO harness_health(adapter,manual_path,revision) VALUES(?,?,1) ON CONFLICT(adapter) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json='{}',checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None))
-            db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED' WHERE adapter=?", (name,))
+            from ..catalog.catalog import CATALOG_FACT_REASONS
+            db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
+                       ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                       (name, *CATALOG_FACT_REASONS))
             self.board._append_event(db, 'harness.path_changed', payload={'adapter': name, 'manualPath': path})
             head = self.board._head_of(db)
         self.board._notify(head)
@@ -163,6 +175,18 @@ class HarnessHealth:
                 raise
             now = utc_now()
             if not force and not preflight and (old.get('scanAfter') or '') > now:
+                # ADR-027 rule 4: even a throttled scan owes one bounded catalog
+                # re-read once the shelf life passed. The catalog scan marker,
+                # not the health probe schedule, bounds its cadence. The record
+                # after the callback is authoritative: a re-read whose native
+                # call invalidated the harness must not be answered with the
+                # stale pre-reread ready record.
+                if self._stale_catalog(name, now):
+                    current = self.get(name)
+                    if current['available']:
+                        self.catalog_refresh(name, current)
+                        self._note_catalog_scan(name)
+                        return self.get(name)
                 return old
             environment = self.environment()
             from ..catalog.accounts import execution_environment
@@ -182,6 +206,13 @@ class HarnessHealth:
                     db.execute('UPDATE harness_health SET scan_after=? WHERE adapter=? AND revision=?', (_later(SCAN_SECONDS), name, old['revision']))
                 if name == "codex":
                     self._codex_account_read(old)
+                # ADR-027 rule 4: an unchanged health state still owes a catalog
+                # re-read once the last confirmed reading passed its shelf life.
+                if self._stale_catalog(name, now):
+                    current = self.get(name)
+                    if current['available']:
+                        self.catalog_refresh(name, current)
+                        self._note_catalog_scan(name)
                 return self.get(name)
             with self.board.db.write() as db:
                 if self._closed or (self.board.directory / 'upgrade.json').exists():
@@ -217,7 +248,21 @@ class HarnessHealth:
                 db.execute('UPDATE harness_health SET status=?,record_json=?,checked_at=?,expires_at=?,scan_after=? WHERE adapter=? AND revision=?',
                            (status, canonical_json(record), now, _later(READY_SECONDS if status == 'ready' else SCAN_SECONDS), _later(SCAN_SECONDS), name, generation))
                 if status != 'ready':
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE adapter=?', (record.get('reasonCode') or 'HARNESS_UNHEALTHY', name))
+                    # Same boundary as invalidate: health grounds the rows it
+                    # marks, never the ones a catalog fact already grounded.
+                    from ..catalog.catalog import CATALOG_FACT_REASONS
+                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                               ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                               (record.get('reasonCode') or 'HARNESS_UNHEALTHY', name, *CATALOG_FACT_REASONS))
+                elif old['status'] != 'ready':
+                    # ADR-027: health availability and adopted catalog facts are
+                    # separate. Recovering health restores the model availability
+                    # of the retained confirmed catalog (and of families still
+                    # awaiting disappearance confirmation); confirmed absences,
+                    # retired efforts and native unavailable declarations are
+                    # catalog facts and stay untouched.
+                    from ..catalog.catalog import restore_retained_availability
+                    restore_retained_availability(db, name)
                 self.board._append_event(db, 'harness.checked', payload={'adapter': name, 'status': status, 'revision': generation,
                                           'version': record.get('version'), 'reasonCode': record.get('reasonCode')})
                 head = self.board._head_of(db)
@@ -227,9 +272,57 @@ class HarnessHealth:
                 return current
             if name == "codex" and status == "ready":
                 self._codex_account_read(current)
-            if not self._closed and status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged):
+            if not self._closed and status == 'ready' and self.catalog_refresh and (
+                    force or old['status'] != 'ready' or old.get('version') != record.get('version')
+                    or not unchanged or (self._catalog_scan_due(name, now) and self._catalog_expired(name, now))):
                 self.catalog_refresh(name, current)
+                self._note_catalog_scan(name)
             return self.get(name)
+
+    def _stale_catalog(self, name, now):
+        """True when this harness owes one bounded stale-catalog re-read now.
+
+        ADR-027 rule 4: the catalog is past its shelf life and no earlier re-read
+        inside the current scan window already happened; the marker keeps the
+        re-read on the bounded scan cadence instead of a native process per call.
+        """
+        return (not self._closed and self.catalog_refresh is not None
+                and self._catalog_scan_due(name, now) and self._catalog_expired(name, now))
+
+    def _catalog_scan_due(self, name, now):
+        from ..evaluation.native_observations import _time
+        with self.board.db.read() as db:
+            row = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-scan-after:' + name,)).fetchone()
+        if row is None:
+            return True
+        moment, due = _time(now), _time(row[0])
+        return due is None or moment is None or moment >= due
+
+    def _note_catalog_scan(self, name):
+        with self.board.db.write() as db:
+            db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       ('catalog-scan-after:' + name, _later(SCAN_SECONDS)))
+
+    def _catalog_expired(self, name, now):
+        """ADR-027 rule 4: a catalog past its shelf life needs a confirmed re-read.
+
+        Only a confirmed (trusted) reading advances the confirmed-read time, so
+        a streak of unknown readings never extends that deadline. A board with
+        no confirmed reading yet — cold start, or a cleared account binding —
+        measures the shelf life from the last recorded observation instead, and
+        a harness with no observation at all has nothing stale to re-read.
+        """
+        from ..catalog.catalog import CATALOG_SHELF_SECONDS, catalog_read_at
+        from ..evaluation.native_observations import _time
+        with self.board.db.read() as db:
+            read_at = catalog_read_at(db, name)
+            if read_at is None:
+                row = db.execute('SELECT updated_at FROM catalog_current WHERE adapter=?', (name,)).fetchone()
+                read_at = row['updated_at'] if row is not None else None
+        if read_at is None:
+            return False
+        read, moment = _time(read_at), _time(now)
+        return read is None or moment is None or (moment - read).total_seconds() >= CATALOG_SHELF_SECONDS
 
     def _codex_account_read(self, health):
         """One on-demand account read per 180 seconds, even across forced refreshes."""

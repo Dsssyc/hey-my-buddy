@@ -1958,10 +1958,15 @@ def _catalog(options: list, version: str) -> dict:
     return {
         "source": "dsh-acp-session-config", "adapter": "dsh", "harnessVersion": version,
         "discoveredAt": utc_now(), "providers": list(providers.values()),
-        "discoveries": [{"adapter": "dsh", "status": "complete"}],
+        "discoveries": [{"adapter": "dsh", "status": "complete", "accountStatus": "not-applicable"}],
         "warnings": [
             "The no-prompt ACP surface exposes the declared model and effort selectors only; "
             "per-model effort availability and context windows stay unknown until a real session.",
+            "The account status is not applicable to this reading: the discovery launches the "
+            "installed DSH with this run's private DSH_HOME and points DSH's own settings and "
+            "credentials rows by file path at the owning DSH home, so the read presumes that "
+            "home's login without this module reading or copying any credential content, and "
+            "the no-prompt session carries no separate account read.",
         ],
     }
 

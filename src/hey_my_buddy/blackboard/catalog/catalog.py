@@ -6,13 +6,15 @@ calls a model or publishes an evaluation card.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 from contextlib import nullcontext
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ...errors import BoardError
 
@@ -22,6 +24,262 @@ MAX_TEXT = 2000
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
 CATALOG_FILE_ENV = "BUDDY_MODEL_CATALOG_FILE"
 CONFIGURATION_FIELDS = ("adapter", "provider", "model", "effort")
+
+#: ADR-027 rule 1: the account-status fact every harness reports per discovery.
+#: The blackboard, not the harness, decides whether a reading is trusted; a
+#: missing or malformed fact reads as ``unknown`` and cannot replace the catalog.
+ACCOUNT_STATUSES = ("confirmed", "unknown", "not-applicable")
+TRUSTED_ACCOUNT_STATUSES = ("confirmed", "not-applicable")
+
+#: ADR-027 rule 2: one confirmed absence starts a confirmation window; only a
+#: further confirmed absence after this window marks a model unavailable.
+CONFIRMATION_SECONDS = 3600
+
+#: ADR-027 rule 4: a harness catalog without a confirmed reading for this long
+#: is re-read at the next health check. Unknown readings do not extend it.
+CATALOG_SHELF_SECONDS = 6 * 3600
+
+#: ADR-027 rule 2: the unavailable reason of a model whose absence was confirmed.
+CONFIRMED_ABSENCE_REASON = "not present in the latest confirmed native discovery"
+
+#: The unavailable reason of one retired effort whose model remains in the reading.
+RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
+
+#: Unavailable reasons that are catalog facts, never undone by health recovery.
+#: A 0 left behind by a harness health failure is a health fact, not evidence
+#: that the native model disappeared (ADR-027 rules 1 and 2).
+CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "ACCOUNT_BINDING_CHANGED")
+
+#: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
+CATALOG_REMEDY = "Run buddy adapters with refresh:true"
+
+_PENDING_PREFIX = "catalog-pending:"
+_READ_AT_PREFIX = "catalog-read-at:"
+_ACCOUNT_STATUS_PREFIX = "catalog-account-status:"
+
+#: ADR-027 rule 3: per-directory hooks the service registers so an explicitly
+#: rejected configuration can borrow the service's own bounded native refresh
+#: (its environment, account binding and subprocess deadlines) exactly once.
+_catalog_reread: dict[str, Callable[[str], None]] = {}
+
+
+def register_catalog_reread(directory: Path | str, hook: Callable[[str], None] | None) -> None:
+    """Register (or clear) this state directory's single-harness catalog re-read."""
+    if hook is None:
+        _catalog_reread.pop(str(directory), None)
+    else:
+        _catalog_reread[str(directory)] = hook
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return stamp.astimezone(timezone.utc) if stamp.tzinfo else None
+    except ValueError:
+        return None
+
+
+def _family_key(provider: str, model: str) -> str:
+    return provider + "\x1f" + model
+
+
+def catalog_account_matches(db, adapter: str, *, account: dict | None = None) -> bool:
+    """Whether retained catalog facts belong to the selected credential identity."""
+    from .accounts import identity, selection
+    saved = db.execute("SELECT value FROM meta WHERE key=?", ("catalog-account:" + adapter,)).fetchone()
+    retained = json.loads(saved[0]) if saved else {"source": "native", "credentialRevision": 0}
+    selected = account if account is not None else selection(db, adapter)
+    return identity(retained) == identity(selected)
+
+
+def _pending_map(db, adapter: str) -> dict:
+    if not catalog_account_matches(db, adapter):
+        return {}
+    row = db.execute("SELECT value FROM meta WHERE key=?", (_PENDING_PREFIX + adapter,)).fetchone()
+    if row is None:
+        return {}
+    try:
+        saved = json.loads(row[0])
+    except ValueError:
+        return {}
+    return saved if isinstance(saved, dict) else {}
+
+
+def _pending_entry(value: Any) -> dict:
+    """One pending entry: the first absence plus the last legal efforts.
+
+    The legal efforts are the ones the last trusted reading still declared when
+    the model first went absent; a later health reason is never native metadata
+    (ADR-027 rule 2). A legacy plain timestamp keeps its time, without efforts.
+    """
+    if isinstance(value, dict):
+        efforts = value.get("efforts")
+        return {"since": value.get("since") if isinstance(value.get("since"), str) else None,
+                "efforts": sorted({item for item in efforts if isinstance(item, str)}) if isinstance(efforts, list) else None}
+    if isinstance(value, str):
+        return {"since": value, "efforts": None}
+    return {"since": None, "efforts": None}
+
+
+def _write_pending_map(db, adapter: str, pending: dict) -> None:
+    from ...json_codec import canonical_json
+
+    db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+               (_PENDING_PREFIX + adapter, canonical_json(pending)))
+
+
+def pending_families(db) -> dict[tuple[str, str, str], str]:
+    """Model families awaiting disappearance confirmation, with their first absence.
+
+    ADR-027 rule 2 keys the pending state by adapter/provider/model identity, so
+    an effort-only change is never a model disappearance.
+    """
+    families: dict[tuple[str, str, str], str] = {}
+    for row in db.execute("SELECT key FROM meta WHERE key LIKE ?", (_PENDING_PREFIX + "%",)):
+        adapter = row["key"][len(_PENDING_PREFIX):]
+        for name, value in _pending_map(db, adapter).items():
+            provider, _, model = name.partition("\x1f")
+            since = _pending_entry(value)["since"]
+            if since:
+                families[(adapter, provider, model)] = since
+    return families
+
+
+def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[str] | None:
+    """Legal efforts retained for a pending model family, or None when not pending.
+
+    The recorded last legal efforts of the window lead; the retained profiles
+    are only a defensive fallback, so explicit validation keeps working through
+    health noise without adopting a health reason as native metadata.
+    """
+    value = _pending_map(db, adapter).get(_family_key(provider, model))
+    if value is None:
+        return None
+    efforts = _pending_entry(value)["efforts"]
+    if efforts is not None:
+        return list(efforts)
+    rows = db.execute(
+        "SELECT effort FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=?"
+        " AND available=1 ORDER BY effort",
+        (adapter, provider, model)).fetchall()
+    return [row["effort"] for row in rows] or None
+
+
+def catalog_read_at(db, adapter: str) -> str | None:
+    """When this harness catalog was last confirmed (trusted) reading, if ever.
+
+    ADR-027 legacy boards recorded trusted catalogs before the confirmed-read
+    keys existed. Their read time comes from the existing catalog record: the
+    row's own time while the adopted reading is current, otherwise the time of
+    the discovery it still retains. An unknown reading never masquerades as a
+    successful one (it keeps the retained discovery and its time), a switched
+    account binding never inherits the old account's time, and a board without
+    an adopted discovery stays without a read time (cold start).
+    """
+    if not catalog_account_matches(db, adapter):
+        return None
+    row = db.execute("SELECT value FROM meta WHERE key=?", (_READ_AT_PREFIX + adapter,)).fetchone()
+    if row is not None:
+        return row[0]
+    current = db.execute(
+        "SELECT c.status, c.updated_at, c.discovery_id, d.discovered_at FROM catalog_current c"
+        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
+        (adapter,)).fetchone()
+    if current is None or current["discovery_id"] is None or current["discovered_at"] is None:
+        return None
+    return current["updated_at"] if current["status"] == "complete" else current["discovered_at"]
+
+
+def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str, str]]:
+    """Legal adapter/provider/model/effort identities a retained catalog lists.
+
+    A model the retained reading itself declared unavailable contributes none
+    of its efforts: that unavailability is a native fact, not a health artifact
+    (ADR-027 rule 1).
+    """
+    identities: set[tuple[str, str, str]] = set()
+    if not isinstance(payload_json, str) or not payload_json:
+        return identities
+    try:
+        view = CatalogView.from_payload(json.loads(payload_json))
+    except (ValueError, BoardError):
+        return identities
+    for entry in view.payload["providers"]:
+        if entry["adapter"] != adapter:
+            continue
+        for model in entry["models"]:
+            if model["available"]:
+                identities.update((entry["provider"], model["id"], effort) for effort in model["efforts"])
+    return identities
+
+
+def families_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
+    """Model families a retained confirmed catalog still lists as available."""
+    return {(provider, model) for provider, model, _effort in identities_from_payload(payload_json, adapter)}
+
+
+def restore_retained_availability(db, adapter: str) -> int:
+    """Restore the model availability of the retained catalog after health noise.
+
+    ADR-027 separates health availability from adopted catalog facts, at the
+    effort level: the 0s a harness health failure left on ``evaluation_profiles``
+    are never evidence that a native configuration disappeared. A row returns
+    only when the retained confirmed catalog still lists its exact
+    adapter/provider/model/effort identity, or when it is one of the last legal
+    efforts recorded for a family still awaiting disappearance confirmation. A
+    confirmed absence, a retired effort and a native unavailable declaration are
+    catalog facts and are never restored here.
+    """
+    if not catalog_account_matches(db, adapter):
+        return 0
+    row = db.execute(
+        "SELECT d.payload_json FROM catalog_current c"
+        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
+        (adapter,)).fetchone()
+    identities = identities_from_payload(row[0] if row is not None else None, adapter)
+    pending_efforts = {}
+    for key, value in _pending_map(db, adapter).items():
+        provider, _, model = key.partition("\x1f")
+        pending_efforts[(provider, model)] = pending_model_efforts(db, adapter, provider, model) or []
+    restored = 0
+    for profile in db.execute(
+            "SELECT profile_id, provider, model, effort, available, unavailable_reason"
+            " FROM evaluation_profiles WHERE adapter=?",
+            (adapter,)).fetchall():
+        if profile["available"] or profile["unavailable_reason"] in CATALOG_FACT_REASONS:
+            continue
+        family = (profile["provider"], profile["model"])
+        identity = (*family, profile["effort"])
+        legal_pending = pending_efforts.get(family)
+        if identity in identities or (legal_pending is not None and profile["effort"] in legal_pending):
+            db.execute("UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL WHERE profile_id=?",
+                       (profile["profile_id"],))
+            restored += 1
+    return restored
+
+
+def catalog_account_status(db, adapter: str) -> str:
+    """The account-status fact of the last trusted reading; unknown without one."""
+    if not catalog_account_matches(db, adapter):
+        return "unknown"
+    row = db.execute("SELECT value FROM meta WHERE key=?", (_ACCOUNT_STATUS_PREFIX + adapter,)).fetchone()
+    return row[0] if row is not None and row[0] in ACCOUNT_STATUSES else "unknown"
+
+
+def note_confirmed_read(db, adapter: str, *, now: str, account_status: str) -> None:
+    """Persist the fact that a trusted reading was applied for this harness."""
+    db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+               (_READ_AT_PREFIX + adapter, now))
+    db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+               (_ACCOUNT_STATUS_PREFIX + adapter, account_status if account_status in ACCOUNT_STATUSES else "unknown"))
+
+
+def clear_confirmed_read(db, adapter: str) -> None:
+    """Drop the confirmed-read and pending facts of a replaced account binding."""
+    _write_pending_map(db, adapter, {})
+    db.execute("DELETE FROM meta WHERE key IN (?,?)", (_READ_AT_PREFIX + adapter, _ACCOUNT_STATUS_PREFIX + adapter))
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -111,7 +369,12 @@ def canonical_payload(value: Any) -> dict:
         if name in seen:
             raise BoardError("CATALOG_INVALID", "Repeated harness observation")
         seen.add(name)
-        discoveries.append({"adapter": name, "status": result["status"], "reason": _text(result.get("reason")) or None})
+        # The native reading keeps its own status; the account-status fact is
+        # normalized, never invented: a missing or malformed fact stays unknown.
+        account_status = result.get("accountStatus")
+        discoveries.append({"adapter": name, "status": result["status"],
+                            "accountStatus": account_status if account_status in ACCOUNT_STATUSES else "unknown",
+                            "reason": _text(result.get("reason")) or None})
     if any(p["adapter"] not in seen for p in providers):
         raise BoardError("CATALOG_INVALID", "Every provider must have a harness observation")
     return {
@@ -135,11 +398,22 @@ def _override() -> dict | None:
             raw = stream.read(MAX_CATALOG_BYTES + 1)
         if len(raw) > MAX_CATALOG_BYTES:
             raise BoardError("CATALOG_INVALID", "The catalog override exceeds the metadata size bound")
-        payload = canonical_payload(json.loads(raw))
+        document = json.loads(raw)
+        payload = canonical_payload(document)
     except OSError as error:
         raise BoardError("CATALOG_UNAVAILABLE", "The catalog override could not be read") from error
     except ValueError as error:
         raise BoardError("CATALOG_INVALID", "The catalog override is not valid JSON") from error
+    # ADR-027 governs native readings, not this operator pin: the file replaces
+    # discovery entirely, so the operator vouches for the account state the way
+    # a harness's confirmed discovery fact would. An explicitly declared legal
+    # fact (even unknown) keeps its declared meaning.
+    observations = document.get("discoveries") if isinstance(document, dict) else None
+    declared = {item.get("adapter"): item.get("accountStatus") for item in observations
+                if isinstance(item, dict)} if isinstance(observations, list) else {}
+    payload["discoveries"] = [{**entry, "accountStatus": declared[entry["adapter"]]
+                              if declared.get(entry["adapter"]) in ACCOUNT_STATUSES else "confirmed"}
+                             for entry in payload["discoveries"]]
     payload["source"] = f"file:{path}"
     return payload
 
@@ -174,7 +448,8 @@ def discover(*, directory=None, database=None) -> dict:
                 usable, reason = instance.discovery_available()
                 if not usable:
                     warnings.append(f"{name}: {reason or 'harness unavailable'}")
-                    discoveries.append({"adapter": name, "status": "unknown", "reason": reason or "harness unavailable"})
+                    discoveries.append({"adapter": name, "status": "unknown", "accountStatus": "unknown",
+                                        "reason": reason or "harness unavailable"})
                     continue
                 from .accounts import native_operation
                 with native_operation(database, selected_health['account'], 'catalog') if database and selected_health and selected_health.get('account') else nullcontext() as stop:
@@ -185,10 +460,14 @@ def discover(*, directory=None, database=None) -> dict:
                 raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
         except BoardError as error:
             warnings.append(f"{name}: {error.code}")
-            discoveries.append({"adapter": name, "status": "unknown", "reason": error.code})
+            discoveries.append({"adapter": name, "status": "unknown", "accountStatus": "unknown", "reason": error.code})
             continue
         providers.extend(payload["providers"])
-        discoveries.append({"adapter": name, "status": "complete"})
+        # The harness's own observation carries the account-status fact of this
+        # native session; the aggregate never hardcodes it over that fact.
+        native_fact = next((item for item in payload["discoveries"] if item["adapter"] == name), None)
+        discoveries.append({"adapter": name, "status": "complete",
+                            "accountStatus": (native_fact or {}).get("accountStatus", "unknown")})
         warnings.extend(payload["warnings"])
         sources.append(payload["source"])
         if payload.get("harnessVersion"):
@@ -199,8 +478,21 @@ def discover(*, directory=None, database=None) -> dict:
     })
 
 
+def _reject_unavailable(selected: dict, *, read_at: str | None, remedy: str) -> BoardError:
+    details = {"configuration": selected, "remedy": remedy}
+    if read_at:
+        details["catalogReadAt"] = read_at
+    return BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available", **details)
+
+
 def validate_configuration(configuration: dict, *, directory: Path) -> dict:
-    """Validate an explicit native tuple, without selection, inference or state writes."""
+    """Validate an explicit native tuple, without selection or inference.
+
+    A buddy absent from the recorded catalog but still awaiting disappearance
+    confirmation stays acceptable (ADR-027 rule 2). When the route is missing or
+    unavailable, the board borrows the service's own bounded native refresh for
+    that one harness and re-checks once before rejecting (rule 3).
+    """
     if not isinstance(configuration, dict) or set(configuration) != set(CONFIGURATION_FIELDS):
         raise BoardError("INVALID_ARGUMENT", "configuration requires exactly adapter, provider, model and effort")
     selected = {key: _identity(configuration[key], key) for key in CONFIGURATION_FIELDS}
@@ -209,24 +501,76 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     if not instance.model_discovery:
         raise BoardError("UNSUPPORTED_ADAPTER", "This adapter does not declare a model execution catalog")
     payload = _override()
-    if payload is None:
-        from ..store.db import Database
-        from ..service.harness_health import read_health
-        from . import catalog_store
+    if payload is not None:
+        return _check_recorded(selected, CatalogView.from_payload(payload), pending_efforts=None)
+    from ..store.db import Database
+    from ..service.harness_health import read_health
+    from . import catalog_store
+
+    def judge():
+        """One judgment over the currently recorded catalog state."""
         with Database(directory).read() as db:
-            health = read_health(db, selected['adapter'])
-            if not health['available']:
-                raise BoardError('ADAPTER_UNAVAILABLE', health.get('remedy') or 'Run buddy adapters with refresh:true', harness=health)
+            health = read_health(db, selected["adapter"])
             recorded = catalog_store.current(db)
+            read_at = catalog_read_at(db, selected["adapter"])
+            pending_efforts = pending_model_efforts(db, selected["adapter"], selected["provider"], selected["model"])
+        if not health["available"]:
+            raise BoardError("ADAPTER_UNAVAILABLE", health.get("remedy") or CATALOG_REMEDY, harness=health)
         if recorded is None:
-            raise BoardError('CATALOG_UNAVAILABLE', 'No native model catalog is recorded; run buddy adapters with refresh:true')
-        payload = recorded.payload
-    view = CatalogView.from_payload(payload)
+            raise BoardError("CATALOG_UNAVAILABLE",
+                             f"No native model catalog is recorded; {CATALOG_REMEDY}", remedy=CATALOG_REMEDY)
+        try:
+            return _check_recorded(selected, CatalogView.from_payload(recorded.payload),
+                                   pending_efforts=pending_efforts)
+        except BoardError as error:
+            if error.code != "CONFIGURATION_UNAVAILABLE":
+                raise
+            raise _reject_unavailable(selected, read_at=read_at, remedy=CATALOG_REMEDY) from None
+
+    try:
+        return judge()
+    except BoardError as error:
+        if error.code not in ("CATALOG_UNAVAILABLE", "CONFIGURATION_UNAVAILABLE"):
+            raise
+        first = error
+    hook = _catalog_reread.get(str(directory))
+    if hook is None:
+        raise first
+    try:
+        # ADR-027 rule 3: one bounded re-read of exactly this harness, borrowing
+        # the service's own refresh (environment, account binding, deadlines).
+        hook(selected["adapter"])
+    except (BoardError, OSError, ValueError, sqlite3.Error):
+        pass  # A failed bounded re-read leaves the rejection to speak for itself.
+    try:
+        return judge()
+    except BoardError as error:
+        if error.code in ("CATALOG_UNAVAILABLE", "CONFIGURATION_UNAVAILABLE", "INVALID_ARGUMENT"):
+            raise
+        # The re-read itself broke the harness (for example the native refresh
+        # invalidated health). The fresh error and its diagnostics lead, while
+        # rule 3's rejection context — catalog read time and refresh method —
+        # still rides along instead of being lost at this boundary.
+        raise BoardError(error.code, error.message,
+                         **{**first.details, **error.details}) from error
+
+
+def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: list[str] | None) -> dict:
     model = view.lookup(selected["adapter"], selected["provider"], selected["model"])
-    if model is None or not model["available"]:
-        raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available", configuration=selected)
+    if model is None:
+        if pending_efforts:
+            if selected["effort"] not in pending_efforts:
+                raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model",
+                                 legalEfforts=pending_efforts, configuration=selected)
+            return selected
+        raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available",
+                         configuration=selected)
+    if not model["available"]:
+        raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available",
+                         configuration=selected)
     if selected["effort"] not in model["efforts"]:
-        raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model", legalEfforts=model["efforts"], configuration=selected)
+        raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model",
+                         legalEfforts=model["efforts"], configuration=selected)
     return selected
 
 

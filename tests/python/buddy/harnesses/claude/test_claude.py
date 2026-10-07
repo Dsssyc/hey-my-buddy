@@ -437,6 +437,9 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
             catalog = self.adapter.discover_models()
         provider = catalog["providers"][0]
         self.assertEqual(provider["provider"], "anthropic")
+        # The account fact comes from the same initialize session's validation.
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])
         self.assertEqual([model["id"] for model in provider["models"]],
                          ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
                           "claude-haiku-4-5-20251001"])
@@ -457,6 +460,8 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                                "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": "ok"}
                 with mock.patch.dict("os.environ", environment, clear=False):
                     catalog = self.adapter.discover_models()
+                self.assertEqual(catalog["discoveries"],
+                                 [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                                  ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
                                   "claude-haiku-4-5-20251001"])
@@ -477,6 +482,10 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(state["authStatusRuns"], 1)
 
     def test_explicit_none_stays_refused_without_an_auth_status_process(self):
+        # The existing account validation is this harness's account fact: a
+        # discovery that cannot confirm the login produces no reading at all,
+        # and its bounded reason travels on the refusal for the board to treat
+        # as an unknown reading — never as a models-plus-unknown receipt.
         (self.root / "fixture.json").unlink(missing_ok=True)
         environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "no-auth",
                        "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": "ok"}
