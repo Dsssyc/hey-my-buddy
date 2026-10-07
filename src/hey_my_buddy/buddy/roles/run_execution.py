@@ -124,9 +124,10 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
 
 
 def _worker_facts(result) -> dict:
-    from ..harnesses.registry import worker_format
+    from ..harnesses.registry import worker_format, worker_receipt_options
 
     format = worker_format(result.harness)
+    receipt_options = worker_receipt_options(result.harness)
     payload = _base_result(result)
     if format is not None:
         payload.update(format.receipt_fields(result))
@@ -137,10 +138,9 @@ def _worker_facts(result) -> dict:
         payload["nativeFailure"] = result.native_error.value
     if result.native_failure is not None and not (format and format.native_quota_failure):
         failure = result.native_failure.value
-        # DSH's record contains every native error code. Its existing public
-        # receipt reports only recognized quota failures in this field; the
-        # complete native fact remains in the run result and retained record.
-        payload["quotaFailure"] = (None if result.harness == "dsh" and failure.get("code") == "unknown"
+        # Registration preserves which native codes the published quota
+        # field omits; the full native fact remains in the retained run result.
+        payload["quotaFailure"] = (None if failure.get("code") in receipt_options.ignored_quota_codes
                                    else failure)
     if result.activity is not None:
         activity = result.activity.value
@@ -379,7 +379,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
     path = root / _CONTROL
     private_json(path, control)
     handle = launch_controller(
-        prepare=lambda _environment: (
+        prepare=lambda: (
             [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(path)],
             control["cwd"], controller_environment(context.directory, environment,
                                                   read_only=control["operation"] in ("fast", "review"))),
@@ -519,9 +519,12 @@ class WorkerRunExecutor:
     """The runtime's unchanged role surface over one selected registered run."""
 
     def __init__(self, description, module):
+        from ..harnesses.registry import worker_receipt_options
+
         self.description = description
         self.module = module
         self.name = description.name
+        self.receipt_options = worker_receipt_options(self.name)
 
     def available(self):
         return self.description.available()
@@ -643,10 +646,11 @@ class WorkerRunExecutor:
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
-        if self.name == "dsh":
-            # Preserve DSH's published identity rule: only the imported,
-            # validated turn can mark its native session as captured.
+        if self.receipt_options.capture_session_from_validated_turn:
+            # Only an imported, validated turn can establish capture where
+            # that is the registered native receipt rule.
             session_id = (record or {}).get("sessionId")
+        if self.receipt_options.report_native_activity:
             payload["nativeActivity"] = {"sidecarWritten": (context.directory / "activity.json").is_file()}
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
@@ -654,7 +658,7 @@ class WorkerRunExecutor:
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
                                    and turn_io.checkpoint_resumable(payload, checkpoint)))}
-        if self.name == "dsh":
+        if self.receipt_options.capture_session_from_validated_turn:
             payload["nativeSession"]["sessionIdSource"] = "validated-turn" if session_id else "none"
         if isinstance(getattr(context, "effective_workspace", None), dict):
             payload["workspaceManifest"] = context.effective_workspace
@@ -701,7 +705,7 @@ def discover_models(name: str) -> dict:
                                "privateRoot": str(directory), "nativeRoot": str(directory / "native"),
                                "cwd": str(directory), "timeoutSeconds": 25})
         handle = launch_controller(
-            prepare=lambda _environment: (
+            prepare=lambda: (
                 [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(control)],
                 None, controller_environment(directory)),
             log_paths={"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")})

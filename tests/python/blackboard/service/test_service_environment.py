@@ -210,7 +210,7 @@ class UpgradeEnvironmentTests(unittest.TestCase):
         self.assertEqual(environment["BUDDY_RUNTIME_IDENTITY"], "runtime:" + target.name)
         self.assertEqual(environment["BUDDY_MAX_CONCURRENT"], "7")
         self.assertEqual(environment["BUDDY_WAIT_CAPACITY"], "32")
-        self.assertEqual(environment["BUDDY_PYTHON"], str(target / "venv/bin/python"))
+        self.assertNotIn("BUDDY_PYTHON", environment)
         self.assertEqual(environment["PATH"], "/usr/bin:/bin")
 
 
@@ -258,7 +258,7 @@ class ExplicitWorkerEnvironmentTests(unittest.TestCase):
             self.assertEqual(environment["BUDDY_WORKER_ID"], "extra")
             self.assertEqual(environment["BUDDY_RUNTIME"], "/stable/runtime")
             self.assertEqual(environment["BUDDY_RUNTIME_IDENTITY"], "runtime:fixed")
-            self.assertEqual(environment["BUDDY_PYTHON"], "/stable/venv/bin/python")
+            self.assertNotIn("BUDDY_PYTHON", environment)
             self.assertNotIn("PYTHONPATH", environment)
             self.assertNotIn("VIRTUAL_ENV", environment)
             self.assertEqual(environment["PATH"].split(os.pathsep)[0], "/stable/venv/bin")

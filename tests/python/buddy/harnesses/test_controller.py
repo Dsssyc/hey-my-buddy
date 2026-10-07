@@ -26,7 +26,6 @@ from hey_my_buddy.buddy.harnesses.controller import (
     ControllerCollection,
     collect_controller,
     launch_controller,
-    read_router_result,
     read_strict_result,
     router_stop_confirmed,
     signal_name,
@@ -71,7 +70,7 @@ class LaunchControllerTests(unittest.TestCase):
         self.log_paths = {"stdout": str(self.root / "stdout"), "stderr": str(self.root / "stderr")}
 
     def test_real_child_writes_through_the_opened_logs_and_stamps_its_deadline(self):
-        handle = launch_controller(prepare=lambda _environment: ([sys.executable, "-c", CHILD_SOURCE],
+        handle = launch_controller(prepare=lambda: ([sys.executable, "-c", CHILD_SOURCE],
                                                     str(self.root), dict(os.environ)),
                                    log_paths=self.log_paths, timeout_seconds=30)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
@@ -87,7 +86,7 @@ class LaunchControllerTests(unittest.TestCase):
         process = FakeProcess()
         trace = []
 
-        def prepare(_environment):
+        def prepare():
             trace.append("prepare")
             return (["fixture"], str(self.root), {"FIXTURE": "1"})
 
@@ -120,20 +119,20 @@ class LaunchControllerTests(unittest.TestCase):
         for unbounded, expected in ((math.inf, math.inf), (None, None)):
             with self.subTest(unbounded=unbounded):
                 with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()):
-                    handle = launch_controller(prepare=lambda _environment: (["fixture"], None, {}),
+                    handle = launch_controller(prepare=lambda: (["fixture"], None, {}),
                                                log_paths=self.log_paths,
                                                timeout_seconds=0, unbounded_deadline=unbounded)
                 self.assertIs(handle.deadline, expected)
 
     def test_positive_timeout_stamps_now_plus_timeout_and_grace(self):
         with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()):
-            handle = launch_controller(prepare=lambda _environment: (["fixture"], None, {}),
+            handle = launch_controller(prepare=lambda: (["fixture"], None, {}),
                                        log_paths=self.log_paths, timeout_seconds=5, grace_seconds=10)
         self.assertAlmostEqual(handle.deadline, time.monotonic() + 15, delta=1.0)
 
     def test_discovery_launch_without_timeout_stamps_no_deadline(self):
         with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()) as spawn:
-            handle = launch_controller(prepare=lambda _environment: (["fixture"], None, {}), log_paths=self.log_paths)
+            handle = launch_controller(prepare=lambda: (["fixture"], None, {}), log_paths=self.log_paths)
         self.assertFalse(hasattr(handle, "deadline"))
         self.assertIsNone(spawn.call_args.kwargs["cwd"])
 
@@ -220,8 +219,6 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
         self.assert_failure_leaves_finalized_logs("spawn", ["logs", "cwd", "env", "spawn"], OSError)
 
 
-
-
 class StrictReadTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-read-")
@@ -268,25 +265,13 @@ class StrictReadTests(unittest.TestCase):
         self.assertIsNone(read_strict_result(self.path))
 
 
-class PlainAndLastLineReadTests(unittest.TestCase):
+class PlainEvidenceReadTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-plain-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.path = self.root / "stdout"
 
-    def test_router_read_folds_its_baseline_exceptions_to_none(self):
-        for raw in (None, b"{broken", b"\xff\xfe\x00", b" " * (256 * 1024 + 1)):
-            with self.subTest(raw=raw):
-                if raw is None:
-                    self.path.unlink(missing_ok=True)
-                else:
-                    self.path.write_bytes(raw)
-                self.assertIsNone(read_router_result(self.path))
-
-    def test_router_read_returns_parsed_non_objects_for_the_role_fallback(self):
-        self.path.write_bytes(b"[1, 2]")
-        self.assertEqual(read_router_result(self.path), [1, 2])
 
     def test_router_read_is_the_same_raising_read_the_retention_uses(self):
         from hey_my_buddy.errors import BoardError
@@ -296,7 +281,6 @@ class PlainAndLastLineReadTests(unittest.TestCase):
         linked.symlink_to(self.root / "outside", target_is_directory=True)
         with self.assertRaises(BoardError):
             controller.read_plain_evidence(linked / "request.json")
-
 
 
 class StopConfirmedTests(unittest.TestCase):
@@ -345,15 +329,13 @@ class RouterStopTests(unittest.TestCase):
         self.assertEqual(handle.calls, 0)
 
 
-
-
 class RealStopTests(unittest.TestCase):
     def test_a_terminated_real_child_confirms_only_with_its_receipt(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-stop-")
         self.addCleanup(temporary.cleanup)
         log_paths = {"stdout": str(Path(temporary.name) / "stdout"),
                      "stderr": str(Path(temporary.name) / "stderr")}
-        handle = launch_controller(prepare=lambda _environment: ([sys.executable, "-c", "import time; time.sleep(30)"],
+        handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
                                                     str(temporary.name), dict(os.environ)),
                                    log_paths=log_paths)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
@@ -381,7 +363,7 @@ class ObservationErrorStopTests(unittest.TestCase):
             self.skipTest("POSIX owned groups only")
         with tempfile.TemporaryDirectory(prefix="controller-observe-") as name:
             log_paths = {"stdout": str(Path(name) / "stdout"), "stderr": str(Path(name) / "stderr")}
-            handle = launch_controller(prepare=lambda _bound: ([sys.executable, "-c", "pass"],
+            handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"],
                                                     name, dict(os.environ)),
                                        log_paths=log_paths)
             self.assertIsNotNone(handle.wait(5))
@@ -416,15 +398,11 @@ class CollectControllerTests(unittest.TestCase):
         self.assertIs(collection.stop_confirmed, True)
         self.assertEqual(list(collection.__dataclass_fields__), ["payload", "exit_code", "stop_confirmed"])
 
-    def test_a_path_running_its_own_later_stop_rule_gets_none(self):
-        stdout = self.root / "stdout"
-        stdout.write_text('{"status": "ok"}\n')
-        handle = SimpleNamespace(log_paths={"stdout": str(stdout)}, process=FakeProcess(0),
-                                 shutdown_confirmed=lambda: True)
-        collection = collect_controller(handle, read=read_strict_result)
-        self.assertEqual(collection.payload, {"status": "ok"})
-        self.assertEqual(collection.exit_code, 0)
-        self.assertIsNone(collection.stop_confirmed)
+    def test_every_collection_requires_an_explicit_stop_rule(self):
+        handle = SimpleNamespace(log_paths={}, process=FakeProcess(0))
+        with self.assertRaises(TypeError):
+            collect_controller(handle, read=read_strict_result)
+
 
     def test_an_unreadable_result_keeps_the_attempt_unconfirmed(self):
         handle = SimpleNamespace(log_paths={"stdout": str(self.root / "missing")},
@@ -433,6 +411,27 @@ class CollectControllerTests(unittest.TestCase):
         self.assertIsNone(collection.payload)
         self.assertIs(collection.stop_confirmed, False)
         self.assertEqual(collection.exit_code, 1)
+
+
+def _review_handle(root, outer=True):
+    from buddy.harnesses.test_run_contract import full_request, full_result
+    from hey_my_buddy.buddy.harnesses import run_contract as rc
+
+    request = full_request(root)
+    result = rc.RunResult.from_payload(full_result().to_payload() | {
+        "nativeFailure": None,
+        "value": {"schemaStatus": "valid", "parsed": {"answer": "ok"}},
+    })
+    stdout = root / "stdout"
+    stdout.write_text(rc.encode_run_result(result))
+    request_file = root / "request.json"
+    request_file.write_text(rc.encode_run_request(request))
+    verdict_file = root / "verdict.json"
+    verdict_file.write_text(json.dumps({"stopReason": None, "elapsedMs": 1}))
+    return SimpleNamespace(process=SimpleNamespace(returncode=0), log_paths={"stdout": str(stdout)},
+                           shutdown_confirmed=lambda: outer, role_run_identity=request.identity,
+                           role_run_control={"operation": "review", "harness": request.harness,
+                                             "requestFile": str(request_file), "verdictFile": str(verdict_file)})
 
 
 class RouterCollectCoercionTests(unittest.TestCase):
@@ -446,10 +445,7 @@ class RouterCollectCoercionTests(unittest.TestCase):
     def collect_with_outer(self, value):
         temporary = tempfile.TemporaryDirectory(prefix="controller-router-")
         self.addCleanup(temporary.cleanup)
-        stdout = Path(temporary.name) / "stdout"
-        stdout.write_text(json.dumps({"status": "ok", "processState": {"shutdownConfirmed": True}}))
-        handle = SimpleNamespace(process=SimpleNamespace(returncode=0), log_paths={"stdout": str(stdout)},
-                                 shutdown_confirmed=lambda: value)
+        handle = _review_handle(Path(temporary.name), value)
         return structured_call.collect(handle)
 
     def test_the_baseline_outer_coercion_table(self):
@@ -464,10 +460,8 @@ class RouterCollectCoercionTests(unittest.TestCase):
     def test_an_unreadable_router_result_stays_invalid_and_unconfirmed(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-router-bad-")
         self.addCleanup(temporary.cleanup)
-        stdout = Path(temporary.name) / "stdout"
-        stdout.write_bytes(b"{broken")
-        handle = SimpleNamespace(process=SimpleNamespace(returncode=0), log_paths={"stdout": str(stdout)},
-                                 shutdown_confirmed=lambda: True)
+        handle = _review_handle(Path(temporary.name))
+        Path(handle.log_paths["stdout"]).write_bytes(b"{broken")
         outcome = structured_call.collect(handle)
         self.assertEqual(outcome.status, "failed")
         self.assertIs(outcome.shutdown_confirmed, False)
@@ -489,21 +483,18 @@ class ReplacedEvidenceTests(unittest.TestCase):
             root = Path(name)
             outside = root / "outside"
             outside.mkdir()
-            (outside / "payload.json").write_text(json.dumps(
-                {"status": "ok", "processState": {"shutdownConfirmed": True}}))
-            stdout = root / "stdout"
-            stdout.write_text(json.dumps({"status": "ok", "processState": {"shutdownConfirmed": True}}))
+            handle = _review_handle(root)
+            stdout = Path(handle.log_paths["stdout"])
+            valid_result = stdout.read_bytes()
+            self.assertEqual(structured_call.collect(handle).status, "ok")
+            (outside / "payload.json").write_bytes(valid_result)
             stdout.unlink()
             stdout.symlink_to(outside / "payload.json")
-            handle = SimpleNamespace(process=SimpleNamespace(returncode=0),
-                                     log_paths={"stdout": str(stdout)},
-                                     shutdown_confirmed=lambda: True)
             outcome = structured_call.collect(handle)
             self.assertEqual(outcome.status, "failed", outcome.to_report())
             self.assertIs(outcome.shutdown_confirmed, False)
             self.assertEqual(outcome.result["code"], "invalid-native-result")
-            self.assertEqual((outside / "payload.json").read_text(),
-                             json.dumps({"status": "ok", "processState": {"shutdownConfirmed": True}}))
+            self.assertEqual((outside / "payload.json").read_bytes(), valid_result)
 
 
 class SignalNameTests(unittest.TestCase):

@@ -77,7 +77,6 @@ def test_environment(root: Path) -> dict:
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")
     values["PYTHONPATH"] = os.pathsep.join([source, tests] + ([inherited] if inherited else []))
-    values["BUDDY_PYTHON"] = sys.executable
     # Tests must exercise this checkout, not a stable runtime install.
     values["BUDDY_DEV_SOURCE"] = "1"
     # Claude availability reads native account metadata. Unrelated tests must not
