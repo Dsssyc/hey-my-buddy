@@ -398,7 +398,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 handle, outcome = fixture.execute(context)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 control = handle.role_run_control
-                self.assertTrue(Path(control["inquiry"]["errorPath"]).is_relative_to(context.directory))
+                self.assertEqual(set(control["inquiry"]), {"resultsPath"})
+                self.assertTrue(Path(control["live"]["readyFile"]).is_relative_to(context_root(context, "dsh")))
                 self.assertTrue((Path(control["nativeRoot"]) / "dsh-home/sessions").is_dir())
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)
                 self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
