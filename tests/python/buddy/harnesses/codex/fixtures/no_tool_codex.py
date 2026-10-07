@@ -33,8 +33,12 @@ def main():
         elif method == "account/read":
             send({"id": ident, "result": {"account": {"type": "chatgpt"}}})
         elif method == "model/list":
-            send({"id": ident, "result": {"data": [{"model": "fixture-model", "displayName": "Fixture",
-                "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}], "nextCursor": None}})
+            entry = {"model": "fixture-model", "displayName": "Fixture",
+                     "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+            if case == "unlisted-model":
+                entry = {"model": "other-model", "displayName": "Other",
+                         "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+            send({"id": ident, "result": {"data": [entry], "nextCursor": None}})
         elif method == "config/read":
             config = tomllib.loads((Path(os.environ["CODEX_HOME"]) / "config.toml").read_text())
             if case == "config-mismatch":
@@ -55,6 +59,11 @@ def main():
             recorded.setdefault("turns", []).append(params)
             trace.write_text(json.dumps(recorded))
             turn_id = f"turn-{turns}"
+            if case == "unlisted-model":
+                # The native answer decides: the server rejects the turn under
+                # the selected model's own name.
+                send({"id": ident, "error": {"code": -32000, "message": "model not found"}})
+                continue
             if case == 'native-metadata':
                 send({'method':'thread/settings/updated','params':{'threadId':'thread-1','threadSettings':{}}})
                 send({'method':'thread/status/changed','params':{'threadId':'thread-1','status':{'type':'active'}}})

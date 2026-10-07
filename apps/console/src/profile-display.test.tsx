@@ -6,7 +6,9 @@ import { RoutingPanel } from "./RoutingPanel";
 import type { ConsoleApi } from "./api";
 import type { Profile, Snapshot, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
+import { formatDate } from "./ui";
 import {
+  catalogStateText,
   effortText,
   profileName,
   profileTitle,
@@ -138,6 +140,26 @@ describe("profile display", () => {
     expect(profileTitleOr(flashOff, "unused")).toBe(
       "DeepSeek-V41-Flash · off",
     );
+  });
+});
+
+describe("catalog state text", () => {
+  it("reads an explicit catalog state as recorded, never from availability", () => {
+    // The board's own state wins even when harness health marks the
+    // configuration unavailable right now.
+    expect(catalogStateText({ available: false, catalogStatus: "available", pendingSince: null })).toBe("可用");
+    expect(catalogStateText({ available: true, catalogStatus: "unavailable", pendingSince: null })).toBe("不可用");
+  });
+
+  it("keeps pending with the recorded time and stays honest when none was recorded", () => {
+    expect(catalogStateText({ available: true, catalogStatus: "pending", pendingSince: "2026-10-07T01:23:45Z" }))
+      .toBe(`待确认 · 自 ${formatDate("2026-10-07T01:23:45Z")}`);
+    expect(catalogStateText({ available: true, catalogStatus: "pending", pendingSince: null })).toBe("待确认");
+  });
+
+  it("falls back to recorded availability only for fixtures without the field", () => {
+    expect(catalogStateText({ available: true, pendingSince: null })).toBe("可用");
+    expect(catalogStateText({ available: false, pendingSince: null })).toBe("不可用");
   });
 });
 

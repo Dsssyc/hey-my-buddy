@@ -1,6 +1,7 @@
 """Codex transport deadline boundary checks; no model network or shared state is used."""
 import json
 import math
+import os
 import subprocess
 import sys
 import threading
@@ -222,6 +223,62 @@ class NativeUsageEvidenceTests(unittest.TestCase):
                                       "reasoningOutputTokens": 0, "totalTokens": 0}, "total": {}}):
             self.notify(evidence, token_usage.get("last"), token_usage.get("total"))
         self.assertIsNone(attempt_token_usage(evidence))
+
+
+class NativeRpcErrorTests(unittest.TestCase):
+    """A settled native error keeps its bounded message beside the machine code."""
+
+    def connection_with_error(self, error: dict) -> Connection:
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        process = SimpleNamespace(stdin=SimpleNamespace(fileno=lambda: write_fd),
+                                  stdout=SimpleNamespace(readline=lambda _maximum: b""))
+        connection = Connection(process, time.monotonic() + 5, threading.Event())
+        connection.responses[connection.next_id] = {"id": connection.next_id, "error": error}
+        return connection
+
+    def call_with_error(self, error: dict) -> CodexProtocolError:
+        with self.assertRaises(CodexProtocolError) as caught:
+            self.connection_with_error(error).call("turn/start", {})
+        return caught.exception
+
+    def test_a_native_error_keeps_its_message_and_expands_nothing_else(self):
+        error = self.call_with_error({"code": -32000, "message": "model not found: fixture-model",
+                                      "data": {"accountPlan": "must never appear"}})
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertEqual(error.args[0], "Codex rejected turn/start: model not found: fixture-model")
+
+    def test_a_long_multibyte_error_is_cut_byte_safely_with_its_prefix_kept(self):
+        # The Host probe's shape: a native reason of repeated three-byte CJK
+        # plus four-byte characters, far past the public UTF-8 byte budget.
+        # The refusal arrives cut but readable — prefix intact, valid text,
+        # never erased — and error.data stays unexpanded.
+        from hey_my_buddy.buddy.harnesses.codex.protocol import MAX_NATIVE_REFUSAL_BYTES
+        error = self.call_with_error({"code": -32000,
+                                      "message": "模型不可用" * 80 + "\U0001D11E" * 10,
+                                      "data": {"accountPlan": "must never appear"}})
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertTrue(error.args[0].startswith("Codex rejected turn/start: 模型不可用"))
+        self.assertNotIn("accountPlan", error.args[0])
+        self.assertLessEqual(len(error.args[0].encode("utf-8")), MAX_NATIVE_REFUSAL_BYTES)
+        self.assertNotIn("\N{REPLACEMENT CHARACTER}", error.args[0])
+
+    def test_a_four_byte_error_within_the_budget_arrives_complete(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import MAX_NATIVE_REFUSAL_BYTES
+        reason = "\U0001D11E" * 100
+        self.assertLess(len(("Codex rejected turn/start: " + reason).encode("utf-8")),
+                        MAX_NATIVE_REFUSAL_BYTES)
+        error = self.call_with_error({"code": -32000, "message": reason})
+        self.assertEqual(error.args[0], "Codex rejected turn/start: " + reason)
+
+    def test_an_error_without_a_usable_message_keeps_the_method_fallback(self):
+        for error in ({"code": -32000}, {"code": -32000, "message": None},
+                      {"code": -32000, "message": 47}, {"code": -32000, "message": "   "}):
+            with self.subTest(error=error):
+                failure = self.call_with_error(error)
+                self.assertEqual(failure.code, "native-rpc-error")
+                self.assertEqual(failure.args[0], "Codex rejected turn/start")
 
 
 if __name__ == "__main__":

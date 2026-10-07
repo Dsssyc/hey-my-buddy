@@ -67,7 +67,8 @@ class HarnessServiceTests(BoardTestCase):
     def test_router_catalog_eligibility_does_not_require_a_version_certificate(self):
         self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog
         payload = {'source': 'fixture', 'providers': [{'adapter': 'codex', 'provider': 'openai',
-            'models': [{'id': 'gpt-6-sol', 'name': 'Sol', 'efforts': ['high']}]}]}
+            'models': [{'id': 'gpt-6-sol', 'name': 'Sol', 'efforts': ['high']}]}],
+            'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
         with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), \
              patch('hey_my_buddy.buddy.harnesses.codex.adapter.CodexAdapter.discover_models', return_value=payload), \
              patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}):

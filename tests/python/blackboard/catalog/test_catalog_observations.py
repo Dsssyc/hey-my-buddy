@@ -1,28 +1,38 @@
 """Current native facts change without replacing user history or accepting late results."""
-from support import BoardTestCase
+from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog_store
 
 
-def catalog(adapter='dsh', models=('alpha',), status='complete'):
-    return {'source': 'fixture-native', 'discoveries': [{'adapter': adapter, 'status': status, 'reason': 'fixture failure' if status == 'unknown' else None}], 'providers': ([{'adapter': adapter, 'provider': 'fixture', 'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}] if models else [])}
+def catalog(adapter='dsh', models=('alpha',), status='complete', account_status=None):
+    trusted = account_status if account_status is not None else ('unknown' if status == 'unknown' else 'confirmed')
+    return {'source': 'fixture-native', 'discoveries': [{'adapter': adapter, 'status': status, 'accountStatus': trusted, 'reason': 'fixture failure' if status == 'unknown' else None}], 'providers': ([{'adapter': adapter, 'provider': 'fixture', 'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}] if models else [])}
 
 
 class CatalogObservationTests(BoardTestCase):
     def setUp(self):
         super().setUp()
-        self.b = self.board()
+        self.clock = FakeClock()
+        self.b = self.board(clock=self.clock)
         self.e = self.b.evaluation
 
     def record(self, payload, observation=None):
         return self.e.record_catalog(payload, observation)
 
-    def test_a_b_a_restores_identity_and_preserves_human_intent(self):
+    def test_a_ba_restores_identity_and_preserves_human_intent(self):
         first = self.record(catalog())
         profile_id = 'dsh:fixture:alpha:max'
         with self.e.db.write() as db:
             db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
             db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','human text',1,'now')")
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason',1)", (profile_id,))
+        # A first confirmed absence is pending, not a retirement: the profile
+        # keeps its metadata, its routability and the user's intent (ADR-027).
+        self.record(catalog(models=()))
+        pending = catalog_store.profiles(self.e, {'includeUnavailable': True})
+        self.assertTrue(pending['profiles'][0]['available'])
+        self.assertEqual(pending['profiles'][0]['catalogStatus'], 'pending')
+        self.assertTrue(pending['profiles'][0]['enabled'])
+        self.clock.advance(3601)
         self.record(catalog(models=()))
         retired = catalog_store.profiles(self.e, {'includeUnavailable': True})
         self.assertFalse(retired['profiles'][0]['available'])
@@ -32,6 +42,8 @@ class CatalogObservationTests(BoardTestCase):
         self.assertGreater(last['observationId'], first['observationId'])
         current = self.e.snapshot({})
         self.assertTrue(current['profiles'][0]['available'])
+        self.assertEqual(current['profiles'][0]['catalogStatus'], 'available')
+        self.assertNotIn('pendingSince', current['profiles'][0])
         self.assertTrue(current['profiles'][0]['enabled'])
         self.assertEqual(current['familyAnnotations'][0]['text'], 'human text')
         self.assertEqual({key: current['familyAnnotations'][0][key] for key in ('adapter', 'provider', 'model')},
@@ -50,8 +62,9 @@ class CatalogObservationTests(BoardTestCase):
             self.assertEqual(db.execute("SELECT status FROM catalog_current WHERE adapter='dsh'").fetchone()[0], 'unknown')
         self.record(catalog(models=()))
         with self.e.db.read() as db:
-            self.assertIsNone(self.e._catalog(db).lookup('dsh', 'fixture', 'alpha'))
-            self.assertIsNotNone(self.e._catalog(db).lookup('zcode', 'fixture', 'beta'))
+            view = self.e._catalog(db)
+            self.assertIsNone(view.lookup('dsh', 'fixture', 'alpha'))
+            self.assertIsNotNone(view.lookup('zcode', 'fixture', 'beta'))
 
     def test_late_complete_result_cannot_replace_newer_observation(self):
         slow = catalog_store.begin(self.e, 'slow')['observationId']
@@ -66,6 +79,8 @@ class CatalogObservationTests(BoardTestCase):
     def test_retired_configuration_history_is_paginated_and_new_profiles_disabled(self):
         self.record(catalog(models=('a', 'b', 'c')))
         self.record(catalog(models=('c',)))
+        self.clock.advance(3601)
+        self.record(catalog(models=('c',)))
         page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True})
         self.assertEqual(len(page['profiles']), 1)
         next_page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True, 'after': page['nextCursor']})
@@ -76,6 +91,8 @@ class CatalogObservationTests(BoardTestCase):
 
     def test_history_search_filters_before_paging_and_treats_wildcards_literally(self):
         self.record(catalog(models=('a', 'b', 'c')))
+        self.record(catalog(models=()))
+        self.clock.advance(3601)
         self.record(catalog(models=()))
         page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True, 'query': 'fixture c', 'adapter': 'dsh'})
         self.assertEqual([p['model'] for p in page['profiles']], ['c'])

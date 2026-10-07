@@ -255,7 +255,8 @@ class AccountServiceTests(WorkflowTestCase):
         old = catalog_store.begin(board.evaluation)
         self.select(board, 'worker')
         worker = catalog_store.begin(board.evaluation)
-        catalog_store.record(board.evaluation, FIXTURE_CATALOG, worker['observationId'])
+        trusted = {**FIXTURE_CATALOG, 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        catalog_store.record(board.evaluation, trusted, worker['observationId'])
         with board.store.db.read() as db:
             cached = catalog_store.current(db, accounts=old['accounts'])
         self.assertEqual(cached.payload['providers'], [])
@@ -273,6 +274,12 @@ class AccountServiceTests(WorkflowTestCase):
         with board.service.account_settings.credential_change('dsh', 'native', expected_credential_revision=0):
             pass
         self.ready(board, 'dsh')
+        with board.store.db.read() as db:
+            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [],
+                             'New credentials need their own trusted catalog before routing')
+        from support import FIXTURE_CATALOG
+        board.evaluation.record_catalog({**FIXTURE_CATALOG, 'discoveries': [
+            {'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]})
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 1)
 
@@ -362,7 +369,13 @@ class AccountServiceTests(WorkflowTestCase):
         from blackboard.tasks.test_workflow_routing import TestWorkflowRouting
         DecisionTestCase.use_helper(self)
         board = self.board()
-        DecisionTestCase.seed(self, board)
+        # The shared fixture catalog predates per-observation account facts; this
+        # test's subject is selection fencing, so seed with one confirmed reading.
+        from support import FIXTURE_CATALOG
+        from unittest.mock import patch as mock_patch
+        trusted = {**FIXTURE_CATALOG, 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        with mock_patch('hey_my_buddy.blackboard.catalog.catalog.discover', return_value=trusted):
+            DecisionTestCase.seed(self, board)
         # Use production decision/claim/result transactions with deterministic
         # structured output; no Router process or model is started.
         submitted = TestWorkflowRouting.routed(self, board)

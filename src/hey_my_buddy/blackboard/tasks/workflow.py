@@ -2456,14 +2456,40 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _require_enabled_override(connection, configuration):
+        """Recheck current availability and the user's independent enabled gate.
+
+        ADR-027: catalog facts — including the one bounded re-read — were already
+        applied by ``_validated_configuration`` outside the write transaction.
+        A concurrent confirmed absence must still fence the write, without any
+        native call here. Neither a refresh nor the override flips enablement.
+        """
         if configuration is None:
             return
         row = connection.execute(
             "SELECT enabled,available FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND effort=?",
             tuple(configuration[key] for key in schemas.CONFIGURATION_FIELDS),
         ).fetchone()
-        if row is None or not row["enabled"] or not row["available"]:
-            raise BoardError("CONFIGURATION_UNAVAILABLE", "A Host override requires an enabled, available configuration", configuration=configuration)
+        from ..catalog.catalog import CATALOG_REMEDY, catalog_read_at
+
+        read_at = catalog_read_at(connection, configuration["adapter"])
+        if row is not None and not row["available"]:
+            details = {"configuration": configuration, "reason": "catalog-unavailable", "remedy": CATALOG_REMEDY}
+            if read_at:
+                details["catalogReadAt"] = read_at
+            raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is no longer available", **details)
+        if row is not None and row["enabled"]:
+            return
+        details = {
+            "configuration": configuration,
+            "enabled": False,
+            "reason": "not-enabled",
+            "remedy": f"Enable this model profile for the Host override; {CATALOG_REMEDY} only re-reads the catalog and never enables a profile",
+        }
+        if read_at:
+            details["catalogReadAt"] = read_at
+        raise BoardError("CONFIGURATION_UNAVAILABLE",
+                         "A Host override must name a model profile the user enabled; the catalog route itself is admitted",
+                         **details)
 
     def continue_run(self, params: dict, *, console_authority: dict | None = None) -> dict:
         schemas.reject_unknown(
@@ -2521,7 +2547,10 @@ class WorkflowCoordinator:
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
             self._configuration_matches_goal(target_snapshot, supplied_configuration)
-            self._require_enabled_override(connection, supplied_configuration)
+        # ADR-027 rule 3: an explicit override meets the same catalog facts as a
+        # submission — one bounded re-read of its harness before any catalog
+        # rejection — and only afterwards the user's independent enabled gate,
+        # which is re-checked inside the write transaction below.
         configuration = self._validated_configuration(supplied_configuration) if supplied_configuration is not None else None
         now = self.now()
         with self.db.write() as connection:

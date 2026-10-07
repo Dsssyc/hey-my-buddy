@@ -114,6 +114,14 @@ export type QuotaRoutingRecord = {
   retry: QuotaRetryWindow | null;
 };
 
+/**
+ * The board's model-level catalog state (ADR-027 §2/§6), published on every
+ * profile view. `pending` marks a model absent from a confirmed reading: it
+ * stays usable until a later reading confirms the absence. The console only
+ * renders this state; the board owns every judgment about it.
+ */
+export type CatalogStatus = "available" | "pending" | "unavailable";
+
 export type Profile = {
   billing?: BillingFact;
   quotaExhausted?: boolean;
@@ -132,6 +140,13 @@ export type Profile = {
   description: string;
   source: string;
   unavailableReason?: string;
+  /**
+   * Model-identity (adapter/provider/model) catalog state, shared by every
+   * effort of the family; absent on boards and fixtures from before ADR-027.
+   */
+  catalogStatus?: CatalogStatus;
+  /** First recorded absence of a pending model, UTC ISO; absent otherwise. */
+  pendingSince?: string | null;
 };
 /** A user preference mode; `none` exists only as an effort override. */
 export type PreferenceMode = "prefer" | "pin" | "exclude";
