@@ -1,8 +1,9 @@
 """Discovery generations, expiry, settings and cache reads use private boards."""
 from datetime import datetime, timedelta, timezone
+import threading
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
+from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, _later
 from support import BoardTestCase, FakeClock
 
 
@@ -13,7 +14,7 @@ class HarnessHealthTests(BoardTestCase):
         self.board = BoardStore(self.directory / 'health')
         self.board.initialize()
         self.refreshed = []
-        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record: self.refreshed.append((name, record)))
+        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: self.refreshed.append((name, record)))
         self.health.initialize()
         self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
@@ -101,7 +102,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.board.initialize()
         self.board.evaluation = EvaluationStore(self.board)
         self.refreshed = []
-        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record: self.refreshed.append(name))
+        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: self.refreshed.append(name))
         self.health.initialize()
         self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
@@ -212,7 +213,7 @@ class CatalogShelfLifeTests(BoardTestCase):
     def test_cold_start_unknown_then_confirmed_publishes_the_catalog(self):
         self.record_native('unknown', observed_seconds_ago=7 * 3600)
 
-        def confirmed_on_reread(name, record):
+        def confirmed_on_reread(name, record, expected_binding=None):
             self.refreshed.append(name)
             if len(self.refreshed) > 1:
                 self.record_native('confirmed')
@@ -242,7 +243,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.set_read_at(6 * 3600 + 1)
         self.expire_catalog_throttle()
 
-        def failing_refresh(name, record):
+        def failing_refresh(name, record, expected_binding=None):
             self.refreshed.append(name)
             self.health.invalidate(name, record['revision'], 'CATALOG_UNAVAILABLE')
 
@@ -252,6 +253,196 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.assertFalse(result['available'], 'The post-callback record leads')
         self.assertEqual(result['reasonCode'], 'CATALOG_UNAVAILABLE')
         self.assertEqual(self.health.get('codex')['revision'], result['revision'])
+
+
+class SharedStaleCatalogFlightTests(BoardTestCase):
+    """A health stale read and an explicit validation re-read share one flight.
+
+    Both go through the same claim of the ``catalog-scan-after`` window, so one
+    harness gets one bounded native read per window however it was triggered:
+    the explicit side boundedly joins a health read in flight, and a health scan
+    that finds an explicit read in flight starts none of its own.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+        self.clock = FakeClock()
+        self.board = BoardStore(self.directory / 'health')
+        self.board.initialize()
+        self.board.evaluation = EvaluationStore(self.board, clock=self.clock)
+        self.evaluation = self.board.evaluation
+        self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0',
+                      'command': ['/fixture/dsh'], 'executable': '/fixture/dsh'}
+        for target, result in (('_snapshot', {'paths': [{'path': '/fixture/dsh', 'mtimeNs': 1}]}),
+                               ('_discover', self.ready)):
+            stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
+            stub.start()
+            self.addCleanup(stub.stop)
+
+    def reading(self, models):
+        return {'source': 'fixture-native',
+                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+                'providers': [{'adapter': 'dsh', 'provider': 'fixture',
+                               'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
+
+    def prime_ready_health(self, health):
+        """One ready health record plus a shelf-expired catalog and an open window."""
+        self.evaluation.record_catalog(self.reading(('alpha',)))
+        health.refresh('dsh', force=True)
+        with self.board.db.write() as db:
+            db.execute("UPDATE harness_health SET scan_after=? WHERE adapter='dsh'", (_later(3600),))
+            db.execute("DELETE FROM meta WHERE key='catalog-scan-after:dsh'")
+        # The confirmed read time stays at the FakeClock epoch, far in the past.
+
+    def test_an_explicit_request_joins_a_health_stale_read_in_flight(self):
+        from hey_my_buddy.blackboard.catalog import catalog
+        quiet = []
+        health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: quiet.append(name))
+        health.initialize()
+        self.prime_ready_health(health)
+        refreshed, entered, release = [], threading.Event(), threading.Event()
+
+        def slow_refresh(name, record, expected_binding=None):
+            refreshed.append(name)
+            entered.set()
+            self.assertTrue(release.wait(timeout=10), "The parked health read was never released")
+            self.evaluation.record_catalog(self.reading(('alpha', 'beta')))
+
+        health.catalog_refresh = slow_refresh
+        hook_calls = []
+        catalog.register_catalog_reread(self.board.directory, lambda name, binding: hook_calls.append(name))
+        self.addCleanup(lambda: catalog.register_catalog_reread(self.board.directory, None))
+        target = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
+        outcome, error = {}, {}
+
+        def request():
+            try:
+                outcome['value'] = catalog.validate_configuration(target, directory=self.board.directory)
+            except Exception as caught:  # noqa: BLE001 - recorded for the assertion below
+                error['value'] = caught
+
+        scanner = threading.Thread(target=lambda: health.refresh('dsh'))
+        scanner.start()
+        self.assertTrue(entered.wait(timeout=10), "The health stale read never started")
+        validator = threading.Thread(target=request)
+        validator.start()
+        validator.join(timeout=0.3)
+        self.assertTrue(validator.is_alive(), "The explicit request waits for the health read in flight")
+        release.set()
+        scanner.join(timeout=10)
+        validator.join(timeout=10)
+        self.assertFalse(scanner.is_alive() or validator.is_alive())
+        self.assertEqual(error, {}, "The joining request cannot reject while the shared read is in flight")
+        self.assertEqual(outcome.get('value'), target, "The joined facts admit the route")
+        self.assertEqual(refreshed, ['dsh'], "Exactly one native catalog read ran")
+        self.assertEqual(hook_calls, [], "The explicit side started no native read of its own")
+        self.assertEqual(quiet, ['dsh'], "Priming ran its own quiet read once")
+
+    def test_a_health_stale_scan_skips_when_an_explicit_read_is_in_flight(self):
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.errors import BoardError
+        quiet = []
+        health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: quiet.append(name))
+        health.initialize()
+        self.prime_ready_health(health)
+        hook_calls, entered, release = [], threading.Event(), threading.Event()
+
+        def slow_hook(name, binding):
+            hook_calls.append(name)
+            entered.set()
+            self.assertTrue(release.wait(timeout=10), "The parked explicit read was never released")
+            self.evaluation.record_catalog(self.reading(('alpha', 'beta')))
+
+        catalog.register_catalog_reread(self.board.directory, slow_hook)
+        self.addCleanup(lambda: catalog.register_catalog_reread(self.board.directory, None))
+        target = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
+        outcome, error = {}, {}
+
+        def request():
+            try:
+                outcome['value'] = catalog.validate_configuration(target, directory=self.board.directory)
+            except BoardError as caught:
+                error['value'] = caught
+
+        # The scan passes its staleness check first and pauses; the explicit
+        # request claims and parks; the scan then resumes and must start no
+        # second native read even though its check already said yes.
+        from hey_my_buddy.blackboard.store.db import utc_now
+        was_stale = health._stale_catalog('dsh', utc_now())
+        self.assertTrue(was_stale)
+        health._stale_catalog = lambda name, now: entered.wait(timeout=10) and was_stale
+        validator = threading.Thread(target=request)
+        validator.start()
+        self.assertTrue(entered.wait(timeout=10), "The explicit read never started")
+        scanned = health.refresh('dsh')
+        self.assertTrue(scanned['available'])
+        self.assertEqual(quiet, ['dsh'], "Only the priming read ran; the stale scan started none")
+        release.set()
+        validator.join(timeout=10)
+        self.assertFalse(validator.is_alive())
+        self.assertEqual(error, {})
+        self.assertEqual(outcome.get('value'), target)
+        self.assertEqual(hook_calls, ['dsh'], "Exactly one native catalog read ran, on the explicit side")
+
+
+class HealthRecoveryRestoreTests(BoardTestCase):
+    """The direct restore on health recovery, with no catalog publication behind it.
+
+    The publication layer (a trusted reading upserting its rows, or an unknown
+    reading calling the same restore) is the other restorer; this is the one
+    that runs when recovery publishes nothing, inside the health write itself.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+        self.clock = FakeClock()
+        self.board = self.board(clock=self.clock)
+        self.evaluation = self.board.evaluation
+        self.health = HarnessHealth(self.board.store, catalog_refresh=None)
+        self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
+        for target, result in (
+            ('_snapshot', {'paths': [{'path': '/fixture/dsh', 'mtimeNs': 1}]}),
+            ('_discover', self.ready),
+        ):
+            stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
+            stub.start()
+            self.addCleanup(stub.stop)
+
+    def reading(self, efforts):
+        models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
+                  {'id': 'gamma', 'efforts': ['max'], 'available': False, 'unavailableReason': 'native-disabled'}]
+        return {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': models}],
+                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+
+    def profiles(self):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        return {item['profileId']: item for item in catalog_store.profiles(
+            self.evaluation, {'includeUnavailable': True})['profiles']}
+
+    def test_recovery_restores_the_retained_catalog_without_any_publication(self):
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        self.evaluation.record_catalog(self.reading(('max', 'high')))
+        self.evaluation.record_catalog(self.reading(('max',)))  # alpha:high retires
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+        self.health.invalidate('dsh', self.health.get('dsh')['revision'], 'HARNESS_HANDSHAKE_FAILED')
+        broken = self.profiles()['dsh:fixture:alpha:max']
+        self.assertFalse(broken['available'], 'The health failure zeroed the retained route')
+        self.assertEqual(broken.get('unavailableReason'), 'HARNESS_HANDSHAKE_FAILED')
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        profiles = self.profiles()
+        self.assertTrue(profiles['dsh:fixture:alpha:max']['available'],
+                        'Recovery itself restores the retained reading, before any publication')
+        self.assertFalse(profiles['dsh:fixture:alpha:high']['available'], 'A retired effort is a catalog fact')
+        self.assertEqual(profiles['dsh:fixture:alpha:high']['unavailableReason'], catalog.RETIRED_EFFORT_REASON)
+        self.assertFalse(profiles['dsh:fixture:gamma:max']['available'], 'A native unavailable declaration stays down')
+        with self.board.store.db.read() as db:
+            self.assertEqual([row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)],
+                             ['dsh:fixture:alpha:max'])
 
 
 class CatalogHealthOwnershipTests(BoardTestCase):

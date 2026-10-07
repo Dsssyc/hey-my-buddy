@@ -80,3 +80,17 @@ W1 冻结候选的五轴只读审查未发现正常场景阻塞；Host 以清除
 A-F 写入范围在首次提交前补充 `tests/probes/objective_console_preview.py` 和必要的 `tests/python/cli/test_host_preview.py`：现有前端 `preview-contract.test.ts` 实际消费该合成预览的 `tasks.runs` 快照合同，瘦快照及按需预检必须同步其 DTO/端点，才能保持既有前端解析回归。补充仅用于 A 的既有合成夹具，不扩展控制台其他界面问题；对应 preview 检查属于受影响测试。
 
 R06 的最终固定 W1 产物为 `66ecabc5-c878-43a2-90c2-97159b389bfa`，输出提交 `305d64b19e8774f9465fc7621a3dc1c88b54ba39`；两文件 SHA-256 与 Host 已测试的冻结候选一致。Host 独立 8/800 文件对照中，SHA-1/SHA-256 的观察读均为 5 个 Git 进程，写对象均为 7 个，不随文件数增长；原始编号及 `cat-file` 存储字节逐个一致（退出码 0）。Host 的逐文件 Git 变异使独立进程数量断言失败（800 文件、804 个进程，退出码 1），加上追加换行/跳过写入两处变异，共三处捕获。这里只整合代码，最终 accepted 与检出回收待整合后完整检查。
+
+A-S 固定输出 `97711ff5` 的 Host 受影响 264 项检查通过（1 skip、97.056 秒、退出码 0），但独立跨会话 HTTP 注入失败（退出码 1）：A 缓存后 B 正常登录，未发生 SQL 变化，A 仍收到 304 和旧会话列表。已登记该产物 rejected 并原 run continue，要求会话增删/活动分钟与时间边界纳入标记。R05 方法也退回原 run：第一版将客户端往返填作服务端时间，并以虚构 reason 的状态行估算头字节；最终要分列逐路由服务端 wall/producer 与客户端时间，按真实状态行计头字节，显式使用私有运行时根。首次四处累积变异且 gzip 未触达 server 绑定的旧证据已由 Worker 作废，后续七处隔离变异仍待 Host 独立核对。此输出尚未整合。
+
+E 第三轮越过原 packet 写入范围，`test_service.py` 的两行既有消费者断言导致黑板拒绝封存。Host 核对新增 `expected_binding=None` 参数所需的断言，只将这个精确文件登记为 scope Version 2，再按固定 fingerprint adopt；原 scope 冲突与 failed turn 保留，resolved-output `b4ffecdd` 尚未验收。独立固定源审查未发现单服务正常场景阻塞，但已登记 rejected 并原 run continue，要求在已登记范围内实际验证与诚实封存，不能把补登记写作第一轮通过。另有末尾多余空行使 diff --check 退出码 2，已通过同一 run 的 inquiry 通知修正。
+
+R10/R11：E 固定 `b4ffecdd` 的 Host 独立受影响 225 项检查全部通过（41.526 秒、退出码 0）；九处进程内变异全部使目标测试失败，源码文件未改。包含新事实重判、选择纪元、真实服务绑定、账户清读事实、独立健康恢复、`enabled:false` 键、不可用/未启用优先级、正常目录文件覆盖下无 profile 行及目录 reason。reason 变异第一次选了不走该拒绝路径的测试，未触发；Host 更正为实际缺失目录拒绝两例后捕获，原始尝试日志保留，未计作保护通过。结果与完整失败测试 ID 在 ignored `tmp/console-reads-host/e-host-mutations.json`；该源仍待原 run 完成范围返修/最终封存与整合，未登记 accepted。
+
+A-S 最终固定输出 `2baaeb60bb8b27fa40d58394fdee926ef2043afe`、产物 `1f2ec035-1549-410a-87d8-039f12c3f39a` 的增量只读审查未发现阻塞。Host 在整合字节上独立运行 112 项受影响检查（60.552 秒、退出码 0），跨会话登录注入与强 ETag/升级 fence/180 秒健康扫描三个 HTTP 注入均退出码 0。九处独立隔离变异覆盖标记缓存、gzip、编码验证器、扫描时限、数据库文件身份、预检拆分、瘦快照、会话标记与活动分钟时限；第一版缓存变异错误处理 callable 参数使 HTTP 500，作废此项，改为保留正确参数并强制每次标记变化后重新验证。源码不写入变异，最终结果以 corrected 日志为准。
+
+E 最终固定输出 `2d0e86bf58768433b2356d08fd28bf57415b1eec`、产物 `46275e26-992c-4f58-b610-b9ae7a2c62b3` 相对已验证 `b4ffecdd` 仅删除末尾空行，十个文件的固定摘要已核对（共享 test_service.py 保留 A-S 新测试与 E 消费者断言）。本轮 Worker 在补登记范围内实际验证 49+11+3 项、退出码均为 0；Host 前述 225 项与九处变异仍对应相同代码。Worker 的第三/四轮报告把旧 ADR-027 返修的 stash 事故误写成此次 E 首轮退回原因：旧事故在 adr027-host-review.md:60，本次 E 首轮记录明确为并发恢复拒绝与扫描认领缺陷。此为一句历史记录更正，由 Host 直接订正并登记，不改旧事故、原失败回合与 scope 违规的结论。
+
+W2 首次固定输出 `023860373003da0b647c21a2377b83315451fc10` 的 D 真实私有 Git 分支回收诊断/拒绝/分离后重试通过，但 C2 的实际 claim 在 common .git 路径运行 stash list 报 worktree 错误，开始事实为 unknown；另在 64 条完整观察之后仅新增第 65 条，截断观察误报旧条目丢失。独立审查同时发现 shared-refs 自摘要无法复算及采集候选与实际认领不一致。Host 已登记 rejected 并原 run continue，四配置字段仍全部省略。最初 Host 夹具误以为连续 store 同一 OID 会新增 reflog 条目，失败未到目标行为，已作废；用不同真实 stash 提交更正后上述两项实际失败（退出码 1），原日志保留。此产物未整合或 accepted。
+
+R01/R03 的 Host corrected 变异逐个先在未改行为上通过目标测试，再隔离移除行为并复原：九处均捕获、退出码 0（变异目标自身退出 1），失败 ID 和详情保留在 `tmp/console-reads-host/as-host-mutations-corrected.log`。修正后的缓存变异是合法标记返回值每次变化，目标因收到 200 而应为 304 失败；没有沿用 HTTP 500 的无效证据。

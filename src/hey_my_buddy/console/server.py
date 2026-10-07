@@ -33,6 +33,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..errors import BoardError
 from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS, READ_OPERATIONS
+from .read_cache import ReadCache, encoding_unacceptable, select_encoding, uncached_read
+from . import reads
 from ..blackboard.service.service import call_operation
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -40,6 +42,16 @@ MAX_ASSET_BYTES = 8 * 1024 * 1024
 SESSION_COOKIE = "buddy_console_session"
 CSRF_HEADER = "X-Buddy-CSRF"
 ACCESS_OPERATIONS = frozenset({"console_access_set", "console_logout", "console_session_revoke"})
+
+#: Conditional read responses are private to this browser and always revalidate:
+#: the browser may keep one cached copy and skip the transfer on 304, but it can
+#: never serve a stored body without the server's marker check first.
+READ_CACHE_CONTROL = "private, max-age=0, must-revalidate"
+
+#: The snapshot's session list is a display clock: activity stamps are rounded
+#: to whole minutes so one poll's body can serve the next unchanged poll. The
+#: exact activity time stays available through the access commands.
+SESSION_STAMP_SECONDS = 60
 
 #: Exact parameter whitelist of the read-only task history route. It is forwarded to
 #: the same named ``task_list`` operation the CLI and C-Two use; an unknown or
@@ -291,6 +303,8 @@ class Console:
         self._sessions: ConsoleSessions | None = None
         self._local_session: BrowserSession | None = None
         self._expiry_stop: threading.Event | None = None
+        #: Marker-checked, session-private response cache for the read routes.
+        self.read_cache = ReadCache(store.db, clock=clock)
         self.origin: str | None = None
 
     # -- lifecycle -----------------------------------------------------------
@@ -353,6 +367,7 @@ class Console:
             self._local_session = None
             self._sessions = None
             self.origin = None
+            self.read_cache.close()
         # A handler waiting for the ownership lock must not deadlock shutdown.
         if server is not None:
             server.shutdown()
@@ -405,7 +420,12 @@ class Console:
 
     def access_view(self, session: BrowserSession | None = None) -> dict:
         return {"requireLogin": self.require_login, "revision": self.access_revision,
-                "sessions": [{"id": item.id, "lastSeen": item.last_seen, "current": item is session}
+                "sessions": [{"id": item.id,
+                              # Minute-granular display stamp: the snapshot stays
+                              # byte-stable between a session's own polls while the
+                              # exact activity time remains a private session fact.
+                              "lastSeen": int(item.last_seen // SESSION_STAMP_SECONDS) * SESSION_STAMP_SECONDS,
+                              "current": item is session}
                              for item in self._sessions.sessions.values()] if self.require_login and self._sessions else []}
 
     def access_command(self, operation: str, params: dict, session: BrowserSession) -> tuple[dict, BrowserSession | None]:
@@ -488,15 +508,87 @@ class Console:
             params["consoleAuthority"] = {"sessionId": session.cookie}
         return call_operation(self.service, operation, params)
 
+    def _compose_snapshot(self, session: BrowserSession, projection: dict) -> dict:
+        """The projection plus this session's private overlay fields."""
+        snapshot = {**projection}
+        snapshot["csrfToken"] = session.csrf
+        snapshot["consoleSession"] = session.view()
+        with self._lock:
+            snapshot["consoleAccess"] = self.access_view(session)
+        snapshot["capabilities"] = {**projection["capabilities"], "consoleAssets": assets_ready(self.assets_dir)}
+        return snapshot
+
     def snapshot(self, session: BrowserSession) -> dict:
+        """The slim console snapshot, composed uncached for direct callers."""
         with self._lock:
             self._authenticate(session)
-            snapshot = call_operation(self.service, "console_snapshot", {})
-            snapshot["csrfToken"] = session.csrf
-            snapshot["consoleSession"] = session.view()
-            snapshot["consoleAccess"] = self.access_view(session)
-            snapshot["capabilities"]["consoleAssets"] = assets_ready(self.assets_dir)
-            return snapshot
+        projection, _deadline = reads.console_snapshot_projection(self.service, clock=self._clock)
+        return self._compose_snapshot(session, projection)
+
+    def _sessions_marker(self) -> tuple:
+        """The snapshot overlay's session-set and activity-minute fingerprint.
+
+        The sessions file is not SQL: ``create``/``revoke``/``authenticate``
+        never move the database marker and never bump ``access_revision`` (only
+        the access settings do), so a login creating, leaving or revoking a
+        session would otherwise leave every other session's cached snapshot
+        answering 304 with a stale session list. The fingerprint is the set of
+        session ids plus each session's displayed activity minute: a session's
+        own polls inside one minute leave it unchanged, and any cross-session
+        change moves it. Call under the console lock.
+        """
+        if not (self.require_login and self._sessions is not None):
+            return ()
+        return (
+            tuple(
+                sorted(
+                    (item.id, int(item.last_seen // SESSION_STAMP_SECONDS))
+                    for item in self._sessions.sessions.values()
+                )
+            ),
+        )
+
+    def _minute_boundary(self, now: float) -> float:
+        """The next whole activity-display minute after ``now``."""
+        return (int(now // SESSION_STAMP_SECONDS) + 1) * SESSION_STAMP_SECONDS
+
+    def read_snapshot(self, session: BrowserSession, *, if_none_match: str | None = None, coding: str = "identity"):
+        """The periodic console read: marker-checked, per-session, conditional.
+
+        Authentication has already happened on the HTTP path; the representation
+        was negotiated before this call. This composes and caches the snapshot
+        body under the board marker plus this console's own state (asset
+        availability, access settings, the session-set/activity-minute
+        fingerprint), bounded by the projection's time-derived deadline and, in
+        login mode, by the next display minute. The fingerprint is re-read as a
+        callable so a session change during generation is caught by the same
+        before/after rule as a database change. Two sessions never share an
+        entry.
+        """
+        def generate() -> tuple[dict, float | None]:
+            projection, deadline = reads.console_snapshot_projection(self.service, clock=self._clock)
+            if self.require_login:
+                # The sessions overlay displays activity minutes; the next
+                # whole minute bounds the entry to its own display grain.
+                deadline = min(deadline, self._minute_boundary(self._clock()))
+            return self._compose_snapshot(session, projection), deadline
+
+        with self._lock:
+            marker_state = (assets_ready(self.assets_dir), self.require_login, self.access_revision)
+
+        def extra_marker() -> tuple:
+            with self._lock:
+                return (*marker_state, *self._sessions_marker())
+
+        return self.read_cache.serve(
+            kind="console",
+            key="snapshot",
+            session=session.id,
+            extra_marker=extra_marker,
+            generate=generate,
+            if_none_match=if_none_match,
+            coding=coding,
+        )
 
     # -- HTTP ----------------------------------------------------------------
     def _handler(self):
@@ -539,6 +631,54 @@ class Console:
             def _json(self, status: int, value: Any) -> None:
                 body = json.dumps(value, ensure_ascii=False).encode()
                 self._send(status, body, "application/json; charset=utf-8")
+
+            def _negotiated_coding(self) -> str | None:
+                """Select the representation before any conditional decision.
+
+                Negotiation precedes the conditional evaluation (RFC 9110), and
+                a coding the client refuses is refused before any cache or
+                marker work happens at all.
+                """
+                coding = select_encoding(self.headers.get_all("Accept-Encoding"))
+                if encoding_unacceptable(coding):
+                    self._error(406, "INVALID_ARGUMENT", "Neither identity nor gzip is acceptable")
+                    return None
+                return coding
+
+            def _send_read(self, outcome, coding: str, *, cache: str = READ_CACHE_CONTROL) -> None:
+                """One conditional JSON read for an already-negotiated coding.
+
+                The validator, the body and the Vary metadata on the wire all
+                belong to the selected representation: identity and gzip carry
+                different strong validators (RFC 9110 §8.8.3), and a matching
+                If-None-Match costs a bodyless 304 instead of a transfer. The
+                cache control line lets the browser keep one private copy that
+                it must always revalidate.
+                """
+                etag = outcome.entry.validator(coding)
+                payload: bytes | None = None
+                if outcome.not_modified:
+                    self.send_response(304)
+                else:
+                    self.send_response(200)
+                    payload = outcome.entry.representation(coding)
+                    if coding == "gzip":
+                        self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", cache)
+                self.send_header("Vary", "Accept-Encoding")
+                if self.close_connection:
+                    self.send_header("Connection", "close")
+                if getattr(self, "clear_cookie", False):
+                    self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
+                elif console.require_login and getattr(self, "browser_session", None) is not None:
+                    self.send_header("Set-Cookie", f"{SESSION_COOKIE}={self.browser_session.cookie}; Path=/; Max-Age={COOKIE_SECONDS}; HttpOnly; SameSite=Strict")
+                self._security_headers()
+                self.end_headers()
+                if payload is not None and self.command != "HEAD":
+                    self.wfile.write(payload)
 
             def _error(self, status: int, code: str, message: str, details: dict | None = None) -> None:
                 # Refusals may precede body consumption. Never reuse a connection
@@ -654,15 +794,11 @@ class Console:
                 if relative in ("", "/"):
                     return self._page()
                 if relative == "/api/console":
-                    try:
-                        snapshot = console.snapshot(self.browser_session)
-                    except BoardError as error:
-                        return self._board_error(error)
-                    except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                        return self._error(500, "INTERNAL_ERROR", "The console could not read the snapshot")
-                    return self._json(200, snapshot)
+                    return self._console_read()
                 if relative == "/api/tasks":
                     return self._task_history()
+                if relative == "/api/backup-preflight":
+                    return self._backup_preflight()
                 if relative == "/api/objectives":
                     return self._objective_read("objective_list", {}, OBJECTIVE_LIST_PARAMETERS)
                 if relative.startswith("/api/objectives/") and relative.endswith("/timeline"):
@@ -717,34 +853,104 @@ class Console:
                 cache = "no-cache" if target.suffix.lower() == ".html" else "private, max-age=31536000, immutable"
                 self._send(200, body, content_type, cache=cache)
 
+            def _console_read(self) -> None:
+                """The periodic snapshot: slim, per-session, conditional."""
+                coding = self._negotiated_coding()
+                if coding is None:
+                    return
+                try:
+                    outcome = console.read_snapshot(
+                        self.browser_session,
+                        if_none_match=self.headers.get("If-None-Match"),
+                        coding=coding,
+                    )
+                except BoardError as error:
+                    return self._board_error(error)
+                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
+                    return self._error(500, "INTERNAL_ERROR", "The console could not read the snapshot")
+                self._send_read(outcome, coding)
+
+            def _backup_preflight(self) -> None:
+                """The original backup preflight, computed only on this explicit read.
+
+                Opening the storage panel or asking for the report pays the walk
+                here; the periodic snapshot never does. The report is still
+                recomputed per explicit read — only the transfer is conditional,
+                under the same per-representation validators as the cache.
+                """
+                coding = self._negotiated_coding()
+                if coding is None:
+                    return
+                try:
+                    report = reads.backup_preflight(console.store)
+                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
+                    return self._error(500, "INTERNAL_ERROR", "The backup preflight could not be read")
+                outcome = uncached_read(
+                    json.dumps(report, ensure_ascii=False).encode(),
+                    if_none_match=self.headers.get("If-None-Match"),
+                    coding=coding,
+                )
+                self._send_read(outcome, coding)
+
             def _task_history(self) -> None:
                 """Read-only task history over the same named ``task_list`` operation.
 
                 Reads authenticate the session cookie and exact-origin trust boundary;
-                they require no write authority or publication lease.
+                they require no write authority or publication lease. The page is
+                cached per query and session under the board marker, so an unchanged
+                page answers 304 without re-running the projection.
                 """
+                coding = self._negotiated_coding()
+                if coding is None:
+                    return
+                query = urlsplit(self.path).query
                 try:
-                    params = parse_task_history_query(urlsplit(self.path).query)
+                    params = parse_task_history_query(query)
                 except BoardError as error:
                     return self._board_error(error)
                 try:
-                    result = call_operation(console.service, "task_list", params)
+                    outcome = console.read_cache.serve(
+                        kind="tasks",
+                        key=query or "",
+                        session=self.browser_session.id,
+                        extra_marker=(),
+                        generate=lambda: (call_operation(console.service, "task_list", params), None),
+                        if_none_match=self.headers.get("If-None-Match"),
+                        coding=coding,
+                    )
                 except BoardError as error:
                     return self._board_error(error)
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary
                     return self._error(500, "INTERNAL_ERROR", "The task history could not be read")
-                self._json(200, result)
+                self._send_read(outcome, coding)
 
             def _objective_read(self, operation: str, fixed: dict, allowed: frozenset[str]) -> None:
-                """Authenticated read-only objective browsing; no lease, write authority or model call."""
+                """Authenticated read-only objective browsing; no lease, write authority or model call.
+
+                The summary (and the timeline) is cached by its query and the board
+                marker: keyset, filter and ``changed`` semantics are untouched, only
+                recomputation of an unchanged answer is skipped.
+                """
+                coding = self._negotiated_coding()
+                if coding is None:
+                    return
+                query = urlsplit(self.path).query
                 try:
-                    params = {**parse_objective_query(urlsplit(self.path).query, allowed), **fixed}
-                    result = call_operation(console.service, operation, params)
+                    params = {**parse_objective_query(query, allowed), **fixed}
+                    outcome = console.read_cache.serve(
+                        kind="objectives",
+                        key=f"{operation}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}",
+                        session=self.browser_session.id,
+                        extra_marker=(),
+                        generate=lambda: (call_operation(console.service, operation, params), None),
+                        if_none_match=self.headers.get("If-None-Match"),
+                        coding=coding,
+                    )
                 except BoardError as error:
                     return self._board_error(error)
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary
                     return self._error(500, "INTERNAL_ERROR", "The work objectives could not be read")
-                self._json(200, result)
+                self._send_read(outcome, coding)
 
             def _task(self, run_id: str) -> None:
                 if not re.match(r"^[A-Za-z0-9._:-]{1,128}$", run_id):

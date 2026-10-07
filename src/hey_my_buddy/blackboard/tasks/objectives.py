@@ -80,6 +80,43 @@ MARKER_LABELS = {
 # -- admission and activity ----------------------------------------------------
 
 
+#: The console top bar's pending count: distinct delegation-tree roots that
+#: currently have a run parked on its Host. It reuses the same lineage walk as
+#: the history relation (``delegation.RELATION_SQL``) but selects nothing beyond
+#: the root of each awaiting-host run, so it stays a bounded aggregate over the
+#: whole board instead of decorating the latest page of tasks.
+PENDING_ROOTS_SQL = """
+WITH RECURSIVE lineage(task_id, root_run_id) AS (
+    SELECT child_task_id, child_task_id FROM workflow_children
+    UNION ALL
+    SELECT lineage.task_id, parent.parent_run_id
+      FROM lineage JOIN workflow_children parent ON parent.child_task_id = lineage.root_run_id
+),
+roots AS (
+    SELECT lineage.task_id AS task_id, lineage.root_run_id AS root_run_id
+      FROM lineage
+     WHERE NOT EXISTS (
+         SELECT 1 FROM workflow_children parent WHERE parent.child_task_id = lineage.root_run_id
+     )
+)
+SELECT COUNT(DISTINCT COALESCE(roots.root_run_id, tasks.task_id)) AS pending
+  FROM tasks
+  JOIN workflow_runs awaiting ON awaiting.run_id = tasks.task_id AND awaiting.state = 'awaiting-host'
+  LEFT JOIN roots ON roots.task_id = tasks.task_id
+"""
+
+
+def pending_root_count(store) -> int:
+    """Delegation roots with at least one run awaiting its Host, board-wide.
+
+    The console's old client-side count deduplicated the latest snapshot page
+    by ``delegation.rootRunId || runId``; this is the same semantics computed
+    over every run, so it stays correct past any page boundary.
+    """
+    with store.db.read() as connection:
+        return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
+
+
 def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest.get("repositoryId") or spec["cwd"]

@@ -631,8 +631,16 @@ class EvaluationStore:
         ).fetchone()
         return int(row["value"]) if row is not None else 0
 
-    def snapshot(self, params: dict) -> dict:
-        schemas.reject_unknown(params, set(), "console.snapshot")
+    def console_core(self) -> dict:
+        """The board-state core shared by every console snapshot read.
+
+        This is the part of the snapshot that reads one coherent database view:
+        configuration, routed profiles with their quota facts, cards, policy,
+        evidence and decision pages, the write gate and model-family capacity.
+        Route consumers add their own bounded extras (task pages, harness
+        health, routing health); nothing here depends on the wall clock except
+        through the absolute boundaries the projection itself carries.
+        """
         with self.board.db.read() as connection:
             now = self._now()
             state = self._state(connection)
@@ -707,9 +715,7 @@ class EvaluationStore:
                 for profile in profiles
             }
             model_concurrency = self.board.model_capacity_rows(connection, families)
-        tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
-            "csrfToken": "",
             "tableRevision": table_revision,
             "gate": gate,
             "configuration": ({
@@ -727,6 +733,15 @@ class EvaluationStore:
             "evidence": evidence,
             "decisions": decisions,
             "pendingEvidence": pending,
+        }
+
+    def snapshot(self, params: dict) -> dict:
+        schemas.reject_unknown(params, set(), "console.snapshot")
+        core = self.console_core()
+        tasks = self.board.task_list({"limit": 100, "offset": 0})
+        return {
+            "csrfToken": "",
+            **core,
             # The latest 100 rows stay exactly what the snapshot has always shown
             # (helpers and internal decisions included); ``nextCursor`` is the keyset
             # position the separate task-history read resumes from.

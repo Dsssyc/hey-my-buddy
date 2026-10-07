@@ -65,6 +65,19 @@ def selection(connection, adapter):
     return {'adapter': adapter, **setting, 'credentialRevision': credential}
 
 
+def binding_key(connection, adapter):
+    """The selected account binding with its selection epoch.
+
+    The selection revision separates an A→B→A round trip from the original A:
+    both hold the same source and credential revision, but the returned
+    selection is a fresh epoch whose read facts and windows were cleared at each
+    switch. Ordinary harness-health observation revisions never enter this key,
+    so they cannot reopen a bounded re-read window on their own.
+    """
+    selected = selection(connection, adapter)
+    return canonical_json([selected['source'], selected['credentialRevision'], selected['revision']])
+
+
 def attempt_account(connection, attempt):
     adapter = attempt['model_adapter'] or attempt['adapter']
     if adapter not in ADAPTERS:

@@ -105,6 +105,56 @@ class ObjectiveAdmissionTests(WorkflowTestCase):
             self.assertEqual(tuple(db.execute('SELECT activity_seq,activity_at FROM objectives').fetchone()), before)
 
 
+class PendingRootCountTests(WorkflowTestCase):
+    """The console top bar's board-wide pending count, with the old dedup semantics."""
+
+    def park_on_host(self, board, request_id, *, task='parked work'):
+        submitted = self.submit(board, request_id=request_id, task=task,
+                                cwd=str(self.workdir(request_id)))
+        claim = self.claim(board, claim_request_id=f'{request_id}-claim')
+        self.finish_turn(board, claim, disposition='assistance')
+        return submitted
+
+    def test_pending_root_count_dedups_helpers_under_their_root(self):
+        from hey_my_buddy.blackboard.tasks.objectives import pending_root_count
+        board = self.board()
+        self.register(board)
+        self.assertEqual(pending_root_count(board.store), 0)
+        root = self.park_on_host(board, 'pending-dedupe')
+        self.assertEqual(pending_root_count(board.store), 1)
+        # A helper of the same tree parked on the Host still counts once.
+        view = board.call('workflow_get', {'runId': root['runId']})
+        self.assertTrue(view['awaitingHost'])
+        self.decide(board, view, view['activeRequest']['requestId'],
+                    helpers=[{'requestId': 'pending-helper', 'task': 'assist',
+                              'cwd': str(self.workdir('pending-helper')),
+                              'executionWorkspace': {'kind': 'existing', 'access': 'write'}}])
+        helper_claim = self.claim(board, claim_request_id='pending-helper-claim')
+        self.finish_turn(board, helper_claim, disposition='assistance')
+        self.assertEqual(pending_root_count(board.store), 1)
+        # A second distinct root awaiting its Host counts once more.
+        self.park_on_host(board, 'pending-second')
+        self.assertEqual(pending_root_count(board.store), 2)
+        # A queued run that nobody parked is not pending.
+        self.submit(board, request_id='pending-queued', cwd=str(self.workdir('pending-queued')))
+        self.assertEqual(pending_root_count(board.store), 2)
+
+    def test_pending_root_count_stays_correct_beyond_one_page(self):
+        from hey_my_buddy.blackboard.tasks.objectives import pending_root_count
+        board = self.board()
+        self.register(board)
+        # Claim by explicit run: the scheduler's bounded candidate window fills
+        # with parked runs long before one page worth, which is exactly the
+        # situation the board-wide count must survive.
+        runs = [self.submit(board, request_id=f'pending-bulk-{index:03d}', task=f'bulk {index}',
+                            cwd=str(self.workdir(f'pending-bulk-{index:03d}')))['runId']
+                for index in range(105)]
+        for index, run_id in enumerate(runs):
+            claim = self.claim(board, claim_request_id=f'pending-bulk-{index:03d}-claim', run_id=run_id)
+            self.finish_turn(board, claim, disposition='assistance')
+        self.assertEqual(pending_root_count(board.store), 105)
+
+
 class ObjectiveReadTests(WorkflowTestCase):
     """objective_list / objective_timeline are bounded, read-only derivations."""
 

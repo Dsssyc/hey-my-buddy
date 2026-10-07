@@ -2469,11 +2469,11 @@ class WorkflowCoordinator:
             "SELECT enabled,available FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND effort=?",
             tuple(configuration[key] for key in schemas.CONFIGURATION_FIELDS),
         ).fetchone()
-        from ..catalog.catalog import CATALOG_REMEDY, catalog_read_at
+        from ..catalog.catalog import CATALOG_REMEDY, CATALOG_UNAVAILABLE_REASON, catalog_read_at
 
         read_at = catalog_read_at(connection, configuration["adapter"])
         if row is not None and not row["available"]:
-            details = {"configuration": configuration, "reason": "catalog-unavailable", "remedy": CATALOG_REMEDY}
+            details = {"configuration": configuration, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": CATALOG_REMEDY}
             if read_at:
                 details["catalogReadAt"] = read_at
             raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is no longer available", **details)
