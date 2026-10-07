@@ -286,10 +286,10 @@ def _inquiry_event_metadata(message: dict) -> dict:
             "toolName": data.get("toolName") if isinstance(data, dict) else None}
 
 
-def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
+def make_inquiry_bridge(*, identity: dict, journal_path: str,
                         attention_path: str | None = None,
                         live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
-    return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
+    return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, live=live, error_factory=NativeError,
                          event_metadata=_inquiry_event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE)
 
@@ -1198,7 +1198,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
             return  # optional metadata cannot fail the native turn
 
     if services.inquiry is not None:
-        outcome.inquiry_bridge = make_inquiry_bridge(services.inquiry,
+        outcome.inquiry_bridge = make_inquiry_bridge(
                                                      identity=_bridge_identity(request),
                                                      journal_path=str(services.inquiry.get("resultsPath") or ""),
                                                      attention_path=mount.bridge.get("attentionPath"),

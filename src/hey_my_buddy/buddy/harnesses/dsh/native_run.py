@@ -439,11 +439,11 @@ def _inquiry_event_metadata(message: dict) -> dict:
     return {"kind": kind if isinstance(kind, str) and kind else "event", "toolName": tool_name}
 
 
-def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
+def make_inquiry_bridge(*, identity: dict, journal_path: str,
                         attention_path: str | None = None,
                         live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     """The shared cooperative bridge over this harness's own native error shape."""
-    return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
+    return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, live=live, error_factory=NativeError,
                          event_metadata=_inquiry_event_metadata, limitation=CHECKPOINT_INQUIRY_NOTE)
 
@@ -1184,7 +1184,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     inquiry_bridge: InquiryBridge | None = None
     if governed and services.inquiry is not None:
         inquiry_bridge = make_inquiry_bridge(
-            services.inquiry, identity={"taskId": request.identity.task_id,
+            identity={"taskId": request.identity.task_id,
                                         "attemptId": request.identity.attempt_id,
                                         "generation": request.identity.generation,
                                         "turnId": request.identity.turn_id},

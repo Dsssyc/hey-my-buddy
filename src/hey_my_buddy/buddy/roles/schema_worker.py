@@ -48,7 +48,6 @@ class WorkerReceiptOptions:
 
     ignored_quota_codes: tuple[str, ...] = ()
     capture_session_from_validated_turn: bool = False
-    report_native_activity: bool = False
 
 
 @dataclass(frozen=True)

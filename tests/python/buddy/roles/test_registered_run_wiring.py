@@ -390,7 +390,8 @@ class DshPublishedReceiptTests(unittest.TestCase):
         self.assertIsNone(outcome.result["nativeSession"]["sessionId"])
         self.assertFalse(outcome.result["nativeSession"]["captured"])
         self.assertEqual(outcome.result["nativeSession"]["sessionIdSource"], "none")
-        self.assertTrue(outcome.result["nativeActivity"]["sidecarWritten"])
+        self.assertIsNotNone(outcome.result["activity"]["eventSeq"])
+        self.assertNotIn("nativeActivity", outcome.result)
 
 if __name__ == "__main__":
     unittest.main()

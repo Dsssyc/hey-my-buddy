@@ -90,8 +90,7 @@ def worker_receipt_options(name: str):
 
     if name == "dsh":
         return WorkerReceiptOptions(ignored_quota_codes=("unknown",),
-                                    capture_session_from_validated_turn=True,
-                                    report_native_activity=True)
+                                    capture_session_from_validated_turn=True)
     return WorkerReceiptOptions()
 
 
@@ -123,16 +122,11 @@ def worker_message_source(name: str) -> str:
 
 
 def live_binding(name: str):
-    """The registered live-channel binding of one harness, or None while it has none.
-
-    A live binding exists only through registration: it must be a callable
-    operation on the registered run module, and nothing is probed or simulated
-    for a harness whose module declares none (ADR-023 principle 8). The
-    declared set stays the minimum the extracted harnesses actually use.
-    """
-    module = RUN_SEAMS.get(name)
-    binding = getattr(module, "bind_live_channel", None)
-    return binding if callable(binding) else None
+    """An extracted module uses the common C-Two client, with no native fallback."""
+    if RUN_SEAMS.get(name) is None:
+        return None
+    from .c_two_live import CTwoLiveChannel
+    return CTwoLiveChannel
 
 
 # Switching a harness is atomic here: the registered native body and the

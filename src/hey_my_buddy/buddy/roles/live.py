@@ -1,140 +1,107 @@
-"""The role-side live seam: every generic consumer's one way into a live channel.
-
-ADR-025 step 2-C2. The blackboard's inquiry and the Worker runtime's activity
-forwarding take a harness's live channel only through this seam and the harness
-registry — never by importing a specific harness module. A channel is bound to
-the complete execution identity of the real run's stored public request (the
-``role-run-request.json`` the role controller writes and keeps); the consumer
-verifies that identity against the ones it already holds — the board against
-the run's own private control binding and governed turn input, the Worker
-against the identity it received with the handle — so no invocation is ever
-fabricated and nothing is derived from an arbitrary tool frame. The
-role-private control binding supplies the attempt's own bridge credentials and
-paths, and no token travels in any public value.
-
-An extracted harness's live path has no direct-bridge fallback: when its stored
-request is not readable or does not verify, the binding reports unavailable and
-the consumer reports no update — never a second channel, never the old direct
-facilities, never a stop.
-"""
+"""Live access through the controller held by this Worker process."""
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
-from typing import Mapping
 
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
-from ..harnesses.live import LiveChannel
-from ..harnesses.run_contract import RunIdentity, RunRequest, decode_run_request
+from ...protocol.contracts import HarnessRunLive
+from ..harnesses.c_two_live import (
+    C_TWO_IPC_DIRECTORY, CTwoLiveChannel, ConfirmedProcessGone,
+    LiveEndpointDescriptor, cleanup_abandoned_socket,
+)
+from ..harnesses.run_contract import MAX_RUN_REQUEST_BYTES, RunIdentity, decode_run_request
+from .turn_io import guard_private_path
 
-#: The three states of one handle's live binding: the harness's registered run
-#: module declares no live binding, the stored request verified and the channel
-#: is bound, or the binding is pending or refused for this tick and may be
-#: retried on the next one.
 LIVE_BOUND = "bound"
 LIVE_UNAVAILABLE = "unavailable"
 LIVE_UNEXTRACTED = "unextracted"
 
-__all__ = ["LIVE_BOUND", "LIVE_UNAVAILABLE", "LIVE_UNEXTRACTED", "build_live_channel",
-           "handle_live_binding", "stored_run_request"]
 
-
-def build_live_channel(harness: str, request: RunRequest, *, credentials: Mapping | None,
-                       activity_dir: str | Path, journal_path: str | None = None) -> LiveChannel | None:
-    """One harness's live channel over its registered binding, or ``None``.
-
-    ``None`` is the honest answer for a harness whose registered run module
-    declares no live binding: the caller keeps its existing facilities path.
-    The request must be this harness's own; the binding receives the request's
-    complete execution identity and the attempt's own narrow materials.
-    """
-    if request.harness != harness:
-        raise BoardError("INVALID_ARGUMENT", "a live channel binds its own harness", harness=harness)
-    from ..harnesses.registry import live_binding
-
-    binding = live_binding(harness)
-    if binding is None:
-        return None
-    from ...protocol import activity as activity_protocol
-
-    return binding(request.identity, credentials=dict(credentials or {}), journal_path=journal_path,
-                   activity_path=activity_protocol.sidecar_path(activity_dir))
-
-
-def stored_run_request(attempt_dir: str | Path) -> RunRequest | None:
-    """The stored public run request of one attempt, verified against its own control.
-
-    Reads the files the accepted role launch wrote — the public
-    ``role-run-request.json`` and the private ``role-run-control.json`` with the
-    governed turn input it names — and verifies the complete stored identity
-    across them: the request's invocation must be the control's invocation, and
-    its task, attempt, generation, turn id and input digest must be the actual
-    turn input's. ``None`` is the honest answer for anything missing, unreadable
-    or mismatched; nothing here fabricates an identity or derives one from a
-    tool frame.
-    """
-    root = Path(attempt_dir)
+def _private_regular_bytes(path: Path, maximum: int) -> bytes:
+    # Reuse the retired sidecar reader's nonblocking, no-link, regular-file
+    # barrier for the two actual readiness materials the holder still reads.
+    path = guard_private_path(path)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
     try:
-        request = decode_run_request((root / "role-run-request.json").read_bytes())
-        control = decode_strict_json((root / "role-run-control.json").read_bytes())
-    except (OSError, ValueError, BoardError, RecursionError):
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+            raise BoardError("INVALID_ARGUMENT", "Live readiness material is not a bounded regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            raw = stream.read(maximum + 1)
+        if len(raw) > maximum:
+            raise BoardError("INVALID_ARGUMENT", "Live readiness material exceeds its frame bound")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _ready_descriptor(handle) -> LiveEndpointDescriptor | None:
+    control = getattr(handle, "role_run_control", None)
+    expected = getattr(handle, "role_run_identity", None)
+    if not isinstance(control, dict) or not isinstance(expected, RunIdentity):
         return None
-    if not isinstance(control, dict) or control.get("invocationId") != request.identity.invocation_id \
-            or control.get("harness") != request.harness:
-        return None
-    input_file = control.get("inputFile")
-    if not isinstance(input_file, str) or not input_file:
+    material = control.get("live")
+    if not isinstance(material, dict):
         return None
     try:
-        turn_input = decode_strict_json(Path(input_file).read_bytes())
-    except (OSError, ValueError, BoardError, RecursionError):
+        request = decode_run_request(_private_regular_bytes(Path(control["requestFile"]), MAX_RUN_REQUEST_BYTES))
+        if request.identity != expected or request.harness != control["harness"]:
+            return None
+        descriptor = LiveEndpointDescriptor.from_payload(decode_strict_json(
+            _private_regular_bytes(Path(material["readyFile"]), 16384)))
+    except (OSError, ValueError, BoardError, RecursionError, KeyError, TypeError):
         return None
-    if not isinstance(turn_input, dict):
+    if descriptor.instance_id != material.get("instanceId") or descriptor.host_pid != handle.pid:
         return None
-    from .turn_io import input_hash
+    fact = descriptor.socket
+    if fact is not None:
+        if not descriptor.address.startswith("ipc://"):
+            return None
+        server_id = descriptor.address[len("ipc://"):]
+        if not server_id or "/" in server_id or "\\" in server_id:
+            return None
+        if fact.address != descriptor.address or fact.path != str(Path(C_TWO_IPC_DIRECTORY) / (server_id + ".sock")):
+            return None
+    return descriptor
 
-    if (request.identity.task_id != turn_input.get("taskId")
-            or request.identity.attempt_id != turn_input.get("attemptId")
-            or request.identity.generation != turn_input.get("generation")
-            or request.identity.turn_id != turn_input.get("turnId")
-            or request.identity.input_sha256 != input_hash(turn_input)):
-        return None
-    return request
 
-
-def handle_live_binding(handle) -> tuple[str, LiveChannel | None]:
-    """One owned role run's live binding state and channel, if bound.
-
-    ``LIVE_UNEXTRACTED`` is the answer for a harness whose registered run module
-    declares no live binding — the caller keeps its existing facilities path.
-    ``LIVE_BOUND`` carries the channel decoded from the stored public request,
-    whose complete identity must equal the identity the holder received with the
-    handle. Anything else — a missing, unreadable, foreign or altered request —
-    is ``LIVE_UNAVAILABLE``: no update this tick, the binding retried on the
-    next one, never a look-alike channel and never the old direct facilities.
-    """
+def handle_live_binding(handle):
+    """Retry readiness against the held identity; never adopt a PID or file's identity."""
     control = getattr(handle, "role_run_control", None)
     expected = getattr(handle, "role_run_identity", None)
     if not isinstance(control, dict) or not isinstance(expected, RunIdentity):
         return LIVE_UNEXTRACTED, None
-    harness = control.get("harness")
     from ..harnesses.registry import live_binding
-
-    if not isinstance(harness, str) or live_binding(harness) is None:
+    binding = live_binding(control.get("harness"))
+    if binding is None:
         return LIVE_UNEXTRACTED, None
-    request_file = control.get("requestFile")
-    if not isinstance(request_file, str) or not request_file:
+    descriptor = _ready_descriptor(handle)
+    if descriptor is None:
         return LIVE_UNAVAILABLE, None
-    try:
-        request = decode_run_request(Path(request_file).read_bytes())
-    except (OSError, ValueError, BoardError, RecursionError):
-        return LIVE_UNAVAILABLE, None
-    if request.identity != expected or request.harness != harness:
-        return LIVE_UNAVAILABLE, None
-    inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else {}
-    channel = build_live_channel(harness, request, credentials=inquiry,
-                                 activity_dir=control.get("directory"),
-                                 journal_path=inquiry.get("resultsPath"))
-    if channel is None:
-        return LIVE_UNAVAILABLE, None
-    return LIVE_BOUND, channel
+    cached = getattr(handle, "role_live_channel", None)
+    if cached is None:
+        cached = binding(expected, HarnessRunLive, name=descriptor.name, address=descriptor.address,
+                         instance_id=descriptor.instance_id, token=control["live"]["token"])
+        handle.role_live_channel = cached
+        handle.role_live_descriptor = descriptor
+    return LIVE_BOUND, cached
+
+
+def release_live_binding(handle):
+    """Release local access and clean only this reaped controller's exact endpoint."""
+    cached = getattr(handle, "role_live_channel", None)
+    if cached is not None:
+        cached.close(reason="owned-controller-ended")
+    descriptor = getattr(handle, "role_live_descriptor", None) or _ready_descriptor(handle)
+    if descriptor is None:
+        return None
+    # ProcessHandle owns this Popen. poll() reaps its leader; its separate group
+    # confirmation is necessary even when the leader has an exit code.
+    exit_code = handle.process.poll()
+    evidence = ConfirmedProcessGone(pid=handle.pid, exit_code=exit_code,
+                                    group_gone=handle.shutdown_confirmed() is True)
+    return cleanup_abandoned_socket(descriptor, evidence)

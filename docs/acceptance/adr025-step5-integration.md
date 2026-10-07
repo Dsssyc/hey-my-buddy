@@ -93,3 +93,15 @@ C-Two 点查口径由 Host 选择：按当前所有者已发布的事实查询�
 5-B2 原run补正固定产物11f28f5a，五路径范围一致；Host固定副本32项全部通过5.921秒，含六项实际IPC peer与named detach、迟到attach补偿，真实登记数归零和正常socket消失断言有效。两项本轮变异原始红输出核对为4与2项断言失败，没有导入错误。重绑在旧attach和后续detach结束前被同key屏障拒绝，复用既有identity/instance契约，没有增加CAS字段。固定产物已整合，公共Worker/服务接线仍待整步验证。
 
 5-C1 最终原run已正常 delivered，固定产物8e625a29445cc137226256413a7d64feb73a8037与Host15项聚焦已验证的8e625a2五文件逐字相同，代码/测试没有再变，不重复检查。只收尾回合没有运行工具或测试，之前两次native-shutdown-failed及准备选择器错误均保留。问询owner唯一实时输入为endpoint有界队列；journal提交后才settle、真实原生收据才delivered/answered；旧socket和失去生产调用的参数/方法已删除。公共producer构造参数适配由Host处理，整步检查仍待。
+
+5b2 已 accepted，受管检出清理计划已应用且路径消失；Host保留47份命名原始日志/变异/编号/摘要后，按创建时登记的单个确切任务根整体回收。未读取凭据文件内容、未改其他会话对象或旧IPC残留。
+
+5c1 已 accepted，受管检出清理计划已应用且路径消失；Host保留45份命名原始日志/变异/编号/摘要后，按创建时登记的单个确切任务根整体回收。未读取凭据文件内容、未改其他会话对象或旧IPC残留。
+
+Host公共接线验证：已收齐5-A/5-B1/5-B2/5-C1/5-C2，角色签名适配与真实endpoint注入完成；公共三模块35项聚焦通过27.000秒（host-public-wiring-focused1.log）。实际私有BoardService/Store的named attach/detach、真实Actor/turn核验和C-Two服务客户端→持有Worker→controller两跳，重启内存映射/实际reconcile后原handle重挂、两次fsynced fake journal、解绑与两socket消失通过1项0.659秒（host-holder-three-hop2.log）；只有登记送达沿测试peer的recording客户端回送service，未称完整后台Worker模型回合。首次nonce夹具不足16字符失败已保留并修正。
+
+独立只读审查发现Host生命周期问题：直接execute/run_once每次关闭不可重启live runtime，下一任务失去连接。Host移除这次过早stop，资源由Worker.run finally或直接驱动的显式owner结束；新增实际runtime连续两次直接attempt test通过0.005秒，使用同一资源且两次真实named detach。生产实现属于Host公共整合，非微任务代码代改；源与环境边界在记录/原始输出中保留。
+
+Host公共防护变异：完整身份比较移除后，13项holder seam测试出现13个子项/方法断言失败；恢复逐项身份门的原件13项通过0.021秒。把live runtime重新改为每次execute后stop时，连续两任务测试出现1个行为断言失败；原件1项通过0.005秒。两个变异都在Host新源码副本中运行，未覆盖实施源码，没有导入/环境ERROR，原始输出与摘要保存 host-public-*-mutation1.log / host-public-mutations1.json。
+
+公共接线由Host统一整合：服务只经内存LiveRegistry向Worker具名端点请求；实际Holder以run request与held identity、ready实例/进程/端点素材核对controller，缓存同一有界客户端。Worker初始化先设置server/client，成功renew/reconcile后仅重挂同一handle；attempt结束摘除，进程结束停止Worker自己的资源。controller每run注册临时endpoint，ready不含token、私有control含独立token，原生结束后finally注销；Holder只有实际Popen收割且进程组确认消失才对同一个文件身份清理。角色/注册表/public文件与跨微任务的ZCode/DSH keyword-only构造适配均由Host完成，尚未在日常运行时启用。

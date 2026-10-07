@@ -9,6 +9,7 @@ import hashlib
 import math
 import os
 import shutil
+import secrets
 import sys
 import tempfile
 import uuid
@@ -144,7 +145,7 @@ def _worker_facts(result) -> dict:
                                    else failure)
     if result.activity is not None:
         activity = result.activity.value
-        payload["activity"] = {"published": True, "phase": activity.get("phase"),
+        payload["activity"] = {"phase": activity.get("phase"),
                                "eventSeq": activity.get("eventSeq")}
     return payload
 
@@ -275,7 +276,7 @@ def worker_request(control: dict, module):
             attention_path=attention_path,
             session_tools=worker_services.session_tools(), completion_tool="buddy_finish_turn",
             inquiry=inquiry, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
-            validate_outcome=validate_outcome, activity_dir=control["directory"],
+            validate_outcome=validate_outcome,
             native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
         prompt = worker_services.governed_prompt(
             task_text, turn_input, binding.completion_tool,
@@ -317,14 +318,15 @@ def worker_request(control: dict, module):
 
 
 def _native_services(control: dict, module, tool_scope: str):
-    """Bind native paths and the frozen account, without workflow authority."""
+    """Supply only the registered factory's actual inputs, without workflow authority."""
     factory = getattr(module, "prepare_run_services", None)
     if factory is None:
         return None
-    return factory(invocation_root=Path(control["privateRoot"]),
-                   native_root=Path(control["nativeRoot"]),
-                   activity_dir=Path(control["directory"]),
-                   account=control.get("account"), tool_scope=tool_scope)
+    import inspect
+    values = dict(account=control.get("account"), tool_scope=tool_scope)
+    # These are this project's registered factories, not vendor qualification.
+    parameters = inspect.signature(factory).parameters
+    return factory(**{key: value for key, value in values.items() if key in parameters})
 
 
 def fast_request(control: dict, module):
@@ -375,7 +377,9 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
 
     root = ensure_private_dir(Path(control["privateRoot"]))
     control.update(invocationId=identity.invocation_id, requestFile=str(root / _REQUEST),
-                   verdictFile=str(root / _VERDICT))
+                   verdictFile=str(root / _VERDICT),
+                   live={"instanceId": uuid.uuid4().hex + uuid.uuid4().hex,
+                         "token": secrets.token_hex(32), "readyFile": str(root / "live-ready.json")})
     path = root / _CONTROL
     private_json(path, control)
     handle = launch_controller(
@@ -562,7 +566,7 @@ class WorkerRunExecutor:
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
-            "inquiry": {key: inquiry[key] for key in ("socketPath", "resultsPath", "errorPath", "token")},
+            "inquiry": {key: inquiry[key] for key in ("resultsPath",)},
             "account": context.runtime.get("account"),
             "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         })
@@ -650,8 +654,6 @@ class WorkerRunExecutor:
             # Only an imported, validated turn can establish capture where
             # that is the registered native receipt rule.
             session_id = (record or {}).get("sessionId")
-        if self.receipt_options.report_native_activity:
-            payload["nativeActivity"] = {"sidecarWritten": (context.directory / "activity.json").is_file()}
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
             "resumable": bool(facts.get("bindingPresent", True) and shutdown and result is not None
