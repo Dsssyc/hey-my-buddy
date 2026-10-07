@@ -1,0 +1,136 @@
+{
+  "fullCheck": {
+    "command": "uv run --frozen python -m hey_my_buddy.cli.checks",
+    "codeCommit": "92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4",
+    "coreCommitAtStart": "fbfa8eac881ee7da8d23465df155d270b8707b60",
+    "requestedBaseCommit": "54d159082c3ec2bb995c897c0833da216876485c",
+    "coreMerged": false,
+    "parallelism": "default; no --jobs and no inherited BUDDY_CHECKS_JOBS",
+    "startedAt": "2026-10-07T18:42:08.290335+00:00",
+    "exitCode": 0,
+    "elapsedSeconds": 498.921,
+    "finishedAt": "2026-10-07T18:50:27.229699+00:00",
+    "pythonTestFiles": 187,
+    "pythonTests": 2987,
+    "pythonSkipped": 1,
+    "pythonWorkers": 4,
+    "environment": "inherited BUDDY_*, ANTHROPIC_*, VIRTUAL_ENV and UV_PROJECT_ENVIRONMENT removed before uv; fresh private state/runtime and source checks",
+    "rawLog": "tmp/console-reads-host/full-check.log",
+    "initialWrapperGuard": "latest-core-ancestor guard rejected before starting the check command; corrected to the user-requested base commit. This was not a full-check run."
+  },
+  "rebuild": {
+    "productSourceCommit": "00f32cf578b18900e2ea3e4a8bd4ae1b25723e86",
+    "assets": {
+      "src/hey_my_buddy/console/assets/index.html": "304922860695d57e573fecd3246412e88a6a171861993921b861760a34a2b50b",
+      "src/hey_my_buddy/console/assets/assets/index-Ds-aFj6J.css": "123ea0d833f29151313ee3024a2098ce55940ddadef1d77a5eda1223f379e73c",
+      "src/hey_my_buddy/console/assets/assets/icon-CSqZwn0a.svg": "78f0a1f7d96f7c9bd282646eb3191747dee450348d7a1a625643e8f1a601cb56",
+      "src/hey_my_buddy/console/assets/assets/index-BvBeWtDi.js": "5fe9a723c4b48fffaebb772cdf417cd0174b8b5c3c872931e8b7045938ef3b4c"
+    }
+  },
+  "cleanup": [
+    {
+      "alias": "w1",
+      "runId": "6cada123-97cc-4a81-80a8-6926de525fb7",
+      "artifactId": "66ecabc5-c878-43a2-90c2-97159b389bfa",
+      "integrationId": "int-30d76e78-c0d0-49e2-a327-9f3f25c8f689",
+      "planId": "cln-22fce17a-31e8-4f65-b3e6-8a76bf700534",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-583e2f0d0bc68a74047b0c30a7c95c2a/checkout",
+      "state": "applied",
+      "appliedAt": "2026-10-07T18:57:48.767Z",
+      "checkoutAbsent": true,
+      "retainedPatchCount": 2,
+      "retainedRefCount": 10,
+      "firstApplyResponseError": {
+        "code": "WORKSPACE_CHANGED",
+        "message": "An untracked file disappeared during capture"
+      },
+      "appliedBy": "existing daemon accepted-workspace-maintenance",
+      "applyCommandId": "accepted-cleanup-f75a4bd293864124b2f4128763031fec-apply"
+    },
+    {
+      "alias": "as",
+      "runId": "b9955292-15e2-45e6-98d9-e367109fc281",
+      "artifactId": "791ba07f-8225-43a8-b0c3-c47b55770351",
+      "integrationId": "int-6e397de0-8072-4882-ac3f-62c039fb6596",
+      "planId": "cln-8e083927-23d5-43d0-82c6-ab74158400f8",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-fea15e63020cd44ec10b1687615751c3/checkout",
+      "state": "applied",
+      "appliedAt": "2026-10-07T19:00:20.175Z",
+      "checkoutAbsent": true,
+      "retainedPatchCount": 6,
+      "retainedRefCount": 26,
+      "alreadyAppliedAtRead": true,
+      "commandResponseErrors": [
+        {
+          "operation": "workspace-cleanup-plan",
+          "code": "REVISION_CONFLICT",
+          "message": "The governed run changed since this decision was prepared; re-read it and retry"
+        }
+      ],
+      "appliedBy": "existing daemon accepted-workspace-maintenance",
+      "applyCommandId": "accepted-cleanup-0c0b75cd642f46dbb5775092620dd943-apply"
+    },
+    {
+      "alias": "e",
+      "runId": "7fb2d7a2-553a-4620-89d9-8fd1f8fd98ea",
+      "artifactId": "46275e26-992c-4f58-b610-b9ae7a2c62b3",
+      "integrationId": "int-7890aca7-1e68-4a61-b698-9516033d36c4",
+      "planId": "cln-10a962c7-914b-4439-9db6-844d6c9f56e5",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-210c7b90a632d599db3dea4e7ce34ca8/checkout",
+      "state": "applied",
+      "appliedAt": "2026-10-07T18:59:04.426Z",
+      "checkoutAbsent": true,
+      "retainedPatchCount": 6,
+      "retainedRefCount": 17,
+      "alreadyAppliedAtRead": true,
+      "commandResponseErrors": [],
+      "appliedBy": "existing daemon accepted-workspace-maintenance",
+      "applyCommandId": "accepted-cleanup-d91eaaec966d4e31b615fa9a08b99959-apply"
+    },
+    {
+      "alias": "w2",
+      "runId": "03e86d71-40ff-4346-bfb7-4eb0195dd447",
+      "artifactId": "2155c77f-7fbc-402d-9f77-16bd53a441ce",
+      "integrationId": "int-151fd1ab-3649-4e44-b3db-2d41cdea331a",
+      "planId": "cln-2cefeb4e-1c56-4edb-8c31-ca0864c7cbd0",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-57bcfd51de4eb45a698a700ba3106efe/checkout",
+      "state": "applied",
+      "appliedAt": "2026-10-07T18:57:10.817Z",
+      "checkoutAbsent": true,
+      "retainedPatchCount": 8,
+      "retainedRefCount": 24,
+      "alreadyAppliedAtRead": true,
+      "commandResponseErrors": [],
+      "appliedBy": "existing daemon accepted-workspace-maintenance",
+      "applyCommandId": "accepted-cleanup-68f941a077ad467e9c50785bdfef528f-apply"
+    },
+    {
+      "alias": "af",
+      "runId": "890cc404-0b42-47f2-b0f5-642fe5f69645",
+      "artifactId": "58ab160e-007a-40b5-9088-ebca221c4da6",
+      "integrationId": "int-f76c7a95-7ca6-4e59-b1e2-db613307a9b0",
+      "planId": "cln-7a150ae0-f1bb-4ef5-8543-24f1e86c347a",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-4067d6910ce27bc5721014b79db717ec/checkout",
+      "state": "applied",
+      "appliedAt": "2026-10-07T19:01:38.208Z",
+      "checkoutAbsent": true,
+      "retainedPatchCount": 14,
+      "retainedRefCount": 42,
+      "alreadyAppliedAtRead": true,
+      "commandResponseErrors": [],
+      "appliedBy": "existing daemon accepted-workspace-maintenance",
+      "applyCommandId": "accepted-cleanup-6159d4c979844970877c1ddcbdcf0b7e-apply"
+    }
+  ],
+  "sourceWorktree": "~/.codex/worktrees/console-reads-and-checkouts/hey-my-buddy",
+  "sourceBranch": "socu/console-reads-and-checkouts",
+  "sourceWorktreeRetainedFor": "Claude Code Host acceptance",
+  "pushed": false,
+  "recordOnlyHygiene": {
+    "command": "uv run --frozen python tmp/console-reads-host/run_affected.py cli.test_repository_hygiene",
+    "tests": 5,
+    "exitCode": 0,
+    "environment": "same inherited-variable removal and fresh private roots",
+    "finalTracking": "all final acceptance files staged for tracked-file hygiene verification; source code remains 92f2a8c"
+  }
+}

@@ -182,6 +182,28 @@ Python 测试编号 2,874→2,987，新增 113、删除 0；前端编号 667→7
 
 ## 待 Claude Code Host 验收的整合边界
 
-五项范围与新宏任务保持本批归属；所有首次提交和原 run 的 continue 均省略 adapter/provider/model/effort，没有使用限流完整配置例外。源码不修改 harnesses、实时协议、live_registry.py，也不修改 roles 中除 C1 提醒之外的内容；ADR、CONTEXT、AGENTS、README、待办、docs/reference 均未改，schema 仍为 15。最终提交、默认并行完整检查、微任务验收与精确路径回收在下面追加实际结果；这些结果尚未记录为通过。日常运行时、登录和凭据没有安装、升级或改动，模型调用仅限本批委派。
+五项范围与新宏任务保持本批归属；所有首次提交和原 run 的 continue 均省略 adapter/provider/model/effort，没有使用限流完整配置例外。源码不修改 harnesses、实时协议、live_registry.py，也不修改 roles 中除 C1 提醒之外的内容；ADR、CONTEXT、AGENTS、README、待办、docs/reference 均未改，schema 仍为 15。最终代码、默认并行完整检查、微任务验收与精确路径回收的实际结果在下面的 R12 收尾记录中给出。日常运行时、登录和凭据没有安装、升级或改动，模型调用仅限本批委派。
 
 最终 API 文件再独立重放 If-None-Match、解析后票号核对、所有结束路径清票、会话纪元和成功响应缓存上限五处移除，干净 34 项目标先通过、五处均产生实际断言失败，没有写入源码。此前旧锚点推进实现已被当前核对时钟替换，其旧变异不计作最终实现的防护；有效失败证据按功能目标关联各固定源码版本保存。最终源码与公开记录的仓库卫生预检退出 0，未含本机主目录的绝对路径。
+
+## R12：最终代码、完整检查与回收
+
+最终代码提交为 `92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4`（`perf(console): reuse conditional reads and pause hidden polling`），工作树干净后执行唯一一次完整检查：`uv run --frozen python -m hey_my_buddy.cli.checks`。UTC 2026-10-07 18:42:08 开始、18:50:27 结束，约 498.921 秒，退出码 **0**；沿用默认并行数，Python 4 个 Worker、187/187 文件、2,987 项测试、跳过 1 项。每个测试使用检查器的全新私有状态和运行时，启动 uv 前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT。完整检查后核对四个构建产物与该提交逐字节相同、工作树没有源码或产物变化，随后只补验收记录。完整检查的 stdout 只给出上述 Python 数量，不把前端编号清点数量冒充它打印的执行数量。命令、完整提交号、开始/结束时刻、退出码和产物哈希见 [最终核对 JSON](console-reads-and-checkouts-verification.json)，原始日志留在 ignored `tmp/console-reads-host/full-check.log`。
+
+启动包装器最初误用了旧 ADR-027 任务的“最新 core 必须为祖先”门槛，在实际检查命令启动前退出；该次没有运行完整检查。更正 ignored 包装器为本批用户指定的 `54d15908` 起点后，运行了上述一次实际完整检查。开始时 `socu/buddy-core` 已推进到 `fbfa8eac881ee7da8d23465df155d270b8707b60`；本批按并行互不依赖的指令保留原起点，没有合入 ADR-025 的并行改动。该事实单列，未声称核对了最新 core 的整合结果。
+
+Host 在最终代码完整检查通过后，对以下五个固定产物和各自已核对的 integration ID 登记 accepted；早期 rejected、失败回合、范围更正和原 run continue 均保留。这里的微任务验收与本批等待 Claude Code Host 验收是两个阶段。
+
+| 微任务 | 固定产物 ID | 整合记录 ID | 精确回收路径 | 回收后的补丁／固定 refs 数量 |
+| --- | --- | --- | --- | --- |
+| W1：B | `66ecabc5-c878-43a2-90c2-97159b389bfa` | `int-30d76e78-c0d0-49e2-a327-9f3f25c8f689` | `~/.local/share/hey-my-buddy/state/workspaces/ws-583e2f0d0bc68a74047b0c30a7c95c2a/checkout` | 2／10 |
+| A-S | `791ba07f-8225-43a8-b0c3-c47b55770351` | `int-6e397de0-8072-4882-ac3f-62c039fb6596` | `~/.local/share/hey-my-buddy/state/workspaces/ws-fea15e63020cd44ec10b1687615751c3/checkout` | 6／26 |
+| E | `46275e26-992c-4f58-b610-b9ae7a2c62b3` | `int-7890aca7-1e68-4a61-b698-9516033d36c4` | `~/.local/share/hey-my-buddy/state/workspaces/ws-210c7b90a632d599db3dea4e7ce34ca8/checkout` | 6／17 |
+| W2：C2、D | `2155c77f-7fbc-402d-9f77-16bd53a441ce` | `int-151fd1ab-3649-4e44-b3db-2d41cdea331a` | `~/.local/share/hey-my-buddy/state/workspaces/ws-57bcfd51de4eb45a698a700ba3106efe/checkout` | 8／24 |
+| A-F | `58ab160e-007a-40b5-9088-ebca221c4da6` | `int-f76c7a95-7ca6-4e59-b1e2-db613307a9b0` | `~/.local/share/hey-my-buddy/state/workspaces/ws-4067d6910ce27bc5721014b79db717ec/checkout` | 14／42 |
+
+五项均有持久 `applied` 计划，计划的路径与分配路径完全一致；Host 独立确认检出路径及符号链接均不存在，计划中每个输出补丁实际存在，每个固定 ref 仍可解析。Worker 的一次性任务目录随其所属检出由正常回收机制删除，所需源码快照、材料和日志已先复制到 Host 的 ignored 专用目录，原始产物与失败证据保留。Host 分支和 `~/.codex/worktrees/console-reads-and-checkouts/hey-my-buddy` 留给 Claude Code Host 验收，不推送。
+
+现有守护进程在 accepted 后会调用 `cleanup_accepted_workspace`，沿用正常的受保护 plan/apply 并确认确切路径；这次五项实际 apply 的命令号均为既有 `accepted-cleanup-…-apply`，已按仅本批 run 的只读持久记录核对。Host 在同时发起 W1 回收时收到 WORKSPACE_CHANGED（采集时未跟踪文件消失），重放旧修订收到 REVISION_CONFLICT；A-S 的同时计划请求也收到 REVISION_CONFLICT。没有把这些失败回复记成成功，也没有手工删除或恢复；重新读取五项持久计划、实际路径与保留产物后确认回收已完成。异常回复及实际执行主体均保留在 ignored 原始记录和最终核对 JSON。
+
+最终验收记录变更后，仅重跑 `cli.test_repository_hygiene`，5 项测试通过、退出码 0；在暂存完整记录（含新增 JSON）后再以同一私有环境核对该项，未重复完整检查。最终源码、构建产物和上述完整检查提交保持相同。本批的标准机制、影响范围、测试编号变化、逐项失败注入、服务端字节/耗时、真实浏览器事实、对外变化和未验证边界均已列出；完成后停止，等待 Claude Code Host 验收，不开始其他工作。
