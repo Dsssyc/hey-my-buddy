@@ -27,6 +27,7 @@ from ...json_codec import canonical_json, decode_bounded_frame
 from ...protocol import activity as activity_protocol
 from ...protocol import tool_evidence as tool_evidence_protocol
 from ...protocol import usage as usage_protocol
+from ...protocol.run_identity import RunIdentity
 from ...protocol.internal_models import (
     AbsolutePath,
     Count,
@@ -100,17 +101,6 @@ MAX_SERVICE_TOOL_NAMES = 16
 #: own length bound enforces it on construction and decode alike. The
 #: corrected input of one feedback carries the same allowed set.
 NonEmptyInputText = Annotated[RawText(MAX_INPUT_TEXT_BYTES), Field(min_length=1)]
-
-
-class RunIdentity(InternalModel):
-    """The frozen execution identity shared by a request and its result."""
-
-    task_id: Identifier
-    attempt_id: Identifier
-    generation: NonNegativeInt
-    invocation_id: Identifier
-    turn_id: OptionalText(128) = None
-    input_sha256: Optional[Hex64] = None
 
 
 class RunConfiguration(InternalModel):

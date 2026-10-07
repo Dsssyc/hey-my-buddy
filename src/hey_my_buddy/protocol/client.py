@@ -179,6 +179,22 @@ class BoardClient:
             },
         )
 
+    def live_attach(self, attachment) -> dict:
+        """Register only this holder's live endpoint, with its attempt actor."""
+        from .worker_live import WorkerLiveAttach
+
+        if not isinstance(attachment, WorkerLiveAttach):
+            attachment = WorkerLiveAttach.from_payload(attachment)
+        return self.call("worker_live_attach", attachment.to_payload())
+
+    def live_detach(self, attachment) -> dict:
+        """Release one exact live binding; this is not a result or stop receipt."""
+        from .worker_live import WorkerLiveDetach
+
+        if not isinstance(attachment, WorkerLiveDetach):
+            attachment = WorkerLiveDetach.from_payload(attachment)
+        return self.call("worker_live_detach", attachment.to_payload())
+
     def progress(
         self,
         worker_id: str,
