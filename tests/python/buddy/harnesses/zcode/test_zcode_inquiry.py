@@ -1003,74 +1003,106 @@ class FinishToolTests(unittest.TestCase):
         self.assertLessEqual(len(checkpoint["content"][0]["text"].encode()), 200 * 1024)
 
 
-class ActivitySidecarTests(ZcodeFixtureCase):
+class LiveActivityTests(ZcodeFixtureCase):
+    """Actual controller/native fixture publication through the held C-Two endpoint."""
+
+    def own_handle(self, handle):
+        from hey_my_buddy.buddy.roles.live import release_live_binding
+        def release():
+            release_live_binding(handle)
+            descriptor = getattr(handle, "role_live_descriptor", None)
+            if descriptor is not None and descriptor.socket is not None:
+                self.assertFalse(Path(descriptor.socket.path).exists(), "the owned endpoint was left behind")
+        # LIFO: stop the actual held group before cleaning its captured endpoint.
+        self.addCleanup(release)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+
+    def activity_channel(self, handle):
+        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            _, channel = handle_live_binding(handle)
+            if channel is not None:
+                return channel
+            time.sleep(0.05)
+        self.fail("the held controller endpoint never became ready")
+
+    def streaming_activity(self, channel):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("activity",))
+            if snapshot.activity is not None and snapshot.activity.value["phase"] == "streaming-model":
+                return snapshot.activity.value
+            time.sleep(0.05)
+        self.fail("no native streaming activity was published")
+
+    def release_turn(self, context):
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+
     def test_running_same_phase_native_events_refresh_the_published_observation(self):
         context = self.context("live-activity", timeout=30)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        path = activity_module.sidecar_path(context.directory)
-        first = latest = None
+        self.own_handle(handle)
+        channel = self.activity_channel(handle)
+        first = self.streaming_activity(channel)
+        latest = None
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            current = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
-            if current and current["phase"] == "streaming-model":
-                if first is None:
-                    first = current
-                elif current["eventSeq"] > first["eventSeq"]:
-                    latest = current
-                    break
+            current = self.streaming_activity(channel)
+            if current["eventSeq"] > first["eventSeq"]:
+                latest = current
+                break
             time.sleep(0.05)
-        from hey_my_buddy.private_dirs import context_root
-        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+        self.release_turn(context)
         self.assertIsNotNone(handle.wait(10), "controller did not settle")
         self.assertEqual(self.adapter.collect(handle, context).status, "ok")
-        self.assertIsNotNone(first, "no initial streaming observation")
-        self.assertIsNotNone(latest, "native events in the same phase left the published observation frozen")
+        self.assertIsNotNone(latest, "same-phase native events left the publication frozen")
         self.assertGreater(latest["lastNativeActivityAt"], first["lastNativeActivityAt"])
         self.assertEqual(latest["counts"], first["counts"])
         self.assertNotIn("fixture-private-progress", json.dumps(latest))
 
-    def test_the_runner_publishes_a_real_bound_metadata_only_sidecar(self):
-        context = self.context(timeout=20)
-        _, outcome = self.execute(context)
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
-        activity = outcome.result["activity"]
-        self.assertTrue(activity["published"], activity)
-        self.assertIn(activity["phase"], activity_module.PHASES)
-
-        path = activity_module.sidecar_path(context.directory)
-        self.assertTrue(path.is_file(), "the runner did not publish activity.json")
-        payload = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
-        self.assertIsNotNone(payload, "the emitted sidecar must satisfy the real hey_my_buddy.protocol.activity reader")
+    def test_the_runner_publishes_real_bound_metadata_only_live_activity(self):
+        from hey_my_buddy.protocol.run_identity import RunIdentity
+        context = self.context("live-activity", timeout=20)
+        handle = self.adapter.start(context)
+        self.own_handle(handle)
+        channel = self.activity_channel(handle)
+        payload = self.streaming_activity(channel)
         self.assertIn(payload["phase"], activity_module.PHASES)
-        self.assertEqual(payload["nativeSessionId"], outcome.result["turn"]["sessionId"])
         self.assertGreaterEqual(payload["counts"]["toolCalls"], 0)
-        # Timestamps are real ISO instants, not an invented heartbeat or percentage.
         from datetime import datetime
-
         datetime.fromisoformat(payload["observedAt"].replace("Z", "+00:00"))
-        raw = path.read_text()
         for forbidden in ("fixture task", "prompt", "toolArguments", "reasoning", "fixture-secret"):
-            self.assertNotIn(forbidden, raw)
-        # The binding is enforced: another attempt or generation reads nothing.
-        self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id="other", generation=1))
-        self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=2))
+            self.assertNotIn(forbidden, json.dumps(payload))
+        original = channel.identity
+        try:
+            for changes in ({"attempt_id": "other"}, {"generation": 2}):
+                channel._identity = RunIdentity(**{**original.model_dump(), **changes})
+                snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("activity",))
+                self.assertIsNone(snapshot.activity)
+                self.assertIsNotNone(snapshot.unavailable)
+        finally:
+            channel._identity = original
+        self.release_turn(context)
+        self.assertIsNotNone(handle.wait(10))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertNotIn("published", outcome.result["activity"])
+        self.assertEqual(payload["nativeSessionId"], outcome.result["turn"]["sessionId"])
+        self.assertFalse((context.directory / "activity.json").exists())
 
-    def test_same_phase_updates_are_throttled_but_recorded_phase_changes_are_written(self):
-        context = self.context(timeout=20)
-        # The projection is what the controller publishes; the helper coalesces
-        # same-phase receipts inside its window and always writes a phase change.
+    def test_same_phase_updates_are_throttled_but_recorded_phase_changes_are_published(self):
         from hey_my_buddy.buddy.harnesses.zcode.protocol import ActivityProjection
-
         projection = ActivityProjection("sess")
-        sidecar = activity_module.ActivitySidecar(context.directory, task_id="goal-1",
-                                                  attempt_id="attempt-1", generation=1)
-        first = sidecar.publish(projection.payload())
-        self.assertIsNotNone(first)
+        observed = []
+        publisher = activity_module.ActivityPublisher(lambda value: observed.append(value) or True,
+                                                       min_interval_seconds=2.0)
+        self.assertTrue(publisher.publish(projection.payload()))
         projection.note({"method": "state.updated", "params": {"reason": "noop"}}, 1)
-        self.assertIsNone(sidecar.publish(projection.payload()), "an unchanged receipt must be coalesced")
+        self.assertFalse(publisher.publish(projection.payload()), "an unchanged receipt must be coalesced")
         projection.phase = "finishing"
-        self.assertIsNotNone(sidecar.publish(projection.payload()), "a phase change must be written")
+        self.assertTrue(publisher.publish(projection.payload()), "a phase change must be published")
+        self.assertEqual([value["phase"] for value in observed], ["starting", "finishing"])
 
 
 class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
