@@ -39,7 +39,7 @@ Host 整合后以默认并行数运行一次 `uv run --frozen python -m hey_my_b
 | B：harness/Codex | `4e713942-3408-4407-ab6d-f457c5b0375f` | `f8e2ca1a66963d33ea26593ed7bbe59eee41de34` | `int-1df973fd-abe4-4c88-9349-39842f06e927` | accepted |
 | C：控制台 | `4f9dfdf2-a795-4f61-8493-2b134cb900c2` | `d090e88e342405a1ada0d72a57f85197da7a8958` | `int-024ce269-e345-4c10-ace6-dcc11de075a2` | accepted |
 
-三个最终整合记录均为 `verified`，分别匹配 15、16、8 个目标路径，无 missing、differing 或 unrecorded 路径；每个 acknowledgement 都绑定最终固定 artifact 和整合记录。机器可读摘要见 [adr027-verification.json](adr027-verification.json)。微任务验收与 Claude Code Host 对本步骤的验收分别记录，后者尚待进行。
+三个最终整合记录均为 `verified`，分别匹配 15、16、8 个目标路径，无 missing、differing 或 unrecorded 路径；每个 acknowledgement 都绑定最终固定 artifact 和整合记录。机器可读摘要见 [adr027-verification.json](adr027-verification.json)。微任务验收与 Claude Code Host 对本步骤的整体验收分别记录；首次整体验收已退回，本轮重新提交尚待验收。
 
 A 的实现缺陷均返回原 run：先修扫描限流挡住过期刷新、冷启动未知目录永不过期和旧服务 fixture；再修重读导致健康失效时漏掉拒绝上下文、健康恢复与目录事实混用、旧目录读取时间；随后修退休 effort 被恢复、路径重查及初始化抹掉目录事实；最后修 source/credentialRevision 切换时采用旧账户目录。最后一轮还补足退休 effort 与模型恢复事件的组合。Host 保留失败用例并逐次核对转绿，没有改写早期失败结果。首轮摘要漏算新测试文件的统计由 Host 按固定 diff 登记为 14 个文件、955 插入/49 删除；后来步骤增加的差异另以最终代码树为准。
 
@@ -74,7 +74,7 @@ Python 编号基线 2,785，首次提交 2,867（新增 83、移除 1）；本�
 
 Host 验收后仅回收三条登记路径：A 的 `ws-46c8c752810e3897106ed1c6a40f1885/checkout`，B 的 `ws-3a14be25c4957ba5e3c5f33f4d923ea7/checkout`，C 的 `ws-daca4f4556dcd320844e40ee0c44212f/checkout`，均位于 `~/.local/share/hey-my-buddy/state/workspaces/`。三个 cleanup plan 最终都是 applied，`result.removed=true`，Host 核对路径均已不存在；A 显式 plan/apply，B/C 的服务回收与 Host 操作存在竞争，曾返回 Git/revision 错误，随后以 ledger applied 和路径不存在核实，不重复删除。固定 refs、输入/输出、补丁和命令收据保留。原始 Host 日志放在本机忽略的 `.dsh-skill-build/adr027-model-catalog/`；Host 工作树保留供 Claude Code Host 审查。
 
-未真实验证 DSH、ZCode、Claude 在账户异常下的清单变化，也未做真实模型成功/拒绝调用；Codex 只确认本机一次正常发现的账户事实。没有安装或升级日常运行时，本步骤不声称日常 0.27 已具备 ADR-027 行为。首次提交未给最终代码重跑完整命令，已被 Claude Code Host 指出；本轮将在最终提交运行完整检查，结果随后按提交号与实际退出码登记。尚未取得 Claude Code Host 对 ADR-027 的整体验收，未改它维护的架构/入口/参考文档或 ADR-025 工作树、分支及微任务。
+未真实验证 DSH、ZCode、Claude 在账户异常下的清单变化，也未做真实模型成功/拒绝调用；Codex 只确认本机一次正常发现的账户事实。没有安装或升级日常运行时，本步骤不声称日常 0.27 已具备 ADR-027 行为。首次提交未给最终代码重跑完整命令，已被 Claude Code Host 指出；本轮已在下述最终代码提交运行完整检查并取得退出 0，原先的失败事实仍保留。尚未取得 Claude Code Host 对 ADR-027 的整体验收，未改它维护的架构/入口/参考文档或 ADR-025 工作树、分支及微任务。
 
 ## Claude Code Host 退回后的返修计划
 
@@ -101,3 +101,15 @@ A 首轮 Worker 还报告误执行共享仓库的 git stash pop，造成其工�
 本轮外显变化补充：continue 指定 buddy 先做与提交相同的目录校验，目录缺失或不可用时有限重读；仍拒绝带 catalogReadAt 与刷新办法。已接纳但未启用的配置以 CONFIGURATION_UNAVAILABLE、reason=not-enabled、enabled=false 拒绝，说明启用动作及刷新不会启用；写入前刚变得不可用时以同一错误码、reason=catalog-unavailable 及当前目录事实拒绝。DSH 说明改为启动已安装 DSH 的本次私有 DSH_HOME、设置与凭据按路径指回所属主目录、无单独账户读取；accountStatus 保持 not-applicable。
 
 建议项边界：没有增加明确指定重读的节流，每次目录缺失/不可用仍有限重读一次；健康检查的既有 180 秒扫描窗口不变。accounts.py 的 clear_confirmed_read 与 harness_health.py 的 restore_retained_availability 均保留，本轮没有补足其独立变异覆盖，不声称旧两处未捕获的变异已受保护。返修整合提交采用可读说明，原有 ws 输出提交说明未改写。已通过的真实免模型发现、控制台逐字节产物核对与 effort 单独消失的边界沿用；没有新增真实发现或模型验证，也未安装/升级日常运行时。
+
+## 返修最终完整检查与重新提交
+
+C16：最终代码提交 `1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93` 包含当前最新 `socu/buddy-core` 的 `55fff85fbe4ddce8a88eccd898a977a9bcd16a24`。在干净工作树上运行 `uv run --frozen python -m hey_my_buddy.cli.checks`，不传 --jobs 并清除 BUDDY_CHECKS_JOBS，默认 4 并行；181/181 文件通过，运行 2,874 项（1 skip），退出码 0，耗时 465.628 秒，UTC `2026-10-07T08:17:51.525940+00:00` 至 `2026-10-07T08:25:37.160559+00:00`。本轮完整检查一次，检查时脱敏的验收 JSON 与 7 个新回归已经跟踪在该提交内。之后只更新验收记录，没有再改源码或重复完整检查。
+
+C15：包含三处绝对主目录路径的 `277eadd8` 已改写为 `c8336e6a`；它不是本分支的可达祖先。在被完整检查的代码提交上，19 个本分支独有的可达提交中检查两份 ADR-027 记录，未发现本机主目录路径。最终记录继续使用 `~` 或相对路径，登记后再运行仓库卫生的 5 项定向检查；分支未推送。原始失败的 Host 完整检查与 Claude Code Host 在 `277eadd8` 的退出 1 分别保留，未改写成通过。
+
+返修 A 的整合记录为 `int-09752cb8-f6cf-41f2-bf39-61ad1a4ba9ae`，匹配 2 个产物路径；返修 B 为 `int-5e5dcf82-548a-4de4-97c1-e7537ae19ada`，匹配 1 个路径，两者 verified 且无 missing/differing/unrecorded 路径。独立微任务的整合和步骤记录列为相应 hostPaths，未混入各 Worker 的授权改动。完整检查后 Host 对最终 artifact 分别 accepted，保留 A 首轮 rejected、事故与订正。两个 run 的自己和后代都确认停止。
+
+Host 按已授权的确切路径回收返修检出：A 为 `~/.local/share/hey-my-buddy/state/workspaces/ws-b43554517fe8356e0da2d59446cca502/checkout`，计划 `cln-2a2026d6-ed1c-472f-a9d1-64188776bab8`；B 为 `~/.local/share/hey-my-buddy/state/workspaces/ws-637754ba43910d4dcf052450881d0c7b/checkout`，计划 `cln-0fb7bc90-5c0d-4ac5-a938-0bafa1b0666d`。两计划均 applied，事后路径均不存在；A 的 apply 返回 duplicate，回放的是同一个已应用计划，未另行删除。源码、固定产物、patch、refs、整合与历史收据保留，A 第二回合的本地验证日志已在回收前取到 Host 的 ignored tmp；没有全仓库 prune。Host 工作树继续保留供 Claude Code Host 验收。
+
+本次重新提交保留以下边界：建议的明确读取节流与两处冗余保护的独立变异覆盖未增加；Worker 删除事故不能撤销为未发生，事前共享 stash 状态没有快照；首轮 routing 单例的环境差异根因未调查；新错误的真实控制台渲染与真实模型拒绝未验证。已核对通过的免模型发现、控制台产物与旧规则证据沿用，未安装或升级日常运行时，也未改受保护文档、ADR-025 工作树/分支/微任务。完成后停止，等 Claude Code Host 验收。

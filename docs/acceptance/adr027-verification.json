@@ -1,7 +1,7 @@
 {
   "hostId": "codex-adr027",
   "objectiveId": "obj-9f62bcab-3a1c-4878-ba75-38a10337ee4a",
-  "codeCommit": null,
+  "codeCommit": "1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93",
   "coreCommit": "55fff85fbe4ddce8a88eccd898a977a9bcd16a24",
   "schemaVersion": 15,
   "microtasks": {
@@ -206,8 +206,21 @@
   },
   "fullPythonCheck": {
     "command": "uv run --frozen python -m hey_my_buddy.cli.checks",
-    "state": "pending-final-code-check",
-    "parallelism": "default"
+    "codeCommit": "1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93",
+    "coreCommit": "55fff85fbe4ddce8a88eccd898a977a9bcd16a24",
+    "parallelism": "default; no --jobs or BUDDY_CHECKS_JOBS",
+    "startedAt": "2026-10-07T08:17:51.525940+00:00",
+    "exitCode": 0,
+    "elapsedSeconds": 465.628,
+    "finishedAt": "2026-10-07T08:25:37.160559+00:00",
+    "state": "passed",
+    "runs": 1,
+    "jobs": 4,
+    "files": 181,
+    "passedFiles": 181,
+    "testsRun": 2874,
+    "skipped": 1,
+    "sourceIncludesTrackedAcceptanceJson": true
   },
   "finalAffectedPythonChecks": {
     "catalogAccountHealthRoutingTests": 102,
@@ -237,7 +250,7 @@
     }
   },
   "dailyRuntimeUpgraded": false,
-  "claudeHostAcceptance": "rejected at 277eadd8; resubmission pending final checks",
+  "claudeHostAcceptance": "pending resubmission; previous verdict at 277eadd8 remains rejected",
   "initialHostFullPythonCheck": {
     "command": "uv run --frozen python -m hey_my_buddy.cli.checks",
     "runs": 1,
@@ -266,14 +279,12 @@
   "rework": {
     "authorization": "User explicitly authorized new routed microtasks linked to accepted/cleaned original A and B, after original A continue returned CONFLICT.",
     "historyPrivacy": {
-      "reachableBranchCommitsChecked": 17,
-      "trackedFilesChecked": [
-        "docs/acceptance/adr027-verification.json",
-        "docs/acceptance/adr027-model-catalog.md"
-      ],
+      "reachableBranchCommitsChecked": 19,
       "offenders": [],
+      "rejectedPrivatePathCommitReachable": false,
       "redactedCommit": "c8336e6a61d7bde7d1072adfdd24b40104541d79",
-      "branchPushed": false
+      "branchPushed": false,
+      "checkedCodeCommit": "1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93"
     },
     "a": {
       "originalRunId": "543174ce-34b9-4a26-aeb1-b6537db0152b",
@@ -282,7 +293,7 @@
       "rejectedOutputCommit": "3213b6f5026e06cd4010e51f1752ed287ec7e71e",
       "finalArtifactId": "cd8c93e1-d004-420b-a655-6538770e21a9",
       "outputCommit": "713e87647b58417e202186f8464fd668e3a6b0f6",
-      "state": "delivered-awaiting-final-check",
+      "state": "accepted",
       "focusedTests": 43,
       "focusedExitCode": 0,
       "hostBoundaryTests": 3,
@@ -299,16 +310,63 @@
         "model": "gpt-6.1-sol",
         "effort": "high",
         "reason": "First routed artifact failed Host acceptance; bounded write-fence repair and accurate evidence correction on the same run."
-      }
+      },
+      "revision": 13,
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-2a2026d6-ed1c-472f-a9d1-64188776bab8",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-b43554517fe8356e0da2d59446cca502/checkout",
+        "appliedAt": "2026-10-07T08:30:06.349Z"
+      },
+      "cleanupApplyDuplicate": true,
+      "physicalPathExists": false,
+      "integrationId": "int-09752cb8-f6cf-41f2-bf39-61ad1a4ba9ae",
+      "integrationState": "verified",
+      "matchingPaths": [
+        "src/hey_my_buddy/blackboard/tasks/workflow.py",
+        "tests/python/blackboard/tasks/test_continue_catalog_trust.py"
+      ],
+      "differingPaths": [],
+      "missingPaths": []
     },
     "b": {
       "originalRunId": "4e713942-3408-4407-ab6d-f457c5b0375f",
       "runId": "fed49e93-922d-4e00-834f-076857393cda",
       "finalArtifactId": "ec14f5c7-9ff3-4519-88f5-5f7aaaf2ffab",
       "outputCommit": "9b14da0c0bd4c72ce5ee15c39ae9625080570b24",
-      "state": "delivered-awaiting-final-check",
+      "state": "accepted",
       "focusedTests": 3,
-      "focusedExitCode": 0
+      "focusedExitCode": 0,
+      "revision": 8,
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-0fb7bc90-5c0d-4ac5-a938-0bafa1b0666d",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-637754ba43910d4dcf052450881d0c7b/checkout",
+        "appliedAt": "2026-10-07T08:31:24.490Z"
+      },
+      "cleanupApplyDuplicate": false,
+      "physicalPathExists": false,
+      "integrationId": "int-5e5dcf82-548a-4de4-97c1-e7537ae19ada",
+      "integrationState": "verified",
+      "matchingPaths": [
+        "src/hey_my_buddy/buddy/harnesses/dsh/native_run.py"
+      ],
+      "differingPaths": [],
+      "missingPaths": []
     },
     "hostMutations": {
       "baseline": {
