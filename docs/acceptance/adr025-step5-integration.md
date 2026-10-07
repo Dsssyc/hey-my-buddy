@@ -75,3 +75,5 @@ Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既
 C-Two 点查口径由 Host 选择：按当前所有者已发布的事实查询。成功读取但该 id 没有已发布条目时，observed=true、inquiries=[]；这只表示没有已发布的该条目，不证明原生端没有问题或回答，也不改变黑板 pending 状态。旧 socket 直接点查原生所有者时曾返回 bridge-refused/not-ready；第五步的通道投影差异在此登记，不把两者称为逐字段相同。原生 observation 来源失败的 observed/reason/error 仍原样发布，失联、关停不成为 native stopped 证据。
 
 5-C2 固定产物 351b9f80 已核对十路径范围，并在独立固定副本运行四个 native_run 模块，197 项通过，46.222 秒。三个实际原生事件/callback/计数防护变异的绿/红原始日志已核对。Native producer 使用共同 endpoint 与 ActivityPublisher，Codex 原计数/节流单独保留；零安装版 harness/真实模型检查。公共桥、角色工厂与跨进程运输仍待后续整合，未声称此次聚焦已证明这些边界。
+
+整合缺陷由 Host 修复：5-C1 的真实 journal 发布器首次把带 delivery 的 InquiryState 交给 5-A 后端，重放时 _question_reply 将 FrozenJson 对象直接嵌入 JSON 字典，严格模型拒绝。Host 只把它投影为既有 .value（实际 JSON 值），保留全部 delivery、reason 和状态；新增重放传输回归 1 项通过。未代改 5-C1 范围实现。以 5-C1 未验收部分产物构建固定验证副本，覆盖已固定公共后端及已验收四个 producer，在 Host 可使用共享内存的环境运行 owner 15 项全部通过 1.660 秒，含两个真实跨进程 C-Two peer。仅消除公共整合和测试环境的阻塞，5-C1 仍未验收。

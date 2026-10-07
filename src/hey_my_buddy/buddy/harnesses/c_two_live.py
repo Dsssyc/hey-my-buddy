@@ -337,7 +337,7 @@ def _question_reply(entry: InquiryState, *, duplicate: bool) -> LiveReply:
     if entry.reason is not None:
         correlation["reason"] = entry.reason
     if entry.delivery is not None:
-        correlation["delivery"] = entry.delivery
+        correlation["delivery"] = entry.delivery.value
     status = _REPLY_STATE_STATUSES.get(entry.status)
     if status is None:
         return LiveReply(status="unavailable", reason_code="question-state-unknown")

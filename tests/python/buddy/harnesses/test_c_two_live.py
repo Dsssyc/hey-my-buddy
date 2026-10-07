@@ -1659,3 +1659,16 @@ class SubprocessLifecycleTests(LivePeerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RichReplayIntegrationTests(unittest.TestCase):
+    def test_owner_delivery_replay_is_a_json_value_and_keeps_the_published_state(self):
+        entry = lv.InquiryState(question_id="inquiry", status="delivered",
+            delivery={"admittedDelivery": "cooperative-checkpoint", "startsNewTurn": False},
+            reason="owner observation")
+        reply = ctl._question_reply(entry, duplicate=True)
+        decoded = lv.LiveReply.from_payload(decode_strict_json(canonical_json(reply.to_payload())))
+        self.assertEqual(decoded.status, "delivered")
+        self.assertTrue(decoded.observed)
+        self.assertEqual(decoded.native_correlation.value["delivery"], entry.delivery.value)
+        self.assertEqual(decoded.native_correlation.value["reason"], "owner observation")
