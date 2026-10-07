@@ -155,3 +155,9 @@ Host 范围外修正：路由测试核对 requestedProfile.effort，未取得原
 ADR-027 合入后的最终生产审计仍是45个含字段模型/190字段，未发现没有生产使用方的字段、类或实现参数；重新计算跨边界导入仍56条（37/15/3/1），与第零步54条的增删表不变。最终合并源码的私有 wheel 为347项，顶层仅 hey_my_buddy 与 dist-info，退休入口缺席；锁定依赖私有安装成功，隔离导入四个 run、共同实时模块及内部 attach/detach 成功。最初隔离导入探针把 CONTRACT_VERSION 写在 protocol 空包上而失败，改从实际 transport 导入后通过，未重复已经成功的依赖安装，日常运行时未变。
 
 为补齐第一次真实 DSH 冒烟漏存 Worker 端点确切路径的证据，同目的最小重跑1次：run 98f9a75b-f891-4c43-a5f5-241f27f771e0，attempt 712ef86f-f3dc-428a-9270-8628e5a6d6cc，所选 Worker 是实际持有该回合的 adr025-dsh-smoke-worker。原生 ok/modelStarted、签收与根绑定均 true、native group gone 与 outer 停止 true、完成签收与问询 answered 均核对；Worker 与 controller 两个确切文件各从存在到消失，详见 DSH 冒烟记录。本步 DSH 真正调用模型累计2次；新探针第一次错误把 tracked 文件放进 includeUntracked，提交阶段拒绝、没有运行/模型/端点，改用新命名的探针与私有材料后完成。没有再做 Claude Code 模型调用。
+
+DSH 两个确切任务根已由 Host 回收：先保留首轮材料及第二轮28份命名材料/哈希（含 RunResult 引用的6份原生证据与私有 fixture bundle），严格解码核对身份、签收、用量与停止后，再核对自己的根没有进程命令引用；这项进程核对仅是补充，未代替两层停止证据。没有扫描清理其他 /tmp/c_two_ipc 对象。Host 将冒烟记录早先21份的初始保留计数更正为最终28份并登记，已掌握事实、只改记录，未重跑测试。
+
+5-D3 首次路由 dec-44904f35-0420-4e78-a3a4-62bb941a2c9a 选 zcode/zai-api/GLM-5.3-Flash/max，固定初稿241bd0b仅三路径。Host 对合入ADR-027后的固定副本17项通过28.772秒，两个原始故障注入SHA与断言失败核对通过；编号表把相同12个编号写成changed，以及stdout/停止生命周期注释不准，原run continue要求更正记录/注释，不改行为、不重跑，尚未验收。
+
+5-D3 原run continue在准备检出阶段失败：attention prep-f9bb86e3-0fda-4b4f-bcf4-6e3eee48ecaa，WORKSPACE_GIT_ERROR，没有产生新模型回合。Host仅只读核对受管HEAD仍2278c40、改动仍授权三路径，没有使用stash/移动分支标签/手动提交受管文件或扩大到修黑板。已准备仅记录/编号表/源码注释的更正补丁，去除docstring后可执行AST与241bd0b完全相等，全17个实际加载编号与基线集合相等；与C3两行导入补丁一并提出一次性Host更正授权，未应用到实施分支。候选私有副本共3049个唯一编号/189模块（原步输入2785，最新已验上游2874），无装载错误；这是未授权补丁的提案编号核对，不是最终代码或完整检查通过。D1/D2的integration-record已登记，ack/回收继续等待最终发现与整批完整检查；D3原run保留且未取消、未另开。
