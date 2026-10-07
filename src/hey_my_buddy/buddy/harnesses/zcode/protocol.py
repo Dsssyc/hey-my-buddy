@@ -1,7 +1,6 @@
 """Bounded NDJSON transport and root-turn evidence for ZCode's native app server."""
 from __future__ import annotations
 
-import hmac
 import os
 import queue
 import re
@@ -13,19 +12,9 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
 
+from .. import session_receipts
 from ..native_observations import bound_native_text, native_counter
-from ..session_receipts import (
-    MAX_ANSWER_BYTES,
-    MAX_INQUIRIES,
-    MAX_INQUIRY_ID_BYTES,
-    MAX_INQUIRY_RECEIPT_BYTES,
-    MAX_QUESTION_BYTES,
-    MAX_TOOL_REFUSAL_BYTES,
-    MAX_TOOL_REFUSAL_DETAIL_BYTES,
-    MAX_TOOL_REFUSAL_PREFIX_BYTES,
-    TOOL_REFUSAL_REASONS,
-    sign_receipt,
-)
+from ..session_receipts import refusal_shaped
 from ....json_codec import canonical_json, decode_strict_json
 from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, MAX_WAITING_REASON, PHASES
 
@@ -175,124 +164,52 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# -- the shared session-receipt verification --------------------------------------
+#
+# ADR-025 step 5: the finish receipt, the signed tool-refusal envelope and the
+# inquiry receipts verify through exactly the shared implementation in
+# :mod:`hey_my_buddy.buddy.harnesses.session_receipts` — one signature rule,
+# one attempt-identity judgment and one byte budget for every harness. These
+# names run it, pass this driver's registered rule bundle, and only convert
+# the shared failure into this protocol's own :class:`NativeError`, so the
+# run's stop handling and every caller keep the failure type they already
+# catch. ``refusal_shaped`` is the shared dispatch function itself.
+
+
+def _receipt_failure(error: session_receipts.ReceiptError) -> NativeError:
+    """The shared verification failure as this protocol's own native error."""
+    return NativeError(error.code, str(error))
+
+
 def verify_receipt(raw: object, configuration: dict, validate_outcome: Callable[[object], str | None]) -> dict:
-    """Verify the signed finish receipt; malformed and forged failures stay distinct.
-
-    Every stage keeps the fatal ``invalid-finish`` code — only a fully verified
-    receipt is a success — but the bounded message distinguishes an unusable
-    payload (no bounded JSON, wrong object shape) from a signature, attempt-
-    identity or outcome failure, without ever quoting the raw content. The
-    six-field outcome rule itself belongs to the Worker role: the current
-    caller injects its narrow validator, so this protocol verifies the receipt
-    with it instead of re-deciding what a legal outcome is, and a role-signed
-    receipt still never skips the signature, binding or order checks here.
-    """
-    if not isinstance(raw, str) or len(raw.encode()) > 70000:
-        raise NativeError("invalid-finish", "the finish tool returned no bounded JSON receipt")
+    """Verify the signed finish receipt through the shared implementation."""
     try:
-        receipt = decode_json(raw)
-        if not isinstance(receipt, dict) or set(receipt) != {"version", "identity", "inputSha256", "outcome", "receiptId", "signature"}:
-            raise NativeError("invalid-finish", "the finish tool receipt was not the current signed receipt object")
-        signature = receipt.pop("signature")
-        if not isinstance(signature, str) or not hmac.compare_digest(signature, sign_receipt(receipt, configuration["key"])):
-            raise NativeError("invalid-finish", "the finish tool receipt failed its signature verification")
-        if receipt["version"] != 1 or receipt["identity"] != configuration["identity"] or receipt["inputSha256"] != configuration["inputSha256"]:
-            raise NativeError("invalid-finish", "the finish tool receipt failed its attempt-identity binding")
-        if not isinstance(receipt["receiptId"], str) or len(receipt["receiptId"]) != 32 or validate_outcome(receipt["outcome"]):
-            raise NativeError("invalid-finish", "the finish tool receipt failed its outcome validation")
-        return receipt
-    except NativeError:
-        raise
-    except (ValueError, TypeError, KeyError, RecursionError):
-        raise NativeError("invalid-finish", "the finish tool receipt was malformed") from None
+        return session_receipts.verify_receipt(raw, configuration, validate_outcome)
+    except session_receipts.ReceiptError as error:
+        raise _receipt_failure(error) from None
 
 
-def _refusal_payload(raw: object) -> dict | None:
-    """The candidate refusal object, tolerating only the wrapper's bounded framing.
-
-    The installed native wrapper delivers an MCP ``isError`` text as a tool
-    result prefixed with one bounded plain header line. This extracts the JSON
-    candidate starting at the first ``{`` — no prose is interpreted, no
-    substring is searched — and accepts it only when it decodes to a complete
-    object (nothing but whitespace may follow) that explicitly claims the
-    refusal format. Whether that candidate is genuine is decided solely by
-    :func:`verify_tool_refusal`'s signature and binding checks.
-    """
-    if not isinstance(raw, str) or len(raw.encode()) > MAX_TOOL_REFUSAL_BYTES:
-        return None
-    text = raw.lstrip()
-    start = text.find("{")
-    if start < 0 or len(text[:start].encode()) > MAX_TOOL_REFUSAL_PREFIX_BYTES:
-        return None
-    try:
-        value = decode_json(text[start:])
-    except (ValueError, RecursionError):
-        return None
-    return value if isinstance(value, dict) and value.get("kind") == "tool-refusal" else None
-
-
-def refusal_shaped(raw: object) -> bool:
-    """True only when ``raw`` carries an object explicitly claiming the refusal format.
-
-    This is dispatch between the two signed formats our own MCP emits, never
-    prose recognition: a refusal-shaped payload still has to pass
-    :func:`verify_tool_refusal` before anything recovers, and anything else
-    keeps flowing to the (fatal) receipt verification.
-    """
-    return _refusal_payload(raw) is not None
-
-
-def verify_tool_refusal(raw: object, configuration: dict, native_tool: str,
+def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | None,
                         mounted_tools: tuple[str, ...] | list[str]) -> dict:
-    """Verify one signed tool-refusal envelope against this attempt, input and tool.
+    """Verify one signed tool-refusal envelope through the shared implementation.
 
-    The private MCP mints these for expected argument, attention and inquiry
-    refusals because the native wrapper surfaces an MCP ``isError`` response as
-    a *successful* tool result framed with a plain header; the signature binds
-    the attempt identity, the turn input and the exact session tool, so a
-    tampered, cross-attempt or cross-tool envelope fails here fatally instead
-    of becoming a recoverable refusal. The tool binding is checked against the
-    session tools this run actually mounted — never a fixed global set — so a
-    refusal verifies only for the service the driver really bound. A verified
-    refusal only ever means "correct the call and retry in this same native
-    turn"; it can never carry an outcome or mutate state.
+    This driver's registered rule keeps the detail bounded and judges a
+    non-string native tool name at the tool-binding stage.
     """
-    tool = native_tool.rsplit("__", 1)[-1] if isinstance(native_tool, str) else None
-    envelope = _refusal_payload(raw)
-    if envelope is None:
-        raise NativeError("invalid-tool-refusal", "the session tool returned no bounded JSON refusal envelope")
     try:
-        if set(envelope) != {"version", "kind", "identity", "inputSha256",
-                             "tool", "reason", "detail", "receiptId", "signature"}:
-            raise NativeError("invalid-tool-refusal", "the tool refusal envelope was not the current signed refusal object")
-        signature = envelope.pop("signature")
-        if not isinstance(signature, str) or not hmac.compare_digest(signature, sign_receipt(envelope, configuration["key"])):
-            raise NativeError("invalid-tool-refusal", "the tool refusal envelope failed its signature verification")
-        if (envelope["version"] != 1 or envelope["kind"] != "tool-refusal"
-                or envelope["identity"] != configuration["identity"]
-                or envelope["inputSha256"] != configuration["inputSha256"]):
-            raise NativeError("invalid-tool-refusal", "the tool refusal envelope failed its attempt-identity binding")
-        if (not isinstance(envelope["tool"], str) or envelope["tool"] not in tuple(mounted_tools)
-                or envelope["tool"] != tool or not native_tool.endswith("__" + envelope["tool"])):
-            raise NativeError("invalid-tool-refusal", "the tool refusal envelope was signed for a different session tool")
-        if (envelope["reason"] not in TOOL_REFUSAL_REASONS
-                or not isinstance(envelope["receiptId"], str) or len(envelope["receiptId"]) != 32
-                or not isinstance(envelope["detail"], str) or not envelope["detail"].strip()
-                or len(envelope["detail"].encode()) > MAX_TOOL_REFUSAL_DETAIL_BYTES or "\0" in envelope["detail"]):
-            raise NativeError("invalid-tool-refusal", "the tool refusal envelope failed its bounded reason validation")
-        return envelope
-    except NativeError:
-        raise
-    except (ValueError, TypeError, KeyError, RecursionError):
-        raise NativeError("invalid-tool-refusal", "the tool refusal envelope was malformed") from None
+        return session_receipts.verify_tool_refusal(raw, configuration, native_tool, mounted_tools,
+                                                    rules=session_receipts.BOUNDED_REFUSAL_DETAIL)
+    except session_receipts.ReceiptError as error:
+        raise _receipt_failure(error) from None
 
 
-def _valid_inquiry_id(value: object) -> bool:
-    return isinstance(value, str) and 0 < len(value.encode()) <= MAX_INQUIRY_ID_BYTES
-
-
-def _valid_question_sha(value: object) -> bool:
-    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
+    """Verify one signed checkpoint or answer receipt through the shared implementation."""
+    try:
+        return session_receipts.verify_inquiry_receipt(raw, configuration, kind,
+                                                       rules=session_receipts.BOUNDED_REFUSAL_DETAIL)
+    except session_receipts.ReceiptError as error:
+        raise _receipt_failure(error) from None
 
 
 #: The failure attribution this adapter imports from the exported native
@@ -678,63 +595,6 @@ class ZcodeAttemptUsage:
     def raw_usage(self) -> dict | None:
         """The strictly bound message tokens when provable, else the delta fallback."""
         return self.message_usage() or self.delta_usage()
-
-
-def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
-    """Verify one signed checkpoint or answer receipt from the session tools.
-
-    The MCP handler only ever returns a tentative signed receipt; this is the
-    controller-side authority check. The signature binds the attempt identity
-    and the exact payload, so a tampered, stale or cross-attempt receipt fails
-    here before any bridge state changes.
-    """
-    if kind not in ("inquiry-checkpoint", "inquiry-answer"):
-        raise ValueError("unknown inquiry receipt kind")
-    fields = ({"version", "kind", "identity", "inquiries", "receiptId", "signature"} if kind == "inquiry-checkpoint"
-              else {"version", "kind", "identity", "inquiryId", "questionSha256", "answer", "receiptId", "signature"})
-    #: A checkpoint receipt may name how many queued questions did not fit its
-    #: serialized batch budget, so explicit batching never silently hides them.
-    optional = {"morePending"} if kind == "inquiry-checkpoint" else set()
-    if not isinstance(raw, str) or len(raw.encode()) > MAX_INQUIRY_RECEIPT_BYTES:
-        raise NativeError("invalid-inquiry-receipt", f"the {kind} tool returned no bounded JSON receipt")
-    try:
-        receipt = decode_json(raw)
-        if (not isinstance(receipt, dict) or set(receipt) - optional != fields or not fields <= set(receipt)
-                or ("morePending" in receipt
-                    and (type(receipt["morePending"]) is not int or not 0 <= receipt["morePending"] <= MAX_INQUIRIES))):
-            raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt was not the current signed receipt object")
-        signature = receipt.pop("signature")
-        if not isinstance(signature, str) or not hmac.compare_digest(signature, sign_receipt(receipt, configuration["key"])):
-            raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt failed its signature verification")
-        if receipt["version"] != 1 or receipt["kind"] != kind or receipt["identity"] != configuration["identity"]:
-            raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt failed its attempt-identity binding")
-        if not isinstance(receipt["receiptId"], str) or len(receipt["receiptId"]) != 32:
-            raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt has no usable receipt identity")
-        if kind == "inquiry-answer":
-            if (not _valid_inquiry_id(receipt["inquiryId"]) or not _valid_question_sha(receipt["questionSha256"])
-                    or not isinstance(receipt["answer"], str) or not receipt["answer"].strip()
-                    or len(receipt["answer"].encode()) > MAX_ANSWER_BYTES):
-                raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt failed its answer binding")
-        else:
-            inquiries = receipt["inquiries"]
-            if not isinstance(inquiries, list) or len(inquiries) > MAX_INQUIRIES:
-                raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt failed its inquiry-list binding")
-            for item in inquiries:
-                if (not isinstance(item, dict)
-                        or set(item) - {"inquiryId", "question", "questionSha256", "state", "askedAt", "deliveredAt"}
-                        or not {"inquiryId", "question", "questionSha256", "state", "askedAt"} <= set(item)
-                        or not _valid_inquiry_id(item["inquiryId"]) or not _valid_question_sha(item["questionSha256"])
-                        or item["state"] not in ("queued", "delivered")
-                        or not isinstance(item["question"], str) or not item["question"].strip()
-                        or len(item["question"].encode()) > MAX_QUESTION_BYTES
-                        or not isinstance(item["askedAt"], str)
-                        or not isinstance(item.get("deliveredAt", ""), str)):
-                    raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt failed its inquiry-entry binding")
-        return receipt
-    except NativeError:
-        raise
-    except (ValueError, TypeError, KeyError, RecursionError):
-        raise NativeError("invalid-inquiry-receipt", f"the {kind} receipt was malformed") from None
 
 
 class NativeConnection:

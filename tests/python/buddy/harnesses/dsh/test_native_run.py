@@ -1252,6 +1252,57 @@ class DiscoveryTests(NativeRunCase):
             entry.get("event") == "dying-before-answer" for entry in self.agent_log())))
 
 
+class AlwaysOffPatchRowsTests(NativeRunCase):
+    """The two accepted always-off rows, named literally, on the real launch.
+
+    The witnesses read the patch the real run and discovery startup
+    construction wrote through the launch wrapper and assert each literal
+    row's own presence and ``disabled`` fact. Neither the expected names nor
+    the expected flag may come from the module's row constant: an expectation
+    built from the same value stays self-consistent when a row is dropped, so
+    each row here fails its own witness instead of a tautology.
+    """
+
+    def assert_patch_row_disabled(self, row_id):
+        records = self.launch_records()
+        self.assertTrue(records, "the launch must record its argv and patch")
+        argv = records[-1]["argv"]
+        patch_path = Path(argv[argv.index("--patch") + 1])
+        matches = [row for row in json.loads(patch_path.read_text())
+                   if row.get("id") == row_id]
+        self.assertEqual(len(matches), 1,
+                         f"the launch patch must carry the {row_id} row exactly once")
+        self.assertIs(matches[0].get("disabled"), True,
+                      f"the launch patch must disable the {row_id} row")
+
+    def test_a_run_launch_disables_the_session_title_llm_row(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        result = run(self.fast_request("prompt", scope="write"),
+                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assert_patch_row_disabled("session-title-llm")
+
+    def test_a_run_launch_disables_the_session_telemetry_otel_row(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        result = run(self.fast_request("prompt", scope="write"),
+                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assert_patch_row_disabled("session-telemetry-otel")
+
+    def test_a_discovery_launch_disables_both_always_off_rows(self):
+        self.extra_agent_args = ["--prompt-mode", "final"]
+        catalog = native_run.run_discovery(
+            cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
+            native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
+        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete"}])
+        self.assert_patch_row_disabled("session-title-llm")
+        self.assert_patch_row_disabled("session-telemetry-otel")
+
+
 class SourceBindingTests(NativeRunCase):
     """The owning home's settings/credentials binding and the acp profile."""
 

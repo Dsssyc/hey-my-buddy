@@ -316,6 +316,61 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
                 self.assertNotIn("turn", refused.result)
                 self.assertNotIn("workspaceSeal", refused.result)
 
+    def test_a_confirmed_two_layer_stop_is_the_resumable_positive_witness(self):
+        handle, outcome = self.execute(self.context())
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        native_session = outcome.result["nativeSession"]
+        self.assertIs(native_session["bindingPresent"], True)
+        self.assertIs(native_session["resumable"], True,
+                      "a confirmed native and outer stop with a valid turn is the one resumable fact")
+
+    def test_an_unconfirmed_outer_stop_keeps_the_session_not_resumable(self):
+        context = self.context()
+        handle, original = self.execute(context)
+        self.assertIs(original.result["nativeSession"]["resumable"], True)
+        with mock.patch.object(handle, "shutdown_confirmed", return_value=False):
+            refused = self.adapter.collect(handle, context)
+        self.assertFalse(refused.shutdown_confirmed)
+        self.assertIs(refused.result["nativeSession"]["resumable"], False,
+                      "an unconfirmed outer stop is never a resumable session")
+
+    def test_an_unconfirmed_native_stop_is_never_resumable_even_when_outer_confirms(self):
+        context = self.context()
+        handle, original = self.execute(context)
+        self.assertIs(original.result["nativeSession"]["resumable"], True)
+        # The closed GroupState vocabulary has no "running": the still-existing
+        # fact a native layer actually reports is "alive", beside "unknown".
+        for state in ("unknown", "alive"):
+            with self.subTest(nativeGroupState=state):
+                path = Path(handle.log_paths["stdout"])
+                fields = decode_run_result(path.read_bytes()).to_payload()
+                fields["stopEvidence"]["native"]["groupState"] = state
+                path.write_text(encode_run_result(decode_run_result(fields)))
+                refused = self.adapter.collect(handle, context)
+                self.assertIs(refused.shutdown_confirmed, False,
+                              "a native group that is not gone leaves the stop unconfirmed even when the outer layer confirms")
+                self.assertIs(refused.result["processState"]["shutdownConfirmed"], False,
+                              "the native stop fact itself stays unconfirmed")
+                self.assertIs(refused.result["nativeSession"]["resumable"], False,
+                              "an unknown or still-alive native group is never counted as stopped")
+
+    def test_a_denied_or_unknown_continuation_capability_is_not_resumable(self):
+        context = self.context()
+        handle, original = self.execute(context)
+        self.assertIs(original.result["nativeSession"]["resumable"], True)
+        for value, naming in ((False, "denied"), (None, "unknown")):
+            with self.subTest(continuationCapability=naming):
+                path = Path(handle.log_paths["stdout"])
+                fields = decode_run_result(path.read_bytes()).to_payload()
+                fields["continuation"]["resumable"] = value
+                path.write_text(encode_run_result(decode_run_result(fields)))
+                refused = self.adapter.collect(handle, context)
+                self.assertIs(refused.shutdown_confirmed, True,
+                              "both stop layers stay confirmed; only the continuation capability went away")
+                self.assertIs(refused.result["nativeSession"]["resumable"], False,
+                              "a denied or unknown continuation capability is not a resumable session")
+
 
 
 class DshPublishedReceiptTests(unittest.TestCase):
