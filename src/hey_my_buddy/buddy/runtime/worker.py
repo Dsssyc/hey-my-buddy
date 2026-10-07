@@ -191,12 +191,19 @@ class Worker:
         retry_seconds: int = DEFAULT_RETRY_SECONDS,
         log: Callable[[str], None] | None = None,
     ):
+        from ...protocol.rpc_config import configure_server, configure_client
+        configure_server()
+        configure_client()
         self.worker_id = worker_id
         # One identity per worker *process*: a new process cannot prove it owns a
         # child that a previous process spawned, so it must never resume that work.
         self.instance_id = f"{worker_id}-{uuid.uuid4()}"
         self.state_dir = Path(state_dir)
         self.client = client or BoardClient(self.state_dir, autostart=False)
+        from .live import WorkerLiveRuntime
+        from ..roles.live import handle_live_binding
+        self.live = WorkerLiveRuntime(self.client, worker_id=self.worker_id,
+                                      worker_instance=self.instance_id, resolve_channel=handle_live_binding)
         self.lease_seconds = lease_seconds
         self.adapters = adapters
         self.extra_capabilities = tuple(extra_capabilities)
@@ -408,29 +415,33 @@ class Worker:
         )
 
     def run(self, *, max_iterations: int | None = None) -> None:
-        self.register()
-        self.reattach()
-        self.heartbeat("idle")
-        iterations = 0
-        while not self.stop_requested():
-            if self.retire_requested():
-                # Retirement mode: a scale-down may complete only once every durable
-                # receipt and startup intent is reconciled, and it never claims new
-                # work. A retire intent therefore cannot cancel an owned child or
-                # race a claim into an abandoned attempt.
-                remaining = self.settle_retirement()
-                if not remaining:
-                    self.log("retire intent observed with no unreconciled evidence; retiring")
+        self.live.start()
+        try:
+            self.register()
+            self.reattach()
+            self.heartbeat("idle")
+            iterations = 0
+            while not self.stop_requested():
+                if self.retire_requested():
+                    # Retirement mode: a scale-down may complete only once every durable
+                    # receipt and startup intent is reconciled, and it never claims new
+                    # work. A retire intent therefore cannot cancel an owned child or
+                    # race a claim into an abandoned attempt.
+                    remaining = self.settle_retirement()
+                    if not remaining:
+                        self.log("retire intent observed with no unreconciled evidence; retiring")
+                        return
+                    self.log(f"retire intent observed with unreconciled evidence {remaining}; retrying reconciliation")
+                    self.stop.wait(CLAIM_IDLE_SECONDS)
+                    continue
+                if max_iterations is not None and iterations >= max_iterations:
                     return
-                self.log(f"retire intent observed with unreconciled evidence {remaining}; retrying reconciliation")
-                self.stop.wait(CLAIM_IDLE_SECONDS)
-                continue
-            if max_iterations is not None and iterations >= max_iterations:
-                return
-            iterations += 1
-            outcome = self.run_once()
-            if outcome == "idle":
-                self.stop.wait(CLAIM_IDLE_SECONDS)
+                iterations += 1
+                outcome = self.run_once()
+                if outcome == "idle":
+                    self.stop.wait(CLAIM_IDLE_SECONDS)
+        finally:
+            self.live.stop()
 
     def run_once(self) -> str:
         # A durable receipt means this attempt already ran. Recovery may only replay
@@ -573,6 +584,21 @@ class Worker:
                 },
                 directory,
             )
+        finally:
+            try:
+                self.live.unbind(claim)
+            except Exception as error:
+                self.log(f"live detach unavailable: {type(error).__name__}")
+            handle = holder.get("handle")
+            if handle is not None:
+                try:
+                    from ..roles.live import release_live_binding
+                    cleanup = release_live_binding(handle)
+                    if cleanup is not None:
+                        self.log(f"owned controller endpoint cleanup: {cleanup.outcome}; {cleanup.reason}")
+                except Exception as error:
+                    self.log(f"owned endpoint cleanup not confirmed: {type(error).__name__}")
+
 
     def _execute_guarded(
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
@@ -886,14 +912,10 @@ class _Renewal(threading.Thread):
         self._done = threading.Event()
         self.attempt = claim["attempt"]
         self.nonce = worker._nonce()
-        #: The last native activity this thread forwarded, so a repeated sidecar is
-        #: not published twice and the projection only moves forward.
+        #: The last actual activity forwarded; repeated observations are coalesced.
         self._activity: dict | None = None
-        #: The attempt's live channel through the registered role seam (ADR-025
-        #: step 2-C2), bound once its stored public request verifies. An
-        #: unextracted harness keeps the existing sidecar read; an extracted
-        #: harness whose binding is pending or refused has no update this tick
-        #: and never falls back to a direct read beside its channel.
+        #: The held controller's channel, retried until its actual readiness
+        #: verifies. An unextracted command has no live projection.
         self._activity_channel: Any = None
         self._activity_unextracted = False
 
@@ -961,6 +983,7 @@ class _Renewal(threading.Thread):
             return False
         if response.get("uncertain") or response.get("reconciliationRequired"):
             return self._recover()
+        self._refresh_live_binding()
         return True
 
     def _owns_live_child(self) -> bool:
@@ -1023,7 +1046,15 @@ class _Renewal(threading.Thread):
             f"reattached attempt {attempt_id} as {state}"
             + (f" (waiting reason cleared, was {queue_reason!r})" if response.get("restored") else "")
         )
+        self._refresh_live_binding()
         return True
+
+    def _refresh_live_binding(self) -> None:
+        try:
+            self.worker.live.refresh(self.claim, self.handle, self.nonce)
+        except Exception:
+            # Live loss is independent of lease and process supervision.
+            pass
 
     def _attempt_activity_binding(self) -> tuple[str, Any]:
         """This attempt's live binding state over the registered role seam.
@@ -1031,7 +1062,7 @@ class _Renewal(threading.Thread):
         ``bound`` carries the channel whose stored public request verified
         against the identity this worker received with the handle;
         ``unextracted`` (cached as final) means the harness's registered run
-        module declares no live binding and the existing sidecar path applies;
+        module declares no live binding and contributes no live activity;
         ``unavailable`` — a pending, unreadable or foreign request — is never
         cached, so the next tick retries the binding and this tick reports no
         update instead of reading around its own channel.
@@ -1044,6 +1075,10 @@ class _Renewal(threading.Thread):
 
         state, channel = role_live.handle_live_binding(self.handle)
         if state == role_live.LIVE_BOUND:
+            try:
+                self.worker.live.bind(self.claim, self.handle, self.nonce)
+            except Exception:
+                pass
             self._activity_channel = channel
         elif state == role_live.LIVE_UNEXTRACTED:
             self._activity_unextracted = True
@@ -1062,13 +1097,7 @@ class _Renewal(threading.Thread):
                 return
             payload = snapshot.activity.value if snapshot.activity is not None else None
         elif state == "unextracted":
-            directory = self.worker.attempt_directory(self.attempt.get("taskId"), self.attempt["attemptId"])
-            payload = activity_module.read_sidecar(
-                activity_module.sidecar_path(directory),
-                task_id=self.attempt["taskId"],
-                attempt_id=self.attempt["attemptId"],
-                generation=self.attempt["generation"],
-            )
+            return
         else:
             # An extracted harness with an unbound channel: no update this
             # tick, the binding retried next tick — never a stop and never a

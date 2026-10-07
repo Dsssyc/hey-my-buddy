@@ -66,6 +66,28 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
+    def wait_native_turn_start(self, timeout=10):
+        """Bounded wait for the fixture's explicit native turn-start fact.
+
+        The marker is written only after the fixture actually emitted the
+        turn/start response and the turn/started notification, so waiting on it
+        proves the native turn had started before the cancel — never a blind
+        sleep, and never a thread merely existing.
+        """
+        path = Path(self.environment["BUDDY_CODEX_FIXTURE_STATE"])
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(path.read_text()) if path.is_file() else {}
+            except ValueError:  # a state write in flight; retry within the bound
+                state = {}
+            for thread in (state.get("threads") or {}).values():
+                started = thread.get("turnStart")
+                if isinstance(started, dict) and started.get("threadId") and started.get("turnId"):
+                    return started
+            time.sleep(0.05)
+        self.fail("the fixture never recorded a started native turn before the cancel")
+
     def review(self, case, *, index, budget_options=None, capture=True):
         from hey_my_buddy.buddy.roles.structured_call import collect
         from hey_my_buddy.blackboard.routing.router import answer_schema, budget
@@ -80,9 +102,12 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
         return collect(handle), context
 
-    def test_completed_native_turn_has_structured_provenance_and_activity(self):
+    def test_completed_native_turn_has_structured_provenance_and_preserved_final_activity(self):
         context = self.context()
-        outcome = self.execute(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
+        outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["nativeSession"]["nativeAppVisibility"], "not-listed-in-native-app")
@@ -93,9 +118,25 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(turn["provenance"]["nativeThreadId"], turn["sessionId"])
         self.assertEqual(turn["provenance"]["nativeTurnId"], "native-turn-1")
         self.assertNotIn("tool", turn["provenance"])
-        activity = json.loads((context.directory / "activity.json").read_text())
-        self.assertEqual(activity["attemptId"], context.attempt_id)
-        self.assertEqual(activity["activity"]["phase"], "finishing")
+        # The retired activity.json sidecar is replaced by the run's own final
+        # fact: the preserved RunResult frame the controller published, decoded
+        # here from its own stdout log. It is a final fact, not a process
+        # observation: the counts and the native session id below are the ones
+        # the native events actually drove, and no publication success is
+        # claimed for the live channel (live observation is the holder's
+        # C-Two binding, exercised by the zcode live activity suite).
+        self.assertFalse((context.directory / "activity.json").exists())
+        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+        frame = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes().strip())
+        self.assertEqual(frame.identity.attempt_id, context.attempt_id)
+        self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
+        self.assertEqual(frame.identity.task_id, "goal-1")
+        activity = frame.activity.value
+        self.assertEqual(activity["phase"], "finishing")
+        self.assertEqual(activity["nativeSessionId"], turn["sessionId"])
+        self.assertEqual(activity["counts"], {"modelTurns": 1, "toolCalls": 0})
+        self.assertEqual(outcome.result["activity"], {"phase": "finishing",
+                                                      "eventSeq": activity["eventSeq"]})
 
     def test_assistance_uses_the_same_strict_outcome_schema(self):
         outcome = self.execute(self.context("assistance"))
@@ -213,12 +254,16 @@ class CodexAdapterTests(unittest.TestCase):
                        'BUDDY_ACCOUNT_SELECTION': json.dumps({'adapter': 'codex', 'source': 'worker',
                                                                'revision': 1, 'credentialRevision': 1})}
         with mock.patch.dict(os.environ, environment):
-            services = prepare_run_services(invocation_root=self.root / 'invocation',
-                                            native_root=self.root / 'native', activity_dir=self.root / 'attempt',
-                                            account=None)
+            services = prepare_run_services(account=None)
         self.assertEqual(services.credential_source['home'], str(root))
         self.assertEqual(services.credential_source['source'], 'worker')
         self.assertEqual(services.credential_source['credentialRevision'], 1)
+        # The structured carriers bind only the frozen account identity: they
+        # prepare no coding home and carry no credential source at all.
+        with mock.patch.dict(os.environ, environment):
+            read_only = prepare_run_services(account=None, tool_scope="read")
+        self.assertIsNone(read_only.credential_source)
+        self.assertIsNone(read_only.account)
 
     def test_previous_unsettled_auth_is_retained_and_cannot_be_replaced(self):
         from hey_my_buddy.private_dirs import native_root
@@ -466,7 +511,8 @@ class CodexAdapterTests(unittest.TestCase):
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)
-        time.sleep(0.3)
+        started = self.wait_native_turn_start()
+        self.assertEqual(set(started), {"threadId", "turnId"})
         self.adapter.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(10))
         outcome = self.adapter.collect(handle, context)
@@ -485,7 +531,7 @@ class CodexAdapterTests(unittest.TestCase):
         context = self.context("hang", timeout=12)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        time.sleep(0.3)
+        self.wait_native_turn_start()
         self.adapter.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(10))
         outcome = self.adapter.collect(handle, context)

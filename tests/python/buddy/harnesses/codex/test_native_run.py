@@ -24,6 +24,10 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.routing.router import answer_schema
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, LiveWireObserve
+from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+from hey_my_buddy.protocol.contracts import HarnessRunLive
+from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.home import remove_coding_auth
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
@@ -54,6 +58,17 @@ OUTCOME_SCHEMA = worker_format("codex").schema
 FAST_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
                "properties": {"profileId": {"type": "string", "enum": ["legal"]}}}
 REVIEW_SCHEMA = answer_schema(["legal"])
+
+
+def activity_endpoint(identity):
+    return CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES["codex"], HarnessRunLive,
+                            instance_id="a" * 64, token="b" * 64)
+
+
+def observed_activity(endpoint, identity):
+    query = LiveWireObserve(identity=identity, instance_id="a" * 64, token="b" * 64,
+                            fields=("activity",), limit=10)
+    return json.loads(endpoint.observe(json.dumps(query.to_payload())))["activity"]
 
 
 class SeamCase(unittest.TestCase):
@@ -118,11 +133,11 @@ class SeamCase(unittest.TestCase):
             budget=RunBudget(timeout_seconds=timeout), continuation=continuation,
             capture_evidence=capture_evidence)
 
-    def worker_services(self) -> RunServices:
+    def worker_services(self, live=None) -> RunServices:
         return RunServices(
             credential_source={"home": str(self.home), "source": "worker",
                                "credentialRevision": 1, "identity": "a" * 64},
-            activity_dir=str(self.base / "activity"))
+            live=live)
 
 
 class FastSeamTests(SeamCase):
@@ -341,7 +356,7 @@ class CodexSeamCase(SeamCase):
         os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
     def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
-                   observer=None, input_text: str = "fixture governed task"):
+                   observer=None, input_text: str = "fixture governed task", live=None):
         self.set_case(case)
         turn_input = {"taskId": "goal-1", "attemptId": "attempt-check", "generation": 7,
                       "turnId": "turn-check"}
@@ -350,7 +365,7 @@ class CodexSeamCase(SeamCase):
                                 input_sha256=input_hash(turn_input), turn_id="turn-check",
                                 native="worker-native"),
                    observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
-                   services=self.worker_services(), cancelled=lambda: False)
+                   services=self.worker_services(live=live), cancelled=lambda: False)
 
     def review_run(self, case: str, *, observer=None, capture_evidence=False, timeout: int = 8):
         self.set_case(case)
@@ -358,7 +373,7 @@ class CodexSeamCase(SeamCase):
                                 prompt="Select from the frozen packet", timeout=timeout,
                                 capture_evidence=capture_evidence),
                    observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
-                   services=RunServices(activity_dir=str(self.base / "review-activity")),
+                   services=RunServices(),
                    cancelled=lambda: False)
 
 
@@ -398,6 +413,21 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
+    def test_a_fast_native_correction_publishes_the_second_round_final_activity(self):
+        self.set_case("readonly-repair")
+        prompt = "Select from the frozen packet"
+        request = self.request(tool_scope="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
+        endpoint = activity_endpoint(request.identity)
+        rule = ReviewCorrection(REVIEW_SCHEMA, prompt)
+        with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
+            result = run(request, observer=rule.observer, services=RunServices(live=endpoint),
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.correction_count, 1)
+        self.assertEqual(result.activity.value["counts"], {"modelTurns": 2, "toolCalls": 0})
+        self.assertEqual(observed_activity(endpoint, request.identity), result.activity.value)
+        self.assertEqual(publish.call_args.args[0], result.activity.value)
+
     def test_a_completed_review_stream_stays_complete_without_a_confirmed_stop(self):
         # The Host probe's shape: the real halt executed, its recorded
         # confirmation says unconfirmed, and the completed round's stream fact
@@ -503,8 +533,8 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIs(result.continuation.resumable, True)
         self.assertIsNotNone(result.last_assistant_message.value)
         self.assertGreaterEqual(result.native_event_count, 2)
-        activity = json.loads((self.base / "activity" / "activity.json").read_text())
-        self.assertEqual(activity["activity"]["phase"], "finishing")
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertFalse((self.base / "activity" / "activity.json").exists())
         remove_coding_auth(self.base / "worker-native")
 
     def test_worker_native_usage_and_quota_snapshot_are_retained(self):
@@ -611,9 +641,96 @@ class WorkerSeamTests(CodexSeamCase):
     def test_worker_tool_facts_count_in_activity(self):
         result = self.worker_run("worker-tool")
         self.assertEqual(result.end.status, "ok", result.end.message)
-        activity = json.loads((self.base / "activity" / "activity.json").read_text())
-        self.assertEqual(activity["activity"]["counts"]["toolCalls"], 1)
+        self.assertEqual(result.activity.value["counts"]["toolCalls"], 1)
+        self.assertFalse((self.base / "activity" / "activity.json").exists())
         remove_coding_auth(self.base / "worker-native")
+
+    def test_native_events_publish_through_the_shared_endpoint_callback(self):
+        self.set_case("worker-tool")
+        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+                               prompt="fixture governed task", timeout=12,
+                               input_sha256=input_hash({"fixture": "live"}), turn_id="turn-live",
+                               native="worker-native")
+        endpoint = activity_endpoint(request.identity)
+        with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=self.worker_services(live=endpoint), cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        payloads = [call.args[0] for call in publish.call_args_list]
+        self.assertEqual([payload["phase"] for payload in payloads],
+                         ["waiting-model", "tool-running", "streaming-model", "finishing"])
+        self.assertEqual(payloads[-1]["counts"], {"modelTurns": 1, "toolCalls": 1})
+        self.assertTrue(all(normalize_activity(payload) == payload for payload in payloads))
+        self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
+        self.assertEqual(observed_activity(endpoint, request.identity), result.activity.value)
+        foreign = request.identity.model_copy(update={"attempt_id": "another-attempt"})
+        self.assertIsNone(observed_activity(endpoint, foreign))
+        self.assertFalse(Path(request.private_state.invocation_root, "activity.json").exists())
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_refused_activity_publication_retains_native_final_facts(self):
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = False
+        result = self.worker_run("worker-tool", live=endpoint)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertEqual(result.activity.value["counts"], {"modelTurns": 1, "toolCalls": 1})
+        self.assertGreater(endpoint.publish_activity.call_count, 0)
+        writer = native_run._ActivityWriter(endpoint)
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+        evidence = TurnEvidence("thread", "turn")
+        writer.write(evidence, "waiting-model")
+        self.assertIsNone(writer.publisher.current(), "refusal is never a transmitted receipt")
+        self.assertIsNotNone(writer.last_payload)
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_codex_activity_preserves_native_counts_and_coalesced_tool_metadata(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+        from hey_my_buddy.protocol.activity import ActivityPublisher
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = True
+        writer = native_run._ActivityWriter(endpoint)
+        tick = [10.0]
+        writer.publisher = ActivityPublisher(endpoint.publish_activity, clock=lambda: tick[0])
+        evidence = TurnEvidence("thread", "turn")
+
+        def observe(method, item=None):
+            params = {"threadId": "thread", "turnId": "turn"}
+            if item is not None:
+                params["item"] = item
+            phase, tool = evidence.observe({"method": method, "params": params})
+            writer.write(evidence, phase, tool, model_turns_base=2, tool_calls=7)
+
+        with mock.patch.object(native_run.time, "monotonic", side_effect=lambda: tick[0]):
+            observe("item/started", {"id": "tool-1", "type": "commandExecution"})
+            tick[0] = 10.5
+            observe("item/started", {"id": "tool-2", "type": "fileChange"})
+            self.assertEqual(endpoint.publish_activity.call_count, 1)
+            tick[0] = 12.5
+            observe("item/started", {"id": "tool-3", "type": "mcpToolCall"})
+            self.assertEqual(endpoint.publish_activity.call_count, 2)
+            tick[0] = 12.6
+            observe("item/completed", {"id": "agent", "type": "agentMessage"})
+        receipts = [call.args[0] for call in endpoint.publish_activity.call_args_list]
+        self.assertEqual([receipt["eventSeq"] for receipt in receipts], [1, 3, 4])
+        self.assertEqual(receipts[-1]["counts"], {"modelTurns": 2, "toolCalls": 7})
+        self.assertEqual(receipts[-1]["toolName"], "mcpToolCall")
+        self.assertEqual(receipts[-1]["lastToolActivityAt"], receipts[-2]["lastToolActivityAt"])
+        self.assertEqual(writer.last_payload, receipts[-1])
+
+    def test_unknown_events_and_native_failure_keep_their_actual_activity(self):
+        for case, status in (("worker-unknown", "ok"), ("failed", "error")):
+            with self.subTest(case=case):
+                endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+                endpoint.publish_activity.return_value = True
+                result = self.worker_run(case, live=endpoint)
+                self.assertEqual(result.end.status, status, result.end.message)
+                payloads = [call.args[0] for call in endpoint.publish_activity.call_args_list]
+                self.assertIn("streaming-model", [payload["phase"] for payload in payloads])
+                self.assertEqual(payloads[-1]["phase"], "finishing")
+                self.assertEqual(payloads[-1], result.activity.value)
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+                remove_coding_auth(self.base / "worker-native")
 
     def test_native_session_resume_reuses_the_bound_thread(self):
         first = self.worker_run("ok")

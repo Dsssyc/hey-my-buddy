@@ -463,6 +463,15 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_real_decision_worker_selects_once_and_persists_owned_shutdown_evidence(self):
         DecisionTestCase.use_helper(self, profile_id=SECOND_PROFILE_ID)
+        held = []
+        start = self.readonly_start.side_effect
+
+        def remember_handle(*args, **kwargs):
+            handle = start(*args, **kwargs)
+            held.append(handle)
+            return handle
+
+        self.readonly_start.side_effect = remember_handle
         board = self.board(max_concurrent=1)
         self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
@@ -480,8 +489,10 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(sorted(profile["profileId"] for profile in audit["input"]["profiles"]),
                          sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
         self.assertEqual(audit["requestedProfile"]["model"], PROFILE["model"])
-        control_path = self.directory / "attempts" / decision_task["taskId"] / selected["routing"]["attemptId"] / "mock-readonly.json"
-        self.assertEqual(json.loads(control_path.read_text())["document"], audit["input"])
+        self.assertEqual(len(held), 1)
+        control = held[0].role_run_control
+        self.assertEqual(control["attemptId"], selected["routing"]["attemptId"])
+        self.assertEqual(control["fixture"]["document"], audit["input"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
         self.assertEqual(worker.spool.pending(), [])

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from dataclasses import replace
 import signal
 import sys
 import threading
@@ -9,6 +11,9 @@ import time
 from pathlib import Path
 
 from ...errors import BoardError
+from ...protocol.contracts import HarnessRunLive
+from ..harnesses.c_two_live import CTwoLiveEndpoint, write_ready_material
+from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.registry import adapter, run_seam
 from ..harnesses.run_contract import (
@@ -18,6 +23,24 @@ from ..harnesses.run_contract import (
 from . import run_execution
 from .controller import run_harness
 from .turn_io import _private_bytes, guard_private_path, private_json
+
+
+@contextmanager
+def _controller_live(control, request, services):
+    material = control.get("live")
+    if material is None:
+        yield services
+        return
+    capabilities = (EXISTING_CAPABILITIES[request.harness] if getattr(services, "inquiry", None)
+                    else LiveCapabilities(inquiry_delivery="unsupported"))
+    endpoint = CTwoLiveEndpoint(request.identity, capabilities, HarnessRunLive,
+                               instance_id=material["instanceId"], token=material["token"])
+    try:
+        descriptor = endpoint.start()
+        write_ready_material(material["readyFile"], descriptor)
+        yield replace(services, live=endpoint) if services is not None else None
+    finally:
+        endpoint.stop()
 
 
 def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
@@ -55,7 +78,8 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
     _private_bytes(request_path, encode_run_request(request).encode(), exclusive=True)
     request = decode_run_request(request_path.read_bytes())
     if input_error is None:
-        result = run_harness(module, request, observer=observer, services=services, cancelled=cancelled.is_set)
+        with _controller_live(control, request, services) as live_services:
+            result = run_harness(module, request, observer=observer, services=live_services, cancelled=cancelled.is_set)
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),

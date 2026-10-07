@@ -1,23 +1,4 @@
-"""Bounded, read-only observation of one attempt's inquiry bridge.
-
-The ZCode and DSH controllers each bind the shared cooperative inquiry bridge
-to their current native run. The socket client is the one shared transport
-(:mod:`hey_my_buddy.protocol.inquiry_transport`); this module imports the
-journal and projects the bridge's facts onto the durable board message rows,
-which stay authoritative — the journal is idempotent transport evidence, and a
-missing or unreachable bridge is reported honestly instead of being invented.
-
-Two capabilities come from the adapter registry, never from a second hard-coded
-adapter list here: ``inquiry`` means correlated questions are genuinely supported;
-``observe`` means bounded read-only native activity is published.
-
-Since ADR-025 step 2-C2 a harness whose registered run module declares a live
-binding (ZCode today) is observed and asked through its LiveChannel, reached
-over the role seam with the run's own stored request identity; the direct
-transport remains the path of every other harness and of every execution whose
-request is absent or foreign, so finished and older executions keep reading
-their durable evidence by the existing rules and no native program is woken.
-"""
+"""Project live facts through the owning Worker and retain terminal journal evidence."""
 from __future__ import annotations
 
 import json
@@ -29,12 +10,11 @@ from ...protocol import schemas
 from ...errors import BoardError
 from ..store.store import BoardStore
 from ...private_dirs import attempt_root
-from ...protocol.inquiry_transport import (
+from ...protocol.inquiry import (
     BRIDGE_ERRORS,
     DEFAULT_TRANSPORT_TIMEOUT_MS,
     MAX_TRANSPORT_TIMEOUT_MS,
     MIN_TRANSPORT_TIMEOUT_MS,
-    bridge_request,
 )
 # The shared live frames of the registered-seam path (ADR-025 step 2-C2): the
 # board builds and reads the common channel formats, never a specific harness.
@@ -92,14 +72,6 @@ def observe_capable(adapter: str) -> bool:
     """Whether bounded read-only native observation is declared and mounted."""
     capabilities = adapter_capabilities(adapter)
     return "inquiry" in capabilities or "observe" in capabilities
-
-
-def inquiry_credentials(directory: Path) -> dict | None:
-    try:
-        value = json.loads((Path(directory) / "inquiry.json").read_text())
-    except (OSError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def read_journal(results_path: str | None) -> dict:
@@ -178,10 +150,6 @@ def observe(store: BoardStore, params: dict) -> dict:
     view = store.task_get({k: params[k] for k in ("runId", "taskId") if k in params})["task"]
     attempt = view.get("selectedAttempt") or {}
     adapter = view.get("adapter")
-    credentials = (inquiry_credentials(attempt_root(store.directory, adapter, view["taskId"], attempt["attemptId"]))
-                   if adapter in {"dsh", "zcode"} and attempt.get("attemptId") else None)
-    if credentials is None:
-        credentials = _credentials_from_log_paths(attempt)
     recorded = None
     duplicate = False
     if inquiry_id is not None:
@@ -203,14 +171,11 @@ def observe(store: BoardStore, params: dict) -> dict:
     from ...buddy.harnesses.registry import live_binding
 
     extracted_live = live_binding(adapter) is not None
-    channel = (None if terminal or credentials is None
-               else _live_channel(store, view, attempt, adapter, credentials))
-    # An extracted harness's live path has no direct fallback: a live run whose
-    # stored request does not verify reports an unbound channel, retried on the
-    # next inquiry. Only unextracted harnesses bridge directly, and terminal
-    # journal recovery keeps its existing file read.
+    channel = None if terminal else _live_channel(store, view)
+    # A restarted service waits for the original holder to attach. Active facts
+    # never fall back to files or a directly addressed controller.
     unbound_live = extracted_live and not terminal and channel is None
-    bridge = {"enabled": credentials is not None, "observed": False, "reason": None, "error": None,
+    bridge = {"enabled": channel is not None, "observed": False, "reason": None, "error": None,
               "canObserve": can_observe, "canAsk": can_ask}
     live: dict[str, Any] = {
         "available": False,
@@ -222,8 +187,6 @@ def observe(store: BoardStore, params: dict) -> dict:
         bridge["reason"] = "this adapter has no observation or inquiry capability"
     elif terminal:
         bridge["reason"] = "the attempt is terminal; an idle or finished agent cannot be woken"
-    elif credentials is None:
-        bridge["reason"] = "the attempt has no inquiry bridge credentials yet"
     elif inquiry_id is not None and not can_ask:
         # The adapter can be observed but cannot ask: record the honest capability
         # refusal instead of sending a question the native protocol cannot carry.
@@ -263,27 +226,7 @@ def observe(store: BoardStore, params: dict) -> dict:
                 bridge["reason"] = snapshot.reason or "observation-unavailable"
                 bridge["error"] = snapshot.error
     elif unbound_live:
-        bridge["reason"] = "the attempt's stored run request does not verify; the live channel stays unbound"
-    else:
-        if inquiry_id is not None:
-            result = bridge_request(credentials, "ask", {"inquiryId": inquiry_id, "question": question}, timeout_ms=timeout_ms)
-        else:
-            result = bridge_request(credentials, "observe", {}, timeout_ms=timeout_ms)
-        if result.get("ok"):
-            bridge["observed"] = True
-            if inquiry_id is None:
-                live = _live(result["value"])
-            else:
-                _apply_bridge_answer(store, view["taskId"], inquiry_id, result["value"], result)
-        else:
-            bridge["reason"] = result.get("reason")
-            bridge["error"] = result.get("code")
-            if inquiry_id is not None and result.get("code") in TERMINAL_BRIDGE_ERRORS:
-                # The owned turn already ended: the question is refused, never
-                # injected into a new or idle turn and never left looking pending.
-                _mark_unavailable(store, view["taskId"], inquiry_id, result.get("code"))
-        live = _live(result.get("value")) if result.get("ok") and inquiry_id is None else live
-
+        bridge["reason"] = "the owning Worker has not attached this live run"
     evidence_journal = (store.directory / "attempts" / view["taskId"] / attempt["attemptId"] /
                         "inquiry.results.jsonl") if attempt.get("attemptId") else None
     rejections: dict[str, str] = {}
@@ -315,7 +258,8 @@ def observe(store: BoardStore, params: dict) -> dict:
     elif unbound_live:
         journal = {"available": False, "reason": "channel-unbound", "entries": 0}
     else:
-        journal = read_journal(credentials.get("resultsPath") if credentials else str(evidence_journal) if evidence_journal else None)
+        journal = (read_journal(str(evidence_journal) if evidence_journal else None) if terminal
+                   else {"available": False, "reason": "no-live-channel", "entries": {}})
     if inquiry_id is not None and channel is not None:
         if inquiry_id in rejections:
             # A record the binding refused under this very question is the
@@ -346,7 +290,7 @@ def observe(store: BoardStore, params: dict) -> dict:
             current = store.message_get({"runId": view["taskId"], "inquiryId": inquiry_id})["message"]
             if current["state"] in ("answered", "delivered", "discarded", "unavailable"):
                 break
-            if credentials is None or unbound_live:
+            if channel is None:
                 break
             if channel is not None:
                 # The wait queries only this one question's native answer, the
@@ -355,11 +299,6 @@ def observe(store: BoardStore, params: dict) -> dict:
                 if answer_view.inquiries:
                     _apply_bridge_answer(store, view["taskId"], inquiry_id,
                                          _live_answer_value(answer_view.inquiries[0]), None)
-                    break
-            else:
-                result = bridge_request(credentials, "answer", {"inquiryId": inquiry_id}, timeout_ms=timeout_ms)
-                if result.get("ok"):
-                    _apply_bridge_answer(store, view["taskId"], inquiry_id, result["value"], result)
                     break
             time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -403,45 +342,10 @@ def observe(store: BoardStore, params: dict) -> dict:
     }
 
 
-def _live_channel(store: BoardStore, view: dict, attempt: dict, adapter: str, credentials: dict | None):
-    """The live channel of one active registered harness run, or ``None``.
-
-    The channel exists only for a harness whose registered run module declares
-    a live binding, only while the attempt is live, and only when the stored
-    public request verifies against the run's own private control binding and
-    governed turn input (the helper checks invocation, turn id and input
-    digest) and carries this attempt's task, attempt and generation. ``None``
-    for such a run is an unbound channel, which the caller reports honestly —
-    the direct bridge is never a fallback for an extracted harness; it stays
-    only for unextracted ones and for terminal journal recovery.
-    """
-    if credentials is None or not attempt.get("attemptId"):
-        return None
-    try:
-        from ...buddy.harnesses.registry import live_binding
-
-        if live_binding(adapter) is None:
-            return None
-        from ...buddy.roles import live as role_live
-
-        request = role_live.stored_run_request(
-            attempt_root(store.directory, adapter, view["taskId"], attempt["attemptId"]))
-    except (OSError, ValueError, BoardError, RecursionError, KeyError):
-        return None
-    if (request is None or request.harness != adapter
-            or request.identity.task_id != view["taskId"]
-            or request.identity.attempt_id != attempt.get("attemptId")
-            or request.identity.generation != attempt.get("generation")):
-        return None
-    try:
-        from ...buddy.roles import live as role_live
-
-        return role_live.build_live_channel(
-            adapter, request, credentials=credentials,
-            activity_dir=store.directory / "attempts" / view["taskId"] / attempt["attemptId"],
-            journal_path=credentials.get("resultsPath"))
-    except (BoardError, TypeError, ValueError):
-        return None
+def _live_channel(store: BoardStore, view: dict):
+    """Service restart leaves no live bindings until the same holder attaches again."""
+    registry = getattr(store, "live_registry", None)
+    return registry.channel_for(view) if registry is not None else None
 
 
 def _live_ask_value(reply) -> dict:
@@ -532,20 +436,6 @@ def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: st
         )
     except BoardError:
         pass
-
-
-def _credentials_from_log_paths(attempt: dict) -> dict | None:
-    paths = attempt.get("logPaths") or {}
-    if not isinstance(paths, dict):
-        return None
-    socket_path = paths.get("inquirySocket") or paths.get("socketPath")
-    if not isinstance(socket_path, str) or not socket_path:
-        return None
-    return {
-        "socketPath": socket_path,
-        "resultsPath": paths.get("inquiryResults") or paths.get("resultsPath"),
-        "token": paths.get("inquiryToken"),
-    }
 
 
 def _inquiry_view(message: dict, duplicate: bool) -> dict:

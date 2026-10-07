@@ -13,7 +13,7 @@ control capacity that cancel, renew and result commits need.
 """
 import c_two as cc
 
-CONTRACT_VERSION = "0.28.0"
+CONTRACT_VERSION = "0.29.0"
 CONTROL_NAME = "buddy-control"
 WAIT_NAME = "buddy-wait"
 
@@ -119,6 +119,12 @@ class BuddyControl:
         ...
 
     def worker_reconcile(self, request_json: str) -> str:
+        ...
+
+    def worker_live_attach(self, request_json: str) -> str:
+        ...
+
+    def worker_live_detach(self, request_json: str) -> str:
         ...
 
     def worker_renew(self, request_json: str) -> str:
@@ -269,4 +275,32 @@ class BuddyWait:
         ...
 
     def wait_capacity(self, request_json: str) -> str:
+        ...
+
+
+@cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
+class HarnessRunLive:
+    """One controller's bounded live facts and owner-loop request queue."""
+
+    def request(self, request_json: str) -> str:
+        ...
+
+    def observe(self, request_json: str) -> str:
+        ...
+
+    def capabilities(self, request_json: str) -> str:
+        ...
+
+
+@cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
+class WorkerRuntimeLive:
+    """The holding Worker's narrow forwarding surface, for every role."""
+
+    def request(self, request_json: str) -> str:
+        ...
+
+    def observe(self, request_json: str) -> str:
+        ...
+
+    def capabilities(self, request_json: str) -> str:
         ...

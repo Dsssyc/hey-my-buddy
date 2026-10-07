@@ -86,8 +86,7 @@ def _environment(state: Path, target: Path) -> dict:
         for key in ('BUDDY_MAX_CONCURRENT', 'BUDDY_WAIT_CAPACITY'):
             if key in preserved:
                 env[key] = str(preserved[key])
-    env.update(BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name,
-               BUDDY_PYTHON=str(runtime.runtime_python(target)))
+    env.update(BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name)
     return env
 
 

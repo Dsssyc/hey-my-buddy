@@ -24,8 +24,7 @@ import time
 import unittest
 from pathlib import Path
 
-from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
-
+from buddy.harnesses.test_c_two_live import TEST_CRM, decode_snapshot, wire_observe
 from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
 from hey_my_buddy.private_dirs import context_root
@@ -45,33 +44,89 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     verify_receipt,
     verify_tool_refusal,
 )
-from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge
+from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
+RUN_IDENTITY = RunIdentity(task_id="task-1", attempt_id="attempt-1", generation=1,
+                           turn_id="turn-1", invocation_id="invocation-inquiry-test",
+                           input_sha256="a" * 64)
+LIVE_TOKEN = "d" * 64
+LIVE_INSTANCE = "c" * 64
+
+
+def make_inquiry_bridge(*, identity: dict, journal_path: str,
+                        attention_path: str | None = None,
+                        live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
+    """Construct the native owner without importing the Host's run wiring."""
+    def event_metadata(message: dict) -> dict:
+        params = message.get("params") if isinstance(message, dict) else None
+        method = message.get("method") if isinstance(message, dict) else None
+        kind = params.get("type") if isinstance(params, dict) else None
+        if method == "state.updated":
+            kind = f"state:{str((params or {}).get('reason'))[:40]}"
+        data = params.get("payload") if isinstance(params, dict) else None
+        return {"kind": kind or method or "event",
+                "toolName": data.get("toolName") if isinstance(data, dict) else None}
+
+    return InquiryBridge(identity=identity, journal_path=journal_path,
+                         attention_path=attention_path, error_factory=NativeError,
+                         event_metadata=event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE,
+                         live=live)
+
+
+class ZcodeFixtureCase(unittest.TestCase):
+    """Load the unchanged controller fixture only for controller integration tests."""
+    def setUp(self):
+        from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase as Fixture
+
+        self._fixture_type = Fixture
+        Fixture.setUp(self)
+
+    def context(self, *args, **kwargs):
+        return self._fixture_type.context(self, *args, **kwargs)
+
+    def execute(self, context):
+        return self._fixture_type.execute(self, context)
+
+    def own_handle(self, handle):
+        return self._fixture_type.own_handle(self, handle)
 
 
 class BridgeHarness:
-    """A mounted, activated bridge with its private journal in a temp directory."""
+    """An activated owner with its private journal and optional typed endpoint."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, live: bool = False):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.credentials = {
-            "socketPath": str(self.directory / "inquiry.sock"),
             "resultsPath": str(self.directory / "inquiry.results.jsonl"),
             "errorPath": str(self.directory / "inquiry.error.json"),
-            "token": "a" * 64,
         }
         self.attention_path = self.directory / "attention.json"
-        self.bridge = make_inquiry_bridge(self.credentials, identity=IDENTITY,
-                                    journal_path=self.credentials["resultsPath"],
-                                    attention_path=str(self.attention_path))
+        self.live = (CTwoLiveEndpoint(RUN_IDENTITY, LiveCapabilities(
+            inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
+            instance_id=LIVE_INSTANCE, token=LIVE_TOKEN) if live else None)
+        self.bridge = make_inquiry_bridge(identity=IDENTITY,
+                                         journal_path=self.credentials["resultsPath"],
+                                         attention_path=str(self.attention_path), live=self.live)
         self.bridge.start()
         self.bridge.activate("sess-1")
 
-    def request(self, method: str, **payload) -> dict:
-        return inquiry_module.bridge_request(self.credentials, method, payload)
+    def owner_call(self, method: str, **payload) -> dict:
+        def response(ok, *, value=None, error=None):
+            return {"ok": ok, "value": value, "code": error}
+
+        operation = {"ask": self.bridge._ask}[method]
+        return operation(payload, response)
+
+    def published(self):
+        """Read the endpoint's actual published strict facts, without IPC startup."""
+        return decode_snapshot(self.live.observe(wire_observe(
+            RUN_IDENTITY, token=LIVE_TOKEN, instance_id=LIVE_INSTANCE, limit=32)))
 
     def records(self) -> list[dict]:
         path = Path(self.credentials["resultsPath"])
@@ -105,7 +160,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.addCleanup(self.harness.close)
 
     def ask(self, inquiry_id="q-1", question="what is blocking you?") -> dict:
-        asked = self.harness.request("ask", inquiryId=inquiry_id, question=question)
+        asked = self.harness.owner_call("ask", inquiryId=inquiry_id, question=question)
         self.assertTrue(asked["ok"], asked)
         return asked["value"]
 
@@ -126,11 +181,11 @@ class BridgeQueueTests(unittest.TestCase):
 
     def test_identical_replay_is_a_duplicate_at_every_state_and_changed_text_conflicts(self):
         self.ask()
-        duplicate = self.harness.request("ask", inquiryId="q-1", question="what is blocking you?")
+        duplicate = self.harness.owner_call("ask", inquiryId="q-1", question="what is blocking you?")
         self.assertTrue(duplicate["ok"])
         self.assertTrue(duplicate["value"]["duplicate"])
         self.assertEqual(duplicate["value"]["state"], "queued")
-        conflict = self.harness.request("ask", inquiryId="q-1", question="a different question")
+        conflict = self.harness.owner_call("ask", inquiryId="q-1", question="a different question")
         self.assertFalse(conflict["ok"])
         self.assertEqual(conflict["code"], "conflict")
         self.assertEqual(len(self.harness.records()), 1)
@@ -140,11 +195,11 @@ class BridgeQueueTests(unittest.TestCase):
             verify_inquiry_receipt(answer_receipt("q-1", "resolved", self._config(), sha=self.harness.bridge.entries["q-1"]["questionSha256"]),
                                    self._config(), "inquiry-answer"),
             "root-answer-call")
-        replay = self.harness.request("ask", inquiryId="q-1", question="what is blocking you?")
+        replay = self.harness.owner_call("ask", inquiryId="q-1", question="what is blocking you?")
         self.assertTrue(replay["ok"])
         self.assertTrue(replay["value"]["duplicate"])
         self.assertEqual(replay["value"]["state"], "answered")
-        changed = self.harness.request("ask", inquiryId="q-1", question="a different question")
+        changed = self.harness.owner_call("ask", inquiryId="q-1", question="a different question")
         self.assertFalse(changed["ok"])
 
     def _config(self) -> dict:
@@ -154,41 +209,55 @@ class BridgeQueueTests(unittest.TestCase):
         harness = BridgeHarness(Path(self.temporary.name) / "not-ready")
         harness.bridge.active = False
         self.addCleanup(harness.close)
-        early = harness.request("ask", inquiryId="q-early", question="status?")
+        early = harness.owner_call("ask", inquiryId="q-early", question="status?")
         self.assertFalse(early["ok"])
         self.assertEqual(early["code"], "not-ready")
         self.assertEqual(harness.records(), [])
         closed = BridgeHarness(Path(self.temporary.name) / "closed")
         closed.close()
-        late = closed.request("ask", inquiryId="q-late", question="status?")
+        late = closed.owner_call("ask", inquiryId="q-late", question="status?")
         self.assertFalse(late["ok"])
-        self.assertEqual(late["reason"], "bridge-unreachable")
+        self.assertEqual(late["code"], "not-ready")
 
     def test_bounds_are_enforced_before_any_state_change(self):
         for payload, code in (({"inquiryId": "q-big", "question": "x" * 4001}, "bad-request"),
                               ({"inquiryId": "i" * 129, "question": "ok?"}, "bad-request"),
                               ({"inquiryId": "q-blank", "question": "  "}, "bad-request")):
             with self.subTest(code=code):
-                result = self.harness.request("ask", **payload)
+                result = self.harness.owner_call("ask", **payload)
                 self.assertFalse(result["ok"])
                 self.assertEqual(result["code"], code)
         for index in range(MAX_INQUIRIES):
             self.ask(f"q-{index}")
-        self.assertEqual(self.harness.request("ask", inquiryId="q-over", question="one too many")["code"], "too-many")
+        self.assertEqual(self.harness.owner_call("ask", inquiryId="q-over", question="one too many")["code"], "too-many")
 
-    def test_discard_withdraws_an_unanswered_question(self):
+    def test_historical_discard_projects_bound_source_without_a_pending_question(self):
         self.ask()
-        discarded = self.harness.request("discard", inquiryId="q-1")
-        self.assertTrue(discarded["ok"], discarded)
-        self.assertEqual(discarded["value"]["state"], "discarded")
-        again = self.harness.request("discard", inquiryId="q-1")
-        self.assertFalse(again["ok"])
-        self.assertEqual(again["code"], "conflict")
-        unknown = self.harness.request("discard", inquiryId="q-none")
-        self.assertFalse(unknown["ok"])
-        self.assertEqual(unknown["code"], "not-ready")
-        # A withdrawn question no longer counts as pending for the finish tool.
-        self.assertEqual(self.harness.bridge.entries["q-1"]["state"], "discarded")
+        queued = self.harness.records()[0]
+        discarded = {"version": 1, **IDENTITY, "inquiryId": "q-1", "state": "discarded",
+                     "discardedAt": "2026-01-01T00:00:00Z", "reason": "historical Host withdrawal"}
+        directory = Path(self.temporary.name) / "historical-discard"
+        directory.mkdir()
+        path = directory / "inquiry.results.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in (
+            queued, discarded, {**queued, **OTHER_IDENTITY, "inquiryId": "q-foreign"})))
+        original = path.read_bytes()
+        restored = BridgeHarness(directory, live=True)
+        self.addCleanup(restored.close)
+        snapshot = restored.published()
+        self.assertEqual(restored.live.identity, RUN_IDENTITY)
+        self.assertTrue(snapshot.journal.available)
+        self.assertEqual(snapshot.journal.entries, 2)
+        self.assertEqual(snapshot.journal.rejections[0].question_id, "q-foreign")
+        self.assertEqual(len(snapshot.inquiries), 1)
+        entry = snapshot.inquiries[0]
+        self.assertEqual((entry.question_id, entry.status, entry.answer), ("q-1", "discarded", None))
+        self.assertEqual(entry.reason, discarded["reason"])
+        self.assertEqual(entry.delivery.value, queued["delivery"])
+        self.assertEqual(entry.limitation, queued["limitation"])
+        self.assertEqual(snapshot.observation.inbox.value["pending"], 0)
+        self.assertEqual(pending_inquiries({"identity": IDENTITY, "inquiryJournalPath": str(path)}), [])
+        self.assertEqual(path.read_bytes(), original)
 
     def test_controller_transitions_require_committed_root_evidence(self):
         config = self._config()
@@ -238,28 +307,47 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(entry["answer"]["text"], "do this")
 
     def test_a_late_valid_answer_racing_discard_or_closure_is_ignored(self):
-        # A validly signed root answer that arrives after the Host withdrew the
-        # question, or after the turn closed, is a normal race: the terminal
-        # state is preserved, the late answer is dropped and the turn may finish
-        # normally instead of failing as forged evidence.
+        # A historical withdrawal and a live closure both retain their terminal
+        # facts when an otherwise valid native answer arrives late.
         config = self._config()
         self.ask("q-discarded", "first?")
         self.ask("q-closed", "second?")
-        self.harness.request("discard", inquiryId="q-discarded")
-        sha = self.harness.bridge.entries["q-discarded"]["questionSha256"]
+        history = self.harness.records()
+        history.append({"version": 1, **IDENTITY, "inquiryId": "q-discarded", "state": "discarded",
+                        "discardedAt": "2026-01-01T00:00:00Z", "reason": "historical Host withdrawal"})
+        directory = Path(self.temporary.name) / "late-history"
+        directory.mkdir()
+        path = directory / "inquiry.results.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in history))
+        restored = BridgeHarness(directory, live=True)
+        self.addCleanup(restored.close)
+        before = restored.published().inquiries[0]
+        sha = history[0]["questionSha256"]
         late = verify_inquiry_receipt(answer_receipt("q-discarded", "late but valid", config, sha=sha),
                                       config, "inquiry-answer")
-        self.harness.bridge.record_answer(late, "root-answer-late")
-        self.assertEqual(self.harness.bridge.entries["q-discarded"]["state"], "discarded")
-        self.assertNotIn("answer", self.harness.bridge.entries["q-discarded"])
-        self.harness.close()
-        closed_sha = next(record["questionSha256"] for record in self.harness.records()
+        restored.bridge.record_answer(late, "root-answer-late")
+        self.assertEqual(restored.published().inquiries[0], before)
+        self.assertEqual((before.status, before.answer), ("discarded", None))
+        self.assertEqual(restored.records(), history)
+        # Identity/hash verification still runs before the terminal-state guard.
+        for inquiry_id, wrong_sha in (("q-discarded", "f" * 64), ("q-foreign", sha)):
+            with self.subTest(inquiryId=inquiry_id):
+                forged = verify_inquiry_receipt(answer_receipt(inquiry_id, "late", config, sha=wrong_sha),
+                                                config, "inquiry-answer")
+                with self.assertRaises(NativeError):
+                    restored.bridge.record_answer(forged, "root-answer-forged")
+        restored.close()
+        closed_sha = next(record["questionSha256"] for record in restored.records()
                           if record.get("inquiryId") == "q-closed" and record.get("questionSha256"))
         after_close = verify_inquiry_receipt(answer_receipt("q-closed", "too late", config, sha=closed_sha),
                                              config, "inquiry-answer")
-        self.harness.bridge.record_answer(after_close, "root-answer-late")
-        self.assertEqual(self.harness.bridge.entries["q-closed"]["state"], "unavailable")
-        self.assertNotIn("answer", self.harness.bridge.entries["q-closed"])
+        before_closed = restored.published()
+        closed_records = restored.records()
+        restored.bridge.record_answer(after_close, "root-answer-late")
+        self.assertEqual(restored.published().inquiries, before_closed.inquiries)
+        self.assertEqual((before_closed.inquiries[1].status, before_closed.inquiries[1].answer),
+                         ("unavailable", None))
+        self.assertEqual(restored.records(), closed_records)
 
     def test_journal_replay_requires_the_current_version_and_this_attempt(self):
         import hashlib
@@ -282,7 +370,7 @@ class BridgeQueueTests(unittest.TestCase):
         ]
         Path(self.harness.credentials["resultsPath"]).write_text(
             "garbage line\n" + "".join(json.dumps(record) + "\n" for record in records))
-        restarted = make_inquiry_bridge(self.harness.credentials, identity=IDENTITY,
+        restarted = make_inquiry_bridge(identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
         self.assertEqual(set(restarted.entries), {"q-mine"})
@@ -311,16 +399,13 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(self.harness.bridge.entries["q-queued"]["state"], "unavailable")
         self.assertIn("ended before this inquiry was answered", states["q-queued"]["reason"])
         self.assertEqual(self.harness.bridge.entries["q-answered"]["state"], "answered")
-        self.assertFalse(Path(self.harness.credentials["socketPath"]).exists())
-        # A closed bridge is unreachable: a late question cannot even queue.
-        self.assertEqual(self.harness.request("ask", inquiryId="q-after", question="late?")["reason"],
-                         "bridge-unreachable")
+        # A closed local owner refuses admission before any journal append.
+        self.assertEqual(self.harness.owner_call("ask", inquiryId="q-after", question="late?")["code"],
+                         "not-ready")
 
     def test_observation_is_bounded_and_reports_the_cooperative_channel(self):
         self.ask()
-        observed = self.harness.request("observe")
-        self.assertTrue(observed["ok"], observed)
-        value = observed["value"]
+        value = self.harness.bridge.snapshot()
         self.assertTrue(value["ready"])
         self.assertEqual(value["capability"], "inquiry")
         self.assertTrue(value["supported"])
@@ -334,95 +419,74 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertIn("immediateDelivery", value["unavailable"])
 
     def test_live_answer_view_reports_state_and_receipt_shape(self):
+        self.harness = BridgeHarness(Path(self.temporary.name) / "answer-facts", live=True)
+        self.addCleanup(self.harness.close)
         self.ask()
-        pending = self.harness.request("answer", inquiryId="q-1")
-        self.assertTrue(pending["ok"], pending)
-        self.assertFalse(pending["value"]["answer"]["available"])
-        self.assertEqual(pending["value"]["state"], "queued")
+        pending = self.harness.published()
+        self.assertEqual((pending.inquiries[0].status, pending.inquiries[0].answer), ("queued", None))
+        self.assertEqual(pending.observation.delivery_mode, "cooperative-checkpoint")
         config = self._config()
         sha = self.harness.bridge.entries["q-1"]["questionSha256"]
         self.harness.bridge.record_answer(
             verify_inquiry_receipt(answer_receipt("q-1", "all good", config, sha=sha), config, "inquiry-answer"),
             "root-answer-call")
-        answered = self.harness.request("answer", inquiryId="q-1")
-        self.assertTrue(answered["ok"], answered)
-        self.assertEqual(answered["value"]["state"], "answered")
-        self.assertEqual(answered["value"]["answer"]["text"], "all good")
-        self.assertEqual(answered["value"]["answer"]["toolCallId"], "root-answer-call")
-        # The exact shape the board importer normalizes from a live answer view.
-        normalized = inquiry_module.normalize_journal_answer({"answer": answered["value"]["answer"]})
-        self.assertEqual(normalized["text"], "all good")
-        self.assertEqual(normalized["toolCallId"], "root-answer-call")
+        answered = self.harness.published().inquiries[0]
+        native_answer = self.harness.records()[-1]["answer"]
+        self.assertEqual((answered.question_id, answered.status, answered.answer),
+                         ("q-1", "answered", "all good"))
+        self.assertEqual((answered.bytes, answered.tool_call_id, answered.via,
+                          answered.at, answered.truncated),
+                         (native_answer["bytes"], "root-answer-call", "tool:buddy_answer_inquiry",
+                          native_answer["at"], False))
+        self.assertEqual(answered.delivery, pending.inquiries[0].delivery)
+        self.assertGreater(answered.seq, pending.inquiries[0].seq)
 
     def test_a_failed_journal_append_refuses_the_ask_without_fabricating_state(self):
         from unittest import mock
 
-        import os as os_module
-
-        bridge = self.harness.bridge
-        real_write = os_module.write
+        real_write = os.write
 
         def flaky_write(fd, data):
-            state = flaky_write.state
-            state["count"] += 1
-            if state["count"] == 1:
+            flaky_write.count += 1
+            if flaky_write.count == 1:
                 return max(1, real_write(fd, bytes(data[:5])))
             raise OSError("disk gone mid-record")
 
         for failure in ("raise", "partial-then-raise", "byte-cap"):
             with self.subTest(failure=failure):
-                bridge.entries.clear()
-                bridge.error = None
-                bridge._torn_line = False
-                flaky_write.state = {"count": 0}
+                harness = BridgeHarness(Path(self.temporary.name) / failure)
+                self.addCleanup(harness.close)
+                bridge = harness.bridge
+                flaky_write.count = 0
                 if failure == "byte-cap":
-                    Path(self.harness.credentials["resultsPath"]).write_bytes(b"x" * MAX_JOURNAL_BYTES)
-                    asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
-                    raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
-                                                      "token": self.harness.credentials["token"],
-                                                      "method": "ask", "inquiryId": f"q-{failure}-probe",
-                                                      "question": "durable?"})
-                elif failure == "raise":
-                    with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=OSError("disk gone")):
-                        asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
-                        raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
-                                                          "token": self.harness.credentials["token"],
-                                                          "method": "ask", "inquiryId": f"q-{failure}-probe",
-                                                          "question": "durable?"})
+                    Path(harness.credentials["resultsPath"]).write_bytes(b"x" * MAX_JOURNAL_BYTES)
+                    asked = harness.owner_call("ask", inquiryId=f"q-{failure}", question="durable?")
                 else:
-                    with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=flaky_write):
-                        asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
-                        raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
-                                                          "token": self.harness.credentials["token"],
-                                                          "method": "ask", "inquiryId": f"q-{failure}-probe",
-                                                          "question": "durable?"})
+                    effect = OSError("disk gone") if failure == "raise" else flaky_write
+                    with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=effect):
+                        asked = harness.owner_call("ask", inquiryId=f"q-{failure}", question="durable?")
                 self.assertFalse(asked["ok"], asked)
-                # The bridge refuses with the explicit journal-unavailable code;
-                # the board client normalizes unknown codes to "internal" until
-                # the Host adds this one to its refusal vocabulary.
-                self.assertEqual(asked["reason"], "bridge-refused")
-                self.assertFalse(raw["ok"])
-                self.assertEqual(raw["error"], "journal-unavailable")
+                self.assertEqual(asked["code"], "journal-unavailable")
                 self.assertNotIn(f"q-{failure}", bridge.entries, "a refused ask must not commit in-memory state")
                 self.assertTrue(str(bridge.error).startswith("journal-unavailable"), bridge.error)
-                observed = self.harness.request("observe")
-                self.assertTrue(observed["ok"])
-                self.assertIn("journal-unavailable", observed["value"]["error"])
-                self.assertEqual(observed["value"]["inbox"]["pending"], 0)
-        # After the fault clears, the identical ask commits durably and the MCP
-        # tools can read the question back from the journal.
-        Path(self.harness.credentials["resultsPath"]).unlink(missing_ok=True)
-        bridge.error = None
-        bridge._torn_line = False
-        asked = self.harness.request("ask", inquiryId="q-recovered", question="durable?")
-        self.assertTrue(asked["ok"], asked)
-        self.assertEqual(asked["value"]["state"], "queued")
-        self.assertTrue(any(json.loads(line).get("inquiryId") == "q-recovered"
-                            for line in Path(self.harness.credentials["resultsPath"]).read_text().splitlines()))
+                observed = bridge.snapshot()
+                self.assertIn("journal-unavailable", observed["error"])
+                self.assertEqual(observed["inbox"]["pending"], 0)
+                # The byte cap remains a real refusal. The other faults leave a
+                # rolled-back journal which accepts the identical ask once repaired.
+                if failure != "byte-cap":
+                    recovered = harness.owner_call("ask", inquiryId=f"q-{failure}", question="durable?")
+                    self.assertTrue(recovered["ok"], recovered)
+                    self.assertEqual(recovered["value"]["state"], "queued")
+                    self.assertEqual(read_inquiry_entries({"identity": IDENTITY,
+                                                         "inquiryJournalPath": harness.credentials["resultsPath"]})
+                                     [f"q-{failure}"]["state"], "queued")
 
     def test_controller_transitions_never_fabricate_state_on_a_failed_append(self):
         from unittest import mock
 
+        self.harness = BridgeHarness(Path(self.temporary.name) / "failed-transitions", live=True)
+        self.addCleanup(self.harness.close)
         config = self._config()
         self.ask("q-flaky", "delivered anyway?")
         sha = self.harness.bridge.entries["q-flaky"]["questionSha256"]
@@ -444,13 +508,19 @@ class BridgeQueueTests(unittest.TestCase):
         bridge.record_answer(answer, "root-answer-2")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "answered")
         self.assertEqual(bridge.entries["q-flaky"]["answer"]["toolCallId"], "root-answer-2")
-        # A discard that cannot be recorded refuses explicitly instead.
+        # Closure cannot publish a terminal journal fact when its append fails.
         self.ask("q-flaky-2", "another?")
+        before = self.harness.published().inquiries[1]
+        committed = self.harness.records()
         with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=OSError("disk gone")):
-            discarded = self.harness.request("discard", inquiryId="q-flaky-2")
-        self.assertFalse(discarded["ok"])
-        self.assertEqual(discarded["reason"], "bridge-refused")
-        self.assertEqual(bridge.entries["q-flaky-2"]["state"], "queued")
+            bridge.close()
+        snapshot = self.harness.published()
+        self.assertEqual(snapshot.inquiries[1], before)
+        self.assertEqual(snapshot.inquiries[1].status, "queued")
+        self.assertFalse(snapshot.observation.ready)
+        self.assertEqual(snapshot.observation.agent_status, "ended")
+        self.assertIn("journal-unavailable", snapshot.observation.error)
+        self.assertEqual(self.harness.records(), committed)
 
     def test_the_bridge_has_no_native_injection_path_at_all(self):
         # The proof that delivery stays cooperative is structural: this class
@@ -475,7 +545,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(merged["deliveredAt"], "2026-01-01T00:00:00Z")
         # A controller restart replays the journal and keeps the same committed
         # identity, so the same question is still a duplicate.
-        restarted = make_inquiry_bridge(self.harness.credentials, identity=IDENTITY,
+        restarted = make_inquiry_bridge(identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
         self.assertEqual(restarted.entries["q-merge"]["questionSha256"], committed["questionSha256"])
@@ -533,9 +603,7 @@ class JournalBarrierTests(unittest.TestCase):
                             "askedAt": "2026-01-01T00:00:00Z", **IDENTITY}) + "\n").encode()
 
     def bridge(self) -> InquiryBridge:
-        return make_inquiry_bridge({"socketPath": str(self.root / "bridge.sock"), "resultsPath": str(self.journal),
-                              "errorPath": str(self.root / "inquiry.error.json"), "token": "a" * 64},
-                             identity=IDENTITY, journal_path=str(self.journal))
+        return make_inquiry_bridge(identity=IDENTITY, journal_path=str(self.journal))
 
     def test_a_shared_reader_waits_for_the_exclusive_writer_transaction(self):
         record = self.queued_record("q-barrier")
@@ -938,150 +1006,98 @@ class FinishToolTests(unittest.TestCase):
         self.assertLessEqual(len(checkpoint["content"][0]["text"].encode()), 200 * 1024)
 
 
-class ActivitySidecarTests(ZcodeFixtureCase):
+class LiveActivityTests(ZcodeFixtureCase):
+    """Actual controller/native fixture publication through the held C-Two endpoint."""
+
+    def activity_channel(self, handle):
+        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            _, channel = handle_live_binding(handle)
+            if channel is not None:
+                return channel
+            time.sleep(0.05)
+        self.fail("the held controller endpoint never became ready")
+
+    def streaming_activity(self, channel):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("activity",))
+            if snapshot.activity is not None and snapshot.activity.value["phase"] == "streaming-model":
+                return snapshot.activity.value
+            time.sleep(0.05)
+        self.fail("no native streaming activity was published")
+
+    def release_turn(self, context):
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+
     def test_running_same_phase_native_events_refresh_the_published_observation(self):
         context = self.context("live-activity", timeout=30)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        path = activity_module.sidecar_path(context.directory)
-        first = latest = None
+        self.own_handle(handle)
+        channel = self.activity_channel(handle)
+        first = self.streaming_activity(channel)
+        latest = None
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            current = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
-            if current and current["phase"] == "streaming-model":
-                if first is None:
-                    first = current
-                elif current["eventSeq"] > first["eventSeq"]:
-                    latest = current
-                    break
+            current = self.streaming_activity(channel)
+            if current["eventSeq"] > first["eventSeq"]:
+                latest = current
+                break
             time.sleep(0.05)
-        from hey_my_buddy.private_dirs import context_root
-        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+        self.release_turn(context)
         self.assertIsNotNone(handle.wait(10), "controller did not settle")
         self.assertEqual(self.adapter.collect(handle, context).status, "ok")
-        self.assertIsNotNone(first, "no initial streaming observation")
-        self.assertIsNotNone(latest, "native events in the same phase left the published observation frozen")
+        self.assertIsNotNone(latest, "same-phase native events left the publication frozen")
         self.assertGreater(latest["lastNativeActivityAt"], first["lastNativeActivityAt"])
         self.assertEqual(latest["counts"], first["counts"])
         self.assertNotIn("fixture-private-progress", json.dumps(latest))
 
-    def test_the_runner_publishes_a_real_bound_metadata_only_sidecar(self):
-        context = self.context(timeout=20)
-        _, outcome = self.execute(context)
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
-        activity = outcome.result["activity"]
-        self.assertTrue(activity["published"], activity)
-        self.assertIn(activity["phase"], activity_module.PHASES)
-
-        path = activity_module.sidecar_path(context.directory)
-        self.assertTrue(path.is_file(), "the runner did not publish activity.json")
-        payload = activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=1)
-        self.assertIsNotNone(payload, "the emitted sidecar must satisfy the real hey_my_buddy.protocol.activity reader")
+    def test_the_runner_publishes_real_bound_metadata_only_live_activity(self):
+        from hey_my_buddy.protocol.run_identity import RunIdentity
+        context = self.context("live-activity", timeout=20)
+        handle = self.adapter.start(context)
+        self.own_handle(handle)
+        channel = self.activity_channel(handle)
+        payload = self.streaming_activity(channel)
         self.assertIn(payload["phase"], activity_module.PHASES)
-        self.assertEqual(payload["nativeSessionId"], outcome.result["turn"]["sessionId"])
         self.assertGreaterEqual(payload["counts"]["toolCalls"], 0)
-        # Timestamps are real ISO instants, not an invented heartbeat or percentage.
         from datetime import datetime
-
         datetime.fromisoformat(payload["observedAt"].replace("Z", "+00:00"))
-        raw = path.read_text()
         for forbidden in ("fixture task", "prompt", "toolArguments", "reasoning", "fixture-secret"):
-            self.assertNotIn(forbidden, raw)
-        # The binding is enforced: another attempt or generation reads nothing.
-        self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id="other", generation=1))
-        self.assertIsNone(activity_module.read_sidecar(path, task_id="goal-1", attempt_id=context.attempt_id, generation=2))
+            self.assertNotIn(forbidden, json.dumps(payload))
+        original = channel.identity
+        try:
+            for changes in ({"attempt_id": "other"}, {"generation": 2}):
+                channel._identity = RunIdentity(**{**original.model_dump(), **changes})
+                snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("activity",))
+                self.assertIsNone(snapshot.activity)
+                self.assertIsNotNone(snapshot.unavailable)
+        finally:
+            channel._identity = original
+        self.release_turn(context)
+        self.assertIsNotNone(handle.wait(10))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertNotIn("published", outcome.result["activity"])
+        self.assertEqual(payload["nativeSessionId"], outcome.result["turn"]["sessionId"])
+        self.assertFalse((context.directory / "activity.json").exists())
 
-    def test_same_phase_updates_are_throttled_but_recorded_phase_changes_are_written(self):
-        context = self.context(timeout=20)
-        # The projection is what the controller publishes; the helper coalesces
-        # same-phase receipts inside its window and always writes a phase change.
+    def test_same_phase_updates_are_throttled_but_recorded_phase_changes_are_published(self):
         from hey_my_buddy.buddy.harnesses.zcode.protocol import ActivityProjection
-
         projection = ActivityProjection("sess")
-        sidecar = activity_module.ActivitySidecar(context.directory, task_id="goal-1",
-                                                  attempt_id="attempt-1", generation=1)
-        first = sidecar.publish(projection.payload())
-        self.assertIsNotNone(first)
+        observed = []
+        publisher = activity_module.ActivityPublisher(lambda value: observed.append(value) or True,
+                                                       min_interval_seconds=2.0)
+        self.assertTrue(publisher.publish(projection.payload()))
         projection.note({"method": "state.updated", "params": {"reason": "noop"}}, 1)
-        self.assertIsNone(sidecar.publish(projection.payload()), "an unchanged receipt must be coalesced")
+        self.assertFalse(publisher.publish(projection.payload()), "an unchanged receipt must be coalesced")
         projection.phase = "finishing"
-        self.assertIsNotNone(sidecar.publish(projection.payload()), "a phase change must be written")
+        self.assertTrue(publisher.publish(projection.payload()), "a phase change must be published")
+        self.assertEqual([value["phase"] for value in observed], ["starting", "finishing"])
 
 
 class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
-    def credentials(self, context, timeout=20):
-        """Wait until the attempt mounted its bridge AND admitted the root turn."""
-        from hey_my_buddy.private_dirs import context_root
-        path = context_root(context, "zcode") / "inquiry.json"
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if path.is_file():
-                credentials = json.loads(path.read_text())
-                observed = inquiry_module.bridge_request(credentials, "observe", {}, timeout_ms=500)
-                if observed.get("ok") and (observed.get("value") or {}).get("ready") is True:
-                    return credentials
-            time.sleep(0.05)
-        self.fail("the attempt never mounted its private inquiry bridge and admitted the root turn")
-
-    def records(self, credentials) -> list[dict]:
-        path = Path(credentials["resultsPath"])
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-
-    def native_log(self, context, name: str) -> str:
-        from hey_my_buddy.private_dirs import context_root
-        path = context_root(context, "zcode") / "native-logs" / name
-        return path.read_text() if path.exists() else ""
-
-    def test_a_live_question_queues_without_touching_the_native_session(self):
-        context = self.context("live", timeout=30)
-        handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        credentials = self.credentials(context)
-        asked = inquiry_module.bridge_request(credentials, "ask", {"inquiryId": "q-live", "question": "what is the status?"}, timeout_ms=4000)
-        self.assertTrue(asked["ok"], asked)
-        self.assertTrue(asked["value"]["accepted"])
-        self.assertEqual(asked["value"]["state"], "queued")
-        duplicate = inquiry_module.bridge_request(credentials, "ask", {"inquiryId": "q-live", "question": "what is the status?"}, timeout_ms=4000)
-        self.assertTrue(duplicate["value"]["duplicate"])
-        answered = inquiry_module.bridge_request(credentials, "answer", {"inquiryId": "q-live"}, timeout_ms=4000)
-        self.assertTrue(answered["ok"], answered)
-        self.assertFalse(answered["value"]["answer"]["available"])
-        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
-        self.assertIsNotNone(handle.wait(30), "controller did not exit")
-        outcome = self.adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
-        # The root never checkpointed, so its completed finish was refused with
-        # the question and it honestly settled on assistance; the unanswered
-        # question became unavailable without any native injection.
-        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
-        self.assertEqual(self.native_log(context, "commands.jsonl"), "")
-        self.assertNotIn("v4/command", self.native_log(context, "methods.jsonl"))
-        self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
-        records = [record for record in self.records(credentials) if record["inquiryId"] == "q-live"]
-        self.assertEqual(records[0]["state"], "queued")
-        self.assertEqual(records[0]["questionSha256"], asked["value"]["questionSha256"])
-        self.assertEqual(records[-1]["state"], "unavailable")
-        self.assertFalse(records[0]["delivery"]["startsNewTurn"])
-        self.assertEqual(outcome.result["inquiry"]["supported"], True)
-        self.assertEqual(outcome.result["inquiry"]["refused"], 1)
-        self.assertIn("never injected", outcome.result["inquiry"]["limitation"])
-        self.assertEqual(outcome.result["nativeAttention"]["requests"], 0)
-
-    def test_the_question_socket_is_gone_after_a_settled_turn(self):
-        context = self.context("live", timeout=30)
-        handle = self.adapter.start(context)
-        credentials = self.credentials(context)
-        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
-        self.assertIsNotNone(handle.wait(30), "controller did not exit")
-        outcome = self.adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertFalse(Path(credentials["socketPath"]).exists(), "the bridge socket must not outlive the turn")
-        late = inquiry_module.bridge_request(credentials, "ask", {"inquiryId": "q-late", "question": "still there?"})
-        self.assertFalse(late["ok"])
-        self.assertEqual(late["reason"], "bridge-unreachable")
-
     def test_native_interactive_requests_end_as_host_attention(self):
         context = self.context("attention", timeout=30)
         _, outcome = self.execute(context)

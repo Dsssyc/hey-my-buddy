@@ -9,8 +9,7 @@ from unittest.mock import patch
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
-from hey_my_buddy.buddy.roles import structured_call as read_only
-from hey_my_buddy.buddy.roles import run_controller, router as router_role
+from hey_my_buddy.buddy.roles import run_controller, run_execution, router as router_role
 from hey_my_buddy.errors import BoardError
 
 
@@ -38,7 +37,7 @@ class DeferredReviewTests(unittest.TestCase):
                     with self.assertRaises(BoardError):
                         router_role.prepare_router_review({}, {}, item, context)
                     with self.assertRaises(BoardError):
-                        read_only.start(item.name, context, request)
+                        run_execution.start_review(item.name, context, request)
 
     def test_manually_supplied_controller_review_request_is_refused_before_launch(self):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \

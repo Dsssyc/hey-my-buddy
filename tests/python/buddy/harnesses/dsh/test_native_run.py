@@ -14,10 +14,10 @@ the stdio MCP carrier.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -89,7 +89,8 @@ class NativeRunCase(unittest.TestCase):
         (self.base / "cwd").mkdir(mode=0o700)
         # A run inherits HOME by contract; these tests pin it to this test's
         # private directory, which the launch wrapper validates like DSH_HOME.
-        environment = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        environment = mock.patch.dict(os.environ, {"HOME": str(self.home),
+                                                  "DSH_HOME": str(self.base / "source-dsh-home")})
         environment.start()
         self.addCleanup(environment.stop)
         patcher = mock.patch.object(native_run, "command_for",
@@ -122,8 +123,8 @@ class NativeRunCase(unittest.TestCase):
         """The governed binding: a real mount, the real role validator and prompt.
 
         The binding is assembled through exactly the shared role controller's
-        parameter set, including the activity directory and the stderr mirror
-        path the governed projection consumes. ``inquiry`` mounts the cooperative
+        parameter set, including the stderr mirror path the governed projection
+        consumes. The controller injects its optional live endpoint separately. ``inquiry`` mounts the cooperative
         channel the same way the role passes this attempt's inquiry paths.
         """
         identity = {"taskId": "task", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
@@ -134,23 +135,14 @@ class NativeRunCase(unittest.TestCase):
         invocation = self.base / f"worker-invocation-{uuid.uuid4().hex[:8]}"
         inquiry_credentials = None
         if inquiry:
-            # The socket must fit the OS sun_path budget even under this suite's
-            # long per-test prefix, so the socket lives in a short directory of
-            # its own beside the per-test root; journal and error stay local.
-            short = Path(os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
-            channel = short / f"dsh-sock-{uuid.uuid4().hex[:8]}"
-            channel.mkdir(mode=0o700)
-            self.addCleanup(shutil.rmtree, channel, ignore_errors=True)
-            inquiry_credentials = {"socketPath": str(channel / "s.sock"),
-                                   "resultsPath": str(self.base / f"inquiry-{channel.name[-8:]}.results.jsonl"),
-                                   "errorPath": str(self.base / f"inquiry-{channel.name[-8:]}.error.json"),
-                                   "token": uuid.uuid4().hex + uuid.uuid4().hex}
+            inquiry_credentials = {
+                "resultsPath": str(self.base / f"inquiry-{uuid.uuid4().hex[:8]}.results.jsonl"),
+                "errorPath": str(self.base / f"inquiry-{uuid.uuid4().hex[:8]}.error.json")}
         bound = native_run.prepare_services(
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention, session_tools=worker_services.session_tools(),
             completion_tool="buddy_finish_turn", validate_outcome=validate_outcome,
             inquiry=inquiry_credentials, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
-            activity_dir=str(self.base / f"activity-{uuid.uuid4().hex[:8]}"),
             native_stderr=str(self.base / f"native-stderr-{uuid.uuid4().hex[:8]}.log"))
         mount = bound.services.mount
         prompt = worker_services.governed_prompt(
@@ -479,6 +471,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNone(result.model_started)
         self.assertIsNone(result.end.native_exit_code)
         self.assertIsNone(result.harness_version)
+        self.assertIsNone(result.activity, "a failed spawn supplies no native activity")
 
     def test_an_agent_lost_before_any_session_never_claims_spawn_never_happened(self):
         # The agent was spawned and held, then died before the handshake: the
@@ -888,30 +881,86 @@ class WorkerSeamTests(NativeRunCase):
     def test_a_tampered_finish_receipt_is_fatal(self):
         request, bound, mount = self.worker_request()
         self.governed_agent_args(mount, forge_receipt=True)
-        result = run(request, observer=worker_observer, services=bound.services,
-                     cancelled=lambda: False)
+        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM)
+        services = dataclasses.replace(bound.services, live=endpoint)
+        with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
+            result = run(request, observer=worker_observer, services=services,
+                         cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-finish")
         self.assertIsNone(result.value)
         self.assertIsNone(result.completion_evidence)
 
-    def test_the_governed_activity_sidecar_publishes_bounded_phases(self):
+        self.assertGreater(publish.call_count, 0)
+        self.assertIn("tool-running", [call.args[0]["phase"] for call in publish.call_args_list])
+        self.assertEqual(result.activity.value["counts"]["modelTurns"], 1)
+        self.assertGreaterEqual(result.activity.value["counts"]["toolCalls"], 2)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_the_governed_activity_callback_publishes_bounded_phases(self):
+        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        from hey_my_buddy.protocol.activity import is_newer
         request, bound, mount = self.worker_request()
-        activity_dir = self.base / f"activity-{uuid.uuid4().hex[:8]}"
-        services = SessionServices(mount=bound.services.mount,
-                                   validate_outcome=bound.services.validate_outcome,
-                                   activity_dir=str(activity_dir))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM)
+        seen = []
+        original = endpoint.publish_activity
+
+        def publish(payload):
+            seen.append(dict(payload))
+            return original(payload)
+
+        services = dataclasses.replace(bound.services, live=endpoint)
         self.governed_agent_args(mount)
-        result = run(request, observer=worker_observer, services=services,
+        with mock.patch.object(endpoint, "publish_activity", side_effect=publish):
+            result = run(request, observer=worker_observer, services=services,
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        phases = [payload["phase"] for payload in seen]
+        self.assertIn("tool-running", phases)
+        self.assertIn("streaming-model", phases)
+        self.assertEqual(phases[-1], "finishing")
+        self.assertTrue(all(is_newer(new, old) for old, new in zip(seen, seen[1:])))
+        self.assertEqual(seen[-1]["counts"]["modelTurns"], 1)
+        self.assertGreaterEqual(seen[-1]["counts"]["toolCalls"], 2)
+        self.assertEqual(result.activity.value["counts"], seen[-1]["counts"])
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertEqual(result.value.parsed.value["disposition"], "completed")
+        self.assertFalse(any(self.base.rglob("activity.json")))
+
+    def test_no_live_endpoint_keeps_the_native_activity_final_fact(self):
+        request, bound, mount = self.worker_request()
+        self.assertIsNone(bound.services.live)
+        self.governed_agent_args(mount)
+        result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        sidecar = activity_dir / "activity.json"
-        self.assertTrue(sidecar.is_file())
-        document = json.loads(sidecar.read_text())
-        self.assertEqual(document["taskId"], request.identity.task_id)
-        self.assertIn(document["activity"]["phase"],
-                     ("streaming-model", "tool-running", "finishing", "waiting-model"))
-        self.assertGreaterEqual(document["activity"]["counts"]["toolCalls"], 2)
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertEqual(result.activity.value["counts"]["modelTurns"], 1)
+        self.assertGreaterEqual(result.activity.value["counts"]["toolCalls"], 2)
+        self.assertFalse(any(self.base.rglob("activity.json")))
+
+    def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
+        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+        request, bound, mount = self.worker_request()
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM)
+        services = dataclasses.replace(bound.services, live=endpoint)
+        self.governed_agent_args(mount)
+        with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
+            result = run(request, observer=worker_observer, services=services,
+                         cancelled=lambda: False)
+        self.assertGreater(publish.call_count, 0)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertGreaterEqual(result.activity.value["counts"]["toolCalls"], 2)
+        self.assertIsNone(endpoint._activity, "a refusal never proves a live publication")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_an_answer_with_no_session_service_takes_no_governed_path(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
@@ -950,6 +999,19 @@ class ContinuationTests(NativeRunCase):
 
 class RoleSeamFunctionTests(unittest.TestCase):
     """The module-level seams the shared role and registry consume, without a process."""
+
+    def test_inquiry_factory_passes_the_controller_endpoint_without_socket_credentials(self):
+        credentials = {"resultsPath": "<private-journal>"}
+        endpoint = object()
+        with mock.patch.object(native_run, "InquiryBridge") as constructor:
+            bridge = native_run.make_inquiry_bridge(
+                identity={"taskId": "task", "attemptId": "attempt", "generation": 1},
+                journal_path="<private-journal>", live=endpoint)
+        self.assertIs(bridge, constructor.return_value)
+        self.assertIs(constructor.call_args.kwargs["live"], endpoint)
+        self.assertEqual(constructor.call_args.args, ())
+        self.assertNotIn("socketPath", credentials)
+        self.assertNotIn("token", credentials)
 
     def test_check_preparation_confirms_a_selected_or_discoverable_command(self):
         from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
@@ -1038,7 +1100,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
 
 
 class InquirySeamTests(NativeRunCase):
-    """The cooperative checkpoint channel end to end, over the registered binding."""
+    """Native receipts through the actual C-Two owner and session service."""
 
     QUESTION = "What is the bounded state of the private checkout?"
 
@@ -1047,10 +1109,13 @@ class InquirySeamTests(NativeRunCase):
         self.governed_agent_args(mount)
         self.extra_agent_args += list(extra)
         credentials = bound.services.inquiry
-        channel = native_run.bind_live_channel(
-            request.identity, credentials=dict(credentials),
+        from buddy.harnesses.zcode.test_native_run import fixture_live_channel
+        channel = fixture_live_channel(
+            self, request.identity, credentials=dict(credentials),
             journal_path=credentials["resultsPath"],
-            activity_path=Path(bound.services.activity_dir) / "activity.json")
+            activity_path=self.base / "unused-activity.json", harness="dsh")
+        bound = dataclasses.replace(bound, services=dataclasses.replace(
+            bound.services, live=channel.fixture_endpoint))
         return request, bound, credentials, channel
 
     def ask_when_ready(self, channel):
@@ -1177,10 +1242,10 @@ class InquirySeamTests(NativeRunCase):
         self.assertNotIn("delivered", [record.get("state") for record in records],
                          "nothing is journaled delivered without a verified root receipt")
 
-    def test_the_live_binding_declares_the_registered_capability_and_binds_identity(self):
+    def test_the_shared_endpoint_declares_the_registered_capability_and_binds_identity(self):
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES, InquiryPayload, LiveRequest
         _, _, credentials, channel = self.inquiry_worker()
-        self.assertIs(channel.capabilities(), EXISTING_CAPABILITIES["dsh"],
+        self.assertEqual(channel.capabilities(), EXISTING_CAPABILITIES["dsh"],
                       "the binding carries the declared capability fact, whatever the registry states")
         foreign_identity = LiveRequest(
             identity=type(channel.identity).from_payload(
@@ -1253,6 +1318,58 @@ class DiscoveryTests(NativeRunCase):
                       "the operation's own confirmed group stop is the fact")
         self.assertTrue(self.wait_for(lambda: any(
             entry.get("event") == "dying-before-answer" for entry in self.agent_log())))
+
+
+class AlwaysOffPatchRowsTests(NativeRunCase):
+    """The two accepted always-off rows, named literally, on the real launch.
+
+    The witnesses read the patch the real run and discovery startup
+    construction wrote through the launch wrapper and assert each literal
+    row's own presence and ``disabled`` fact. Neither the expected names nor
+    the expected flag may come from the module's row constant: an expectation
+    built from the same value stays self-consistent when a row is dropped, so
+    each row here fails its own witness instead of a tautology.
+    """
+
+    def assert_patch_row_disabled(self, row_id):
+        records = self.launch_records()
+        self.assertTrue(records, "the launch must record its argv and patch")
+        argv = records[-1]["argv"]
+        patch_path = Path(argv[argv.index("--patch") + 1])
+        matches = [row for row in json.loads(patch_path.read_text())
+                   if row.get("id") == row_id]
+        self.assertEqual(len(matches), 1,
+                         f"the launch patch must carry the {row_id} row exactly once")
+        self.assertIs(matches[0].get("disabled"), True,
+                      f"the launch patch must disable the {row_id} row")
+
+    def test_a_run_launch_disables_the_session_title_llm_row(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        result = run(self.fast_request("prompt", scope="write"),
+                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assert_patch_row_disabled("session-title-llm")
+
+    def test_a_run_launch_disables_the_session_telemetry_otel_row(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        result = run(self.fast_request("prompt", scope="write"),
+                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assert_patch_row_disabled("session-telemetry-otel")
+
+    def test_a_discovery_launch_disables_both_always_off_rows(self):
+        self.extra_agent_args = ["--prompt-mode", "final"]
+        catalog = native_run.run_discovery(
+            cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
+            native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
+        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete",
+                                                   "accountStatus": "not-applicable"}])
+        self.assert_patch_row_disabled("session-title-llm")
+        self.assert_patch_row_disabled("session-telemetry-otel")
 
 
 class SourceBindingTests(NativeRunCase):

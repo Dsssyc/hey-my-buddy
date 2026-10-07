@@ -120,7 +120,7 @@ class DescriptionSeamTests(DshRoleCase):
         module = run_seam("dsh")
         for operation in ("run", "run_discovery", "check_preparation", "prepare_services",
                           "validate_turn_provenance", "session_facts", "native_evidence",
-                          "bind_live_channel", "make_inquiry_bridge"):
+                          "make_inquiry_bridge"):
             self.assertTrue(callable(getattr(module, operation)), operation)
         self.assertIs(worker_executor("dsh").module, module)
         self.assertIsNone(worker_format("dsh"),
@@ -246,10 +246,15 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertTrue(request_file.is_file(), "the controller never published its run request")
         request = decode_request(request_file.read_bytes())
         control = decode_strict_json((root / "role-run-control.json").read_bytes())
-        channel = run_seam("dsh").bind_live_channel(
-            request.identity, credentials=dict(control["inquiry"]),
-            journal_path=control["inquiry"]["resultsPath"],
-            activity_path=Path(control["directory"]) / "activity.json")
+        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        channel = None
+        while time_module.monotonic() < deadline:
+            if holder:
+                _, channel = handle_live_binding(holder[0])
+            if channel is not None:
+                break
+            time_module.sleep(0.05)
+        self.assertIsNotNone(channel, "the held controller endpoint never became ready")
         live_request = LiveRequest(identity=request.identity, request_id="live-1", kind="inquiry",
                                    payload=InquiryPayload(question_id="inq-1",
                                                           question="bounded wiring question"))

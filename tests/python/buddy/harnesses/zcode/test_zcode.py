@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.registry import adapter
 
@@ -38,8 +39,8 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.description = adapter("zcode")
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, timeout=10, effort="low"):
-        # Concurrent private suites can use the same short socket fallback;
-        # keep an attempt stable within this fixture and distinct across roots.
+        # Concurrent private suites keep an attempt stable within this fixture
+        # and distinct across roots, so journals and live endpoints never cross.
         attempt_id = f"attempt-{self.root.name}-{index}"
         identity = {"version": 1, "taskId": "goal-1", "attemptId": attempt_id, "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
@@ -58,6 +59,99 @@ class ZcodeFixtureCase(unittest.TestCase):
         outcome = self.adapter.collect(handle, context)
         return handle, outcome
 
+    # -- the integrated live and inquiry entry points (shared with the
+    # checkpoint and refusal flow suites) -----------------------------------
+
+    def own_handle(self, handle):
+        """Own a live controller: stop its group, then release only its endpoint."""
+        from hey_my_buddy.buddy.roles.live import release_live_binding
+
+        def release():
+            release_live_binding(handle)
+            descriptor = getattr(handle, "role_live_descriptor", None)
+            if descriptor is not None and descriptor.socket is not None:
+                self.assertFalse(Path(descriptor.socket.path).exists(),
+                                 "the owned endpoint was left behind")
+        # LIFO: stop the actual held group before cleaning its captured endpoint.
+        self.addCleanup(release)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+
+    def live_channel(self, handle):
+        """The holder's bound C-Two channel of this own run, once its ready file lands."""
+        from hey_my_buddy.buddy.roles.live import handle_live_binding
+
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            state, channel = handle_live_binding(handle)
+            if channel is not None:
+                return channel
+            time.sleep(0.05)
+        self.fail("the held controller endpoint never became ready")
+
+    def ready_channel(self, handle):
+        """The bound channel once the owner admitted the root turn (ready fact)."""
+        channel = self.live_channel(handle)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("observation",))
+            observation = snapshot.observation if snapshot.observed else None
+            if observation is not None and observation.ready:
+                self.assertEqual(channel.identity, handle.role_run_identity,
+                                 "the live channel must carry the run's complete identity")
+                return channel
+            time.sleep(0.05)
+        self.fail("the attempt never mounted its private inquiry bridge and admitted the root turn")
+
+    def ask(self, handle, inquiry_id, question, channel=None, timeout_ms=4000):
+        """Queue one Host question through the real C-Two request operation."""
+        channel = channel or self.ready_channel(handle)
+        reply = channel.request(LiveRequest(identity=channel.identity, request_id=inquiry_id,
+                                            kind="inquiry",
+                                            payload=InquiryPayload(question_id=inquiry_id, question=question)),
+                                timeout_ms=timeout_ms)
+        self.assertTrue(reply.observed, reply.model_dump())
+        self.assertEqual(reply.status, "queued", reply.model_dump())
+        correlation = reply.native_correlation.value
+        self.assertEqual(correlation["inquiryId"], inquiry_id)
+        self.assertFalse(correlation["duplicate"])
+        return channel, reply
+
+    def inquiry_results_path(self, context):
+        """The attempt-private journal path from the integrated inquiry entry."""
+        from hey_my_buddy.private_dirs import context_root
+
+        paths = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
+        self.assertEqual(set(paths), {"resultsPath"}, paths)
+        return Path(paths["resultsPath"])
+
+    def inquiry_records(self, context, inquiry_id):
+        """The durable journal's ordered records of one inquiry of this attempt."""
+        path = self.inquiry_results_path(context)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()
+                if line.strip() and json.loads(line).get("inquiryId") == inquiry_id]
+
+    def release(self, context):
+        from hey_my_buddy.private_dirs import context_root
+
+        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+
+    def native_log(self, context, name):
+        from hey_my_buddy.private_dirs import context_root
+
+        path = context_root(context, "zcode") / "native-logs" / name
+        return path.read_text() if path.exists() else ""
+
+    def wait_file(self, context, name, timeout=20):
+        from hey_my_buddy.private_dirs import context_root
+
+        path = context_root(context, "zcode") / "native-logs" / name
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not path.exists():
+            time.sleep(0.05)
+        return path.read_text() if path.exists() else None
+
 
 class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
@@ -69,7 +163,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_success_uses_native_root_receipt_and_keeps_secrets_private(self):
         original = self.personal.read_bytes()
         context = self.context()
-        _, outcome = self.execute(context)
+        handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         turn = outcome.result["turn"]
@@ -102,10 +196,34 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])
+        # The integrated inquiry entry: the attempt-private paths file and the
+        # role control carry only the durable journal path — the retired socket
+        # credentials (token, socket, errorPath) no longer exist on disk. Live
+        # access is the holder's own control.live material plus the ready
+        # descriptor its controller published; the narrow token stays in the
+        # holder-held material and never reaches the descriptor or the report.
         from hey_my_buddy.private_dirs import context_root
-        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
-        self.assertEqual(len(credentials["token"]), 64)
-        self.assertEqual(oct((context_root(context, "zcode") / "inquiry.json").stat().st_mode & 0o777), "0o600")
+        inquiry_file = context_root(context, "zcode") / "inquiry.json"
+        paths = json.loads(inquiry_file.read_text())
+        self.assertEqual(set(paths), {"resultsPath"}, paths)
+        self.assertEqual(paths["resultsPath"], str(context.directory / "inquiry.results.jsonl"))
+        self.assertEqual(oct(inquiry_file.stat().st_mode & 0o777), "0o600")
+        control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
+        self.assertEqual(control["inquiry"], {"resultsPath": paths["resultsPath"]})
+        self.assertEqual(control, handle.role_run_control)
+        material = control["live"]
+        self.assertEqual(set(material), {"instanceId", "token", "readyFile"}, material)
+        self.assertEqual(len(material["instanceId"]), 64)
+        self.assertEqual(len(material["token"]), 64)
+        ready = Path(material["readyFile"])
+        self.assertEqual(ready.parent, context_root(context, "zcode"))
+        self.assertEqual(oct(ready.stat().st_mode & 0o777), "0o600")
+        descriptor = json.loads(ready.read_text())
+        self.assertEqual(set(descriptor), {"address", "name", "instanceId", "hostPid", "socket"}, descriptor)
+        self.assertEqual(descriptor["instanceId"], material["instanceId"])
+        self.assertEqual(descriptor["hostPid"], handle.pid)
+        self.assertNotIn(material["token"], json.dumps(descriptor))
+        self.assertNotIn(material["token"], json.dumps(outcome.to_report()))
 
     def test_child_finish_does_not_replace_or_disable_root_finish(self):
         _, outcome = self.execute(self.context("child-first"))

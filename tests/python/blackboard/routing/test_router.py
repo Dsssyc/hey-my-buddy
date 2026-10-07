@@ -37,12 +37,39 @@ class RouterContractTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from types import SimpleNamespace
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            RunEnd, RunResult, StopEvidence, StopLayer, encode_run_request, encode_run_result,
+        )
+        from hey_my_buddy.buddy.roles.run_execution import review_request
         from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.buddy.roles.turn_io import _private_bytes, private_json
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'native.json'
-            output.write_text(json.dumps({'status': 'cancelled', 'processState': {'shutdownConfirmed': False}}))
+            root = Path(directory).resolve()
+            output = root / 'native.json'
+            control = {
+                'operation': 'review', 'harness': 'dsh', 'taskId': 'task',
+                'attemptId': 'attempt', 'generation': 1, 'invocationId': 'invocation',
+                'privateRoot': str(root), 'nativeRoot': str(root / 'native'),
+                'cwd': str(root), 'timeoutSeconds': 10, 'canCorrect': False,
+                'spec': {'provider': 'fixture', 'model': 'fixture', 'effort': 'off'},
+                'requestFile': str(root / 'request.json'),
+                'verdictFile': str(root / 'verdict.json'),
+                'readOnlyRequest': {
+                    'prompt': 'fixture', 'budget': {'toolCalls': 1},
+                    'outputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+                },
+            }
+            request, *_ = review_request(control, None)
+            native = RunResult(identity=request.identity, harness='dsh',
+                               end=RunEnd(status='cancelled'),
+                               stop_evidence=StopEvidence(native=StopLayer(group_state='unknown')))
+            _private_bytes(Path(control['requestFile']), encode_run_request(request).encode())
+            _private_bytes(output, encode_run_result(native).encode())
+            private_json(Path(control['verdictFile']), {'stopReason': None, 'elapsedMs': 0})
+            # The outer fixture is stopped; only the native stop remains unknown.
             handle = SimpleNamespace(log_paths={'stdout': str(output)}, process=SimpleNamespace(returncode=1),
-                                     shutdown_confirmed=lambda: True)
+                                     shutdown_confirmed=lambda: True,
+                                     role_run_control=control, role_run_identity=request.identity)
             result = collect(handle)
         self.assertEqual(result.status, 'failed')
         self.assertFalse(result.shutdown_confirmed)

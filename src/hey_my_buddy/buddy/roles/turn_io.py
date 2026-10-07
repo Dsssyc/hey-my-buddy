@@ -157,40 +157,13 @@ def workspace_cwd(context: ExecutionContext) -> str:
     return str(manifest["path"]) if isinstance(manifest, dict) and manifest.get("path") else context.cwd
 
 
-#: ``sun_path`` budget for a private Unix socket. The attempt directory can be
-#: deep, so callers fall back to a short temp directory and keep the credentials
-#: (not the socket) in the harness-private attempt directory the service reads.
-UNIX_SOCKET_PATH_BUDGET = 105 if sys.platform.startswith("linux") else 101
-
-
 def inquiry_paths(context: ExecutionContext) -> dict:
-    """Owner-private paths and token for one attempt's inquiry bridge.
-
-    The credentials file always lives in the harness-private attempt directory so the service can
-    find it; only the socket may move to a short temp directory. Every directory is
-    created 0700 and the token is hex so it can never be parsed as an option.
-    """
+    """The durable checkpoint journal of one attempt; live credentials stay in memory."""
     private_root = ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
-    candidates = [
-        private_root,
-        Path("/tmp") / "hey-my-buddy-inquiry" / context.attempt_id,
-        Path(os.environ.get("TMPDIR", "/tmp")) / "hey-my-buddy-inquiry" / context.attempt_id,
-    ]
-    directory = next(
-        (candidate for candidate in candidates if len(str(candidate / "inquiry.sock").encode()) <= UNIX_SOCKET_PATH_BUDGET),
-        candidates[-1],
-    )
-    directory = ensure_private_dir(directory)
-    credentials = {
-        "socketPath": str(directory / "inquiry.sock"),
-        "resultsPath": str(context.directory / "inquiry.results.jsonl"),
-        "errorPath": str(context.directory / "inquiry.sock.error.json"),
-        "token": secrets.token_hex(32),
-    }
     ensure_private_dir(context.directory)
-    credentials_path = private_root / "inquiry.json"
-    private_json(credentials_path, credentials)
-    return {"directory": directory, **credentials}
+    paths = {"resultsPath": str(context.directory / "inquiry.results.jsonl")}
+    private_json(private_root / "inquiry.json", paths)
+    return {"directory": private_root, **paths}
 
 
 def verify_workspace(context: ExecutionContext) -> None:

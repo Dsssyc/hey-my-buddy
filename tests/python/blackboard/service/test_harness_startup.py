@@ -28,7 +28,7 @@ class HarnessStartupTests(BoardTestCase):
         self.client = Mock()
         self.record = {'adapter': 'codex', 'status': 'ready', 'available': True, 'revision': 1, 'command': ['/native/codex']}
         self.client.call.return_value = {'harness': self.record}
-        self.worker = Worker(self.directory / 'state', 'fixture', client=self.client)
+        self.worker = Worker('fixture', self.directory / 'state', client=self.client)
         self.worker.spool.write_startup({'nonce': 'fixture-owned-nonce'})
         self.attempt = {'attemptId': 'attempt-1', 'generation': 1}
         self.claim = {'attempt': self.attempt}

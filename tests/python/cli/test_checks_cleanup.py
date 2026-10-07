@@ -60,7 +60,6 @@ class ChecksEnvironmentTests(unittest.TestCase):
         for key in checks.SANITIZED_VARIABLES:
             self.assertNotIn(key, environment)
         self.assertEqual(environment["BUDDY_DEV_SOURCE"], "1")
-        self.assertEqual(environment["BUDDY_PYTHON"], sys.executable)
         self.assertEqual(environment["BUDDY_CONSOLE_PORT"], "0")
         self.assertTrue(environment["BUDDY_CLAUDE_CLI"].endswith("claude-not-installed"))
         path_entries = environment["PYTHONPATH"].split(os.pathsep)
