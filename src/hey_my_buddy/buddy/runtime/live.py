@@ -18,7 +18,7 @@ from ...errors import BoardError
 from ...json_codec import canonical_json
 from ...protocol import rpc_config
 from ...protocol.contracts import WorkerRuntimeLive
-from ...protocol.inquiry_transport import DEFAULT_TRANSPORT_TIMEOUT_MS
+from ...protocol.inquiry import DEFAULT_TRANSPORT_TIMEOUT_MS
 from ...protocol.internal_models import check_text, fail
 from ...protocol.run_identity import RunIdentity
 from ...protocol.worker_live import WorkerLiveActor, WorkerLiveAttach, WorkerLiveDetach

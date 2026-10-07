@@ -105,3 +105,11 @@ Host公共接线验证：已收齐5-A/5-B1/5-B2/5-C1/5-C2，角色签名适配�
 Host公共防护变异：完整身份比较移除后，13项holder seam测试出现13个子项/方法断言失败；恢复逐项身份门的原件13项通过0.021秒。把live runtime重新改为每次execute后stop时，连续两任务测试出现1个行为断言失败；原件1项通过0.005秒。两个变异都在Host新源码副本中运行，未覆盖实施源码，没有导入/环境ERROR，原始输出与摘要保存 host-public-*-mutation1.log / host-public-mutations1.json。
 
 公共接线由Host统一整合：服务只经内存LiveRegistry向Worker具名端点请求；实际Holder以run request与held identity、ready实例/进程/端点素材核对controller，缓存同一有界客户端。Worker初始化先设置server/client，成功renew/reconcile后仅重挂同一handle；attempt结束摘除，进程结束停止Worker自己的资源。controller每run注册临时endpoint，ready不含token、私有control含独立token，原生结束后finally注销；Holder只有实际Popen收割且进程组确认消失才对同一个文件身份清理。角色/注册表/public文件与跨微任务的ZCode/DSH keyword-only构造适配均由Host完成，尚未在日常运行时启用。
+
+5-C4 部分产物5e44cbf被拒绝：迁移后的测试仍通过JournalOwner.projection实例化整个ExistingLiveChannel，不能在旧backend退休后运行。Host仅记录并原run continue，不代改其测试；提供固定Host源码快照manifest，要求纯journal/严格模型及实际endpoint发布，保留所有原guard意图。上一模型关闭失败真实记录保留，未接受部分产物。
+
+Host退休旧后端：生产消费者已接通C-Two后，删除ExistingLiveChannel、旧raw inquiry_transport以及ActivitySidecar文件读写入口，保留纯journal投影与规范化活动模型。write_json_atomic检索只有退休ActivitySidecar调用，没有usage生产读取方，故同批删除；早先Host要求保留的假设已撤回。第一次固定59项测试因Host误删json import出现9个NameError，恢复equality_key实际依赖后59项通过1.997秒，原始失败保留。
+
+跨交付整合由Host适配ZCode/DSH原生测试：调用keyword-only InquiryBridge，ZCode晚绑定时启动实际owner队列消费者，DSH由native run自己建立唯一owner，SDK连接仅在测试中局部替换；不再用旧raw socket/backend。原guard编号保留，失联/错token断言改查实际C-Two分类。103项聚焦第二轮只剩错token夹具未修改真正_token的1项断言失败（102项通过，26.748秒），修正夹具后该1项通过0.191秒。原先5个旧构造导入错误与2个旧分类断言失败均留原日志，未记为变异证据。
+
+5-C3记录接续continue在workspace准备阶段返回WORKSPACE_GIT_ERROR，没有启动模型，既有五路径固定产物de798ea与测试不变。该continue已失效；Host不改变Worker回合58通过/1失败的历史结论，以自己固定副本59通过及公共holder守卫验证完成整合审查；write_json_atomic用途的小更正由Host直接处理并登记，不重跑不变测试。

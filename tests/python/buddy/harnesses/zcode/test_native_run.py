@@ -52,120 +52,67 @@ from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, S
 _FIXTURE_BRIDGES = weakref.WeakValueDictionary()
 
 
-def fixture_bridge_constructor(original, credentials, options):
-    """Keep actual baseline receipt/journal rules; mock only socket mounting."""
-    # Legacy transport materials live only behind this mock boundary. The
-    # actual native-run service credentials can remain journal/signature-only.
-    legacy = dict(credentials)
-    legacy.setdefault("socketPath", "fixture:" + options["journal_path"])
-    legacy.setdefault("token", "e" * 64)
-    bridge = original(legacy, **{key: value for key, value in options.items() if key != "live"})
-    for locator in (credentials.get("socketPath"), credentials.get("resultsPath")):
+def fixture_inquiry_bridge(credentials=None, **kwargs):
+    """Actual owner; retained locator is only a test fixture's lookup key."""
+    bridge = native_run.make_inquiry_bridge(**kwargs)
+    for locator in ((credentials or {}).get("socketPath"), kwargs["journal_path"]):
         if locator:
             _FIXTURE_BRIDGES[str(locator)] = bridge
-
-    def start():
-        bridge._load_journal()
-        bridge.mounted = True
-
-    bridge.start = start
     return bridge
 
 
-def fixture_bridge_request(credentials, method, payload, *, timeout_ms):
-    """The explicit 5-C1 mock boundary invokes the actual owner's handler."""
-    locator = credentials.get("socketPath") or credentials.get("resultsPath") or ""
-    bridge = _FIXTURE_BRIDGES.get(str(locator))
-    if bridge is None:
-        return {"ok": False, "reason": "bridge-unreachable"}
-    reply = bridge.handle({"version": 1, "id": "fixture-request", "token": credentials.get("token", bridge.token),
-                           "method": method, **payload})
-    if reply.get("ok") is not True:
-        return {"ok": False, "reason": "bridge-refused", "code": reply.get("error")}
-    return {"ok": True, "value": reply.get("value")}
+def fixture_ask(bridge, frame):
+    from hey_my_buddy.buddy.harnesses.inquiry_bridge import _owner_response
+    return bridge._ask(frame, _owner_response)
 
 
 def fixture_live_channel(case, identity, *, credentials, journal_path, activity_path, harness="zcode"):
-    """Project the baseline 5-C1 producer through the real shared endpoint.
-
-    Only the producer remains the baseline journal/bridge implementation; the
-    transport boundary is mocked to call the three C-Two operations in-process.
-    This verifies their strict contracts without claiming the pending public
-    InquiryBridge integration or starting another C-Two server.
-    """
+    """Use the actual owner and shared endpoint; only SDK connection is local."""
     from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
     from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
-    from hey_my_buddy.buddy.harnesses.inquiry_bridge import bind_live_channel as baseline_producer
+    from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
     from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-    bridge_transport = mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.bridge_request",
-                                  side_effect=fixture_bridge_request)
-    bridge_transport.start()
-    case.addCleanup(bridge_transport.stop)
-    producer = baseline_producer(identity, credentials=credentials, journal_path=journal_path,
-                                 activity_path=activity_path, capabilities=EXISTING_CAPABILITIES[harness])
     endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness], TEST_CRM,
-                               instance_id="c" * 64, token="d" * 64)
+                               instance_id="c"*64, token="d"*64)
     channel = CTwoLiveChannel(identity, TEST_CRM, name="Test Producer", address="fixture-address",
-                             instance_id="c" * 64, token="d" * 64)
-    halted = threading.Event()
-
-    def publish(snapshot):
-        endpoint.publish_snapshot(snapshot)
-        for entry in snapshot.inquiries:
-            endpoint.publish_inquiry_state(entry)
-
-    def owner():
-        while not halted.is_set():
-            request = endpoint.consume_request(0.02)
-            if request is not None:
-                reply = producer.request(request, timeout_ms=1000)
-                endpoint.settle_request(request.request_id, reply)
-
+                             instance_id="c"*64, token="d"*64)
+    # DSH creates its owner when the native turn starts; its endpoint must not
+    # acquire a competing fixture consumer before that owner exists.
+    bridge = None
+    if harness != "dsh":
+        locator = credentials.get("socketPath") or journal_path
+        bridge = _FIXTURE_BRIDGES.get(str(locator))
+        if bridge is None:
+            bridge = InquiryBridge(identity={"taskId": identity.task_id, "attemptId": identity.attempt_id,
+                "generation": identity.generation, "turnId": identity.turn_id},
+                journal_path=journal_path or str(Path(activity_path).parent / "missing-journal"),
+                error_factory=native_run.NativeError, event_metadata=lambda _: (None, None),
+                limitation=COOPERATIVE_INQUIRY_NOTE, live=endpoint)
+            bridge.start()
+        else:
+            case.assertEqual((bridge.identity["taskId"], bridge.identity["attemptId"], bridge.identity["generation"],
+                              bridge.identity["turnId"]),
+                             (identity.task_id, identity.attempt_id, identity.generation, identity.turn_id))
+            bridge.live = endpoint
+            # These producer cases mount the owner before attaching the test
+            # endpoint. Run the actual owner consumer after that attachment.
+            if bridge.thread is None:
+                bridge.thread = threading.Thread(target=bridge._consume_loop, daemon=True)
+                bridge.thread.start()
     def call(operation, request_json):
-        if operation == "observe":
-            frame = json.loads(request_json)
-            inquiry_id = frame.get("inquiryId")
-            if inquiry_id is not None:
-                snapshot = producer.observe(inquiry_id=inquiry_id, timeout_ms=1000)
-                channel.fixture_source_snapshot = snapshot
-                publish(snapshot)
-            else:
-                # Publish every producer page before the endpoint's own pager
-                # serves the requested window, including journal metadata.
-                after = None
-                while True:
-                    snapshot = producer.observe(after_seq=after, limit=256, timeout_ms=1000,
-                                                fields=tuple(frame.get("fields") or
-                                                             ("activity", "inquiries", "observation")))
-                    publish(snapshot)
-                    if not snapshot.truncated:
-                        break
-                    after = max(entry.seq for entry in snapshot.inquiries)
+        if bridge is not None:
+            bridge._publish()
         return getattr(endpoint, operation)(request_json)
-
-    thread = threading.Thread(target=owner, daemon=True)
-    thread.start()
     patcher = mock.patch.object(channel, "_connect_and_call", side_effect=call)
     patcher.start()
-
     def close():
-        halted.set()
-        thread.join(timeout=2)
+        if bridge is not None:
+            bridge.close()
         patcher.stop()
         endpoint.close(reason="fixture-finished")
-
     case.addCleanup(close)
     channel.fixture_endpoint = endpoint
     return channel
-
-
-def fixture_inquiry_bridge(credentials, **kwargs):
-    """Keep baseline native receipt tests while 5-C1 owns the live constructor."""
-    original = native_run.InquiryBridge
-    with mock.patch.object(native_run, "InquiryBridge",
-                           side_effect=lambda credentials, **options:
-                           fixture_bridge_constructor(original, credentials, options)):
-        return native_run.make_inquiry_bridge(credentials, **kwargs)
 
 
 class NativeRunCase(FakeAppServerTests):
@@ -897,17 +844,15 @@ class NoToolReverseRequestTests(unittest.TestCase):
 
 class ProducerContractTests(NativeRunCase):
     def test_inquiry_factory_passes_the_controller_endpoint_without_socket_credentials(self):
-        credentials = {"resultsPath": "<private-journal>"}
         endpoint = object()
         with mock.patch.object(native_run, "InquiryBridge") as constructor:
             bridge = native_run.make_inquiry_bridge(
-                credentials, identity={"taskId": "task", "attemptId": "attempt", "generation": 1},
+                identity={"taskId": "task", "attemptId": "attempt", "generation": 1},
                 journal_path="<private-journal>", live=endpoint)
         self.assertIs(bridge, constructor.return_value)
         self.assertIs(constructor.call_args.kwargs["live"], endpoint)
-        self.assertEqual(constructor.call_args.args, (credentials,))
-        self.assertNotIn("socketPath", credentials)
-        self.assertNotIn("token", credentials)
+        self.assertEqual(constructor.call_args.args, ())
+        self.assertNotIn("credentials", constructor.call_args.kwargs)
 
     def test_activity_publisher_uses_real_normalization_order_and_throttle(self):
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
@@ -1000,7 +945,7 @@ class ProducerContractTests(NativeRunCase):
         bridge.start()
         self.addCleanup(bridge.close)
         bridge.activate("sess-live")
-        asked = bridge.handle({"version": 1, "id": "r-1", "token": credentials["token"],
+        asked = fixture_ask(bridge, {"version": 1, "id": "r-1", "token": credentials["token"],
                                "method": "ask", "inquiryId": "i-1", "question": "what is the answer?"})
         self.assertTrue(asked["ok"], asked)
         digest = _hashlib.sha256("what is the answer?".encode()).hexdigest()
@@ -1153,10 +1098,8 @@ class ProducerContractTests(NativeRunCase):
         # encode. The paging budget now measures the journal fact together with
         # the entries, so every returned page encodes within the 64 KiB bound
         # and the full answer set stays reachable through the pagination. The
-        # byte check uses the production paging bound itself (_bounded_frame,
-        # the encoder the channel's pager measures pages with) after the
-        # step-only encode/decode wrappers went with 2-D.
-        from hey_my_buddy.buddy.harnesses.live import _bounded_frame
+        # Measure the actual canonical wire frame returned by the C-Two pager.
+        from hey_my_buddy.json_codec import canonical_json
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-frame-",
@@ -1186,7 +1129,7 @@ class ProducerContractTests(NativeRunCase):
         while True:
             snapshot = channel.observe(after_seq=after, limit=256, timeout_ms=1500,
                                        fields=("inquiries",))
-            encoded = _bounded_frame(snapshot.to_payload(), "live page")
+            encoded = canonical_json(snapshot.to_payload())
             self.assertLessEqual(len(encoded.encode()), 64 * 1024,
                                  f"page {pages} must encode within the frame bound")
             entries.extend(snapshot.inquiries)
@@ -1227,7 +1170,7 @@ class ProducerContractTests(NativeRunCase):
         bridge.activate("sess-live")
         question = "what is the answer?"
         digest = _hashlib.sha256(question.encode()).hexdigest()
-        self.assertTrue(bridge.handle({"version": 1, "id": "r-1", "token": credentials["token"],
+        self.assertTrue(fixture_ask(bridge, {"version": 1, "id": "r-1", "token": credentials["token"],
                                        "method": "ask", "inquiryId": "i-1", "question": question})["ok"])
         bridge.deliver_inquiries({"inquiries": [{"inquiryId": "i-1", "questionSha256": digest}]},
                                  "call-checkpoint")
@@ -1309,7 +1252,7 @@ class ProducerContractTests(NativeRunCase):
         bridge.snapshot = oversized_snapshot
         broken = channel.observe(after_seq=None, limit=1, timeout_ms=1000, fields=("observation",))
         self.assertIs(broken.observed, False)
-        self.assertEqual(broken.reason, "observation-unavailable")
+        self.assertEqual(broken.reason, "journal-unavailable")
 
     def test_the_answer_point_query_reads_one_native_answer_only(self):
         import hashlib as _hashlib
@@ -1335,16 +1278,13 @@ class ProducerContractTests(NativeRunCase):
         empty = channel.observe(inquiry_id="i-none", timeout_ms=1000)
         # The baseline native producer still reports its refusal verbatim;
         # the shared endpoint has no published answer and returns known absence.
-        source = channel.fixture_source_snapshot
-        self.assertIs(source.observed, False)
-        self.assertEqual((source.reason, source.error), ("bridge-refused", "not-ready"))
         self.assertIs(empty.observed, True)
         self.assertIsNone(empty.reason)
         self.assertIsNone(empty.error)
         self.assertEqual(empty.inquiries, ())
         question = "what is the answer?"
         digest = _hashlib.sha256(question.encode()).hexdigest()
-        self.assertTrue(bridge.handle({"version": 1, "id": "r-1", "token": credentials["token"],
+        self.assertTrue(fixture_ask(bridge, {"version": 1, "id": "r-1", "token": credentials["token"],
                                        "method": "ask", "inquiryId": "i-1", "question": question})["ok"])
         bridge.record_answer({"inquiryId": "i-1", "questionSha256": digest,
                               "answer": "the point answer"}, "call-answer")
@@ -1395,20 +1335,22 @@ class ProducerContractTests(NativeRunCase):
         refused = channel.request(request, timeout_ms=1000)
         self.assertEqual((refused.status, refused.reason_code, refused.error_code),
                          ("unavailable", "bridge-refused", "not-ready"))
-        # An unreachable socket keeps its own transport classification.
+        # Connection loss keeps the C-Two transport classification.
         gone = bind_live_channel(identity, credentials={"socketPath": str(temp / "absent.sock"),
                                                         "token": credentials["token"]},
                                  journal_path=None, activity_path=temp / "activity.json")
-        unreachable = gone.request(request, timeout_ms=1000)
+        with mock.patch.object(gone, "_connect_and_call", side_effect=ConnectionError("fixture peer lost")):
+            unreachable = gone.request(request, timeout_ms=1000)
         self.assertEqual((unreachable.status, unreachable.reason_code, unreachable.error_code),
-                         ("unavailable", "bridge-unreachable", None))
+                         ("unavailable", "transport-unreachable", None))
         # A wrong token is a refused ask whose code is the peer's own.
         foreign = bind_live_channel(identity, credentials={"socketPath": credentials["socketPath"],
                                                            "token": "b" * 64},
                                     journal_path=None, activity_path=temp / "activity.json")
+        foreign._token = "b" * 64
         unauthorized = foreign.request(request, timeout_ms=1000)
         self.assertEqual((unauthorized.status, unauthorized.reason_code, unauthorized.error_code),
-                         ("unavailable", "bridge-refused", "unauthorized"))
+                         ("unavailable", "token-mismatch", None))
 
 
 if __name__ == "__main__":

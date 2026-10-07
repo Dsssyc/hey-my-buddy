@@ -1005,11 +1005,11 @@ class RoleSeamFunctionTests(unittest.TestCase):
         endpoint = object()
         with mock.patch.object(native_run, "InquiryBridge") as constructor:
             bridge = native_run.make_inquiry_bridge(
-                credentials, identity={"taskId": "task", "attemptId": "attempt", "generation": 1},
+                identity={"taskId": "task", "attemptId": "attempt", "generation": 1},
                 journal_path="<private-journal>", live=endpoint)
         self.assertIs(bridge, constructor.return_value)
         self.assertIs(constructor.call_args.kwargs["live"], endpoint)
-        self.assertEqual(constructor.call_args.args, (credentials,))
+        self.assertEqual(constructor.call_args.args, ())
         self.assertNotIn("socketPath", credentials)
         self.assertNotIn("token", credentials)
 
@@ -1100,17 +1100,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
 
 
 class InquirySeamTests(NativeRunCase):
-    """Native receipts retained across the explicit pending 5-C1 boundary mock."""
-
-    def setUp(self):
-        super().setUp()
-        from buddy.harnesses.zcode.test_native_run import fixture_bridge_constructor
-        original = native_run.InquiryBridge
-        patcher = mock.patch.object(native_run, "InquiryBridge",
-                                    side_effect=lambda credentials, **options:
-                                    fixture_bridge_constructor(original, credentials, options))
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    """Native receipts through the actual C-Two owner and session service."""
 
     QUESTION = "What is the bounded state of the private checkout?"
 

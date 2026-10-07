@@ -67,7 +67,7 @@ from ...errors import BoardError
 from ...json_codec import canonical_json, decode_bounded_frame, decode_strict_json
 from ...protocol import activity as activity_protocol
 from ...protocol import rpc_config
-from ...protocol.inquiry_transport import DEFAULT_TRANSPORT_TIMEOUT_MS
+from ...protocol.inquiry import DEFAULT_TRANSPORT_TIMEOUT_MS
 from ...protocol.internal_models import (
     FrozenJson,
     Hex64,

@@ -505,7 +505,7 @@ class InquiryBridge:
 #: fields the board's ``live`` view reads. The bridge's own ``limits`` and its
 #: start timestamp stay behind: they are dropped here, never hidden in a JSON
 #: slot, and the recent-event metadata is renamed to ``recentActivity`` so the
-#: snapshot's ``activity`` field keeps meaning the normalized sidecar.
+#: snapshot's ``activity`` field keeps meaning the normalized activity publication.
 _OBSERVATION_FIELDS = ("ready", "observedAt", "sessionId", "agentStatus", "inbox", "lastEvent",
                        "activityDropped", "replyTool", "capability", "supported", "attention",
                        "journal", "deliveryMode", "limitation", "unavailable", "error")

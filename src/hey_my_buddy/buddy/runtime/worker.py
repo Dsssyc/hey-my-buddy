@@ -1062,7 +1062,7 @@ class _Renewal(threading.Thread):
         ``bound`` carries the channel whose stored public request verified
         against the identity this worker received with the handle;
         ``unextracted`` (cached as final) means the harness's registered run
-        module declares no live binding and the existing sidecar path applies;
+        module declares no live binding and contributes no live activity;
         ``unavailable`` — a pending, unreadable or foreign request — is never
         cached, so the next tick retries the binding and this tick reports no
         update instead of reading around its own channel.

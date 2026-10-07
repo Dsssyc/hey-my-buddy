@@ -245,8 +245,8 @@ class DshActivity:
     It keeps only what :mod:`hey_my_buddy.protocol.activity` allows: a phase,
     timestamps, an event ordinal, the last tool name and non-negative counts.
     Prompts, tool arguments, outputs, credentials and reasoning never enter it;
-    the shared :class:`~hey_my_buddy.protocol.activity.ActivitySidecar` owns
-    validation, atomic replacement and throttling.
+    the shared :class:`~hey_my_buddy.protocol.activity.ActivityPublisher` owns
+    validation, live publication and throttling.
     """
 
     def __init__(self, session_id: str | None = None):
