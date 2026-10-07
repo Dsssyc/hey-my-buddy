@@ -910,21 +910,8 @@ class CTwoLiveEndpoint:
         reason code the caller reports — the narrow token itself never appears
         in any refusal.
         """
-        value, refusal = _decode_wire_frame(request_json)
-        if refusal is not None:
-            return None, refusal
-        try:
-            frame = model.from_payload(value)
-        except BoardError:
-            return None, "frame-invalid"
-        if frame.instance_id != self._instance_id:
-            return None, "instance-mismatch"
-        if not secrets.compare_digest(frame.token, self._token):
-            return None, "token-mismatch"
-        for wire_name, field_name in _IDENTITY_COMPONENTS:
-            if getattr(frame.identity, field_name) != getattr(self._identity, field_name):
-                return None, f"identity-mismatch:{wire_name}"
-        return frame, None
+        return authenticate_live_frame(request_json, model, identity=self._identity,
+                                       instance_id=self._instance_id, token=self._token)
 
     def _question_entry(self, question_id: str) -> InquiryState | None:
         for entry in self._entries:
@@ -1005,7 +992,27 @@ class CTwoLiveEndpoint:
             LiveReply(status="unavailable", reason_code=reason_code).to_payload())
 
 
-def _decode_wire_frame(raw: Any) -> tuple[Any, str | None]:
+def authenticate_live_frame(request_json: Any, model: type, *, identity: RunIdentity,
+                            instance_id: str, token: str):
+    """The same bounded frame and complete binding validation at both live hops."""
+    value, refusal = decode_live_wire_frame(request_json)
+    if refusal is not None:
+        return None, refusal
+    try:
+        frame = model.from_payload(value)
+    except BoardError:
+        return None, "frame-invalid"
+    if frame.instance_id != instance_id:
+        return None, "instance-mismatch"
+    if not secrets.compare_digest(frame.token, token):
+        return None, "token-mismatch"
+    for wire_name, field_name in _IDENTITY_COMPONENTS:
+        if getattr(frame.identity, field_name) != getattr(identity, field_name):
+            return None, f"identity-mismatch:{wire_name}"
+    return frame, None
+
+
+def decode_live_wire_frame(raw: Any) -> tuple[Any, str | None]:
     """The strict bounded decode every inbound frame passes first."""
     if not isinstance(raw, str):
         return None, "frame-invalid"
@@ -1203,5 +1210,5 @@ __all__ = [
     "C_TWO_IPC_DIRECTORY", "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
     "ConfirmedProcessGone", "EndpointSocketFact", "LiveEndpointDescriptor", "LiveWireObserve",
     "LiveWireQuery", "LiveWireRequest", "MAX_INFLIGHT_LIVE_CALLS", "MAX_PENDING_LIVE_REQUESTS",
-    "cleanup_abandoned_socket", "random_person_name", "write_ready_material",
+    "authenticate_live_frame", "decode_live_wire_frame", "cleanup_abandoned_socket", "random_person_name", "write_ready_material",
 ]

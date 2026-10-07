@@ -59,3 +59,7 @@ Claude 两次原生冒烟的私有根在核实停止后已由 Host 按各自创�
 两条微任务因 Z.ai 不可重试的限流（rate_limited、code 1308、HTTP 429）失败，按用户第五步许可在原 run 上继续，未取消或另开。5-B1 被限流的 buddy 为 zcode/zai-api/GLM-5.3-Flash/max，原路由决定 dec-024b214f-2b5b-4c75-927c-df5acb3999fd；5-B2 为 zcode/zai-api/GLM-5.3/max，原路由决定 dec-4f931ac6-fef4-4105-9caa-a011e4cd5736。两条均改用已启用且可用的 codex/openai/gpt-6.1-sol/high，保留原检出、任务根与范围；未修改模型启用、登录或配置。
 
 Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既有 normalize_activity/is_newer 与相同阶段、时间节流，只将写文件改为调用实际端点发布函数。未成功的发布不前移序列，保留重试；阶段变化即时发送。新增一项行为测试验证合并、发布失败与新阶段，聚焦测试 1 个通过（0.001 秒）；这不是另一个运行通道。暂保留旧 sidecar 实现供尚未整合的调用方，最终接线时删除。
+
+5-A 原 run 已确认验收 accepted，受管检出 cleanup-plan/apply 已成功。Host 先保留任务材料 20 份并记录摘要，再按创建时登记的单个确切任务根整体回收，未扫描或删除其他端点、目录。
+
+5-B2 报告公共接口缺口后，Host 将 5-A 的严格有界解码和完整身份、实例、token 认证原实现提取为 decode_live_wire_frame / authenticate_live_frame，原 endpoint 同源调用，无新规则或账本。后端 53 项聚焦回归通过（原始输出 host-live-auth-focused1.log）；此公共文件由 Host 维护。Worker 的隔离 Codex 检出不能写共享 Git 元数据，后续若只因提交命令失败，由 Host 核对文件来源和范围后代执行 git add/commit，不代改实现并登记。
