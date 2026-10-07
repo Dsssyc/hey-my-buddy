@@ -69,3 +69,9 @@ Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既
 5-B1 Codex 已完成实现、聚焦与变异验证但无法写受管检出外的共享 Git 元数据；Host 按原 run assistance 请求只执行精确四路径暂存和提交（0bfbbaaac34cff3392b7d9ac9cfdf38eeb103ed1），执行前后文件摘要相等，没有源代码或测试代改。之后原 run continue 收尾，不重跑不变的测试。
 
 5-B1 固定交付 6fefde0c18f6659a0fb094c25b443255d9fd1590 已审查：四路径与范围对应，两份 Python 源码与 Host 独立审查的 6fefde0c 副本逐字相同，29 项聚焦测试通过 3.169 秒。真实 claim 的摘要列尚空仍能正常绑定；治理身份缺失、未知 Worker 实例与错实例 view 均被拒绝。7 个原始变异红日志已核对。最终 continue 只收尾固定提交说明，未重跑不变的测试。已将内存 registry 类整合，公共服务/Worker 接线与整步检查仍待整合。
+
+5-B1 受管检出清理计划已应用，路径消失且两层任务停止已确认。Host 保留 30 份原始日志、变异脚本与摘要后按创建时登记的单个任务根回收；其固定提交权限说明作为当时事实保留，Host 代执行提交及封存完成的后续事实在本整合登记记录。
+
+C-Two 点查口径由 Host 选择：按当前所有者已发布的事实查询。成功读取但该 id 没有已发布条目时，observed=true、inquiries=[]；这只表示没有已发布的该条目，不证明原生端没有问题或回答，也不改变黑板 pending 状态。旧 socket 直接点查原生所有者时曾返回 bridge-refused/not-ready；第五步的通道投影差异在此登记，不把两者称为逐字段相同。原生 observation 来源失败的 observed/reason/error 仍原样发布，失联、关停不成为 native stopped 证据。
+
+5-C2 固定产物 351b9f80 已核对十路径范围，并在独立固定副本运行四个 native_run 模块，197 项通过，46.222 秒。三个实际原生事件/callback/计数防护变异的绿/红原始日志已核对。Native producer 使用共同 endpoint 与 ActivityPublisher，Codex 原计数/节流单独保留；零安装版 harness/真实模型检查。公共桥、角色工厂与跨进程运输仍待后续整合，未声称此次聚焦已证明这些边界。

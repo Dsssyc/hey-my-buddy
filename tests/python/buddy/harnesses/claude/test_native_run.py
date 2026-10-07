@@ -34,6 +34,10 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.roles.worker_services import OUTCOME_SCHEMA as WORKER_SCHEMA
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, LiveWireObserve
+from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
+from hey_my_buddy.protocol.contracts import HarnessRunLive
+from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
@@ -369,7 +373,7 @@ class RequestGateTests(NativeRunCase):
         # entries are gone — registration is the only switch left, and it is
         # the Host's line in the registry.
         for operation in ("run", "run_discovery", "check_preparation", "session_facts",
-                          "validate_turn_provenance", "prepare_run_services", "bind_live_channel"):
+                          "validate_turn_provenance", "prepare_run_services"):
             self.assertTrue(callable(getattr(native_run, operation, None)), operation)
         from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
         description = ClaudeAdapter()
@@ -698,25 +702,18 @@ class RoleSurfaceTests(NativeRunCase):
         self.assertFalse(self.state_path.exists(), "no native child may start from a preparation check")
         native_run.check_preparation({"provider": "anthropic"}, dict(os.environ))
 
-    def test_the_narrow_path_binding_routes_the_activity_sidecar(self):
-        activity_dir = self.base / "attempt-activity"
-        activity_dir.mkdir()
-        binding = native_run.prepare_run_services(invocation_root=self.base / "inv",
-                                                  native_root=self.base / "nat",
-                                                  activity_dir=activity_dir,
-                                                  account=None, tool_scope="write")
-        self.assertEqual(binding, native_run.BoundRunPaths(activity_dir=activity_dir))
+    def test_the_optional_live_service_binding_consumes_the_endpoint(self):
+        binding = native_run.prepare_run_services()
+        self.assertEqual(binding, native_run.RunServices())
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = True
         result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
-                     services=binding, cancelled=lambda: False)
+                     services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        document = json.loads((activity_dir / "activity.json").read_bytes())
-        self.assertEqual(document["attemptId"], result.identity.attempt_id)
-        self.assertEqual(document["activity"]["phase"], "finishing")
-        # A look-alike binding — the whole control file, a worker input, a bare
-        # dict — is still refused; the run accepts only its own narrow type.
+        self.assertEqual(endpoint.publish_activity.call_args.args[0], result.activity.value)
         with self.assertRaises(BoardError):
             run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
-                services={"activity_dir": str(activity_dir)}, cancelled=lambda: False)
+                services={"live": endpoint}, cancelled=lambda: False)
 
     def test_session_facts_report_the_user_store_without_a_binding_claim(self):
         facts = native_run.session_facts(self.base / "native", "session-x")
@@ -728,30 +725,68 @@ class RoleSurfaceTests(NativeRunCase):
         empty = native_run.session_facts(self.base / "native", None)
         self.assertFalse(empty["captured"])
 
-    def test_bind_live_channel_reads_the_identity_bound_activity_sidecar(self):
+    def test_native_events_publish_the_identity_bound_shared_endpoint_activity(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("clean")
         request = self.request()
-        activity_dir = self.base / "live-activity"
-        activity_dir.mkdir()
-        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
-                     services=native_run.BoundRunPaths(activity_dir=activity_dir),
-                     cancelled=lambda: False)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["claude"], HarnessRunLive,
+                                   instance_id="a" * 64, token="b" * 64)
+        with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        from hey_my_buddy.protocol import activity as activity_protocol
-        channel = native_run.bind_live_channel(request.identity, credentials={}, journal_path=None,
-                                               activity_path=activity_protocol.sidecar_path(activity_dir))
-        self.assertEqual(channel.identity, request.identity)
-        self.assertEqual(channel.capabilities().inquiry_delivery, "unsupported")
-        snapshot = channel.observe(timeout_ms=100, limit=10)
-        self.assertIsNotNone(snapshot.activity)
-        self.assertEqual(snapshot.activity.value["phase"], "finishing")
-        # A foreign attempt's sidecar reads as nothing; the channel never
-        # forwards another execution's activity.
-        foreign = activity_protocol.ActivitySidecar(self.base / "foreign", task_id="other",
-                                                    attempt_id="other", generation=9)
-        foreign.publish({"phase": "starting", "eventSeq": 1, "observedAt": "2026-10-06T00:00:00Z"})
-        stranger = native_run.bind_live_channel(request.identity, credentials={}, journal_path=None,
-                                                activity_path=activity_protocol.sidecar_path(self.base / "foreign"))
-        self.assertIsNone(stranger.observe(timeout_ms=100, limit=10).activity)
+        payloads = [call.args[0] for call in publish.call_args_list]
+        self.assertEqual([payload["phase"] for payload in payloads],
+                         ["waiting-model", "starting", "tool-running", "streaming-model", "finishing"])
+        self.assertEqual(payloads[-1]["counts"], {"modelTurns": 1, "toolCalls": 1})
+        self.assertTrue(all(normalize_activity(payload) == payload for payload in payloads))
+        self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
+        query = LiveWireObserve(identity=request.identity, instance_id="a" * 64, token="b" * 64,
+                                fields=("activity",), limit=10)
+        snapshot = json.loads(endpoint.observe(json.dumps(query.to_payload())))
+        self.assertEqual(snapshot["activity"], result.activity.value)
+        foreign = query.model_copy(update={"identity": request.identity.model_copy(
+            update={"attempt_id": "other-attempt"})})
+        self.assertIsNone(json.loads(endpoint.observe(json.dumps(foreign.to_payload())))["activity"])
+        self.assertFalse(Path(request.private_state.invocation_root, "activity.json").exists())
+
+    def test_refused_activity_publication_keeps_native_final_activity(self):
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = False
+        result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertEqual(result.activity.value["counts"]["modelTurns"], 1)
+        self.assertGreater(endpoint.publish_activity.call_count, 0)
+        publisher = native_run.ActivityPublisher(endpoint.publish_activity)
+        self.assertFalse(publisher.publish(result.activity.value))
+        self.assertIsNone(publisher.current(), "refusal is never a transmitted receipt")
+
+    def test_unknown_native_tools_keep_actual_callback_counts_and_final_facts(self):
+        self.use_fixture(STREAM_FIXTURE)
+        self.fixture_case("unknown")
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = True
+        result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.activity.value["counts"], {"modelTurns": 2, "toolCalls": 2})
+        receipts = [call.args[0] for call in endpoint.publish_activity.call_args_list]
+        self.assertEqual(receipts[-1], result.activity.value)
+        self.assertEqual([receipt["phase"] for receipt in receipts],
+                         ["waiting-model", "starting", "tool-running", "finishing"])
+
+    def test_native_failure_preserves_the_actual_callback_activity(self):
+        self.fixture_case("failed")
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = True
+        result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        self.assertEqual(endpoint.publish_activity.call_args.args[0], result.activity.value)
+        self.assertEqual(result.activity.value["phase"], "finishing")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
 
 class StructuredDeliveryTests(NativeRunCase):

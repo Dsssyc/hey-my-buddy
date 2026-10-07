@@ -30,16 +30,9 @@ them before any process starts. Model discovery (:func:`run_discovery`) is a
 separate initialize-only operation that reuses the same spawn and stop
 primitives and never sends a user message.
 
-3-B2 wiring: this module is also the registered seam's role surface. The
-shared role executor consumes :func:`check_preparation` before any spawn,
-:func:`prepare_run_services` for the one narrow path binding this harness
-actually uses (the activity sidecar directory — never the role control file,
-the worker input or a blackboard credential), :func:`session_facts` and
-:func:`validate_turn_provenance` on collection, and :func:`bind_live_channel`
-for the existing activity-reading live channel. ``services`` therefore accepts
-exactly that binding or ``None`` (a direct native module call); anything else
-is still refused. The legacy ``runner.py`` controller and its execution
-entries are gone; there is no second native path.
+The registered role surface carries preparation and native facts. The controller
+owns the common C-Two endpoint and injects it into RunServices; direct module
+fixtures can pass None and still collect the native final activity.
 """
 from __future__ import annotations
 
@@ -58,7 +51,8 @@ from typing import Any, Callable, Mapping
 from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
-from ....protocol.activity import ActivitySidecar
+from ....protocol.activity import ActivityPublisher
+from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
 from ..base import ProcessHandle
@@ -115,7 +109,6 @@ from .protocol import (
     result_quota_denial,
     total_cost_usd,
 )
-from ..live import EXISTING_CAPABILITIES, ExistingLiveChannel
 from .tool_evidence import ReadOnlyToolEvidence
 
 _SETTINGS_FILE = "settings.json"
@@ -416,10 +409,10 @@ class _TurnCollector:
     pre-user model output at replay, keeping its projected facts.
     """
 
-    def __init__(self, request: RunRequest, sidecar: ActivitySidecar,
+    def __init__(self, request: RunRequest, publisher: ActivityPublisher,
                  observer: Callable[[Mapping[str, Any]], RunFeedback],
                  native_schema_delivery: bool = False):
-        self._sidecar = sidecar
+        self._publisher = publisher
         self._observer = observer
         self.tools = ReadOnlyToolEvidence({"adapter": "claude", "taskId": request.identity.task_id,
                                            "attemptId": request.identity.attempt_id,
@@ -515,10 +508,10 @@ class _TurnCollector:
             payload["toolName"] = tool[:80]
         self.last_activity = payload
         try:
-            self._sidecar.publish(payload)
+            self._publisher.publish(payload)
         except BoardError:
             # Metadata must never fail the native turn; the last payload stays
-            # the run's own activity fact instead of a look-alike file.
+            # the run's own activity fact even when live publication is refused.
             return
 
     def settled_notify(self, native_result: dict) -> None:
@@ -908,9 +901,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native Claude Code execution: the single native path of this harness."""
     if request.harness != "claude":
         raise BoardError("INVALID_ARGUMENT", "this run module drives claude", harness=request.harness)
-    if services is not None and not isinstance(services, BoundRunPaths):
+    if services is not None and not isinstance(services, RunServices):
         # No in-run session service exists on this harness; the one accepted
-        # binding is this module's own narrow activity-path binding, and a
+        # binding is this module's own controller endpoint binding, and a
         # direct native module call may pass None.
         raise BoardError("INVALID_ARGUMENT", "claude mounts no in-run session service")
     if request.session_services:
@@ -938,15 +931,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
     try:
         preparation = _prepare(request)
-        # The activity sidecar belongs to the attempt's real activity directory
-        # when the role bound one; a direct native module call without the
-        # binding keeps the invocation root, never inventing a second location.
-        activity_directory = Path(services.activity_dir) if services is not None else preparation.invocation_root
+        live = services.live if services is not None else None
         collector = _TurnCollector(
             request,
-            ActivitySidecar(activity_directory, task_id=request.identity.task_id,
-                            attempt_id=request.identity.attempt_id,
-                            generation=request.identity.generation),
+            ActivityPublisher(live.publish_activity if live else None),
             observer,
             # The delivery identification is armed by this run's own command
             # line carrying the native schema, never by the caller's role or
@@ -1105,28 +1093,15 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
 
 @dataclasses.dataclass(frozen=True)
-class BoundRunPaths:
-    """The one narrow binding a claude run consumes: where its activity sidecar goes.
+class RunServices:
+    """The controller-owned endpoint, optional for direct native fixtures."""
 
-    The role hands exactly the attempt's activity directory; the whole control
-    file, the worker input and every blackboard credential stay outside this
-    binding, and the run reads nothing else from it.
-    """
-
-    activity_dir: Path
+    live: CTwoLiveEndpoint | None = None
 
 
-def prepare_run_services(*, invocation_root: Path, native_root: Path, activity_dir: Path,
-                         account: dict | None, tool_scope: str) -> BoundRunPaths:
-    """Bind the paths one claude run actually uses; no process, no authority.
-
-    The shared worker/fast/review binding point passes every harness the same
-    narrow materials. This harness consumes only ``activity_dir`` — the frozen
-    account already reached the launch environment through the role's own
-    account seam, and the tool scope already reached the request — so the
-    remaining parameters are accepted and left unused, never re-derived.
-    """
-    return BoundRunPaths(activity_dir=Path(activity_dir))
+def prepare_run_services() -> RunServices:
+    """Create the binding; the controller injects its own live endpoint."""
+    return RunServices()
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -1217,28 +1192,5 @@ def validate_turn_provenance(record: dict) -> str | None:
     return "the Claude P1 session identity is invalid; native-session resume is not supported"
 
 
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path) -> ExistingLiveChannel:
-    """The existing-facilities live binding of one governed claude run.
-
-    The one wired facility is activity: the channel reads the attempt's own
-    published sidecar, validated against the complete execution identity. This
-    harness delivers no inquiry — the declared capability is ``unsupported`` —
-    so no ask, journal or bridge observation is bound, and the narrow
-    materials the shared binding receives are left unused rather than routed
-    into a bypass.
-    """
-    def read_activity():
-        # The existing attempt-bound sidecar reader — validation, binding and
-        # throttling belong to it; a foreign attempt's file reads as nothing.
-        from ....protocol import activity as activity_protocol
-        return activity_protocol.read_sidecar(Path(activity_path),
-                                               task_id=identity.task_id,
-                                               attempt_id=identity.attempt_id,
-                                               generation=identity.generation)
-
-    return ExistingLiveChannel(identity, EXISTING_CAPABILITIES["claude"], read_activity=read_activity)
-
-
-__all__ = ["BoundRunPaths", "bind_live_channel", "check_preparation", "prepare_run_services",
+__all__ = ["RunServices", "check_preparation", "prepare_run_services",
            "run", "run_discovery", "session_facts", "validate_turn_provenance"]

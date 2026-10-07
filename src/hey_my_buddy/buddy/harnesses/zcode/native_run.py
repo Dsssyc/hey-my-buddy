@@ -20,11 +20,8 @@ decides whether an unknown event or a tool fact fails the run.
 
 Model discovery (:func:`run_discovery`) is a separate no-prompt metadata
 operation that reuses the same spawn and handshake primitives; it never
-masquerades as a model run. The live channel binding
-(:func:`bind_live_channel`) is the registered module's live seam operation of
-step 2-C2: the blackboard and the Worker runtime reach this harness's live
-facilities only through the registry, never by importing this package
-directly.
+masquerades as a model run. The controller supplies the shared live endpoint
+through this run's narrow session services.
 """
 from __future__ import annotations
 
@@ -59,7 +56,6 @@ from ..native_support import (
     utc_now,
 )
 from ..run_contract import (
-    RunIdentity,
     ActivityPackage,
     MAX_SCHEMA_BYTES,
     CheckedConfiguration,
@@ -87,7 +83,9 @@ from ..run_contract import (
     StopLayer,
 )
 from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths, snapshot_provider_files
-from ..inquiry_bridge import InquiryBridge, bind_live_channel as bind_checkpoint_channel
+from ..inquiry_bridge import InquiryBridge
+from ..c_two_live import CTwoLiveEndpoint
+from ....protocol.activity import ActivityPublisher
 from .protocol import (
     COOPERATIVE_INQUIRY_NOTE,
     ActivityProjection,
@@ -213,15 +211,14 @@ class SessionServices:
     The driver sees only this narrow binding: the mechanical mount, the role's
     outcome validator for finish-receipt verification, the inquiry bridge
     credentials (``None`` when this run carries no inquiry channel) and the
-    paths of this attempt's published live evidence — the activity sidecar
-    directory and the native stderr log. No board client, database handle,
-    execution context or credential file travels in it.
+    controller-owned live endpoint and the native stderr log. No board client,
+    database handle, execution context or credential file travels in it.
     """
 
     mount: SessionServiceMount
     validate_outcome: Callable[[object], str | None]
     inquiry: dict | None = None
-    activity_dir: str | None = None
+    live: CTwoLiveEndpoint | None = None
     native_stderr: str | None = None
 
 
@@ -290,17 +287,12 @@ def _inquiry_event_metadata(message: dict) -> dict:
 
 
 def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
-                        attention_path: str | None = None) -> InquiryBridge:
+                        attention_path: str | None = None,
+                        live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
-                         attention_path=attention_path, error_factory=NativeError,
+                         attention_path=attention_path, live=live, error_factory=NativeError,
                          event_metadata=_inquiry_event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE)
 
-
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path):
-    from ..live import EXISTING_CAPABILITIES
-    return bind_checkpoint_channel(identity, credentials=credentials, journal_path=journal_path,
-                                   activity_path=activity_path, capabilities=EXISTING_CAPABILITIES["zcode"])
 
 def check_preparation(spec: dict, environment: dict) -> None:
     """Confirm native capability and the selected provider without spawning."""
@@ -316,7 +308,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
 def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str,
                      attention_path: Path, session_tools, completion_tool: str,
                      validate_outcome, inquiry: dict | None, inquiry_tools: tuple[str, ...],
-                     activity_dir: str, native_stderr: str) -> BoundSessionServices:
+                     native_stderr: str) -> BoundSessionServices:
     """Expose only the binding the role actually consumes, without a process."""
     mount = prepare_session_service(
         invocation_root=invocation_root, identity=identity, input_sha256=input_sha256,
@@ -328,7 +320,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
         completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
         answer_tool=mount.answer_tool,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=inquiry,
-                                 activity_dir=activity_dir, native_stderr=native_stderr))
+                                 native_stderr=native_stderr))
 
 
 def session_facts(native_root: Path, session_id: str | None) -> dict:
@@ -1194,28 +1186,23 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
     # identity is bound onto them the moment the root is opened.
     outcome.projection = ActivityProjection(None)
     outcome.attempt_usage = ZcodeAttemptUsage(None, resumed=mode == "native-session")
-    # The real helper owns validation, atomic replacement and throttling;
-    # its state lives for the whole run so same-phase updates are
-    # coalesced instead of rewriting the sidecar for every token event.
-    from ....protocol.activity import ActivitySidecar
-    sidecar_dir = ensure_private_dir(Path(services.activity_dir) if services.activity_dir else invocation_root)
-    sidecar = ActivitySidecar(sidecar_dir, task_id=request.identity.task_id,
-                              attempt_id=request.identity.attempt_id,
-                              generation=request.identity.generation)
+    # Reuse the shared normalizer, monotone ordering and throttle for the
+    # whole native turn. Final facts stay in the native projection even when
+    # the controller has no live endpoint or refuses a publication.
+    publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def publish_activity() -> None:
         try:
-            sidecar.publish(outcome.projection.payload())
+            publisher.publish(outcome.projection.payload())
         except BoardError:
-            # Metadata must never fail the native turn; the failure is
-            # reported instead of writing a look-alike sidecar.
-            return
+            return  # optional metadata cannot fail the native turn
 
     if services.inquiry is not None:
         outcome.inquiry_bridge = make_inquiry_bridge(services.inquiry,
                                                      identity=_bridge_identity(request),
                                                      journal_path=str(services.inquiry.get("resultsPath") or ""),
-                                                     attention_path=mount.bridge.get("attentionPath"))
+                                                     attention_path=mount.bridge.get("attentionPath"),
+                                                     live=services.live)
         outcome.inquiry_bridge.start()
         state.inquiry = outcome.inquiry_bridge.report()
 
@@ -1246,7 +1233,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
         if outcome.inquiry_bridge is not None:
             outcome.inquiry_bridge.note_event(message, outcome.projection.phase)
         # Native events in a long phase still advance the observation.
-        # The sidecar coalesces token-level updates within its own window.
+        # The publisher coalesces token-level updates within its own window.
         publish_activity()
 
     def bind_worker_session(opened_session: str) -> None:
@@ -1620,7 +1607,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
 
 __all__ = [
-    "NoToolProtocol", "SessionServiceMount", "SessionServices", "bind_live_channel", "catalog",
+    "NoToolProtocol", "SessionServiceMount", "SessionServices", "catalog",
     "configure_session", "execution_deadline", "prepare_session_service", "prepare_services",
     "check_preparation", "session_facts", "validate_turn_provenance", "native_evidence", "run",
     "run_discovery", "selected",

@@ -26,9 +26,8 @@ operation over the same spawn and handshake primitives; it never masquerades
 as a model run. The role-facing seam operations beside it —
 :func:`check_preparation`, :func:`prepare_run_services`,
 :func:`validate_turn_provenance`, :func:`session_facts`,
-:func:`cleanup_after_run`, :func:`native_evidence` and
-:func:`bind_live_channel` — carry this harness's own narrow facts to the
-shared role executor, which owns every prompt, completion rule and observer.
+:func:`cleanup_after_run` and :func:`native_evidence` — carry this harness's
+own narrow facts to the shared role executor, which owns every prompt, completion rule and observer.
 """
 from __future__ import annotations
 
@@ -46,6 +45,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ....errors import BoardError
+from ....protocol.activity import ActivityPublisher
+from ..c_two_live import CTwoLiveEndpoint
 from ....private_dirs import account_root, ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ...runtime.windows_process import owned_popen
@@ -263,19 +264,15 @@ class _Classifier:
 
 @dataclasses.dataclass(frozen=True)
 class RunServices:
-    """The role-held narrow binding of one codex run (the seam's ``services``).
+    """The native credential source, frozen account and controller-owned live endpoint.
 
-    Three facts only, each with an existing legacy source: the Worker coding
-    home's credential source (the full ``credential_source`` value the coding
-    preparation consumes and the resume binding compares), the frozen account
-    identity the structured calls check against ``account/read``, and this
-    attempt's live activity directory. ``None`` means the run carries none.
-    No board client, ExecutionContext or credential file content travels here.
+    No blackboard client, ExecutionContext or credential file content travels here.
+    Direct fixtures can omit the endpoint while retaining native activity facts.
     """
 
     credential_source: dict | None = None
     account: dict | None = None
-    activity_dir: str | None = None
+    live: CTwoLiveEndpoint | None = None
 
 
 # -- the run state ----------------------------------------------------------------
@@ -353,18 +350,20 @@ class _Spawn:
 
 
 class _ActivityWriter:
-    """The throttled live activity sidecar of the worker and review carriers."""
+    """Preserve Codex's own counting and throttle before the shared live publisher."""
 
-    def __init__(self, path: Path | None, request: RunRequest):
-        self.path = ensure_private_dir(path.parent) / path.name if path is not None else None
-        self.identity = {"taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
-                         "generation": request.identity.generation}
+    def __init__(self, live: CTwoLiveEndpoint | None):
+        # Codex already coalesces on its own phase/count state below. A second
+        # throttle could hide a fast correction's final receipt after its
+        # per-turn sequence restarted; keep shared validation and ordering only.
+        self.publisher = ActivityPublisher(live.publish_activity if live else None,
+                                           min_interval_seconds=0)
         self.state: dict = {}
         self.last_payload: dict | None = None
 
     def write(self, evidence: TurnEvidence, phase: str, tool: str | None = None, *,
               model_turns_base: int = 0, tool_calls: int | None = None) -> None:
-        if self.path is None or evidence is None:
+        if evidence is None:
             return
         state, tick, now = self.state, time.monotonic(), utc_now()
         if tool:
@@ -378,12 +377,15 @@ class _ActivityWriter:
                               "toolCalls": evidence.tool_calls if tool_calls is None else tool_calls}}
         if state.get("lastToolActivityAt"):
             payload.update(lastToolActivityAt=state["lastToolActivityAt"], toolName=state["toolName"])
-        record = {"version": 1, **self.identity, "activity": payload}
-        temp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
-        private_json(temp, record)
-        os.replace(temp, self.path)
+        # A refused publication never erases the run's own observed activity.
+        # Codex retains its native throttle and tool metadata between receipts;
+        # ActivityPublisher adds canonical validation and monotone publication.
         state.update(phase=phase, lastWrite=tick)
         self.last_payload = payload
+        try:
+            self.publisher.publish(payload)
+        except BoardError:
+            return
 
 
 # -- phase 1: preparation (private roots, home, environment) ----------------------
@@ -988,8 +990,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     projector = CodexToolEventProjector({"adapter": "codex", "taskId": request.identity.task_id,
                                          "attemptId": request.identity.attempt_id,
                                          "generation": request.identity.generation})
-    activity = _ActivityWriter(Path(services.activity_dir) / "activity.json"
-                               if services.activity_dir else None, request)
+    activity = _ActivityWriter(services.live)
     chain = _EventChain(facts, _Classifier(facts), projector, overflow_raises=mode == "fast")
     review_policy: dict | None = None
     try:
@@ -1656,22 +1657,19 @@ def _incoming_worker_selection(environment: dict, state: Path) -> dict | None:
     return None
 
 
-def prepare_run_services(*, invocation_root: Path, native_root: Path,
-                         activity_dir, account: dict | None, tool_scope: str = "write") -> RunServices:
+def prepare_run_services(*, account: dict | None, tool_scope: str = "write") -> RunServices:
     """Bind this harness's narrow run services from the controller process.
 
     The Worker (``write``) coding home's credential source is resolved exactly
     as the legacy carrier did: the service-frozen account when one is bound,
     else the checked Worker selection the account environment already carries
     — never a native fallback for a bound selection. The structured calls
-    (``none`` and ``read``) bind only the frozen account identity and this
-    attempt's activity directory: no coding home is prepared and no coding
-    credential source exists on those carriers. Only paths and identities
+    (``none`` and ``read``) bind only the frozen account identity: no coding
+    home is prepared and no coding credential source exists on those carriers. Only paths and identities
     enter the binding; no credential content is read.
     """
     if tool_scope in ("none", "read"):
-        return RunServices(account=account if isinstance(account, dict) else None,
-                           activity_dir=str(activity_dir))
+        return RunServices(account=account if isinstance(account, dict) else None)
     if tool_scope != "write":
         raise BoardError("INVALID_ARGUMENT",
                          "codex binds its native services for the none, read and write tool scopes",
@@ -1689,7 +1687,7 @@ def prepare_run_services(*, invocation_root: Path, native_root: Path,
     # The write carrier's account gate reads the credential source, which is
     # always present and always preferred here; the account field belongs to
     # the structured calls alone.
-    return RunServices(credential_source=source, activity_dir=str(activity_dir))
+    return RunServices(credential_source=source)
 
 
 def validate_turn_provenance(record: dict) -> str | None:
@@ -1807,28 +1805,6 @@ def native_evidence(result: RunResult) -> dict:
     return projection
 
 
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path):
-    """The existing activity sidecar is this harness's only live facility.
-
-    Inquiry delivery stays unsupported: no question channel is wired and none
-    is simulated, and the identity binding itself stays with the role's live
-    seam, which hands over the stored run request's own identity.
-    """
-    from ..live import EXISTING_CAPABILITIES, ExistingLiveChannel
-    from ....protocol import activity as activity_protocol
-
-    def read_activity():
-        # The existing attempt-bound sidecar reader — validation, binding and
-        # throttling belong to it; a foreign attempt's file reads as nothing.
-        return activity_protocol.read_sidecar(Path(activity_path),
-                                              task_id=identity.task_id,
-                                              attempt_id=identity.attempt_id,
-                                              generation=identity.generation)
-
-    return ExistingLiveChannel(identity, EXISTING_CAPABILITIES["codex"], read_activity=read_activity)
-
-
 def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
     """One verified evidence reference of this run, or None when absent."""
     from ..controller import STRICT_RESULT_BYTES
@@ -1852,7 +1828,7 @@ def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
 supported_request_controls = ("resume_checkpoint",)
 
 __all__ = [
-    "RunServices", "bind_live_channel", "check_preparation", "cleanup_after_run",
+    "RunServices", "check_preparation", "cleanup_after_run",
     "execution_deadline", "native_evidence", "prepare_run_services", "run",
     "run_discovery", "session_facts", "validate_turn_provenance",
 ]

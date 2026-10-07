@@ -38,8 +38,8 @@ else in this package: the process-free service binding (:func:`prepare_services`
 and its mount), the no-spawn preparation check (:func:`check_preparation`), the
 turn provenance validator and the storage facts (:func:`validate_turn_provenance`,
 :func:`session_facts`), the fast channel's native evidence projection
-(:func:`native_evidence`), and the registered live binding
-(:func:`bind_live_channel`) over the shared cooperative inquiry bridge. Host
+(:func:`native_evidence`), and the controller-supplied live endpoint over
+the shared cooperative inquiry bridge. Host
 questions are only ever queued by the bridge and delivered at the root's own
 checkpoint tool call inside the admitted turn; the journal advances only after
 this driver verified the signed root-turn receipt. Native resume stays unwired:
@@ -74,8 +74,11 @@ from ..native_support import (
     shape_guard,
     utc_now,
 )
-from ..inquiry_bridge import InquiryBridge, bind_live_channel as bind_checkpoint_channel
+from ..inquiry_bridge import InquiryBridge
+from ..c_two_live import CTwoLiveEndpoint
+from ....protocol.activity import ActivityPublisher
 from ..run_contract import (
+    ActivityPackage,
     MAX_SCHEMA_BYTES,
     MAX_UNKNOWN_EVENT_TYPES,
     CheckedConfiguration,
@@ -91,7 +94,6 @@ from ..run_contract import (
     RunConfiguration,
     RunEnd,
     RunFeedback,
-    RunIdentity,
     RunRequest,
     RunResult,
     SessionService,
@@ -314,7 +316,7 @@ class SessionServices:
 
     The driver sees only this narrow binding: the mechanical mount, the role's
     outcome validator for finish-receipt verification, the optional inquiry
-    channel credentials and the activity sidecar directory. No board client,
+    channel credentials and the controller-owned live endpoint. No board client,
     database handle, execution context or credential file travels in it.
     ``native_stderr`` is the role's own path for the child's captured stderr
     tail; the ACP wrapper owns the capture, and the governed driver mirrors its
@@ -324,7 +326,7 @@ class SessionServices:
     mount: SessionServiceMount
     validate_outcome: Callable[[object], str | None]
     inquiry: dict | None = None
-    activity_dir: str | None = None
+    live: CTwoLiveEndpoint | None = None
     native_stderr: str | None = None
 
 
@@ -384,13 +386,12 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
                      attention_path: Path, session_tools, completion_tool: str,
                      validate_outcome,
                      inquiry: dict | None, inquiry_tools: tuple[str, ...],
-                     activity_dir: str, native_stderr: str) -> BoundSessionServices:
+                     native_stderr: str) -> BoundSessionServices:
     """Expose only the binding the role actually consumes, without a process.
 
-    The parameters are exactly the shared role controller's call
-    (:func:`hey_my_buddy.buddy.roles.run_execution.worker_request`).
-    ``native_stderr`` is accepted for that seam and consumed as the governed
-    stderr-tail mirror; DSH needs no other adaptation.
+    The role supplies the mechanical mount and outcome validator.
+    ``native_stderr`` is consumed as the governed stderr-tail mirror; the
+    controller injects its optional live endpoint after preparation.
     """
     mount = prepare_session_service(
         invocation_root=invocation_root, identity=identity, input_sha256=input_sha256,
@@ -403,7 +404,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
         completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
         answer_tool=mount.answer_tool,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome,
-                                 inquiry=inquiry, activity_dir=activity_dir,
+                                 inquiry=inquiry,
                                  native_stderr=native_stderr))
 
 
@@ -439,21 +440,12 @@ def _inquiry_event_metadata(message: dict) -> dict:
 
 
 def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
-                        attention_path: str | None = None) -> InquiryBridge:
+                        attention_path: str | None = None,
+                        live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     """The shared cooperative bridge over this harness's own native error shape."""
     return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
-                         attention_path=attention_path, error_factory=NativeError,
+                         attention_path=attention_path, live=live, error_factory=NativeError,
                          event_metadata=_inquiry_event_metadata, limitation=CHECKPOINT_INQUIRY_NOTE)
-
-
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path):
-    """The registered live seam: the shared existing-facilities binding under DSH's
-    declared capability. Step five replaces the transport behind this one seam."""
-    from ..live import EXISTING_CAPABILITIES
-    return bind_checkpoint_channel(identity, credentials=credentials, journal_path=journal_path,
-                                   activity_path=activity_path,
-                                   capabilities=EXISTING_CAPABILITIES["dsh"])
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -1197,7 +1189,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                         "generation": request.identity.generation,
                                         "turnId": request.identity.turn_id},
             journal_path=str(services.inquiry.get("resultsPath") or ""),
-            attention_path=services.mount.bridge.get("attentionPath"))
+            attention_path=services.mount.bridge.get("attentionPath"), live=services.live)
         inquiry_bridge.start()
     client: AcpClient | None = None
     sessions: list[str] = []
@@ -1305,7 +1297,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
     record = session_record_facts(dsh_home, sessions) if sessions else None
-    return _build_result(request, state=state, tools=tools, client=client,
+    return _build_result(request, state=state, tools=tools, activity=activity, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
                          correction_count=correction_count, drained=drained,
                          invocation_root=invocation_root, record=record,
@@ -1510,13 +1502,13 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         inquiry_bridge.activate(session_id)
     state.configured = True
     state.checked = _configure(client, session_id, snapshot, request.configuration)
-    sidecar = _activity_sidecar(request, services)
+    publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def governed_fold(message: object) -> bool:
         changed = fold(message)
-        if sidecar is not None and changed:
+        if changed:
             try:
-                sidecar.publish(activity.payload())
+                publisher.publish(activity.payload())
             except BoardError:
                 pass  # metadata must never fail the native turn
         return changed
@@ -1538,27 +1530,15 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         # or finished agent is never woken for an inquiry.
         inquiry_bridge.close()
     activity.phase = "finishing"
-    if sidecar is not None:
-        try:
-            sidecar.publish(activity.payload())
-        except BoardError:
-            pass
+    try:
+        publisher.publish(activity.payload())
+    except BoardError:
+        pass
     _close_session(client, session_id)
     # The close was acknowledged: the accepted finish's ordered native evidence
     # is complete and is retained for the role's turn record.
     state.provenance = evidence.provenance(close_ordinal=state.event_count,
                                            event_count=state.event_count)
-
-
-def _activity_sidecar(request: RunRequest, services: SessionServices):
-    """The shared throttling sidecar when this run carries an activity directory."""
-    if not services.activity_dir:
-        return None
-    from ....protocol.activity import ActivitySidecar
-    directory = ensure_private_dir(Path(services.activity_dir))
-    return ActivitySidecar(directory, task_id=request.identity.task_id,
-                           attempt_id=request.identity.attempt_id,
-                           generation=request.identity.generation)
 
 
 # -- collection, stop facts and the result -------------------------------------------
@@ -1647,10 +1627,11 @@ _dsh_tool_package = shape_guard(ToolEvidencePackage)
 _usage_package = shape_guard(UsagePackage)
 _quota_package = shape_guard(NativeFailurePackage)
 _message_package = shape_guard(LastAssistantMessagePackage)
+_activity_package = shape_guard(ActivityPackage)
 
 
 def _build_result(request: RunRequest, *, state: _RunState,
-                  tools: DshToolFacts, client: AcpClient | None, sessions: list,
+                  tools: DshToolFacts, activity: DshActivity, client: AcpClient | None, sessions: list,
                   evidence: RootTurnEvidence | None, raw_answer: str | None,
                   correction_count: int, drained: bool | None,
                   invocation_root: Path, record: dict | None = None,
@@ -1732,6 +1713,8 @@ def _build_result(request: RunRequest, *, state: _RunState,
         last_assistant_message=(_message_package({"text": record["lastAssistant"],
                                                   "sourceId": record.get("lastAssistantSourceId")})
                                 if record and record.get("lastAssistant") else None),
+        activity=(_activity_package(activity.payload())
+                  if state.event_count or activity.counts["modelTurns"] else None),
         continuation=None,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),
         evidence_refs=_evidence_refs(client, invocation_root, state,
@@ -1985,7 +1968,7 @@ def _catalog(options: list, version: str) -> dict:
 
 __all__ = [
     "CHECKPOINT_INQUIRY_NOTE", "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
-    "bind_live_channel", "check_preparation", "execution_deadline", "make_inquiry_bridge",
+    "check_preparation", "execution_deadline", "make_inquiry_bridge",
     "native_evidence", "prepare_services", "prepare_session_service", "run", "run_discovery",
     "session_facts", "session_record_facts", "tool_scope_launch", "validate_turn_provenance",
 ]
