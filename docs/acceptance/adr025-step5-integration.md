@@ -41,3 +41,7 @@ Claude Code 的已批准两次冒烟可以独立于尚在执行的清理微任�
 Host 范围外收尾：5-P2 可写范围之外的 codex/protocol.py 仍有相同 UTC 格式函数，唯一生产读取方为额度快照 observed_at。Host 改为直接引用已验收 native_support.utc_now，删除重复定义与 datetime 导入，格式与调用点不变；此项由 Host 修改并纳入聚焦检查。
 
 5-P1 与 5-P3 的两份整合记录均 verified 并内部签收；受管检出各按 cleanup-plan/apply 回收，原始聚焦、对照与变异材料已在本检出 tmp 中按各自 manifest 保留 SHA-256。Host 仅整体删除创建时登记的两个微任务根，核实路径均消失，无通配符删除。UTC 收尾的两模块聚焦检查通过（1.105 秒）；一次性元数据脚本误带 P3 artifact 标识，Host 在新归属记录中更正，原脚本/日志/元数据原样保留，没有更改实际检查结论或重跑。
+
+第五步公共接线选择：CONTRACT_VERSION 与包版本由 0.28.0 提到 0.29.0，新增 worker_live_attach/detach 两个内部具名操作及 HarnessRunLive、WorkerRuntimeLive 的 request/observe/capabilities，不新增 CLI 命令、claim/renew 字段或数据库结构。WorkerLiveAttach/Detach 使用严格内部模型，服务接收的帧只含 Worker 端点、完整运行身份与 attempt actor，绝不含 controller 地址或能力。RunIdentity 六个字段原样移到 protocol/run_identity.py，由现有 run_contract 直接引用同一个类，JSON 规则没有变化；跨边界事实由 protocol 定义，避免新传输模型反向导入 buddy 一侧。该公共接线由 Host 统一拥有，微任务只在其唯一目录中使用；运行结果中的字段本步按实际消费者核对。C-Two 后端尚未内部验收，以上先固定公共格式，尚未启动依赖它的 Worker/服务实施微任务。
+
+Host 聚焦核对发现 5-P1 原可写范围之外的 live_channel 限额测试仍从 ZCode 协议页引用已搬入 session_receipts 的三项公共常量；Host 直接更新导入与引用位置，编号及实际比较值不变，不恢复旧别名。本轮先错误选择不存在的 test_live 模块（31 项 run_contract 已通过），新命令选择实际 test_live_channel 后发现上述旧引用；原失败日志保留，此次仅重跑受修正影响的 44 项。

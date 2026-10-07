@@ -17,7 +17,7 @@ import unittest
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.blackboard.tasks import inquiry as board_inquiry
-from hey_my_buddy.buddy.harnesses.zcode import protocol as zcode_protocol
+from hey_my_buddy.buddy.harnesses import session_receipts
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import schemas as board_schemas
 
@@ -88,9 +88,9 @@ class LimitTests(unittest.TestCase):
         self.assertEqual(lv.MAX_QUESTION_BYTES, board_schemas.MAX_QUESTION_BYTES)
         self.assertEqual(lv.MAX_ANSWER_BYTES, board_schemas.MAX_ANSWER_BYTES)
         self.assertEqual(lv.MAX_INQUIRIES_PER_RUN, board_schemas.MAX_INQUIRIES_PER_RUN)
-        self.assertEqual(lv.MAX_INQUIRIES_PER_RUN, zcode_protocol.MAX_INQUIRIES)
-        self.assertEqual(lv.MAX_QUESTION_BYTES, zcode_protocol.MAX_QUESTION_BYTES)
-        self.assertEqual(lv.MAX_ANSWER_BYTES, zcode_protocol.MAX_ANSWER_BYTES)
+        self.assertEqual(lv.MAX_INQUIRIES_PER_RUN, session_receipts.MAX_INQUIRIES)
+        self.assertEqual(lv.MAX_QUESTION_BYTES, session_receipts.MAX_QUESTION_BYTES)
+        self.assertEqual(lv.MAX_ANSWER_BYTES, session_receipts.MAX_ANSWER_BYTES)
         self.assertEqual(lv.MIN_TRANSPORT_TIMEOUT_MS, board_inquiry.MIN_TRANSPORT_TIMEOUT_MS)
         self.assertEqual(lv.MAX_TRANSPORT_TIMEOUT_MS, board_inquiry.MAX_TRANSPORT_TIMEOUT_MS)
         self.assertEqual((lv.MIN_TRANSPORT_TIMEOUT_MS, lv.MAX_TRANSPORT_TIMEOUT_MS), (100, 5000))
