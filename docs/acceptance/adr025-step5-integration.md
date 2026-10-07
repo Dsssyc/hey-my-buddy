@@ -63,3 +63,9 @@ Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既
 5-A 原 run 已确认验收 accepted，受管检出 cleanup-plan/apply 已成功。Host 先保留任务材料 20 份并记录摘要，再按创建时登记的单个确切任务根整体回收，未扫描或删除其他端点、目录。
 
 5-B2 报告公共接口缺口后，Host 将 5-A 的严格有界解码和完整身份、实例、token 认证原实现提取为 decode_live_wire_frame / authenticate_live_frame，原 endpoint 同源调用，无新规则或账本。后端 53 项聚焦回归通过（原始输出 host-live-auth-focused1.log）；此公共文件由 Host 维护。Worker 的隔离 Codex 检出不能写共享 Git 元数据，后续若只因提交命令失败，由 Host 核对文件来源和范围后代执行 git add/commit，不代改实现并登记。
+
+5-C1 原路由决定 dec-edb4247b-4fc6-4165-b643-8f16e9b4714a 的 zcode/zai-api/GLM-5.3/max 在首次原生回合报不可重试 code 1308/HTTP 429，按用户许可原 run continue 为 codex/openai/gpt-6.1-sol/high；未改供应方启用或登录。
+
+5-B1 Codex 已完成实现、聚焦与变异验证但无法写受管检出外的共享 Git 元数据；Host 按原 run assistance 请求只执行精确四路径暂存和提交（0bfbbaaac34cff3392b7d9ac9cfdf38eeb103ed1），执行前后文件摘要相等，没有源代码或测试代改。之后原 run continue 收尾，不重跑不变的测试。
+
+5-B1 固定交付 6fefde0c18f6659a0fb094c25b443255d9fd1590 已审查：四路径与范围对应，两份 Python 源码与 Host 独立审查的 6fefde0c 副本逐字相同，29 项聚焦测试通过 3.169 秒。真实 claim 的摘要列尚空仍能正常绑定；治理身份缺失、未知 Worker 实例与错实例 view 均被拒绝。7 个原始变异红日志已核对。最终 continue 只收尾固定提交说明，未重跑不变的测试。已将内存 registry 类整合，公共服务/Worker 接线与整步检查仍待整合。
