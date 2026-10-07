@@ -227,6 +227,14 @@ def main():
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send_usage(case, thread_id, turn_id, turn_index)
             if case == "hang":
+                # Only the hang scenario records an explicit start fact, and only
+                # after the turn/start response and the turn/started notification
+                # were actually emitted: a thread merely existing never counts as a
+                # started turn. The cancellation tests wait for this fact instead
+                # of sleeping blindly.
+                state = read_state()
+                state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
+                write_state(state)
                 time.sleep(60)
                 continue
             if case == 'worker-tool':

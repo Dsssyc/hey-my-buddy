@@ -171,3 +171,9 @@ DSH 两个确切任务根已由 Host 回收：先保留首轮材料及第二轮2
 整合后的完整检查首次使用默认4并行，189文件全部调度，186文件2981项通过（原有skip1），3个模块失败，用时480.607秒。后续控制台及其他尾部检查尚未执行，未记完整通过。两处范围外旧引用由Host修正：worker_sessions用当前已改名的Codex测试夹具名；workflow_routing记录并读取start实际返回的held control、核对attempt与fixture.document，而不是猜旧mock-readonly.json路径，两项聚焦通过1.017秒。另一个是Codex取消场景固定sleep(0.3)后SIGTERM退出-15，没有完整帧；独立只读审查发现处理器在模块导入/argparse之后安装，但不能凭日志证明具体竞态根因，也未认定生产回归。
 
 Codex取消场景按范围缺陷打回原5-D2 run continue，未因耗时换buddy。最初指示错误地以fixture状态作turn-start记录，独立审查确认只记录thread/start；Host尝试加fixture路径的scope-amend被CONFLICT拒绝（已准备continuation冻结旧scope），没有实际扩范围。随后同run继续输入替代未消耗前指示，保持原7路径，以现有身份绑定C-Two activity.counts.modelTurns作为controller接收原生turn/started的实际证据，要求有界等待再cancel，不只延长sleep，不修改生产行为、不跑全套；原失败与两次指示/拒绝记录保留。
+
+D2实际attention回合指出native Codex自身同相位节流使hang场景modelTurns一直0；其新source副本去掉节流的对照仅证明该观察条件不适合，Host未采用改生产的方案。上一continuation已消耗、范围冻结解除后，在原run成功scope-amend只增加已有mock_codex.py测试fixture（共8路径），让真实turn/start处理写已有state机制的开始标记，再有界等待该事实后cancel；公共/角色/注册表/所有生产代码仍Host。原attention与scope-amend前次CONFLICT保留，没有取消重提，也没因等容量更换buddy。
+
+补齐计划中的新源码ZCode真实问询冒烟1次：此前额度拒绝来自微任务模型执行，不能当成原生核对未验证的证据。实际0.16.9、zai-api/GLM-5.3-Flash/max，run43b45b2f/attempt8a7f7c29由真实持有Worker执行；签收、Read、问询answered、严格结果identity、native gone与outer true均核对，两个capture socket存在→消失。Host独立严格解码及SHA核对通过，24份原始证据与私有fixture bundle保留后按登记exact root回收，未清其他对象。微任务执行次数不并入本步原生最小运行表；DSH2、ZCode1、Claude2（Claude早于通道切换）分别明确证据边界，Codex无额外真实模型冒烟。
+
+5-D2最终固定7be5bfc、产物71a39d79-9a57-44ea-b774-b446b99af322，8路径累计patch/SHA与全线两层停止核对。新增marker只在hang的turn/start响应/turn/started发出后写已有state；两取消用例有界等待标记，保持原判定与两层停止，不改正常/续接生产行为。Host在已合入ADR-027的固定副本2项通过12.005秒，删标记变异2项真实断言失败20.778秒，SHA792d91ac4f6a2d864b3da6c103f29807301860df356bc25e598ae2be01b35b98，无导入错误。整合只应用两个代码路径增量，保留ADR-027的fixture未列出模型拒绝场景；记录确切私有根改占位符、手动授权口径明确为Host继续输入，小更正不重跑。最初含记录的增量patch因原Host已改路径表述而不能apply，未写代码，改用代码增量与明确记录适配，不重写历史失败。
