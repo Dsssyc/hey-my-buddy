@@ -628,15 +628,31 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertFalse((self.root / "fixture.json").exists(),
                          "the refusal must fire before any native child starts")
 
-    def test_activity_file_tracks_the_native_turn(self):
+    def test_preserved_final_activity_tracks_the_native_turn(self):
         context = self.context()
-        outcome = self.execute(context)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        activity = json.loads((context.directory / "activity.json").read_text())
-        self.assertEqual(activity["attemptId"], context.attempt_id)
-        self.assertEqual(activity["activity"]["phase"], "finishing")
-        self.assertEqual(activity["activity"]["nativeSessionId"],
-                         outcome.result["turn"]["sessionId"])
+        # The retired activity.json sidecar is replaced by the run's own final
+        # fact: the preserved RunResult frame the controller published, decoded
+        # here from its own stdout log. It is a final fact, not a process
+        # observation: the counts and the native session id below are the ones
+        # the native stream events actually drove, and no live publication
+        # success is claimed (live observation is the holder's C-Two binding,
+        # exercised by the zcode live activity suite).
+        self.assertFalse((context.directory / "activity.json").exists())
+        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+        frame = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes().strip())
+        self.assertEqual(frame.identity.attempt_id, context.attempt_id)
+        self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
+        activity = frame.activity.value
+        self.assertEqual(activity["phase"], "finishing")
+        self.assertEqual(activity["nativeSessionId"], outcome.result["turn"]["sessionId"])
+        self.assertEqual(activity["counts"], {"modelTurns": 1, "toolCalls": 0})
+        self.assertEqual(outcome.result["activity"], {"phase": "finishing",
+                                                      "eventSeq": activity["eventSeq"]})
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
         from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest

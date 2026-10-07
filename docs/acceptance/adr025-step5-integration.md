@@ -137,3 +137,11 @@ CONTRACT_VERSION的两处旧0.28.0字面断言由Host随本步真实契约变化
 Host直接修范围外四处：HarnessStartup将Worker参数改为声明的worker_id,state_dir顺序；registered review不向无参fixture服务工厂注入已删闲置参数；private adapter改核对live.readyFile归属而非退休errorPath；真实Worker回合读取保留RunResult.activity并与公开phase/eventSeq相对，不再断言sidecarWritten。初次27项仅最后1项因Host还引用退休nativeActivity字段KeyError；改为实际activity投影后该1项通过，其他26项原件通过，不重复无变化模块。
 
 5-C3完整发现导入缺陷已准备仅两处前缀的确切patch，按用户规则尝试原run continue；黑板以CONFLICT/An accepted goal cannot be continued拒绝。内部验收漏了tests/python cwd场景，accepted与检出回收已发生；Host未绕过黑板状态或代改，已向用户提出这一次两行导入的例外授权，独立工作继续。
+
+独立只读源码复核与Host初核一致：限定公共运行/实时格式、共同机制及其生产消费者，没有可确认的闲置字段/类/参数或公共整合缺陷。实际Pydantic请求/结果文件解码消费formatVersion，blackboard公共live投影消费嵌套元数据，holder消费descriptor、Worker日志消费CleanupOutcome，ReceiptRules四项均被实际核验函数读取；没有运行厂商harness或静态证明厂商代码。该源码结论不代替完整检查与外部验收。
+
+当前跨边界导入登记56条：黑板→buddy37、buddy→黑板15、protocol→黑板3、protocol→buddy1；第零步54条分别33/16/4/1。同一AST/相对导入/dynamic literal脚本在已验第零步4cf58de重算与原54条逐项完全相等；本步相对增加/删除逐项见cross-import-delta.tsv，完整56条见cross-imports.tsv。只登记，没有顺手改变这些既有边界；本步后续修正仅测试，不会改变该生产登记。
+
+5-D2首次路由dec-cfb245c1-f2b8-441e-95c6-77c5ac35f6c7选zcode/zai-api/GLM-5.3/max，正常固定交付dbdb5e5；没有因耗时更换buddy。七路径封存patch/SHA/停止核对一致，Host固定整合副本六相关模块168项通过224.859秒；8份迁移防护变异均真实断言失败且无导入错误，原始日志保留。仅将MD确切系统临时根改为<task-root>，不改Worker做过/验证过的结论。内部ack/回收暂等最终集成发现检查完成，避免重复C3验收遗漏。
+
+用户补充：提交第五步前合入socu/buddy-core 9b65abbc的ADR-027；解决Codex/DSH等冲突保留两边行为，受影响聚焦后最终代码才再跑完整检查。今后微任务描述新增共享Git规则：受管检出与用户仓库共用stash/分支/标签，Worker禁止git stash，不移动或删除分支/标签；基线对比用新临时副本。Host本次合入不使用stash或自动stash。
