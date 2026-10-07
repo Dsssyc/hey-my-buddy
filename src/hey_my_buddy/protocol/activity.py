@@ -293,6 +293,36 @@ def write_json_atomic(path: str | Path, value: dict) -> Path:
     return path
 
 
+class ActivityPublisher:
+    """Normalize and coalesce actual observations before the live owner receives them."""
+
+    def __init__(self, publish: Callable[[dict], bool] | None, *,
+                 min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
+                 clock: Callable[[], float] = time.monotonic):
+        self._publish = publish
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds))
+        self._clock = clock
+        self._last: dict | None = None
+        self._written_at: float | None = None
+
+    def publish(self, activity: dict) -> bool:
+        payload = normalize_activity(activity)
+        if not is_newer(payload, self._last):
+            return False
+        now = self._clock()
+        phase_changed = self._last is None or payload["phase"] != self._last.get("phase")
+        if not phase_changed and self._written_at is not None and now - self._written_at < self.min_interval_seconds:
+            return False
+        if self._publish is not None and not self._publish(payload):
+            return False
+        self._last = payload
+        self._written_at = now
+        return True
+
+    def current(self) -> dict | None:
+        return None if self._last is None else dict(self._last)
+
+
 class ActivitySidecar:
     """Atomic, throttled, attempt-bound writer for one native controller.
 
@@ -354,6 +384,7 @@ class ActivitySidecar:
 __all__ = [
     "ACTIVITY_FIELDS",
     "ACTIVITY_VERSION",
+    "ActivityPublisher",
     "ActivitySidecar",
     "COUNT_FIELDS",
     "DEFAULT_MIN_INTERVAL_SECONDS",

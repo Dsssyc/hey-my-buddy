@@ -509,3 +509,23 @@ class WorkerActivityForwarding(BoardTestCase):
         _write(path, valid)
         renewal._forward_activity()
         self.assertEqual(client.get(runId=attempt["taskId"])["activity"], valid["activity"])
+
+
+class ActivityPublisherTest(BoardTestCase):
+    def test_live_publication_coalesces_without_losing_failed_or_new_phase(self):
+        observed = []
+        ticks = iter((0., .5, 1., 1.5, 3.))
+        accept = [True, False, True, True]
+        def send(value):
+            if not accept.pop(0):
+                return False
+            observed.append(value)
+            return True
+        publisher = activity_module.ActivityPublisher(send, clock=lambda: next(ticks))
+        self.assertTrue(publisher.publish({"phase": "starting", "eventSeq": 1}))
+        self.assertFalse(publisher.publish({"phase": "starting", "eventSeq": 2}))
+        self.assertFalse(publisher.publish({"phase": "tool-running", "eventSeq": 3}))
+        self.assertEqual(publisher.current()["eventSeq"], 1)
+        self.assertTrue(publisher.publish({"phase": "tool-running", "eventSeq": 3}))
+        self.assertTrue(publisher.publish({"phase": "finishing", "eventSeq": 4}))
+        self.assertEqual([v["eventSeq"] for v in observed], [1, 3, 4])

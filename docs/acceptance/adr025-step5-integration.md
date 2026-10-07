@@ -53,3 +53,9 @@ Claude 两次原生冒烟的私有根在核实停止后已由 Host 按各自创�
 5-A 第三轮封存 09176996 的独立聚焦 129 项通过（13.473 秒，1 项原有平台 skip），仍按真实函数的并发/关闭探针拒绝：close 后仍 consume；并发别名成功后未绑定自己的 requestId，改问题可再次入队；settle 覆盖 owner 先发布的 delivery/limitation；consume(0) 不取已排队值。原 run continue-3 修复这四处，Host 没有代改范围内源码，不扩大完整检查。原日志与探针保留。
 
 5-A 第四份封存 8732af92 的固定副本中，53 项后端聚焦测试全部通过（12.893 秒），未重跑未变的其他 80 项。Host 原四处队列探针原样换到该封存源再次核对：close 请求不再消费；并发 r1/r2 均被预算内绑定且 r2 改问题回 request-payload-conflict；settle 保留实际 delivery/limitation 及原 seq；零等待正确取队列。源码五路径逐字节整合，后端保持三个具名 RPC，owner 本地 settle/publish 接口由真实 producer 接线，不直接驱动模型。通过本次内部验收后再开始依赖它的 Worker 实施。
+
+5-B1 首份 helper 的 21 项独立聚焦检查通过（2.908 秒），真实 BoardStore 探针仍发现实例 NULL 放行、已有治理回合省略 turn/hash 放行以及当前合法摘要被拒；拒绝并原 run continue。Host 任务中的“已记录摘要列”假设错误：当前服务先保存规范化 input_json，input_sha256 列等结果才写，修正为复用现有服务输入摘要来源，未新增 schema/写操作或扩大微任务范围。未代改 helper，探针与失败来源完整保留。
+
+两条微任务因 Z.ai 不可重试的限流（rate_limited、code 1308、HTTP 429）失败，按用户第五步许可在原 run 上继续，未取消或另开。5-B1 被限流的 buddy 为 zcode/zai-api/GLM-5.3-Flash/max，原路由决定 dec-024b214f-2b5b-4c75-927c-df5acb3999fd；5-B2 为 zcode/zai-api/GLM-5.3/max，原路由决定 dec-4f931ac6-fef4-4105-9caa-a011e4cd5736。两条均改用已启用且可用的 codex/openai/gpt-6.1-sol/high，保留原检出、任务根与范围；未修改模型启用、登录或配置。
+
+Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既有 normalize_activity/is_newer 与相同阶段、时间节流，只将写文件改为调用实际端点发布函数。未成功的发布不前移序列，保留重试；阶段变化即时发送。新增一项行为测试验证合并、发布失败与新阶段，聚焦测试 1 个通过（0.001 秒）；这不是另一个运行通道。暂保留旧 sidecar 实现供尚未整合的调用方，最终接线时删除。
