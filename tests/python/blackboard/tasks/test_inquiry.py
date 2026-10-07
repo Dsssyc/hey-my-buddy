@@ -1,19 +1,15 @@
-"""Inquiry behaviour over the real service: registered live seam, journal, bounds.
+"""Board inquiry facts over a real Store/Actor/turn and registered C-Two seam.
 
-DSH runs through its registered module and the shared cooperative bridge now,
-so this file exercises the board's real inquiry path for it: the stored public
-run request's complete identity is verified against the run's own control
-binding and governed turn input, the channel comes from the harness registry's
-registered live binding, and the one shared transport client speaks to
-FakeBridge — a model-less stand-in for the driver-side bridge socket. The JSONL
-journal importer, the recorded message facts and the honest answers for adapters
-that have no inquiry capability at all keep their direct tests beside it.
+The narrow JournalOwner replaces the native owner and Worker/network forwarding,
+not inquiry, actor validation, wire codecs, endpoint admission or projections.
+It commits a private journal before settling requests and publishes through the
+real DTO/journal layer. It is not an end-to-end or native receipt verification.
+The native InquiryBridge lifecycle remains a separate C1 boundary.
 """
 from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import threading
 import unittest
@@ -23,111 +19,214 @@ from pathlib import Path
 from support import FIXTURE_CATALOG, BoardTestCase
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
 from hey_my_buddy.blackboard.tasks.inquiry import (
     MAX_JOURNAL_BYTES,
     NOTE,
-    bridge_request,
     observe,
     read_journal,
 )
 
+from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
+from hey_my_buddy.buddy.harnesses.inquiry_bridge import read_inquiry_journal
+from hey_my_buddy.buddy.harnesses.live import (
+    LiveCapabilities, LiveJournal, LiveObservation, LiveReply, LiveSnapshot, _journal_states,
+)
+from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.protocol.contracts import WorkerRuntimeLive
+from hey_my_buddy.protocol.run_identity import RunIdentity
 
-class FakeBridge:
-    """A minimal stand-in for the driver-side cooperative bridge's socket.
 
-    It speaks the shared wire protocol the one transport client uses — one
-    version-1 JSON frame per connection, one token, the ``observe`` and ``ask``
-    methods the registered dsh live binding issues — without any model or
-    native process. Its answers are steerable: ``observation`` overrides the
-    observe value's fields, ``state`` is the committed state an ask reports and
-    ``refusal`` makes the peer refuse with exactly that code.
+class OwnerChannel(CTwoLiveChannel):
+    """Replace only connect/call; all three named RPCs still encode shared Wire."""
+
+    def __init__(self, attachment, owner):
+        super().__init__(attachment.identity, WorkerRuntimeLive,
+                         name=attachment.name, address=attachment.address,
+                         instance_id=attachment.instance_id, token=attachment.live_token)
+        self.owner = owner
+
+    def _connect_and_call(self, operation, text):
+        self.owner.requests.append({"operation": operation, **json.loads(text)})
+        if self.owner.disconnected:
+            raise ConnectionError("the fixture Worker endpoint is unavailable")
+        # The owner publishes its source facts before the endpoint reads them;
+        # the endpoint itself never opens a journal or drives a native process.
+        self.owner.publish()
+        if operation == "capabilities":
+            return self.owner.endpoint.capabilities(text)
+        if operation == "request":
+            return self.owner.endpoint.request(text)
+        return self.owner.endpoint.observe(text)
+
+
+class JournalOwner:
+    """A model-free owner fixture, with real durable writes and endpoint handoff.
+
+    The production C1 reader checks source version/task/attempt/generation/turn.
+    Signed native receipts, lifecycle and Worker forwarding remain outside
+    this fixture; the endpoint checks the complete transport RunIdentity.
     """
 
-    def __init__(self, directory: Path, *, token: str = "a" * 64):
-        # The real adapter picks a short socket path for the same platform reason:
-        # a long sun_path overflows the macOS/Linux Unix-socket limit.
-        import tempfile
-        import uuid
-
-        self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.directory, 0o700)
-        short = Path(tempfile.gettempdir()) / f"hbi-{uuid.uuid4().hex[:8]}"
-        short.mkdir(mode=0o700, exist_ok=True)
-        self.path = short / "inquiry.sock"
-        self.token = token
-        self.requests: list[dict] = []
-        self.state = "queued"
-        self.refusal: str | None = None
-        self.observation: dict = {}
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(str(self.path))
-        self.listener.listen(4)
-        self.listener.settimeout(0.2)
+    def __init__(self, directory, identity):
+        self.directory = directory
+        self.journal_path = str(directory / "inquiry.results.jsonl")
+        self.identity = identity
+        self.token = "a" * 64
+        self.requests = []
+        self.refusal = None
+        self.disconnected = False
+        self.observation = {
+            "ready": True, "observedAt": "2026-10-07T00:00:00.000Z", "sessionId": "s-1",
+            "agentStatus": "running", "deliveryMode": "cooperative-checkpoint",
+            "inbox": {"pending": 0, "delivered": 0, "answered": 0, "discarded": 0, "refused": 0},
+            "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": "bash"}],
+        }
+        capabilities = LiveCapabilities(inquiry_delivery="cooperative-checkpoint")
+        self.endpoint = CTwoLiveEndpoint(identity, capabilities, WorkerRuntimeLive, token=self.token)
+        self.lock = threading.RLock()
         self.stopping = threading.Event()
-        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.errors = []
+        self.thread = threading.Thread(target=self._consume, name="inquiry-test-owner", daemon=True)
         self.thread.start()
 
-    def _serve(self):
-        while not self.stopping.is_set():
-            try:
-                connection, _ = self.listener.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            with connection:
-                connection.settimeout(2)
-                try:
-                    raw = bytearray()
-                    while b"\n" not in raw:
-                        block = connection.recv(4096)
-                        if not block:
-                            break
-                        raw.extend(block)
-                        if len(raw) > 16 * 1024:
-                            return
-                    request = json.loads(bytes(raw).split(b"\n", 1)[0])
-                    self.requests.append(request)
-                    reply = self._reply(request)
-                except (OSError, ValueError):
-                    reply = {"version": 1, "id": None, "ok": False, "error": "bad-request"}
-                try:
-                    connection.sendall((json.dumps(reply) + "\n").encode())
-                except OSError:
-                    pass
+    @property
+    def bound(self):
+        return {"version": 1, "taskId": self.identity.task_id, "attemptId": self.identity.attempt_id,
+                "generation": self.identity.generation, "turnId": self.identity.turn_id}
 
-    def _reply(self, request: dict) -> dict:
-        if request.get("token") != self.token:
-            return {"version": 1, "id": request.get("id"), "ok": False, "error": "unauthorized"}
-        if request.get("method") == "observe":
-            value = {"ready": True, "observedAt": "2026-10-07T00:00:00.000Z", "sessionId": "s-1",
-                     "agentStatus": "running", "deliveryMode": "cooperative-checkpoint",
-                     "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call",
-                                   "toolName": "bash"}],
-                     **self.observation}
-            return {"version": 1, "id": request.get("id"), "ok": True, "value": value}
-        if request.get("method") == "ask":
-            if self.refusal:
-                return {"version": 1, "id": request.get("id"), "ok": False, "error": self.refusal}
-            return {"version": 1, "id": request.get("id"), "ok": True,
-                    "value": {"accepted": True, "state": self.state,
-                              "inquiryId": request.get("inquiryId"),
-                              "delivery": {"requestedDelivery": None,
-                                           "admittedDelivery": "cooperative-checkpoint",
-                                           "startsNewTurn": False, "extendsDeadline": False}}}
-        return {"version": 1, "id": request.get("id"), "ok": False, "error": "unsupported-method"}
+    @property
+    def entries(self):
+        return read_journal(self.journal_path)["entries"]
+
+    def _journal_fact(self):
+        return read_inquiry_journal(self.identity, self.journal_path)
+
+    def publish(self):
+        with self.lock:
+            source = self._journal_fact()
+            self.endpoint.publish_journal(LiveJournal.from_payload(
+                {key: source[key] for key in ("available", "reason", "entries", "rejections")}))
+            # Pure production projection retains answer provenance through
+            # _record_facts; only the endpoint owns sequencing and pagination.
+            for state in _journal_states(source["records"]):
+                self.endpoint.publish_inquiry_state(state)
+            try:
+                observation = LiveObservation.from_payload({
+                    **{key: value for key, value in self.observation.items() if key != "activity"},
+                    "recentActivity": self.observation.get("activity", []),
+                })
+            except BoardError:
+                # A source/strict DTO failure clears the stale observation.
+                # It supplies no answer, shutdown or look-alike metadata.
+                self.endpoint.publish_snapshot(LiveSnapshot(
+                    observed=False, reason="observation-unavailable"))
+            else:
+                self.endpoint.publish_observation(observation)
+
+    def append(self, record):
+        with self.lock:
+            with open(self.journal_path, "a") as stream:
+                stream.write(json.dumps({**self.bound, **record}) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            self.publish()
+
+    def _consume(self):
+        while not self.stopping.is_set():
+            request = self.endpoint.consume_request(0.05)
+            if request is None:
+                continue
+            try:
+                if self.refusal:
+                    reply = LiveReply(status="unavailable", reason_code=self.refusal, error_code=self.refusal)
+                else:
+                    question_id = request.payload.question_id
+                    if question_id not in self.entries:
+                        self.append({"inquiryId": question_id, "question": request.payload.question,
+                                     "state": "queued"})
+                    reply = LiveReply(status="queued", observed=True, state="queued")
+                self.endpoint.settle_request(request.request_id, reply)
+            except OSError:
+                self.endpoint.settle_request(request.request_id, LiveReply(
+                    status="unavailable", reason_code="journal-unavailable", error_code="journal-unavailable"))
+            except Exception as error:
+                self.errors.append(error)
+                self.endpoint.settle_request(request.request_id, LiveReply(
+                    status="unavailable", reason_code="internal", error_code="internal"))
+
+    def activate(self, session_id):
+        self.observation = {**self.observation, "sessionId": session_id}
+        self.publish()
+
+    def note_event(self, message, phase):
+        self.observation = {**self.observation, "agentStatus": phase,
+                            "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": message["params"]["payload"]["toolName"]}]}
+        self.publish()
+
+    def deliver_inquiries(self, receipt, tool_call_id):
+        # Fixture source facts only; verification of native signed receipts is C1.
+        for entry in receipt["inquiries"]:
+            self.append({**entry, "state": "delivered", "via": "tool:buddy_checkpoint",
+                         "toolCallId": tool_call_id})
+
+    def record_answer(self, receipt, tool_call_id):
+        self.append({"inquiryId": receipt["inquiryId"], "state": "answered",
+                     "answer": {"text": receipt["answer"], "via": "tool:buddy_answer_inquiry",
+                                "toolCallId": tool_call_id}})
+
+    def withdraw(self, question_id):
+        self.append({"inquiryId": question_id, "state": "discarded",
+                     "reason": "withdrawn by the asking side; it no longer blocks turn completion"})
+
+    def settle(self):
+        for question_id, entry in self.entries.items():
+            if entry["state"] == "queued":
+                self.append({"inquiryId": question_id, "state": "unavailable",
+                             "reason": "the owned turn ended", "limitation": "cooperative fixture limitation"})
 
     def close(self):
         self.stopping.set()
-        self.listener.close()
         self.thread.join(timeout=2)
-        self.path.unlink(missing_ok=True)
-        try:
-            self.path.parent.rmdir()
-        except OSError:
-            pass
+        self.endpoint.close(reason="fixture cleanup")
+        if self.thread.is_alive() or self.errors:
+            raise AssertionError(f"owner cleanup failed: {self.errors!r}")
+
+
+def attach_owner(case, board, client, task, adapter):
+    worker_id, worker_instance, nonce = "w-inquiry", "inquiry-worker-instance", "a" * 32
+    client.register_worker(worker_id, adapter=adapter, capabilities=[adapter, "inquiry"],
+                           identity=worker_instance)
+    claim = client.claim(worker_id, "claim-inquiry-1", nonce, worker_instance=worker_instance)["claim"]
+    turn, attempt = claim["turn"], claim["attempt"]
+    case.assertIsNotNone(turn)
+    case.assertEqual(attempt["workerInstance"], worker_instance)
+    with board.store.db.read() as db:
+        row = db.execute("SELECT input_json, input_sha256 FROM workflow_turns WHERE turn_id=?", (turn["turnId"],)).fetchone()
+        case.assertIsNone(row["input_sha256"], "the running receipt-time digest is allowed to remain NULL")
+        case.assertEqual(json.loads(row["input_json"]), turn["input"])
+    identity = RunIdentity(task_id=task["runId"], attempt_id=attempt["attemptId"],
+                           generation=attempt["generation"], invocation_id="inquiry-fixture-invocation",
+                           turn_id=turn["turnId"], input_sha256=turn["inputSha256"])
+    case.assertEqual(identity.input_sha256, input_hash(turn["input"]))
+    directory = case.directory / "attempts" / task["runId"] / attempt["attemptId"]
+    directory.mkdir(parents=True, exist_ok=True)
+    owner = JournalOwner(directory, identity)
+    case.addCleanup(owner.close)
+    # Require BoardService's production initialization before injecting a factory.
+    case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
+    board.store.live_registry = LiveRegistry(board.store, lambda frame: OwnerChannel(frame, owner))
+    attachment = {"workerId": worker_id, "workerInstance": worker_instance,
+                  "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": nonce,
+                  "identity": identity.to_payload(), "instanceId": owner.endpoint.instance_id,
+                  "name": "inquiry fixture", "address": "fixture://worker-live", "liveToken": owner.token}
+    case._turn_id = identity.turn_id
+    owner.attachment = attachment
+    case.assertTrue(board.call("worker_live_attach", attachment)["attached"])
+    channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+    case.assertEqual(channel.capabilities().inquiry_delivery, "cooperative-checkpoint")
+    case.assertEqual(channel.identity, identity)
+    return task, attempt, owner
 
 
 class TestInquiry(BoardTestCase):
@@ -153,80 +252,18 @@ class TestInquiry(BoardTestCase):
     def _submit_dsh(self, client, cwd, *, request_id):
         return self._submit(client, cwd, request_id=request_id)
 
-    def _attempt_directory(self, client):
-        """Submit, claim and publish the materials the registered live path binds.
-
-        The stored files are exactly what the accepted role launch writes: the
-        public ``role-run-request.json`` carrying the run's complete identity,
-        the private ``role-run-control.json`` naming the invocation and the
-        governed turn input, and the attempt's bridge credentials. The board's
-        real ``inquiry_observe`` verifies that relationship, binds the
-        registry's dsh live channel through the role seam and speaks to
-        FakeBridge over the one shared transport client; no production
-        inquiry or channel function is mocked.
-        """
-        from hey_my_buddy.buddy.harnesses.run_contract import (
-            FrozenJson,
-            PrivateStatePaths,
-            RunBudget,
-            RunConfiguration,
-            RunIdentity,
-            RunRequest,
-            encode_run_request,
-        )
-        from hey_my_buddy.buddy.roles.turn_io import input_hash
-        from hey_my_buddy.buddy.runtime.worker import fsync_json
-
+    def _attempt_directory(self, board, client):
         task = self._submit(client, self.workdir(), request_id="inq-task")
-        client.register_worker("w-inq", adapter="dsh", capabilities=["dsh", "inquiry"])
-        claim = client.claim("w-inq", "claim-inq-1", "a" * 32)
-        self.assertIsNotNone(claim["claim"]["turn"])
-        attempt = claim["claim"]["attempt"]
-        directory = self.directory / "attempts" / task["runId"] / attempt["attemptId"]
-        directory.mkdir(parents=True, exist_ok=True)
-        private = ensure_private_dir(attempt_root(self.directory, "dsh", task["runId"], attempt["attemptId"]))
-        bridge = FakeBridge(directory)
-        credentials = {
-            "socketPath": str(bridge.path),
-            "resultsPath": str(directory / "inquiry.results.jsonl"),
-            "errorPath": str(directory / "inquiry.sock.error.json"),
-            "token": bridge.token,
-        }
-        fsync_json(private / "inquiry.json", credentials)
-        turn_input = {"taskId": task["runId"], "attemptId": attempt["attemptId"],
-                      "generation": attempt["generation"], "turnId": "turn-dsh-live",
-                      "resumeMode": "initial", "previousSessionId": None,
-                      "context": {}}
-        identity = RunIdentity(task_id=task["runId"], attempt_id=attempt["attemptId"],
-                               generation=attempt["generation"], invocation_id="invocation-dsh-live",
-                               turn_id="turn-dsh-live", input_sha256=input_hash(turn_input))
-        fsync_json(directory / "turn-input.json", turn_input)
-        control = {"operation": "worker", "harness": "dsh", "invocationId": identity.invocation_id,
-                   "inputFile": str(directory / "turn-input.json"), "privateRoot": str(private),
-                   "directory": str(directory), "inquiry": credentials,
-                   "spec": {"provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"},
-                   "cwd": str(self.workdir()), "timeoutSeconds": 600}
-        fsync_json(private / "role-run-control.json", control)
-        request = RunRequest(
-            identity=identity, harness="dsh",
-            configuration=RunConfiguration(provider="deepseek-official", model="deepseek-flash", effort="off"),
-            cwd=str(self.workdir()),
-            private_state=PrivateStatePaths(invocation_root=str(private), native_root=str(private / "native")),
-            input_text="the governed turn input", tool_scope="write",
-            output_schema=FrozenJson({"type": "object"}),
-            budget=RunBudget(timeout_seconds=600))
-        fsync_json(private / "role-run-request.json", json.loads(encode_run_request(request)))
-        return task, attempt, bridge
+        return attach_owner(self, board, client, task, "dsh")
 
     def _bound_fields(self, task, attempt):
-        """The identity fields every bound journal record of this attempt carries."""
         return {"version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
-                "generation": attempt["generation"], "turnId": "turn-dsh-live", "sessionId": "s-1"}
+                "generation": attempt["generation"], "turnId": self._turn_id, "sessionId": "s-1"}
 
     def test_observation_uses_the_real_bridge_protocol(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(client)
+        task, _attempt, bridge = self._attempt_directory(board, client)
         try:
             result = board.call("inquiry_observe", {"runId": task["runId"]})
             self.assertTrue(result["bridge"]["observed"])
@@ -236,15 +273,15 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(result["live"]["activity"][0]["toolName"], "bash")
             self.assertEqual(result["phase"], "active")
             self.assertEqual(result["inflight"] if "inflight" in result else result["execution"]["attemptState"], "starting")
-            self.assertEqual(bridge.requests[-1]["method"], "observe")
-            self.assertEqual(bridge.requests[-1]["version"], 1)
-            self.assertEqual(bridge.requests[-1]["token"], bridge.token)
+            self.assertEqual({request["operation"] for request in bridge.requests}, {"capabilities", "observe"})
+            self.assertEqual(bridge.requests[-1]["identity"], bridge.identity.to_payload())
+            self.assertEqual(bridge.requests[-1]["instanceId"], bridge.endpoint.instance_id)
         finally:
             bridge.close()
 
     def test_observation_does_not_publish_native_tool_arguments(self):
         board = self.board()
-        task, _attempt, bridge = self._attempt_directory(board.client())
+        task, _attempt, bridge = self._attempt_directory(board, board.client())
         try:
             # A peer that smuggles native tool arguments inside its activity
             # metadata loses its whole observation: the channel's strict live
@@ -260,13 +297,16 @@ class TestInquiry(BoardTestCase):
             self.assertFalse(result["live"]["available"])
             self.assertNotIn("private-provider-key", json.dumps(result))
             self.assertNotIn("private-prompt", json.dumps(result))
+            self.assertNotIn(bridge.token, json.dumps(result))
+            self.assertNotIn(bridge.attachment["nonce"], json.dumps(result))
+            self.assertNotIn(bridge.attachment["address"], json.dumps(result))
         finally:
             bridge.close()
 
     def test_a_question_is_correlated_and_a_wrong_token_is_refused(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(client)
+        task, _attempt, bridge = self._attempt_directory(board, client)
         try:
             result = board.call(
                 "inquiry_observe",
@@ -276,25 +316,28 @@ class TestInquiry(BoardTestCase):
             # delivery and answers arrive through the journal.
             self.assertEqual(result["inquiry"]["state"], "queued")
             self.assertEqual(result["inquiry"]["correlation"], "inquiryId")
-            self.assertEqual(bridge.requests[-1]["method"], "ask")
-            self.assertEqual(bridge.requests[-1]["inquiryId"], "q-live")
+            request = next(item for item in bridge.requests if item["operation"] == "request")
+            self.assertEqual(request["payload"]["questionId"], "q-live")
+            self.assertEqual(bridge.entries["q-live"]["state"], "queued")
             # A bridge that rejects the token is reported, never silently treated as an answer.
-            bridge.token = "b" * 64
+            bridge.endpoint._token = "b" * 64
             second = board.call(
                 "inquiry_observe",
                 {"runId": task["runId"], "inquiryId": "q-two", "question": "and now?"},
             )
-            self.assertEqual(second["bridge"]["error"], "unauthorized")
+            self.assertEqual(second["bridge"]["reason"], "token-mismatch")
+            self.assertIsNone(second["bridge"]["error"])
+            self.assertNotIn("q-two", bridge.entries)
             self.assertEqual(client.get_message("q-two", runId=task["runId"])["state"], "queued",
                              "an unauthorized ask is a retryable refusal, never a terminal answer")
         finally:
             bridge.close()
 
     def test_the_real_bridge_journal_shape_is_imported_with_reply_tool_evidence(self):
-        """The shared bridge journals a nested answer with its checkpoint tool evidence."""
+        """Nested source answer facts keep their checkpoint tool evidence."""
         board = self.board()
         client = board.client()
-        task, attempt, bridge = self._attempt_directory(client)
+        task, attempt, bridge = self._attempt_directory(board, client)
         bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
@@ -337,7 +380,7 @@ class TestInquiry(BoardTestCase):
     def test_an_answered_journal_entry_without_text_never_becomes_answered(self):
         board = self.board()
         client = board.client()
-        task, attempt, bridge = self._attempt_directory(client)
+        task, attempt, bridge = self._attempt_directory(board, client)
         bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
@@ -360,7 +403,7 @@ class TestInquiry(BoardTestCase):
     def test_the_journal_is_idempotent_transport_evidence(self):
         board = self.board()
         client = board.client()
-        task, attempt, bridge = self._attempt_directory(client)
+        task, attempt, bridge = self._attempt_directory(board, client)
         bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
@@ -398,7 +441,7 @@ class TestInquiry(BoardTestCase):
         dsh_task = self._submit_dsh(client, self.workdir(), request_id="no-bridge")
         result = board.call("inquiry_observe", {"runId": dsh_task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
-        self.assertIn("no inquiry bridge credentials", result["bridge"]["reason"])
+        self.assertIn("has not attached", result["bridge"]["reason"] or "")
         command_task = client.submit(
             requestId="no-bridge-command",
             task="do",
@@ -425,17 +468,19 @@ class TestInquiry(BoardTestCase):
             "available": False, "unlimited": True, "reason": "this execution has no deadline",
         })
 
-    def test_bridge_request_reports_unreachable_sockets(self):
-        import tempfile
-        import uuid
-
-        # Keep the AF_UNIX address short even inside hey_my_buddy.cli.checks' private TMPDIR.
-        # A nested workdir can exceed macOS's socket limit before ENOENT is tested.
-        missing = Path(tempfile.gettempdir()) / f"hbi-{uuid.uuid4().hex[:8]}"
-        self.assertFalse(missing.exists())
-        result = bridge_request({"socketPath": str(missing), "token": "x"}, "observe", {})
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "bridge-unreachable")
+    def test_worker_endpoint_loss_is_unavailable_not_shutdown(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, owner = self._attempt_directory(board, client)
+        owner.disconnected = True
+        result = board.call("inquiry_observe", {"runId": task["runId"],
+                            "inquiryId": "q-lost", "question": "status?"})
+        self.assertEqual(result["bridge"]["reason"], "transport-unreachable")
+        self.assertFalse(result["bridge"]["observed"])
+        self.assertEqual(result["status"], "running")
+        self.assertFalse(result["execution"]["shutdownConfirmed"])
+        self.assertIsNone(client.get_message("q-lost", runId=task["runId"])["answer"])
+        self.assertEqual(client.get_message("q-lost", runId=task["runId"])["state"], "queued")
 
     def test_an_unsupported_adapter_answers_with_a_capability_error(self):
         board = self.board()
@@ -466,9 +511,11 @@ class TestInquiry(BoardTestCase):
     def test_journal_failure_refuses_the_question_without_ending_execution(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(client)
+        task, _attempt, bridge = self._attempt_directory(board, client)
         try:
-            bridge.refusal = "journal-unavailable"
+            # A directory at the journal path produces a real read/open failure;
+            # the owner cannot commit, so it must never acknowledge queued.
+            Path(bridge.journal_path).mkdir()
             result = board.call("inquiry_observe", {
                 "runId": task["runId"], "inquiryId": "q-journal-failed", "question": "Status?",
             })
@@ -483,12 +530,9 @@ class TestInquiry(BoardTestCase):
     def test_a_question_refused_after_the_turn_ended_is_recorded_unavailable(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(client)
-        # The shared cooperative bridge itself ends a closed turn by refusing
-        # with not-ready and journaling its entries unavailable; the shared
-        # transport vocabulary still carries the terminal agent-gone code, and
-        # the board's handling of a peer that reports the owned turn gone is
-        # pinned here with the stand-in refusing exactly so.
+        task, _attempt, bridge = self._attempt_directory(board, client)
+        # An explicit owner refusal reports its real code. This does not
+        # supply process shutdown evidence or open a replacement model turn.
         bridge.refusal = "agent-gone"
         try:
             result = board.call(
@@ -506,7 +550,7 @@ class TestInquiry(BoardTestCase):
     def test_a_journal_record_bound_to_another_task_can_never_answer(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(client)
+        task, _attempt, bridge = self._attempt_directory(board, client)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(json.dumps({
             "version": 1, "taskId": "another-task", "attemptId": "another-attempt", "generation": 0,
@@ -525,6 +569,167 @@ class TestInquiry(BoardTestCase):
         finally:
             bridge.close()
 
+    def test_question_replay_and_conflict_never_requeue_the_owner(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, owner = self._attempt_directory(board, client)
+        params = {"runId": task["runId"], "inquiryId": "q-replay", "question": "status?"}
+        board.call("inquiry_observe", params)
+        first = Path(owner.journal_path).read_bytes()
+        second = board.call("inquiry_observe", params)
+        self.assertTrue(second["inquiry"]["duplicate"])
+        self.assertEqual(Path(owner.journal_path).read_bytes(), first)
+        with self.assertRaises(BoardError) as error:
+            board.call("inquiry_observe", {**params, "question": "changed question"})
+        self.assertEqual(error.exception.code, "CONFLICT")
+        self.assertEqual(Path(owner.journal_path).read_bytes(), first)
+        self.assertEqual(client.get_message("q-replay", runId=task["runId"])["state"], "queued")
+        self.assertEqual(board.call("inquiry_observe", {"runId": task["runId"]})["execution"]["attemptId"],
+                         owner.identity.attempt_id)
+
+    def test_all_identity_components_and_endpoint_instance_are_refused_before_owner_commit(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, owner = self._attempt_directory(board, client)
+        view = board.store.task_get({"runId": task["runId"]})["task"]
+        channel = board.store.live_registry.channel_for(view)
+        original = channel.identity
+        changed = (("taskId", "foreign-task"), ("attemptId", "foreign-attempt"),
+                   ("generation", original.generation + 1), ("invocationId", "foreign-invocation"),
+                   ("turnId", "foreign-turn"), ("inputSha256", "b" * 64))
+        for index, (key, value) in enumerate(changed):
+            with self.subTest(field=key):
+                channel._identity = RunIdentity.from_payload({**original.to_payload(), key: value})
+                result = board.call("inquiry_observe", {"runId": task["runId"],
+                                    "inquiryId": f"q-identity-{index}", "question": "probe"})
+                self.assertEqual(result["bridge"]["reason"], f"identity-mismatch:{key}")
+                self.assertFalse(result["bridge"]["observed"])
+                self.assertEqual(result["inquiry"]["state"], "queued")
+                self.assertFalse(result["execution"]["shutdownConfirmed"])
+        channel._identity = original
+        channel._instance_id = "b" * 64
+        result = board.call("inquiry_observe", {"runId": task["runId"],
+                            "inquiryId": "q-instance", "question": "probe"})
+        self.assertEqual(result["bridge"]["reason"], "instance-mismatch")
+        self.assertEqual(owner.entries, {})
+        self.assertFalse(Path(owner.journal_path).exists())
+        self.assertEqual(client.get(runId=task["runId"])["state"], "running")
+
+    def test_wait_for_an_unpublished_id_does_not_invent_an_answer_or_new_turn(self):
+        board = self.board()
+        task, _attempt, owner = self._attempt_directory(board, board.client())
+        owner.refusal = "timeout"
+        result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-wait",
+                            "question": "status?", "waitMs": 100})
+        self.assertEqual(result["inquiry"]["state"], "queued")
+        self.assertFalse(result["inquiry"]["answer"]["available"])
+        point_queries = [item for item in owner.requests if item.get("inquiryId") == "q-wait"]
+        self.assertTrue(point_queries)
+        self.assertEqual(owner.entries, {})
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["runId"],)).fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM workflow_turns WHERE run_id=?", (task["runId"],)).fetchone()[0], 1)
+
+    def test_unreadable_and_oversized_live_journals_publish_only_their_availability(self):
+        board = self.board()
+        task, _attempt, owner = self._attempt_directory(board, board.client())
+        journal = Path(owner.journal_path)
+        journal.mkdir()
+        unreadable = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertEqual(unreadable["journal"], {"available": False, "reason": "journal-unreadable", "entries": 0})
+        # Keep the original failure material; select a new source path instead
+        # of deleting or overwriting the previous experiment object.
+        owner.journal_path = str(owner.directory / "oversized.results.jsonl")
+        Path(owner.journal_path).write_bytes(b"x" * (MAX_JOURNAL_BYTES + 1))
+        oversized = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertEqual(oversized["journal"], {"available": False, "reason": "journal-exceeds-limit", "entries": 0})
+        self.assertEqual(oversized["status"], "running")
+        self.assertFalse(oversized["execution"]["shutdownConfirmed"])
+
+    def test_terminal_history_reads_only_this_attempt_without_a_live_call_or_new_turn(self):
+        board = self.board()
+        client = board.client()
+        task, attempt, owner = self._attempt_directory(board, client)
+        owner.append({"inquiryId": "q-terminal", "state": "answered",
+                      "answer": {"text": "durable history", "via": "tool:buddy_answer_inquiry",
+                                 "toolCallId": "terminal-answer"}})
+        owner.append({"inquiryId": "q-foreign-terminal", "taskId": "foreign-task", "state": "answered",
+                      "answer": {"text": "foreign history"}})
+        owner.append({"inquiryId": "q-foreign-attempt", "attemptId": "foreign-attempt", "state": "answered",
+                      "answer": {"text": "foreign attempt history"}})
+        owner.close()  # the fixture's only owned execution thread has really stopped
+        frame = owner.attachment
+        client.submit_result(frame["workerId"], attempt["attemptId"], attempt["generation"], frame["nonce"],
+                             {"status": "ok", "result": {"finalText": "fixture owner stopped"},
+                              "shutdownConfirmed": True, "exitCode": 0})
+        before = len(owner.requests)
+        result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-terminal",
+                            "question": "what was the last answer?", "waitMs": 100})
+        self.assertEqual(result["phase"], "terminal")
+        self.assertIn("cannot be woken", result["bridge"]["reason"])
+        self.assertEqual(result["inquiry"]["state"], "answered")
+        self.assertEqual(result["inquiry"]["answer"]["text"], "durable history")
+        self.assertEqual(result["inquiry"]["answer"]["source"], "bridge-journal")
+        self.assertEqual(result["inquiry"]["answer"]["toolCallId"], "terminal-answer")
+        for question_id, label in (("q-foreign-terminal", "task"), ("q-foreign-attempt", "attempt")):
+            with self.subTest(source=label):
+                rejected = board.call("inquiry_observe", {"runId": task["runId"],
+                                      "inquiryId": question_id, "question": "historical probe"})
+                self.assertEqual(rejected["bridge"]["journalRejected"], f"the journal record belongs to another {label}")
+                self.assertFalse(rejected["inquiry"]["answer"]["available"])
+        self.assertEqual(len(owner.requests), before)
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["runId"],)).fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM workflow_turns WHERE run_id=?", (task["runId"],)).fetchone()[0], 1)
+
+    def test_an_observation_source_loss_removes_stale_public_facts_without_stopping(self):
+        board = self.board()
+        task, _attempt, owner = self._attempt_directory(board, board.client())
+        initial = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertTrue(initial["live"]["available"])
+        owner.observation = {}
+        lost = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertFalse(lost["bridge"]["observed"])
+        self.assertEqual(lost["bridge"]["reason"], "observation-unavailable")
+        self.assertFalse(lost["live"]["available"])
+        self.assertNotIn("sessionId", lost["live"])
+        self.assertEqual(lost["status"], "running")
+        self.assertFalse(lost["execution"]["shutdownConfirmed"])
+        self.assertEqual(lost["execution"]["attemptId"], initial["execution"]["attemptId"])
+
+    def test_the_last_foreign_source_record_rejects_every_journal_binding_component(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, owner = self._attempt_directory(board, client)
+        # Neither the owner nor the endpoint has published the earlier legal
+        # answer: the final source record must reject it before publication.
+        changed = (("version", 2, "not bound to this execution"),
+                   ("taskId", "foreign-task", "another task"),
+                   ("attemptId", "foreign-attempt", "another attempt"),
+                   ("generation", owner.identity.generation + 1, "not bound to this execution"),
+                   ("turnId", "foreign-turn", "not bound to this execution"))
+        rows = []
+        for index, (key, value, _reason) in enumerate(changed):
+            legal = {**owner.bound, "inquiryId": f"q-source-{index}", "state": "answered",
+                     "answer": {"text": "earlier legal answer"}}
+            rows.extend((legal, {**legal, key: value, "answer": {"text": "foreign answer"}}))
+        Path(owner.journal_path).write_text("".join(json.dumps(row) + "\n" for row in rows) + "{torn line\n")
+        for index, (_key, _value, reason) in enumerate(changed):
+            with self.subTest(source=_key):
+                question_id = f"q-source-{index}"
+                result = board.call("inquiry_observe", {"runId": task["runId"],
+                                    "inquiryId": question_id, "question": "source probe"})
+                self.assertTrue(result["bridge"]["observed"])
+                self.assertIsNone(result["bridge"]["reason"])
+                self.assertIsNone(result["bridge"]["error"])
+                self.assertIn(reason, result["bridge"]["journalRejected"])
+                self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 5})
+                message = client.get_message(question_id, runId=task["runId"])
+                self.assertEqual(message["state"], "queued")
+                self.assertIsNone(message["answer"])
+                self.assertEqual(result["status"], "running")
+                self.assertFalse(result["execution"]["shutdownConfirmed"])
+
 
 def zcode_catalog() -> dict:
     import copy
@@ -537,15 +742,7 @@ def zcode_catalog() -> dict:
 
 
 class ZcodeLiveChannelTests(BoardTestCase):
-    """The board's zcode path through the registered live channel (step 2-C2).
-
-    The real Python bridge serves a real socket and the board's real
-    ``inquiry_observe`` runs against a real store. The channel binds the stored
-    public run request's complete identity against the run's own control
-    binding and governed turn input; an extracted harness whose stored request
-    is missing, unreadable or foreign stays unbound with no direct fallback —
-    the old direct-bridge behavior was the defect this round corrects.
-    """
+    """ZCode capability facts with a narrow owner, not a native harness run."""
 
     def setUp(self):
         super().setUp()
@@ -565,83 +762,9 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertTrue(submitted["governed"])
         return client.get(runId=submitted["runId"])
 
-    def _live_attempt(self, board, client, *, with_request=True, invocation_id="invocation-live"):
-        """Submit a zcode task, claim it, and serve the real bridge it owns.
-
-        The stored materials mirror exactly what the accepted C1 launch wrote:
-        the public ``role-run-request.json``, the private ``role-run-control.json``
-        naming the invocation and the governed turn input, and that turn input
-        file — the relationship the channel's full identity check reads.
-        """
-        import secrets as secrets_module
-        import tempfile
-        import uuid
-
-        from hey_my_buddy.buddy.harnesses.run_contract import (
-            FrozenJson,
-            PrivateStatePaths,
-            RunBudget,
-            RunConfiguration,
-            RunIdentity,
-            RunRequest,
-            encode_run_request,
-        )
-        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge
-        from hey_my_buddy.buddy.roles.turn_io import input_hash
-        from hey_my_buddy.buddy.runtime.worker import fsync_json
-
+    def _live_attempt(self, board, client):
         task = self._submit(client, self.workdir(), request_id="zcode-live")
-        client.register_worker("w-zcode-live", adapter="zcode", capabilities=("zcode", "inquiry"))
-        claim = client.claim("w-zcode-live", "claim-zcode-live-1", "a" * 32)
-        self.assertIsNotNone(claim["claim"]["turn"])
-        attempt = claim["claim"]["attempt"]
-        directory = self.directory / "attempts" / task["runId"] / attempt["attemptId"]
-        directory.mkdir(parents=True, exist_ok=True)
-        private = ensure_private_dir(attempt_root(self.directory, "zcode", task["runId"],
-                                                  attempt["attemptId"]))
-        # The real adapter moves the socket itself to a short temp directory:
-        # the attempt root's path overflows a Unix socket's sun_path.
-        short = Path(tempfile.gettempdir()) / f"zbl-{uuid.uuid4().hex[:8]}"
-        short.mkdir(mode=0o700, exist_ok=True)
-        bridge_identity = {"taskId": task["runId"], "attemptId": attempt["attemptId"],
-                           "generation": attempt["generation"], "turnId": "turn-fixture-live"}
-        credentials = {
-            "socketPath": str(short / "inquiry.sock"),
-            "resultsPath": str(directory / "inquiry.results.jsonl"),
-            "errorPath": str(directory / "inquiry.sock.error.json"),
-            "token": secrets_module.token_hex(32),
-        }
-        bridge = make_inquiry_bridge({"socketPath": credentials["socketPath"], "token": credentials["token"]},
-                               identity=bridge_identity,
-                               journal_path=credentials["resultsPath"])
-        bridge.start()
-        self.addCleanup(bridge.close)
-        fsync_json(private / "inquiry.json", credentials)
-        turn_input = {"taskId": task["runId"], "attemptId": attempt["attemptId"],
-                      "generation": attempt["generation"], "turnId": "turn-fixture-live",
-                      "resumeMode": "initial", "previousSessionId": None,
-                      "context": {}}
-        identity = RunIdentity(task_id=task["runId"], attempt_id=attempt["attemptId"],
-                               generation=attempt["generation"], invocation_id=invocation_id,
-                               turn_id="turn-fixture-live", input_sha256=input_hash(turn_input))
-        fsync_json(directory / "turn-input.json", turn_input)
-        control = {"operation": "worker", "harness": "zcode", "invocationId": identity.invocation_id,
-                   "inputFile": str(directory / "turn-input.json"), "privateRoot": str(private),
-                   "directory": str(directory), "inquiry": credentials,
-                   "spec": {"provider": "fixture-zcode", "model": "fixture-glm", "effort": "low"},
-                   "cwd": str(self.workdir()), "timeoutSeconds": 600}
-        fsync_json(private / "role-run-control.json", control)
-        if with_request:
-            request = RunRequest(
-                identity=identity, harness="zcode",
-                configuration=RunConfiguration(provider="fixture-zcode", model="fixture-glm", effort="low"),
-                cwd=str(self.workdir()),
-                private_state=PrivateStatePaths(invocation_root=str(private), native_root=str(private / "native")),
-                input_text="the governed turn input", tool_scope="write",
-                output_schema=FrozenJson({"type": "object"}),
-                budget=RunBudget(timeout_seconds=600))
-            fsync_json(private / "role-run-request.json", json.loads(encode_run_request(request)))
-        return task, attempt, bridge
+        return attach_owner(self, board, client, task, "zcode")
 
     def test_observation_reads_the_real_bridge_through_the_channel(self):
         board = self.board()
@@ -670,22 +793,20 @@ class ZcodeLiveChannelTests(BoardTestCase):
         result = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-live", "question": question, "waitMs": 3000,
         })
-        # Before the root checkpoint the question is queued, never delivered;
-        # the wait's single native answer query found no answer yet. (The
-        # bridge's own delivery record is journal transport evidence; the board
-        # message store keeps only its bounded injection-delivery keys.)
+        # Owner admission commits queued, never delivered. The point query
+        # reads the published queued state; it proves no native answer fact.
+        # Signed native root-checkpoint verification stays outside this fixture.
         self.assertEqual(result["inquiry"]["state"], "queued")
         self.assertIn("q-live", bridge.entries)
-        # The verified root answer arrives through the driver-authority methods
-        # that write the very journal records.
+        # The fixture writes checkpoint and reply-tool source evidence; the
+        # business projection preserves it without verifying a native receipt.
         digest = hashlib_module.sha256(question.encode()).hexdigest()
         bridge.deliver_inquiries({"inquiries": [{"inquiryId": "q-live", "questionSha256": digest}]},
                                  "call-checkpoint")
         bridge.record_answer({"inquiryId": "q-live", "questionSha256": digest,
                               "answer": "the checkpoint tool"}, "call-answer")
-        # A later ask of the same question replays the committed inquiry and
-        # imports the answer from the durable journal through the channel's
-        # bound projection, with the journal's own source.
+        # A later ask replays the committed inquiry and imports its source
+        # evidence from the owner-published durable journal projection.
         replayed = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-live", "question": question,
         })
@@ -696,32 +817,29 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertEqual(message["answer"]["source"], "bridge-journal")
         self.assertEqual(message["answer"]["toolCallId"], "call-answer")
 
-    def test_a_not_ready_refusal_stays_pending_and_carries_the_specific_code(self):
+    def test_an_unpublished_point_query_is_observed_but_keeps_the_board_question_pending(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._live_attempt(board, client)
-        # The bridge is mounted but the native turn is not admitted yet.
-        result = board.call("inquiry_observe", {
-            "runId": task["runId"], "inquiryId": "q-early", "question": "anyone there?",
-        })
-        self.assertEqual(result["bridge"]["reason"], "bridge-refused")
-        self.assertEqual(result["bridge"]["error"], "not-ready")
-        message = client.get_message("q-early", runId=task["runId"])
-        self.assertEqual(message["state"], "queued", "a retryable refusal never terminalizes a question")
+        task, _attempt, owner = self._live_attempt(board, client)
+        client.post_question("q-early", "anyone there?", runId=task["runId"])
+        channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+        snapshot = channel.observe(inquiry_id="q-early", timeout_ms=1500)
+        self.assertTrue(snapshot.observed)
+        self.assertEqual(snapshot.inquiries, ())
+        self.assertEqual(client.get_message("q-early", runId=task["runId"])["state"], "queued")
+        self.assertNotIn("q-early", owner.entries)
+        self.assertFalse(board.call("inquiry_observe", {"runId": task["runId"]})["execution"]["shutdownConfirmed"])
 
     def test_an_answered_journal_entry_without_text_never_becomes_answered_here_either(self):
         board = self.board()
         client = board.client()
         task, attempt, bridge = self._live_attempt(board, client)
-        # The native turn is not admitted, so the board's ask is refused
-        # without journaling and the journal keeps only this record: an
-        # answered entry with no usable answer text, projected through the
-        # channel, must degrade to delivered with its reason — never a
-        # half-answered question.
+        # A published journal state without usable answer text must degrade
+        # to delivered with a reason, never become a half-answered question.
         journal = Path(bridge.journal_path)
         journal.write_text(json.dumps({
             "version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"], "turnId": "turn-fixture-live",
+            "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
             "inquiryId": "q-empty", "state": "answered", "via": "tool:buddy_answer_inquiry",
         }) + "\n")
         board.call("inquiry_observe", {
@@ -732,53 +850,59 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertIsNone(message["answer"])
         self.assertIn("without usable answer text", message["reason"])
 
-    def test_a_tampered_request_never_bridges_around_its_channel(self):
+    def test_an_absent_registration_never_falls_back_to_private_files(self):
         board = self.board()
         client = board.client()
-        task, attempt, bridge = self._live_attempt(board, client)
-        bridge.activate("sess-live")
-        # Tamper the stored request after the fixture established the owned
-        # bridge: its invocation no longer matches the run's own control
-        # binding, so no channel binds — and the extracted live path has no
-        # direct fallback. Nothing reaches the native bridge.
-        request_file = attempt_root(self.directory, "zcode", task["runId"], attempt["attemptId"]) / "role-run-request.json"
-        request = json.loads(request_file.read_text())
-        request["identity"]["invocationId"] = "foreign-invocation"
-        request_file.write_text(json.dumps(request))
-        observed = board.call("inquiry_observe", {"runId": task["runId"]})
+        task, _attempt, owner = self._live_attempt(board, client)
+        frame = {key: value for key, value in owner.attachment.items()
+                 if key not in {"address", "name", "liveToken"}}
+        self.assertTrue(board.call("worker_live_detach", frame)["detached"])
+        # A live source has an answer, but the service must not read it without
+        # the holder's binding. There are no native request/credential files.
+        owner.append({"inquiryId": "q-unbound", "state": "answered", "answer": {"text": "private answer"}})
+        observed = board.call("inquiry_observe", {"runId": task["runId"],
+                              "inquiryId": "q-unbound", "question": "anyone there?"})
         self.assertFalse(observed["bridge"]["observed"])
-        self.assertIn("unbound", observed["bridge"]["reason"])
-        self.assertFalse(observed["live"]["available"])
         self.assertEqual(observed["journal"], {"available": False, "reason": "channel-unbound", "entries": 0})
-        asked = board.call("inquiry_observe", {
-            "runId": task["runId"], "inquiryId": "q-tampered", "question": "anyone there?",
-        })
-        self.assertFalse(asked["bridge"]["observed"])
-        self.assertNotIn("q-tampered", bridge.entries,
-                         "a foreign request identity never reaches the native bridge")
-        message = client.get_message("q-tampered", runId=task["runId"])
-        self.assertEqual(message["state"], "queued")
+        self.assertFalse(observed["live"]["available"])
+        self.assertEqual(observed["status"], "running")
+        self.assertEqual(client.get_message("q-unbound", runId=task["runId"])["state"], "queued")
+        self.assertIsNone(client.get_message("q-unbound", runId=task["runId"])["answer"])
 
-    def test_a_task_id_mismatch_never_binds_either(self):
+    def test_a_mismatched_actual_actor_cannot_attach_or_replace_a_held_binding(self):
         board = self.board()
         client = board.client()
-        task, attempt, bridge = self._live_attempt(board, client)
-        bridge.activate("sess-live")
-        request_file = attempt_root(self.directory, "zcode", task["runId"], attempt["attemptId"]) / "role-run-request.json"
-        request = json.loads(request_file.read_text())
-        request["identity"]["taskId"] = "foreign-task"
-        request_file.write_text(json.dumps(request))
-        observed = board.call("inquiry_observe", {"runId": task["runId"]})
-        self.assertFalse(observed["bridge"]["observed"])
-        self.assertIn("unbound", observed["bridge"]["reason"])
+        task, _attempt, owner = self._live_attempt(board, client)
+        original = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+        for key, value in (("workerId", "foreign-worker"), ("workerInstance", "foreign-instance"),
+                           ("nonce", "b" * 32), ("generation", owner.identity.generation + 1)):
+            with self.subTest(field=key):
+                with self.assertRaises(BoardError):
+                    board.call("worker_live_attach", {**owner.attachment, key: value})
+                self.assertIs(board.store.live_registry.channel_for(
+                    board.store.task_get({"runId": task["runId"]})["task"]), original)
+        for key, value in (("taskId", "foreign-task"), ("turnId", "foreign-turn"), ("inputSha256", "b" * 64)):
+            with self.subTest(identity=key):
+                bad_identity = {**owner.identity.to_payload(), key: value}
+                with self.assertRaises(BoardError):
+                    board.call("worker_live_attach", {**owner.attachment, "identity": bad_identity})
+                self.assertIs(board.store.live_registry.channel_for(
+                    board.store.task_get({"runId": task["runId"]})["task"]), original)
+        detach = {key: value for key, value in owner.attachment.items()
+                  if key not in {"address", "name", "liveToken"}}
+        with self.assertRaises(BoardError) as error:
+            board.call("worker_live_detach", {**detach, "instanceId": "b" * 64})
+        self.assertEqual(error.exception.code, "CONFLICT")
+        self.assertIs(board.store.live_registry.channel_for(
+            board.store.task_get({"runId": task["runId"]})["task"]), original)
+        self.assertTrue(board.call("inquiry_observe", {"runId": task["runId"]})["bridge"]["observed"])
 
     def test_a_foreign_record_for_the_asked_id_surfaces_as_the_public_rejection(self):
         board = self.board()
         client = board.client()
         task, attempt, bridge = self._live_attempt(board, client)
-        # The native turn is not admitted, so the board's ask is refused
-        # without journaling; the journal keeps only the foreign record, bound
-        # to the very id this run is asking about.
+        # The source record is foreign; the public rejection must survive
+        # typed projection and never import the foreign answer.
         journal = Path(bridge.journal_path)
         journal.write_text(json.dumps({
             "version": 1, "taskId": "another-task", "attemptId": "another-attempt", "generation": 0,
@@ -788,7 +912,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         result = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-live", "question": "who are you?",
         })
-        self.assertEqual(result["bridge"]["error"], "not-ready")
+        self.assertIsNone(result["bridge"]["error"])
         self.assertEqual(result["bridge"]["journalRejected"],
                          "the journal record belongs to another task")
         self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 1},
@@ -818,7 +942,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         rows = []
         for index in range(32):
             rows.append({"version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
-                         "generation": attempt["generation"], "turnId": "turn-fixture-live",
+                         "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
                          "inquiryId": f"q{index}", "state": "answered",
                          "answer": {"text": "x" * 4000, "bytes": 4000,
                                     "via": "tool:buddy_answer_inquiry", "toolCallId": f"call-{index}",
@@ -834,6 +958,10 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertEqual(message["answer"]["text"], "x" * 4000)
         self.assertEqual(message["answer"]["toolCallId"], "call-31")
         self.assertEqual(message["answer"]["source"], "bridge-journal")
+        pages = [item for item in bridge.requests if item["operation"] == "observe"
+                 and item.get("fields") == ["inquiries"]]
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(any(item.get("afterSeq") is not None for item in pages))
 
     def test_a_withdrawn_question_replays_as_an_observed_discarded_state(self):
         board = self.board()
@@ -842,9 +970,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         bridge.activate("sess-live")
         params = {"runId": task["runId"], "inquiryId": "q-discard", "question": "probe"}
         board.call("inquiry_observe", params)
-        discarded = bridge.handle({"version": 1, "id": "withdraw-1", "token": bridge.token,
-                                   "method": "discard", "inquiryId": "q-discard"})
-        self.assertTrue(discarded["ok"], discarded)
+        bridge.withdraw("q-discard")
         replayed = board.call("inquiry_observe", params)
         # The replay of a withdrawn question is an observed success carrying
         # the committed state and the native withdrawal reason — the transport
@@ -863,16 +989,14 @@ class ZcodeLiveChannelTests(BoardTestCase):
         bridge.activate("sess-live")
         params = {"runId": task["runId"], "inquiryId": "q-close", "question": "probe"}
         board.call("inquiry_observe", params)
-        bridge.close()
+        bridge.settle()
         result = board.call("inquiry_observe", params)
         message = client.get_message("q-close", runId=task["runId"])
         self.assertEqual(message["state"], "unavailable")
         # The direct reader preferred the record's limitation over its reason;
         # the channel's projection keeps that selection verbatim, bounded by
         # the message store's own reason length exactly as before.
-        from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
-
-        self.assertEqual(message["reason"], COOPERATIVE_INQUIRY_NOTE[:200])
+        self.assertEqual(message["reason"], "cooperative fixture limitation")
 
     def test_an_empty_existing_journal_is_available_not_exceeds(self):
         board = self.board()
@@ -898,7 +1022,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                    "generation": 0, "turnId": "other-turn", "inquiryId": "q-last",
                    "state": "answered", "answer": {"text": "foreign"}}
         valid = {"version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
-                 "generation": attempt["generation"], "turnId": "turn-fixture-live",
+                 "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
                  "inquiryId": "q-last", "state": "answered",
                  "answer": {"text": "owned answer", "bytes": 12,
                             "via": "tool:buddy_answer_inquiry"}}
