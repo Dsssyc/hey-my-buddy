@@ -48,14 +48,19 @@ def _errors():
         raise BoardError("INVALID_WORKSPACE", "Malformed workspace argument or recovery record") from error
 
 
-def _git(root, *args, data=None, env=None, allowed=(0,)):
+def _git_command(root, *args):
     # Do not inherit a caller's private index, repository, worktree or config
     # override. Read operations must not refresh the source index or run hooks.
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
-    git_env.update(env or {})
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
                "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", str(root), *args]
+    return command, git_env
+
+
+def _git(root, *args, data=None, env=None, allowed=(0,)):
+    command, git_env = _git_command(root, *args)
+    git_env.update(env or {})
     try:
         result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -189,11 +194,127 @@ def _file_with_git_mode(root, relative, mode):
     return _file(root, relative, mode_hint=mode) if _WINDOWS else _file(root, relative)
 
 
-def _blob(root, data, *, write=False):
-    args = ["hash-object", "--no-filters", "--stdin"]
+def _blob_oid(data, fmt):
+    # The object number of already-read bytes: exactly what
+    # ``git hash-object --no-filters --stdin`` computes over the payload in the
+    # repository's own object format. No path is involved, so clean filters,
+    # CRLF conversion and autocrlf cannot change the result. An object format
+    # hashlib does not implement fails closed instead of guessing a length.
+    if fmt not in ("sha1", "sha256"):
+        raise BoardError("WORKSPACE_UNSUPPORTED", "The repository object format is not supported", format=fmt)
+    return hashlib.new(fmt, b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _known_objects(root, oids):
+    query = b"".join(oid.encode() + b"\n" for oid in oids)
+    present = set()
+    for line in _git(root, "cat-file", "--batch-check", data=query).splitlines():
+        name, _, description = line.partition(b" ")
+        if description.startswith(b"blob "):
+            present.add(name.decode())
+    return present
+
+
+def _write_objects(root, objects):
+    # One fast-import stream stores every missing payload as a blob in the same
+    # repository, carrying the exact bytes that were already read. The exported
+    # marks must reproduce the computed object numbers, so the write semantics
+    # stay hash-object's. Blob commands create no ref, branch, tag or stash.
+    # https://git-scm.com/docs/git-fast-import
+    with tempfile.TemporaryDirectory(prefix="buddy-objects-") as directory:
+        marks = Path(directory) / "marks"
+        with tempfile.TemporaryFile() as diagnostics:
+            command, git_env = _git_command(root, "fast-import", "--quiet", "--done",
+                                            "--export-marks=" + os.fspath(marks))
+            try:
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=diagnostics,
+                                           stderr=diagnostics, env=git_env)
+            except OSError as error:
+                raise BoardError("WORKSPACE_GIT_ERROR", str(error)) from error
+            code, recorded = 1, {}
+            try:
+                stream = process.stdin
+                stream.write(b"feature done\n")
+                for number, (oid, data) in enumerate(objects.items(), start=1):
+                    stream.write(b"blob\nmark :%d\ndata %d\n" % (number, len(data)))
+                    stream.write(data)
+                    stream.write(b"\n")
+                stream.write(b"done\n")
+                stream.close()
+                code = process.wait(timeout=60)
+                for line in marks.read_bytes().splitlines():
+                    name, _, oid = line.partition(b" ")
+                    recorded[name.decode()] = oid.decode()
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.wait()
+                raise BoardError("WORKSPACE_GIT_ERROR", str(error)) from error
+            except OSError as error:
+                raise BoardError("WORKSPACE_GIT_ERROR", "Git stopped reading workspace objects", reason=str(error)) from error
+            finally:
+                if not stream.closed:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
+            if code != 0:
+                diagnostics.seek(0)
+                raise BoardError("WORKSPACE_GIT_ERROR", "Git workspace operation failed", operation="fast-import",
+                                 reason=diagnostics.read().decode(errors="replace")[-2000:])
+    for number, (oid, _data) in enumerate(objects.items(), start=1):
+        if recorded.get(f":{number}") != oid:
+            raise BoardError("WORKSPACE_GIT_ERROR", "Git numbered workspace bytes differently than the computed object identity",
+                             expected=oid)
+
+
+def _batch_blobs(root, payloads, *, write):
+    """Object numbers for already-read payloads, in input order.
+
+    One Git process names the repository's object format; write=True adds one
+    existence pass and one fast-import stream for the payloads the repository
+    does not have yet, so the process count no longer grows with the file
+    count. Identities and stored bytes both come from the payloads themselves,
+    never from a second read of any path.
+    """
+    if not payloads:
+        return []
+    fmt = _line(root, "rev-parse", "--show-object-format")
+    oids = [_blob_oid(payload, fmt) for payload in payloads]
     if write:
-        args.append("-w")
-    return _line(root, *args, data=data)
+        present = _known_objects(root, oids)
+        missing = {}
+        for oid, payload in zip(oids, payloads):
+            if oid not in present:
+                missing.setdefault(oid, payload)
+        if missing:
+            _write_objects(root, missing)
+    return oids
+
+
+def _blob(root, data, *, write=False):
+    return _batch_blobs(root, [data], write=write)[0]
+
+
+def _batch_objects(root, oids):
+    """Read many committed objects' exact bytes from one Git process."""
+    if not oids:
+        return []
+    query = b"".join(oid.encode() + b"\n" for oid in oids)
+    payload = _git(root, "cat-file", "--batch", data=query)
+    results = []
+    position = 0
+    for oid in oids:
+        end = payload.find(b"\n", position)
+        name, _, description = payload[position:end].partition(b" ")
+        fields = description.split()
+        if name.decode() != oid or len(fields) != 2 or fields[0] != b"blob":
+            raise BoardError("WORKSPACE_GIT_ERROR", "Git did not return a workspace object", oid=oid)
+        start = end + 1
+        results.append(payload[start:start + int(fields[1])])
+        position = start + int(fields[1]) + 1
+    if position != len(payload):
+        raise BoardError("WORKSPACE_GIT_ERROR", "Git returned more workspace objects than requested")
+    return results
 
 
 def _entries(root, revision=None):
@@ -238,11 +359,14 @@ def _observe(root, selected, *, write=False, require_selected=False):
     head = _commit(root, "HEAD")
     index = _entries(root)
     tracked, untracked, included = {}, {}, {}
+    blobs = []
     for path in index:
         item = _file_with_git_mode(root, path, index[path][0])
         if item is not None:
             mode, data = item
-            tracked[path] = [mode, _blob(root, data, write=write)]
+            entry = [mode, None]
+            blobs.append((entry, data))
+            tracked[path] = entry
     for path in _untracked(root, selected):
         item = _file(root, path)
         if item is None:
@@ -250,7 +374,11 @@ def _observe(root, selected, *, write=False, require_selected=False):
         mode, data = item
         untracked[path] = [mode, _sha(data)]
         if _in_scope(path, selected):
-            included[path] = [mode, _blob(root, data, write=write)]
+            entry = [mode, None]
+            blobs.append((entry, data))
+            included[path] = entry
+    for (entry, _data), oid in zip(blobs, _batch_blobs(root, [data for _entry, data in blobs], write=write)):
+        entry[1] = oid
     if _WINDOWS:
         windows_paths.validate_unique([*index, *untracked])
     if require_selected:
@@ -477,17 +605,17 @@ def _worktree_record(root, target):
 def _materialize(root, entries):
     if _WINDOWS:
         windows_paths.validate_unique(entries)
-        for path, (mode, oid) in entries.items():
+    contents = iter(_batch_objects(root, [oid for _mode, oid in entries.values()]))
+    if _WINDOWS:
+        for (path, (mode, _oid)), data in zip(entries.items(), contents):
             _relative(path)
-            data = _git(root, "cat-file", "blob", oid)
             target = Path(root) / path
             if mode == "120000":
                 windows_paths.symlink(target, os.fsdecode(data))
             else:
                 windows_paths.write_new(target, data, create_parents=True)
         return
-    for path, (mode, oid) in entries.items():
-        data = _git(root, "cat-file", "blob", oid)
+    for (path, (mode, _oid)), data in zip(entries.items(), contents):
         with _parent(root, path, create=True) as (parent, name):
             if mode == "120000":
                 os.symlink(os.fsdecode(data), name, dir_fd=parent)
@@ -718,6 +846,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
     violations = set()
     adopted = set()
     excluded_changes = set()
+    pending = []
     for path, fingerprint in observation["untracked"].items():
         if path in excluded and excluded[path] == fingerprint:
             continue
@@ -726,7 +855,9 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
         item = _file(root, path)
         if item is None or [item[0], _sha(item[1])] != fingerprint:
             raise BoardError("WORKSPACE_CHANGED", "An output changed during sealing", path=path)
-        entry = [item[0], _blob(root, item[1], write=True)]
+        pending.append((path, item))
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
+        entry = [item[0], oid]
         if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
         elif allow_outside_scope:
@@ -961,30 +1092,45 @@ def _entry_state_matches(current, expected):
     return current == expected
 
 
-def _entry_is_authorized(root, entry, current):
-    authorized = entry.get("authorized")
-    if authorized is None:
-        return current is None
-    if not isinstance(current, dict) or current.get("mode") != authorized.get("mode"):
-        return False
-    item = _file_with_git_mode(root, entry["path"], authorized.get("mode"))
-    return item is not None and _blob(root, item[1]) == authorized.get("oid")
+def _site_conflicts(root, recorded, selected, index):
+    """Selected paths matching neither the recorded site nor its authorized state.
+
+    Each path keeps the recorded compare-and-swap — the observed state read, the
+    authorized content read, then the observed/authorized index check — while
+    one batch numbers the authorized bytes, so the Git process count stays
+    independent of the selected path count.
+    """
+    observed = {path: _observed_file(root, path, mode_hint=(index.get(path) or [None])[0]) for path in selected}
+    matches, pending = {}, []
+    for path in selected:
+        entry = recorded[path]
+        if _entry_state_matches(observed[path], entry.get("observed")):
+            matches[path] = True
+            continue
+        authorized = entry.get("authorized")
+        if authorized is None:
+            matches[path] = observed[path] is None
+        elif not isinstance(observed[path], dict) or observed[path].get("mode") != authorized.get("mode"):
+            matches[path] = False
+        else:
+            pending.append(path)
+    items = {path: _file_with_git_mode(root, path, recorded[path]["authorized"].get("mode")) for path in pending}
+    identities = iter(_batch_blobs(root, [items[path][1] for path in pending if items[path] is not None],
+                                   write=False))
+    for path in pending:
+        item = items[path]
+        matches[path] = item is not None and next(identities) == recorded[path]["authorized"].get("oid")
+    return [path for path in selected
+            if not matches[path] or _entry_state(index, path) not in (recorded[path].get("observedIndex"),
+                                                                      recorded[path].get("authorizedIndex"))]
 
 
-def _entry_matches(root, entry, index_entries):
-    """Compare-and-swap test: the recorded site or its already-authorized state."""
-    current = _observed_file(root, entry["path"], mode_hint=(index_entries.get(entry["path"]) or [None])[0])
-    if not _entry_state_matches(current, entry.get("observed")) and not _entry_is_authorized(root, entry, current):
-        return False
-    index = _entry_state(index_entries, entry["path"])
-    return index == entry.get("observedIndex") or index == entry.get("authorizedIndex")
-
-
-def _write_path(root, path, entry):
+def _write_path(root, path, entry, data=None):
     if _WINDOWS:
         _relative(path)
         target = Path(root) / path
-        data = _git(root, "cat-file", "blob", entry["oid"]) if entry is not None else None
+        if data is None and entry is not None:
+            data = _git(root, "cat-file", "blob", entry["oid"])
         windows_paths.restore(target, None if entry is None or entry["mode"] == "120000" else data,
                               symlink_target=os.fsdecode(data) if entry is not None and entry["mode"] == "120000" else None)
         return
@@ -997,7 +1143,8 @@ def _write_path(root, path, entry):
             raise BoardError("WORKSPACE_UNSUPPORTED", "A managed path is now a directory", path=path) from error
         if entry is None:
             return
-        data = _git(root, "cat-file", "blob", entry["oid"])
+        if data is None:
+            data = _git(root, "cat-file", "blob", entry["oid"])
         if entry["mode"] == "120000":
             os.symlink(os.fsdecode(data), name, dir_fd=parent)
         else:
@@ -1041,8 +1188,13 @@ def _reset_site(root, manifest, observation):
         if path in excluded and excluded[path] == fingerprint:
             continue
         selected.add(path)
-    for path in sorted(selected):
-        _write_path(root, path, _entry_state(initial, path))
+    ordered = sorted(selected)
+    states = {path: _entry_state(initial, path) for path in ordered}
+    needed = [path for path in ordered if states[path] is not None]
+    contents = iter(_batch_objects(root, [states[path]["oid"] for path in needed]))
+    payloads = dict(zip(needed, contents))
+    for path in ordered:
+        _write_path(root, path, states[path], data=payloads.get(path))
     _restore_index(root, {path: _entry_state(initial_index, path) for path in sorted(selected)
                           if _entry_state(current_index, path) != _entry_state(initial_index, path)})
     # An excluded cache was never captured by content, so a modified one cannot be
@@ -1146,11 +1298,14 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
         return _finish_record(repository, existing, directory, ref_name=output_id, ref_kind="abandoned",
                               record_name="abandoned.json", patch_name="abandoned.patch", bindings=_RECORD_BINDINGS)
     entries = dict(observation["tracked"])
+    pending = []
     for path in observation["untracked"]:
         item = _file(root, path)
         if item is None:
             raise BoardError("WORKSPACE_CHANGED", "A managed path disappeared during evidence capture", path=path)
-        entries[path] = [item[0], _blob(root, item[1], write=True)]
+        pending.append((path, item))
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
+        entries[path] = [item[0], oid]
     initial = _entries(root, manifest["inputCommit"])
     changed = sorted(path for path in set(initial) | set(entries) if initial.get(path) != entries.get(path))
     tree = _tree(root, entries)
@@ -1261,12 +1416,16 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             if not selected:
                 raise BoardError("WORKSPACE_CONFLICT", "The recorded failure site has no blocking path to restore")
             index = _entries(root)
-            conflicting = [path for path in selected if not _entry_matches(root, entries[path], index)]
+            conflicting = _site_conflicts(root, entries, selected, index)
             if conflicting:
                 raise BoardError("WORKSPACE_CONFLICT", "Selected paths changed after the recorded failure; the site is preserved",
                                  conflictingPaths=sorted(conflicting)[:32])
+            authorized = {path: entries[path].get("authorized") for path in selected}
+            needed = [path for path in selected if authorized[path] is not None]
+            contents = iter(_batch_objects(root, [authorized[path]["oid"] for path in needed]))
+            payloads = dict(zip(needed, contents))
             for path in selected:
-                _write_path(root, path, entries[path].get("authorized"))
+                _write_path(root, path, authorized[path], data=payloads.get(path))
             _restore_index(root, {path: entries[path].get("authorizedIndex") for path in selected
                                   if _entry_state(index, path) != entries[path].get("authorizedIndex")})
             after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True)

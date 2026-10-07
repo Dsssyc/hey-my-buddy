@@ -54,3 +54,29 @@ A-S 与 E 使用不同函数区域并由 Host 整合 service.py；W2 与 E 若�
 每个微任务 packet 明写只运行受影响测试、不运行完整检查；不删除任何文件或目录、不使用 git stash、不新建或切换分支；开始时建立任务专用目录，一次性材料放进去，交付报告确切路径。测试仅操作自身私有合成资料，真实共享仓库的引用只读取；涉及实际 stash/分支动作的原生失败注入由 Host 在自己的私有合成仓库执行。每个测试子进程清除全部继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，再设置明确私有状态、运行时、源代码与夹具路径；不安装升级日常运行时、不动登录和凭据，除委派外不调用模型。
 
 原始日志与一次性材料置于 Host 的 ignored `tmp/console-reads-host/`，公开位置只用 `~` 或占位符。Host 对代码/测试/行为缺陷退回原 run，单句记录更正直接登记；验收后按精确路径回收任务检出与已报告专用目录，保留固定 refs、patch 和收据。ADR、CONTEXT、AGENTS、README、待办、docs/reference 由 Claude Code Host 维护；本次对外变化仅写这里，提交无 AI 署名。schema 保持 15，需要提升即停止说明。完成后停止，等待 Claude Code Host 验收，不开始其他工作。
+
+## 首批启动与 Host 的 C1 核对
+
+新宏任务为 `obj-e7f5f4a6-85a5-4338-a8af-8c396266b34d`。A-S run `b9955292-15e2-45e6-98d9-e367109fc281`，W1 run `6cada123-97cc-4a81-80a8-6926de525fb7`，E run `7fb2d7a2-553a-4620-89d9-8fd1f8fd98ea`；三次提交均完全省略四个 buddy 字段，经路由。微任务固定输入为计划提交 `e52af0ee61ea1f37165479225c0ce6c2e2cf87a0`。
+
+C1 由 Host 直接提交为 `ff8bcee`，源码只在 governed_prompt 现有作用域段落加一句提醒，未改动回合协议或段落顺序。新增契约用例覆盖初始、重建与原生续接三种输入；Worker services/assistance hints 的 18 项定向检查退出 0，去掉提醒的内存变异使新增用例失败（退出 1，三个 subtest），原始日志在 Host 的 ignored 专用目录。uv/npm 仅准备本工作树的开发依赖，没有安装或升级日常运行时。
+
+W2 的准备核对补充：workspace.prepare 在提交/准备时运行，不能将其时间冒充真正回合开始；begin_turn 位于 SQLite claim 事务内，不能在那里直接启动 git。因此 W2 必要的写入范围补充 `blackboard/store/store.py` 的 claim 准备传递、`tasks/workflow.py` 的冻结回合与 Host 事实投影及对应 mock/claim 测试，Git 采集仍在事务外并绑定该次回合。此项是现有黑板与 JSON 事实的扩展，不触碰实时通道或角色执行。
+
+E 首次固定产物 `3e468305` 的受影响 209 个测试由 Host 独立重跑通过，但另加的并发恢复核对失败（退出码 1）：两个请求同时指定新模型，首个重读发布新模型后成功，第二个在读完前已按旧目录拒绝。独立审查还发现健康扫描与明确请求没有共用原子认领。已把固定产物登记 rejected，并在原 run `7fb2d7a2-553a-4620-89d9-8fd1f8fd98ea` continue，未提供任何配置字段；要求共用进行中读取、账户边界与回归测试。此产物尚未验收或提交整合。
+
+R06 的 Host 基线由独立生成的私有 Git 仓库测得：SHA-1 与 SHA-256 下，`_observe` 在 8 个文件时启动 12 个 Git 进程、800 个文件时启动 804 个进程，读与写对象两种路径一致。二进制、CRLF、空文件与 4 MiB 大文件的编号逐个与原生 `hash-object --no-filters --stdin` 对照，写入后的 `cat-file blob` 内容一致。原始日志与生成脚本保留在 Host 的 ignored `tmp/console-reads-host/`；耗时只作观测，不作为回归条件。
+
+R03 的标准核对参照 [RFC 9110 第 8.8.3.3 节](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.8.3.3) 与 [第 13.1.2 节](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.2)：强 ETag 区分 gzip/identity 编码，If-None-Match 使用标准弱比较；gzip;q=0 与无内容 304 分别覆盖。尚未把计划中的核对登记为通过。
+
+A-S 首轮原生完成但输出与 partial seal 均以 `WORKSPACE_REF_INVALID` 失败，没有固定产物；Host 的候选代码 HTTP 注入有两处失败：gzip/identity 共用强 ETag，缓存命中延迟 180 秒健康扫描。升级 fence 的核对通过。原 run 已 continue 且四个配置字段仍全部省略，接口说明和测量结论必须随代码修正；原始第一轮材料保留在 Host 的 ignored `tmp/console-reads-host/as-first-retained/`。
+
+共同 Git 读取环境故障随后影响 E 第二轮封存与 W1 封存。Host 能解析同一提交，但旧后台进程不能读共享 Git 对象。确认全局活动执行为 0 后，使用现有 `restart` 替换守护进程（30699→33956），`runtimeContentId` 仍为 `7aadcb4af814adbde51eaa088e8c7ae1`、schema 15、Worker 保留；新守护进程能准备固定输入，旧 Worker 仍在启动前失败。随后核对七个 Worker idle、无活动或可执行排队任务，用现有 `worker-stop`/`worker-start` 协作重启七个旧 Supervisor；逐个有匹配旧 PID 的 `stopped` 持久记录与新 PID 登记。另一个等待 Host 的 run 原样保留，没有使用全局 stop 或 cancel，没有安装升级或修改登录凭据。恢复操作及失败的观察尝试保留在 ignored 日志中。原 A-S、E、W1 都继续使用原 run，未创建替代任务。
+
+E 第二轮的冻结候选仍检出窗口/超时分支抛旧 `first` 错误：首次查找后另一合法 confirmed 读取已恢复模型，节流窗口命中仍拒绝；Host 实际注入退出码 1。独立审查另见账户核对到真实读取回调的间隙与 A→B→A 复用旧 flight。已将这些范围内缺陷继续交回原 E run，要求现有选择修订与真实服务回调接线的失败测试，不提升 schema。
+
+W1 冻结候选的五轴只读审查未发现正常场景阻塞；Host 以清除继承环境、私有状态与运行时根独立运行 workspace、API、batch、Windows 结构与生命周期五个受影响模块：87 项、328.795 秒、退出码 0。这是受影响检查，不是完整检查；Windows 原生执行、总字节内存与 GC 的边界另记录。Host 的追加换行编号、跳过对象写入两处进程内变异均使目标测试退出码 1；逐文件 Git 变异与独立 8/800 文件对照仍在进行。W1 尚未登记最终验收，原 run 已请求在恢复后的 Worker 上重新封存。
+
+A-F 写入范围在首次提交前补充 `tests/probes/objective_console_preview.py` 和必要的 `tests/python/cli/test_host_preview.py`：现有前端 `preview-contract.test.ts` 实际消费该合成预览的 `tasks.runs` 快照合同，瘦快照及按需预检必须同步其 DTO/端点，才能保持既有前端解析回归。补充仅用于 A 的既有合成夹具，不扩展控制台其他界面问题；对应 preview 检查属于受影响测试。
+
+R06 的最终固定 W1 产物为 `66ecabc5-c878-43a2-90c2-97159b389bfa`，输出提交 `305d64b19e8774f9465fc7621a3dc1c88b54ba39`；两文件 SHA-256 与 Host 已测试的冻结候选一致。Host 独立 8/800 文件对照中，SHA-1/SHA-256 的观察读均为 5 个 Git 进程，写对象均为 7 个，不随文件数增长；原始编号及 `cat-file` 存储字节逐个一致（退出码 0）。Host 的逐文件 Git 变异使独立进程数量断言失败（800 文件、804 个进程，退出码 1），加上追加换行/跳过写入两处变异，共三处捕获。这里只整合代码，最终 accepted 与检出回收待整合后完整检查。
