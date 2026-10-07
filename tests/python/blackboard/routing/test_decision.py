@@ -253,7 +253,8 @@ class SelectionRequestTests(DecisionTestCase):
         # The Host decides and starts work explicitly: the recommendation returns the
         # parameters, and the decision run itself is not an execution permit.
         self.assertEqual(decision["requestedProfile"]["model"], PROFILE["model"])
-        self.assertEqual(decision["resolvedProfile"]["reasoningEffort"], PROFILE["effort"])
+        self.assertEqual(decision["requestedProfile"]["effort"], PROFILE["effort"])
+        self.assertIsNone(decision["resolvedProfile"])
         self.assertIsNone(decision["observedProfile"])
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assert_code("UNSUPPORTED", board.call, "task_retry", {"runId": request["runId"]})
@@ -818,7 +819,7 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.outcome(board, "json_answer")
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(set(decision["output"]["decision"]), {"profileId", "reason", "evidence"})
-        self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": 33})
+        self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
     def test_budget_and_input_changed_are_separate_from_failures_and_abstentions(self):

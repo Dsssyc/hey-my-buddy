@@ -145,3 +145,13 @@ Host直接修范围外四处：HarnessStartup将Worker参数改为声明的worke
 5-D2首次路由dec-cfb245c1-f2b8-441e-95c6-77c5ac35f6c7选zcode/zai-api/GLM-5.3/max，正常固定交付dbdb5e5；没有因耗时更换buddy。七路径封存patch/SHA/停止核对一致，Host固定整合副本六相关模块168项通过224.859秒；8份迁移防护变异均真实断言失败且无导入错误，原始日志保留。仅将MD确切系统临时根改为<task-root>，不改Worker做过/验证过的结论。内部ack/回收暂等最终集成发现检查完成，避免重复C3验收遗漏。
 
 用户补充：提交第五步前合入socu/buddy-core 9b65abbc的ADR-027；解决Codex/DSH等冲突保留两边行为，受影响聚焦后最终代码才再跑完整检查。今后微任务描述新增共享Git规则：受管检出与用户仓库共用stash/分支/标签，Worker禁止git stash，不移动或删除分支/标签；基线对比用新临时副本。Host本次合入不使用stash或自动stash。
+
+已将 socu/buddy-core 的 9b65abbc 合入实施分支（2278c40）：Codex 冲突采用共同 configuration_spec 且保存 _initialize 返回的 selected_model_listed；DSH 发现保留共同 utc_now 与 ADR-027 的 accountStatus。四个发现路径、Codex 所选模型未列出时的核对放宽、角色 selectedModelListed 传递均保留。聚焦中 DSH 旧发现字面断言遗漏 accountStatus 由 Host 修正并单项通过，实际 registered_run_wiring 21 项通过；两次 Host 写错不存在的测试选择器导致的装载错误如实保留，不当作生产失败。最终完整检查仍等全部交付整合完成。
+
+5-D1 首轮部分交付 bd1cbaa 为 failed/duplicate-finish（完成工具后再调度工具），同 run finish-only continue 正常交付，三路径字节不变；其后记录存在失败次数口径与未证明时序根因的表述，因会改变验证结论再经原 run continue 修正，未重跑测试。最终固定 68cfbff、产物 937f6734-8aa0-46a6-b4f3-a9c965282799 的三路径/SHA/两层停止已核对；代码与已验固定副本完全相等，Host 整合没有代改微任务代码。实际红色46项为 failures20/errors3，含子例程；实际后次46项仍 failure1/errors2，三处范围外旧断言由 Host 处理，不把该轮称为全绿。路由 dec-5545abeb-8181-42bf-89e3-6f5d87ba7274，zcode/zai-api/GLM-5.3-Flash/max，两个 continue 均未更换配置。
+
+Host 范围外修正：路由测试核对 requestedProfile.effort，未取得原生 checked 配置时 resolvedProfile 应为未知；审阅 usage.bytesRead 原生没有来源，断言改为 None；取消回执测试改用实际绑定 RunRequest/RunResult 与未知 native group、已停止 outer 的两层收集。三项聚焦均通过；去掉 native 停止核对的单点变异使取消被误报，1 项断言失败（0.014 秒）。真实收集器未被整体 mock。D2 已退休的两种旧 discard 测试夹具分支经无调用方确认删除；LiveActivityTests 复用 D2 共同 own_handle，初轮因本地 FixtureCase 包装没有转发而2项 AttributeError，Host 加转发后3项通过3.945秒，其他已通过项未重复。
+
+ADR-027 合入后的最终生产审计仍是45个含字段模型/190字段，未发现没有生产使用方的字段、类或实现参数；重新计算跨边界导入仍56条（37/15/3/1），与第零步54条的增删表不变。最终合并源码的私有 wheel 为347项，顶层仅 hey_my_buddy 与 dist-info，退休入口缺席；锁定依赖私有安装成功，隔离导入四个 run、共同实时模块及内部 attach/detach 成功。最初隔离导入探针把 CONTRACT_VERSION 写在 protocol 空包上而失败，改从实际 transport 导入后通过，未重复已经成功的依赖安装，日常运行时未变。
+
+为补齐第一次真实 DSH 冒烟漏存 Worker 端点确切路径的证据，同目的最小重跑1次：run 98f9a75b-f891-4c43-a5f5-241f27f771e0，attempt 712ef86f-f3dc-428a-9270-8628e5a6d6cc，所选 Worker 是实际持有该回合的 adr025-dsh-smoke-worker。原生 ok/modelStarted、签收与根绑定均 true、native group gone 与 outer 停止 true、完成签收与问询 answered 均核对；Worker 与 controller 两个确切文件各从存在到消失，详见 DSH 冒烟记录。本步 DSH 真正调用模型累计2次；新探针第一次错误把 tracked 文件放进 includeUntracked，提交阶段拒绝、没有运行/模型/端点，改用新命名的探针与私有材料后完成。没有再做 Claude Code 模型调用。

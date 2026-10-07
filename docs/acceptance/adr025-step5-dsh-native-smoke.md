@@ -16,3 +16,9 @@ controller的登记socket确切路径、device/inode与hostPid在原始ready/摘
 原始request在正常回合收尾后未保留；真实RunResult、turn输出、问询journal、controller ready、原生provenance、会话用量元数据与启动日志已逐文件SHA留存于<checkout>/tmp/adr025-host/<phase>/retained-dsh-native/。私有fixture clone中的Git输入/输出快照对象另以bundle保留；没有把这些快照记录称作源码提交或业务交付文件。原生controller运行源码为ca839f40后的Host公共接线，具体源码现已提交为5776a9b及后续退休整合；两次Claude冒烟基线更早，另文明确未覆盖切换后的实时通道。
 
 本次继续已接受的DSH行为差异：问询可能只在checkpoint送达；快速路由带DSH系统提示；原生续接目前仍不接入；所有hey-my-buddy启动的DSH运行关闭session-title-llm与session-telemetry-otel。没有发现新的行为差异。只读命令强制范围及工具名归类、未知新工具行和可选用量来源沿用第三四步已验收的规则，本次write范围read工具不能当作只读沙盒证据。
+
+补充：ADR-027 合入后在 2278c40 的实际运行代码上，为补齐前次漏存的 Worker 端点地址同目的最小重跑1次（本步 DSH 真正调用模型累计2次，未再调用 Claude Code）。run 98f9a75b-f891-4c43-a5f5-241f27f771e0、attempt 712ef86f-f3dc-428a-9270-8628e5a6d6cc、Worker adr025-dsh-smoke-worker；只读一个最小 fixture 文件、检查点、问询回答与完成签收。modelStarted true、native ok/退出0、native group gone、外层停止 true、签收验证与根会话匹配 true、完成 disposition completed；服务最后确认问询 answered。没有改变日常 DSH、登录或凭据；HOME 沿用，DSH_HOME 由运行模块强制私有，两个已接受的启动项照常关闭。
+
+两个确切端点在启动前/运行中各记下地址：Worker /tmp/c_two_ipc/cc17cc440bac1d596f04bea860311c84d52c46a.sock，controller /tmp/c_two_ipc/cc17da127a00b0f4fa84211b147ec3cb1f41b7a.sock。前者 presentBeforeRun true、后者 presentDuringRun true；Worker 线程结束、实际所选 Worker 与持有者一致、两层停止证据确认后，两个 presentAfterRun 均 false，Host 再查两个确切路径仍不存在。其余 /tmp/c_two_ipc 文件未扫描归属或清理；前一次遗漏地址的证据缺口保留，不改写成前一次已证明。
+
+真实 read 工具1次；私有会话记录用量 nativeRecords7、input83597（含 cached71424）、output596，completeness complete，source dsh/session-record。没有新增 zstd 系统命令依赖。准备探针 v6 把 tracked fixture 文件误放 includeUntracked，被提交阶段拒绝，没有 run、模型或端点；新命名 v7 去掉该选择器后完成。第一次整理证据误用无 pydantic 的系统 Python，解码前失败；换已锁定 uv 环境后严格解码与证据断言通过。原始失败与后续成功分别保留。21份命名材料、SHA与最终严格解码摘要留在 <checkout>/tmp/adr025-host/<phase>/retained-dsh-endpoint-rerun/ 与 dsh-endpoint-rerun2-evidence.json；私有任务根只由 Host 按创建时记下的确切路径回收。

@@ -92,6 +92,9 @@ class ZcodeFixtureCase(unittest.TestCase):
     def execute(self, context):
         return self._fixture_type.execute(self, context)
 
+    def own_handle(self, handle):
+        return self._fixture_type.own_handle(self, handle)
+
 
 class BridgeHarness:
     """An activated owner with its private journal and optional typed endpoint."""
@@ -1005,17 +1008,6 @@ class FinishToolTests(unittest.TestCase):
 
 class LiveActivityTests(ZcodeFixtureCase):
     """Actual controller/native fixture publication through the held C-Two endpoint."""
-
-    def own_handle(self, handle):
-        from hey_my_buddy.buddy.roles.live import release_live_binding
-        def release():
-            release_live_binding(handle)
-            descriptor = getattr(handle, "role_live_descriptor", None)
-            if descriptor is not None and descriptor.socket is not None:
-                self.assertFalse(Path(descriptor.socket.path).exists(), "the owned endpoint was left behind")
-        # LIFO: stop the actual held group before cleaning its captured endpoint.
-        self.addCleanup(release)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
 
     def activity_channel(self, handle):
         from hey_my_buddy.buddy.roles.live import handle_live_binding

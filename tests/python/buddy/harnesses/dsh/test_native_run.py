@@ -1366,7 +1366,8 @@ class AlwaysOffPatchRowsTests(NativeRunCase):
         catalog = native_run.run_discovery(
             cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
             native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
-        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete"}])
+        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete",
+                                                   "accountStatus": "not-applicable"}])
         self.assert_patch_row_disabled("session-title-llm")
         self.assert_patch_row_disabled("session-telemetry-otel")
 
