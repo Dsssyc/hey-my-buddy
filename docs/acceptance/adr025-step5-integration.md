@@ -161,3 +161,13 @@ DSH 两个确切任务根已由 Host 回收：先保留首轮材料及第二轮2
 5-D3 首次路由 dec-44904f35-0420-4e78-a3a4-62bb941a2c9a 选 zcode/zai-api/GLM-5.3-Flash/max，固定初稿241bd0b仅三路径。Host 对合入ADR-027后的固定副本17项通过28.772秒，两个原始故障注入SHA与断言失败核对通过；编号表把相同12个编号写成changed，以及stdout/停止生命周期注释不准，原run continue要求更正记录/注释，不改行为、不重跑，尚未验收。
 
 5-D3 原run continue在准备检出阶段失败：attention prep-f9bb86e3-0fda-4b4f-bcf4-6e3eee48ecaa，WORKSPACE_GIT_ERROR，没有产生新模型回合。Host仅只读核对受管HEAD仍2278c40、改动仍授权三路径，没有使用stash/移动分支标签/手动提交受管文件或扩大到修黑板。已准备仅记录/编号表/源码注释的更正补丁，去除docstring后可执行AST与241bd0b完全相等，全17个实际加载编号与基线集合相等；与C3两行导入补丁一并提出一次性Host更正授权，未应用到实施分支。候选私有副本共3049个唯一编号/189模块（原步输入2785，最新已验上游2874），无装载错误；这是未授权补丁的提案编号核对，不是最终代码或完整检查通过。D1/D2的integration-record已登记，ack/回收继续等待最终发现与整批完整检查；D3原run保留且未取消、未另开。
+
+用户已明确授权两项一次性 Host 更正。C3 两处测试导入去掉 tests.python. 前缀；原 run 已接受不能 continue，不取消或重提。D3 固定241bd0b三路径先逐字整合，再更正编号表/记录与源码注释：全17个实际加载编号相等，变化/删除/新增均零；12处夹具机制变化另在记录说明；生产stdout是RunResult帧，夹具runner日志是单独的角色投影脱敏样本；模拟组在观察阶段活跃而非笼统永不消失。去除docstring后可执行AST完全相等，原17项/两变异证据不改、不为注释或记录重跑。所有Host适配明确列入integration-record的adjustedPaths，原WORKSPACE_GIT_ERROR、首轮产物与日志保留；受管检出没有手动改写。
+
+提交前再次合入最新socu/buddy-core 54d15908，仅用户维护的待办文档变化，没有生产或测试变化；没有由Host改写待办。最终完整检查将在这些已授权修正与全部交付整合后的代码上运行，默认并行数，不传--jobs。
+
+授权后C3实际tests/python cwd的三迁移模块与检查运行器73项通过6.849秒；D3记录/注释不重跑。主编号清单实际3049个唯一编号/189模块，无装载错误；原输入2785个的未变集合2712相等，73个旧编号变化/退役、337个新增，含上游ADR-027的1个改名与89个新增ID差异；相对最新已验上游2874个是72旧/247新。逐项见adr025-step5-test-id-delta.tsv，仅列实际编号差异；微任务表中正文/断言迁移明细不计作整步编号变化。主表额外补齐Host范围外改名及控制器退休入口的对应，不能靠新用例总数掩盖旧意图。
+
+整合后的完整检查首次使用默认4并行，189文件全部调度，186文件2981项通过（原有skip1），3个模块失败，用时480.607秒。后续控制台及其他尾部检查尚未执行，未记完整通过。两处范围外旧引用由Host修正：worker_sessions用当前已改名的Codex测试夹具名；workflow_routing记录并读取start实际返回的held control、核对attempt与fixture.document，而不是猜旧mock-readonly.json路径，两项聚焦通过1.017秒。另一个是Codex取消场景固定sleep(0.3)后SIGTERM退出-15，没有完整帧；独立只读审查发现处理器在模块导入/argparse之后安装，但不能凭日志证明具体竞态根因，也未认定生产回归。
+
+Codex取消场景按范围缺陷打回原5-D2 run continue，未因耗时换buddy。最初指示错误地以fixture状态作turn-start记录，独立审查确认只记录thread/start；Host尝试加fixture路径的scope-amend被CONFLICT拒绝（已准备continuation冻结旧scope），没有实际扩范围。随后同run继续输入替代未消耗前指示，保持原7路径，以现有身份绑定C-Two activity.counts.modelTurns作为controller接收原生turn/started的实际证据，要求有界等待再cancel，不只延长sleep，不修改生产行为、不跑全套；原失败与两次指示/拒绝记录保留。

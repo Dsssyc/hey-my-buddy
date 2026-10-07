@@ -89,7 +89,7 @@ class WorkerSessionTests(unittest.TestCase):
 
     def test_codex_list_accepts_actual_stopped_adapter_fixture(self):
         from buddy.harnesses.codex.test_codex import CodexAdapterTests
-        fixture = CodexAdapterTests('test_completed_native_turn_has_structured_provenance_and_activity')
+        fixture = CodexAdapterTests('test_completed_native_turn_has_structured_provenance_and_preserved_final_activity')
         fixture.setUp()
         try:
             with mock.patch.dict(os.environ, {'BUDDY_DEV_SOURCE': '1',

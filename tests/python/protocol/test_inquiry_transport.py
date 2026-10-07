@@ -19,7 +19,7 @@ from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json
-from tests.python.buddy.harnesses.test_c_two_live import (
+from buddy.harnesses.test_c_two_live import (
     StubPeer,
     TEST_CRM,
     identity,

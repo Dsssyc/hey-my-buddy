@@ -27,7 +27,7 @@ from hey_my_buddy.buddy.harnesses import session_receipts
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json
 from hey_my_buddy.protocol import schemas as board_schemas
-from tests.python.buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
+from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
 
 
 def identity() -> RunIdentity:
