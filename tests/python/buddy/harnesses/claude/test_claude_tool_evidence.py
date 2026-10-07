@@ -1,10 +1,11 @@
-"""Claude read-only tool evidence: frame projection and runner receipt wiring.
+"""Claude read-only tool evidence: frame projection and role-run receipt wiring.
 
 No model calls and no board: the collector is driven frame by frame, and the
-dedicated stream fixture (``fixtures/mock_claude.py``) drives the real runner
-subprocess for the receipt-level facts — the finish after the observed stream
-close, the unified collector budget count, and the binding taken from the
-private Python control file.
+dedicated stream fixture (``fixtures/mock_claude.py``) drives the real
+registered role run — the shared role controller over the claude native run —
+for the receipt-level facts: the finish after the observed stream close, the
+unified collector budget count, and the binding taken from the stored public
+run request.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import json
 import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from hey_my_buddy.protocol import tool_evidence
@@ -19,6 +21,9 @@ from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.tool_evidence import ReadOnlyToolEvidence
+from hey_my_buddy.buddy.harnesses.registry import run_seam
+from hey_my_buddy.buddy.roles.run_execution import start_review
+from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.blackboard.routing.router import answer_schema
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
@@ -72,6 +77,28 @@ def project(frames, stream_complete=True):
     for frame in frames:
         collector.observe_frame(frame)
     return collector, collector.finish(stream_complete)
+
+
+def structured_use(call_id, value, session="session-root", parent=None):
+    block = {"type": "tool_use", "id": call_id, "name": "StructuredOutput", "input": value}
+    fields = {}
+    if session is not None:
+        fields["session_id"] = session
+    if parent is not None:
+        fields["parent_tool_use_id"] = parent
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "delivering"}, block]}, **fields}
+
+
+def armed(frames):
+    """An armed collector over the frames: this run's schema command line is on."""
+    collector = ReadOnlyToolEvidence(dict(BINDING), native_schema_delivery=True)
+    for frame in frames:
+        collector.observe_frame(frame)
+    return collector
+
+
+DELIVERED = {"profileId": "legal", "reason": "the delivered value", "evidence": ["one"]}
 
 
 def settled_stream():
@@ -227,9 +254,217 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(foreign_roots.finish(True)["nativeIdentity"], [])
 
 
+class StructuredDeliveryProjectionTests(unittest.TestCase):
+    """The built-in StructuredOutput delivery identified by its native facts only."""
+
+    def delivery_key(self, call_id="toolu_so_1", identity=None):
+        from hey_my_buddy.json_codec import canonical_json
+        return (canonical_json(identity or ROOT), call_id)
+
+    def test_the_root_delivery_is_verified_and_excluded_from_the_package(self):
+        collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED),
+                           tool_result("toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), (self.delivery_key(),))
+        # The one settlement is frozen; a second call returns the same answer.
+        self.assertEqual(collector.settle_delivery({"profileId": "other"}, ROOT),
+                         (self.delivery_key(),))
+        self.assertEqual(collector.tool_calls, 0)
+        package = collector.finish(True, exclude_calls=collector.settle_delivery(DELIVERED, ROOT))
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
+                         (0, 0, []))
+        self.assertTrue(package["streamComplete"])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+
+    def test_the_live_budget_count_holds_the_candidate_before_verification(self):
+        armed_collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED)])
+        self.assertEqual(armed_collector.tool_calls, 0)
+        # The same frames under a run without the schema command line keep the
+        # ordinary-tool projection: the call counts as one ordinary start.
+        disarmed = ReadOnlyToolEvidence(dict(BINDING))
+        for frame in (init_frame(), structured_use("toolu_so_1", DELIVERED)):
+            disarmed.observe_frame(frame)
+        self.assertEqual(disarmed.tool_calls, 1)
+        self.assertEqual(disarmed.settle_delivery(DELIVERED, ROOT), ())
+
+    def test_settlement_releases_unverified_candidates_before_the_role_sees_the_count(self):
+        # A candidate whose input never matches the final value is held while
+        # it waits for its association, but the settlement that precedes the
+        # role's settled facts releases it: the last count the role may act on
+        # and the finished package report the same classification.
+        collector = armed([init_frame(),
+                           structured_use("toolu_so_1", {"profileId": "forged"}), tool_result("toolu_so_1")])
+        self.assertEqual(collector.tool_calls, 0)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+
+    def test_a_missing_final_value_settles_to_no_verification(self):
+        collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(None, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+
+    def test_stream_and_assistant_duplicate_projections_verify_as_one_call(self):
+        collector = armed([init_frame(),
+                           stream_start("StructuredOutput", "toolu_so_1"), block_stop(),
+                           structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1")])
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        self.assertEqual(verified, (self.delivery_key(),))
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+
+    def test_a_value_mismatch_verifies_nothing_and_keeps_the_call_counted(self):
+        collector = armed([init_frame(),
+                           structured_use("toolu_so_1", {"profileId": "forged"}), tool_result("toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
+        other = {"profileId": "conflict", "reason": "a different complete input", "evidence": []}
+        for name, first, second in (("delivered-first", DELIVERED, other), ("conflict-first", other, DELIVERED)):
+            with self.subTest(order=name):
+                collector = armed([init_frame(), structured_use("toolu_so_1", first),
+                                   structured_use("toolu_so_1", second), tool_result("toolu_so_1")])
+                # The conflicted candidate is never held out of a count, and
+                # the final value — whichever input it matches — verifies none.
+                self.assertEqual(collector.tool_calls, 1)
+                self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+                self.assertEqual(collector.tool_calls, 1)
+                package = collector.finish(True)
+                self.assertEqual(package["toolCalls"], 1)
+                self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
+                                 [("StructuredOutput", "start"), ("StructuredOutput", "end")])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                                 tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_an_incomplete_fact_on_the_call_refuses_the_exemption(self):
+        # A nameless end before the start is a broken fact on the same native
+        # call: the shared exclusion guard refuses such a call, so the
+        # candidate is never held or verified even with a matching input.
+        broken_end = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_so_1"}]}, "session_id": "session-root"}
+        collector = armed([init_frame(), broken_end,
+                           structured_use("toolu_so_1", DELIVERED)])
+        self.assertEqual(collector.tool_calls, 1)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+        self.assertFalse(package["streamComplete"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_subagent_foreign_and_mounted_lookalikes_are_not_candidates(self):
+        collector = armed([init_frame(),
+                           structured_use("toolu_sub", DELIVERED, parent="toolu_parent_9"),
+                           tool_result("toolu_sub", parent="toolu_parent_9"),
+                           structured_use("toolu_foreign", DELIVERED, session="session-other"),
+                           tool_result("toolu_foreign", session="session-other"),
+                           assistant_tool("mcp__server__StructuredOutput", "toolu_mcp"),
+                           tool_result("toolu_mcp")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 3)
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 3)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_a_conflicting_start_name_on_the_same_call_refuses_the_exemption(self):
+        collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED),
+                           assistant_tool("Read", "toolu_so_1")])
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True)
+        self.assertEqual(len(package["events"]), 2)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_a_candidate_on_an_unconfirmed_root_verifies_nothing(self):
+        foreign = armed([init_frame(session="session-other"),
+                         structured_use("toolu_so_1", DELIVERED, session="session-other"),
+                         tool_result("toolu_so_1", session="session-other")])
+        # The handshake confirmed another session: this run's root identity can
+        # never verify the delivery of a run rooted elsewhere, and the one
+        # settlement is frozen with that answer.
+        self.assertEqual(foreign.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(foreign.tool_calls, 1)
+        own = armed([init_frame(), structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1")])
+        self.assertEqual(own.settle_delivery(DELIVERED, ROOT), (self.delivery_key(),))
+
+    def test_repeated_deliveries_settle_consistently_under_the_input_bound(self):
+        frames = [init_frame()]
+        for index in range(10):
+            frames += [structured_use(f"toolu_so_{index}", DELIVERED), tool_result(f"toolu_so_{index}")]
+        collector = armed(frames)
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        # The input retention bound keeps the most recent eight candidates; the
+        # two oldest keep their facts but can no longer prove their value, and
+        # the settled count releases them exactly as the finished package does.
+        self.assertEqual([call_id for _identity, call_id in verified],
+                         [f"toolu_so_{index}" for index in range(2, 10)])
+        self.assertEqual(collector.tool_calls, 2)
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual((package["toolCalls"], len(package["events"])), (2, 4))
+
+    def test_an_evicted_first_input_still_refuses_a_conflicting_second(self):
+        # The Host probe's shape: c1 first carries {"answer": "first"}; c2..c9
+        # each carry a different complete input and the eight-slot bound evicts
+        # c1's full text; c1 then carries the delivered {"answer": "conflict"}.
+        # The first input's fingerprint survives the eviction, so the conflict
+        # refuses the exemption and all nine distinct calls stay counted.
+        frames = [init_frame(), structured_use("toolu_so_1", {"answer": "first"})]
+        for index in range(2, 10):
+            frames.append(structured_use(f"toolu_so_{index}", {"answer": f"different-{index}"}))
+        frames.append(structured_use("toolu_so_1", {"answer": "conflict"}))
+        collector = armed(frames)
+        # Pre-settlement only the conflicted call charges the count; the eight
+        # consistent candidates still wait for their final association.
+        self.assertEqual(collector.tool_calls, 1)
+        self.assertEqual(collector.settle_delivery({"answer": "conflict"}, ROOT), ())
+        self.assertEqual(collector.tool_calls, 9)
+        package = collector.finish(True)
+        self.assertEqual(package["toolCalls"], 9)
+
+    def test_an_evicted_input_reproves_the_value_when_the_same_input_returns(self):
+        frames = [init_frame(), structured_use("toolu_so_1", DELIVERED)]
+        for index in range(2, 10):
+            frames.append(structured_use(f"toolu_so_{index}", {"answer": f"different-{index}"}))
+        frames.append(structured_use("toolu_so_1", DELIVERED))
+        collector = armed(frames)
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        # The same input returning after the eviction is a consistent repeat:
+        # its recaptured full text re-proves the value, the eight mismatched
+        # calls stay counted, and the settled count and package agree.
+        self.assertEqual(verified, (self.delivery_key("toolu_so_1"),))
+        self.assertEqual(collector.tool_calls, 8)
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual(package["toolCalls"], 8)
+
+    def test_a_mixed_candidate_field_settles_to_one_agreed_count(self):
+        collector = armed([init_frame(),
+                           structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1"),
+                           structured_use("toolu_so_2", {"profileId": "forged"}), tool_result("toolu_so_2")])
+        self.assertEqual(collector.tool_calls, 0)
+        verified = collector.settle_delivery(DELIVERED, ROOT)
+        self.assertEqual(verified, (self.delivery_key("toolu_so_1"),))
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True, exclude_calls=verified)
+        self.assertEqual((package["toolCalls"], [event["callId"] for event in package["events"]]),
+                         (1, ["toolu_so_2", "toolu_so_2"]))
+
+
+@unittest.skipUnless(run_seam("claude") is not None,
+                     "the claude run seam is registered only in the activated verification copy")
 class RunnerReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-evidence-")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-evidence-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"
@@ -248,38 +483,34 @@ class RunnerReceiptTests(unittest.TestCase):
         self.adapter = ClaudeAdapter()
 
     def context(self, case):
-        return ExecutionContext(task_id="goal-1", attempt_id="attempt-1", generation=1,
+        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
                                 spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "timeoutSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
     def run_read_only(self, case, *, tool_calls=8):
-        from hey_my_buddy.buddy.roles.structured_call import collect
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
                                             {"timeoutSeconds": 20, "toolCalls": tool_calls})
         context = self.context(case)
-        handle = self.adapter.start_read_only_structured(context, request)
+        handle = start_review("claude", context, request)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(30), "the stream fixture controller did not exit")
+        self.assertIsNotNone(handle.wait(30), "the role-run controller did not exit")
         return context, collect(handle)
-
-    def control(self, context):
-        return json.loads((context.directory / "readonly-control.json").read_text())
 
     def test_a_settled_receipt_finishes_evidence_after_the_observed_stream_close(self):
         context, outcome = self.run_read_only("clean")
         self.assertEqual(outcome.status, "ok", outcome.result)
         receipt = outcome.result
-        session = self.control(context)["sessionId"]
-        self.assertEqual(receipt["nativeIdentity"], {"sessionId": session})
+        session = receipt["nativeIdentity"]["sessionId"]
+        uuid.UUID(session, version=4)
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
         self.assertIsNone(receipt["usage"]["bytesRead"])
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
         self.assertEqual(evidence["version"], 1)
         self.assertEqual(evidence["binding"], {"adapter": "claude", "taskId": "goal-1",
-                                               "attemptId": "attempt-1", "generation": 1})
+                                               "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])
         self.assertTrue(evidence["streamComplete"])
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"], evidence["truncated"]), (2, 0, False))
@@ -300,7 +531,7 @@ class RunnerReceiptTests(unittest.TestCase):
         context, outcome = self.run_read_only("subagent")
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        parent_identity = {"sessionId": self.control(context)["sessionId"], "callId": "toolu_parent_9"}
+        parent_identity = {"sessionId": outcome.result["nativeIdentity"]["sessionId"], "callId": "toolu_parent_9"}
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual([event["nativeIdentity"] for event in evidence["events"]],
                          [evidence["nativeIdentity"][0], evidence["nativeIdentity"][0],

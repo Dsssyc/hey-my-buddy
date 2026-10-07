@@ -1,7 +1,7 @@
 """The shared mechanical controller layer, against private model-free fixtures.
 
 One real plain-Python child proves the launch wiring end to end; real callers
-(CodexAdapter.start, structured_call.collect) prove that the baseline's
+(run_execution._launch, structured_call.collect) prove that the baseline's
 evaluation order, log-file creation, descriptor finalization and outer stop
 coercion survive the shared face, including on the failure paths.
 """
@@ -20,16 +20,12 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import controller
-from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses import runtime_selection
-from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
-from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.controller import (
     ControllerCollection,
     collect_controller,
     launch_controller,
-    legacy_node_stop_confirmed,
-    read_last_line_result,
     read_router_result,
     read_strict_result,
     router_stop_confirmed,
@@ -37,6 +33,7 @@ from hey_my_buddy.buddy.harnesses.controller import (
     stop_confirmed,
 )
 from hey_my_buddy.buddy.roles import structured_call
+from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles import turn_io
 
 
@@ -142,7 +139,7 @@ class LaunchControllerTests(unittest.TestCase):
 
 
 class CodexCallerLaunchOrderTests(unittest.TestCase):
-    """The real Codex caller keeps the baseline order on the failure paths too.
+    """The shared caller used by Codex keeps the baseline's FD boundary.
 
     The baseline opened the run's logs first and evaluated the working directory
     and environment only inside the spawn ``try``: an evaluation failure leaves
@@ -171,11 +168,17 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
             opened.extend(pair)
             return pair
 
-        def traced_cwd(_context):
-            trace.append("cwd")
-            if failure == "cwd":
-                raise ValueError("fixture cwd failure")
-            return str(directory)
+        class LaunchControl(dict):
+            def __getitem__(self, key):
+                if key == "cwd":
+                    trace.append("cwd")
+                    if failure == "cwd":
+                        raise ValueError("fixture cwd failure")
+                return super().__getitem__(key)
+
+        control = LaunchControl(privateRoot=str(directory / "private"), cwd=str(directory),
+                                operation="worker", harness="codex", timeoutSeconds=0)
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
 
         def traced_env(*_args, **_kwargs):
             trace.append("env")
@@ -187,14 +190,12 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
             trace.append("spawn")
             raise OSError("fixture spawn failure")
 
-        with mock.patch.object(CodexAdapter, "prepare"), \
-                mock.patch.object(controller, "open_logs", traced_open_logs), \
-                mock.patch.object(turn_io, "workspace_cwd", traced_cwd), \
+        with mock.patch.object(controller, "open_logs", traced_open_logs), \
                 mock.patch.object(runtime_selection, "controller_environment", traced_env), \
                 mock.patch.object(controller, "owned_popen", traced_spawn):
             raised = None
             try:
-                CodexAdapter().start(context)
+                run_execution._launch(control, context, environment={}, identity=identity)
             except (ValueError, OSError) as error:
                 raised = error
         return paths, trace, opened, raised
@@ -219,96 +220,6 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
         self.assert_failure_leaves_finalized_logs("spawn", ["logs", "cwd", "env", "spawn"], OSError)
 
 
-class DshCallerFdBoundaryTests(unittest.TestCase):
-    """The real DSH caller keeps the baseline's between-step FD boundary.
-
-    The DSH baseline evaluated its selected harness record and native
-    environment after opening the run's logs and before its spawn try/finally:
-    a failure there leaves the two log descriptors open and the two log files
-    in place, while a failure inside the spawn ``try`` (the command assembly)
-    closes them. The probe ``1b-dsh-fd-order`` pinned exactly this. The tests
-    close only the descriptors they themselves created and still hold; files
-    are left to the fixture.
-    """
-
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="controller-dsh-fd-")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-
-    def caller_start(self, failure):
-        directory = self.root / f"attempt-{failure}"
-        directory.mkdir(mode=0o700)
-        paths = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
-        context = SimpleNamespace(environment={"HOME": str(self.root / "home"),
-                                              "DSH_HOME": str(self.root / "dsh-home")},
-                                  log_paths=lambda: paths, timeout_seconds=0)
-        inquiry = {"socketPath": str(directory / "socket"),
-                   "resultsPath": str(directory / "results"),
-                   "errorPath": str(directory / "error")}
-        trace = []
-        opened = []
-        original_open_logs = controller.open_logs
-
-        def traced_open_logs(traced_paths):
-            trace.append("logs")
-            pair = original_open_logs(traced_paths)
-            opened.extend(pair)
-            return pair
-
-        def traced_selected(*_args, **_kwargs):
-            trace.append("selected")
-            if failure == "selected":
-                raise ValueError("fixture selected failure")
-            return None
-
-        def traced_arguments(*_args, **_kwargs):
-            trace.append("arguments")
-            if failure == "arguments":
-                raise OSError("fixture arguments failure")
-            return []
-
-        with mock.patch.object(DshAdapter, "prepare"), \
-                mock.patch.object(DshAdapter, "inquiry_paths", return_value=inquiry), \
-                mock.patch.object(controller, "open_logs", traced_open_logs), \
-                mock.patch.object(controller, "owned_popen") as spawn, \
-                mock.patch.object(runtime_selection, "selected", traced_selected), \
-                mock.patch.object(discovery, "native_environment", return_value={}), \
-                mock.patch.object(DshAdapter, "arguments", traced_arguments):
-            raised = None
-            try:
-                DshAdapter().start(context)
-            except (ValueError, OSError) as error:
-                raised = error
-        return paths, trace, opened, raised, spawn
-
-    def test_a_selection_failure_keeps_both_log_descriptors_open_as_the_baseline_did(self):
-        paths, trace, opened, raised, spawn = self.caller_start("selected")
-        self.assertIsInstance(raised, ValueError)
-        self.assertEqual(trace, ["logs", "selected"])
-        self.assertTrue(Path(paths["stdout"]).exists(), "the baseline leaves both logs behind")
-        self.assertTrue(Path(paths["stderr"]).exists(), "the baseline leaves both logs behind")
-        still_open = 0
-        for descriptor in opened:
-            try:
-                os.fstat(descriptor)
-            except OSError:
-                continue
-            still_open += 1
-            os.close(descriptor)  # This test's own resource finalization.
-        self.assertEqual(still_open, 2, "the between step runs outside the spawn try: descriptors stay open")
-        spawn.assert_not_called()
-
-    def test_a_failure_inside_the_spawn_try_closes_the_descriptors(self):
-        paths, trace, opened, raised, spawn = self.caller_start("arguments")
-        self.assertIsInstance(raised, OSError)
-        self.assertEqual(trace, ["logs", "selected", "arguments"])
-        self.assertTrue(Path(paths["stdout"]).exists())
-        self.assertTrue(Path(paths["stderr"]).exists())
-        for descriptor in opened:
-            with self.assertRaises(OSError, msg="the finally must close every opened descriptor"):
-                os.fstat(descriptor)
-        spawn.assert_not_called()
 
 
 class StrictReadTests(unittest.TestCase):
@@ -386,17 +297,6 @@ class PlainAndLastLineReadTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             controller.read_plain_evidence(linked / "request.json")
 
-    def test_dsh_read_takes_the_last_non_empty_line_and_keeps_failure_semantics(self):
-        self.path.write_text('garbage line\n{"status": "ok", "processState": {"shutdownConfirmed": true}}\n')
-        self.assertEqual(read_last_line_result(self.path),
-                         {"status": "ok", "processState": {"shutdownConfirmed": True}})
-        for raw in (None, b"", b"   \n  \n", b"not json", b'["array"]', b'{"unclosed": ', b"\xff\xfe\x00"):
-            with self.subTest(raw=raw):
-                if raw is None:
-                    self.path.unlink(missing_ok=True)
-                else:
-                    self.path.write_bytes(raw)
-                self.assertIsNone(read_last_line_result(self.path))
 
 
 class StopConfirmedTests(unittest.TestCase):
@@ -445,32 +345,6 @@ class RouterStopTests(unittest.TestCase):
         self.assertEqual(handle.calls, 0)
 
 
-class LegacyNodeStopTests(unittest.TestCase):
-    def test_a_truthy_receipt_counts_without_running_the_preflight(self):
-        for receipt in (True, 1, "yes"):
-            with self.subTest(receipt=receipt):
-                handle = FakeHandle(True)
-
-                def unexpected_preflight():
-                    raise AssertionError("preflight must be deferred while the receipt is truthy")
-
-                self.assertIs(legacy_node_stop_confirmed(handle, native_receipt=receipt,
-                                                         preflight=unexpected_preflight), True)
-                self.assertEqual(handle.calls, 1)
-
-    def test_the_preflight_is_evaluated_only_when_the_receipt_is_falsy(self):
-        calls = []
-
-        def preflight():
-            calls.append("preflight")
-            return True
-
-        handle = FakeHandle(True)
-        self.assertIs(legacy_node_stop_confirmed(handle, native_receipt=None, preflight=preflight), True)
-        self.assertEqual(calls, ["preflight"])
-        handle = FakeHandle(False)
-        self.assertIs(legacy_node_stop_confirmed(handle, native_receipt=None, preflight=preflight), False)
-        self.assertEqual(calls, ["preflight", "preflight"])
 
 
 class RealStopTests(unittest.TestCase):
@@ -544,10 +418,10 @@ class CollectControllerTests(unittest.TestCase):
 
     def test_a_path_running_its_own_later_stop_rule_gets_none(self):
         stdout = self.root / "stdout"
-        stdout.write_text('earlier frame\n{"status": "ok"}\n')
+        stdout.write_text('{"status": "ok"}\n')
         handle = SimpleNamespace(log_paths={"stdout": str(stdout)}, process=FakeProcess(0),
                                  shutdown_confirmed=lambda: True)
-        collection = collect_controller(handle, read=read_last_line_result)
+        collection = collect_controller(handle, read=read_strict_result)
         self.assertEqual(collection.payload, {"status": "ok"})
         self.assertEqual(collection.exit_code, 0)
         self.assertIsNone(collection.stop_confirmed)

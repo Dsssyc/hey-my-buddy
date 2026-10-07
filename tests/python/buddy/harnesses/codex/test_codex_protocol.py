@@ -6,22 +6,39 @@ import sys
 import threading
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
+from hey_my_buddy.buddy.harnesses.codex.native_run import _checkpoint, execution_deadline
 from hey_my_buddy.buddy.harnesses.codex.protocol import (
     CodexProtocolError,
     Connection,
     TurnEvidence,
     attempt_token_usage,
-    checkpoint_resumable,
-    native_checkpoint,
-    parse_outcome,
-    validated_checkpoint,
 )
-from hey_my_buddy.buddy.harnesses.codex.runner import execution_deadline
+from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.harnesses.run_contract import (
+    PrivateStatePaths,
+    RunBudget,
+    RunConfiguration,
+    RunIdentity,
+    RunRequest,
+    RunValue,
+)
+from hey_my_buddy.buddy.roles.turn_io import checkpoint_resumable, input_hash, validated_checkpoint
+from hey_my_buddy.errors import BoardError
 
 
 class StructuredOutcomeTests(unittest.TestCase):
+    """The native-schema outcome decoding the registered Worker format applies."""
+
+    format = worker_format("codex")
+
+    def deliver(self, raw: str):
+        result = SimpleNamespace(value=RunValue(schema_status="unknown",
+                                                raw=raw, correction_count=0))
+        return self.format.delivery(result, {})[0]
+
     def outcome(self, summary):
         return {"outcome": {"disposition": "completed", "summary": summary,
                             "remaining": [], "decisions": [], "artifacts": [], "request": None}}
@@ -33,22 +50,36 @@ class StructuredOutcomeTests(unittest.TestCase):
         summary = "调研结论。" * 600 + citation
         self.assertGreater(len(summary.encode()), 8000)
         value = self.outcome(summary)
-        self.assertEqual(parse_outcome(json.dumps(value, ensure_ascii=False)), value["outcome"])
+        self.assertEqual(self.deliver(json.dumps(value, ensure_ascii=False)), value["outcome"])
 
     def test_total_outcome_bound_still_rejects_large_reports(self):
-        with self.assertRaisesRegex(ValueError, "byte bound"):
-            parse_outcome(json.dumps(self.outcome("研" * 22000), ensure_ascii=False))
+        with self.assertRaises(BoardError) as raised:
+            self.deliver(json.dumps(self.outcome("研" * 22000), ensure_ascii=False))
+        self.assertIn("byte bound", raised.exception.message)
 
     def test_memory_markup_does_not_relax_the_json_contract(self):
         value = json.dumps(self.outcome("valid summary"))
         for raw in (value + "<oai-mem-citation>extra</oai-mem-citation>",
                     value.replace('"summary":', '"summary":"duplicate", "summary":'),
                     value.replace('"request": null', '"request": {}')):
-            with self.subTest(raw=raw), self.assertRaises(ValueError):
-                parse_outcome(raw)
+            with self.subTest(raw=raw), self.assertRaises(BoardError):
+                self.deliver(raw)
 
 
 class NativeCheckpointTests(unittest.TestCase):
+    document = {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "turn"}
+
+    def request(self) -> RunRequest:
+        return RunRequest(
+            identity=RunIdentity(task_id="goal", attempt_id="attempt", generation=1,
+                                 invocation_id="invocation", turn_id="turn",
+                                 input_sha256=input_hash(self.document)),
+            harness="codex", configuration=RunConfiguration(provider="openai", model="fixture-model", effort="low"),
+            cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/invocation",
+                                                            native_root="/fixture/native"),
+            input_text="prompt", tool_scope="write", output_schema={},
+            budget=RunBudget(timeout_seconds=8))
+
     def test_failed_turn_can_retain_only_its_own_completed_assistant_message(self):
         evidence = TurnEvidence("root", "turn")
         evidence.observe({"method": "turn/started", "params": {"threadId": "root", "turn": {"id": "turn"}}})
@@ -56,28 +87,27 @@ class NativeCheckpointTests(unittest.TestCase):
             evidence.observe({"method": "item/completed", "params": {"threadId": thread, "turnId": "turn",
                 "item": {"id": "item-1", "type": "agentMessage", "phase": "commentary", "text": text}}})
         evidence.observe({"method": "turn/completed", "params": {"threadId": "root", "turn": {"id": "turn", "status": "failed"}}})
-        checkpoint = native_checkpoint(evidence, {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "turn"})
+        checkpoint = _checkpoint(self.request(), evidence)
         self.assertEqual(checkpoint["lastAssistantMessage"]["text"], "partial research")
         self.assertIsNone(evidence.final_item)
 
     def test_message_is_bounded_and_truncation_is_honest(self):
-        document = {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "turn"}
         evidence = SimpleNamespace(thread_id="thread", turn_id="native-turn", started=True,
                                    completed={"status": "completed"}, event_seq=3,
                                    final_item={"id": "final", "text": "调研\n" * 15000})
-        checkpoint = native_checkpoint(evidence, document)
+        checkpoint = _checkpoint(self.request(), evidence)
         self.assertTrue(checkpoint["lastAssistantMessage"]["truncated"])
         payload = {"nativeCheckpoint": checkpoint, "sessionId": "thread", "nativeTurnId": "native-turn",
                    "processState": {"shutdownConfirmed": True, "nativeExitCode": 0}}
-        self.assertEqual(validated_checkpoint(payload, document), checkpoint)
+        self.assertEqual(validated_checkpoint(payload, self.document), checkpoint)
         self.assertFalse(checkpoint_resumable(payload, checkpoint))
         checkpoint["bindingSaved"] = True
         self.assertTrue(checkpoint_resumable(payload, checkpoint))
         for change in ({"inputSha256": "foreign"}, {"sessionId": "foreign"}, {"nativeTurnStarted": False},
                        {"generation": True}, {"eventSeq": 1}):
             with self.subTest(change=change):
-                self.assertIsNone(validated_checkpoint({**payload, "nativeCheckpoint": {**checkpoint, **change}}, document))
-        self.assertIsNone(validated_checkpoint({**payload, "processState": None}, document))
+                self.assertIsNone(validated_checkpoint({**payload, "nativeCheckpoint": {**checkpoint, **change}}, self.document))
+        self.assertIsNone(validated_checkpoint({**payload, "processState": None}, self.document))
         self.assertFalse(checkpoint_resumable({**payload, "processState": {"nativeExitCode": False}}, checkpoint))
 
 

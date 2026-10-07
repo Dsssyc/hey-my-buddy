@@ -142,20 +142,6 @@ def read_router_result(path: Path) -> object | None:
         return None
 
 
-def read_last_line_result(path: Path) -> dict | None:
-    """The DSH worker's plain read, unchanged in size and error semantics.
-
-    Unbounded ``read_text(errors="replace")``, the last non-empty line as one
-    plain ``json.loads`` value; a non-object, an empty log or any failure of
-    the baseline's exception set (``OSError``, ``ValueError``, ``IndexError``)
-    is None.
-    """
-    try:
-        raw = path.read_text(errors="replace")
-        payload = json.loads(raw.strip().splitlines()[-1]) if raw.strip() else None
-        return payload if isinstance(payload, dict) else None
-    except (OSError, ValueError, IndexError):
-        return None
 
 
 def stop_confirmed(payload: object, handle: ProcessHandle) -> bool:
@@ -183,17 +169,6 @@ def router_stop_confirmed(payload: object, handle: ProcessHandle) -> bool:
         and handle.shutdown_confirmed() is True
 
 
-def legacy_node_stop_confirmed(handle: ProcessHandle, *, native_receipt: object,
-                               preflight) -> bool:
-    """The DSH worker's legacy inner stop, removed with the Node runner in step four.
-
-    Any truthy runner receipt counts (not only ``is True``), and the deferred
-    ``preflight`` — the runner's exit-2 preflight failure with an empty stdout
-    log — is evaluated only when the receipt is falsy, as in the baseline. The
-    outer layer is the same conservative owned-group observation every path
-    shares, and unknown stays alive.
-    """
-    return (bool(native_receipt) or preflight()) and handle.shutdown_confirmed()
 
 
 @dataclass(frozen=True)

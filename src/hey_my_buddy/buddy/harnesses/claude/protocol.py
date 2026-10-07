@@ -223,56 +223,6 @@ class Connection:
         return response["response"]
 
 
-_REQUEST_SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
-    "properties": {"summary": {"type": "string"}, "attempted": {"type": "string"},
-                   "neededWork": {"type": "string"}, "expectedArtifacts": {"type": "array", "items": {"type": "string"}},
-                   "acceptance": {"type": "string"},
-                   # The shared assistance hints name this field; validate_outcome
-                   # accepts it as an optional string or an explicit null.
-                   "suggestedProfileId": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
-}
-
-
-def _outcome_branch(dispositions, request_schema):
-    return {
-        "type": "object", "additionalProperties": False,
-        "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
-        "properties": {
-            "disposition": {"type": "string", "enum": dispositions},
-            "summary": {"type": "string"},
-            "remaining": {"type": "array", "items": {"type": "string"}},
-            "decisions": {"type": "array", "items": {"type": "string"}},
-            "artifacts": {"type": "array", "items": {"type": "string"}},
-            "request": request_schema,
-        },
-    }
-
-
-# The same nested-union shape the Codex harness uses: ``--json-schema`` permits
-# a nested anyOf but not a root union, and the tagged branches keep a
-# "completed" result from carrying an unresolved request. The native value is
-# always re-validated with ``turn_io.validate_outcome`` after import.
-OUTCOME_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["outcome"],
-    "properties": {"outcome": {"anyOf": [
-        _outcome_branch(["completed"], {"type": "null"}),
-        _outcome_branch(["assistance", "attention"], _REQUEST_SCHEMA),
-    ]}},
-}
-
-
-def parse_structured_output(value: object) -> dict:
-    from ...roles.turn_io import validate_outcome
-    if not isinstance(value, dict) or set(value) != {"outcome"}:
-        raise ValueError("The native structured output must contain exactly the outcome")
-    error = validate_outcome(value["outcome"])
-    if error:
-        raise ValueError(error)
-    return value["outcome"]
-
-
 def _bounded_resets_at(value: object):
     if isinstance(value, str) and value and len(value) <= 64:
         return value

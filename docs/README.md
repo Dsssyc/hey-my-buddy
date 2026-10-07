@@ -16,9 +16,8 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | Path | Contents |
 | --- | --- |
 | `src/hey_my_buddy/` | The package, divided by the two sides of the system: `blackboard/` (the service process, store, micro task lifecycle, routing, catalog and evaluation), `buddy/` (the Worker runtime, the roles and one package per harness under `buddy/harnesses/`) and `protocol/` (C-Two contracts, transport and client) between them; `cli/`, `install/` and `console/`, with the built console assets under `console/assets/` |
-| `harnesses/dsh/` | DSH-specific Node runner, bridge and decision scripts under `scripts/`, their plugins under `plugins/`, and the DSH Node tests |
 | `apps/console/` | React/Vite console source; built output is checked into `src/hey_my_buddy/console/assets/` and shipped to users without npm |
-| `tests/python/` | Python and cross-component verification, mirroring the package layout; the DSH Node suites live under `harnesses/dsh/tests/` |
+| `tests/python/` | Python and cross-component verification, mirroring the package layout; DSH ACP tests live under `tests/python/buddy/harnesses/dsh/` |
 | `packaging/runtime-assets.json` | The explicit runtime resource manifest consumed by `packaging/build-skill.py` and the stable-runtime materializer |
 | `skills/buddy/` | The shared agent skill: `SKILL.md` and its `scripts/buddy` launcher |
 | `docs/reference/`, `docs/decisions/`, `docs/acceptance/` | Current operational contracts, the design record, and versioned evidence |

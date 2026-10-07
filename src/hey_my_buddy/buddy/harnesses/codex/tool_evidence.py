@@ -40,25 +40,6 @@ RAW_TOOL_OUTPUTS = frozenset({
 NAMED_RAW_CALLS = frozenset({"function_call", "custom_tool_call"})
 
 
-def control_binding(control: dict) -> dict | None:
-    """The evidence binding from the private Python control file, or ``None``.
-
-    The binding is program identity that never reaches the model prompt or
-    schema; a control written before bindings existed projects no evidence
-    rather than inventing one.
-    """
-    try:
-        binding = {"adapter": ADAPTER, "taskId": control["taskId"],
-                   "attemptId": control["attemptId"], "generation": control["generation"]}
-    except (KeyError, TypeError):
-        return None
-    if (any(not isinstance(binding[key], str) or not binding[key]
-            for key in ("taskId", "attemptId"))
-            or type(binding["generation"]) is not int or binding["generation"] < 0):
-        return None
-    return binding
-
-
 class CodexToolEventProjector:
     """One attempt's Codex tool facts, collected before the controller's filters.
 
@@ -199,5 +180,5 @@ class CodexToolEventProjector:
 
 __all__ = [
     "ADAPTER", "CodexToolEventProjector", "NAMED_RAW_CALLS", "NON_TOOL_ITEMS",
-    "RAW_TOOL_OUTPUTS", "RAW_TOOL_STARTS", "TYPED_TOOL_ITEMS", "control_binding",
+    "RAW_TOOL_OUTPUTS", "RAW_TOOL_STARTS", "TYPED_TOOL_ITEMS",
 ]

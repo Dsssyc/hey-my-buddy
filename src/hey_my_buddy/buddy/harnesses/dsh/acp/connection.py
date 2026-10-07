@@ -215,6 +215,16 @@ class _WriteJob:
         self.uncertain = False
 
 
+def _wait_seconds(remaining: float) -> float | None:
+    """An event wait budget where an infinite deadline means wait without one.
+
+    The normalized ``timeoutSeconds=0`` sentinel arrives here as an infinite
+    remaining budget; a bounded ``Event.wait`` cannot take it, and the honest
+    translation is a wait with no timeout, never an immediate expiry.
+    """
+    return remaining if 0 <= remaining < float("inf") else None if remaining > 0 else 0.0
+
+
 class AcpConnection:
     """Owns one launched process's stdio and correlates every JSON-RPC message.
 
@@ -440,13 +450,14 @@ class AcpConnection:
             self.frame_log.write("out", line.rstrip("\n"))
         return len(encoded)
 
+
     def _await_write(self, job: _WriteJob, label: str, timeout: float) -> None:
         """Wait for one write job inside its budget. On expiry the atomic
         observation decides: a queued job is cancelled (never written), a job
         whose completion raced in is simply settled, and only a genuinely
         started-but-unconfirmed write becomes an uncertain fact."""
         remaining = job.deadline - time.monotonic()
-        if not job.done.wait(remaining if remaining > 0 else 0.0):
+        if not job.done.wait(_wait_seconds(remaining)):
             observation = self._observe_write_after_deadline(job)
             if observation == "cancelled":
                 raise AcpTimeout(f"{label} could not be written within {timeout}s")
@@ -493,7 +504,7 @@ class AcpConnection:
             if not resolved:
                 raise
         remaining = deadline - time.monotonic()
-        if not waiter["event"].wait(remaining if remaining > 0 else 0.0):
+        if not waiter["event"].wait(_wait_seconds(remaining)):
             with self._pending_lock:
                 resolved = waiter["resolved"]
                 if not resolved:

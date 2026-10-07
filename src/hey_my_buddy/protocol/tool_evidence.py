@@ -52,7 +52,7 @@ EVENT_FIELDS = frozenset({"nativeIdentity", "callId", "toolName", "category", "p
 #: unrecognized name, including one that merely resembles an ACP category —
 #: stays ``other``; it is never promoted to a legal category.
 NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
-    "dsh": {"read": "read", "glob": "search", "grep": "search"},
+    "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute"},
     "claude": {
         "Read": "read", "LS": "read",
         "Glob": "search", "Grep": "search",

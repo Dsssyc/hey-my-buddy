@@ -10,6 +10,7 @@ import json
 import unittest
 
 from support import BoardTestCase, FIXTURE_CATALOG, FakeClock
+from protocol.fixtures import native_turn
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.db import sha256_text
@@ -210,18 +211,22 @@ class EvaluationTestCase(BoardTestCase):
 
     def modelled_task(self, board, request_id: str = "task-m1", *, verdict: str | None = "accepted",
                       failed: bool = False, profile: dict | None = None) -> str:
-        """One governed DSH attempt, with real admission/receipt/acceptance rules."""
+        """One governed DSH attempt, with real admission/receipt/acceptance rules.
+
+        The turn record is a synthetic native fact in the current provenance
+        format (``protocol.fixtures.native_turn``): it passes the real validator
+        the board runs on import, but no harness ran and nothing here is real
+        native verification.
+        """
         identity = profile or PROFILE
         run_id, worker_id, claim = self.model_claim(board, request_id, identity)
         turn, attempt = claim["turn"], claim["attempt"]
-        record = {
-            "version": 1, "taskId": run_id, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "turnId": turn["turnId"], "resumeMode": turn["resumeMode"], "previousSessionId": None,
-            "sessionId": f"fixture-{request_id}", "inputSha256": turn["inputSha256"], "promptSha256": sha256_text("evaluation fixture"),
-            "outcome": {"disposition": "completed", "summary": "model output", "remaining": [],
-                        "decisions": [], "artifacts": [], "request": None},
-            "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "flush": "awaited", "rootSessionMatched": True},
-        }
+        record = native_turn.claim_record(
+            claim,
+            outcome={"disposition": "completed", "summary": "model output", "remaining": [],
+                     "decisions": [], "artifacts": [], "request": None},
+            session_id=f"fixture-{request_id}", prompt_sha256=sha256_text("evaluation fixture"),
+        )
         board.client().submit_result(worker_id, attempt["attemptId"], attempt["generation"], "n" * 32, {
             "status": "failed" if failed else "ok",
             "result": {

@@ -1,18 +1,28 @@
 {
   "format": 1,
   "assets": [
-    {"path": "packaging/runtime-assets.json", "kind": "file"},
-    {"path": "packaging/hatch_build.py", "kind": "file"},
-    {"path": "pyproject.toml", "kind": "file"},
-    {"path": "uv.lock", "kind": "file"},
-    {"path": "src/hey_my_buddy", "kind": "directory"},
-    {"path": "harnesses/dsh/scripts", "kind": "directory"},
-    {"path": "harnesses/dsh/plugins", "kind": "directory"}
+    {
+      "path": "packaging/runtime-assets.json",
+      "kind": "file"
+    },
+    {
+      "path": "packaging/hatch_build.py",
+      "kind": "file"
+    },
+    {
+      "path": "pyproject.toml",
+      "kind": "file"
+    },
+    {
+      "path": "uv.lock",
+      "kind": "file"
+    },
+    {
+      "path": "src/hey_my_buddy",
+      "kind": "directory"
+    }
   ],
   "resources": {
-    "dsh.runner": "harnesses/dsh/scripts/run.mjs",
-    "dsh.catalog": "harnesses/dsh/scripts/model-catalog.mjs",
-    "yaml.bridge": "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
     "console.assets": "src/hey_my_buddy/console/assets"
   }
 }

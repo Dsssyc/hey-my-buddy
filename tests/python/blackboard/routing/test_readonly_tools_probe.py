@@ -50,17 +50,18 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
     def test_only_one_execution_is_possible_for_the_prepared_packet(self):
         packet = self.prepared()
         native, handle = Mock(), Mock()
-        native.start_read_only_structured.return_value = handle
+        native.registered_start.return_value = handle
         handle.wait.return_value = 0
         handle.shutdown_confirmed.return_value = True
         self.args.execute = True
         with patch.object(probe, 'adapter_for', return_value=native), \
+             patch.object(probe, 'start_review', native.registered_start), \
              patch.object(probe.read_only, 'collect', return_value=self.outcome(packet)):
             self.assertEqual(probe.run(self.args)['status'], 'passed')
             with self.assertRaises(FileExistsError):
                 probe.run(self.args)
-        native.start_read_only_structured.assert_called_once()
-        context, request = native.start_read_only_structured.call_args.args
+        native.registered_start.assert_called_once()
+        _harness, context, request = native.registered_start.call_args.args
         self.assertIsNone(context.agent_credential)
         self.assertIsNone(context.turn)
         self.assertEqual(request.budget['timeoutSeconds'], 60)

@@ -92,6 +92,18 @@ def tool_result(call_id, session=None, parent=None):
             **frame_fields(session, parent)}
 
 
+def structured_use(call_id, value, session=None, parent=None):
+    """The built-in StructuredOutput delivery the --json-schema CLI itself adds.
+
+    Shaped from the Host-verified fact that ``--json-schema`` is implemented
+    through a StructuredOutput tool: the final assistant turn carries one
+    tool_use block whose input is the structured value.
+    """
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": call_id, "name": "StructuredOutput", "input": value}]},
+        **frame_fields(session, parent)}
+
+
 def result_frame(session_id):
     structured = {"outcome": {"disposition": "completed", "summary": "stream fixture", "remaining": [],
                               "decisions": [], "artifacts": [], "request": None}}
@@ -108,13 +120,24 @@ def handle_control(frame, case):
         state = read_state()
         state["initialize"] = True
         write_state(state)
+        if case == "early-before-response":
+            # Written before the initialize response, so the controller's
+            # reader queues it first: the frame is provably delivered while
+            # the pre-user buffer is still installed, making the boundary
+            # rejection a matter of pipe order, never of thread timing.
+            send(assistant_tool("Read", "toolu_early_1"))
+        if case == "premature":
+            # Tool output emitted before the controller could send its user
+            # message, and written before the initialize response for the same
+            # pipe-order reason: a frame sent only after the response could
+            # race the controller's own send and deadlock the turn instead of
+            # proving the boundary.
+            send(assistant_tool("Read", "toolu_early_1"))
         send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
                                                        "response": {"models": DEFAULT_MODELS,
                                                                     "account": {"apiProvider": "firstParty",
                                                                                 "tokenSource": "subscription"}}}})
         if case == "premature":
-            # Tool output emitted before the controller sends the user message.
-            send(assistant_tool("Read", "toolu_early_1"))
             for _ in sys.stdin:
                 pass
             sys.exit(0)
@@ -197,6 +220,71 @@ def run_stream(case, session_id):
         send(assistant_tool("Grep", "toolu_2"))
         wait_for_interrupt()
         return
+    elif case == "structured-clean":
+        # A real read, then the built-in delivery and its tool_result pairing.
+        structured = result_frame(session_id)["structured_output"]
+        send(assistant_tool("Read", "toolu_1"))
+        send(tool_result("toolu_1"))
+        send(structured_use("toolu_so_1", structured))
+        send(tool_result("toolu_so_1"))
+    elif case == "structured-only":
+        # The delivery alone: a zero tool budget must still accept this turn.
+        structured = result_frame(session_id)["structured_output"]
+        send(structured_use("toolu_so_1", structured))
+        send(tool_result("toolu_so_1"))
+    elif case == "structured-dupes":
+        # The same delivery projected twice: a stream content_block_start and
+        # the assistant full block, one correlated tool_result end.
+        structured = result_frame(session_id)["structured_output"]
+        send(stream_tool_start("StructuredOutput", "toolu_so_1"))
+        send(block_stop())
+        send(structured_use("toolu_so_1", structured))
+        send(tool_result("toolu_so_1"))
+    elif case == "structured-unverified":
+        # The bare name without the association: the use input is not the
+        # value the result frame carried, so nothing may be exempted.
+        send(structured_use("toolu_so_1", {"profileId": "forged",
+                                           "reason": "not the delivered value", "evidence": []}))
+        send(tool_result("toolu_so_1"))
+    elif case in ("structured-conflict-ab", "structured-conflict-ba"):
+        # One native call id whose two full projections disagree on the input.
+        # Whichever order they arrive in, the conflict refuses the exemption.
+        structured = result_frame(session_id)["structured_output"]
+        other = {"profileId": "conflict", "reason": "a different complete input", "evidence": []}
+        order = (structured, other) if case == "structured-conflict-ab" else (other, structured)
+        for value in order:
+            send(structured_use("toolu_so_1", value))
+        send(tool_result("toolu_so_1"))
+    elif case == "structured-evict-conflict":
+        # Nine delivery uses fill the input retention bound and evict c1's
+        # first full text; c1 then carries a second, different complete input
+        # that matches the final value. The remembered conflict must keep all
+        # nine calls counted.
+        structured = result_frame(session_id)["structured_output"]
+        send(structured_use("toolu_so_1", {"answer": "first"}))
+        for index in range(2, 10):
+            send(structured_use(f"toolu_so_{index}", {"answer": f"different-{index}"}))
+        send(structured_use("toolu_so_1", structured))
+    elif case == "structured-evict-same":
+        # The same shape, but c1's returning input is the same value again: a
+        # consistent repeat whose recaptured text re-proves the delivery.
+        structured = result_frame(session_id)["structured_output"]
+        send(structured_use("toolu_so_1", structured))
+        for index in range(2, 10):
+            send(structured_use(f"toolu_so_{index}", {"answer": f"different-{index}"}))
+        send(structured_use("toolu_so_1", structured))
+    elif case == "structured-mcp":
+        # A mounted MCP tool that merely resembles the built-in's name.
+        send(assistant_tool("mcp__server__StructuredOutput", "toolu_1"))
+        send(tool_result("toolu_1"))
+    elif case == "structured-subagent":
+        # A subagent substream calling the same built-in name: its facts keep
+        # the parent-call identity and never inherit the root's exemption.
+        structured = result_frame(session_id)["structured_output"]
+        send(structured_use("toolu_sub_so", structured, session=session_id, parent="toolu_parent_9"))
+        send(tool_result("toolu_sub_so", session=session_id, parent="toolu_parent_9"))
+        send(structured_use("toolu_so_1", structured))
+        send(tool_result("toolu_so_1"))
     send(result_frame(session_id))
     # A -p CLI exits after its final result; the controller drains to this EOF.
     sys.exit(0)

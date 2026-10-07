@@ -5373,7 +5373,7 @@ class WorkflowCoordinator:
             previous_session = native[1]["sessionId"]
         native_completed = previous is not None and previous["state"] == "concluded"
         if native is not None:
-            from ...buddy.harnesses.codex.protocol import checkpoint_resumable
+            from ...buddy.roles.turn_io import checkpoint_resumable
             native_completed = checkpoint_resumable(*native)
         harness_changed = False
         native_home_changed = False
@@ -5496,7 +5496,7 @@ class WorkflowCoordinator:
         if (attempt is None or attempt["adapter"] != "codex" or attempt["execution_state"] != "finished"
                 or attempt["shutdown_confirmed"] != 1):
             return None
-        from ...buddy.harnesses.codex.protocol import validated_checkpoint
+        from ...buddy.roles.turn_io import validated_checkpoint
         payload = self.result_payload(json.loads(attempt["result_json"] or "{}"))
         checkpoint = validated_checkpoint(payload, json.loads(previous["input_json"]))
         return (payload, checkpoint) if checkpoint is not None else None

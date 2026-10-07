@@ -143,6 +143,9 @@ def main():
             else:
                 send({"id": ident, "result": RATE_LIMITS_READ})
         elif method == "model/list":
+            if case == "bad-catalog":
+                send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
+                continue
             send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",
                 "displayName": "Fixture", "description": "fixture", "hidden": False, "isDefault": True,
                 "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
@@ -187,6 +190,19 @@ def main():
             if case == "hang":
                 time.sleep(60)
                 continue
+            if case == 'worker-tool':
+                send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "tool-1"}}})
+                send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"type": "commandExecution", "id": "tool-1", "exitCode": 0}}})
+            if case == 'worker-unknown':
+                send({"method": "thread/hologram/updated", "params": {"threadId": thread_id, "turnId": turn_id}})
+            if case == 'worker-unknown-flood':
+                # More distinct unclassified types in one turn than the public
+                # result carries: the run must still return a bounded result.
+                for number in range(65):
+                    send({"method": f"native/future/{number}",
+                          "params": {"threadId": thread_id, "turnId": turn_id}})
             if case == "readonly-budget":
                 send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
                       "item": {"type": "commandExecution", "id": "read-1"}}})

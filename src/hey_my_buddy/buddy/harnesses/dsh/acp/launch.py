@@ -243,7 +243,9 @@ def finalize_after_spawn_failure(process, handle, *, settle_seconds: float = 5.0
 
 def launch(argv: list[str], *, private_root: Path, dsh_home: Path | None = None,
            home: Path | None = None, extra_env: dict | None = None,
-           cwd: Path | None = None, launch_log: Path | None = None) -> tuple[subprocess.Popen, ProcessHandle]:
+           cwd: Path | None = None, launch_log: Path | None = None,
+           source_environment: dict | None = None,
+           merge_stderr: bool = False) -> tuple[subprocess.Popen, ProcessHandle]:
     """Validate this run's private directories, then spawn one owned process group.
 
     ``DSH_HOME`` is always forced into the verified private root: ``dsh_home``
@@ -257,6 +259,10 @@ def launch(argv: list[str], *, private_root: Path, dsh_home: Path | None = None,
     evidence. The caller keeps both objects: EOF, a session close or a cancel
     acknowledgement never proves the group stopped - only this handle's
     conservative observation does.
+
+    Qualification callers may supply their already-selected environment and
+    merge stderr into stdout for the existing bounded version probe. ACP
+    callers keep the inherited environment and separate protocol/log pipes.
     """
     if not argv:
         raise LaunchRejected("launch requires a non-empty argv")
@@ -275,14 +281,15 @@ def launch(argv: list[str], *, private_root: Path, dsh_home: Path | None = None,
     spawn_cwd = Path(cwd) if cwd is not None else root
     log_path = ensure_private_log_path(
         Path(launch_log) if launch_log is not None else root / "logs" / "launches.jsonl", root)
-    environment = child_environment(dsh, user_home, extra_env)
+    environment = child_environment(dsh, user_home, extra_env, source=source_environment)
     if problems:
         record_launch(log_path, argv, dsh, user_home, environment,
                       spawn_cwd=spawn_cwd, rejected=problems)
         raise LaunchRejected("; ".join(problems), argv=argv)
     try:
         process = owned_popen([str(part) for part in argv], env=environment, cwd=str(spawn_cwd),
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
                               start_new_session=True, close_fds=True)
     except OSError as error:
         record_launch(log_path, argv, dsh, user_home, environment,

@@ -51,13 +51,13 @@ from ..base import BoundSessionServices, ProcessHandle
 from ...runtime.windows_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..run_contract import (
+    RunIdentity,
     ActivityPackage,
     MAX_SCHEMA_BYTES,
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
-    DeniedInteraction,
     EffectivePolicy,
     EvidenceRef,
     FrozenJson,
@@ -67,7 +67,6 @@ from ..run_contract import (
     ToolEvidencePackage,
     NativeErrorRecord,
     LastAssistantMessagePackage,
-    ModelStartEvidence,
     NativeIdentity,
     PolicyFact,
     ResultConfiguration,
@@ -80,11 +79,11 @@ from ..run_contract import (
     RunValue,
     StopEvidence,
     StopLayer,
-    UnknownEvents,
 )
 from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths, snapshot_provider_files
-from .live_bridge import InquiryBridge, bind_live_channel
+from ..inquiry_bridge import InquiryBridge, bind_live_channel as bind_checkpoint_channel
 from .protocol import (
+    COOPERATIVE_INQUIRY_NOTE,
     ActivityProjection,
     NativeConnection,
     NativeError,
@@ -270,7 +269,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     bridge_path = root / "finish-bridge.json"
     private_json(bridge_path, bridge, exclusive=True)
     mcp = [{"name": server_name, "command": sys.executable,
-            "args": ["-m", "hey_my_buddy.buddy.harnesses.zcode.mcp", "--config", str(bridge_path)],
+            "args": ["-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(bridge_path)],
             "env": [{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}] if os.environ.get("PYTHONPATH") else [],
             "isolation": "session", "protocolVersion": "legacy"}]
     input_id = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
@@ -286,6 +285,30 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
 
 # -- the normalized facts the role observer sees ---------------------------------
 
+
+def _inquiry_event_metadata(message: dict) -> dict:
+    params = message.get("params") if isinstance(message, dict) else None
+    method = message.get("method") if isinstance(message, dict) else None
+    kind = params.get("type") if isinstance(params, dict) else None
+    if method == "state.updated":
+        kind = f"state:{str((params or {}).get('reason'))[:40]}"
+    data = (params or {}).get("payload") if isinstance(params, dict) else None
+    return {"kind": kind or method or "event",
+            "toolName": data.get("toolName") if isinstance(data, dict) else None}
+
+
+def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
+                        attention_path: str | None = None) -> InquiryBridge:
+    return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
+                         attention_path=attention_path, error_factory=NativeError,
+                         event_metadata=_inquiry_event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE)
+
+
+def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
+                      activity_path: Path):
+    from ..live import EXISTING_CAPABILITIES
+    return bind_checkpoint_channel(identity, credentials=credentials, journal_path=journal_path,
+                                   activity_path=activity_path, capabilities=EXISTING_CAPABILITIES["zcode"])
 
 def check_preparation(spec: dict, environment: dict) -> None:
     """Confirm native capability and the selected provider without spawning."""
@@ -709,16 +732,6 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     return _Spawn(process=process, handle=handle, connection=connection, access=access, version=version)
 
 
-def _signal_name(exit_code: int | None) -> str | None:
-    if exit_code is None or exit_code >= 0:
-        return None
-    import signal
-    try:
-        return signal.Signals(-exit_code).name
-    except ValueError:
-        return f"signal-{-exit_code}"
-
-
 def _halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
     """The one actual stop of an owned group: close, wait, terminate, confirm.
 
@@ -845,8 +858,6 @@ def _checked_root_session(snapshot: dict, cwd: str, *, previous: str | None, mod
     if not native_cwd or Path(native_cwd).resolve() != Path(cwd).resolve():
         raise NativeError("wrong-native-workspace", "ZCode session checkout does not match the allocated workspace")
     return session_id
-
-
 
 
 def _open_root(connection: NativeConnection, workspace: dict, *, create_params: dict,
@@ -1173,7 +1184,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     return
 
             if services.inquiry is not None:
-                inquiry_bridge = InquiryBridge(services.inquiry,
+                inquiry_bridge = make_inquiry_bridge(services.inquiry,
                                                identity=_bridge_identity(request),
                                                journal_path=str(services.inquiry.get("resultsPath") or ""),
                                                attention_path=mount.bridge.get("attentionPath"))
@@ -1218,8 +1229,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id)),
                     on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id)),
                     validate_outcome=services.validate_outcome,
-                    mounted_tools=mount.bare_tools,
-                )
+                    mounted_tools=mount.bare_tools)
                 projection.session_id = opened_session
                 attempt_usage.session_id = opened_session
                 connection.observe = observe
@@ -1403,13 +1413,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                          size_bytes=len(raw_stderr),
                                          sha256=hashlib.sha256(raw_stderr).hexdigest()))
     try:
-        return _build_result(request, spawn=spawn, state=state, facts=facts, owned_spawn=owned_spawn,
+        return _build_result(request, spawn=spawn, state=state, owned_spawn=owned_spawn,
                              completion_carrier=completion_carrier, verified_outcome=verified_outcome,
                              verified_completion=verified_completion,
                              final_message_completed=final_message_completed,
                              resolved=resolved,
-                             session_id=session_id, turn_id=turn_id, input_id=input_id, raw_answer=raw_answer,
-                             correction_count=correction_count, event_count=event_count, evidence=evidence,
+                             session_id=session_id, turn_id=turn_id, raw_answer=raw_answer,
+                             correction_count=correction_count, event_count=event_count,
                              record=record, projection=projection, binding_path=binding_path, drained=drained,
                              evidence_refs=evidence_refs, tool_package=tool_package)
     except BoardError:
@@ -1420,13 +1430,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         # own shape failed, so nothing observed becomes unknown again.
         fallback = dataclasses.replace(state, status="error", reason="invalid-native-result",
                                        error_text="the native execution returned invalid or incomplete data")
-        return _build_result(request, spawn=spawn, state=fallback, facts=facts, owned_spawn=owned_spawn,
+        return _build_result(request, spawn=spawn, state=fallback, owned_spawn=owned_spawn,
                              completion_carrier=completion_carrier, verified_outcome=verified_outcome,
                              verified_completion=verified_completion,
                              final_message_completed=final_message_completed,
                              resolved=resolved,
-                             session_id=session_id, turn_id=turn_id, input_id=input_id, raw_answer=raw_answer,
-                             correction_count=correction_count, event_count=event_count, evidence=evidence,
+                             session_id=session_id, turn_id=turn_id, raw_answer=raw_answer,
+                             correction_count=correction_count, event_count=event_count,
                              record=None, projection=None, binding_path=binding_path, drained=drained,
                              evidence_refs=evidence_refs, tool_package=None)
 
@@ -1471,46 +1481,30 @@ def _activity_package(projection) -> Any:
     return _activity_package_fn(projection.payload()) if projection is not None else None
 
 
-def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, resolved, session_id,
-                  turn_id, input_id, raw_answer, correction_count, event_count, evidence, record,
+def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, session_id,
+                  turn_id, raw_answer, correction_count, event_count, record,
                   projection, binding_path, drained, evidence_refs, tool_package,
                   completion_carrier, verified_outcome, verified_completion,
                   final_message_completed) -> RunResult:
     native_identity = None
-    root_identities: tuple[NativeIdentity, ...] = ()
     if session_id is not None:
         fields = {"session_id": session_id}
         if turn_id:
             fields["turn_id"] = turn_id
         native_identity = _identity_or_none(fields)
-    if tool_package is not None:
-        roots = tool_package.get("nativeIdentity") or []
-        root_identities = tuple(_identity_or_none({"session_id": root["sessionId"],
-                                                   "turn_id": root["turnId"]})
-                                for root in roots if root.get("sessionId") and root.get("turnId"))
-    elif native_identity is not None and record is not None:
-        root_identities = (native_identity,)
-    # A run whose trusted root was never verified keeps an empty root list —
-    # an honest absence, never a zero fabricated from it.
     if spawn is None:
         if owned_spawn and isinstance(owned_spawn[0], dict):
             # A child existed and the spawn helper itself stopped it when the
             # connection could not be set up; those are its observed facts.
             created = owned_spawn[0]
-            stop_native = StopLayer(group_state="gone" if created["shutdown"] else "unknown",
-                                    started=True, leader_exited=True,
-                                    exit_code=created["exit_code"],
-                                    observation_basis="owned-group-stopped-in-spawn")
+            stop_native = StopLayer(group_state="gone" if created["shutdown"] else "unknown")
         else:
             # No process object ever existed: the holding side itself confirms
             # the spawn never happened, which is the one honest "gone" without
             # a process.
-            stop_native = StopLayer(group_state="gone", observation_basis="spawn-never-happened")
+            stop_native = StopLayer(group_state="gone")
     else:
-        stop_native = StopLayer(group_state="gone" if state.shutdown else "unknown",
-                                started=True,
-                                leader_exited=state.exit_code is not None, exit_code=state.exit_code,
-                                observation_basis="owned-process-group")
+        stop_native = StopLayer(group_state="gone" if state.shutdown else "unknown")
     # This harness has no native interrupt acknowledgement: a signal sent or a
     # group observed gone proves the process side only, never an SDK answer, so
     # no acknowledgement is carried at all instead of a constant.
@@ -1521,12 +1515,9 @@ def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, reso
     checked = CheckedConfiguration()
     if resolved is not None:
         checked = CheckedConfiguration(
-            provider=CheckedValue(value=resolved["provider"], basis="native-readback",
-                                  source="zcode/session-setModel"),
-            model=CheckedValue(value=resolved["model"], basis="native-readback",
-                               source="zcode/session-setModel"),
-            effort=CheckedValue(value=resolved["effort"], basis="native-readback",
-                                source="zcode/session-setThoughtLevel"))
+            provider=CheckedValue(value=resolved["provider"]),
+            model=CheckedValue(value=resolved["model"]),
+            effort=CheckedValue(value=resolved["effort"]))
     value = None
     completion = None
     if completion_carrier:
@@ -1534,75 +1525,47 @@ def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, reso
         # such as an unacknowledged close fails the run but never rewrites
         # the mechanism or erases the verified receipt facts already given.
         if verified_outcome is not None and verified_completion is not None:
-            value = RunValue(schema_status="valid", mechanism="completion-tool",
+            value = RunValue(schema_status="valid",
                              parsed=_json_package(verified_outcome),
-                             validation_basis="signed-receipt-role-validator", correction_count=0)
-            completion = CompletionEvidence(
-                mechanism="completion-tool", stream_end=state.shutdown and drained is True,
-                native_identity=(_identity_or_none({"session_id": session_id, "turn_id": turn_id,
-                                                    "input_id": input_id,
-                                                    "call_id": verified_completion["call_id"]})
-                                 if session_id else None),
-                call_id=verified_completion["call_id"], receipt_ref=verified_completion["receipt_id"],
-                receipt_verified=True, event_order=state.completion_ordinal,
-                native_outcome="turn.completed")
+                             correction_count=0)
+            completion = CompletionEvidence(stream_end=state.shutdown and drained is True)
     elif tool_package is not None:
         # The final-message carrier: the role's schema subset rule is the
         # role's; the driver only reports the raw final message, so the schema
         # status stays unknown rather than naming a check that did not run here.
-        value = RunValue(schema_status="unknown", mechanism="final-message", raw=raw_answer,
+        value = RunValue(schema_status="unknown", raw=raw_answer,
                          correction_count=correction_count)
         if final_message_completed and state.completion_ordinal is not None:
-            completion = CompletionEvidence(
-                mechanism="final-message", stream_end=drained, native_identity=native_identity,
-                event_order=state.completion_ordinal, native_outcome="turn.completed")
-    unknown = None
-    if facts.unknown_counts:
-        unknown = UnknownEvents(counts=tuple(facts.unknown_counts.items()),
-                                 total=sum(facts.unknown_counts.values()))
+            completion = CompletionEvidence(stream_end=drained)
     effective = EffectivePolicy()
     if state.session_opened and state.create_params is not None:
         if request.tool_scope == "none":
             effective = EffectivePolicy(
-                tools=PolicyFact(enforcement="native",
-                                 requested=_json_package(state.create_params),
-                                 basis="zcode/session-create-accepted"),
-                filesystem=PolicyFact(enforcement="unknown"))
+                tools=PolicyFact(requested=_json_package(state.create_params)))
         else:
             effective = EffectivePolicy(
-                tools=PolicyFact(enforcement="unrestricted", basis="zcode-yolo-session-default-tools"),
-                filesystem=PolicyFact(enforcement="unrestricted", basis="zcode-yolo-session-default-tools"))
+                tools=PolicyFact())
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(
-            resumable=bool(binding_path.is_file() and state.shutdown and record is not None),
-            native_session_ref=session_id, binding_ref=str(binding_path),
-            basis="private-goal-binding")
+            resumable=bool(binding_path.is_file() and state.shutdown and record is not None))
     return RunResult(
         identity=request.identity, harness="zcode",
         end=RunEnd(status=state.status, reason_code=state.reason,
-                   native_exit_code=state.exit_code, signal=_signal_name(state.exit_code),
+                   native_exit_code=state.exit_code,
                    message=state.error_text),
         harness_version=spawn.version if spawn is not None else None,
         model_started=True if state.model_started else None,
-        model_start_evidence=ModelStartEvidence(basis="input-sent", native_identity=native_identity)
-        if state.model_started else ModelStartEvidence(basis="unknown"),
         native_event_count=event_count if event_count else None,
         configuration=ResultConfiguration(
             requested=RunConfiguration(provider=request.configuration.provider,
                                        model=request.configuration.model,
                                        effort=request.configuration.effort),
-            checked=checked,
-            checks=("native-available-catalog", "session-setModel-readback",
-                    "thought-level-readback") if state.configured else ()),
-        native_identity=native_identity, root_identities=root_identities,
+            checked=checked),
+        native_identity=native_identity,
         value=value, completion_evidence=completion,
         tool_evidence=_tool_package(tool_package),
-        denied_interactions=tuple(DeniedInteraction(method=item.get("method") or "unknown",
-                                                    action=item.get("outcome") or "refused-with-jsonrpc-error",
-                                                    reason=item.get("hostAction"))
-                                  for item in facts.denied),
-        unknown_events=unknown, effective_policy=effective,
+        effective_policy=effective,
         activity=_activity_package(projection),
         usage=_usage_package(state.token_usage),
         native_error=_native_error_package(state.native_failure),
@@ -1610,8 +1573,7 @@ def _build_result(request: RunRequest, *, spawn, state, facts, owned_spawn, reso
         last_assistant_message=_message_package(state.last_assistant_message),
         continuation=continuation,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),
-        evidence_refs=tuple(evidence_refs),
-    )
+        evidence_refs=tuple(evidence_refs))
 
 
 def native_evidence(result: RunResult) -> dict:

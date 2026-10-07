@@ -1261,12 +1261,12 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.assertTrue(envelope["processState"]["shutdownConfirmed"])
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertTrue(decision["inputVerification"]["unchanged"])
-        native, context, request_view = self.readonly_start.call_args.args
+        harness, context, request_view = self.readonly_start.call_args.args
         manifest, frozen_root, expected_digest = self.input_verify.call_args.args
         self.assertEqual(manifest, decision["input"]["executionWorkspace"])
         self.assertEqual(request_view.cwd, str(frozen_root))
         from hey_my_buddy.private_dirs import context_root
-        private_root = context_root(context, native.name)
+        private_root = context_root(context, harness)
         self.input_prepare.assert_called_once_with(manifest, private_root)
         self.assertTrue(Path(frozen_root).is_relative_to(private_root))
         self.assertFalse(private_root.is_relative_to(context.directory))

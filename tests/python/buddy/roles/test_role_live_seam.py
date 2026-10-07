@@ -12,13 +12,15 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
 from hey_my_buddy.buddy.harnesses.live import ExistingLiveChannel
-from hey_my_buddy.buddy.harnesses.registry import live_binding
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, live_binding, run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FrozenJson,
+    HARNESS_NAMES,
     PrivateStatePaths,
     RunBudget,
     RunConfiguration,
@@ -51,8 +53,15 @@ def request(*, harness="zcode", invocation_id="invocation-live") -> RunRequest:
 
 class LiveBindingRegistryTests(unittest.TestCase):
     def test_only_registered_modules_carry_a_live_binding(self):
-        self.assertIs(live_binding("zcode"), native_run.bind_live_channel)
-        for name in ("dsh", "codex", "claude", "command", "external", "not-a-harness"):
+        for name in HARNESS_NAMES:
+            with self.subTest(harness=name):
+                module = run_seam(name)
+                if module is None:
+                    self.assertIsNone(live_binding(name))
+                else:
+                    self.assertTrue(callable(module.bind_live_channel))
+                    self.assertIs(live_binding(name), module.bind_live_channel)
+        for name in ("command", "external", "not-a-harness"):
             self.assertIsNone(live_binding(name), name)
 
     def test_a_channel_binds_the_requests_own_complete_identity(self):
@@ -69,8 +78,9 @@ class LiveBindingRegistryTests(unittest.TestCase):
                                          dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")) as directory:
             with self.assertRaises(BoardError):
                 role_live.build_live_channel("codex", request(), credentials={}, activity_dir=directory)
-            self.assertIsNone(role_live.build_live_channel("dsh", request(harness="dsh"),
-                                                           credentials={}, activity_dir=directory))
+            with mock.patch.dict(RUN_SEAMS, {"dsh": None}):
+                self.assertIsNone(role_live.build_live_channel("dsh", request(harness="dsh"),
+                                                               credentials={}, activity_dir=directory))
 
 
 class StoredRequestTests(unittest.TestCase):
@@ -139,6 +149,36 @@ class StoredRequestTests(unittest.TestCase):
         self.assertIsNone(role_live.stored_run_request(corrupt))
         self.assertIsNone(role_live.stored_run_request(self.directory / "nowhere"))
 
+    def test_one_request_identity_component_mismatch_refuses_alone(self):
+        # Each identity component verifies on its own: for every component
+        # exactly one valid-typed value changes in the REQUEST alone — the real
+        # governed turn input file and its correct digest stay untouched — so
+        # only that component's comparison can refuse the stored pair and no
+        # other failing check can mask the gap.
+        changes = {
+            "task_id": {"task_id": "other-task"},
+            "attempt_id": {"attempt_id": "other-attempt"},
+            "generation": {"generation": 2},
+            "turn_id": {"turn_id": "other-turn"},
+            "invocation_id": {"invocation_id": "other-invocation"},
+            "input_sha256": {"input_sha256": input_hash({"taskId": "task", "altered": True})},
+        }
+        for component, update in changes.items():
+            with self.subTest(component=component):
+                stored = self.write_stored()
+                baseline = decode_run_request((stored / "role-run-request.json").read_bytes())
+                altered = baseline.model_copy(update={"identity": baseline.identity.model_copy(update=update)})
+                (stored / "role-run-request.json").write_text(encode_run_request(altered))
+                self.assertIsNone(role_live.stored_run_request(stored), component)
+        # The harness pair verifies as its own check too: the control keeps
+        # naming zcode while the stored request claims another harness.
+        with self.subTest(component="harness"):
+            stored = self.write_stored()
+            baseline = decode_run_request((stored / "role-run-request.json").read_bytes())
+            altered = baseline.model_copy(update={"harness": "codex"})
+            (stored / "role-run-request.json").write_text(encode_run_request(altered))
+            self.assertIsNone(role_live.stored_run_request(stored))
+
 
 class HandleBindingTests(unittest.TestCase):
     def setUp(self):
@@ -170,11 +210,16 @@ class HandleBindingTests(unittest.TestCase):
         self.assertNotIn("a" * 64, json.dumps(encode_run_request(request())))
 
     def test_the_binding_states_are_the_three_the_consumer_acts_on(self):
+        # DSH is a registered harness now, so the unextracted state is reached
+        # by injecting its registration's absence explicitly — a registered
+        # module whose control lacks a request file is unavailable, not
+        # unextracted.
         unextracted = SimpleNamespace(
             role_run_control={"operation": "worker", "harness": "dsh"},
             role_run_identity=identity())
-        self.assertEqual(role_live.handle_live_binding(unextracted),
-                         (role_live.LIVE_UNEXTRACTED, None))
+        with mock.patch.dict(RUN_SEAMS, {"dsh": None}):
+            self.assertEqual(role_live.handle_live_binding(unextracted),
+                             (role_live.LIVE_UNEXTRACTED, None))
         bound_handle = self.handle()
         state, channel = role_live.handle_live_binding(bound_handle)
         self.assertEqual(state, role_live.LIVE_BOUND)
@@ -203,12 +248,37 @@ class HandleBindingTests(unittest.TestCase):
                                        "directory": str(self.directory)})
         # A control naming an unextracted harness keeps the caller on its
         # existing facilities; it is not a binding failure of this run.
-        self.assertEqual(role_live.handle_live_binding(changed),
-                         (role_live.LIVE_UNEXTRACTED, None))
+        with mock.patch.dict(RUN_SEAMS, {"codex": None}):
+            self.assertEqual(role_live.handle_live_binding(changed),
+                             (role_live.LIVE_UNEXTRACTED, None))
         name_only = self.handle()
         name_only.role_run_control = {"operation": "worker", "harness": "zcode"}
         self.assertEqual(role_live.handle_live_binding(name_only),
                          (role_live.LIVE_UNAVAILABLE, None))
+
+    def test_each_held_identity_component_and_harness_must_match_the_request(self):
+        # The held identity is compared as a whole against the stored request:
+        # every single component differing alone — one valid-typed change, all
+        # other components equal — refuses the binding, and so does a control
+        # harness the stored request does not carry.
+        changes = {
+            "task_id": {"task_id": "other-task"},
+            "attempt_id": {"attempt_id": "other-attempt"},
+            "generation": {"generation": 2},
+            "turn_id": {"turn_id": "other-turn"},
+            "invocation_id": {"invocation_id": "other-invocation"},
+            "input_sha256": {"input_sha256": input_hash({"taskId": "task", "held": True})},
+        }
+        for component, update in changes.items():
+            with self.subTest(component=component):
+                held = identity().model_copy(update=update)
+                self.assertEqual(role_live.handle_live_binding(self.handle(held=held)),
+                                 (role_live.LIVE_UNAVAILABLE, None))
+        with self.subTest(component="harness"):
+            binding = self.handle()
+            self.request_file.write_text(encode_run_request(request(harness="codex")))
+            self.assertEqual(role_live.handle_live_binding(binding),
+                             (role_live.LIVE_UNAVAILABLE, None))
 
 
 if __name__ == "__main__":

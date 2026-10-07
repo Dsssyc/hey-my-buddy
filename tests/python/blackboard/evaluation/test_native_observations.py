@@ -11,7 +11,7 @@ class QuotaVisibilityTests(BoardTestCase):
     def test_optional_quota_read_is_bounded_and_restores_the_execution_deadline(self):
         import time
         from types import SimpleNamespace
-        from hey_my_buddy.buddy.harnesses.codex.runner import _observe_quota
+        from hey_my_buddy.buddy.harnesses.codex.native_run import _observe_quota
         from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
         connection = SimpleNamespace(deadline=time.monotonic() + 1000)
         previous = connection.deadline

@@ -16,7 +16,7 @@ SECOND_IDENTITY = {"sessionId": "session-2", "inputId": "input-2"}
 BINDING = {"adapter": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "generation": 2}
 
 CLASSIFICATION = {
-    "dsh": {"read": "read", "glob": "search", "grep": "search"},
+    "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute"},
     "claude": {
         "Read": "read", "LS": "read", "Glob": "search", "Grep": "search", "Bash": "execute",
         "Write": "edit", "Edit": "edit", "MultiEdit": "edit", "WebFetch": "fetch", "WebSearch": "fetch",

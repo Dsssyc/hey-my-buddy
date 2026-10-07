@@ -7,9 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
-from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector, control_binding
+from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector
+from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router import answer_schema, budget
@@ -265,13 +266,44 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                          [{"sessionId": "thread-1", "turnId": "turn-1"}, {"sessionId": "thread-1", "turnId": "turn-2"}])
         self.assertEqual(package["toolCalls"], 2)
 
-    def test_control_binding_takes_only_the_private_python_identity(self):
-        self.assertEqual(control_binding({"taskId": "t", "attemptId": "a", "generation": 0}),
-                         {"adapter": "codex", "taskId": "t", "attemptId": "a", "generation": 0})
-        for control in ({}, {"taskId": "t", "attemptId": "a"}, {"taskId": "t", "attemptId": "a", "generation": "1"},
-                        {"taskId": "t", "attemptId": "a", "generation": -1}, {"taskId": "", "attemptId": "a", "generation": 1},
-                        {"taskId": 5, "attemptId": "a", "generation": 1}):
-            self.assertIsNone(control_binding(control), control)
+    def test_the_binding_comes_only_from_a_validated_request_identity(self):
+        # The legacy control-file binding check now lives at the frame the
+        # driver actually consumes: a run request identity that is missing a
+        # field, of the wrong type, empty or negative never reaches the
+        # projector, and a validated identity projects exactly the private
+        # Python binding the evidence carries.
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+            decode_run_request, encode_run_request,
+        )
+        request = RunRequest(
+            identity=RunIdentity(task_id="t", attempt_id="a", generation=0, invocation_id="inv"),
+            harness="codex", configuration=RunConfiguration(provider="openai", model="m", effort="low"),
+            cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/i", native_root="/fixture/n"),
+            input_text="prompt", tool_scope="read", output_schema={},
+            budget=RunBudget(timeout_seconds=8))
+        frame = json.loads(encode_run_request(request))
+        decoded = decode_run_request(json.dumps(frame))
+        projector = CodexToolEventProjector({"adapter": "codex", "taskId": decoded.identity.task_id,
+                                              "attemptId": decoded.identity.attempt_id,
+                                              "generation": decoded.identity.generation})
+        self.assertEqual(projector.finish(False)["binding"], {"adapter": "codex", "taskId": "t",
+                                                              "attemptId": "a", "generation": 0})
+        mutations = {"missing task": lambda identity: identity.pop("taskId"),
+                     "missing attempt": lambda identity: identity.pop("attemptId"),
+                     "numeric task": lambda identity: identity.update(taskId=5),
+                     "empty task": lambda identity: identity.update(taskId=""),
+                     "empty attempt": lambda identity: identity.update(attemptId=""),
+                     "string generation": lambda identity: identity.update(generation="1"),
+                     "negative generation": lambda identity: identity.update(generation=-1)}
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                identity = dict(frame["identity"])
+                mutate(identity)
+                with self.assertRaises((ValueError, TypeError, BoardError)):
+                    decode_run_request(json.dumps({**frame, "identity": identity}))
+        # The projector itself still refuses an incomplete binding, so a
+        # caller that bypasses the frame validation cannot invent one.
         with self.assertRaises(BoardError):
             CodexToolEventProjector({"adapter": "codex", "taskId": "t"})
 
@@ -280,7 +312,8 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     """The review controller projects unified evidence over the fixture stream."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-tool-evidence-")
+        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-tool-evidence-",
+                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "empty"
@@ -290,22 +323,20 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.adapter = CodexAdapter()
 
     def context(self, case, *, index, task="review-task", attempt="review-attempt", generation=7):
-        turn_input = {"version": 1, "taskId": task, "attemptId": attempt, "generation": generation,
-                      "turnId": f"turn-{generation}", "resumeMode": "initial", "previousSessionId": None,
-                      "context": {}, "executionWorkspace": {}}
+        from hey_my_buddy.buddy.harnesses.base import ExecutionContext
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CODEX_CLI=str(FIXTURE),
                            BUDDY_CODEX_FIXTURE_STATE=str(self.root / f"fixture-{index}.json"),
                            CODEX_HOME=str(self.home), HOME=str(self.root),
                            BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_FIXTURE_CASE=case)
+                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_FIXTURE_CASE=case,
+                           PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
         context = ExecutionContext(task_id=task, attempt_id=attempt, generation=generation,
                                   spec={"cwd": str(self.cwd), "task": "Select", "timeoutSeconds": 8,
                                         "provider": "openai", "model": "fixture-model", "effort": "low"},
                                   directory=self.root / f"attempt-{index}", runtime={}, environment=environment,
-                                  turn={"turnId": f"turn-{generation}", "input": turn_input})
-        context.turn = None
+                                  turn=None)
         return context
 
     def run_review(self, case, *, index, **request_options):
@@ -313,7 +344,8 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet",
                                             answer_schema(["legal"]), {**budget(), **request_options},
                                             capture_evidence=True)
-        handle = self.adapter.start_read_only_structured(context, request)
+        handle = start_router_preparation(ReviewPreparation("codex", self.adapter, request, context,
+                                                            (None, self.cwd, "fixture-digest")))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
         return collect(handle), context

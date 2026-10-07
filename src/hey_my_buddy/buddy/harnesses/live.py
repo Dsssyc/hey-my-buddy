@@ -93,14 +93,13 @@ class LiveCapabilities(InternalModel):
 
 
 #: What each harness's existing facilities can do today. Codex and Claude Code
-#: refuse questions; ZCode delivers them at its session's cooperative
-#: checkpoint; DSH keeps its current Node realtime delivery until step four
-#: moves it to ACP.
+#: refuse questions; ZCode and DSH deliver them at their session's cooperative
+#: checkpoint.
 EXISTING_CAPABILITIES = {
     "codex": LiveCapabilities(inquiry_delivery="unsupported"),
     "claude": LiveCapabilities(inquiry_delivery="unsupported"),
     "zcode": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-    "dsh": LiveCapabilities(inquiry_delivery="realtime"),
+    "dsh": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
 }
 
 

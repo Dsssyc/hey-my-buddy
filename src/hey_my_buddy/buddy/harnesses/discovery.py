@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import selectors
 
@@ -442,6 +444,51 @@ def _probe(command: list[str], environment: dict, *, deadline: float | None = No
     return _probe_windows(process, stop_at) if os.name == "nt" else _probe_posix(process, stop_at, deadline)
 
 
+def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | None, bytes]:
+    """Use the same private DSH launcher for the no-input version check.
+
+    Keep the caller's HOME and native environment, force only DSH_HOME, and
+    retain the directory if the owned group cannot be confirmed stopped.
+    """
+    from .dsh.acp.launch import LaunchOwnershipError, LaunchRejected, launch
+
+    start = time.monotonic()
+    if start >= deadline:
+        return "scan-timeout", b""
+    root = Path(tempfile.mkdtemp(prefix="buddy-dsh-probe-")).resolve()
+    (root / "dsh-home").mkdir(mode=0o700)
+    process = handle = None
+    stopped = True  # No child exists until launch returns or transfers ownership.
+    code, output = "launch-failed", b""
+    try:
+        try:
+            process, handle = launch([*command, "--version"], private_root=root,
+                                     source_environment=environment, merge_stderr=True)
+        except LaunchOwnershipError as error:
+            process, handle = error.process, error.handle
+        except (LaunchRejected, OSError, ValueError):
+            return code, output
+        else:
+            process.stdin.close()
+            stop_at = min(start + _TIMEOUT, deadline)
+            code, output = (_probe_windows(process, stop_at) if os.name == "nt" else
+                            _probe_posix(process, stop_at, deadline))
+    finally:
+        if handle is not None:
+            stopped = handle.shutdown_confirmed(settle_seconds=0.2)
+            if not stopped:
+                handle.terminate(grace_seconds=1)
+                stopped = handle.shutdown_confirmed(settle_seconds=0.2)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+        if stopped:
+            shutil.rmtree(root)
+        else:
+            logging.getLogger(__name__).warning("DSH probe stop unconfirmed; private directory retained: %s", root)
+    return (code, output) if stopped else ("shutdown-unverified", b"")
+
+
 def _version_key(version: str | None) -> tuple[int, int, int]:
     found = _VERSION.search(version or "")
     return tuple(int(value or 0) for value in found.groups()) if found else (-1, -1, -1)
@@ -527,7 +574,8 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             result["reasonCode"] = "interpreter-missing"
             return result
     child_env = native_environment(environment, command=command, adapter=adapter)
-    code, output = _probe([*command, "--version"], child_env, deadline=deadline)
+    code, output = (_probe_dsh_version(command, child_env, deadline) if adapter == "dsh" else
+                    _probe([*command, "--version"], child_env, deadline=deadline))
     if code is not None:
         result["reasonCode"] = code
         return result

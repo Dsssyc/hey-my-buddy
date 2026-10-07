@@ -1,13 +1,16 @@
-"""Claude controller through the real private daemon, Worker and Git seal.
+"""Claude role wiring through the real private daemon, Worker and Git seal.
 
 Only the native CLI is simulated. No installed harness or model is contacted.
+The daemon-level cases need the Host activation patch that registers the
+claude run seam; the catalog rule is pure and runs anywhere.
 """
 import json
+import unittest
 from pathlib import Path
 
+from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
 from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.protocol import schemas
-from hey_my_buddy.buddy.harnesses.claude.runner import _catalog
 from support import wait_for
 from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase
 
@@ -17,6 +20,13 @@ CONFIGURATION = {"adapter": "claude", "provider": "anthropic",
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
 
+def _claude_registered() -> bool:
+    from hey_my_buddy.buddy.harnesses.registry import run_seam
+    return run_seam("claude") is not None
+
+
+@unittest.skipUnless(_claude_registered(),
+                     "the claude run seam is registered only in the activated verification copy")
 class ClaudeWorkerTests(GovernedWorkerTestCase):
     def setUp(self):
         super().setUp()
@@ -98,6 +108,8 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             self.assertFalse(counted)
             self.assertEqual(basis["excluded"], "infrastructure")
 
+
+class ClaudeCatalogRuleTests(unittest.TestCase):
     def test_effort_directory_never_mixes_default_with_explicit_efforts(self):
         catalog, _ = _catalog({"account": {"apiProvider": "firstParty", "tokenSource": "subscription"},
             "models": [{"value": "bad", "resolvedModel": "bad-model", "supportedEffortLevels": ["default", "high"]},

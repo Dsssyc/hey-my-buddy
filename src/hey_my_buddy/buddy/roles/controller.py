@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, TYPE_CHECKING
+from typing import Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
 from ..harnesses.base import (
@@ -14,7 +14,7 @@ from ..harnesses.base import (
     ProcessHandle,
     ReadOnlyStructuredRequest,
 )
-from ..harnesses.run_contract import HarnessRun, RunFeedback, RunRequest, RunResult
+from ..harnesses.run_contract import HARNESS_NAMES, HarnessRun, RunFeedback, RunRequest, RunResult
 
 if TYPE_CHECKING:
     from .run_execution import WorkerRunExecutor
@@ -66,6 +66,8 @@ def worker_executor(name: str) -> Adapter | WorkerRunExecutor:
     if module is not None:
         from .run_execution import WorkerRunExecutor
         return WorkerRunExecutor(adapter(name), module)
+    if name in HARNESS_NAMES:
+        raise BoardError("ROLE_RUN_UNREGISTERED", "The harness has no registered run", harness=name)
     return adapter(name)
 
 
@@ -103,15 +105,10 @@ def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, 
 
 @dataclass(frozen=True)
 class FastPreparation:
-    """The Router fast mode's prepared native call: everything but the start.
-
-    ``native`` is the carrier selected once during preparation; the one call
-    point below starts exactly this instance, so eligibility and selection are
-    frozen and never recomputed.
+    """The Router fast mode's prepared call with its frozen registered run.
     """
 
     harness: str
-    native: Any
     request: NoToolStructuredRequest
     context: ExecutionContext
     #: The empty owner-private cwd the native call runs in, removed after a
@@ -140,10 +137,16 @@ class ReviewPreparation:
     context: ExecutionContext
     #: The frozen input binding the collection re-verifies: (manifest, root, digest).
     mirror: tuple[dict | None, Path, str]
+    run_module: HarnessRun | None = None
+
+    def __post_init__(self):
+        from ..harnesses.registry import run_seam
+        if self.run_module is None:
+            object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
 def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> ProcessHandle:
-    """Start the prepared role through its run seam or unextracted carrier.
+    """Start the prepared role through its frozen registered run.
 
     Eligibility and the selected description stay frozen at preparation. A
     registered harness takes only the generic role controller path.
@@ -152,21 +155,16 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
 
     if not isinstance(preparation, (FastPreparation, ReviewPreparation)):
         raise BoardError("INVALID_ARGUMENT", "unknown Router preparation", harness=preparation.harness)
+    module = preparation.run_module
+    if module is None or run_seam(preparation.harness) is not module:
+        raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
     if isinstance(preparation, FastPreparation):
-        module = preparation.run_module
-        if run_seam(preparation.harness) is not module:
-            raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
-    else:
-        module = run_seam(preparation.harness)
-    if module is not None:
-        if isinstance(preparation, FastPreparation):
-            from .run_execution import start_fast
-            return start_fast(module, preparation.harness, preparation.context, preparation.request)
-        raise BoardError("router-review-unsupported", "Review on the registered Worker carrier is not implemented")
-    if isinstance(preparation, FastPreparation):
-        return preparation.native.start_no_tool_structured(preparation.context, preparation.request)
-    if isinstance(preparation, ReviewPreparation):
-        return preparation.native.start_read_only_structured(preparation.context, preparation.request)
+        from .run_execution import start_fast
+        return start_fast(module, preparation.harness, preparation.context, preparation.request)
+    from .run_execution import start_review
+    if not preparation.native.read_only_structured:
+        raise BoardError("router-review-unsupported", "Review on this registered harness is not implemented")
+    return start_review(preparation.harness, preparation.context, preparation.request)
 
 
 # -- the new run seam's one call point ----------------------------------------
@@ -196,4 +194,17 @@ def run_harness(
         raise BoardError("ROLE_RUN_UNREGISTERED",
                          f"the run of {request.harness} must go through its registered run seam",
                          harness=request.harness)
+    requested_controls = {
+        name for name, requested in (
+            ("network_allowed_domains", request.network_allowed_domains is not None),
+            ("additional_denied_tools", bool(request.additional_denied_tools)),
+            ("resume_checkpoint", request.continuation is not None
+             and request.continuation.checkpoint is not None),
+        ) if requested
+    }
+    unsupported = requested_controls - set(getattr(module, "supported_request_controls", ()))
+    if unsupported:
+        raise BoardError("ROLE_RUN_UNSUPPORTED_CONTROL",
+                         "The registered run does not support the requested native controls",
+                         harness=request.harness, controls=sorted(unsupported))
     return module.run(request, observer=observer, services=services, cancelled=cancelled)

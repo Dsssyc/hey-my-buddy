@@ -1,8 +1,11 @@
 """Real cross-process governed workflow: daemon, worker, workspace and CLI routes.
 
-The DSH runner is a mock node script that implements the turn protocol; everything
-else is the real service: real daemon, real supervisor/worker, the merged Git-backed
-workspace module, the real C-Two/CLI path and the real console command route.
+The DSH harness runs through its registered run module against an offline
+Python governed ACP agent (``buddy/harnesses/dsh/fixtures/workflow_agent.py``,
+selected as a direct executable command through ``BUDDY_DSH_CLI``); everything
+else is the real service: real daemon, real supervisor/worker, the merged
+Git-backed workspace module, the real C-Two/CLI path and the real console
+command route.
 """
 from __future__ import annotations
 
@@ -24,8 +27,24 @@ GIT_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_SYSTEM": "/dev/null",
 }
-RUNNER = Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures" / "mock_turn_runner.mjs"
+FIXTURE = Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures/workflow_agent.py"
 CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+
+
+def harness_environment(directory: Path) -> dict:
+    """Select the offline governed agent as the harness's CLI entry.
+
+    The daemon chain runs the service-selected health record, and the catalog
+    fixture daemon composes every harness's command from ``BUDDY_<X>_CLI`` —
+    a ``.py`` entry launches under the daemon's own interpreter, anything else
+    runs directly, with no wrapper script and no production compatibility
+    variable. The selection is this module's governed fixture file. HOME is
+    pinned into the test's private root so the agent's forced-private-home
+    tripwire holds off the invoking shell for the whole chain.
+    """
+    home = directory / "home"
+    home.mkdir(mode=0o700, exist_ok=True)
+    return {"HOME": str(home), "BUDDY_DSH_CLI": str(FIXTURE)}
 
 
 class GovernedWorkerTestCase(BoardTestCase):
@@ -49,7 +68,7 @@ class GovernedWorkerTestCase(BoardTestCase):
         return completed.stdout
 
     def env(self) -> dict:
-        return {"BUDDY_RUNNER_PATH": str(RUNNER)}
+        return harness_environment(self.directory)
 
     def submit(self, request_id: str = "worker-req-1") -> tuple[int, dict]:
         return self.cli(
@@ -122,16 +141,27 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertEqual(delivered["counts"]["turns"], 1)
             turn = delivered["turns"][0]
             self.assertEqual(turn["disposition"], "completed")
-            self.assertTrue(turn["sessionId"].startswith("mock-session-"))
+            # The session id is the root session the run module itself opened
+            # through the ACP handshake, not a fixture-chosen label.
+            self.assertTrue(turn["sessionId"].startswith("fake-session-"))
 
-            # Git isolation and native session storage are separate facts: the
-            # grouped default keeps the owning harness store so membership stays
-            # verifiable, and the metadata says exactly that.
+            # Git isolation and native session storage are separate facts: this
+            # run's rollout lands under the attempt-private DSH_HOME sessions
+            # root, the owning credentials store keeps resolving by path, and
+            # the installed app lists none of it. The session identity comes
+            # only from the imported, validated turn record — sessionIdSource
+            # names that source, and no conflict fact exists to clear (the
+            # unvalidated side of this rule is the Host's own
+            # DshPublishedReceiptTests witness). The sidecar on disk stays the
+            # activity witness, with the receipt's sidecarWritten fact beside
+            # it.
             _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             native = (receipt.get("result") or {}).get("nativeSession") or {}
-            self.assertEqual(native.get("storageScope"), "harness-user-store")
-            self.assertEqual(native.get("storageOwner"), "harness-user-store")
-            self.assertEqual(native.get("nativeAppVisibility"), "user-store")
+            self.assertEqual(native.get("storageScope"), "attempt-private-sessions")
+            self.assertEqual(native.get("storageOwner"), "buddy-attempt")
+            self.assertEqual(native.get("nativeAppVisibility"), "not-listed-in-native-app")
+            self.assertEqual(native.get("credentialsStore"), "harness-user-store")
+            self.assertFalse(native.get("bindingPresent"))
             self.assertTrue(native.get("captured"))
             self.assertFalse(native.get("resumable"))
             self.assertEqual(native.get("sessionId"), turn["sessionId"])
@@ -149,10 +179,12 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
                 attempt_id=turn["attemptId"],
                 generation=1,
             )
-            self.assertIsNotNone(sidecar, "the dsh runner did not leave a bound activity sidecar")
+            self.assertIsNotNone(sidecar, "the governed dsh run did not leave a bound activity sidecar")
             self.assertEqual(sidecar["phase"], "finishing")
             self.assertEqual(sidecar["nativeSessionId"], turn["sessionId"])
             self.assertEqual(sidecar["counts"], {"modelTurns": 1, "toolCalls": 1})
+            # The receipt's own sidecar fact reports the same file the bound
+            # read just verified.
             activity_meta = (receipt.get("result") or {}).get("nativeActivity") or {}
             self.assertTrue(activity_meta.get("sidecarWritten"))
 
@@ -357,55 +389,6 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
             self.assertEqual(path.read_text(), "not-json", "a malformed record is never overwritten")
             path.write_text(original)
 
-
-
-class DshNativeStorageArgumentsTests(unittest.TestCase):
-    """Only the session rollout moves; the DSH home and its credentials never do."""
-
-    def arguments(self, *, governed: bool = False) -> list[str]:
-        import tempfile
-        from unittest import mock
-
-        from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-        from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
-
-        directory = Path(tempfile.mkdtemp(prefix="buddy-dsh-args-"))
-        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
-        turn = None
-        if governed:
-            turn = {"turnId": "turn-1", "input": {"version": 1, "taskId": "task", "attemptId": "attempt",
-                                                  "generation": 1, "turnId": "turn-1", "resumeMode": "initial",
-                                                  "previousSessionId": None, "context": {}, "executionWorkspace": {}}}
-        context = ExecutionContext(
-            task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30},
-            directory=directory, runtime={}, environment={**os.environ, "BUDDY_STATE_DIR": str(directory / "state")}, turn=turn,
-        )
-        with mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)}):
-            return DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "a" * 64,
-                                                    "resultsPath": "/tmp/inquiry.jsonl", "errorPath": "/tmp/inquiry.error.json"})
-
-    def test_every_run_moves_only_the_attempt_private_session_root(self):
-        args = self.arguments()
-        # The removed grouping flags never reach the runner; the session
-        # rollout always lands under the attempt's private root.
-        self.assertFalse(any(arg in ("--workspace", "--no-workspace") for arg in args), args)
-        session_root = next((arg for arg in args if arg.startswith("--session-root=")), None)
-        self.assertIsNotNone(session_root, args)
-        self.assertTrue(session_root.endswith("/sessions"), session_root)
-        # The relocated DSH home broke native credential resolution; the owning
-        # home must never be moved or simulated again.
-        self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
-
-    def test_a_governed_turn_publishes_its_activity_sidecar_in_the_attempt_directory(self):
-        plain = self.arguments()
-        self.assertFalse(any(arg.startswith("--activity-file") for arg in plain), plain)
-        args = self.arguments(governed=True)
-        activity = next((arg for arg in args if arg.startswith("--activity-file=")), None)
-        self.assertIsNotNone(activity, args)
-        self.assertTrue(activity.endswith("/activity.json"), activity)
-        turn_input = args[args.index("--turn-input-file") + 1]
-        self.assertEqual(activity, "--activity-file=" + str(Path(turn_input).parent / "activity.json"))
 
 
 if __name__ == "__main__":  # pragma: no cover

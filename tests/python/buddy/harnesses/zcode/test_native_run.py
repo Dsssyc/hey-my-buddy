@@ -9,6 +9,7 @@ the result comes from the same native stream the legacy controller observed.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -112,24 +113,30 @@ class FastSeamTests(NativeRunCase):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a profile", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
-        result = run(self.fast_request(prompt), observer=correction.observer,
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return correction.observer(facts)
+
+        result = run(self.fast_request(prompt), observer=observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        self.assertEqual(result.value.mechanism, "final-message")
+        self.assertEqual(result.end.native_exit_code, 0)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         self.assertEqual(result.value.schema_status, "unknown")
         self.assertEqual(result.value.correction_count, 0)
         self.assertEqual(correction.stop_reason, None)
-        self.assertIsNone(result.unknown_events)
+        # The observer's own cumulative statistics carry the unknown-event
+        # count; a clean run saw none.
+        self.assertTrue(all(facts["unknownEvents"]["total"] == 0 for facts in seen))
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(result.stop_evidence.native.exit_code, 0)
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["toolAllowlist"], [])
         # The sent create parameters stay the requested block, never a native
         # readback projection beside it.
         self.assertNotIn("reported", policy.to_payload())
-        self.assertEqual(policy.basis, "zcode/session-create-accepted")
 
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "correct"
@@ -141,7 +148,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         # Both root sessions are listed as native roots of this one run.
-        self.assertEqual(len(result.root_identities), 2)
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
         self.assertEqual(correction.correction_count, 1)
 
     def test_a_tool_fact_stops_the_run_through_the_observer_feedback(self):
@@ -180,7 +187,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(rounds["count"], 2)
         # Three fresh root sessions on the one process: the original round and
         # both executed corrections.
-        self.assertEqual(len(result.root_identities), 3)
+        self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 3)
 
     def test_a_write_scope_without_a_service_takes_the_final_message_path(self):
         # The scope only sets the native tool settings; without a bound
@@ -195,9 +202,11 @@ class FastSeamTests(NativeRunCase):
         result = run(scoped, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        self.assertEqual(result.value.mechanism, "final-message")
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        self.assertEqual(result.effective_policy.tools.enforcement, "unrestricted")
+        # The write scope sends no native policy request of its own (the
+        # session default tools run); the fact reports exactly that emptiness.
+        self.assertIsNotNone(result.effective_policy.tools)
+        self.assertIsNone(result.effective_policy.tools.requested)
         self.assertNotIn("reported", result.effective_policy.tools.to_payload())
 
     def test_a_late_tool_frame_after_settlement_is_the_role_call_not_the_scopes(self):
@@ -237,12 +246,50 @@ class FastSeamTests(NativeRunCase):
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-native-result")
-        native = result.stop_evidence.native
-        self.assertTrue(native.started)
-        self.assertEqual(native.group_state, "gone")
-        self.assertEqual(native.observation_basis, "owned-group-stopped-in-spawn")
-        self.assertIsNotNone(native.exit_code)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
         # Killing the group proves the process side only; no SDK answered.
+        # (The child's own exit code used to ride the stop layer's slimmed
+        # fields; the common result no longer carries it, so the surviving
+        # facts here are the confirmed group stop and the failure reason.)
+
+    def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
+        # The run module's own stop collection through the real run path: the
+        # narrow stop-observation point (ProcessHandle.shutdown_confirmed) is
+        # denied confirmation, so the halt still closes stdin, waits and
+        # terminates the real fake app-server while the reported group state
+        # stays the honest unknown — a factually reaped leader never becomes
+        # confirmed-gone evidence, and the settlement is refused without it.
+        from unittest import mock as _mock
+        from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+        observed: list[ProcessHandle] = []
+
+        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            observed.append(handle)
+            return False
+
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        correction = FastCorrection(SCHEMA, prompt)
+        with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
+            result = run(self.fast_request(prompt), observer=correction.observer,
+                         services=None, cancelled=lambda: False)
+        native = result.stop_evidence.native
+        self.assertEqual(native.group_state, "unknown")
+        self.assertIsNotNone(result.end.native_exit_code)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+        # The halt really signalled: the pre-terminate check and the final
+        # confirmation were both denied for this run's own one handle.
+        self.assertEqual(len(observed), 2)
+        self.assertTrue(result.stop_evidence.interrupt.requested)
+        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
+        # No orphan: with the patch gone, the run's own captured handle shows
+        # the leader reaped and the whole group confirmed gone by the real
+        # observation the halt performed.
+        handle = observed[0]
+        self.assertIsNotNone(handle.process.poll())
+        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
+        self.assertFalse(handle.group_alive())
 
     def test_the_peer_receives_the_refusal_before_the_observer_stop_ends_the_run(self):
         # The refusal answer completes first — the peer reads the reply with
@@ -277,8 +324,15 @@ class FastSeamTests(NativeRunCase):
         self.assertLess(time.monotonic() - started, 6, "the RPC waited for a reply after the refusal")
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
-        self.assertEqual(len(result.denied_interactions), 1)
-        self.assertEqual(result.denied_interactions[0].method, "interaction/requestPermission")
+        # The refused interaction's own full record travels in the retained
+        # evidence reference, read back through its size and digest.
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "denied-interactions")
+        raw = Path(ref.location).read_bytes()
+        self.assertEqual(len(raw), ref.size_bytes)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
+        records = json.loads(raw)["records"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["method"], "interaction/requestPermission")
         self.assertEqual(json.loads((self.cwd / "refusal-reply.json").read_text()),
                          {"id": "srv-before-reply", "refused": True})
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
@@ -309,9 +363,12 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "session-close-unconfirmed")
-        self.assertEqual(result.value.mechanism, "final-message")
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        self.assertEqual(result.native_identity.turn_id, result.root_identities[0].turn_id)
+        # The value belongs to the observed root session's own native turn.
+        package = result.tool_evidence.value
+        self.assertEqual(result.native_identity.turn_id,
+                         next(root["turnId"] for root in package["nativeIdentity"]
+                              if root.get("sessionId") == result.native_identity.session_id))
 
     def test_a_reverse_request_ends_the_fast_run_immediately_with_the_fact_kept(self):
         # The refused interaction is answered and recorded, and the role's stop
@@ -330,8 +387,12 @@ class FastSeamTests(NativeRunCase):
                 self.assertEqual(result.end.status, "cancelled")
                 self.assertEqual(result.end.reason_code, "observer-interrupt")
                 self.assertEqual(correction.stop_reason, "no-tool-violation")
-                self.assertEqual(len(result.denied_interactions), 1)
-                self.assertIn("interaction/", result.denied_interactions[0].method)
+                ref = next(ref for ref in result.evidence_refs if ref.kind == "denied-interactions")
+                raw = Path(ref.location).read_bytes()
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
+                records = json.loads(raw)["records"]
+                self.assertEqual(len(records), 1)
+                self.assertIn("interaction/", records[0]["method"])
 
     def test_a_pre_spawn_failure_claims_nothing_that_never_happened(self):
         from unittest import mock as _mock
@@ -346,15 +407,18 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "unsupported-provider")
         # Nothing is claimed that the run never reached: no session opened, no
-        # effective policy, no configuration checks, no completion, no model.
+        # effective policy, no configuration check, no completion, no model,
+        # and no native exit code — the holding side's own never-spawned fact.
         self.assertIsNone(result.model_started)
-        self.assertEqual(result.model_start_evidence.basis, "unknown")
         self.assertIsNone(result.effective_policy.tools)
-        self.assertEqual(result.configuration.checks, ())
+        checked = result.configuration.checked
+        self.assertIsNone(checked.provider)
+        self.assertIsNone(checked.model)
+        self.assertIsNone(checked.effort)
         self.assertIsNone(result.completion_evidence)
         self.assertIsNone(result.native_event_count)
-        self.assertEqual(result.stop_evidence.native.observation_basis, "spawn-never-happened")
-        self.assertIsNone(result.stop_evidence.native.started)
+        self.assertIsNone(result.end.native_exit_code)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_the_role_rule_corrects_only_once_and_never_for_an_enum(self):
         # The at-most-once and enum decisions live in FastCorrection: after one
@@ -380,7 +444,10 @@ class FastSeamTests(NativeRunCase):
 
 
 def evidence_call(result):
-    return result.completion_evidence.call_id
+    """The verified delivery call's own identity, from the retained provenance."""
+    provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                      if ref.kind == "turn-provenance")).read_bytes())
+    return provenance["toolCallId"]
 
 
 class WorkerSeamTests(MockNativeCase):
@@ -404,9 +471,12 @@ class WorkerSeamTests(MockNativeCase):
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNone(result.usage)
-        self.assertEqual(result.value.mechanism, "completion-tool")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
-        self.assertTrue(result.completion_evidence.receipt_verified)
+        # The verified finish receipt is the provenance's own fact, read back
+        # through the retained reference.
+        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance")).read_bytes())
+        self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(result.configuration.checked.model.value, "fixture-model")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
@@ -420,14 +490,11 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "wrong-native-turn")
         # Configure ran and the readback confirmed; the session opened; the
-        # input was sent. Each reached stage keeps its fact in the failure.
+        # input was sent. Each reached stage keeps its fact in the failure: the
+        # readback values, the session-create fact and the model start.
         self.assertEqual(result.configuration.checked.model.value, "fixture-model")
-        self.assertEqual(result.configuration.checks,
-                         ("native-available-catalog", "session-setModel-readback",
-                          "thought-level-readback"))
         self.assertIsNotNone(result.effective_policy.tools)
         self.assertTrue(result.model_started)
-        self.assertEqual(result.model_start_evidence.basis, "input-sent")
         self.assertIsNone(result.completion_evidence)
         self.assertIsNotNone(result.end.message)
 
@@ -438,23 +505,27 @@ class WorkerSeamTests(MockNativeCase):
         request, services = self.worker_request(turn_input)
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        self.assertEqual(result.value.mechanism, "completion-tool")
         self.assertEqual(result.value.schema_status, "valid")
         self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
-        self.assertTrue(result.completion_evidence.receipt_verified)
-        self.assertEqual(result.completion_evidence.mechanism, "completion-tool")
-        self.assertIsNotNone(result.completion_evidence.call_id)
         self.assertTrue(result.continuation.resumable)
         # The mock exports no message-boundary token records, so usage stays an
         # honest absent fact here; the adapter-path suites cover the real shape.
         self.assertIsNone(result.usage)
         self.assertEqual(result.configuration.checked.model.value, "fixture-model")
-        # The governed turn's evidence parts are retained for the role's record.
+        # The governed turn's evidence parts are retained for the role's record;
+        # the verified finish receipt and its call identity travel in the
+        # provenance, read back through the size- and digest-checked reference.
         kinds = {ref.kind for ref in result.evidence_refs}
         self.assertIn("turn-provenance", kinds)
-        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                          if ref.kind == "turn-provenance")).read_bytes())
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
+        raw = Path(ref.location).read_bytes()
+        self.assertEqual(len(raw), ref.size_bytes)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
+        provenance = json.loads(raw)
         self.assertEqual(provenance["settlement"], "session-closed")
+        self.assertTrue(provenance["receiptVerified"])
+        self.assertIsNotNone(provenance["receiptId"])
+        self.assertIsNotNone(provenance["toolCallId"])
         self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
         # The mechanical binding published the bridge configuration the MCP read.
         bridge = json.loads(Path(services.mount.bridge_config_path).read_bytes())
@@ -488,12 +559,9 @@ class WorkerSeamTests(MockNativeCase):
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "session-close-unconfirmed")
-        self.assertEqual(result.value.mechanism, "completion-tool")
         self.assertEqual(result.value.schema_status, "valid")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
-        self.assertEqual(result.completion_evidence.call_id, "root-call")
-        self.assertTrue(result.completion_evidence.receipt_verified)
-        self.assertIsNotNone(result.completion_evidence.native_identity.turn_id)
+        self.assertIsNotNone(result.native_identity.turn_id)
         # No role record is publishable from a failed close.
         self.assertEqual({ref.kind for ref in result.evidence_refs},
                          {"inquiry-report", "native-stderr", "denied-interactions", "attention-report"} & {ref.kind for ref in result.evidence_refs})
@@ -532,9 +600,13 @@ class WorkerSeamTests(MockNativeCase):
                          "the root's verified receipt call is delivery evidence, not a task tool")
         self.assertGreaterEqual(package["toolCalls"], 2)
         self.assertTrue(package["streamComplete"])
-        # The completion facts remain their own evidence beside the package.
-        self.assertTrue(result.completion_evidence.receipt_verified)
-        self.assertEqual(result.completion_evidence.call_id, "call-finish-final")
+        # The completion facts remain their own evidence beside the package: the
+        # signed receipt the root's final call actually received is read back
+        # from the retained provenance.
+        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance")).read_bytes())
+        self.assertTrue(provenance["receiptVerified"])
+        self.assertEqual(provenance["toolCallId"], "call-finish-final")
 
     def test_every_carrier_reports_task_tool_facts_with_delivery_kept_separate(self):
         # A completion-tool run projects its task tools like any other run:
@@ -554,10 +626,13 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
         self.assertEqual(package["nativeIdentity"], [{"sessionId": result.native_identity.session_id,
                                                       "turnId": result.native_identity.turn_id}])
-        # The delivery call is evidenced by the receipt, never by the package.
+        # The delivery call is evidenced by the receipt, never by the package;
+        # the verified receipt is the provenance's own fact.
         self.assertNotIn(evidence_call(result), [event["callId"] for event in package["events"]])
-        self.assertTrue(result.completion_evidence.receipt_verified)
-        self.assertEqual(result.completion_evidence.call_id, evidence_call(result))
+        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance")).read_bytes())
+        self.assertTrue(provenance["receiptVerified"])
+        self.assertEqual(provenance["toolCallId"], evidence_call(result))
 
     def test_a_request_schema_differring_from_the_mounted_contract_is_refused(self):
         os.environ.update(self.environment)
@@ -584,7 +659,11 @@ class WorkerSeamTests(MockNativeCase):
         scoped = request.model_copy(update={"tool_scope": "read"})
         result = run(scoped, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        self.assertEqual(result.effective_policy.tools.enforcement, "unrestricted")
+        # The read scope sends no native policy request (the session default
+        # tools run); the fact reports exactly that, with no look-alike
+        # "unrestricted" verdict of its own.
+        self.assertIsNotNone(result.effective_policy.tools)
+        self.assertIsNone(result.effective_policy.tools.requested)
 
 
 class NoToolReverseRequestTests(unittest.TestCase):
@@ -622,7 +701,7 @@ class NoToolReverseRequestTests(unittest.TestCase):
 class LiveBindingTests(NativeRunCase):
     def test_the_existing_live_channel_binds_ask_activity_and_journal(self):
         from hey_my_buddy.buddy.harnesses.live import ExistingLiveChannel
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         from hey_my_buddy.protocol import activity as activity_protocol
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
@@ -632,7 +711,7 @@ class LiveBindingTests(NativeRunCase):
         journal = temp / "inquiry.results.jsonl"
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                        "generation": 1, "turnId": "turn-live"},
                                journal_path=str(journal))
         bridge.start()
@@ -670,7 +749,7 @@ class LiveBindingTests(NativeRunCase):
         # null where the structured answer object stood.
         import hashlib as _hashlib
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -681,7 +760,7 @@ class LiveBindingTests(NativeRunCase):
                                invocation_id="invocation-live", turn_id="turn-live")
         bridge_identity = {"taskId": "task", "attemptId": "attempt-live",
                            "generation": 1, "turnId": "turn-live"}
-        bridge = InquiryBridge(credentials, identity=bridge_identity, journal_path=str(journal))
+        bridge = make_inquiry_bridge(credentials, identity=bridge_identity, journal_path=str(journal))
         bridge.start()
         self.addCleanup(bridge.close)
         bridge.activate("sess-live")
@@ -711,7 +790,7 @@ class LiveBindingTests(NativeRunCase):
         self.assertEqual(answered["answer"]["toolCallId"], "call-answer")
 
     def test_foreign_activity_and_journal_records_read_as_nothing(self):
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-f-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -739,7 +818,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_journal_states_follow_the_direct_reader_semantics(self):
         """Empty is available, over-limit and unreadable keep their own reasons."""
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-j-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -780,7 +859,7 @@ class LiveBindingTests(NativeRunCase):
         # line is foreign, its second line fully bound with an owned answer.
         # The final effective record decides: the answer imports, the stale
         # rejection is gone, and the reader's count covers the question once.
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-sup-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -808,7 +887,7 @@ class LiveBindingTests(NativeRunCase):
         # The mirror case plus dedup: a legal record followed by foreign ones
         # leaves exactly one rejection for that id — never an accumulation of
         # every historical refusal — and no bound record is projected for it.
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-rej-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -842,7 +921,7 @@ class LiveBindingTests(NativeRunCase):
         # the encoder the channel's pager measures pages with) after the
         # step-only encode/decode wrappers went with 2-D.
         from hey_my_buddy.buddy.harnesses.live import _bounded_frame
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import bind_live_channel
         from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-frame-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
@@ -893,7 +972,7 @@ class LiveBindingTests(NativeRunCase):
         # the queued record's delivery fact survives the later records that
         # lack it — the projection never flattens the answer away.
         import hashlib as _hashlib
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-s-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -903,7 +982,7 @@ class LiveBindingTests(NativeRunCase):
         journal = temp / "inquiry.results.jsonl"
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(journal))
         bridge.start()
@@ -943,7 +1022,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_the_observation_reads_the_real_bridge_view_with_its_own_bounds(self):
         from hey_my_buddy.buddy.harnesses.live import LiveObservation
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-o-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -951,7 +1030,7 @@ class LiveBindingTests(NativeRunCase):
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(temp / "inquiry.results.jsonl"))
         bridge.start()
@@ -996,7 +1075,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_the_answer_point_query_reads_one_native_answer_only(self):
         import hashlib as _hashlib
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a2-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -1004,7 +1083,7 @@ class LiveBindingTests(NativeRunCase):
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(temp / "inquiry.results.jsonl"))
         bridge.start()
@@ -1047,7 +1126,7 @@ class LiveBindingTests(NativeRunCase):
 
     def test_a_refused_ask_carries_the_transport_fact_and_the_specific_code(self):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
-        from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge, bind_live_channel
+        from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge, bind_live_channel
         managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-r-",
                                               dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
@@ -1055,7 +1134,7 @@ class LiveBindingTests(NativeRunCase):
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
                                invocation_id="invocation-live", turn_id="turn-live")
-        bridge = InquiryBridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
+        bridge = make_inquiry_bridge(credentials, identity={"taskId": "task", "attemptId": "attempt-live",
                                                       "generation": 1, "turnId": "turn-live"},
                                journal_path=str(temp / "inquiry.results.jsonl"))
         bridge.start()

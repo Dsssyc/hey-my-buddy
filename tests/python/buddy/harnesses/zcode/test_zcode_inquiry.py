@@ -37,7 +37,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_JOURNAL_BYTES,
     sign_receipt,
 )
-from hey_my_buddy.buddy.harnesses.zcode.mcp import respond
+from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     COOPERATIVE_INQUIRY_NOTE,
     NativeError,
@@ -45,7 +45,7 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     verify_receipt,
     verify_tool_refusal,
 )
-from hey_my_buddy.buddy.harnesses.zcode.live_bridge import InquiryBridge
+from hey_my_buddy.buddy.harnesses.zcode.native_run import make_inquiry_bridge
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -64,7 +64,7 @@ class BridgeHarness:
             "token": "a" * 64,
         }
         self.attention_path = self.directory / "attention.json"
-        self.bridge = InquiryBridge(self.credentials, identity=IDENTITY,
+        self.bridge = make_inquiry_bridge(self.credentials, identity=IDENTITY,
                                     journal_path=self.credentials["resultsPath"],
                                     attention_path=str(self.attention_path))
         self.bridge.start()
@@ -282,7 +282,7 @@ class BridgeQueueTests(unittest.TestCase):
         ]
         Path(self.harness.credentials["resultsPath"]).write_text(
             "garbage line\n" + "".join(json.dumps(record) + "\n" for record in records))
-        restarted = InquiryBridge(self.harness.credentials, identity=IDENTITY,
+        restarted = make_inquiry_bridge(self.harness.credentials, identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
         self.assertEqual(set(restarted.entries), {"q-mine"})
@@ -383,14 +383,14 @@ class BridgeQueueTests(unittest.TestCase):
                                                       "method": "ask", "inquiryId": f"q-{failure}-probe",
                                                       "question": "durable?"})
                 elif failure == "raise":
-                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
+                    with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=OSError("disk gone")):
                         asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
                         raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
                                                           "token": self.harness.credentials["token"],
                                                           "method": "ask", "inquiryId": f"q-{failure}-probe",
                                                           "question": "durable?"})
                 else:
-                    with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=flaky_write):
+                    with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=flaky_write):
                         asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
                         raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
                                                           "token": self.harness.credentials["token"],
@@ -430,7 +430,7 @@ class BridgeQueueTests(unittest.TestCase):
         delivery = verify_inquiry_receipt(checkpoint_receipt(
             [{"inquiryId": "q-flaky", "question": "delivered anyway?", "questionSha256": sha,
               "state": "queued", "askedAt": "t"}], config), config, "inquiry-checkpoint")
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=OSError("disk gone")):
             bridge.deliver_inquiries(delivery, "root-ckpt")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "queued", "a failed append must not fabricate delivery")
         self.assertTrue(str(bridge.error).startswith("journal-unavailable"))
@@ -438,7 +438,7 @@ class BridgeQueueTests(unittest.TestCase):
         bridge.deliver_inquiries(delivery, "root-ckpt-2")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered")
         answer = verify_inquiry_receipt(answer_receipt("q-flaky", "still fine", config, sha=sha), config, "inquiry-answer")
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=OSError("disk gone")):
             bridge.record_answer(answer, "root-answer")
         self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered", "a failed append must not fabricate the answer")
         bridge.record_answer(answer, "root-answer-2")
@@ -446,7 +446,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(bridge.entries["q-flaky"]["answer"]["toolCallId"], "root-answer-2")
         # A discard that cannot be recorded refuses explicitly instead.
         self.ask("q-flaky-2", "another?")
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=OSError("disk gone")):
+        with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=OSError("disk gone")):
             discarded = self.harness.request("discard", inquiryId="q-flaky-2")
         self.assertFalse(discarded["ok"])
         self.assertEqual(discarded["reason"], "bridge-refused")
@@ -475,7 +475,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(merged["deliveredAt"], "2026-01-01T00:00:00Z")
         # A controller restart replays the journal and keeps the same committed
         # identity, so the same question is still a duplicate.
-        restarted = InquiryBridge(self.harness.credentials, identity=IDENTITY,
+        restarted = make_inquiry_bridge(self.harness.credentials, identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
         self.assertEqual(restarted.entries["q-merge"]["questionSha256"], committed["questionSha256"])
@@ -533,7 +533,7 @@ class JournalBarrierTests(unittest.TestCase):
                             "askedAt": "2026-01-01T00:00:00Z", **IDENTITY}) + "\n").encode()
 
     def bridge(self) -> InquiryBridge:
-        return InquiryBridge({"socketPath": str(self.root / "bridge.sock"), "resultsPath": str(self.journal),
+        return make_inquiry_bridge({"socketPath": str(self.root / "bridge.sock"), "resultsPath": str(self.journal),
                               "errorPath": str(self.root / "inquiry.error.json"), "token": "a" * 64},
                              identity=IDENTITY, journal_path=str(self.journal))
 
@@ -563,7 +563,7 @@ class JournalBarrierTests(unittest.TestCase):
         fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("BUDDY_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.harnesses.zcode.mcp", "--config", str(config_path)],
+        process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(config_path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=environment)
 
         def stop():
@@ -609,7 +609,7 @@ class JournalBarrierTests(unittest.TestCase):
         flaky_write.triggered = False
         record = {**bridge._identity_fields(), "inquiryId": "q-rollback", "state": "queued",
                   "question": "rolled back?", "questionSha256": "a" * 64, "askedAt": "t"}
-        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.live_bridge.os.write", side_effect=flaky_write):
+        with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=flaky_write):
             self.assertFalse(bridge._journal(record))
         path = Path(harness.credentials["resultsPath"])
         self.assertEqual(path.read_bytes(), b"", "a failed append must leave no fragment behind")

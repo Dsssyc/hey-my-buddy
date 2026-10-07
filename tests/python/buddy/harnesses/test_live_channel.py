@@ -60,8 +60,10 @@ class RecordingBridge:
 
 class CapabilityTests(unittest.TestCase):
     def test_each_harness_declares_its_existing_facilities_only(self):
+        # DSH moved off the retired Node realtime channel with step four: its
+        # questions now arrive at the session's cooperative checkpoint too.
         expected = {"codex": "unsupported", "claude": "unsupported",
-                    "zcode": "cooperative-checkpoint", "dsh": "realtime"}
+                    "zcode": "cooperative-checkpoint", "dsh": "cooperative-checkpoint"}
         for harness, delivery in expected.items():
             capabilities = lv.EXISTING_CAPABILITIES[harness]
             self.assertEqual(capabilities.inquiry_delivery, delivery, harness)

@@ -15,6 +15,8 @@ from hey_my_buddy.protocol import attempt_evidence
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses import controller
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
+from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
@@ -25,10 +27,11 @@ from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
-from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
+from hey_my_buddy.buddy.roles import run_execution
+from hey_my_buddy.buddy.roles.controller import FastPreparation, ReviewPreparation, start_router_preparation
 import buddy.harnesses.codex.test_no_tool_codex as codex_fast_tests
 import buddy.harnesses.zcode.test_no_tool_zcode as zcode_fast_tests
-import buddy.harnesses.dsh.test_dsh_session_storage as dsh_coding_tests
+import buddy.harnesses.dsh.test_dsh_role_wiring as dsh_coding_tests
 import buddy.harnesses.claude.test_claude as claude_tests
 import buddy.harnesses.codex.test_codex as codex_tests
 import buddy.harnesses.dsh.test_no_tool_dsh as dsh_tests
@@ -62,12 +65,20 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
         process = SimpleNamespace(returncode=0)
         handle = SimpleNamespace(process=process, log_paths=context.log_paths(), shutdown_confirmed=lambda: True)
+        module = SimpleNamespace(check_preparation=lambda *_args: None, native_evidence=lambda _result: {})
+        self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
         with (mock.patch.object(controller, "owned_popen", return_value=process) as spawn,
               mock.patch.object(controller, "ProcessHandle", return_value=handle)):
-            self.assertIs(read_only.start_no_tool("codex", context, request), handle)
-        self.assertEqual(spawn.call_args.args[0][-2:], ["--control", str(context.directory / "no-tool-control.json")])
-        Path(handle.log_paths["stdout"]).write_text(json.dumps({"status": "ok", "zeroToolVerified": True,
-            "usage": {"toolCalls": 0}, "processState": {"shutdownConfirmed": True}, "rawAnswer": {}}))
+            self.assertIs(run_execution.start_fast(module, "codex", context, request), handle)
+        control = handle.role_run_control
+        self.assertEqual(spawn.call_args.args[0][-2:], ["--control", str(Path(control["privateRoot"]) / "role-run-control.json")])
+        frame, _services, _observer, _correction = run_execution.fast_request(control, module)
+        Path(control["requestFile"]).write_text(rc.encode_run_request(frame))
+        Path(control["verdictFile"]).write_text(json.dumps({"stopReason": None, "elapsedMs": 1}))
+        result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
+            value=rc.RunValue( schema_status="unknown", raw="{}"),
+            stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+        Path(handle.log_paths["stdout"]).write_text(rc.encode_run_result(result))
         return context, request, handle
 
     def assert_sentinels(self):
@@ -95,7 +106,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                 original_identity = (context.task_id, context.attempt_id, context.generation, context.directory)
                 malicious = {"directory": str(self.outside), "evidenceRoot": str(self.outside),
                              "noToolRequest": {"prompt": "malicious replacement"}}
-                control_path = context.directory / "no-tool-control.json"
+                control_path = Path(handle.role_run_control["privateRoot"]) / "role-run-control.json"
                 if replace_with_link:
                     control_path.unlink()
                     control_path.symlink_to(self.outside / "control.json")
@@ -244,19 +255,18 @@ class PrivateAdapterInvariants(unittest.TestCase):
         fixture = self.fixture(dsh_tests.DshNoToolTests)
         state = Path(fixture.environment["BUDDY_STATE_DIR"])
         evidence = state / "attempts/task/attempt-1"
-        (fixture.root / "case").write_text("ok")
         context = ExecutionContext("task", "attempt-1", 1,
-            {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max",
+            {"adapter": "dsh", **dsh_tests.SPEC,
              "cwd": str(fixture.cwd), "timeoutSeconds": 3}, evidence, {}, fixture.environment)
-        handle = DshAdapter().start_no_tool_structured(context,
-            NoToolStructuredRequest(str(fixture.cwd), "Choose a profile", dsh_tests.SCHEMA, 3))
+        request = NoToolStructuredRequest(str(fixture.cwd), "Choose a profile", dsh_tests.SCHEMA, 3)
+        handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertEqual(handle.wait(8), 0)
-        outcome = DshAdapter().collect(handle, context)
+        outcome = read_only.collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        control = json.loads((evidence / "no-tool-control.json").read_text())
+        control = handle.role_run_control
         self.assertTrue(Path(control["directory"]).is_relative_to(context_root(context, "dsh")))
-        self.assertTrue((Path(control["evidenceRoot"]) / "call-1/result.json").is_file())
+        self.assertTrue((handle.no_tool_evidence.evidence_root / "call-1/result.json").is_file())
         self.assert_partition(context)
 
         command_evidence = state / "attempts/command-task/attempt-2"
@@ -292,7 +302,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     evidence, {}, environment)
                 native = adapter()
                 request = NoToolStructuredRequest(str(fixture.cwd), "Pick a profile", codex_fast_tests.SCHEMA, 3)
-                handle = start_router_preparation(FastPreparation(native.name, native, request, context, fixture.cwd))
+                handle = start_router_preparation(FastPreparation(native.name,  request, context, fixture.cwd))
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
                 self.assertEqual(handle.wait(8), 0)
                 from hey_my_buddy.buddy.roles.structured_call import collect
@@ -318,12 +328,13 @@ class PrivateAdapterInvariants(unittest.TestCase):
         # adapter; the private-root and partition invariants live on that path.
         request = ReadOnlyStructuredRequest(str(fixture.cwd), "Select from the frozen packet",
                                              router.answer_schema(["legal"]), router.budget())
-        handle = CodexAdapter().start_read_only_structured(context, request)
+        handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
+                                                            (None, fixture.cwd, "fixture-digest")))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(20))
         outcome = read_only.collect(handle)
         self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
-        control = json.loads((context.directory / "readonly-control.json").read_text())
+        control = handle.role_run_control
         self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, "codex")))
         self.assertFalse((context_root(context, "codex") / "review-native/codex-home/auth.json").exists())
         cleanup_attempt_credentials(Path(context.environment["BUDDY_STATE_DIR"]), "codex", context.task_id, context.attempt_id)
@@ -339,9 +350,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
             with self.subTest(adapter=name):
                 fixture = self.fixture(kind)
                 if name == "dsh":
-                    (fixture.root / "case").write_text("ok")
                     env = fixture.environment
-                    spec = {"provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
+                    spec = dsh_tests.SPEC
                 elif name == "zcode":
                     env = {**fixture.environment, "BUDDY_ZCODE_TEST_CASE": "ok"}
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
@@ -372,25 +382,27 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assert_partition(context)
 
     def test_dsh_coding_and_reconstructed_claude_continuation(self):
-        fixture = self.fixture(dsh_coding_tests.DshNoDeadlineSentinelTests)
-        stub = fixture.stub(dsh_coding_tests.DELAY_STUB)
-        adapter = DshAdapter()
+        fixture = self.fixture(dsh_coding_tests.DshRoleCase)
+        original_record = fixture.governed_record
+        def with_session_record(context, **kwargs):
+            original_record(context, **kwargs)
+            selection = json.loads(fixture.record.read_text())
+            selection["dsh"]["command"] += ["--session-record", "usage"]
+            fixture.record.write_text(json.dumps(selection))
+        fixture.governed_record = with_session_record
         for index in (1, 2):
             with self.subTest(adapter="dsh", attempt=index):
-                context = fixture.context(timeout_seconds=10, stub=stub)
-                context.attempt_id = f"attempt-{index}"
+                context = fixture.context(index=index, attempt=f"attempt-{index}")
                 state = Path(context.environment["BUDDY_STATE_DIR"])
                 context.directory = state / "attempts/task" / context.attempt_id
-                handle = adapter.start(context)
-                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
-                self.assertEqual(handle.wait(20), 0)
-                outcome = adapter.collect(handle, context)
+                handle, outcome = fixture.execute(context)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                self.assertEqual(outcome.result["inquiryBridge"]["errorPath"], str(context.directory / "inquiry.sock.error.json"))
-                self.assertTrue((context_root(context, "dsh") / "sessions").is_dir())
+                control = handle.role_run_control
+                self.assertTrue(Path(control["inquiry"]["errorPath"]).is_relative_to(context.directory))
+                self.assertTrue((Path(control["nativeRoot"]) / "dsh-home/sessions").is_dir())
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)
                 self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
-                self.assertTrue((context.directory / "dsh-run/stdout.log").is_file())
+                self.assertTrue(Path(handle.log_paths["stdout"]).is_file())
                 self.assert_partition(context)
 
         claude = self.fixture(claude_tests.ClaudeAdapterTests)

@@ -22,6 +22,7 @@ from hey_my_buddy.buddy.roles import router_input
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.registry import adapter as adapter_for
 from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.buddy.roles.run_execution import start_review
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
@@ -164,7 +165,7 @@ def run(args):
     report = {'status': 'failed', 'packetSha256': digest, 'configuration': configuration,
               'modelCalls': None, 'systemSandbox': system_sandbox(configuration['adapter'])}
     try:
-        handle = native.start_read_only_structured(context, request)
+        handle = start_review(configuration['adapter'], context, request)
         if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:
             native.cancel(handle)
             handle.wait(timeout=15)

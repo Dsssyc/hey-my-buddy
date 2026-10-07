@@ -142,6 +142,7 @@ for line in sys.stdin:
         elif case == 'unknown':
             event('future.unknown',2,{})
         elif case == 'timeout':
+            Path(__file__).with_name('prompt-ready').write_text(ident)
             time.sleep(5)
         elif case == 'truncated':
             sys.exit(0)
@@ -488,16 +489,24 @@ class FakeAppServerTests(unittest.TestCase):
                                 ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
 
     def execute(self, case="ok", *, timeout=3, cancel=False):
+        ready = self.root / "prompt-ready"
+        previous_input = ready.read_text() if ready.exists() else ""
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
              "timeoutSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, timeout_seconds=timeout)
-        handle = start_router_preparation(FastPreparation("zcode", ZcodeAdapter(), request, context, self.cwd))
+        handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         if cancel:
-            time.sleep(0.2)
-            handle.terminate(grace_seconds=2)
+            # Cancel an active native turn, not a controller still importing.
+            deadline = time.monotonic() + 8
+            def prompted():
+                return ready.exists() and ready.read_text() not in ("", previous_input)
+            while not prompted() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(prompted(), "fake native turn never received the prompt")
+            handle.terminate(grace_seconds=8)
         self.assertIsNotNone(handle.wait(timeout + 8))
         outcome = collect(handle)
         if outcome.result.get("code") == "invalid-native-result":
@@ -585,7 +594,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
     def test_cancelled_and_timeout_receipts_carry_incomplete_evidence(self):
         for case, cancel in (("timeout", False), ("timeout", True)):
             with self.subTest(case=case, cancel=cancel):
-                outcome = self.execute(case, timeout=1, cancel=cancel)
+                outcome = self.execute(case, timeout=10 if cancel else 1, cancel=cancel)
                 self.assertIn(outcome.status, ("failed", "cancelled"))
                 self.assertNotIn("zeroToolVerified", outcome.result)
                 package = outcome.result["toolEvidence"]

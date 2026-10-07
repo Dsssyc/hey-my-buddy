@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .protocol import OUTCOME_SCHEMA, decode_json
+from .protocol import decode_json
 from ...roles.turn_io import canonical_json
 
 #: The effort spelling used for models without native effort levels. Execution
@@ -244,15 +244,21 @@ def settings_policy(environment: dict | None = None) -> str | None:
     return value if value == "isolated" else None
 
 
-def sandbox_settings() -> dict:
+def sandbox_settings(network_allowed_domains=None) -> dict:
     """Documented native sandbox settings: Bash sandboxed, registries only.
 
     Key names follow the primary sandboxing documentation
     (code.claude.com/docs/en/sandboxing): the domain list is
     ``network.allowedDomains`` with plain string entries, and
     ``strictAllowlist``/``allowUnsandboxedCommands: false`` deny any fallback
-    out of the sandbox.
+    out of the sandbox. ``network_allowed_domains`` is None for the native
+    default allowlist (the package registries, the only value the legacy
+    paths ever wrote); an explicit sequence — empty included — is written
+    verbatim, so an offline run is a caller decision, never a scope
+    inference.
     """
+    domains = list(PACKAGE_REGISTRY_DOMAINS) if network_allowed_domains is None \
+        else list(network_allowed_domains)
     return {
         "sandbox": {
             "enabled": True,
@@ -262,7 +268,7 @@ def sandbox_settings() -> dict:
             "excludedCommands": [],
             "network": {
                 "strictAllowlist": True,
-                "allowedDomains": list(PACKAGE_REGISTRY_DOMAINS),
+                "allowedDomains": domains,
             },
         }
     }
@@ -278,8 +284,16 @@ def discovery_args() -> list[str]:
             "--mcp-config", EMPTY_MCP_CONFIG, "--setting-sources", ""]
 
 
-def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool, output_schema: dict | None = None) -> list[str]:
-    """The strict isolated execution invocation; never ``--resume``, never global settings."""
+def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
+                   output_schema: dict, additional_denied_tools=()) -> list[str]:
+    """The strict isolated execution invocation; never ``--resume``, never global settings.
+
+    ``output_schema`` is the run's own ending contract and is always explicit:
+    the governed turn passes the shared worker schema, the read-only call the
+    caller's answer schema. ``additional_denied_tools`` is the caller's
+    explicit sequence of extra session-wide denials — empty by default;
+    nothing is ever derived from the schema's presence or the tool scope.
+    """
     args = [*base_args(),
             "--safe-mode", "--strict-mcp-config", "--mcp-config", EMPTY_MCP_CONFIG,
             "--setting-sources", "",
@@ -302,11 +316,14 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--permission-mode", "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]
-    if output_schema is not None:
-        # --tools does not limit MCP; keep the native deny layer explicit.
-        index = args.index("--disallowedTools") + 1
-        args[index] += ",mcp__*,WebFetch,WebSearch,Agent,Task"
-    args += ["--json-schema", canonical_json(output_schema if output_schema is not None else OUTCOME_SCHEMA)]
+    if additional_denied_tools:
+        values = list(additional_denied_tools)
+        if "--disallowedTools" in args:
+            index = args.index("--disallowedTools") + 1
+            args[index] += "," + ",".join(values)
+        else:
+            args += ["--disallowedTools", ",".join(values)]
+    args += ["--json-schema", canonical_json(output_schema)]
     return args
 
 

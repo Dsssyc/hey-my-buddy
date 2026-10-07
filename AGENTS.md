@@ -21,7 +21,6 @@ The shared `buddy` skill is the only distribution ([ADR-015](docs/decisions/015-
   - `cli/`: the public CLI and the check runner; `console/`: the console server and its built assets; `install/`: launcher, runtime materialization, install and upgrade.
   - `errors.py`, `home.py`, `locking.py`, `private_dirs.py`: base modules both sides use.
   - Imports that still cross the two sides are registered in `docs/acceptance/adr025-step-0-cross-imports.tsv`; the later ADR-025 steps remove them.
-- `harnesses/dsh/`: DSH-specific Node scripts, plugins and tests, removed in ADR-025 step four.
 - `apps/console/`: React/Vite frontend; built assets are packaged for users without npm.
 - `tests/python/`: Python and cross-component verification, mirroring the package layout. Every test directory is a package; a test file outside one fails the check suite.
 - `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence.

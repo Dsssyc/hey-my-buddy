@@ -187,11 +187,10 @@ class DecisionCapabilityTests(unittest.TestCase):
             def local_read_only_check(self):
                 return {'eligible': True}
 
-            def start_read_only_structured(self, context, request):
-                calls.append((context, request))
-                return SimpleNamespace()
-
         calls = []
+        def start(_name, context, request):
+            calls.append((context, request))
+            return SimpleNamespace()
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / "attempt"
             frozen = Path(root) / "frozen"
@@ -208,7 +207,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                                        turn={"input": {}}, agent_credential="must-not-pass")
             with mock.patch("hey_my_buddy.buddy.roles.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
                 "hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Native()
-            ):
+            ), mock.patch("hey_my_buddy.buddy.roles.run_execution.start_review", side_effect=start):
                 handle = DecisionAdapter().start(context)
             from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
@@ -232,7 +231,7 @@ class DecisionCapabilityTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
-                mock.patch.object(CodexAdapter, "start_read_only_structured") as start:
+                mock.patch("hey_my_buddy.buddy.roles.controller.start_router_preparation") as start:
             with self.assertRaises(BoardError) as raised:
                 DecisionAdapter().start(context)
         self.assertEqual(raised.exception.code, "router-review-unsupported")

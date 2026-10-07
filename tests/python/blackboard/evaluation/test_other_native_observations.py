@@ -18,7 +18,6 @@ from pathlib import Path
 from hey_my_buddy.protocol import usage
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
-from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected, TurnEvidence
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
@@ -193,7 +192,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1")
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
-        self.adapter = ClaudeAdapter()
+        self.adapter = worker_executor("claude")
 
     def context(self, case: str, *, index: int = 1, mode: str = "initial", previous=None,
                 timeout: int = 10) -> ExecutionContext:

@@ -7,6 +7,9 @@ import sys
 import shutil
 from pathlib import Path
 
+from ....json_codec import decode_strict_json
+from ...roles.turn_io import private_json
+
 
 class CodexUnavailable(Exception):
     pass
@@ -71,3 +74,74 @@ def policy_matches(actual, wanted):
     if isinstance(wanted, dict):
         return isinstance(actual, dict) and all(policy_matches(actual.get(key), value) for key, value in wanted.items())
     return type(actual) is type(wanted) and actual == wanted
+
+
+# These switches cover the sources in codex-rs/core/src/tools/spec_plan.rs.
+# ModelInfo additionally advertises clock and asynchronous message tools, so
+# feature switches alone cannot establish an empty native inventory.
+_TOOL_FEATURES = (
+    "shell_tool", "unified_exec", "code_mode", "code_mode_host", "code_mode_only",
+    "multi_agent", "multi_agent_v2", "apps",
+    "plugins", "remote_plugin", "hooks", "view_image", "image_generation",
+    "token_budget", "current_time_reminder", "sleep_tool", "send_message_to_user_async",
+    "request_permissions_tool", "goals", "browser_use", "computer_use",
+    "in_app_browser", "tool_suggest", "recommended_plugins", "tool_search",
+    "standalone_web_search", "deferred_executor", "skill_search", "enable_mcp_apps",
+    "memories", "agent_message_board", "send_async_message", "shell_snapshot",
+    "default_mode_request_user_input", "tool_call_mcp_elicitation", "artifact",
+    "in_app_local_automation", "realtime_conversation",
+)
+
+
+def _no_tool_config(catalog_path: Path) -> str:
+    lines = [f"model_catalog_json = {json.dumps(str(catalog_path))}",
+             'web_search = "disabled"', 'approval_policy = "never"',
+             'project_doc_max_bytes = 0', 'developer_instructions = ""',
+             'include_environment_context = false', 'include_permissions_instructions = false',
+             'include_apps_instructions = false', 'include_collaboration_mode_instructions = false',
+             '[skills]', 'include_instructions = false', '[skills.bundled]', 'enabled = false',
+             '[tools.update_plan]', 'enabled = false',
+             '[tools.experimental_request_user_input]', 'enabled = false',
+             '[cloud.skills]', 'enabled = false', '[orchestrator.mcp]', 'enabled = false',
+             '[features]']
+    lines.extend(f"{name} = false" for name in _TOOL_FEATURES)
+    lines.append('skip_host_skill_discovery = true')
+    return "\n".join(lines) + "\n"
+
+
+def prepare_no_tool_home(native_root: Path, environment: dict, spec: dict) -> Path:
+    """The fast call's private home: public model metadata only, no tools.
+
+    Copy only native public model metadata and rewrite its tool-related fields;
+    the real account home is left intact and only its auth file is linked.
+    """
+    from .protocol import CodexProtocolError
+    old_home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
+    home = native_root / "codex-home"
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        cache = decode_strict_json((old_home / "models_cache.json").read_bytes())
+        models = cache["models"]
+        matches = [model for model in models if isinstance(model, dict) and model.get("slug") == spec.get("model")]
+        if not isinstance(cache, dict) or not isinstance(models, list) or len(matches) != 1:
+            raise ValueError("missing or mismatched native model metadata")
+        model = dict(matches[0])
+        if not isinstance(model.get("supported_reasoning_levels"), list) or not any(
+                entry.get("effort") == spec.get("effort") for entry in model["supported_reasoning_levels"]
+                if isinstance(entry, dict)):
+            raise ValueError("native effort metadata differs")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        raise CodexProtocolError("no-tool-policy-unverified", "Codex native model metadata is unavailable or mismatched") from None
+    model.update(shell_type="disabled", apply_patch_tool_type=None,
+                 experimental_supported_tools=[], supports_search_tool=False,
+                 node_repl_disabled=True, tool_mode="direct", multi_agent_version=None,
+                 include_skills_usage_instructions=False, include_plugin_usage_instructions=False,
+                 include_apps_usage_instructions=False)
+    catalog_path = home / "no-tool-models.json"
+    private_json(catalog_path, {"models": [model]})
+    (home / "config.toml").write_text(_no_tool_config(catalog_path))
+    os.chmod(home / "config.toml", 0o600)
+    auth = old_home / "auth.json"
+    if auth.is_file():
+        (home / "auth.json").symlink_to(auth)
+    return home

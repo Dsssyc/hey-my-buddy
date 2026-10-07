@@ -20,7 +20,7 @@ these facts.
 from __future__ import annotations
 
 from functools import partial
-from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, Tuple, runtime_checkable
+from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_bounded_frame
@@ -48,7 +48,7 @@ from ...protocol.internal_models import (
     fail,
 )
 
-from pydantic import BeforeValidator, Field, field_serializer, model_serializer, model_validator
+from pydantic import BeforeValidator, Field, model_serializer, model_validator
 
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
@@ -61,11 +61,7 @@ NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": 
 HarnessName = Literal["codex", "claude", "zcode", "dsh"]
 ToolScope = Literal["none", "read", "write"]
 EndStatus = Literal["ok", "error", "cancelled"]
-ModelStartBasis = Literal["native-start", "input-admitted", "input-sent", "legacy-report", "unknown"]
-CheckBasis = Literal["catalog-membership", "native-readback", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
-ValueMechanism = Literal["native-schema", "completion-tool", "final-message"]
-PolicyEnforcement = Literal["native", "unrestricted", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
 ContinuationMode = Literal["native-session", "reconstructed-new-session"]
 
@@ -94,13 +90,10 @@ MAX_SCHEMA_BYTES = 65536
 #: The final value's raw text and its parsed form hold the old 512 KiB strict
 #: controller-read range; a value within it is never refused or dropped here.
 MAX_VALUE_BYTES = 512 * 1024
-MAX_DENIED_INTERACTIONS = 64
 MAX_UNKNOWN_EVENT_TYPES = 64
 MAX_EVIDENCE_REFS = 32
 MAX_SESSION_SERVICES = 8
 MAX_SERVICE_TOOL_NAMES = 16
-MAX_CHECKS = 8
-MAX_ROOT_IDENTITIES = 32
 #: The role-assembled input text keeps the old input allowed set: any bounded
 #: string, NUL included (the board's task text admits NUL and the native wire
 #: serializes it escaped), but a whole input is never empty — the library's
@@ -147,6 +140,14 @@ class RunBudget(InternalModel):
     timeout_seconds: Annotated[int, Field(ge=0, le=86400)]
 
 
+class ResumeCheckpoint(InternalModel):
+    """The three facts the existing Codex continuation binding compares."""
+
+    native_turn_id: Text(512)
+    attempt_id: Identifier
+    input_sha256: Hex64
+
+
 class RunContinuation(InternalModel):
     """A requested continuation; without evidence no native resume is enabled.
 
@@ -157,6 +158,7 @@ class RunContinuation(InternalModel):
 
     mode: ContinuationMode
     previous_session_id: OptionalText(512) = None
+    checkpoint: Optional[ResumeCheckpoint] = None
 
     @model_validator(mode="after")
     def _native_resume_names_its_session(self) -> "RunContinuation":
@@ -190,6 +192,11 @@ class RunRequest(InternalModel):
     private_state: PrivateStatePaths
     input_text: NonEmptyInputText
     tool_scope: ToolScope
+    #: None preserves the native default; () explicitly permits no domains.
+    #: Kept separate from file-tool scope because Claude's two existing read
+    #: callers have different network and session-wide tool restrictions.
+    network_allowed_domains: Optional[JsonTuple(Text(256), max_items=64)] = None
+    additional_denied_tools: JsonTuple(Text(256), max_items=64) = ()
     output_schema: FrozenJsonAt(MAX_SCHEMA_BYTES)
     budget: RunBudget
     continuation: Optional[RunContinuation] = None
@@ -206,14 +213,11 @@ class NativeIdentity(InternalModel):
     """
 
     session_id: OptionalText(512) = None
-    thread_id: OptionalText(512) = None
     turn_id: OptionalText(512) = None
-    input_id: OptionalText(512) = None
-    call_id: OptionalText(512) = None
 
     @model_validator(mode="after")
     def _carries_one_field(self) -> "NativeIdentity":
-        if not any((self.session_id, self.thread_id, self.turn_id, self.input_id, self.call_id)):
+        if not any((self.session_id, self.turn_id)):
             raise fail("the native identity payload must carry at least one native identifier field")
         return self
 
@@ -236,23 +240,13 @@ class RunEnd(InternalModel):
     status: EndStatus
     reason_code: OptionalText(128) = None
     native_exit_code: Optional[ExitCode] = None
-    signal: OptionalText(32) = None
     message: Optional[RawText(512)] = None
 
 
-class ModelStartEvidence(InternalModel):
-    """The basis of the ``modelStarted`` boolean; a send is never a model proof."""
-
-    basis: ModelStartBasis
-    native_identity: Optional[NativeIdentity] = None
-
-
 class CheckedValue(InternalModel):
-    """One checked configuration value with the basis that backs it."""
+    """One configuration value actually checked by the native path."""
 
     value: Text(128)
-    basis: CheckBasis
-    source: OptionalText(120) = None
 
 
 class CheckedConfiguration(InternalModel):
@@ -267,17 +261,15 @@ class ResultConfiguration(InternalModel):
     """Requested and checked configuration, kept strictly apart.
 
     The legacy receipts' ``observed`` key stays the role projection's ``None``
-    placeholder; the native readback lands here as checked values with their
-    basis, never as a look-alike observed block.
+    placeholder; the native readback lands here as checked values, never as a look-alike observed block.
     """
 
     requested: Optional[RunConfiguration] = None
     checked: CheckedConfiguration = Field(default_factory=CheckedConfiguration)
-    checks: JsonTuple(Text(32), max_items=MAX_CHECKS) = ()
 
 
 class RunValue(InternalModel):
-    """The final value of one run and the basis of its schema check.
+    """The final value and its schema status.
 
     ``raw`` keeps the delivery's own text even when it is not the parsed
     value; schema verdicts stay with the role, so no per-error list travels
@@ -285,104 +277,37 @@ class RunValue(InternalModel):
     """
 
     schema_status: SchemaStatus
-    mechanism: ValueMechanism
     raw: Optional[RawText(MAX_VALUE_BYTES)] = None
     parsed: OptionalFrozenJsonAt(MAX_VALUE_BYTES) = None
-    validation_basis: OptionalText(128) = None
     correction_count: NonNegativeInt = 0
 
 
 class CompletionEvidence(InternalModel):
-    """How the final value was actually delivered, with its native evidence."""
+    """Whether the final value carrier observed the end of its stream."""
 
-    mechanism: ValueMechanism
     stream_end: Optional[bool] = None
-    native_identity: Optional[NativeIdentity] = None
-    call_id: OptionalText(512) = None
-    event_order: Optional[Count] = None
-    receipt_ref: OptionalText(1024) = None
-    receipt_verified: Optional[bool] = None
-    native_outcome: OptionalText(64) = None
-
-
-class DeniedInteraction(InternalModel):
-    """One native interaction the harness refused; no tool arguments are kept.
-
-    This is the common triple of one refusal: the method, the action taken and
-    the reason. The refused interactions' own full records — native request
-    identities and timestamps included — stay in their clearly-sourced
-    evidence reference, never duplicated here.
-    """
-
-    method: Text(128)
-    action: Text(64)
-    reason: OptionalText(400) = None
-
-
-def _count_pairs(value: Any) -> Any:
-    """The wire form of the unknown-event counts is one JSON object.
-
-    This is the one input conversion the strict tuple still needs: a decoded
-    JSON object arrives as a ``Mapping`` and becomes the tuple of its pairs.
-    Everything else passes to the strict tuple validation unchanged, so a JSON
-    array of pairs is refused exactly like any non-object value.
-    """
-    if isinstance(value, Mapping):
-        return tuple(value.items())
-    return value
-
-
-class UnknownEvents(InternalModel):
-    """Native events of legal shape that no rule classified; never silently dropped.
-
-    The wire form carries one ``countsByType`` object; the Python value is the
-    tuple of its pairs, with unique names and a total that must equal their sum.
-    """
-
-    counts: Annotated[Tuple[Tuple[Text(64), Count], ...], BeforeValidator(_count_pairs)] = Field(
-        alias="countsByType", default=(), max_length=MAX_UNKNOWN_EVENT_TYPES)
-    total: Count
-
-    @field_serializer("counts")
-    def _counts_object(self, value: Any) -> dict:
-        return dict(value)
-
-    @model_validator(mode="after")
-    def _total_is_the_sum(self) -> "UnknownEvents":
-        names = [name for name, _count in self.counts]
-        if len(set(names)) != len(names):
-            raise fail("the unknown event counts repeat an event type", field="countsByType")
-        if sum(count for _name, count in self.counts) != self.total:
-            raise fail("the unknown event total must equal the sum of the counts", field="total")
-        return self
 
 
 class PolicyFact(InternalModel):
-    """One effective-policy fact; only a native readback may claim enforcement."""
+    """The settings actually sent through a native policy path."""
 
-    enforcement: PolicyEnforcement
     requested: OptionalFrozenJsonAt(MAX_SCHEMA_BYTES) = None
-    basis: OptionalText(128) = None
 
 
 class EffectivePolicy(InternalModel):
-    """Effective policy per tools and filesystem; honesty over neatness.
+    """The native tool settings consumed by the role projection.
 
     The network fact stays out until a harness actually reports one: a
     constant ``unknown`` placeholder proves nothing and reads nothing.
     """
 
     tools: Optional[PolicyFact] = None
-    filesystem: Optional[PolicyFact] = None
 
 
 class ContinuationFacts(InternalModel):
     """The run's native continuation facts; the role decides whether to use them."""
 
     resumable: Optional[bool] = None
-    native_session_ref: OptionalText(1024) = None
-    binding_ref: OptionalText(1024) = None
-    basis: OptionalText(128) = None
 
 
 class StopLayer(InternalModel):
@@ -395,10 +320,6 @@ class StopLayer(InternalModel):
     """
 
     group_state: GroupState = "unknown"
-    started: Optional[bool] = None
-    leader_exited: Optional[bool] = None
-    exit_code: Optional[ExitCode] = None
-    observation_basis: OptionalText(48) = None
 
 
 class InterruptEvidence(InternalModel):
@@ -624,16 +545,11 @@ class RunResult(InternalModel):
     #: provenance's own.
     native_event_count: Optional[Count] = None
     model_started: Optional[bool] = None
-    model_start_evidence: ModelStartEvidence = Field(
-        default_factory=lambda: ModelStartEvidence(basis="unknown"))
     configuration: ResultConfiguration = Field(default_factory=ResultConfiguration)
     native_identity: Optional[NativeIdentity] = None
-    root_identities: JsonTuple(NativeIdentity, max_items=MAX_ROOT_IDENTITIES) = ()
     value: Optional[RunValue] = None
     completion_evidence: Optional[CompletionEvidence] = None
     tool_evidence: ToolEvidencePackage = None
-    denied_interactions: JsonTuple(DeniedInteraction, max_items=MAX_DENIED_INTERACTIONS) = ()
-    unknown_events: Optional[UnknownEvents] = None
     effective_policy: EffectivePolicy = Field(default_factory=EffectivePolicy)
     activity: ActivityPackage = None
     usage: UsagePackage = None
@@ -697,10 +613,10 @@ __all__ = [
     "FORMAT_VERSION",
     "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
     "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
-    "CompletionEvidence", "ContinuationFacts", "DeniedInteraction", "EffectivePolicy", "EvidenceRef",
+    "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "PrivateStatePaths",
-    "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
+    "ResumeCheckpoint", "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
-    "StopLayer", "UnknownEvents", "canonical_json",
+    "StopLayer", "canonical_json",
     "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",
 ]

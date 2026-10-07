@@ -27,13 +27,6 @@ from hey_my_buddy.protocol.inquiry_transport import (
 )
 
 
-def short_socket_dir(prefix: str) -> Path:
-    # Keep the AF_UNIX address short: a nested workdir can exceed the platform's
-    # sun_path limit before the tested condition is reached at all.
-    directory = Path(tempfile.mkdtemp(prefix=prefix, dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
-    return directory
-
-
 class SilentServer:
     """A listener that accepts and never answers, for timeout classification."""
 
@@ -58,8 +51,24 @@ class SilentServer:
 
 
 class TransportTests(unittest.TestCase):
+    def short_socket_dir(self, prefix: str) -> Path:
+        """A short AF_UNIX directory on a standard-library fixture lifecycle.
+
+        The directory is one ``tempfile.TemporaryDirectory`` whose removal is
+        registered before the sockets and serving threads each test registers
+        after it, so unittest's last-registered-first cleanup order stops the
+        servers first and removes the directory only afterwards. Nothing the
+        module creates outlives its test.
+        """
+        # Keep the AF_UNIX address short: a nested workdir can exceed the
+        # platform's sun_path limit before the tested condition is reached.
+        temp = tempfile.TemporaryDirectory(prefix=prefix,
+                                           dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(temp.cleanup)
+        return Path(temp.name)
+
     def test_a_bridge_reply_round_trips_its_value(self):
-        directory = short_socket_dir("buddy-transport-ok-")
+        directory = self.short_socket_dir("buddy-transport-ok-")
         path = directory / "bridge.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(listener.close)
@@ -87,13 +96,13 @@ class TransportTests(unittest.TestCase):
         self.assertTrue(seen[0]["id"])
 
     def test_a_missing_or_refusing_socket_path_is_unreachable(self):
-        missing = short_socket_dir("buddy-transport-missing-") / "absent.sock"
+        missing = self.short_socket_dir("buddy-transport-missing-") / "absent.sock"
         self.assertEqual(bridge_request({"socketPath": str(missing), "token": "x"}, "observe", {})["reason"],
                          "bridge-unreachable")
         self.assertEqual(bridge_request({}, "observe", {})["reason"], "bridge-unreachable")
 
     def test_a_refused_answer_carries_the_bridges_own_code(self):
-        directory = short_socket_dir("buddy-transport-refused-")
+        directory = self.short_socket_dir("buddy-transport-refused-")
         path = directory / "bridge.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(listener.close)
@@ -117,7 +126,7 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(result["code"], "not-ready")
 
     def test_an_unknown_refusal_code_is_not_invented_into_the_closed_set(self):
-        directory = short_socket_dir("buddy-transport-internal-")
+        directory = self.short_socket_dir("buddy-transport-internal-")
         path = directory / "bridge.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(listener.close)
@@ -143,7 +152,7 @@ class TransportTests(unittest.TestCase):
                           "journal-unavailable", "conflict", "too-many", "internal"))
 
     def test_a_foreign_reply_id_is_mismatched_not_accepted(self):
-        directory = short_socket_dir("buddy-transport-foreign-")
+        directory = self.short_socket_dir("buddy-transport-foreign-")
         path = directory / "bridge.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(listener.close)
@@ -166,9 +175,10 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(result["reason"], "bridge-mismatched-response")
 
     def test_a_non_json_reply_is_invalid_and_a_silent_socket_times_out(self):
-        directory = short_socket_dir("buddy-transport-bad-")
+        directory = self.short_socket_dir("buddy-transport-bad-")
         path = directory / "bridge.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
         listener.bind(str(path))
         listener.listen(2)
 
@@ -187,6 +197,7 @@ class TransportTests(unittest.TestCase):
 
         silent_path = directory / "silent.sock"
         silent = SilentServer(silent_path)
+        self.addCleanup(silent.close)
         started = time.monotonic()
         result = bridge_request({"socketPath": str(silent_path), "token": "x"}, "observe", {},
                                 timeout_ms=200)
@@ -196,7 +207,7 @@ class TransportTests(unittest.TestCase):
         silent.close()
 
     def test_an_oversized_reply_is_refused_not_truncated(self):
-        directory = short_socket_dir("buddy-transport-big-")
+        directory = self.short_socket_dir("buddy-transport-big-")
         path = directory / "bridge.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(listener.close)
@@ -228,7 +239,7 @@ class TransportTests(unittest.TestCase):
     def test_the_transport_window_stays_the_existing_bounded_one(self):
         self.assertEqual((MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS), (100, 5000))
         # A caller's window is clamped into the same bounds the direct paths had.
-        directory = short_socket_dir("buddy-transport-clamp-")
+        directory = self.short_socket_dir("buddy-transport-clamp-")
         result = bridge_request({"socketPath": str(directory / "absent.sock"), "token": "x"},
                                 "observe", {}, timeout_ms=99_000)
         self.assertEqual(result["reason"], "bridge-unreachable")

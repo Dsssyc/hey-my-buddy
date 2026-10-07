@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "skills" / "buddy" / "scripts" / "buddy"
-REQUIRED_RESOURCES = {"dsh.runner", "dsh.catalog", "yaml.bridge", "console.assets"}
+REQUIRED_RESOURCES = {"console.assets"}
 
 
 def load_build_skill():
@@ -153,10 +153,14 @@ class CheckHarnessTests(unittest.TestCase):
         )
         self.assertEqual(env["BUDDY_DEV_SOURCE"], "1")
 
-    def test_the_check_harness_covers_the_python_dsh_and_node_suites(self):
+    def test_the_check_harness_covers_all_python_harness_suites(self):
         self.assertTrue((ROOT / "tests" / "python").is_dir())
         self.assertTrue((ROOT / "src" / "hey_my_buddy" / "cli" / "checks.py").is_file())
-        self.assertTrue(sorted((ROOT / "harnesses" / "dsh" / "tests").glob("*.test.mjs")))
+        from hey_my_buddy.cli.checks import python_test_modules
+        modules = python_test_modules(ROOT)
+        for harness in ("codex", "claude", "zcode", "dsh"):
+            self.assertTrue(any(name.startswith(f"buddy.harnesses.{harness}.") for name in modules), harness)
+        self.assertFalse((ROOT / "harnesses" / "dsh").exists())
 
     def test_unrelated_checks_cannot_inherit_a_real_claude_cli(self):
         from hey_my_buddy.cli import checks

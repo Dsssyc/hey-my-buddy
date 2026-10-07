@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from support import FakeClock
+from protocol.fixtures import native_turn
 from blackboard.tasks.test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
 
 from hey_my_buddy import private_dirs
@@ -62,22 +63,18 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
 
     def turn_record(self, claim, *, disposition="completed"):
-        attempt, turn = claim["attempt"], claim["turn"]
+        """A synthetic governed turn record in the current provenance format.
+
+        The record passes the board's real import validator; no harness ran, so
+        it is not real native verification (``protocol.fixtures.native_turn``).
+        """
         outcome = {"disposition": disposition, "summary": "did the work", "remaining": [], "decisions": [],
                    "artifacts": [], "request": None}
         if disposition in ("assistance", "attention"):
             outcome["request"] = {"summary": "please review", "attempted": "tried the obvious fix",
                                   "neededWork": ["decide the schema"], "expectedArtifacts": ["a reviewed design"],
                                   "acceptance": "the design is approved"}
-        return {
-            "version": 1, "taskId": attempt["taskId"], "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"], "turnId": turn["turnId"], "resumeMode": turn["resumeMode"],
-            "previousSessionId": turn["input"].get("previousSessionId"), "sessionId": f"sess-{turn['turnId'][:8]}",
-            "promptSha256": "a" * 64, "inputSha256": turn["inputSha256"],
-            "outcome": outcome,
-            "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "flush": "awaited",
-                           "rootSessionMatched": True},
-        }
+        return native_turn.claim_record(claim, outcome=outcome)
 
     def finish_turn(self, board, claimed, seal, *, disposition="completed", nonce="n" * 16, worker_id=None):
         claim = claimed["claim"]

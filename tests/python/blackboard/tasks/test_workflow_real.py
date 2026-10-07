@@ -1,8 +1,11 @@
-"""Real workspace module + real DSH adapter, end to end over actual Git.
+"""Real workspace module + the shared role seams, end to end over actual Git.
 
-These tests exercise the merged ``hey_my_buddy.blackboard.tasks.workspace`` implementation and the real
-``DshAdapter`` turn staging/import/sealing logic. Only the model process is absent:
-Git, manifests, the turn input file and the shutdown gate are real.
+These tests exercise the merged ``hey_my_buddy.blackboard.tasks.workspace`` implementation and, since ADR-025
+step four, the shared role seams that replaced the per-harness adapter carrier:
+``worker_executor`` preparation, the ``roles.turn_io`` governed-turn import and
+seal, and the shared collection over this project's offline fake ACP agent. Git,
+manifests, the turn input file, the provenance validation and the shutdown gate
+are real; only the native harness is the project's own fake program.
 """
 from __future__ import annotations
 
@@ -10,16 +13,23 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from support import BoardTestCase
+from protocol.fixtures import native_turn
+from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 
 from hey_my_buddy.blackboard.tasks import workspace
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
-from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.private_dirs import attempt_root
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
@@ -171,18 +181,9 @@ class DirtyInputTests(RealWorkspaceTestCase):
         seal = workspace.seal(self.directory, manifest, run_id, claim["claim"]["attempt"]["attemptId"])
         self.assertTrue(seal.get("commit"))
         self.assertTrue(seal.get("snapshotSha256"))
-        record = {
-            "version": 1,
-            "taskId": run_id,
-            "attemptId": claim["claim"]["attempt"]["attemptId"],
-            "generation": claim["claim"]["attempt"]["generation"],
-            "turnId": turn["turnId"],
-            "resumeMode": turn["resumeMode"],
-            "previousSessionId": None,
-            "sessionId": "sess-1",
-            "promptSha256": sha256_text("mock turn prompt"),
-            "inputSha256": turn["inputSha256"],
-            "outcome": {
+        record = native_turn.claim_record(
+            claim["claim"],
+            outcome={
                 "disposition": "assistance",
                 "summary": "need a decision",
                 "remaining": ["finish"],
@@ -196,13 +197,8 @@ class DirtyInputTests(RealWorkspaceTestCase):
                     "acceptance": "approved",
                 },
             },
-            "provenance": {
-                "tool": "buddy_finish_turn",
-                "turnEnd": "completed",
-                "flush": "awaited",
-                "rootSessionMatched": True,
-            },
-        }
+            session_id="sess-1", prompt_sha256=sha256_text("mock turn prompt"),
+        )
         board.call(
             "worker_result",
             {
@@ -252,28 +248,79 @@ class DirtyInputTests(RealWorkspaceTestCase):
 
 
 class RealAdapterTests(RealWorkspaceTestCase):
-    def _context(self, run_id: str, manifest: dict) -> ExecutionContext:
-        attempt = self.directory / "attempts" / run_id / "attempt-1"
+    """The shared role seams over the real registered DSH run and real Git.
+
+    The retired per-harness carrier (``DshAdapter.prepare``/``_import_turn``/
+    ``_seal_workspace``/``collect``/``workspace_cwd``) is gone; these cases hold
+    the same boundaries on the seams that replaced it: the shared executor's
+    preparation (workspace input binding, exact turn-input bytes, credential
+    privacy), the shared governed-turn import (``roles.turn_io.read_turn`` with
+    the registered DSH validator) and the shared collection over this project's
+    offline fake ACP agent, whose finish receipts the real role rules mint.
+    The agent declares its own fixture selectors (provider ``fake``, model
+    ``m1``), so the executor context's configuration is the fixture's, not the
+    board task's; the board submission only supplies the real run identity.
+    """
+
+    FIXTURE_CONFIGURATION = {"adapter": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
+
+    def _agent_record(self, index: int, *extra: str) -> Path:
+        """A selected-harness record pointing at the offline fake ACP agent."""
+        command = [sys.executable, str(FAKE_AGENT), "--log",
+                   str(self.directory / f"fake-agent-{index}.log"), *extra]
+        path = self.directory / f"harness-record-{index}.json"
+        path.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}))
+        return path
+
+    def _governed_record(self, index: int, run_id: str, *extra: str) -> Path:
+        attempt_id = f"attempt-{index}"
+        checkpoint, _answer, finish = self._qualified_tools(attempt_id)
+        bridge = attempt_root(self.directory, "dsh", run_id, attempt_id) / "finish-bridge.json"
+        return self._agent_record(
+            index, "--prompt-mode", "governed", "--bridge-config", str(bridge),
+            "--finish-tool", finish, "--checkpoint-tool", checkpoint, *extra)
+
+    @staticmethod
+    def _qualified_tools(attempt_id: str) -> tuple[str, str, str]:
+        """The mount's mechanical qualified names, derived exactly as the module does."""
+        server = "buddy_" + hashlib.sha256(attempt_id.encode()).hexdigest()[:16]
+        return (f"mcp__{server}__buddy_checkpoint",
+                f"mcp__{server}__buddy_answer_inquiry",
+                f"mcp__{server}__buddy_finish_turn")
+
+    def _context(self, run_id: str, manifest: dict, *, index: int = 1, record: Path) -> ExecutionContext:
+        attempt_id = f"attempt-{index}"
+        attempt = self.directory / "attempts" / run_id / attempt_id
         attempt.mkdir(mode=0o700, parents=True, exist_ok=True)
+        home = self.directory / f"agent-home-{index}"
+        home.mkdir(mode=0o700, exist_ok=True)
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "HOME")}
+        environment.update(
+            HOME=str(home), BUDDY_STATE_DIR=str(self.directory),
+            BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"), BUDDY_DEV_SOURCE="1",
+            PYTHONPATH=str(REPOSITORY_ROOT / "src") + os.pathsep + str(REPOSITORY_ROOT / "tests" / "python"),
+            BUDDY_HARNESS_RECORD_FILE=str(record),
+        )
         return ExecutionContext(
             task_id=run_id,
-            attempt_id="attempt-1",
-            generation=1,
-            spec={**CONFIGURATION, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60},
+            attempt_id=attempt_id,
+            generation=index,
+            spec={**self.FIXTURE_CONFIGURATION, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60},
             directory=attempt,
             runtime={"identity": "test"},
-            environment={"BUDDY_STATE_DIR": str(self.directory)},
+            environment=environment,
             turn={
-                "turnId": "turn-1",
-                "turnIndex": 1,
+                "turnId": f"turn-{index}",
+                "turnIndex": index,
                 "resumeMode": "initial",
                 "inputSha256": "",
                 "input": {
                     "version": 1,
                     "taskId": run_id,
-                    "attemptId": "attempt-1",
-                    "generation": 1,
-                    "turnId": "turn-1",
+                    "attemptId": attempt_id,
+                    "generation": index,
+                    "turnId": f"turn-{index}",
                     "resumeMode": "initial",
                     "previousSessionId": None,
                     "context": {"objective": "do work"},
@@ -286,10 +333,11 @@ class RealAdapterTests(RealWorkspaceTestCase):
     def test_adapter_verifies_input_writes_exact_bytes_and_gates_the_seal(self):
         board = self.board()
         submitted = self.submit(board)
-        # Prepare a real manifest directly for the adapter context.
+        # Prepare a real manifest directly for the executor context. The selected
+        # harness record only satisfies the capability check; nothing launches.
         manifest = self.manifest_for("adapter-1")
-        context = self._context(submitted["runId"], manifest)
-        adapter = DshAdapter()
+        context = self._context(submitted["runId"], manifest, record=self._agent_record(1))
+        executor = worker_executor("dsh")
         verified: list[bool] = []
         real_verify = workspace.verify
 
@@ -299,7 +347,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
 
         workspace.verify = recording_verify
         try:
-            adapter.prepare(context)
+            executor.prepare(context)
         finally:
             workspace.verify = real_verify
         self.assertEqual(verified, [False])
@@ -312,49 +360,38 @@ class RealAdapterTests(RealWorkspaceTestCase):
         self.assertTrue(context.credential_file().is_file())
         self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
         # No turn output and no confirmed stop: nothing is imported and nothing sealed.
-        record, error = adapter._import_turn(context, False, 0)
+
+        def import_turn(shutdown_confirmed: bool, exit_code: int | None):
+            return turn_io.read_turn(context, shutdown_confirmed, exit_code,
+                                     executor.module.validate_turn_provenance)
+
+        record, error = import_turn(False, 0)
         self.assertIsNone(record)
         self.assertIn("shutdown", error or "")
-        record, error = adapter._import_turn(context, True, 1)
+        record, error = import_turn(True, 1)
         self.assertIsNone(record)
         self.assertIn("exit zero", error or "")
         context.turn_output_file().write_text(json.dumps({"version": 1}))
-        record, error = adapter._import_turn(context, True, 0)
+        record, error = import_turn(True, 0)
         self.assertIsNone(record)
         self.assertIn("turn record", error or "")
-        # A complete record imports, and sealing produces a real immutable output.
+        # A complete current-format record imports, and the shared seal produces
+        # a real immutable output. The record is a synthetic native fact
+        # (protocol.fixtures.native_turn), not real native verification.
         service_hash = sha256_text(canonical_json(context.turn_input))
-        complete = {
-            "version": 1,
-            "taskId": context.task_id,
-            "attemptId": context.attempt_id,
-            "generation": context.generation,
-            "turnId": "turn-1",
-            "resumeMode": "initial",
-            "previousSessionId": None,
-            "sessionId": "sess-1",
-            "promptSha256": sha256_text("mock turn prompt"),
-            "inputSha256": service_hash,
-            "outcome": {
-                "disposition": "completed",
-                "summary": "done",
-                "remaining": [],
-                "decisions": [],
-                "artifacts": [],
-                "request": None,
-            },
-            "provenance": {
-                "tool": "buddy_finish_turn",
-                "turnEnd": "completed",
-                "flush": "awaited",
-                "rootSessionMatched": True,
-            },
-        }
+        complete = native_turn.governed_record(
+            adapter="dsh", task_id=context.task_id, attempt_id=context.attempt_id,
+            generation=context.generation, turn_id="turn-1", resume_mode="initial",
+            previous_session_id=None, input_sha256=service_hash,
+            outcome={"disposition": "completed", "summary": "done", "remaining": [],
+                     "decisions": [], "artifacts": [], "request": None},
+            session_id="sess-1", prompt_sha256=sha256_text("mock turn prompt"),
+        )
         context.turn_output_file().write_text(json.dumps(complete))
-        record, error = adapter._import_turn(context, True, 0)
+        record, error = import_turn(True, 0)
         self.assertIsNone(error)
         self.assertEqual(record["turnId"], "turn-1")
-        seal, seal_error = adapter._seal_workspace(context)
+        seal, seal_error = turn_io.seal_workspace(context)
         self.assertIsNone(seal_error)
         self.assertTrue(seal["snapshotSha256"])
 
@@ -362,74 +399,35 @@ class RealAdapterTests(RealWorkspaceTestCase):
         board = self.board()
         submitted = self.submit(board)
         manifest = self.manifest_for("adapter-2")
-        context = self._context(submitted["runId"], manifest)
-        adapter = DshAdapter()
-        adapter.prepare(context)
-        stdout = Path(context.log_paths()["stdout"])
-        stdout.write_text(
-            json.dumps(
-                {
-                    "status": "ok",
-                    "logPaths": {"capture": None},
-                    "processState": {"shutdownConfirmed": False},
-                }
-            )
-            + "\n"
-        )
-        process = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
-        process.wait()
-        handle = ProcessHandle(process, own_group=True, log_paths=context.log_paths())
-        outcome = adapter.collect(handle, context)
-        self.assertNotEqual(outcome.status, "ok")
-        self.assertNotIn("workspaceSeal", outcome.result)
-        # With confirmed shutdown the same payload imports the turn and seals.
-        stdout.write_text(
-            json.dumps(
-                {
-                    "status": "ok",
-                    "logPaths": {"capture": None},
-                    "processState": {"shutdownConfirmed": True},
-                }
-            )
-            + "\n"
-        )
-        service_hash = sha256_text(canonical_json(context.turn_input))
-        context.turn_output_file().write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "taskId": context.task_id,
-                    "attemptId": context.attempt_id,
-                    "generation": 1,
-                    "turnId": "turn-1",
-                    "resumeMode": "initial",
-                    "previousSessionId": None,
-                    "sessionId": "sess-2",
-                    "promptSha256": sha256_text("mock second turn prompt"),
-                    "inputSha256": service_hash,
-                    "outcome": {
-                        "disposition": "completed",
-                        "summary": "done",
-                        "remaining": [],
-                        "decisions": [],
-                        "artifacts": [],
-                        "request": None,
-                    },
-                    "provenance": {
-                        "tool": "buddy_finish_turn",
-                        "turnEnd": "completed",
-                        "flush": "awaited",
-                        "rootSessionMatched": True,
-                    },
-                }
-            )
-        )
-        outcome = adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "ok", outcome.error)
+        executor = worker_executor("dsh")
+        # The governed fake agent holds its turn open at the cooperative
+        # checkpoint, so a collection while it runs observes an unconfirmed
+        # stop: nothing is imported and nothing is sealed.
+        holding = self._governed_record(2, submitted["runId"], "--wait-for-inquiry", "20")
+        held = self._context(submitted["runId"], manifest, index=2, record=holding)
+        handle = executor.start(held)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        running = executor.collect(handle, held)
+        self.assertTrue(handle.group_alive(), "the held run must still be alive at collection")
+        self.assertNotEqual(running.status, "ok")
+        self.assertNotIn("turn", running.result)
+        self.assertNotIn("workspaceSeal", running.result)
+        handle.terminate()
+        self.assertIsNotNone(handle.wait(30))
+        # Once the run settles and shutdown is confirmed, the same shared
+        # collection imports the minted turn and seals the real workspace.
+        settling = self._governed_record(3, submitted["runId"])
+        settled = self._context(submitted["runId"], manifest, index=3, record=settling)
+        finished = executor.start(settled)
+        self.addCleanup(lambda: finished.terminate(grace_seconds=0.2) if finished.group_alive() else None)
+        self.assertIsNotNone(finished.wait(settled.timeout_seconds + 15),
+                             "the role controller did not settle within its deadline")
+        outcome = executor.collect(finished, settled)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(outcome.result["turn"]["turnId"], "turn-1")
+        self.assertEqual(outcome.result["turn"]["turnId"], "turn-3")
         self.assertIn("workspaceSeal", outcome.result)
-        self.assertEqual(adapter.workspace_cwd(context), manifest["path"])
+        self.assertEqual(turn_io.workspace_cwd(settled), manifest["path"])
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -440,19 +438,9 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
     """Real Git: a helper on the transferred checkout reseals the parent's baseline."""
 
     def _turn_record(self, run_id, claim, disposition, session_id, seal):
-        turn = claim["claim"]["turn"]
-        return {
-            "version": 1,
-            "taskId": run_id,
-            "attemptId": claim["claim"]["attempt"]["attemptId"],
-            "generation": claim["claim"]["attempt"]["generation"],
-            "turnId": turn["turnId"],
-            "resumeMode": turn["resumeMode"],
-            "previousSessionId": turn["input"]["previousSessionId"],
-            "sessionId": session_id,
-            "promptSha256": sha256_text("mock turn prompt"),
-            "inputSha256": turn["inputSha256"],
-            "outcome": {
+        return native_turn.claim_record(
+            claim["claim"],
+            outcome={
                 "disposition": disposition,
                 "summary": f"{disposition} turn",
                 "remaining": [] if disposition == "completed" else ["finish the integration"],
@@ -468,13 +456,8 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
                     "acceptance": "answered",
                 },
             },
-            "provenance": {
-                "tool": "buddy_finish_turn",
-                "turnEnd": "completed",
-                "flush": "awaited",
-                "rootSessionMatched": True,
-            },
-        }
+            session_id=session_id, prompt_sha256=sha256_text("mock turn prompt"),
+        )
 
     def _finish(self, board, run_id, claim, disposition, seal, session_id, nonce="n" * 16):
         record = self._turn_record(run_id, claim, disposition, session_id, seal)
@@ -587,19 +570,9 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
     """Two real helper worktrees: the parent receives their exact immutable refs."""
 
     def _record(self, run_id, claim, disposition, seal, session_id):
-        turn = claim["claim"]["turn"]
-        return {
-            "version": 1,
-            "taskId": run_id,
-            "attemptId": claim["claim"]["attempt"]["attemptId"],
-            "generation": claim["claim"]["attempt"]["generation"],
-            "turnId": turn["turnId"],
-            "resumeMode": turn["resumeMode"],
-            "previousSessionId": turn["input"]["previousSessionId"],
-            "sessionId": session_id,
-            "promptSha256": sha256_text("mock turn prompt"),
-            "inputSha256": turn["inputSha256"],
-            "outcome": {
+        return native_turn.claim_record(
+            claim["claim"],
+            outcome={
                 "disposition": disposition,
                 "summary": f"{disposition} turn",
                 "remaining": [] if disposition == "completed" else ["needs the Host"],
@@ -615,13 +588,8 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
                     "acceptance": "approved",
                 },
             },
-            "provenance": {
-                "tool": "buddy_finish_turn",
-                "turnEnd": "completed",
-                "flush": "awaited",
-                "rootSessionMatched": True,
-            },
-        }
+            session_id=session_id, prompt_sha256=sha256_text("mock turn prompt"),
+        )
 
     def _finish(self, board, run_id, claim, disposition, seal, session_id, nonce):
         board.call(

@@ -97,6 +97,36 @@ class FakeAgent:
         self.malformed_permission = args.malformed_permission
         self.error_data_on = set(args.error_data_on or [])
         self.freeze_mid_prompt = args.freeze_mid_prompt
+        # -- the native-run driver modes (additive; the legacy path above is unchanged)
+        self.prompt_mode = args.prompt_mode
+        self.final_answers = list(args.final_answer or [])
+        self.emit_unknown_update = args.emit_unknown_update
+        self.bridge_config = args.bridge_config
+        self.finish_tool = args.finish_tool
+        self.checkpoint_tool = args.checkpoint_tool
+        self.governed_permission = args.governed_permission
+        self.finish_fail_then_retry = args.finish_fail_then_retry
+        self.no_finish = args.no_finish
+        self.forge_receipt = args.forge_receipt
+        self.stop_reason = args.stop_reason
+        self.hang_prompt = args.hang_prompt
+        self.park_prompt = args.park_prompt
+        self.emit_tool_update = args.emit_tool_update
+        self.bare_final = args.bare_final
+        self.session_record = args.session_record
+        self.stderr_note = args.stderr_note
+        self.emit_foreign_chunk = args.emit_foreign_chunk
+        self.spam_unknown_kinds = args.spam_unknown_kinds
+        self.late_tool_update = args.late_tool_update
+        # The cooperative-checkpoint inquiry script (additive): wait for a queued
+        # Host question, checkpoint to deliver it, answer it through the real
+        # session-tool rules, or forge the checkpoint receipt when told to.
+        self.wait_for_inquiry = args.wait_for_inquiry
+        self.answer_inquiry = args.answer_inquiry
+        self.forge_checkpoint = args.forge_checkpoint
+        self.last_session_id = None
+        self.cancel_event = threading.Event()
+        self.prompt_count = 0
         self._stop_reading = threading.Event()
         # Handler threads run concurrently; their stdout writes must not
         # interleave, or the client would see corrupted frames.
@@ -198,6 +228,7 @@ class FakeAgent:
             if method == "session/cancel":
                 log(self.log_path, {"event": "cancel-received",
                                     "sessionId": (message.get("params") or {}).get("sessionId")})
+                self.cancel_event.set()
             return
         request_id = message["id"]
         params = message.get("params") or {}
@@ -231,6 +262,24 @@ class FakeAgent:
             self._stop_reading.set()
             log(self.log_path, {"event": "stdin-frozen", "method": method})
         if method == "session/prompt":
+            if self.park_prompt:
+                log(self.log_path, {"event": "parked-prompt"})
+                threading.Event().wait()  # never returns: only the group stop ends this
+            if self.hang_prompt:
+                log(self.log_path, {"event": "hanging-prompt", "until": "session/cancel"})
+                self.cancel_event.wait(timeout=120)
+                self.send({"jsonrpc": "2.0", "id": message["id"], "result": {"stopReason": "cancelled"}})
+                return
+            if self.prompt_mode == "final":
+                self.run_final_prompt(message)
+                if method in self.respond_then_exit:
+                    os._exit(0)
+                return
+            if self.prompt_mode == "governed":
+                self.run_governed_prompt(message)
+                if method in self.respond_then_exit:
+                    os._exit(0)
+                return
             self.run_prompt(message)
             if method in self.respond_then_exit:
                 os._exit(0)
@@ -344,10 +393,280 @@ class FakeAgent:
             self.notify_client("session/update", {"sessionId": session_id, "update": update})
         self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
 
+    def run_final_prompt(self, message: dict) -> None:
+        """The final-message carrier: usage snapshot, unknown fact, then the answer."""
+        request_id = message["id"]
+        params = message.get("params") or {}
+        session_id = params.get("sessionId")
+        self.last_session_id = session_id
+        self.write_session_record(session_id, self.prompt_text(params))
+        if self.emit_foreign_chunk:
+            # A message chunk framed under a session this run never opened.
+            self.notify_client("session/update", {"sessionId": "foreign-root-1",
+                                                  "update": {"sessionUpdate": "agent_message_chunk",
+                                                             "content": {"type": "text",
+                                                                         "text": "foreign"}}})
+        for index in range(self.spam_unknown_kinds):
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": f"future-{index}"}})
+        if self.emit_unknown_update:
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "buddy_probe_unknown"}})
+        if self.emit_tool_update:
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call",
+                                                             "toolCallId": "call_probe_1", "kind": "other",
+                                                             "title": "run-command", "status": "in_progress"}})
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call_update",
+                                                             "toolCallId": "call_probe_1",
+                                                             "status": "completed"}})
+        if not self.bare_final:
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "usage_update",
+                                                             "used": 100, "size": 1000000}})
+        index = min(self.prompt_count, len(self.final_answers) - 1) if self.final_answers else 0
+        self.prompt_count += 1
+        answer = self.final_answers[index] if self.final_answers else '{"choice":"a"}'
+        self.notify_client("session/update", {"sessionId": session_id,
+                                              "update": {"sessionUpdate": "agent_message_chunk",
+                                                         "content": {"type": "text", "text": answer}}})
+        self.send({"jsonrpc": "2.0", "id": request_id,
+                   "result": {"stopReason": self.stop_reason or "end_turn"}})
+
+    def run_governed_prompt(self, message: dict) -> None:
+        """The governed carrier: real session tools through the role's own rules.
+
+        The tool results are minted by ``hey_my_buddy.buddy.roles.worker_services``
+        with this run's real bridge configuration — exactly what the stdio MCP
+        carrier would answer — so the driver verifies genuine signed receipts and
+        refusal envelopes, never fixture prose. The script: one checkpoint call
+        (an inquiry-channel refusal when no journal is mounted), one ``completed``
+        finish (refused while an attention request is outstanding), and, when that
+        refusal came back, one corrected finish with the attention disposition.
+        """
+        request_id = message["id"]
+        params = message.get("params") or {}
+        session_id = params.get("sessionId")
+        self.last_session_id = session_id
+        self.write_session_record(session_id, self.prompt_text(params))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
+        if self.stop_reason:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": self.stop_reason}})
+            return
+        from hey_my_buddy.buddy.roles import worker_services
+        configuration = json.loads(Path(self.bridge_config).read_text())
+        if self.governed_permission:
+            answer = self.request_client("session/request_permission", {
+                "sessionId": session_id,
+                "toolCall": {"toolCallId": "call_upgrade_1", "kind": "edit",
+                             "title": "escalate-write"},
+                "options": [{"optionId": "opt-allow", "kind": "allow_once", "name": "Allow"},
+                            {"optionId": "opt-reject", "kind": "reject_once", "name": "Reject"}]})
+            log(self.log_path, {"event": "governed-permission-answer", "answer": answer})
+
+        def tool_frame(call_id: str, title: str, status: str, content=None) -> None:
+            update = {"sessionUpdate": "tool_call", "toolCallId": call_id, "kind": "other",
+                      "title": title, "status": status}
+            if content is not None:
+                update["content"] = content
+            self.notify_client("session/update", {"sessionId": session_id, "update": update})
+
+        def tool_result(call_id: str, status: str, text: str) -> None:
+            self.notify_client("session/update", {"sessionId": session_id, "update": {
+                "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": status,
+                "content": [{"type": "content", "content": {"type": "text", "text": text}}]}})
+
+        checkpoint_id = "call_checkpoint_1"
+        if self.checkpoint_tool:
+            if self.wait_for_inquiry > 0:
+                # Deterministic cooperative delivery: hold the turn open until a
+                # Host question is actually queued (or the bound expires), so a
+                # test's ask can never race the checkpoint.
+                bounded = time.monotonic() + self.wait_for_inquiry
+                while time.monotonic() < bounded:
+                    if worker_services.pending_inquiries(configuration):
+                        break
+                    time.sleep(0.05)
+                log(self.log_path, {"event": "inquiry-wait-done",
+                                    "pending": bool(worker_services.pending_inquiries(configuration))})
+            # The MCP protocol passes the bare tool name; the mcp__server__tool
+            # composite is the ACP-side presentation only.
+            bare = self.checkpoint_tool.rsplit("__", 1)[-1]
+            tool_frame(checkpoint_id, self.checkpoint_tool, "in_progress")
+            checkpoint_result = worker_services.call_session_tool(bare, {}, configuration)
+            checkpoint_text = checkpoint_result["content"][0]["text"]
+            if self.forge_checkpoint and "tool-refusal" not in checkpoint_text:
+                # A tampered checkpoint receipt fails its signature verification
+                # controller-side: the id changes under a stale signature.
+                receipt = json.loads(checkpoint_text)
+                if receipt.get("inquiries"):
+                    receipt["inquiries"][0]["inquiryId"] = "forged-inquiry-id"
+                checkpoint_text = json.dumps(receipt)
+            tool_result(checkpoint_id, "completed", checkpoint_text)
+            log(self.log_path, {"event": "checkpoint-result",
+                                "refusal": "tool-refusal" in checkpoint_text})
+            if self.answer_inquiry and "tool-refusal" not in checkpoint_text:
+                receipt = json.loads(checkpoint_text)
+                questions = receipt.get("inquiries") or []
+                if questions:
+                    answer_tool = self.checkpoint_tool.rsplit("__", 1)[0] + "__buddy_answer_inquiry"
+                    tool_frame("call_answer_1", answer_tool, "in_progress")
+                    answer_result = worker_services.call_session_tool(
+                        "buddy_answer_inquiry",
+                        {"inquiryId": questions[0]["inquiryId"],
+                         "answer": "the root's bounded answer to the Host question"},
+                        configuration)
+                    answer_text = answer_result["content"][0]["text"]
+                    tool_result("call_answer_1", "completed", answer_text)
+                    log(self.log_path, {"event": "answer-result",
+                                        "refusal": "tool-refusal" in answer_text})
+
+        def finish(outcome: dict, call_id: str, *, fail_first: bool = False) -> str:
+            tool_frame(call_id, self.finish_tool, "in_progress")
+            if fail_first:
+                # A native tool failure keeps the turn alive: the root corrects
+                # its call and retries inside the same native turn.
+                self.notify_client("session/update", {"sessionId": session_id, "update": {
+                    "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "failed"}})
+                log(self.log_path, {"event": "finish-failed", "callId": call_id})
+                return ""
+            result = worker_services.call_session_tool(self.finish_tool.rsplit("__", 1)[-1], outcome, configuration)
+            text = result["content"][0]["text"]
+            if self.forge_receipt and "tool-refusal" not in text:
+                receipt = json.loads(text)
+                receipt["receiptId"] = "f" * 32  # a tampered receipt fails its signature
+                text = json.dumps(receipt)
+            tool_result(call_id, "completed", text)
+            log(self.log_path, {"event": "finish-result",
+                                "refusal": "tool-refusal" in text,
+                                "callId": call_id})
+            return text
+
+        if self.no_finish:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+            return
+        completed_outcome = {"disposition": "completed", "summary": "the fixture turn is done",
+                             "remaining": [], "decisions": [], "artifacts": [], "request": None}
+        text = finish(completed_outcome, "call_finish_1", fail_first=self.finish_fail_then_retry)
+        if self.finish_fail_then_retry:
+            text = finish(completed_outcome, "call_finish_2")
+        elif "tool-refusal" in text:
+            envelope = json.loads(text)
+            if envelope.get("reason") == "inquiry-pending":
+                # The real root's correction: the answer the driver just verified
+                # reaches the journal moments later; wait for it, then retry the
+                # completed finish inside this same native turn.
+                bounded = time.monotonic() + 5
+                while time.monotonic() < bounded and worker_services.pending_inquiries(configuration):
+                    time.sleep(0.05)
+                text = finish(completed_outcome, "call_finish_2")
+            if "tool-refusal" in text:
+                attention_outcome = {"disposition": "attention",
+                                     "summary": "the fixture turn needs a Host decision",
+                                     "remaining": [], "decisions": [], "artifacts": [],
+                                     "request": {"summary": "the refused native upgrade request",
+                                                 "attempted": "the bounded fixture work",
+                                                 "neededWork": "a Host decision on the refused request",
+                                                 "expectedArtifacts": [],
+                                                 "acceptance": "the Host accepts the attention receipt"}}
+                finish(attention_outcome, "call_finish_3")
+        self.notify_client("session/update", {"sessionId": session_id,
+                                              "update": {"sessionUpdate": "usage_update",
+                                                         "used": 900, "size": 1000000}})
+        self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+
+    # -- the synthetic private session record ---------------------------------
+
+    def write_session_record(self, session_id: str, prompt_text: str) -> None:
+        """Write one synthetic ``session.v3`` rollout under this fake's DSH_HOME.
+
+        The shapes mirror the desensitized native fixture: a version-3 session
+        header, a user message, turn/step markers, assistant messages whose
+        ``source`` names the model and whose ``usage`` carries the native
+        counters, and a terminal turn end. This is a fixture written by the
+        fake agent, never a native record; it only exercises the driver's
+        optional record reader end to end.
+        """
+        mode = self.session_record
+        if not mode:
+            return
+        directory = Path(os.environ["DSH_HOME"]) / "sessions"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        now_ms = int(time.time() * 1000)
+        source = {"kind": "model", "provider": "fake", "model": "m1"}
+
+        def assistant(seq: int, step: int, text: str, usage=None) -> dict:
+            data = {"turn": 1, "step": step,
+                    "message": {"id": f"assistant-{session_id}-{seq}", "role": "assistant",
+                                "content": [{"type": "text", "text": text}], "source": source}}
+            if usage is not None:
+                data["usage"] = usage
+            return {"type": "assistant/message", "seq": seq, "data": data}
+
+        events = [
+            {"type": "session", "version": 3,
+             "id": "fake-session-foreign" if mode == "foreign" else session_id,
+             "createdAt": now_ms, "cwd": os.getcwd(), "isSeeded": False,
+             "origin": "acp", "delegationDepth": 0},
+            {"type": "user/message", "seq": 4, "data": {
+                "id": f"user-{session_id}", "role": "user",
+                "content": [{"type": "text", "text": prompt_text}],
+                "source": {"kind": "user"}}},
+            {"type": "turn/start", "seq": 5, "data": {"turn": 1}},
+            {"type": "step/start", "seq": 6, "data": {"turn": 1, "step": 1}},
+            assistant(7, 1, "Reading the fixture task first.", {
+                "inputTokens": 1000, "outputTokens": 100, "totalTokens": 1150,
+                "cacheReadTokens": 50, "reasoningTokens": 10}),
+            {"type": "step/end", "seq": 8, "data": {"turn": 1, "step": 1}},
+            {"type": "step/start", "seq": 9, "data": {"turn": 1, "step": 2}},
+        ]
+        if mode == "missing":
+            events.append(assistant(10, 2, "the final answer", None))
+        else:
+            events.append(assistant(10, 2, "the final answer", {
+                "inputTokens": 2000, "outputTokens": 200, "totalTokens": 2300,
+                "cacheReadTokens": 100, "reasoningTokens": 20}))
+        events.append({"type": "step/end", "seq": 11, "data": {"turn": 1, "step": 2}})
+        if mode == "quota":
+            events.append({"type": "turn/end", "seq": 12, "data": {
+                "turn": 1, "reason": {"kind": "error",
+                                      "error": {"code": "QUOTA",
+                                                "message": "provider wording never retained"}}}})
+        else:
+            events.append({"type": "turn/end", "seq": 12,
+                           "data": {"turn": 1, "reason": {"kind": "completed"}}})
+        if mode == "flood":
+            events.insert(len(events) - 1, {"type": "fixture/oversized",
+                                            "seq": 11.5, "data": {"blob": "x" * (4 * 1024 * 1024)}})
+        lines = "".join(json.dumps(event) + "\n" for event in events)
+        if mode == "corrupt":
+            path = directory / f"{session_id}.v3.jsonl.zstd"
+            path.write_bytes(b"this is not a zstd stream\n")
+        elif mode == "plain":
+            path = directory / f"{session_id}.v3.jsonl"
+            path.write_text(lines)
+        else:
+            import zstandard
+            path = directory / f"{session_id}.v3.jsonl.zstd"
+            path.write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
+        log(self.log_path, {"event": "session-record-written", "mode": mode,
+                            "path": str(path), "sessionId": session_id})
+
+    @staticmethod
+    def prompt_text(params: dict) -> str:
+        """The prompt's own text blocks, without interpreting anything."""
+        blocks = params.get("prompt") if isinstance(params.get("prompt"), list) else []
+        return "".join(block.get("text", "") for block in blocks
+                       if isinstance(block, dict) and isinstance(block.get("text"), str))
+
     def serve(self) -> None:
         import select
 
         log(self.log_path, {"event": "startup"})
+        if self.stderr_note:
+            sys.stderr.write(self.stderr_note + "\n")
+            sys.stderr.flush()
         if self.spam_notifications:
             for index in range(self.spam_notifications):
                 self.notify_client(f"session/spam-{index}", {"index": index})
@@ -379,6 +698,21 @@ class FakeAgent:
             # group termination is the only way out, never a silent exit.
             log(self.log_path, {"event": "parked-frozen"})
             threading.Event().wait()
+        if self.late_tool_update:
+            # Same-root frames emitted as the client drains at EOF: they arrive
+            # after the prompt answered and must still reach the role observer.
+            session_id = self.last_session_id or "fake-session-drain"
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call",
+                                                             "toolCallId": "call_late_1",
+                                                             "kind": "other",
+                                                             "title": "run-command",
+                                                             "status": "in_progress"}})
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call_update",
+                                                             "toolCallId": "call_late_1",
+                                                             "status": "completed"}})
+            log(self.log_path, {"event": "late-tool-emitted"})
         self.close_stubs()
         if self.survive_eof:
             log(self.log_path, {"event": "surviving-eof", "seconds": self.survive_eof})
@@ -407,6 +741,10 @@ class FakeAgent:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", required=True)
+    # The public launch face the run module's driver always passes, accepted and
+    # recorded like the installed agent's: the profile name and the patch file.
+    parser.add_argument("--profile", default=None)
+    parser.add_argument("--patch", default=None)
     parser.add_argument("--delay", action="append", default=[],
                         help="METHOD:SECONDS delay before answering that method")
     parser.add_argument("--garbage-on", action="append", default=[],
@@ -437,11 +775,58 @@ def main() -> int:
                         help="park after sending the first permission request, mid-prompt")
     parser.add_argument("--survive-eof", type=float, default=0.0)
     parser.add_argument("--allowed-title", default=None)
+    # -- native-run driver modes
+    parser.add_argument("--prompt-mode", default="legacy", choices=["legacy", "final", "governed"])
+    parser.add_argument("--final-answer", action="append", default=[],
+                        help="the Nth prompt's message text; the last one repeats")
+    parser.add_argument("--emit-unknown-update", action="store_true",
+                        help="emit one unknown sessionUpdate kind before the answer")
+    parser.add_argument("--bridge-config", default=None,
+                        help="the finish-bridge.json the governed session tools read")
+    parser.add_argument("--finish-tool", default=None, help="the governed completion tool's qualified name")
+    parser.add_argument("--checkpoint-tool", default=None, help="the governed checkpoint tool's qualified name")
+    parser.add_argument("--governed-permission", action="store_true",
+                        help="request one upgrade permission before the governed tool calls")
+    parser.add_argument("--hang-prompt", action="store_true",
+                        help="park the prompt until a session/cancel arrives, then stop cancelled")
+    parser.add_argument("--park-prompt", action="store_true",
+                        help="park the prompt forever; only the owned group stop ends it")
+    parser.add_argument("--emit-tool-update", action="store_true",
+                        help="emit one completed tool_call/update pair before the answer")
+    parser.add_argument("--bare-final", action="store_true",
+                        help="emit no usage snapshot: only the message chunk and the stop")
+    parser.add_argument("--finish-fail-then-retry", action="store_true",
+                        help="the first finish call fails natively and the root retries")
+    parser.add_argument("--no-finish", action="store_true",
+                        help="end the governed prompt without ever calling the finish tool")
+    parser.add_argument("--forge-receipt", action="store_true",
+                        help="tamper with the finish receipt so its signature fails")
+    parser.add_argument("--session-record", default=None,
+                        choices=["usage", "quota", "missing", "foreign", "corrupt",
+                                 "flood", "plain"],
+                        help="write one synthetic session.v3 rollout under this fake's DSH_HOME")
+    parser.add_argument("--stderr-note", default=None,
+                        help="write one line to stderr at startup, for the tail mirror")
+    parser.add_argument("--emit-foreign-chunk", action="store_true",
+                        help="emit one agent_message_chunk framed under a foreign session id")
+    parser.add_argument("--spam-unknown-kinds", type=int, default=0,
+                        help="emit this many distinct unknown sessionUpdate kinds before the answer")
+    parser.add_argument("--late-tool-update", action="store_true",
+                        help="emit one same-root completed tool pair while the client drains at EOF")
+    parser.add_argument("--wait-for-inquiry", type=float, default=0.0,
+                        help="hold the governed turn until a Host question is queued (bounded seconds)")
+    parser.add_argument("--answer-inquiry", action="store_true",
+                        help="answer the first delivered question through the real session-tool rules")
+    parser.add_argument("--forge-checkpoint", action="store_true",
+                        help="mutate the checkpoint receipt under its stale signature")
+    parser.add_argument("--stop-reason", default=None,
+                        help="end the prompt with this stop reason instead of end_turn")
     args = parser.parse_args()
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if not check_private_home(log_path):
         return 3
+    log(log_path, {"event": "launch-face", "profile": args.profile, "patch": args.patch})
     FakeAgent(args).serve()
     return 0
 

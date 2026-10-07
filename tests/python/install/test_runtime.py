@@ -38,30 +38,30 @@ DEFAULT_ASSETS = [
     {"path": "packaging/runtime-assets.json", "kind": "file"},
     {"path": "pyproject.toml", "kind": "file"},
     {"path": "src/hey_my_buddy", "kind": "directory"},
-    {"path": "harnesses/dsh/scripts", "kind": "directory"},
+    {"path": "resources", "kind": "directory"},
 ]
 DEFAULT_RESOURCES = {
-    "dsh.runner": "harnesses/dsh/scripts/run.mjs",
-    "dsh.catalog": "harnesses/dsh/scripts/model-catalog.mjs",
-    "yaml.bridge": "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
+    "fixture.runner": "resources/runner.py",
+    "fixture.catalog": "resources/catalog.json",
+    "fixture.bridge": "src/hey_my_buddy/fixture_bridge.py",
     "console.assets": "src/hey_my_buddy/console/assets",
 }
 
 
 def write_assets(root: Path) -> None:
     """The minimal set of declared files a synthetic runtime root needs."""
-    bridge = root / "src" / "hey_my_buddy" / "buddy" / "harnesses" / "dsh"
+    bridge = root / "src" / "hey_my_buddy"
     bridge.mkdir(parents=True, exist_ok=True)
-    (bridge / "yaml_bridge.py").write_text("# yaml bridge\n")
+    (bridge / "fixture_bridge.py").write_text("# synthetic Python resource\n")
     console = root / "src" / "hey_my_buddy" / "console" / "assets"
     console.mkdir(parents=True, exist_ok=True)
     (console / "index.html").write_text("<html>console</html>\n")
     cache = root / "src" / "hey_my_buddy" / "__pycache__"
     cache.mkdir(parents=True, exist_ok=True)
-    (cache / "yaml_bridge.cpython-312.pyc").write_bytes(b"\0compiled")
-    (root / "harnesses" / "dsh" / "scripts").mkdir(parents=True, exist_ok=True)
-    for name in ("run.mjs", "model-catalog.mjs", "decision.mjs"):
-        (root / "harnesses" / "dsh" / "scripts" / name).write_text(f"// {name}\n")
+    (cache / "fixture_bridge.cpython-312.pyc").write_bytes(b"\0compiled")
+    (root / "resources").mkdir(parents=True, exist_ok=True)
+    for name in ("runner.py", "catalog.json", "decision.py"):
+        (root / "resources" / name).write_text("{}\n" if name.endswith(".json") else f"# {name}\n")
     (root / "pyproject.toml").write_text('[project]\nname = "synthetic"\nversion = "0.0.0"\n')
 
 
@@ -160,13 +160,13 @@ class DeclaredManifestTests(unittest.TestCase):
         self.assertEqual(runtime.declared_resources(self.root), declared["resources"])
 
     def test_a_missing_manifest_is_reported_instead_of_probing_an_old_layout(self):
-        decoy = self.root / "scripts" / "run.mjs"
+        decoy = self.root / "scripts" / "runner.py"
         decoy.parent.mkdir(parents=True)
         decoy.write_text("// old layout\n")
         (self.root / "python").mkdir()
         self.manifest_path.unlink()
         with self.assertRaises(BoardError) as failure:
-            runtime.resource_path("dsh.runner", self.root)
+            runtime.resource_path("fixture.runner", self.root)
         self.assertEqual(failure.exception.code, "RUNTIME_MANIFEST_MISSING")
         self.assertTrue(decoy.is_file(), "the old-layout decoy must not be consulted as a fallback")
         with self.assertRaises(BoardError) as failure:
@@ -193,7 +193,7 @@ class DeclaredManifestTests(unittest.TestCase):
         self.assertEqual(runtime.resource_path("new-harness.runner", self.root), runner)
         self.assertIn(relative, runtime.manifest(self.root)["files"])
         with self.assertRaises(BoardError) as failure:
-            runtime.resource_path("dsh.runner", self.root)
+            runtime.resource_path("fixture.runner", self.root)
         self.assertEqual(failure.exception.code, "RUNTIME_RESOURCE_UNDECLARED")
 
     def test_the_manifest_must_declare_its_own_file(self):
@@ -229,7 +229,7 @@ class DeclaredManifestTests(unittest.TestCase):
         self.assertIn("outside", failure.exception.message)
 
     def test_declared_asset_symlinks_outside_the_root_are_refused(self):
-        for relative in ("pyproject.toml", "harnesses/dsh/scripts"):
+        for relative in ("pyproject.toml", "resources"):
             with self.subTest(relative=relative):
                 asset = self.root / relative
                 outside = self.root.parent / asset.name
@@ -245,14 +245,14 @@ class DeclaredManifestTests(unittest.TestCase):
                     outside.rename(asset)
 
     def test_a_declared_resource_symlink_outside_the_root_is_refused(self):
-        runner = self.root / DEFAULT_RESOURCES["dsh.runner"]
+        runner = self.root / DEFAULT_RESOURCES["fixture.runner"]
         outside = self.root.parent / "outside-runner.mjs"
         runner.rename(outside)
         runner.symlink_to(outside)
         with self.assertRaises(BoardError) as failure:
-            runtime.resource_path("dsh.runner", self.root)
+            runtime.resource_path("fixture.runner", self.root)
         self.assertEqual(failure.exception.code, "RUNTIME_MANIFEST_INVALID")
-        self.assertIn("dsh.runner", failure.exception.message)
+        self.assertIn("fixture.runner", failure.exception.message)
 
     def test_nested_asset_symlinks_outside_the_root_are_never_copied(self):
         outside = self.root.parent / "outside.py"
@@ -270,34 +270,34 @@ class DeclaredManifestTests(unittest.TestCase):
         with self.assertRaises(BoardError) as failure:
             list(runtime.iter_assets(self.root))
         self.assertEqual(failure.exception.code, "RUNTIME_ASSET_MISSING")
-        runtime.resource_path("dsh.runner", self.root).unlink()
-        self.assertEqual(runtime.missing_resources(self.root), ["dsh.runner"])
+        runtime.resource_path("fixture.runner", self.root).unlink()
+        self.assertEqual(runtime.missing_resources(self.root), ["fixture.runner"])
 
     def test_iter_assets_copies_only_declared_content(self):
         (self.root / "tests").mkdir()
         (self.root / "tests" / "test_scratch.py").write_text("# not a runtime asset\n")
         (self.root / ".venv").mkdir()
         (self.root / ".venv" / "pyvenv.cfg").write_text("home = /nope\n")
-        (self.root / "harnesses" / "dsh" / "scripts" / "__pycache__").mkdir()
-        (self.root / "harnesses" / "dsh" / "scripts" / "__pycache__" / "stale.pyc").write_bytes(b"\0")
+        (self.root / "resources" / "__pycache__").mkdir()
+        (self.root / "resources" / "__pycache__" / "stale.pyc").write_bytes(b"\0")
         relative = {path for path, _file in runtime.iter_assets(self.root)}
         self.assertEqual(
             relative,
             {
                 "packaging/runtime-assets.json",
                 "pyproject.toml",
-                "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
+                "src/hey_my_buddy/fixture_bridge.py",
                 "src/hey_my_buddy/console/assets/index.html",
-                "harnesses/dsh/scripts/run.mjs",
-                "harnesses/dsh/scripts/model-catalog.mjs",
-                "harnesses/dsh/scripts/decision.mjs",
+                "resources/runner.py",
+                "resources/catalog.json",
+                "resources/decision.py",
             },
         )
 
     def test_content_id_covers_every_asset_and_the_manifest_itself(self):
         first = runtime.content_id(self.root)
         self.assertEqual(len(first), 32)
-        (self.root / "harnesses" / "dsh" / "scripts" / "run.mjs").write_text("// changed\n")
+        (self.root / "resources" / "runner.py").write_text("// changed\n")
         second = runtime.content_id(self.root)
         self.assertNotEqual(first, second)
         write_manifest(self.root, extra={"note": "identity covers the manifest bytes"})
@@ -355,11 +355,11 @@ class RuntimeMaterializationTests(unittest.TestCase):
         for relative in (
             "pyproject.toml",
             "packaging/runtime-assets.json",
-            "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py",
+            "src/hey_my_buddy/fixture_bridge.py",
             "src/hey_my_buddy/console/assets/index.html",
-            "harnesses/dsh/scripts/run.mjs",
-            "harnesses/dsh/scripts/model-catalog.mjs",
-            "harnesses/dsh/scripts/decision.mjs",
+            "resources/runner.py",
+            "resources/catalog.json",
+            "resources/decision.py",
         ):
             self.assertTrue((target / relative).is_file(), relative)
         self.assertFalse((target / "tests").exists())
@@ -372,7 +372,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(Path(again["runtimeDir"]), target)
 
     def test_materialize_accepts_a_manifest_with_only_another_harness(self):
-        resources = {"new-harness.runner": "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py"}
+        resources = {"new-harness.runner": "src/hey_my_buddy/fixture_bridge.py"}
         write_manifest(self.root, resources=resources)
         target = self.materialize()
         self.assertTrue(runtime.is_ready(target))
@@ -463,18 +463,18 @@ class RuntimeMaterializationTests(unittest.TestCase):
 
     def test_a_ready_runtime_with_a_missing_resource_is_not_ready(self):
         target = self.materialize()
-        Path(runtime.read_ready(target)["resources"]["dsh.runner"]).unlink()
+        Path(runtime.read_ready(target)["resources"]["fixture.runner"]).unlink()
         self.assertFalse(runtime.is_ready(target))
 
     def test_a_ready_runtime_rejects_an_outward_resource_symlink(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        runner = Path(record["resources"]["dsh.runner"])
-        outside = self.root / DEFAULT_RESOURCES["dsh.runner"]
+        runner = Path(record["resources"]["fixture.runner"])
+        outside = self.root / DEFAULT_RESOURCES["fixture.runner"]
         runner.unlink()
         runner.symlink_to(outside)
         self.assertFalse(runtime.is_ready(target))
-        self.assertTrue(any("dsh.runner resolves outside" in leak for leak in runtime.source_leaks(record)))
+        self.assertTrue(any("fixture.runner resolves outside" in leak for leak in runtime.source_leaks(record)))
         with patch.dict(os.environ, {"BUDDY_RUNTIME": str(target)}):
             with self.assertRaises(BoardError) as failure:
                 runtime.resolve_runtime()
@@ -482,7 +482,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
 
     def test_a_ready_runtime_rejects_an_outward_symlink_inside_an_asset_directory(self):
         target = self.materialize()
-        (target / "src/hey_my_buddy/external.py").symlink_to(self.root / "src/hey_my_buddy/buddy/harnesses/dsh/yaml_bridge.py")
+        (target / "src/hey_my_buddy/external.py").symlink_to(self.root / "src/hey_my_buddy/fixture_bridge.py")
         self.assertFalse(runtime.is_ready(target))
 
     def test_a_shared_base_interpreter_symlink_is_allowed(self):
@@ -529,9 +529,9 @@ class RuntimeMaterializationTests(unittest.TestCase):
     def test_source_leaks_find_a_resource_that_resolves_outside_the_runtime(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        record["resources"] = {**record["resources"], "dsh.runner": str(REAL_ROOT / "harnesses" / "dsh" / "scripts" / "run.mjs")}
+        record["resources"] = {**record["resources"], "fixture.runner": str(REAL_ROOT / "src" / "hey_my_buddy" / "cli" / "main.py")}
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
-        self.assertTrue(any("dsh.runner" in leak for leak in leaks), leaks)
+        self.assertTrue(any("fixture.runner" in leak for leak in leaks), leaks)
 
     def test_source_leaks_find_a_plugin_cache_path(self):
         target = self.materialize()

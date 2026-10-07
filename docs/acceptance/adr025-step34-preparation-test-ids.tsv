@@ -1,0 +1,4 @@
+old_id	new_id	disposition	reason	guard	fault_check
+	buddy.harnesses.zcode.test_native_run.FastSeamTests.test_an_unconfirmed_native_group_stop_reports_unknown_not_gone	added	运行模块真实停止路径	未知不等于已停止	强制 gone 后失败
+	buddy.roles.test_role_live_seam.HandleBindingTests.test_each_held_identity_component_and_harness_must_match_the_request	added	持有身份逐项匹配	全部身份组成部分与 harness	逐项有效类型的不一致输入
+	buddy.roles.test_role_live_seam.StoredRequestTests.test_one_request_identity_component_mismatch_refuses_alone	added	存储请求逐项身份	独立 attemptId 比较	去掉 attemptId 比较后失败

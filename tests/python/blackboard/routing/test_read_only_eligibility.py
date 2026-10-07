@@ -9,6 +9,7 @@ from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
 from hey_my_buddy.blackboard.service.harness_health import read_health
 from support import BoardTestCase
 
@@ -52,15 +53,14 @@ class LocalEligibilityTests(unittest.TestCase):
             self.assertFalse(result['eligible'])
             self.assertFalse(result['systemSandbox'])
             self.assertEqual(result['reasonCode'], 'readonly-platform-unsupported')
-        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), patch('hey_my_buddy.buddy.harnesses.base.Path.is_file', return_value=False):
+        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), patch.dict(RUN_SEAMS, {'codex': None}):
             self.assertEqual(CodexAdapter().local_read_only_check()['reasonCode'], 'readonly-resource-missing')
 
     def test_non_sandbox_mechanism_cannot_allow_commands(self):
-        class Restricted(DshAdapter):
+        class Restricted(Adapter):
+            name = "dsh"
             read_only_structured = True
             read_only_tool_categories = ('read', 'search')
-            def start_read_only_structured(self, context, request):
-                raise AssertionError('eligibility must not execute the handler')
         item = Restricted()
         self.assertTrue(item.local_read_only_check()['eligible'])
         with patch.object(item, 'read_only_tool_categories', ('read', 'execute')):
