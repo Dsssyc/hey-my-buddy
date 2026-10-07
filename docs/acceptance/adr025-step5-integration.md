@@ -91,3 +91,5 @@ C-Two 点查口径由 Host 选择：按当前所有者已发布的事实查询�
 5-C1 Host代执行 checkout Git提交后，旧黑板 continuation保留的 includeUntracked 选择器因文件已 tracked 而失效（INVALID_WORKSPACE），准备阶段没有调用模型。Host仅用 git reset --mixed 恢复自己该次提交前的 HEAD/index，五文件摘要前后相等、封存8e625a2产物保留，原run再次仅收尾。不删除source、不改分支；此后新文件以系统封存的 outputCommit 为固定提交，避免重复改变检出追踪状态。
 
 5-B2 原run补正固定产物11f28f5a，五路径范围一致；Host固定副本32项全部通过5.921秒，含六项实际IPC peer与named detach、迟到attach补偿，真实登记数归零和正常socket消失断言有效。两项本轮变异原始红输出核对为4与2项断言失败，没有导入错误。重绑在旧attach和后续detach结束前被同key屏障拒绝，复用既有identity/instance契约，没有增加CAS字段。固定产物已整合，公共Worker/服务接线仍待整步验证。
+
+5-C1 最终原run已正常 delivered，固定产物8e625a29445cc137226256413a7d64feb73a8037与Host15项聚焦已验证的8e625a2五文件逐字相同，代码/测试没有再变，不重复检查。只收尾回合没有运行工具或测试，之前两次native-shutdown-failed及准备选择器错误均保留。问询owner唯一实时输入为endpoint有界队列；journal提交后才settle、真实原生收据才delivered/answered；旧socket和失去生产调用的参数/方法已删除。公共producer构造参数适配由Host处理，整步检查仍待。
