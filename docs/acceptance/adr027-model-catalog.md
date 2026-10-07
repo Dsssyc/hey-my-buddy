@@ -75,3 +75,11 @@ Python 编号基线 2,785，最终 2,867：新增 83、移除 1，净增 82。�
 Host 验收后仅回收三条登记路径：A 的 `ws-46c8c752810e3897106ed1c6a40f1885/checkout`，B 的 `ws-3a14be25c4957ba5e3c5f33f4d923ea7/checkout`，C 的 `ws-daca4f4556dcd320844e40ee0c44212f/checkout`，均位于 `~/.local/share/hey-my-buddy/state/workspaces/`。三个 cleanup plan 最终都是 applied，`result.removed=true`，Host 核对路径均已不存在；A 显式 plan/apply，B/C 的服务回收与 Host 操作存在竞争，曾返回 Git/revision 错误，随后以 ledger applied 和路径不存在核实，不重复删除。固定 refs、输入/输出、补丁和命令收据保留。原始 Host 日志放在本机忽略的 `.dsh-skill-build/adr027-model-catalog/`；Host 工作树保留供 Claude Code Host 审查。
 
 未真实验证 DSH、ZCode、Claude 在账户异常下的清单变化，也未做真实模型成功/拒绝调用；Codex 只确认本机一次正常发现的账户事实。没有安装或升级日常运行时，本步骤不声称日常 0.27 已具备 ADR-027 行为。未给最终代码再跑一次完整命令：首次完整退出 1 的旧断言已定向修复，随后源代码变化用受影响测试与直接消费者验证。尚未取得 Claude Code Host 对 ADR-027 的整体验收，未改它维护的架构/入口/参考文档或 ADR-025 工作树、分支及微任务。
+
+## Claude Code Host 退回后的返修计划
+
+Claude Code Host 对 `277eadd81606152f3ec4c774f5b08d54d108d6a6` 的验收未通过：公开摘要携带三个本机主目录路径，continue 的启用检查挡住目录重读，DSH 发现说明不符实际启动方式，而且最终代码缺少退出 0 的完整检查。Host 已将三处路径改成 `~` 并改写末提交为 `c8336e6a61d7bde7d1072adfdd24b40104541d79`；仓库卫生的 5 项检查退出 0，分支可达历史的该文件无本机主目录路径，尚未推送。原 A、B run 均已 accepted 且已回收；原 A 的 continue 实际返回 `CONFLICT: An accepted goal cannot be continued`。用户因此明确授权创建关联原 A、B run 的返修微任务，首次仍走路由，沿用原 hostId 与宏任务。
+
+返修 A 修改 `blackboard/tasks/workflow.py` 的明确配置续跑入口与受影响的任务测试：原生目录先校验，缺失或不可用先有限重读，之后独立判断用户启用状态；拒绝携带目录读取时间与刷新办法，并区分未启用和目录不可用。待确认与账户读取事实仍存既有 meta，schema 保持 15。返修 B 只改 DSH 的发现说明，写明本次私有 DSH_HOME 启动已安装 DSH、设置与凭据按路径绑定原主目录；不做真实发现或模型验证。Worker 不删除、不运行完整检查，只跑受影响测试。
+
+C13 覆盖 continue 缺失、不可用、重读恢复、仍然拒绝以及未启用的不同原因和事实；C14 核对去掉重读与去掉原因区分时测试失败；C15 核对公开记录路径脱敏与分支历史；C16 在两份返修产物整合、最新核心分支合入并提交最终代码后，运行一次默认并行完整检查，登记被检查的提交号、退出码与实际结果。已核对通过的模型发现、控制台产物与原有变异证据沿用，记录更正不重跑完整检查。
