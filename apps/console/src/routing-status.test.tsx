@@ -24,7 +24,7 @@ function snapshot(routingHealth: RoutingHealth | undefined, extra: Partial<Snaps
     configuration: { revision: 1, routerProfileIds: [router.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [router], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [],
     familyAnnotations: [], evidence: [], decisions: [],
-    sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 }, capabilities: {},
+    sampleCounts: {}, modelConcurrency: [], tasks: { pendingCount: 0 }, capabilities: {},
     routingHealth,
     ...extra,
   };

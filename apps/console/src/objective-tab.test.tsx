@@ -1,10 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Objectives } from "./Objectives";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
-import { objectiveTimelineFixture } from "./objective-fixtures";
+import { objectiveTimelineFixture, OBSERVED_AT } from "./objective-fixtures";
+import { clockTime } from "./objective-display";
 
 function snapshotFixture(): Snapshot {
   return {
@@ -12,7 +13,7 @@ function snapshotFixture(): Snapshot {
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], evidence: [], decisions: [],
-    sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 },
+    sampleCounts: {}, modelConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: { evaluationWriteGate: true },
   };
 }
@@ -31,7 +32,7 @@ function harness() {
     task: vi.fn(async () => rawRecord()),
     tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : [rawRecord()], total: 1, nextCursor: null })),
     objectives: vi.fn(async () => ({ objectives: [timeline.objective], total: 1, nextCursor: null, cursor: 41, changed: false })),
-    objectiveTimeline: vi.fn(async () => timeline),
+    objectiveTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
   const user = userEvent.setup();
@@ -68,6 +69,37 @@ describe("委派记录 tab views", () => {
     const checkbox = screen.getByLabelText("显示协助任务与内部执行") as HTMLInputElement;
     expect(checkbox.closest("[hidden]")).not.toBeNull();
     expect(checkbox.checked).toBe(true);
+  });
+
+  it("advances the timeline's 现在 clock across an unchanged poll through the parent wiring", async () => {
+    // The parent forwards the hook's displayObservedAt into ObjectiveTimeline;
+    // an unchanged poll (same body, same source observedAt) must still move
+    // the rendered 现在 marker forward. Real renderer + real parent + real
+    // hook: removing the forwarding freezes the marker and fails this test.
+    vi.useFakeTimers();
+    // Align the controlled client clock with the source anchor at load: the
+    // mock carries no response date, so the hook's justified local clock IS
+    // this controlled time.
+    vi.setSystemTime(new Date(OBSERVED_AT));
+    try {
+      const f = harness();
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      const row = screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+      fireEvent.click(row);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const chipAtLoad = document.querySelector(".now-chip")!.textContent!;
+      expect(chipAtLoad).toContain(clockTime(OBSERVED_AT));
+      // One unchanged poll 61 seconds later: the display clock advanced past
+      // the source anchor's minute.
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+      const chipAdvanced = document.querySelector(".now-chip")!.textContent!;
+      expect(chipAdvanced).not.toBe(chipAtLoad);
+      expect(chipAdvanced).toContain(clockTime(new Date(Date.parse(OBSERVED_AT) + 61_000).toISOString()));
+      f.unmount();
+    } finally {
+      vi.useRealTimers();
+      cleanup();
+    }
   });
 
   it("keeps the selected detail mounted while an idle reorder refreshes the list", async () => {

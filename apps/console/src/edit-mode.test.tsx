@@ -45,7 +45,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-pro", limit: 5, active: 3 },
     ],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
   const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",

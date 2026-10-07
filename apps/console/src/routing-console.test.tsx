@@ -16,7 +16,7 @@ const worker: Profile = {
 };
 const selector = { provider: "deepseek-official", model: "deepseek-flash", effort: "off" };
 
-function snapshot(records: Task[] = []): Snapshot {
+function snapshot(): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
@@ -26,7 +26,7 @@ function snapshot(records: Task[] = []): Snapshot {
     familyPreferences: [], preferenceOverrides: [],
     cards: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: {},
     modelConcurrency: [],
-    tasks: { runs: records, total: records.length },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
 }
@@ -68,11 +68,11 @@ function workflow(record = task()): Workflow {
     activeRequest: null, children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task: record,
   };
 }
-function apiFor(state: Snapshot, command: ReturnType<typeof vi.fn>): ConsoleApi {
+function apiFor(state: Snapshot, command: ReturnType<typeof vi.fn>, records: Task[] = []): ConsoleApi {
   return {
     snapshot: vi.fn(async () => structuredClone(state)), command,
-    tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
-    task: vi.fn(async (runId: string) => state.tasks.runs.find(record => record.runId === runId)),
+    tasks: vi.fn(async () => ({ runs: records, total: records.length, nextCursor: null })),
+    task: vi.fn(async (runId: string) => records.find(record => record.runId === runId)),
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
 }
@@ -321,7 +321,7 @@ describe("recorded decision details", () => {
 
 describe("delegation routing rationale", () => {
   it("opens the route from the executor header using frozen preferences and configuration", async () => {
-    const record = task(), value = workflow(record), state = snapshot([record]);
+    const record = task(), value = workflow(record), state = snapshot();
     const audit = decision("decision-current");
     const command = vi.fn(async (operation: string, params: { decisionId?: string }) => {
       if (operation === "workflow_get") return value;
@@ -329,7 +329,7 @@ describe("delegation routing rationale", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     const user = userEvent.setup();
-    render(<App suppliedApi={apiFor(state, command)} />);
+    render(<App suppliedApi={apiFor(state, command, [record])} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /完成 goal 状态内核/ }));
     await screen.findByRole("tab", { name: "路由依据" });
@@ -449,14 +449,14 @@ describe("delegation routing rationale", () => {
     const value = workflow(record);
     value.executionConfiguration = null;
     value.routing = { status, decisionId: "pending-or-failed", reason };
-    const state = snapshot([record]);
+    const state = snapshot();
     const command = vi.fn(async (operation: string) => {
       if (operation === "workflow_get") return value;
       if (operation === "selection_get") return { decision: { ...decision("pending-or-failed", { status, reason, profileId: null }), selectedProfile: null, input: null } };
       throw new Error(`Unexpected command: ${operation}`);
     });
     const user = userEvent.setup();
-    render(<App suppliedApi={apiFor(state, command)} />);
+    render(<App suppliedApi={apiFor(state, command, [record])} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /完成 goal 状态内核/ }));
     await user.click(screen.getByRole("button", { name: "查看选择依据" }));

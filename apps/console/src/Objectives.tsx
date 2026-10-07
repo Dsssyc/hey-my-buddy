@@ -388,6 +388,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     active={active}
     summary={selectedSummary}
     timeline={timeline.timeline}
+    displayObservedAt={timeline.displayObservedAt}
     loading={timeline.loading}
     error={timeline.error}
     stale={timeline.stale}

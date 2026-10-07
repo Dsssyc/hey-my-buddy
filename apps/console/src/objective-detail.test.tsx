@@ -16,7 +16,7 @@ function snapshotFixture(): Snapshot {
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], evidence: [], decisions: [],
-    sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 },
+    sampleCounts: {}, modelConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: { evaluationWriteGate: true },
   };
 }
@@ -90,7 +90,7 @@ function harness(options: StopOptions = {}) {
     }
     throw new Error(`Unexpected command: ${operation}`);
   });
-  const timelineReader = vi.fn(async () => options.stoppedTimeline ?? timeline);
+  const timelineReader = vi.fn(async () => ({ timeline: options.stoppedTimeline ?? timeline, verifiedAtMs: null }));
   const api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     command,
@@ -313,9 +313,9 @@ describe("objective-level stop (0.15.1 U4)", () => {
     (f.api.objectiveTimeline as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       if (f.stopAttempts() > 0) {
         readsAfterStop += 1;
-        return readsAfterStop <= 1 ? f.timeline : stopped;
+        return { timeline: readsAfterStop <= 1 ? f.timeline : stopped, verifiedAtMs: null };
       }
-      return f.timeline;
+      return { timeline: f.timeline, verifiedAtMs: null };
     });
     stubViewport(true);
     await openObjective(f);
@@ -431,7 +431,7 @@ describe("objective-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     (f.api.objectiveTimeline as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (objectiveId: string) =>
-      ({ ...f.timeline, objective: summaries.get(objectiveId) ?? f.timeline.objective }));
+      ({ timeline: { ...f.timeline, objective: summaries.get(objectiveId) ?? f.timeline.objective }, verifiedAtMs: null }));
     await openObjective(f);
     // Confirm the first objective's stop; its reply stays pending.
     await f.user.click(screen.getByRole("button", { name: "停止目标" }));

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
 import { useGlobalRefresh, waitForRead } from "./global-refresh";
+import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 import type { ObjectivePage, ObjectiveQuery, ObjectiveSummary } from "./objective-types";
 
 type PageState = { rows: ObjectiveSummary[]; total: number; nextCursor: string | null };
@@ -23,6 +24,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   const [reorder, setReorder] = useState<{ count: number | null } | null>(null);
   const [revision, setRevision] = useState(0);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
+  const visible = useDocumentVisible();
   const pageRef = useRef(page), latestRef = useRef(latest);
   pageRef.current = page;
   latestRef.current = latest;
@@ -149,31 +151,82 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   useGlobalRefresh(() => fetchPage("poll", true), active);
 
   const loadedKey = useRef<string | null>(null);
+  // True while the load effect has an armed (debounced) first-page read; the
+  // cadence effect stands down until it fires, so a mount or scope change
+  // never performs the first read twice.
+  const armed = useRef(false);
+  const resetScope = () => {
+    setPage({ rows: [], total: 0, nextCursor: null });
+    pendingNew.current.clear();
+    needsFirst.current = false;
+    setLatest(new Map());
+    setReorder(null);
+  };
   useEffect(() => {
     ++generation.current; request.current?.abort(); pending.current = false; setLoading(false);
+    armed.current = false;
     const cleanup = () => { ++generation.current; request.current?.abort(); pending.current = false; };
     if (!active) return cleanup;
     const sameScope = loadedKey.current === key + revision;
-    if (sameScope && pageRef.current.rows.length && !needsFirst.current) return cleanup;
-    loadedKey.current = key + revision;
-    if (!sameScope || !needsFirst.current) {
-      setPage({ rows: [], total: 0, nextCursor: null });
-      pendingNew.current.clear();
-      needsFirst.current = false;
-      setLatest(new Map());
-      setReorder(null);
+    if (!sameScope) {
+      // A scope change invalidates the previous answer no matter the
+      // visibility: rows and cursor of the old range must never pose as the
+      // new query's result while the page is hidden. Becoming visible re-runs
+      // this effect and loads the new first page then.
+      loadedKey.current = key + revision;
+      resetScope();
+      if (!visible) return cleanup;
+      setLoading(true);
+      armed.current = true;
+      const timer = setTimeout(() => {
+        armed.current = false;
+        // First mount / scope change also debounces: re-check the document at
+        // fire time — hiding before the visibilitychange cleanup lands must
+        // not produce this automatic GET.
+        if (documentVisibleNow()) void fetchPage("first");
+      }, 180);
+      return () => { clearTimeout(timer); armed.current = false; cleanup(); };
     }
+    // Same scope: legitimately read rows and their pagination survive the
+    // visibility toggle (a hidden page is not an unmount).
+    if (pageRef.current.rows.length && !needsFirst.current) return cleanup;
+    // No rows yet (a mount while hidden, or a failed load): a hidden page
+    // starts no read, and becoming visible re-runs this effect and loads then.
+    if (!visible) return cleanup;
+    if (!needsFirst.current) resetScope();
     setLoading(true);
-    const timer = setTimeout(() => void fetchPage("first"), 180);
-    return () => { clearTimeout(timer); cleanup(); };
-  }, [active, key, revision, fetchPage]);
+    armed.current = true;
+    const timer = setTimeout(() => {
+      armed.current = false;
+      // The document may have hidden inside the debounce window (before the
+      // visibilitychange state update landed): re-check at fire time.
+      if (documentVisibleNow()) void fetchPage("first");
+    }, 180);
+    return () => { clearTimeout(timer); armed.current = false; cleanup(); };
+  }, [active, visible, key, revision, fetchPage]);
 
   // First-page poll on the shared read-only cadence; merges stay in place.
+  // Page Visibility gates the schedule: a hidden page stops polling, and the
+  // effect re-run on return reads once immediately. An empty display or a
+  // pending first-page rebuild reads as "first"; an armed (debounced) load
+  // read takes precedence and the tick only keeps the cadence. Every tick
+  // re-checks the document at its own invocation — the visibilitychange
+  // cleanup can lag the actual hide, and a timer firing inside that gap must
+  // not start a GET.
   useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => void fetchPage("poll"), 3000);
-    return () => clearInterval(timer);
-  }, [active, fetchPage]);
+    if (!active || !visible) return;
+    let timer: ReturnType<typeof setTimeout>;
+    let stopped = false;
+    const poll = async () => {
+      if (documentVisibleNow() && !armed.current) {
+        const mode = pageRef.current.rows.length && !needsFirst.current ? "poll" : "first";
+        await fetchPage(mode);
+      }
+      if (!stopped && documentVisibleNow()) timer = setTimeout(poll, 3000);
+    };
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [active, visible, fetchPage]);
 
   // Freshest summaries win for display; committed order stays until applied.
   const rows = page.rows.map(row => latest.get(row.objectiveId) ?? row);

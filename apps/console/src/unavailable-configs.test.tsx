@@ -87,7 +87,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     evidence: [], decisions: [],
     sampleCounts: Object.fromEntries(Object.entries(sampleCounts).filter(([id]) => live.some(p => p.profileId === id))),
     modelConcurrency: [],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
   const grant: WriterGrant = {

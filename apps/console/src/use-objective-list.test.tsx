@@ -26,8 +26,14 @@ function harness() {
 }
 const startRead = () => act(async () => { await vi.advanceTimersByTimeAsync(500); });
 
+/** Fakes the browser's Page Visibility; the real browser check belongs to the Host. */
+function setHidden(hidden: boolean) {
+  Object.defineProperty(document, "visibilityState", { value: hidden ? "hidden" : "visible", configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); });
 
 describe("work-objective list hook", () => {
   it("keeps committed order and defers newcomers even when a poll returns the complete scope", async () => {
@@ -250,6 +256,66 @@ describe("work-objective list hook", () => {
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet", "older"]);
   });
 
+  it("gates the first mount debounce when the document hides before cleanup", async () => {
+    const objectives = vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false }));
+    const api = { objectives } as unknown as ConsoleApi;
+    renderHook(({ query }: { query: ObjectiveQuery }) => useObjectiveList(api, query, true), { initialProps: { query } });
+    // The document hides before the visibilitychange cleanup lands; the
+    // mount debounce fires inside that gap and must not produce a GET.
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(objectives).not.toHaveBeenCalled();
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  });
+
+  it("gates the scope-change debounce when the document hides before cleanup", async () => {
+    const objectives = vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false }));
+    const api = { objectives } as unknown as ConsoleApi;
+    const hook = renderHook(({ query }: { query: ObjectiveQuery }) => useObjectiveList(api, query, true), { initialProps: { query } });
+    await startRead();
+    expect(objectives).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    hook.rerender({ query: { ...query, projectId: "p2" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(objectives).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  });
+
+  it("invalidates a scope changed while hidden: the new first page loads on return, never the old range", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("old-scope", 1)], "old-cursor")));
+    act(() => setHidden(true));
+    const nextQuery: ObjectiveQuery = { ...query, projectId: "p2" };
+    f.rerender({ query: nextQuery, active: true });
+    // While hidden the old range must vacate at once instead of posing as the
+    // new query's answer; the return then reads the new scope's first page.
+    expect(f.result.current.rows).toEqual([]);
+    expect(f.result.current.nextCursor).toBeNull();
+    act(() => setHidden(false));
+    await startRead();
+    expect(f.requests[1]!.query).toMatchObject({ ...nextQuery, limit: 50 });
+    expect(f.requests[1]!.query).not.toHaveProperty("before");
+    await act(async () => f.requests[1]!.resolve(page([summary("fresh-scope", 2)], "new-cursor")));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["fresh-scope"]);
+    expect(f.result.current.nextCursor).toBe("new-cursor");
+    f.unmount();
+  });
+
+  it("keeps the old range from coming back when the new scope's first read fails", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
+    act(() => setHidden(true));
+    f.rerender({ query: { ...query, projectId: "p2" }, active: true });
+    act(() => setHidden(false));
+    await startRead();
+    await act(async () => f.requests[1]!.reject(new Error("new scope unavailable")));
+    expect(f.result.current.rows).toEqual([]);
+    expect(f.result.current.error).toContain("new scope unavailable");
+    f.unmount();
+  });
+
   it("stops polling while hidden and resumes without dropping loaded rows", async () => {
     const f = harness();
     await startRead();
@@ -262,6 +328,31 @@ describe("work-objective list hook", () => {
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["kept"]);
     expect(f.requests[1]!.query).not.toHaveProperty("before");
     f.unmount();
+  });
+
+  it("stops the poll on document visibility, reads once immediately on return, and never reads a mount that is hidden", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
+    act(() => setHidden(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    act(() => setHidden(false));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    // The return reads once immediately (the poll), then the cadence resumes.
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    expect(f.requests[1]!.query).toMatchObject({ ...query, limit: 50 });
+    await act(async () => f.requests[1]!.resolve(page([summary("kept", 2)])));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(f.objectives).toHaveBeenCalledTimes(3);
+    f.unmount();
+    // A hook mounted while the page is hidden starts no read at all.
+    setHidden(true);
+    const g = harness();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(g.objectives).not.toHaveBeenCalled();
+    g.unmount();
+    setHidden(false);
   });
 
   it("resumes a first-page refresh after the page hides during a reorder", async () => {

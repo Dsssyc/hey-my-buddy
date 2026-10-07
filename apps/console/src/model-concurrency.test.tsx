@@ -44,7 +44,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
     familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], evidence: [], decisions: [], sampleCounts: {},
     modelConcurrency: [flashEntry, retiredEntry],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
   const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",

@@ -119,7 +119,7 @@ function snapshot(options: Options = {}): HarnessSnapshot {
       { ...sol, limit: 2, active: 0 },
       { ...glm, limit: 2, active: 0 },
     ],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
   return { ...base, preferences: effective(base), harnesses: harnesses() };

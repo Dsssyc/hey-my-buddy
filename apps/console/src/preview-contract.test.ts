@@ -34,7 +34,7 @@ import type { Snapshot } from "./types";
 type ManifestEntry = {
   scenario: string;
   path: string;
-  kind: "console-snapshot" | "objectives-page" | "objective-timeline" | "workflow-get";
+  kind: "console-snapshot" | "task-page" | "backup-preflight" | "objectives-page" | "objective-timeline" | "workflow-get";
   endpoint: string;
   httpStatus: number;
   expected: "accepted" | "rejected";
@@ -123,22 +123,27 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       outcome.facts = {
         tableRevision: snapshot.tableRevision,
         configuration: snapshot.configuration,
-        taskCount: snapshot.tasks.runs.length,
+        // The slim snapshot carries the server's board-wide pending count;
+        // full execution records stay on the paginated tasks read.
+        pendingCount: snapshot.tasks.pendingCount,
         harnesses: harnesses.map(row => ({
           adapter: row.adapter,
           status: row.status,
           quota: quotaView(row.quota),
         })),
-        tasks: snapshot.tasks.runs.map(task => ({
-          runId: task.runId,
-          tokenUsage: task.tokenUsage ? tokenUsageView(task.tokenUsage).text : null,
-        })),
       };
+    } else if (entry.kind === "task-page") {
+      const page = await api.tasks({});
+      outcome.facts = { total: page.total, runs: page.runs.length, nextCursor: page.nextCursor };
+    } else if (entry.kind === "backup-preflight") {
+      const report = await api.backupPreflight();
+      outcome.facts = { policy: report.policy, needsAttention: report.needsAttention,
+        skipped: report.skipped.count, rejected: report.rejected.count };
     } else if (entry.kind === "objectives-page") {
       const page = await api.objectives({});
       outcome.facts = { total: page.total, cursor: page.cursor, changed: page.changed };
     } else if (entry.kind === "objective-timeline") {
-      const timeline = await api.objectiveTimeline(entry.request?.objectiveId ?? "", {});
+      const { timeline } = await api.objectiveTimeline(entry.request?.objectiveId ?? "", {});
       outcome.facts = {
         objectiveId: timeline.objective.objectiveId,
         rows: timeline.rows.length,
@@ -183,12 +188,12 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
 }
 
 describe("synthetic preview fixtures through the real console parsers", () => {
-  it("declares the four preview scenarios and a self-consistent manifest", () => {
+  it("declares the six preview reads and a self-consistent manifest", () => {
     expect(manifest.fixtureVersion).toBe(1);
     expect(manifest.source).toBe("tests/probes/objective_console_preview.py");
     expect(manifest.scenarios).toEqual(["normal", "readonly", "truncated", "error"]);
     expect(new Set(manifest.files.map(entry => entry.kind))).toEqual(
-      new Set(["console-snapshot", "objectives-page", "objective-timeline", "workflow-get"]));
+      new Set(["console-snapshot", "task-page", "backup-preflight", "objectives-page", "objective-timeline", "workflow-get"]));
     for (const entry of manifest.files) {
       expect(entry.expected === "accepted" ? entry.expectedCode === undefined : typeof entry.expectedCode === "string").toBe(true);
     }
@@ -218,7 +223,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     const incompatible = byScenario.get("incompatible")!;
     expect(incompatible.filter(outcome => !outcome.accepted).map(outcome => outcome.code))
       .toEqual(incompatible.filter(outcome => entryFor(outcome).expected === "rejected").map(() => "INVALID_RESPONSE"));
-    expect(incompatible.filter(outcome => !outcome.accepted)).toHaveLength(4);
+    expect(incompatible.filter(outcome => !outcome.accepted)).toHaveLength(5);
     // A malformed optional quota observation keeps the page readable and is
     // dropped as unknown: it never surfaces as a recorded 0% or near-limit flag.
     const downgraded = incompatible.find(outcome => entryFor(outcome).expected === "accepted")!;

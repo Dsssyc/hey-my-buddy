@@ -152,7 +152,17 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertNotIn("decisionProfileId", configuration)
         for key in ("routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"):
             self.assertIn(key, configuration)
-        self.assertTrue(normal["taskCount"] > 0)
+        # The slim snapshot carries the server's board-wide pending count; the
+        # full execution records stay on the paginated tasks read.
+        self.assertTrue(normal["pendingCount"] > 0)
+        tasks_page = outcomes["normal/tasks.json"]["facts"]
+        self.assertTrue(tasks_page["runs"] > 0)
+        self.assertTrue(tasks_page["nextCursor"] is None or isinstance(tasks_page["nextCursor"], str))
+        preflight = outcomes["normal/backup-preflight.json"]["facts"]
+        self.assertEqual("attempt-evidence", preflight["policy"])
+        self.assertTrue(preflight["needsAttention"])
+        self.assertEqual(1, preflight["skipped"])
+        self.assertEqual(0, preflight["rejected"])
 
         # Recorded quota: a near-limit window, a stale unknown window, and a harness
         # with no observation at all are three distinct, explicit states.

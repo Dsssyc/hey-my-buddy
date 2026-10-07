@@ -1,0 +1,1667 @@
+{
+  "baselineCommit": "54d159082c3ec2bb995c897c0833da216876485c",
+  "backendCodeCommit": "50c058fa217501073431e21bb882d6e1445ac264",
+  "fixture": {
+    "stateDir": "~/.codex/worktrees/console-reads-and-checkouts/hey-my-buddy/tmp/console-reads-host/host-benchmark/recipe-state",
+    "databaseBytes": 193835008,
+    "evidenceObjects": 4000,
+    "governedRuns": 360,
+    "objectives": 60,
+    "plainExecutions": 40,
+    "largeResults": 100,
+    "awaitingHostRoots": 130
+  },
+  "method": "Fresh generated recipe copied separately for baseline and final backend, not a daily board copy. Exact raw HTTP status/header/body bytes; server do_GET wall entry-to-finally correlated with client request completion via Condition; client round trip separate. Cold identity/gzip single samples; unchanged identity/gzip 10 samples; evaluation SQL revision bump 5 samples per coding; timing observations only.",
+  "preflightCounter": "Structural preflightDuringSnapshot counts only the final warm snapshot verification; raw total was reset before that verification and is omitted rather than mislabeled. On-demand preflight is always recomputed, including conditional304.",
+  "baseline": {
+    "label": "baseline",
+    "implementation": "~/.codex/worktrees/console-reads-and-checkouts/hey-my-buddy/tmp/console-reads-host/host-benchmark/baseline-src/src",
+    "sampleCounts": {
+      "unchanged": 10,
+      "changed": 5
+    },
+    "routes": {
+      "snapshot": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 577,
+          "bodyBytes": 286870,
+          "serverWallMs": 732.8939579892904,
+          "clientRoundTripMs": 733.2482498604804,
+          "etag": null,
+          "producers": [
+            {
+              "label": "service.console_snapshot",
+              "ms": 729.9843749497086
+            },
+            {
+              "label": "call_operation",
+              "ms": 731.1776250135154
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            286870
+          ],
+          "headerBytes": [
+            577
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 725.061,
+            "p90Ms": 887.253,
+            "maxMs": 895.505
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 725.36,
+            "p90Ms": 887.572,
+            "maxMs": 895.766
+          },
+          "producerMsBySample": [
+            [
+              722.718,
+              723.936
+            ],
+            [
+              719.294,
+              720.477
+            ],
+            [
+              805.079,
+              806.318
+            ],
+            [
+              884.536,
+              885.707
+            ],
+            [
+              715.931,
+              717.248
+            ],
+            [
+              721.396,
+              722.741
+            ],
+            [
+              717.44,
+              718.633
+            ],
+            [
+              706.455,
+              707.762
+            ],
+            [
+              730.194,
+              731.44
+            ],
+            [
+              892.767,
+              893.985
+            ]
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 577,
+          "bodyBytes": 286870,
+          "serverWallMs": 1204.025625018403,
+          "clientRoundTripMs": 1204.3946669436991,
+          "etag": null,
+          "contentEncoding": null,
+          "roundTripsToIdentityBody": null,
+          "producers": [
+            {
+              "label": "service.console_snapshot",
+              "ms": 1201.171375112608
+            },
+            {
+              "label": "call_operation",
+              "ms": 1202.470124932006
+            }
+          ]
+        },
+        "etagsDiffer": false,
+        "changedIdentity": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            286870
+          ],
+          "headerBytes": [
+            577
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 728.484,
+            "p90Ms": 731.296,
+            "maxMs": 901.016
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 728.871,
+            "p90Ms": 731.621,
+            "maxMs": 901.393
+          },
+          "producerMsBySample": [
+            [
+              728.413,
+              729.747
+            ],
+            [
+              717.552,
+              718.803
+            ],
+            [
+              725.544,
+              726.862
+            ],
+            [
+              723.634,
+              724.829
+            ],
+            [
+              898.135,
+              899.373
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            286870,
+            286871
+          ],
+          "headerBytes": [
+            577
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 730.753,
+            "p90Ms": 737.009,
+            "maxMs": 788.546
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 731.003,
+            "p90Ms": 737.506,
+            "maxMs": 788.886
+          },
+          "producerMsBySample": [
+            [
+              785.653,
+              786.865
+            ],
+            [
+              705.183,
+              706.417
+            ],
+            [
+              717.094,
+              718.327
+            ],
+            [
+              727.858,
+              729.072
+            ],
+            [
+              734.242,
+              735.445
+            ]
+          ]
+        }
+      },
+      "objectives": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 576,
+          "bodyBytes": 34451,
+          "serverWallMs": 2102.0740419626236,
+          "clientRoundTripMs": 2102.298582904041,
+          "etag": null,
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 2101.7010828945786
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            34451
+          ],
+          "headerBytes": [
+            576
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 2110.82,
+            "p90Ms": 2187.06,
+            "maxMs": 2202.423
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 2111.092,
+            "p90Ms": 2187.33,
+            "maxMs": 2202.654
+          },
+          "producerMsBySample": [
+            [
+              2202.056
+            ],
+            [
+              2186.694
+            ],
+            [
+              2095.871
+            ],
+            [
+              2084.704
+            ],
+            [
+              2183.896
+            ],
+            [
+              2121.296
+            ],
+            [
+              2102.285
+            ],
+            [
+              2067.949
+            ],
+            [
+              2118.617
+            ],
+            [
+              2076.62
+            ]
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 576,
+          "bodyBytes": 34451,
+          "serverWallMs": 2065.481291851029,
+          "clientRoundTripMs": 2065.7787499949336,
+          "etag": null,
+          "contentEncoding": null,
+          "roundTripsToIdentityBody": null,
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 2065.127374837175
+            }
+          ]
+        },
+        "etagsDiffer": false,
+        "changedIdentity": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            34451
+          ],
+          "headerBytes": [
+            576
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 2102.321,
+            "p90Ms": 2110.305,
+            "maxMs": 2123.183
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 2102.658,
+            "p90Ms": 2110.67,
+            "maxMs": 2123.526
+          },
+          "producerMsBySample": [
+            [
+              2101.914
+            ],
+            [
+              2084.014
+            ],
+            [
+              2122.807
+            ],
+            [
+              2078.113
+            ],
+            [
+              2109.712
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            34451
+          ],
+          "headerBytes": [
+            576
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 2096.209,
+            "p90Ms": 2135.776,
+            "maxMs": 2788.027
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 2096.654,
+            "p90Ms": 2136.198,
+            "maxMs": 2788.283
+          },
+          "producerMsBySample": [
+            [
+              2135.324
+            ],
+            [
+              2051.426
+            ],
+            [
+              2095.813
+            ],
+            [
+              2091.875
+            ],
+            [
+              2787.675
+            ]
+          ]
+        }
+      },
+      "timeline": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 576,
+          "bodyBytes": 10855,
+          "serverWallMs": 101.69962490908802,
+          "clientRoundTripMs": 102.02483297325671,
+          "etag": null,
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 101.39379184693098
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            10855
+          ],
+          "headerBytes": [
+            576
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 98.712,
+            "p90Ms": 102.562,
+            "maxMs": 113.109
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 98.952,
+            "p90Ms": 103.759,
+            "maxMs": 113.377
+          },
+          "producerMsBySample": [
+            [
+              96.307
+            ],
+            [
+              102.31
+            ],
+            [
+              99.642
+            ],
+            [
+              94.804
+            ],
+            [
+              95.484
+            ],
+            [
+              97.913
+            ],
+            [
+              112.844
+            ],
+            [
+              101.85
+            ],
+            [
+              96.581
+            ],
+            [
+              98.935
+            ]
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 576,
+          "bodyBytes": 10855,
+          "serverWallMs": 97.79837494716048,
+          "clientRoundTripMs": 98.03129220381379,
+          "etag": null,
+          "contentEncoding": null,
+          "roundTripsToIdentityBody": null,
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 97.53941604867578
+            }
+          ]
+        },
+        "etagsDiffer": false,
+        "changedIdentity": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            10855
+          ],
+          "headerBytes": [
+            576
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 94.357,
+            "p90Ms": 94.535,
+            "maxMs": 94.888
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 94.682,
+            "p90Ms": 94.839,
+            "maxMs": 95.236
+          },
+          "producerMsBySample": [
+            [
+              93.993
+            ],
+            [
+              93.156
+            ],
+            [
+              94.097
+            ],
+            [
+              94.245
+            ],
+            [
+              94.637
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            10855
+          ],
+          "headerBytes": [
+            576
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 94.532,
+            "p90Ms": 94.818,
+            "maxMs": 95.018
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 94.901,
+            "p90Ms": 95.143,
+            "maxMs": 95.301
+          },
+          "producerMsBySample": [
+            [
+              94.561
+            ],
+            [
+              94.703
+            ],
+            [
+              94.229
+            ],
+            [
+              93.847
+            ],
+            [
+              94.285
+            ]
+          ]
+        }
+      },
+      "tasksPage": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 577,
+          "bodyBytes": 115508,
+          "serverWallMs": 62.81791697256267,
+          "clientRoundTripMs": 63.0662499461323,
+          "etag": null,
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 61.99083290994167
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            115508
+          ],
+          "headerBytes": [
+            577
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 58.196,
+            "p90Ms": 60.051,
+            "maxMs": 60.437
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 58.44,
+            "p90Ms": 60.327,
+            "maxMs": 60.71
+          },
+          "producerMsBySample": [
+            [
+              56.95
+            ],
+            [
+              57.35
+            ],
+            [
+              56.797
+            ],
+            [
+              57.229
+            ],
+            [
+              56.883
+            ],
+            [
+              57.389
+            ],
+            [
+              57.493
+            ],
+            [
+              58.747
+            ],
+            [
+              59.139
+            ],
+            [
+              59.648
+            ]
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 577,
+          "bodyBytes": 115508,
+          "serverWallMs": 57.62841715477407,
+          "clientRoundTripMs": 57.9008748754859,
+          "etag": null,
+          "contentEncoding": null,
+          "roundTripsToIdentityBody": null,
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 56.82024988345802
+            }
+          ]
+        },
+        "etagsDiffer": false,
+        "changedIdentity": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            115508
+          ],
+          "headerBytes": [
+            577
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 57.265,
+            "p90Ms": 57.401,
+            "maxMs": 57.554
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 57.577,
+            "p90Ms": 57.74,
+            "maxMs": 57.819
+          },
+          "producerMsBySample": [
+            [
+              56.512
+            ],
+            [
+              56.032
+            ],
+            [
+              56.47
+            ],
+            [
+              56.683
+            ],
+            [
+              56.805
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            115508
+          ],
+          "headerBytes": [
+            577
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 57.641,
+            "p90Ms": 57.915,
+            "maxMs": 58.084
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 57.919,
+            "p90Ms": 58.223,
+            "maxMs": 58.351
+          },
+          "producerMsBySample": [
+            [
+              57.342
+            ],
+            [
+              56.376
+            ],
+            [
+              57.18
+            ],
+            [
+              56.912
+            ],
+            [
+              56.687
+            ]
+          ]
+        }
+      },
+      "preflight": {
+        "available": false,
+        "mode": "insideSnapshot",
+        "insideSnapshotBodyBytes": 8110
+      }
+    },
+    "structural": {},
+    "serverRequestCount": 90
+  },
+  "finalBackend": {
+    "label": "current",
+    "implementation": "~/.codex/worktrees/console-reads-and-checkouts/hey-my-buddy/src",
+    "sampleCounts": {
+      "unchanged": 10,
+      "changed": 5
+    },
+    "routes": {
+      "snapshot": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 669,
+          "bodyBytes": 139458,
+          "serverWallMs": 20.556208211928606,
+          "clientRoundTripMs": 20.847666077315807,
+          "etag": "\"af18f394db542f9f27b56b6410dbafa9\"",
+          "producers": [
+            {
+              "label": "console_snapshot_projection",
+              "ms": 17.39016710780561
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.06,
+            "p90Ms": 0.075,
+            "maxMs": 0.18
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.157,
+            "p90Ms": 0.19,
+            "maxMs": 0.353
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 691,
+          "bodyBytes": 5543,
+          "serverWallMs": 0.10554096661508083,
+          "clientRoundTripMs": 0.2695831935852766,
+          "etag": "\"86ba8cb6ad80ddd3a8c3c1550eba4bd4\"",
+          "contentEncoding": "gzip",
+          "roundTripsToIdentityBody": true,
+          "producers": []
+        },
+        "etagsDiffer": true,
+        "conditionalGzip304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.061,
+            "p90Ms": 0.071,
+            "maxMs": 0.078
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.227,
+            "p90Ms": 0.245,
+            "maxMs": 0.255
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "borrowedValidatorOnGzipStatus": 200,
+        "changedIdentity": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            139458
+          ],
+          "headerBytes": [
+            669
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 13.761,
+            "p90Ms": 13.85,
+            "maxMs": 14.129
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 14.223,
+            "p90Ms": 14.422,
+            "maxMs": 14.858
+          },
+          "producerMsBySample": [
+            [
+              12.296
+            ],
+            [
+              12.546
+            ],
+            [
+              12.091
+            ],
+            [
+              12.207
+            ],
+            [
+              12.201
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            5547,
+            5548
+          ],
+          "headerBytes": [
+            691
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 13.351,
+            "p90Ms": 13.428,
+            "maxMs": 14.782
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 13.673,
+            "p90Ms": 13.697,
+            "maxMs": 15.139
+          },
+          "producerMsBySample": [
+            [
+              11.255
+            ],
+            [
+              11.967
+            ],
+            [
+              11.482
+            ],
+            [
+              13.314
+            ],
+            [
+              11.973
+            ]
+          ]
+        }
+      },
+      "objectives": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 668,
+          "bodyBytes": 34451,
+          "serverWallMs": 2133.2916668616235,
+          "clientRoundTripMs": 2133.558499859646,
+          "etag": "\"54b6ebe6c2700eebdc9136cc28b7ffa4\"",
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 2132.607625098899
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.1,
+            "p90Ms": 0.183,
+            "maxMs": 0.249
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.318,
+            "p90Ms": 0.434,
+            "maxMs": 1.222
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 691,
+          "bodyBytes": 2211,
+          "serverWallMs": 0.11825002729892731,
+          "clientRoundTripMs": 0.32462505623698235,
+          "etag": "\"4a71e7febcea26967731322e10b8668f\"",
+          "contentEncoding": "gzip",
+          "roundTripsToIdentityBody": true,
+          "producers": []
+        },
+        "etagsDiffer": true,
+        "conditionalGzip304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.063,
+            "p90Ms": 0.078,
+            "maxMs": 0.139
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.189,
+            "p90Ms": 0.219,
+            "maxMs": 0.312
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "borrowedValidatorOnGzipStatus": 200,
+        "changedIdentity": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 2149.43,
+            "p90Ms": 2153.904,
+            "maxMs": 2294.672
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 2149.711,
+            "p90Ms": 2154.206,
+            "maxMs": 2294.97
+          },
+          "producerMsBySample": [
+            [
+              2139.504
+            ],
+            [
+              2148.795
+            ],
+            [
+              2293.993
+            ],
+            [
+              2153.153
+            ],
+            [
+              2069.903
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 2061.682,
+            "p90Ms": 2133.736,
+            "maxMs": 2215.11
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 2062.142,
+            "p90Ms": 2134.071,
+            "maxMs": 2215.435
+          },
+          "producerMsBySample": [
+            [
+              2133.071
+            ],
+            [
+              2214.416
+            ],
+            [
+              2061.076
+            ],
+            [
+              2034.907
+            ],
+            [
+              2034.204
+            ]
+          ]
+        }
+      },
+      "timeline": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 668,
+          "bodyBytes": 10855,
+          "serverWallMs": 94.6422501001507,
+          "clientRoundTripMs": 94.93783419020474,
+          "etag": "\"f43156f25d467b817b3223c7ddb93938\"",
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 94.18866597115993
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.089,
+            "p90Ms": 0.144,
+            "maxMs": 0.166
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.224,
+            "p90Ms": 0.339,
+            "maxMs": 0.359
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 691,
+          "bodyBytes": 1259,
+          "serverWallMs": 0.08170795626938343,
+          "clientRoundTripMs": 0.27541606687009335,
+          "etag": "\"de860812c1d3ee372bf0681783f692d0\"",
+          "contentEncoding": "gzip",
+          "roundTripsToIdentityBody": true,
+          "producers": []
+        },
+        "etagsDiffer": true,
+        "conditionalGzip304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.074,
+            "p90Ms": 0.078,
+            "maxMs": 0.087
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.204,
+            "p90Ms": 0.236,
+            "maxMs": 0.263
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "borrowedValidatorOnGzipStatus": 200,
+        "changedIdentity": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            10855
+          ],
+          "headerBytes": [
+            668
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 93.586,
+            "p90Ms": 95.849,
+            "maxMs": 96.434
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 93.876,
+            "p90Ms": 96.092,
+            "maxMs": 96.765
+          },
+          "producerMsBySample": [
+            [
+              95.452
+            ],
+            [
+              95.988
+            ],
+            [
+              93.119
+            ],
+            [
+              92.866
+            ],
+            [
+              92.697
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            200
+          ],
+          "bodyBytes": [
+            1259
+          ],
+          "headerBytes": [
+            691
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 93.634,
+            "p90Ms": 94.446,
+            "maxMs": 95.219
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 93.968,
+            "p90Ms": 94.734,
+            "maxMs": 95.55
+          },
+          "producerMsBySample": [
+            [
+              93.116
+            ],
+            [
+              94.767
+            ],
+            [
+              94.006
+            ],
+            [
+              92.635
+            ],
+            [
+              92.995
+            ]
+          ]
+        }
+      },
+      "tasksPage": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 669,
+          "bodyBytes": 115508,
+          "serverWallMs": 59.6818330232054,
+          "clientRoundTripMs": 60.02549990080297,
+          "etag": "\"63e955b834d69a164d62e846692b9022\"",
+          "producers": [
+            {
+              "label": "call_operation",
+              "ms": 58.159375097602606
+            }
+          ]
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.053,
+            "p90Ms": 0.067,
+            "maxMs": 0.17
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.183,
+            "p90Ms": 0.225,
+            "maxMs": 0.317
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 691,
+          "bodyBytes": 4887,
+          "serverWallMs": 0.05929218605160713,
+          "clientRoundTripMs": 0.3031250089406967,
+          "etag": "\"6e753bfb967cd1dbb4c35471570a1972\"",
+          "contentEncoding": "gzip",
+          "roundTripsToIdentityBody": true,
+          "producers": []
+        },
+        "etagsDiffer": true,
+        "conditionalGzip304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 0.061,
+            "p90Ms": 0.115,
+            "maxMs": 0.119
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 0.236,
+            "p90Ms": 0.298,
+            "maxMs": 0.318
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "borrowedValidatorOnGzipStatus": 200,
+        "changedIdentity": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 57.709,
+            "p90Ms": 58.733,
+            "maxMs": 58.978
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 57.968,
+            "p90Ms": 59.138,
+            "maxMs": 59.238
+          },
+          "producerMsBySample": [
+            [
+              56.403
+            ],
+            [
+              57.614
+            ],
+            [
+              57.285
+            ],
+            [
+              56.224
+            ],
+            [
+              56.118
+            ]
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 57.347,
+            "p90Ms": 57.929,
+            "maxMs": 59.059
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 57.582,
+            "p90Ms": 58.173,
+            "maxMs": 59.278
+          },
+          "producerMsBySample": [
+            [
+              57.757
+            ],
+            [
+              55.378
+            ],
+            [
+              55.266
+            ],
+            [
+              56.076
+            ],
+            [
+              56.603
+            ]
+          ]
+        }
+      },
+      "preflight": {
+        "available": true,
+        "identity200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 667,
+          "bodyBytes": 8110,
+          "serverWallMs": 650.5844588391483,
+          "clientRoundTripMs": 650.837583001703,
+          "etag": "\"d33b73994a4d22c4a03309185569845b\"",
+          "producers": []
+        },
+        "conditionalIdentity304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 625.324,
+            "p90Ms": 672.665,
+            "maxMs": 782.2
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 625.606,
+            "p90Ms": 672.945,
+            "maxMs": 782.465
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "gzip200": {
+          "status": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "headerBytes": 690,
+          "bodyBytes": 588,
+          "serverWallMs": 616.7734998743981,
+          "clientRoundTripMs": 617.0921251177788,
+          "etag": "\"9a8994cfd2a47b78f649f148baaa71ad\"",
+          "contentEncoding": "gzip",
+          "roundTripsToIdentityBody": true,
+          "producers": []
+        },
+        "etagsDiffer": true,
+        "conditionalGzip304": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 10,
+            "medianMs": 639.055,
+            "p90Ms": 764.394,
+            "maxMs": 782.772
+          },
+          "clientRoundTrip": {
+            "samples": 10,
+            "medianMs": 639.311,
+            "p90Ms": 764.623,
+            "maxMs": 783.034
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "borrowedValidatorOnGzipStatus": 200,
+        "changedIdentity": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 635.556,
+            "p90Ms": 639.57,
+            "maxMs": 682.979
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 635.892,
+            "p90Ms": 639.915,
+            "maxMs": 683.271
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        "changedGzip": {
+          "statuses": [
+            304
+          ],
+          "bodyBytes": [
+            0
+          ],
+          "headerBytes": [
+            655
+          ],
+          "serverWall": {
+            "samples": 5,
+            "medianMs": 634.655,
+            "p90Ms": 636.248,
+            "maxMs": 787.094
+          },
+          "clientRoundTrip": {
+            "samples": 5,
+            "medianMs": 634.943,
+            "p90Ms": 636.559,
+            "maxMs": 787.368
+          },
+          "producerMsBySample": [
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        }
+      }
+    },
+    "structural": {
+      "unchangedResendBytes": 0,
+      "unchangedStatuses": [
+        304
+      ],
+      "preflightDuringSnapshot": 0,
+      "reprojections": {
+        "console": 0,
+        "objectives": 0,
+        "tasks": 0
+      },
+      "freshReadReprojections": {
+        "console": 1,
+        "objectives": 0,
+        "tasks": 0
+      },
+      "snapshotIdentityUnder2MB": true,
+      "snapshotHasNoTaskRows": true,
+      "pendingCount": 130,
+      "noBackupPreflightKey": true,
+      "snapshotGzipUnder400KB": true,
+      "snapshotEtagsDifferPerCoding": true,
+      "borrowedCrossCodingValidatorRefused": true
+    },
+    "serverRequestCount": 171
+  }
+}

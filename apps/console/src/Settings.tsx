@@ -11,7 +11,7 @@ const THEME_CHOICES: [ThemeChoice, string][] = [["light", "浅色"], ["dark", "�
  * local storage check and reclaim panel (moved here unchanged from the old
  * routing page). Language will join them later.
  */
-export function Settings({ api, csrfToken, connectionError = "", writesAvailable = true, access, refresh = async () => {}, theme, onTheme }: {
+export function Settings({ api, csrfToken, connectionError = "", writesAvailable = true, access, refresh = async () => {}, theme, onTheme, active = true }: {
   api: ConsoleApi;
   csrfToken: string;
   connectionError?: string;
@@ -20,6 +20,8 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
   refresh?: () => Promise<unknown>;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  /** True while the page is the visible tab; a hidden panel never reads the backup preflight. */
+  active?: boolean;
 }) {
   return <div className="settings-page">
     <section className="panel settings-panel" aria-labelledby="display-settings">
@@ -35,6 +37,6 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
       </div>
     </section>
     <ConsoleAccessSettings api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
-    <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} />
+    <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} active={active} />
   </div>;
 }

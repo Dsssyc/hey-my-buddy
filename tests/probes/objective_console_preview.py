@@ -132,16 +132,17 @@ TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source"
 EMIT_SOURCE = "tests/probes/objective_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
-    "normal": ("console.json", "objectives.json", "timeline-obj-a.json", "timeline-standalone.json",
+    "normal": ("backup-preflight.json", "console.json", "objectives.json", "tasks.json",
+               "timeline-obj-a.json", "timeline-standalone.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
                "workflow-preview-run-b2.json"),
     "readonly": ("console.json", "objectives.json", "timeline-obj-a.json", "workflow-preview-run-a1.json"),
     "truncated": ("console.json", "objectives.json", "timeline-obj-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "objectives.json", "timeline-obj-a.json", "workflow-preview-run-a1.json"),
-    "incompatible": ("harness-quota-malformed.json", "snapshot-legacy-single-router.json",
-                     "snapshot-missing-session.json", "snapshot-missing-tasks.json",
-                     "workflow-missing-revision.json"),
+    "incompatible": ("backup-preflight-malformed.json", "harness-quota-malformed.json",
+                     "snapshot-legacy-single-router.json", "snapshot-missing-session.json",
+                     "snapshot-missing-tasks.json", "workflow-missing-revision.json"),
 }
 
 MARKER_LABELS = {"dispatch": "派发", "decide": "决定", "continue": "续接", "integrate": "整合",
@@ -1292,11 +1293,35 @@ def harness_rows() -> list[dict]:
     ]
 
 
+def pending_root_count() -> int:
+    """The slim snapshot's board-wide awaiting-Host root count.
+
+    Mirrors ``objectives.pending_root_count`` over the synthetic runs: one
+    distinct delegation root per governed run whose state awaits its Host,
+    deduplicated by ``rootRunId`` exactly like the service computes it.
+    """
+    roots = {entry["delegation"]["rootRunId"] for entry in FIXTURES["runs"].values()
+             if entry["governed"] and entry["state"] == "awaiting-host"}
+    return len(roots)
+
+
+def backup_preflight_report() -> dict:
+    """The on-demand preflight the storage panel reads explicitly.
+
+    Synthetic paths only, no real state directory; one skipped entry keeps the
+    attention banner's skipped/rejected semantics observable in the preview.
+    """
+
+    def inventory(count: int, entries: list[dict]) -> dict:
+        return {"count": count, "paths": [row["path"] for row in entries], "entries": entries}
+
+    skipped = [{"path": "attempts/undeclared-note.txt", "reason": "not-evidence-file"}]
+    return {"policy": "attempt-evidence", "ok": True, "needsAttention": True,
+            "copied": inventory(3, []), "skipped": inventory(1, skipped), "rejected": inventory(0, [])}
+
+
 def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     profiles = profile_views()
-    entries = sorted(FIXTURES["runs"].values(),
-                     key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
-    tasks = [task_view(entry) for entry in entries]
     writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
@@ -1322,7 +1347,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
         "pendingEvidence": 0, "sampleCounts": {profile["profileId"]: 0 for profile in profiles},
-        "tasks": {"runs": tasks, "total": len(tasks), "nextCursor": None},
+        "tasks": {"pendingCount": pending_root_count()},
         "capabilities": {"selection": True, "maintenance": False, "maintenanceMode": "harness-owned",
                          "decisionAdapter": True, "decisionAdapterReason": "synthetic preview only",
                          "evaluationWriteGate": True, "readerAdmission": True, "evidenceRecord": True,
@@ -1469,7 +1494,9 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/objectives",
         f"GET  {base}/api/objectives/{OBJ_A}/timeline",
         f"GET  {base}/api/objectives/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline",
+        f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
+        f"GET  {base}/api/backup-preflight",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
         f"model_profiles · evaluation_history   (removed ops: 404; writes incl. objective_stop: 403)",
     )
@@ -1568,6 +1595,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 params = parse_query(query, frozenset({"limit", "state", "adapter", "before", "rootsOnly",
                                                        "query", "projectId", "hostId", "filter"}))
                 return self._json(200, task_page(params))
+            if path == "/api/backup-preflight":
+                return self._json(200, backup_preflight_report())
             if path.startswith("/api/objectives/") and path.endswith("/timeline"):
                 identifier = path[len("/api/objectives/"):-len("/timeline")]
                 if not OBJECTIVE_ID.match(identifier) or identifier not in FIXTURES["groups"]:
@@ -2142,6 +2171,13 @@ def emit_fixture_files() -> list[dict]:
         else:
             add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
                 console_snapshot(scenario, assets_ready=False), request={})
+        if scenario == "normal":
+            # The records view's own paginated read and the storage panel's
+            # on-demand preflight: the two reads the slim snapshot no longer carries.
+            add(scenario, "tasks.json", "task-page", "GET /api/tasks", 200, "accepted",
+                task_page({}), request={})
+            add(scenario, "backup-preflight.json", "backup-preflight", "GET /api/backup-preflight",
+                200, "accepted", backup_preflight_report(), request={})
         add(scenario, "objectives.json", "objectives-page", "GET /api/objectives", 200, "accepted",
             objective_page({}), request={})
         if scenario == "error":
@@ -2182,10 +2218,16 @@ def emit_fixture_files() -> list[dict]:
         "rejected", missing_session, request={}, expected_code="INVALID_RESPONSE",
         mutation="consoleSession removed, so the snapshot cannot describe the console session")
     missing_tasks = clone(normal)
-    missing_tasks["tasks"].pop("runs", None)
+    missing_tasks.pop("tasks", None)
     add("incompatible", "snapshot-missing-tasks.json", "console-snapshot", "GET /api/console", 200,
         "rejected", missing_tasks, request={}, expected_code="INVALID_RESPONSE",
-        mutation="tasks.runs removed, leaving the task list page without its rows")
+        mutation="tasks removed, leaving the slim snapshot without the server's board-wide pending count")
+    malformed_preflight = clone(backup_preflight_report())
+    malformed_preflight["rejected"] = "none"
+    add("incompatible", "backup-preflight-malformed.json", "backup-preflight", "GET /api/backup-preflight",
+        200, "rejected", malformed_preflight, request={}, expected_code="INVALID_RESPONSE",
+        mutation="backup-preflight rejected inventory replaced by the string \"none\" while every "
+                 "other field stays valid")
     missing_revision = clone(workflow_get({"runId": "preview-run-a1"}))
     missing_revision.pop("revision", None)
     add("incompatible", "workflow-missing-revision.json", "workflow-get", workflow_endpoint, 200,
@@ -2312,7 +2354,17 @@ def smoke(assets: Path, scenario: str) -> int:
         status, snapshot, _headers = call("GET", "/api/console")
         check("GET /api/console", status == 200 and snapshot.get("csrfToken") == SYNTHETIC_CSRF
               and snapshot["consoleSession"]["id"] == SYNTHETIC_SESSION_ID, f"status={status}")
-        check("snapshot task views", len(snapshot.get("tasks", {}).get("runs", [])) == len(FIXTURES["runs"]))
+        check("slim snapshot carries the board-wide pending count",
+              snapshot.get("tasks") == {"pendingCount": pending_root_count()},
+              str(snapshot.get("tasks")))
+        status, records, _headers = call("GET", "/api/tasks?rootsOnly=true&limit=50")
+        check("GET /api/tasks serves the paginated records page", status == 200
+              and isinstance(records.get("runs"), list) and isinstance(records.get("total"), int)
+              and records.get("nextCursor") is None, f"status={status}")
+        status, preflight, _headers = call("GET", "/api/backup-preflight")
+        check("GET /api/backup-preflight serves the on-demand report", status == 200
+              and preflight.get("needsAttention") is True and preflight.get("skipped", {}).get("count") == 1
+              and preflight.get("rejected", {}).get("count") == 0, f"status={status}")
         status, page, _headers = call("GET", "/api/objectives")
         check("GET /api/objectives", status == 200 and len(page["objectives"]) == 3
               and page["cursor"] == FIXTURES["head"] and page["changed"] is False, f"status={status}")

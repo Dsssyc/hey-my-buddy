@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ObjectiveTimeline } from "./ObjectiveTimeline";
 import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveTimelineFixture, LONG_TASK_LINE } from "./objective-fixtures";
+import { objectiveTimelineFixture, OBSERVED_AT, LONG_TASK_LINE } from "./objective-fixtures";
+import { clockTime } from "./objective-display";
 import type { ObjectiveTimeline as ObjectiveTimelineData } from "./objective-types";
 import type { InspectorSelection } from "./inspector-card";
 import type { TimelineItem } from "./objective-display";
@@ -868,5 +869,41 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     openLegend();
     expect(screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
     overflow.unmount();
+  });
+});
+
+describe("display clock wiring (component)", () => {
+  const ANCHOR = OBSERVED_AT;
+  /** Two minutes past the anchor: enough for the HH:mm chip text to differ. */
+  const advanced = "2026-09-26T08:14:00Z";
+
+  it("runs the layout and the 现在 marker on the advanced display clock while the source anchor stays fixed", () => {
+    const timeline = objectiveTimelineFixture();
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline, { displayObservedAt: advanced })} />);
+    // The open span's tail extends with the display clock, so the marker
+    // renders — and it shows the advanced time, never the fixed source anchor.
+    const chip = container.querySelector<HTMLElement>(".now-chip");
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toContain(`现在 ${clockTime(advanced)}`);
+    expect(chip!.textContent).not.toContain(clockTime(ANCHOR));
+  });
+
+  it("freezes the marker on a failed read and names the raw source anchor honestly", () => {
+    const timeline = objectiveTimelineFixture();
+    const { container } = render(<ObjectiveTimeline
+      {...baseProps(timeline, { displayObservedAt: advanced, error: "读取失败", stale: true })} />);
+    // The failed read's display clock stays at its last successful anchor.
+    expect(container.querySelector(".now-chip")!.textContent).toContain(`现在 ${clockTime(advanced)}`);
+    // The honesty line names the raw source observedAt — never the display clock.
+    const state = container.querySelector(".refresh-state.stale");
+    expect(state).not.toBeNull();
+    expect(state!.textContent).toContain(clockTime(ANCHOR));
+    expect(state!.getAttribute("title")).toContain(ANCHOR);
+  });
+
+  it("falls back to the source anchor when no advanced display clock is given", () => {
+    const timeline = objectiveTimelineFixture();
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    expect(container.querySelector(".now-chip")!.textContent).toContain(`现在 ${clockTime(ANCHOR)}`);
   });
 });

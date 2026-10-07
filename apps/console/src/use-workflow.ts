@@ -4,6 +4,7 @@ import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 import { useGlobalRefresh } from "./global-refresh";
+import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 
 /**
  * Strict check of one `workflow_get` reply: the governed view must belong to
@@ -33,26 +34,33 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, vis
   const [reload, setReload] = useState(0);
   const csrf = snapshot.csrfToken;
   const runId = task.runId;
+  const pageVisible = useDocumentVisible();
   useGlobalRefresh(async () => {
     setValue(parseWorkflowReply(await api.command<Workflow>("workflow_get", { runId }, csrf), runId));
     setError("");
   }, visible);
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !pageVisible) return;
     // React 19 cleanup prevents an older request replacing a newer snapshot.
     // https://react.dev/reference/react/useEffect#fetching-data-with-effects
+    // Page Visibility stops the schedule on a hidden page and the effect re-run
+    // on return reads once immediately; the header refresh stays available.
     let current = true;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
+      // Invocation-time document check: the visibilitychange cleanup can lag
+      // the actual hide, and a timer firing inside that gap must not start a
+      // GET. The explicit header refresh stays available regardless.
+      if (!documentVisibleNow()) return;
       try {
         const result = parseWorkflowReply(await api.command<Workflow>("workflow_get", { runId }, csrf), runId);
         if (current) { setValue(result); setError(""); }
       } catch (reason) { if (current) setError(errorText(reason)); }
-      if (current) timer = setTimeout(poll, 3000);
+      if (current && documentVisibleNow()) timer = setTimeout(poll, 3000);
     }
     void poll();
     return () => { current = false; clearTimeout(timer); };
-  }, [api, runId, csrf, task.revision, task.workflow?.revision, reload, visible]);
+  }, [api, runId, csrf, task.revision, task.workflow?.revision, reload, visible, pageVisible]);
 
   return {
     value, error,

@@ -7,7 +7,7 @@ import { excerpt, needsReview, taskStatus, taskTitle, titleTooltip } from "./tas
 import { TaskDetails } from "./TaskDetails";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { SplitView } from "./SplitView";
-import { mergeLiveTasks, useTaskHistory } from "./use-task-history";
+import { useTaskHistory } from "./use-task-history";
 import { useGlobalRefresh } from "./global-refresh";
 
 export function Tasks({ snapshot, api, refresh, active = true }: {
@@ -18,6 +18,9 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   const [selected, setSelected] = useState<string | null>(null), [remote, setRemote] = useState<Task | null>(null);
   const [detailError, setDetailError] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // The records view reads only its own paginated route: the loaded pages are
+  // the rows, the first-page poll keeps them current, and the snapshot never
+  // contributes rows to this list.
   const history = useTaskHistory(api, { rootsOnly: !internal, query, projectId, hostId, filter }, active);
   useGlobalRefresh(async () => {
     if (!selected) return;
@@ -26,8 +29,8 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
     setRemote(value as Task);
     setDetailError("");
   }, active && !!selected);
-  const tasks = mergeLiveTasks(history.runs, snapshot.tasks.runs);
-  const listed = tasks.find(t => t.runId === selected) || snapshot.tasks.runs.find(t => t.runId === selected);
+  const tasks = history.runs;
+  const listed = tasks.find(t => t.runId === selected);
   const saved = remote?.runId === selected ? remote : undefined;
   const task = saved && (!listed || saved.revision > listed.revision || saved.revision === listed.revision && (saved.workflow?.revision || 0) >= (listed.workflow?.revision || 0)) ? saved : listed;
   const updateSelected = useCallback((next: Task) => setRemote(previous =>
@@ -36,10 +39,13 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   const scrollIntent = useRef(false);
   const anchor = useRef<{ runId: string; top: number } | null>(null);
   const choices = useMemo(() => {
-    const records = [...snapshot.tasks.runs, ...history.runs];
+    // Filter choices come from the rows this view has itself read (bounded
+    // memory in the hook), so a scope change reloading the list never empties
+    // the dropdowns.
+    const records = history.known;
     return { projects: [...new Map(records.filter(t => t.delegation?.kind === "goal").map(t => [taskProject(t).id, taskProject(t)])).values()],
       hosts: [...new Set(records.map(t => t.delegation?.sourceHostId).filter((x): x is string => !!x))].sort() };
-  }, [snapshot.tasks.runs, history.runs]);
+  }, [history.known]);
   const matchesState = (t: Task) => filter === "all" || (filter === "host" ? t.workflow?.awaitingHost :
     filter === "review" ? needsReview(t) : ["queued", "running", "cancelling", "reconciliation-needed"].includes(t.status)
       || ["executing", "awaiting-host", "waiting-helpers"].includes(t.workflow?.state || ""));
@@ -50,13 +56,9 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
     if (!groups.has(project.id)) groups.set(project.id, { project, runs: [] });
     groups.get(project.id)!.runs.push(row);
   }
-  const newest = history.runs[0];
-  const newRecords = !history.loading ? snapshot.tasks.runs.filter(t => (!internal ? t.delegation?.kind === "goal" : true) && matchesState(t) &&
-    (!projectId || taskProject(t).id === projectId) && (!hostId || [t.delegation?.sourceHostId, t.delegation?.currentHostId].includes(hostId)) &&
-    [t.task, t.runId, taskProject(t).path, t.delegation?.sourceHostId, t.delegation?.currentHostId,
-      t.delegation?.configuration?.adapter || t.spec?.adapter, t.delegation?.configuration?.model || t.spec?.model].join(" ").toLowerCase().includes(query.trim().toLowerCase()) &&
-    !history.runs.some(r => r.runId === t.runId) &&
-    (!newest || t.createdAt > newest.createdAt || t.createdAt === newest.createdAt && t.runId > newest.runId)) : [];
+  // New matching records the loaded history has not seen: detected by the
+  // view's own first-page poll, never by merging snapshot rows.
+  const newRecords = history.newIds.size;
   useEffect(() => {
     if (!selected || task || !active) return;
     let current = true; setDetailError("");
@@ -67,7 +69,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
     return () => { current = false; };
   }, [api, selected, active, !!task]);
   function selectTask(id: string | null) {
-    const next = tasks.find(t => t.runId === id) || snapshot.tasks.runs.find(t => t.runId === id);
+    const next = tasks.find(t => t.runId === id);
     setRemote(next || null);
     setSelected(id); setDetailError("");
   }
@@ -98,7 +100,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
       <label className="check-field"><input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)} />显示协助任务与内部执行</label>
       <p className="small muted">已加载 {history.runs.length} / {history.total} 条</p>
     </div>
-    {newRecords.length > 0 && <button className="new-records" onClick={() => { history.reset(); if (scroll.current) scroll.current.scrollTop = 0; }}>有 {newRecords.length} 条新记录 · 回到最新</button>}
+    {newRecords > 0 && <button className="new-records" onClick={() => { history.reset(); if (scroll.current) scroll.current.scrollTop = 0; }}>有 {newRecords} 条新记录 · 回到最新</button>}
     {history.error && <div className="list-error" role="alert">{history.error}<button className="button small-button" onClick={() => void history.retry()}>重试读取</button></div>}
     <div ref={scroll} className="list-scroll" tabIndex={0} aria-label="委派条目"
       onWheel={() => { scrollIntent.current = true; }} onTouchMove={() => { scrollIntent.current = true; }}

@@ -14,7 +14,7 @@ const REASONS: Record<string, string> = {
   "unreadable-directory": "无法读取目录",
 };
 
-/** The ordinary snapshot carries this read; the notice has no mutation action. */
+/** The on-demand preflight read (storage panel) feeds this notice; it has no mutation action. */
 export function BackupAttention({ report }: { report?: BackupPreflight }) {
   if (!report?.needsAttention) return null;
   const entries = [...report.skipped.entries.map(row => ({ ...row, action: "跳过" })),

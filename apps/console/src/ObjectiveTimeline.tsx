@@ -57,6 +57,13 @@ type MarkerCluster = MarkerClusterView & { head: string };
 export type ObjectiveTimelineProps = {
   summary: ObjectiveSummary | null;
   timeline: ObjectiveTimelineData | null;
+  /**
+   * The display clock for layout and the 现在 marker: the response's server
+   * anchor advanced by the client time since that anchor was read, so an
+   * unchanged (304) poll keeps the wall clock moving without rewriting the
+   * response's own `observedAt`. Absent reads as the response's anchor.
+   */
+  displayObservedAt?: string | null;
   loading: boolean;
   error: string;
   stale: boolean;
@@ -245,10 +252,15 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const drawerActuallyCollapsed = drawerCollapsed;
   const drawerValue = drawerActuallyCollapsed ? DRAWER_MIN_PX : Math.max(DRAWER_MIN_PX, Math.min(drawerHeight ?? DRAWER_DEFAULT_PX, drawerMax));
 
-  const observedAtMs = toMs(timeline?.observedAt);
+  // Layout and the 现在 marker run on the display clock (the anchor advanced
+  // by the client since its read); the response's own observedAt stays the
+  // recorded source fact, shown verbatim in the failure tooltip.
+  const observedAtMs = toMs(props.displayObservedAt ?? timeline?.observedAt);
   const layout = useMemo(
-    () => timeline ? createTimelineLayout(timeline, props.expandedGapIds) : null,
-    [timeline, props.expandedGapIds],
+    () => timeline
+      ? createTimelineLayout({ ...timeline, observedAt: props.displayObservedAt ?? timeline.observedAt }, props.expandedGapIds)
+      : null,
+    [timeline, props.displayObservedAt, props.expandedGapIds],
   );
   const canvasKey = timeline?.objective.objectiveId ?? null;
 

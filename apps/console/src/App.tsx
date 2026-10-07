@@ -11,7 +11,6 @@ import { createAuthorityLatch } from "./console-session";
 import { Objectives } from "./Objectives";
 import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
-import { BackupAttention } from "./BackupAttention";
 import { Badge, Icon } from "./ui";
 import { errorText } from "./api";
 import { refreshVisibleReads } from "./global-refresh";
@@ -107,8 +106,9 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
-  const pending = new Set(snapshot.tasks.runs.filter(t => t.workflow?.awaitingHost)
-    .map(t => t.delegation?.rootRunId || t.runId)).size;
+  // The server's board-wide count of delegation roots awaiting their Host —
+  // computed over every run, never inferred from a page of recent rows.
+  const pending = snapshot.tasks.pendingCount;
   const saveRefusal = editor.saveBlockedReason
     || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
   // P1.2: the internal table revision lives only in the connection tooltip.
@@ -141,7 +141,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
         {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + tabHashes[key]} onClick={() => select(key)}
           aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""}>
           <Icon name={tabIcons[key]} /><span>{tabs[key]}</span>
-          {key === "tasks" && pending > 0 && <span className="nav-count" title="最新记录中等待 Host 决定的目标">{pending}</span>}
+          {key === "tasks" && pending > 0 && <span className="nav-count" title="全部委派中等待 Host 决定的目标">{pending}</span>}
           {key === "buddy" && editor.dirty && <span className="nav-unsaved" title="有未保存的修改"><span aria-hidden="true">•</span><span className="sr-only">有未保存的修改</span></span>}
         </a>)}
       </nav>
@@ -154,7 +154,6 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
     <main id="main" className="main-content" tabIndex={-1}>
       <h1 className="sr-only">{tabs[tab]}</h1>
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
-      <BackupAttention report={snapshot.backupPreflight} />
       {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
         <span title={conflictTitle}>设置已更新；请核对草稿。</span>
         {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
@@ -185,6 +184,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
           key === "buddy" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} refresh={refresh} writesAvailable={writesAvailable}
+              active={tab === "settings"}
               theme={theme.choice} onTheme={theme.setChoice} />}
       </section>)}
       {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
