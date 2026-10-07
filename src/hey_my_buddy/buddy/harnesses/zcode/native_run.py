@@ -30,14 +30,12 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import math
 import os
 import queue
 import re
 import secrets
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +48,16 @@ from ...roles.turn_io import private_json
 from ..base import BoundSessionServices, ProcessHandle
 from ...runtime.windows_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
+from ..native_support import (
+    CancelFlag,
+    ObserverInterrupt,
+    configuration_spec,
+    execution_deadline,
+    halt_owned_group,
+    identity_or_none,
+    shape_guard,
+    utc_now,
+)
 from ..run_contract import (
     RunIdentity,
     ActivityPackage,
@@ -60,14 +68,12 @@ from ..run_contract import (
     ContinuationFacts,
     EffectivePolicy,
     EvidenceRef,
-    FrozenJson,
     InterruptEvidence,
     NativeFailurePackage,
     UsagePackage,
     ToolEvidencePackage,
     NativeErrorRecord,
     LastAssistantMessagePackage,
-    NativeIdentity,
     PolicyFact,
     ResultConfiguration,
     RunConfiguration,
@@ -95,10 +101,6 @@ from .tool_evidence import ZcodeToolFacts
 
 _END_FACTS_FILE = "run-end-facts.json"
 _NATIVE_STDERR_FILE = "native.stderr.log"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def selected(snapshot: dict) -> dict:
@@ -166,16 +168,6 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
     return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
             "discoveries": [{"adapter": "zcode", "status": "complete"}], "warnings": warnings}
-
-
-def execution_deadline(timeout_seconds) -> float:
-    """The one overall native execution deadline; an explicit 0 means unlimited.
-
-    Only this deadline becomes infinite. The version probe and the per-request,
-    cancel and shutdown waits keep their own finite bounds, and the ``cancelled``
-    flag still ends an unlimited turn.
-    """
-    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
 # -- the role-facing service binding -------------------------------------------
@@ -411,16 +403,6 @@ class _RunFacts:
         }
 
 
-class _ObserverInterrupt(Exception):
-    """The role observer asked the driver to stop the native run.
-
-    It is raised only on the driver's own path: a refused interaction is
-    recorded and answered inside the pump first, and the role's answer to the
-    retained fact is taken at the driver's next pump boundary — no control
-    flow bypasses the recorder or the refusal I/O.
-    """
-
-
 #: Native notification methods the protocol knows at every phase.
 _KNOWN_METHODS = frozenset({
     "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
@@ -636,28 +618,6 @@ class _RunState:
             self.error_text = str(error)
 
 
-class _CancelFlag:
-    """A ``threading.Event`` view of the seam's cancel callable."""
-
-    def __init__(self, cancelled: Callable[[], bool]):
-        self._cancelled = cancelled
-        self._event = threading.Event()
-
-    def is_set(self) -> bool:
-        return self._event.is_set() or bool(self._cancelled())
-
-    def set(self) -> None:
-        self._event.set()
-
-    def wait(self, timeout: float) -> None:
-        deadline = time.monotonic() + max(0.0, timeout)
-        while not self.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(0.05, remaining))
-
-
 @dataclasses.dataclass
 class _Spawn:
     process: subprocess.Popen
@@ -668,7 +628,7 @@ class _Spawn:
 
 
 def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, deadline: float,
-                      cancel: _CancelFlag, stderr_path: Path, no_tools: bool,
+                      cancel: CancelFlag, stderr_path: Path, no_tools: bool,
                       owned: list | None = None) -> _Spawn:
     """Spawn the one owned app-server, ready for the native handshake.
 
@@ -724,7 +684,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
         # The connection setup failed after the child existed: this helper is
         # still the only holder, so it stops the group itself and leaves the
         # observed stop facts for the result before re-raising.
-        shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
+        shutdown, _signalled = halt_owned_group(process, handle, time.monotonic() + 5.0)
         if owned is not None:
             owned[:] = [{"created": True, "shutdown": shutdown,
                          "exit_code": process.returncode}]
@@ -732,30 +692,9 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     return _Spawn(process=process, handle=handle, connection=connection, access=access, version=version)
 
 
-def _halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
-    """The one actual stop of an owned group: close, wait, terminate, confirm.
-
-    Returns ``(shutdown, signalled)`` — the group's confirmed disappearance and
-    whether a signal was actually sent. Every owner (the run's stop collection
-    and the spawn helper's failure path) stops its child through this
-    primitive alone.
-    """
-    try:
-        process.stdin.close()
-    except OSError:
-        pass
-    handle.wait(min(3.0, max(0.0, deadline - time.monotonic())))
-    signalled = False
-    if not handle.shutdown_confirmed(settle_seconds=0.2):
-        handle.terminate(grace_seconds=1.0)
-        signalled = True
-    shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
-    return shutdown, signalled
-
-
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     """Stop the run's owned app-server through the shared halt primitive."""
-    return _halt_owned_group(spawn.process, spawn.handle, deadline)
+    return halt_owned_group(spawn.process, spawn.handle, deadline)
 
 
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
@@ -801,7 +740,7 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
                 # the stream.
                 try:
                     notify()
-                except _ObserverInterrupt:
+                except ObserverInterrupt:
                     raise NativeError(
                         "observer-interrupt",
                         "the role observer stopped the run during the EOF drain") from None
@@ -815,11 +754,6 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
         except (TypeError, ValueError, KeyError, AttributeError, RecursionError, BoardError):
             tools.evidence.observe_incomplete("zcode", {})
             failed(NativeError("invalid-protocol", "a native frame could not be recorded"))
-
-
-def _spec(request: RunRequest) -> dict:
-    return {"provider": request.configuration.provider, "model": request.configuration.model,
-            "effort": request.configuration.effort}
 
 
 def _bridge_identity(request: RunRequest) -> dict:
@@ -957,6 +891,33 @@ def _check_service_descriptions(request: RunRequest, mount: SessionServiceMount)
 # -- the one run -----------------------------------------------------------------
 
 
+@dataclasses.dataclass
+class _CarrierOutcome:
+    """What the executed carrier actually reached, in the run's own order.
+
+    The owner loop and the carrier phase share exactly this record: every
+    field keeps its honest initial value until the carrier's own stage really
+    set it, so a later failure still reports the session, configuration and
+    evidence the run had really reached.
+    """
+    session_id: str | None = None
+    turn_id: str | None = None
+    resolved: dict | None = None
+    raw_answer: str | None = None
+    event_count: int = 0
+    correction_count: int = 0
+    final_message_completed: bool = False
+    last_protocol: NoToolProtocol | None = None
+    evidence: RootTurnEvidence | None = None
+    projection: ActivityProjection | None = None
+    attempt_usage: ZcodeAttemptUsage | None = None
+    inquiry_bridge: InquiryBridge | None = None
+    binding_path: Path | None = None
+    record: dict | None = None
+    verified_outcome: dict | None = None
+    verified_completion: dict | None = None
+
+
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native ZCode execution: the single native path of this harness."""
@@ -977,13 +938,21 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     if services is None and request.continuation is not None:
         raise BoardError("INVALID_ARGUMENT",
                          "a final-message zcode run opens fresh root sessions and continues no native one")
-    started_at = time.monotonic()
+    return _run(request, services=services, no_tool=no_tool,
+                completion_carrier=completion_carrier, observer=observer, cancelled=cancelled)
+
+
+def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrier: bool,
+         observer: Callable[[Mapping[str, Any]], RunFeedback],
+         cancelled: Callable[[], bool]) -> RunResult:
+    """The owner loop: one spawn and handshake, one dispatch to the request's
+    carrier, one stop collection, one factual result."""
     deadline = execution_deadline(request.budget.timeout_seconds)
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     stderr_path = (Path(services.native_stderr) if services is not None and services.native_stderr
                    else invocation_root / _NATIVE_STDERR_FILE)
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
 
     facts = _RunFacts()
     classifier = _Classifier(facts)
@@ -997,26 +966,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     tools = ZcodeToolFacts({"adapter": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation})
+    outcome = _CarrierOutcome()
     spawn: _Spawn | None = None
     owned_spawn: list = []
-    session_id: str | None = None
-    turn_id: str | None = None
-    input_id: str | None = None
-    resolved: dict | None = None
-    evidence: RootTurnEvidence | None = None
-    last_protocol: NoToolProtocol | None = None
-    attempt_usage: ZcodeAttemptUsage | None = None
-    projection: ActivityProjection | None = None
-    inquiry_bridge: InquiryBridge | None = None
-    record: dict | None = None
-    raw_answer: str | None = None
-    correction_count = 0
-    event_count = 0
-    binding_path: Path | None = None
     drained: bool | None = None
-    verified_outcome: dict | None = None
-    verified_completion: dict | None = None
-    final_message_completed = False
 
     def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
         facts_snapshot = facts.mapping(tool_calls=tools.tool_calls if tools is not None else 0,
@@ -1027,7 +980,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         if feedback.action == "correct" and not settled:
             raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
         if feedback.action == "stop":
-            raise _ObserverInterrupt()
+            raise ObserverInterrupt()
         return feedback
 
     feedback_due = [False]
@@ -1039,8 +992,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         # waiting — so a stop takes effect at once without bypassing the
         # recorder or the refusal I/O.
         facts.denied.append(record_item)
-        if inquiry_bridge is not None:
-            inquiry_bridge.note_attention(record_item)
+        if outcome.inquiry_bridge is not None:
+            outcome.inquiry_bridge.note_attention(record_item)
         feedback_due[0] = True
 
     def dispatch_feedback() -> None:
@@ -1062,240 +1015,20 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         workspace = {"workspacePath": request.cwd, "workspaceKey": request.cwd}
 
         if not completion_carrier:
-            # -- the final-message channel: fresh root sessions on the one
-            # process and total deadline, one per executed observer correction.
-            # How often a correction is offered — at most once, never for an
-            # enum — is the role's rule alone; this loop only executes what a
-            # settled feedback asks, under the shared deadline and cancel.
-            def final_chain(holder: list) -> Callable[[dict, int], None]:
-                def observe(message: dict, ordinal: int) -> None:
-                    # Projection precedes classification and every check: a
-                    # refused, foreign or child call stays in the evidence
-                    # whatever this chain decides, and the retained facts reach
-                    # the role before any driver-side protocol check runs.
-                    tools.observe(message)
-                    changed = classifier.observe(message)
-                    if changed:
-                        notify()
-                    if holder:
-                        holder[0].observe(message, ordinal)
-                return observe
-
-            protocol_holder: list = []
-            last_protocol = None
-
-            def note_configured(opened_session: str, resolved_spec: dict) -> None:
-                nonlocal session_id, resolved
-                session_id, resolved = opened_session, resolved_spec
-                state.configured = True
-
-            def bind_protocol(opened_session: str) -> None:
-                nonlocal last_protocol
-                last_protocol = NoToolProtocol(opened_session, input_id, tools)
-                protocol_holder[:] = [last_protocol]
-                connection.observe = final_chain(protocol_holder)
-
-            input_text = request.input_text
-            if no_tool:
-                create_params = {"titleGenerationEnabled": False, "toolAllowlist": [],
-                                 "mcpServers": [], "offPeakToolEnabled": False,
-                                 "dynamicWorkflowEnabled": False}
-            else:
-                # A read or write scope without a bound service runs the same
-                # final-message carrier over the session's own default tools;
-                # the effective policy reports that honestly and the external
-                # review eligibility is untouched.
-                create_params = {"mode": "yolo", "titleGenerationEnabled": False, "mcpServers": []}
-            state.create_params = create_params
-            while True:
-                protocol_holder[:] = []
-                connection.observe = final_chain(protocol_holder)
-                snapshot = _open_root(connection, workspace, create_params=create_params)
-                state.session_opened = True
-                input_id = "buddy-no-tool-" + secrets.token_hex(16)
-                session_id, resolved = _admit_root_input(
-                    connection, snapshot=snapshot, request=request, spec=_spec(request),
-                    access=spawn.access, input_id=input_id, input_text=input_text,
-                    previous=None, mode="initial", require_interactive=False,
-                    settled=lambda: bool(last_protocol is not None and last_protocol.settled),
-                    classifier=classifier, state=state,
-                    on_configured=note_configured,
-                    before_send=lambda opened: bind_protocol(opened))
-                protocol = last_protocol
-                state.completion_ordinal = connection.ordinal
-                final_message_completed = bool(protocol and protocol.completed)
-                # The observed answer, count and turn identity are facts of the
-                # settled round: capture them before the close, so a close that
-                # is not acknowledged fails the run without erasing them.
-                raw_answer = protocol.raw_answer
-                event_count = protocol.events
-                turn_id = protocol.turn_id
-                _close_root_session(connection, session_id, tools)
-                state.status = "ok"
-                feedback = notify(settled=True, raw=raw_answer)
-                if feedback.action == "correct":
-                    correction_count += 1
-                    input_text = feedback.input_text
-                    classifier.admitted = False
-                    continue
-                break
+            _final_message_rounds(connection=connection, request=request, spawn=spawn,
+                                  workspace=workspace, no_tool=no_tool, facts=facts,
+                                  classifier=classifier, state=state, tools=tools,
+                                  notify=notify, outcome=outcome)
         else:
-            # -- the governed completion-tool turn: the same lifecycle sites,
-            # with a mounted session service, a continuation and live observers.
-            mount = services.mount
-            _check_service_descriptions(request, mount)
-            mode, previous = _continuation_of(request)
-            create_params = {"mode": "yolo", "titleGenerationEnabled": False,
-                             "mcpServers": list(mount.mcp_servers)}
-            state.create_params = create_params
-            snapshot = None
-            if mode == "native-session":
-                binding_path = native_root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
-                try:
-                    binding = decode_strict_json(binding_path.read_bytes())
-                except (OSError, ValueError):
-                    raise NativeError("native-resume-unavailable", "the previous native session has no private goal binding") from None
-                if binding != {"taskId": request.identity.task_id, "sessionId": previous,
-                               "cwd": request.cwd, "configuration": _spec(request)}:
-                    raise NativeError("native-resume-unavailable", "the previous native session does not match this goal, checkout and configuration")
-                snapshot = _open_root(connection, workspace, create_params=create_params, resume=previous)
-            else:
-                snapshot = _open_root(connection, workspace, create_params=create_params)
-            state.session_opened = True
-            # The per-run observers exist before the session opens; the session
-            # identity is bound onto them the moment the root is opened.
-            projection = ActivityProjection(None)
-            attempt_usage = ZcodeAttemptUsage(None, resumed=mode == "native-session")
-            # The real helper owns validation, atomic replacement and throttling;
-            # its state lives for the whole run so same-phase updates are
-            # coalesced instead of rewriting the sidecar for every token event.
-            from ....protocol.activity import ActivitySidecar
-            sidecar_dir = ensure_private_dir(Path(services.activity_dir) if services.activity_dir else invocation_root)
-            sidecar = ActivitySidecar(sidecar_dir, task_id=request.identity.task_id,
-                                      attempt_id=request.identity.attempt_id,
-                                      generation=request.identity.generation)
-
-            def publish_activity() -> None:
-                try:
-                    sidecar.publish(projection.payload())
-                except BoardError:
-                    # Metadata must never fail the native turn; the failure is
-                    # reported instead of writing a look-alike sidecar.
-                    return
-
-            if services.inquiry is not None:
-                inquiry_bridge = make_inquiry_bridge(services.inquiry,
-                                               identity=_bridge_identity(request),
-                                               journal_path=str(services.inquiry.get("resultsPath") or ""),
-                                               attention_path=mount.bridge.get("attentionPath"))
-                inquiry_bridge.start()
-                state.inquiry = inquiry_bridge.report()
-
-            def observe(message: dict, ordinal: int) -> None:
-                if evidence is None:
-                    return
-                # Projection precedes everything and keeps every observed
-                # fact: child relays, foreign sessions and unverified or
-                # forged same-name calls stay task-tool facts. Only the root
-                # calls whose results carried verified delivery evidence — a
-                # verified receipt or signed refusal envelope, tracked by the
-                # root-turn evidence itself — leave the published package at
-                # finish time; their evidence is the receipt.
-                tools.observe(message)
-                evidence.observe(message, ordinal)
-                if evidence.turn_id is not None:
-                    # The trusted root identity comes only from the verified
-                    # canonical turn start, never from the observed events;
-                    # add_root keeps it unique by itself.
-                    tools.add_root(session_id, evidence.turn_id)
-                changed = classifier.observe(message)
-                if changed:
-                    notify()
-                # Attempt usage is observed next to the root-turn evidence; a
-                # foreign session or an unstarted turn contributes nothing.
-                attempt_usage.observe(message, evidence.turn_id)
-                projection.note(message, ordinal)
-                if inquiry_bridge is not None:
-                    inquiry_bridge.note_event(message, projection.phase)
-                # Native events in a long phase still advance the observation.
-                # The sidecar coalesces token-level updates within its own window.
-                publish_activity()
-
-            def bind_worker_session(opened_session: str) -> None:
-                nonlocal evidence
-                evidence = RootTurnEvidence(
-                    opened_session, mount.input_id, mount.finish_tool, mount.bridge,
-                    checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
-                    on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id)),
-                    on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id)),
-                    validate_outcome=services.validate_outcome,
-                    mounted_tools=mount.bare_tools)
-                projection.session_id = opened_session
-                attempt_usage.session_id = opened_session
-                connection.observe = observe
-                projection.phase = "waiting-model"
-                publish_activity()
-                # The pre-model cursor is a bounded, optional read: it can never
-                # fail or delay the turn, and without it no message is ever
-                # attributed.
-                attempt_usage.capture_baseline(connection)
-
-            def note_configured(opened_session: str, resolved_spec: dict) -> None:
-                nonlocal session_id, resolved, binding_path
-                session_id, resolved = opened_session, resolved_spec
-                state.configured = True
-                if mode != "native-session":
-                    binding_path = native_root / (hashlib.sha256(opened_session.encode()).hexdigest() + ".json")
-                    private_json(binding_path, {"taskId": request.identity.task_id,
-                                                "sessionId": opened_session,
-                                                "cwd": request.cwd, "configuration": resolved_spec},
-                                 exclusive=True)
-
-            def after_admit(opened_session: str) -> None:
-                if inquiry_bridge is not None:
-                    inquiry_bridge.activate(opened_session)
-
-            session_id, resolved = _admit_root_input(
-                connection, snapshot=snapshot, request=request, spec=_spec(request),
-                access=spawn.access, input_id=mount.input_id, input_text=request.input_text,
-                previous=previous, mode=mode, require_interactive=True,
-                settled=lambda: bool(evidence is not None and evidence.settled_ordinal),
-                classifier=classifier, state=state, on_configured=note_configured,
-                before_send=bind_worker_session, after_admit=after_admit)
-            input_id = mount.input_id
-            # The settlement read is also bounded and optional; the root turn is
-            # already settled, so nothing here may change its result.
-            attempt_usage.capture_final(connection)
-            if inquiry_bridge is not None:
-                # Stop accepting observations the instant the root turn settled:
-                # an idle or finished agent is never woken for an inquiry.
-                inquiry_bridge.close()
-            projection.phase = "finishing"
-            publish_activity()
-            # The native completion facts are observed once and survive any
-            # later failure: a close that is not acknowledged fails the run,
-            # but it never rewrites which mechanism delivered the value or
-            # erases the verified receipt and outcome the root already gave.
-            verified_outcome = evidence.receipt["outcome"]
-            verified_completion = {"call_id": evidence.call_id,
-                                   "receipt_id": evidence.receipt["receiptId"],
-                                   "turn_id": evidence.turn_id,
-                                   "result_seq": evidence.result_seq}
-            state.completion_ordinal = evidence.completed_ordinal
-            turn_id = evidence.turn_id
-            state.status = "ok"
-            notify(settled=True)
-            # Only the governed turn is closed here; a final-message loop closes
-            # every session itself, including a corrected one.
-            _close_root_session(connection, session_id, None)
-            record = {"outcome": verified_outcome, "provenance": None}
-            evidence.close_ordinal = connection.ordinal
-            record["provenance"] = evidence.provenance()
-    except _ObserverInterrupt:
+            _governed_turn(connection=connection, request=request, services=services, spawn=spawn,
+                           workspace=workspace, invocation_root=invocation_root, native_root=native_root,
+                           facts=facts, classifier=classifier, state=state, tools=tools,
+                           notify=notify, outcome=outcome)
+    except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
         state.observer_stopped = True
-        record = None
+        outcome.record = None
     except NativeError as error:
         state.status = "cancelled" if error.code == "cancelled" else "error"
         state.reason = error.code
@@ -1315,74 +1048,21 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             native_code = quota_native_code(failure)
             if native_code is not None:
                 state.quota_failure = {"nativeCode": native_code, "source": "zcode/session-turn-failed",
-                                       "observedAt": _now()}
+                                       "observedAt": utc_now()}
         # A failed turn still retains its native observations: the bounded read is
         # optional, so it can never turn this failure into another one.
-        if attempt_usage is not None and spawn is not None:
-            attempt_usage.capture_final(spawn.connection)
-        record = None
+        if outcome.attempt_usage is not None and spawn is not None:
+            outcome.attempt_usage.capture_final(spawn.connection)
+        outcome.record = None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         state.status = "error"
         state.reason = "invalid-native-result"
         state.error_text = "the native execution returned invalid or incomplete data"
-        record = None
+        outcome.record = None
     finally:
-        if attempt_usage is not None:
-            # ADR-018 items 22/23 and the retained root assistant text: raw native
-            # observations for every path, including a quota or process failure. A
-            # value the native records never proved stays null.
-            state.token_usage = attempt_usage.raw_usage()
-            state.last_assistant_message = attempt_usage.last_assistant_message
-        if inquiry_bridge is not None:
-            # Closing before the process disappears keeps an after-end question
-            # honest instead of leaving a dangling observation.
-            inquiry_bridge.close()
-            state.inquiry = inquiry_bridge.report()
-            state.attention = inquiry_bridge.attention_report()
-        if spawn is not None:
-            shutdown, signalled = _stop_native(spawn, deadline)
-            state.shutdown = shutdown
-            state.exit_code = spawn.process.returncode
-            state.signalled = signalled
-            state.interrupted = signalled or state.observer_stopped
-            if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
-                state.status = "error"
-                state.reason = "native-shutdown-failed"
-                state.error_text = ("the native app server did not exit normally "
-                                    "with confirmed group shutdown")
-                record = None
-            if tools is not None and shutdown:
-                # The native server has exited. Read through its terminal EOF so
-                # an event queued after settlement cannot hide behind close/ack
-                # — for both carriers: a stream nobody read to its end is not
-                # proven complete, whatever mechanism delivered the value. A
-                # late frame keeps its projected fact and reaches the role
-                # observer; its stop — not the driver's scope reading — is what
-                # marks the stream incomplete here.
-                if not completion_carrier and last_protocol is not None:
-                    drained = _drain(spawn.connection, tools, classifier, last_protocol, facts,
-                                     state, notify)
-                elif completion_carrier and evidence is not None:
-                    drained = _drain(spawn.connection, tools, classifier, evidence, facts,
-                                     state, notify)
-            try:
-                spawn.process.stdout.close()
-            except OSError:
-                pass
-        if cancel.is_set():
-            state.status = "cancelled"
-            state.reason = "cancelled"
-            state.error_text = "the owned ZCode execution was cancelled"
-            record = None
-    evidence_refs: list[EvidenceRef] = []
-
-    def retain(kind: str, name: str, value: dict) -> None:
-        target = invocation_root / name
-        private_json(target, value, exclusive=True)
-        raw = target.read_bytes()
-        evidence_refs.append(EvidenceRef(kind=kind, location=str(target), size_bytes=len(raw),
-                                         sha256=hashlib.sha256(raw).hexdigest()))
-
+        drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
+                                   tools=tools, classifier=classifier, facts=facts, notify=notify,
+                                   completion_carrier=completion_carrier, outcome=outcome)
     tool_package = None
     if state.session_opened:
         # A stream is complete only when it was read to its EOF with the owned
@@ -1391,8 +1071,322 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         stream_complete = bool(state.status == "ok" and state.shutdown
                                and drained is True
                                and not tools.close_pending)
-        exclude = evidence.verified_delivery() if evidence is not None else frozenset()
+        exclude = outcome.evidence.verified_delivery() if outcome.evidence is not None else frozenset()
         tool_package = tools.finish(stream_complete, exclude_calls=exclude)
+    evidence_refs = _evidence_refs(invocation_root=invocation_root, stderr_path=stderr_path,
+                                   state=state, facts=facts, record=outcome.record)
+    return _finish_result(request=request, spawn=spawn, state=state, owned_spawn=owned_spawn,
+                          outcome=outcome, completion_carrier=completion_carrier, drained=drained,
+                          evidence_refs=evidence_refs, tool_package=tool_package)
+
+
+def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,
+                          workspace: dict, no_tool: bool, facts: _RunFacts, classifier: _Classifier,
+                          state: _RunState, tools: ZcodeToolFacts,
+                          notify: Callable[..., RunFeedback], outcome: _CarrierOutcome) -> None:
+    """The final-message carrier: fresh root sessions on the one process and
+    total deadline, one per executed observer correction.
+
+    How often a correction is offered — at most once, never for an enum — is
+    the role's rule alone; this loop only executes what a settled feedback
+    asks, under the shared deadline and cancel.
+    """
+    def final_chain(holder: list) -> Callable[[dict, int], None]:
+        def observe(message: dict, ordinal: int) -> None:
+            # Projection precedes classification and every check: a
+            # refused, foreign or child call stays in the evidence
+            # whatever this chain decides, and the retained facts reach
+            # the role before any driver-side protocol check runs.
+            tools.observe(message)
+            changed = classifier.observe(message)
+            if changed:
+                notify()
+            if holder:
+                holder[0].observe(message, ordinal)
+        return observe
+
+    protocol_holder: list = []
+
+    def note_configured(opened_session: str, resolved_spec: dict) -> None:
+        outcome.session_id, outcome.resolved = opened_session, resolved_spec
+        state.configured = True
+
+    def bind_protocol(opened_session: str) -> None:
+        outcome.last_protocol = NoToolProtocol(opened_session, input_id, tools)
+        protocol_holder[:] = [outcome.last_protocol]
+        connection.observe = final_chain(protocol_holder)
+
+    input_text = request.input_text
+    if no_tool:
+        create_params = {"titleGenerationEnabled": False, "toolAllowlist": [],
+                         "mcpServers": [], "offPeakToolEnabled": False,
+                         "dynamicWorkflowEnabled": False}
+    else:
+        # A read or write scope without a bound service runs the same
+        # final-message carrier over the session's own default tools;
+        # the effective policy reports that honestly and the external
+        # review eligibility is untouched.
+        create_params = {"mode": "yolo", "titleGenerationEnabled": False, "mcpServers": []}
+    state.create_params = create_params
+    while True:
+        protocol_holder[:] = []
+        connection.observe = final_chain(protocol_holder)
+        snapshot = _open_root(connection, workspace, create_params=create_params)
+        state.session_opened = True
+        input_id = "buddy-no-tool-" + secrets.token_hex(16)
+        outcome.session_id, outcome.resolved = _admit_root_input(
+            connection, snapshot=snapshot, request=request, spec=configuration_spec(request),
+            access=spawn.access, input_id=input_id, input_text=input_text,
+            previous=None, mode="initial", require_interactive=False,
+            settled=lambda: bool(outcome.last_protocol is not None and outcome.last_protocol.settled),
+            classifier=classifier, state=state,
+            on_configured=note_configured,
+            before_send=lambda opened: bind_protocol(opened))
+        protocol = outcome.last_protocol
+        state.completion_ordinal = connection.ordinal
+        final_message_completed = bool(protocol and protocol.completed)
+        # The observed answer, count and turn identity are facts of the
+        # settled round: capture them before the close, so a close that
+        # is not acknowledged fails the run without erasing them.
+        outcome.final_message_completed = final_message_completed
+        outcome.raw_answer = protocol.raw_answer
+        outcome.event_count = protocol.events
+        outcome.turn_id = protocol.turn_id
+        _close_root_session(connection, outcome.session_id, tools)
+        state.status = "ok"
+        feedback = notify(settled=True, raw=outcome.raw_answer)
+        if feedback.action == "correct":
+            outcome.correction_count += 1
+            input_text = feedback.input_text
+            classifier.admitted = False
+            continue
+        break
+
+
+def _governed_turn(*, connection: NativeConnection, request: RunRequest, services: SessionServices,
+                   spawn: _Spawn, workspace: dict, invocation_root: Path, native_root: Path,
+                   facts: _RunFacts, classifier: _Classifier, state: _RunState,
+                   tools: ZcodeToolFacts, notify: Callable[..., RunFeedback],
+                   outcome: _CarrierOutcome) -> None:
+    """The governed completion-tool turn: the same lifecycle sites, with a
+    mounted session service, a continuation and live observers."""
+    mount = services.mount
+    _check_service_descriptions(request, mount)
+    mode, previous = _continuation_of(request)
+    create_params = {"mode": "yolo", "titleGenerationEnabled": False,
+                     "mcpServers": list(mount.mcp_servers)}
+    state.create_params = create_params
+    snapshot = None
+    if mode == "native-session":
+        outcome.binding_path = native_root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
+        try:
+            binding = decode_strict_json(outcome.binding_path.read_bytes())
+        except (OSError, ValueError):
+            raise NativeError("native-resume-unavailable", "the previous native session has no private goal binding") from None
+        if binding != {"taskId": request.identity.task_id, "sessionId": previous,
+                       "cwd": request.cwd, "configuration": configuration_spec(request)}:
+            raise NativeError("native-resume-unavailable", "the previous native session does not match this goal, checkout and configuration")
+        snapshot = _open_root(connection, workspace, create_params=create_params, resume=previous)
+    else:
+        snapshot = _open_root(connection, workspace, create_params=create_params)
+    state.session_opened = True
+    # The per-run observers exist before the session opens; the session
+    # identity is bound onto them the moment the root is opened.
+    outcome.projection = ActivityProjection(None)
+    outcome.attempt_usage = ZcodeAttemptUsage(None, resumed=mode == "native-session")
+    # The real helper owns validation, atomic replacement and throttling;
+    # its state lives for the whole run so same-phase updates are
+    # coalesced instead of rewriting the sidecar for every token event.
+    from ....protocol.activity import ActivitySidecar
+    sidecar_dir = ensure_private_dir(Path(services.activity_dir) if services.activity_dir else invocation_root)
+    sidecar = ActivitySidecar(sidecar_dir, task_id=request.identity.task_id,
+                              attempt_id=request.identity.attempt_id,
+                              generation=request.identity.generation)
+
+    def publish_activity() -> None:
+        try:
+            sidecar.publish(outcome.projection.payload())
+        except BoardError:
+            # Metadata must never fail the native turn; the failure is
+            # reported instead of writing a look-alike sidecar.
+            return
+
+    if services.inquiry is not None:
+        outcome.inquiry_bridge = make_inquiry_bridge(services.inquiry,
+                                                     identity=_bridge_identity(request),
+                                                     journal_path=str(services.inquiry.get("resultsPath") or ""),
+                                                     attention_path=mount.bridge.get("attentionPath"))
+        outcome.inquiry_bridge.start()
+        state.inquiry = outcome.inquiry_bridge.report()
+
+    def observe(message: dict, ordinal: int) -> None:
+        if outcome.evidence is None:
+            return
+        # Projection precedes everything and keeps every observed
+        # fact: child relays, foreign sessions and unverified or
+        # forged same-name calls stay task-tool facts. Only the root
+        # calls whose results carried verified delivery evidence — a
+        # verified receipt or signed refusal envelope, tracked by the
+        # root-turn evidence itself — leave the published package at
+        # finish time; their evidence is the receipt.
+        tools.observe(message)
+        outcome.evidence.observe(message, ordinal)
+        if outcome.evidence.turn_id is not None:
+            # The trusted root identity comes only from this verified
+            # canonical turn start, never from the observed events;
+            # add_root keeps it unique by itself.
+            tools.add_root(outcome.session_id, outcome.evidence.turn_id)
+        changed = classifier.observe(message)
+        if changed:
+            notify()
+        # Attempt usage is observed next to the root-turn evidence; a
+        # foreign session or an unstarted turn contributes nothing.
+        outcome.attempt_usage.observe(message, outcome.evidence.turn_id)
+        outcome.projection.note(message, ordinal)
+        if outcome.inquiry_bridge is not None:
+            outcome.inquiry_bridge.note_event(message, outcome.projection.phase)
+        # Native events in a long phase still advance the observation.
+        # The sidecar coalesces token-level updates within its own window.
+        publish_activity()
+
+    def bind_worker_session(opened_session: str) -> None:
+        outcome.evidence = RootTurnEvidence(
+            opened_session, mount.input_id, mount.finish_tool, mount.bridge,
+            checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
+            on_delivery=(lambda receipt, call_id: outcome.inquiry_bridge.deliver_inquiries(receipt, call_id)),
+            on_answer=(lambda receipt, call_id: outcome.inquiry_bridge.record_answer(receipt, call_id)),
+            validate_outcome=services.validate_outcome,
+            mounted_tools=mount.bare_tools)
+        outcome.projection.session_id = opened_session
+        outcome.attempt_usage.session_id = opened_session
+        connection.observe = observe
+        outcome.projection.phase = "waiting-model"
+        publish_activity()
+        # The pre-model cursor is a bounded, optional read: it can never
+        # fail or delay the turn, and without it no message is ever
+        # attributed.
+        outcome.attempt_usage.capture_baseline(connection)
+
+    def note_configured(opened_session: str, resolved_spec: dict) -> None:
+        outcome.session_id, outcome.resolved = opened_session, resolved_spec
+        state.configured = True
+        if mode != "native-session":
+            outcome.binding_path = native_root / (hashlib.sha256(opened_session.encode()).hexdigest() + ".json")
+            private_json(outcome.binding_path, {"taskId": request.identity.task_id,
+                                                "sessionId": opened_session,
+                                                "cwd": request.cwd, "configuration": resolved_spec},
+                         exclusive=True)
+
+    def after_admit(opened_session: str) -> None:
+        if outcome.inquiry_bridge is not None:
+            outcome.inquiry_bridge.activate(opened_session)
+
+    outcome.session_id, outcome.resolved = _admit_root_input(
+        connection, snapshot=snapshot, request=request, spec=configuration_spec(request),
+        access=spawn.access, input_id=mount.input_id, input_text=request.input_text,
+        previous=previous, mode=mode, require_interactive=True,
+        settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
+        classifier=classifier, state=state, on_configured=note_configured,
+        before_send=bind_worker_session, after_admit=after_admit)
+    # The settlement read is also bounded and optional; the root turn is
+    # already settled, so nothing here may change its result.
+    outcome.attempt_usage.capture_final(connection)
+    if outcome.inquiry_bridge is not None:
+        # Stop accepting observations the instant the root turn settled:
+        # an idle or finished agent is never woken for an inquiry.
+        outcome.inquiry_bridge.close()
+    outcome.projection.phase = "finishing"
+    publish_activity()
+    # The native completion facts are observed once and survive any
+    # later failure: a close that is not acknowledged fails the run,
+    # but it never rewrites which mechanism delivered the value or
+    # erases the verified receipt and outcome the root already gave.
+    outcome.verified_outcome = outcome.evidence.receipt["outcome"]
+    outcome.verified_completion = {"call_id": outcome.evidence.call_id,
+                                   "receipt_id": outcome.evidence.receipt["receiptId"],
+                                   "turn_id": outcome.evidence.turn_id,
+                                   "result_seq": outcome.evidence.result_seq}
+    state.completion_ordinal = outcome.evidence.completed_ordinal
+    outcome.turn_id = outcome.evidence.turn_id
+    state.status = "ok"
+    notify(settled=True)
+    # Only the governed turn is closed here; a final-message loop closes
+    # every session itself, including a corrected one.
+    _close_root_session(connection, outcome.session_id, None)
+    outcome.record = {"outcome": outcome.verified_outcome, "provenance": None}
+    outcome.evidence.close_ordinal = connection.ordinal
+    outcome.record["provenance"] = outcome.evidence.provenance()
+
+
+def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFlag,
+                     state: _RunState, tools: ZcodeToolFacts, classifier: _Classifier,
+                     facts: _RunFacts, notify: Callable[..., RunFeedback],
+                     completion_carrier: bool, outcome: _CarrierOutcome) -> bool | None:
+    """The stop phase: retained observations, bridge close, the conservative
+    group stop and the EOF drain, in their established order."""
+    if outcome.attempt_usage is not None:
+        # ADR-018 items 22/23 and the retained root assistant text: raw native
+        # observations for every path, including a quota or process failure. A
+        # value the native records never proved stays null.
+        state.token_usage = outcome.attempt_usage.raw_usage()
+        state.last_assistant_message = outcome.attempt_usage.last_assistant_message
+    if outcome.inquiry_bridge is not None:
+        # Closing before the process disappears keeps an after-end question
+        # honest instead of leaving a dangling observation.
+        outcome.inquiry_bridge.close()
+        state.inquiry = outcome.inquiry_bridge.report()
+        state.attention = outcome.inquiry_bridge.attention_report()
+    drained: bool | None = None
+    if spawn is not None:
+        shutdown, signalled = _stop_native(spawn, deadline)
+        state.shutdown = shutdown
+        state.exit_code = spawn.process.returncode
+        state.signalled = signalled
+        state.interrupted = signalled or state.observer_stopped
+        if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
+            state.status = "error"
+            state.reason = "native-shutdown-failed"
+            state.error_text = ("the native app server did not exit normally "
+                                "with confirmed group shutdown")
+            outcome.record = None
+        if tools is not None and shutdown:
+            # The native server has exited. Read through its terminal EOF so
+            # an event queued after settlement cannot hide behind close/ack
+            # — for both carriers: a stream nobody read to its end is not
+            # proven complete, whatever mechanism delivered the value. A
+            # late frame keeps its projected fact and reaches the role
+            # observer; its stop — not the driver's scope reading — is what
+            # marks the stream incomplete here.
+            if not completion_carrier and outcome.last_protocol is not None:
+                drained = _drain(spawn.connection, tools, classifier, outcome.last_protocol, facts,
+                                 state, notify)
+            elif completion_carrier and outcome.evidence is not None:
+                drained = _drain(spawn.connection, tools, classifier, outcome.evidence, facts,
+                                 state, notify)
+        try:
+            spawn.process.stdout.close()
+        except OSError:
+            pass
+    if cancel.is_set():
+        state.status = "cancelled"
+        state.reason = "cancelled"
+        state.error_text = "the owned ZCode execution was cancelled"
+        outcome.record = None
+    return drained
+
+
+def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState,
+                   facts: _RunFacts, record: dict | None) -> list[EvidenceRef]:
+    """The run's retained private evidence, in its established order."""
+    refs: list[EvidenceRef] = []
+
+    def retain(kind: str, name: str, value: dict) -> None:
+        target = invocation_root / name
+        private_json(target, value, exclusive=True)
+        raw = target.read_bytes()
+        refs.append(EvidenceRef(kind=kind, location=str(target), size_bytes=len(raw),
+                                sha256=hashlib.sha256(raw).hexdigest()))
+
     if record is not None and record.get("provenance") is not None:
         # The governed turn record is a role document; the driver contributes
         # only these two native evidence parts (the verified outcome and the
@@ -1409,18 +1403,29 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         retain("denied-interactions", "denied-interactions.json", {"records": facts.denied})
     if stderr_path.is_file():
         raw_stderr = stderr_path.read_bytes()
-        evidence_refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
-                                         size_bytes=len(raw_stderr),
-                                         sha256=hashlib.sha256(raw_stderr).hexdigest()))
+        refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
+                                size_bytes=len(raw_stderr),
+                                sha256=hashlib.sha256(raw_stderr).hexdigest()))
+    return refs
+
+
+def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunState,
+                   owned_spawn: list, outcome: _CarrierOutcome, completion_carrier: bool,
+                   drained: bool | None, evidence_refs: list[EvidenceRef],
+                   tool_package) -> RunResult:
+    """Compose the common result; an unrepresentable package fails the run alone."""
     try:
         return _build_result(request, spawn=spawn, state=state, owned_spawn=owned_spawn,
-                             completion_carrier=completion_carrier, verified_outcome=verified_outcome,
-                             verified_completion=verified_completion,
-                             final_message_completed=final_message_completed,
-                             resolved=resolved,
-                             session_id=session_id, turn_id=turn_id, raw_answer=raw_answer,
-                             correction_count=correction_count, event_count=event_count,
-                             record=record, projection=projection, binding_path=binding_path, drained=drained,
+                             completion_carrier=completion_carrier,
+                             verified_outcome=outcome.verified_outcome,
+                             verified_completion=outcome.verified_completion,
+                             final_message_completed=outcome.final_message_completed,
+                             resolved=outcome.resolved,
+                             session_id=outcome.session_id, turn_id=outcome.turn_id,
+                             raw_answer=outcome.raw_answer,
+                             correction_count=outcome.correction_count, event_count=outcome.event_count,
+                             record=outcome.record, projection=outcome.projection,
+                             binding_path=outcome.binding_path, drained=drained,
                              evidence_refs=evidence_refs, tool_package=tool_package)
     except BoardError:
         # A fact that cannot be represented in the common result is the run's
@@ -1431,50 +1436,25 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         fallback = dataclasses.replace(state, status="error", reason="invalid-native-result",
                                        error_text="the native execution returned invalid or incomplete data")
         return _build_result(request, spawn=spawn, state=fallback, owned_spawn=owned_spawn,
-                             completion_carrier=completion_carrier, verified_outcome=verified_outcome,
-                             verified_completion=verified_completion,
-                             final_message_completed=final_message_completed,
-                             resolved=resolved,
-                             session_id=session_id, turn_id=turn_id, raw_answer=raw_answer,
-                             correction_count=correction_count, event_count=event_count,
-                             record=None, projection=None, binding_path=binding_path, drained=drained,
+                             completion_carrier=completion_carrier,
+                             verified_outcome=outcome.verified_outcome,
+                             verified_completion=outcome.verified_completion,
+                             final_message_completed=outcome.final_message_completed,
+                             resolved=outcome.resolved,
+                             session_id=outcome.session_id, turn_id=outcome.turn_id,
+                             raw_answer=outcome.raw_answer,
+                             correction_count=outcome.correction_count, event_count=outcome.event_count,
+                             record=None, projection=None, binding_path=outcome.binding_path, drained=drained,
                              evidence_refs=evidence_refs, tool_package=None)
 
 
-def _guard(shape: Any) -> Callable[[Any], Any]:
-    """One package field's own canonical-shape guard.
-
-    A value the package's own projection refuses is dropped alone; every other
-    observed fact of the run keeps its place, so no fallback blankets known
-    facts into unknowns.
-    """
-    from pydantic import TypeAdapter
-    adapter = TypeAdapter(shape)
-
-    def check(value: Any) -> Any:
-        if value is None:
-            return None
-        try:
-            return adapter.validate_python(value)
-        except BoardError:
-            return None
-    return check
-
-
-_tool_package = _guard(ToolEvidencePackage)
-_usage_package = _guard(UsagePackage)
-_quota_package = _guard(NativeFailurePackage)
-_native_error_package = _guard(NativeErrorRecord)
-_message_package = _guard(LastAssistantMessagePackage)
-_activity_package_fn = _guard(ActivityPackage)
-_json_package = _guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
-
-
-def _identity_or_none(fields: dict) -> Any:
-    try:
-        return NativeIdentity(**fields)
-    except BoardError:
-        return None
+_tool_package = shape_guard(ToolEvidencePackage)
+_usage_package = shape_guard(UsagePackage)
+_quota_package = shape_guard(NativeFailurePackage)
+_native_error_package = shape_guard(NativeErrorRecord)
+_message_package = shape_guard(LastAssistantMessagePackage)
+_activity_package_fn = shape_guard(ActivityPackage)
+_json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
 
 
 def _activity_package(projection) -> Any:
@@ -1491,7 +1471,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
         fields = {"session_id": session_id}
         if turn_id:
             fields["turn_id"] = turn_id
-        native_identity = _identity_or_none(fields)
+        native_identity = identity_or_none(fields)
     if spawn is None:
         if owned_spawn and isinstance(owned_spawn[0], dict):
             # A child existed and the spawn helper itself stopped it when the
@@ -1598,7 +1578,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     return value is the catalog receipt shape consumed by the current callers.
     """
     deadline = execution_deadline(timeout_seconds)
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(invocation_root))
     native_root = ensure_private_dir(Path(native_root))
     # Discovery's empty workspace retains the native project-input switches

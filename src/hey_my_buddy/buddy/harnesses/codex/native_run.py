@@ -35,25 +35,31 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import math
 import os
 import queue
 import re
 import subprocess
-import threading
 import time
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from pydantic import TypeAdapter
-
 from ....errors import BoardError
 from ....private_dirs import account_root, ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ...runtime.windows_process import owned_popen
 from ..base import ProcessHandle
+from ..native_support import (
+    CancelFlag,
+    ObserverInterrupt,
+    configuration_spec,
+    execution_deadline,
+    halt_owned_group as _halt_owned_group,
+    identity_or_none,
+    shape_guard,
+    utc_now,
+)
 from ..run_contract import (
     ActivityPackage,
     CheckedConfiguration,
@@ -68,7 +74,6 @@ from ..run_contract import (
     MAX_UNKNOWN_EVENT_TYPES,
     MAX_VALUE_BYTES,
     NativeFailurePackage,
-    NativeIdentity,
     OptionalFrozenJsonAt,
     PolicyFact,
     ResultConfiguration,
@@ -100,7 +105,6 @@ from .protocol import (
     decode_json,
     quota_candidate_from_response,
     turn_failure_code,
-    utc_now,
 )
 from .tool_evidence import (
     NON_TOOL_ITEMS,
@@ -122,21 +126,6 @@ _BOUND_NOTIFICATIONS = 128
 #: event types than the public result carries. The parenthesised name cannot
 #: pass the label sanitizer below, so no real method can ever collide with it.
 _UNLISTED_UNKNOWN_TYPES = "(unlisted-native-events)"
-
-
-def execution_deadline(timeout_seconds) -> float:
-    """The one overall native execution deadline; an explicit 0 means unlimited.
-
-    Only this deadline becomes infinite. The version probe and the per-request,
-    interrupt and shutdown waits keep their own finite bounds, and the
-    ``cancelled`` flag still ends an unlimited run.
-    """
-    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
-
-
-def _spec(request: RunRequest) -> dict:
-    return {"provider": request.configuration.provider, "model": request.configuration.model,
-            "effort": request.configuration.effort}
 
 
 def _mode(request: RunRequest) -> str:
@@ -267,32 +256,6 @@ class _Classifier:
     def _item_kind(params: Any):
         item = params.get("item") if isinstance(params, dict) else None
         return item.get("type") if isinstance(item, dict) else None
-
-
-class _ObserverInterrupt(Exception):
-    """The role observer asked the driver to stop the native run."""
-
-
-class _CancelFlag:
-    """A ``threading.Event`` view of the seam's cancel callable."""
-
-    def __init__(self, cancelled: Callable[[], bool]):
-        self._cancelled = cancelled
-        self._event = threading.Event()
-
-    def is_set(self) -> bool:
-        return self._event.is_set() or bool(self._cancelled())
-
-    def set(self) -> None:
-        self._event.set()
-
-    def wait(self, timeout: float) -> None:
-        deadline = time.monotonic() + max(0.0, timeout)
-        while not self.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(0.05, remaining))
 
 
 # -- the role-held narrow service binding ----------------------------------------
@@ -464,7 +427,7 @@ def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparat
     home = None
     prepared = False
     if mode == "fast":
-        home = prepare_no_tool_home(native_root, environment, _spec(request))
+        home = prepare_no_tool_home(native_root, environment, configuration_spec(request))
         environment["CODEX_HOME"] = str(home)
     elif mode == "review":
         home = _review_home(native_root, environment, request.cwd)
@@ -501,22 +464,7 @@ def _probe_version(command: list, environment: dict, cwd: str, deadline: float, 
     return None
 
 
-def _halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
-    """The one actual stop of an owned group: close, wait, terminate, confirm."""
-    try:
-        process.stdin.close()
-    except OSError:
-        pass
-    handle.wait(min(3.0, max(0.0, deadline - time.monotonic())))
-    signalled = False
-    if not handle.shutdown_confirmed(settle_seconds=0.2):
-        handle.terminate(grace_seconds=1.0)
-        signalled = True
-    shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
-    return shutdown, signalled
-
-
-def _spawn_app_server(prep: _Preparation, cancel: _CancelFlag, owned: list) -> _Spawn:
+def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _Spawn:
     """Spawn the one owned App Server, ready for the native handshake.
 
     The handshake itself stays with the caller, so a failure there flows
@@ -678,7 +626,7 @@ def _configure_worker(connection: Connection, request: RunRequest, services: Run
                       prep: _Preparation, state: _RunState) -> str:
     """Worker configuration: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
-    requested = _spec(request)
+    requested = configuration_spec(request)
     state.requested = requested
     if mode == "native-session":
         if not isinstance(previous, str) or not previous:
@@ -726,7 +674,7 @@ def _configure_worker(connection: Connection, request: RunRequest, services: Run
 def _configure_review(connection: Connection, request: RunRequest,
                       state: _RunState) -> tuple[str, dict]:
     """Review configuration: exact policy readback, then the buddy-router thread."""
-    cwd, spec = request.cwd, _spec(request)
+    cwd, spec = request.cwd, configuration_spec(request)
     expected = tomllib.loads(read_only_config(cwd))
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
     if isinstance(configured, dict):
@@ -778,7 +726,7 @@ def _configure_review(connection: Connection, request: RunRequest,
 def _configure_fast(connection: Connection, request: RunRequest, state: _RunState,
                     home: Path) -> str:
     """Fast configuration: the private no-tool layers readback, then the thread."""
-    cwd, spec = request.cwd, _spec(request)
+    cwd, spec = request.cwd, configuration_spec(request)
     expected = tomllib.loads((home / "config.toml").read_text())
     config_read = connection.call("config/read", {"cwd": cwd, "includeLayers": True})
     configured, layers = config_read.get("config"), config_read.get("layers")
@@ -1024,7 +972,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping], RunFeedback],
 
 def _run(request: RunRequest, services: RunServices, mode: str,
          observer: Callable[[Mapping], RunFeedback], cancelled: Callable[[], bool]) -> RunResult:
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
     facts = _RunFacts()
     state = _RunState()
     if mode == "review" and request.capture_evidence:
@@ -1053,7 +1001,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
         _wire(connection, chain, facts, observer, request, state, mode)
-        _initialize(connection, prep, services, mode, _spec(request))
+        _initialize(connection, prep, services, mode, configuration_spec(request))
         if mode == "worker":
             thread_id = _configure_worker(connection, request, services, prep, state)
             _worker_turn(connection, chain, request, state, thread_id, observer, activity)
@@ -1064,7 +1012,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                 thread_id, review_policy = _configure_review(connection, request, state)
             _structured_rounds(connection, chain, request, state, thread_id,
                                mode, observer, activity)
-    except _ObserverInterrupt:
+    except ObserverInterrupt:
         state.status, state.reason = "cancelled", "observer-interrupt"
         state.error_text = "the role observer stopped the run"
         state.interrupt_requested = True
@@ -1136,7 +1084,7 @@ def _take_feedback(feedback: Any, mode: str, *, settled: bool) -> RunFeedback:
             raise BoardError("INVALID_ARGUMENT", "the governed codex turn takes no format correction")
         return feedback
     if feedback.action == "stop":
-        raise _ObserverInterrupt()
+        raise ObserverInterrupt()
     return feedback
 
 
@@ -1354,7 +1302,7 @@ def _interrupt(connection: Connection, state: _RunState) -> None:
     """A fresh short control budget permits a native interrupt after the deadline."""
     try:
         connection.on_notification = lambda message: None
-        connection.cancelled = _CancelFlag(lambda: False)
+        connection.cancelled = CancelFlag(lambda: False)
         connection.deadline = time.monotonic() + 2
         connection.call("turn/interrupt", {"threadId": state.thread_id, "turnId": state.turn_id})
         state.interrupt_requested = True
@@ -1372,7 +1320,7 @@ def _interrupt(connection: Connection, state: _RunState) -> None:
 
 def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparation,
                      state: _RunState, spawn: _Spawn | None, owned_spawn: list,
-                     mode: str, cancel: _CancelFlag) -> None:
+                     mode: str, cancel: CancelFlag) -> None:
     """Stop phase: the owned group's conservative confirmation, then cleanup."""
     if spawn is None:
         created = owned_spawn[0] if owned_spawn and isinstance(owned_spawn[0], dict) else None
@@ -1436,37 +1384,12 @@ def _remove_private_auth(native_root: Path) -> None:
 # -- the factual result --------------------------------------------------------------
 
 
-def _identity_or_none(fields: dict) -> NativeIdentity | None:
-    try:
-        return NativeIdentity(**fields)
-    except BoardError:
-        return None
-
-
-def _guard(shape: Any) -> Callable[[Any], Any]:
-    """One package field's own canonical-shape guard.
-
-    A value the package's own projection refuses is dropped alone; every other
-    observed fact of the run keeps its place.
-    """
-    adapter = TypeAdapter(shape)
-
-    def check(value: Any) -> Any:
-        if value is None:
-            return None
-        try:
-            return adapter.validate_python(value)
-        except BoardError:
-            return None
-    return check
-
-
-_tool_evidence_package = _guard(ToolEvidencePackage)
-_json_package = _guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
-_usage_package = _guard(UsagePackage)
-_quota_package = _guard(NativeFailurePackage)
-_message_package = _guard(LastAssistantMessagePackage)
-_activity_package = _guard(ActivityPackage)
+_tool_evidence_package = shape_guard(ToolEvidencePackage)
+_json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
+_usage_package = shape_guard(UsagePackage)
+_quota_package = shape_guard(NativeFailurePackage)
+_message_package = shape_guard(LastAssistantMessagePackage)
+_activity_package = shape_guard(ActivityPackage)
 
 
 def _bounded(value: str | None, limit: int) -> str | None:
@@ -1582,7 +1505,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         fields = {"session_id": state.thread_id}
         if state.turn_id:
             fields["turn_id"] = state.turn_id
-        native_identity = _identity_or_none(fields)
+        native_identity = identity_or_none(fields)
     tool_package = None
     if projector is not None and (state.thread_opened or mode == "review"):
         # Stream facts record the observed ends — the completed root turns
@@ -1648,7 +1571,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     the catalog receipt shape the current callers consume.
     """
     deadline = execution_deadline(timeout_seconds)
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(invocation_root))
     native_root = ensure_private_dir(Path(native_root))
     incoming = dict(os.environ)

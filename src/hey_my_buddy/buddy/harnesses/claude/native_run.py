@@ -62,6 +62,13 @@ from ....protocol.activity import ActivitySidecar
 from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
 from ..base import ProcessHandle
+from ..native_support import (
+    CancelFlag,
+    ObserverInterrupt,
+    execution_deadline,
+    identity_or_none,
+    utc_now,
+)
 from ...runtime.windows_process import owned_popen
 from ..run_contract import (
     CheckedConfiguration,
@@ -71,7 +78,6 @@ from ..run_contract import (
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
-    NativeIdentity,
     PolicyFact,
     ResultConfiguration,
     RunConfiguration,
@@ -125,10 +131,6 @@ _DRAIN_SECONDS = 10.0
 #: does not declare; declaring one commits the module to reading that field,
 #: never to inferring the policy from the tool scope or the caller's role.
 supported_request_controls = ("network_allowed_domains", "additional_denied_tools")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, dict]:
@@ -203,42 +205,6 @@ def _latest_rejected(rate_limits: dict) -> tuple[str, object]:
         if rate_limits[rate_limit_type].get("status") == "rejected":
             return rate_limit_type, rate_limits[rate_limit_type].get("resetsAt")
     return "unknown", None
-
-
-def execution_deadline(timeout_seconds) -> float:
-    """The one overall native execution deadline; an explicit 0 means unlimited.
-
-    Only this deadline becomes infinite. The version probe and the per-request,
-    cancel and shutdown waits keep their own finite bounds, and the ``cancelled``
-    event still ends an unlimited turn.
-    """
-    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
-
-
-class _ObserverInterrupt(Exception):
-    """The role observer's stop; the driver interrupts the native run at once."""
-
-
-class _CancelFlag:
-    """A ``threading.Event`` view of the seam's cancel callable."""
-
-    def __init__(self, cancelled: Callable[[], bool]):
-        self._cancelled = cancelled
-        self._event = threading.Event()
-
-    def is_set(self) -> bool:
-        return self._event.is_set() or bool(self._cancelled())
-
-    def set(self) -> None:
-        self._event.set()
-
-    def wait(self, timeout: float) -> None:
-        deadline = time.monotonic() + max(0.0, timeout)
-        while not self.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(0.05, remaining))
 
 
 @dataclasses.dataclass
@@ -369,7 +335,7 @@ def _probe_version(command: list[str], cwd: str, environment: dict) -> str:
 
 
 def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment: dict,
-                  invocation_root: Path, deadline: float, cancel: _CancelFlag,
+                  invocation_root: Path, deadline: float, cancel: CancelFlag,
                   owned: list | None = None) -> _Spawn:
     """Spawn the one owned native CLI and connect its stdio protocol."""
     version = _probe_version(command, cwd, environment)
@@ -539,7 +505,7 @@ class _TurnCollector:
     def publish_activity(self, phase: str, tool: str | None = None) -> None:
         if self.evidence is None:
             return
-        now = _now()
+        now = utc_now()
         payload = {"phase": phase, "observedAt": now, "eventSeq": self.evidence.event_seq,
                    "nativeSessionId": self.evidence.session_id, "lastNativeActivityAt": now,
                    "counts": {"modelTurns": self.evidence.model_messages,
@@ -581,7 +547,7 @@ class _TurnCollector:
             raise BoardError("INVALID_ARGUMENT",
                              "claude takes no in-run correction; the native -p turn ends at its result")
         if feedback.action == "stop":
-            raise _ObserverInterrupt()
+            raise ObserverInterrupt()
 
 
 # -- phase 4: the shared send/wait/drain settlement ------------------------------
@@ -663,13 +629,6 @@ def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
 
 
 # -- phase 6: the factual result -------------------------------------------------
-
-
-def _identity_or_none(fields: dict) -> NativeIdentity | None:
-    try:
-        return NativeIdentity(**fields)
-    except BoardError:
-        return None
 
 
 def _usable(converter: Callable[[dict], Any], value: dict | None) -> dict | None:
@@ -818,7 +777,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     # the stream reported stays in the fact packages (the tool roots below),
     # never masquerading as this run's root.
     session_confirmed = evidence is not None and evidence.init_observed
-    native_identity = _identity_or_none({"session_id": session_id}) if session_confirmed and session_id else None
+    native_identity = identity_or_none({"session_id": session_id}) if session_confirmed and session_id else None
     stream_ended = state.drained is True
     # The delivery identification froze at settlement, before the role's
     # settled facts: this run's schema command line armed the collector, the
@@ -963,7 +922,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     preparation: _Preparation | None = None
     collector: _TurnCollector | None = None
     native_result: dict | None = None
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
 
     def request_interrupt() -> None:
         # A fresh short control budget permits a native interrupt after the
@@ -1015,7 +974,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.verified_delivery = collector.tools.settle_delivery(
             native_result.get("structured_output"), {"sessionId": preparation.session_id})
         collector.settled_notify(native_result)
-    except _ObserverInterrupt:
+    except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
         request_interrupt()
@@ -1026,7 +985,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.error_text = QUOTA_REJECTED_ERROR
         state.quota_failure = {"nativeCode": error.rate_limit_type,
                                "source": "claude/stream-json-rate-limit-event",
-                               "observedAt": _now(), "resetsAt": error.resets_at}
+                               "observedAt": utc_now(), "resetsAt": error.resets_at}
         request_interrupt()
     except ClaudeProtocolError as error:
         state.status = "cancelled" if error.code == "user-cancel" else "error"
@@ -1095,7 +1054,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     is confirmed stopped with a zero exit.
     """
     deadline = execution_deadline(timeout_seconds)
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(invocation_root))
     ensure_private_dir(Path(native_root))
     incoming = dict(os.environ)
