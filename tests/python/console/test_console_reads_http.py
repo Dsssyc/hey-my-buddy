@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import time
 import unittest
 from datetime import datetime, timezone
@@ -338,6 +339,47 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         with mock.patch.object(board.service.harnesses, "kick") as kick:
             browser.get("/api/console")
             self.assertEqual(kick.call_count, 0)
+
+    def test_a_database_replacement_invalidates_every_cached_route(self):
+        """Round-5 reviewed defect over real HTTP: no route keeps a stale epoch.
+
+        After a same-schema database replacement the reconnected marker may
+        re-read the data_version other routes' entries were cached under; the
+        connection epoch must invalidate them all. The snapshot visibly
+        changes (tableRevision), while the tasks route re-enters its
+        projection even though its content is byte-identical — an honest
+        recompute-304, never a stale cache hit.
+        """
+        board = self.board()
+        browser = self.open(board)
+        _status, console_headers, console_body = browser.get("/api/console")
+        self.assertEqual(json.loads(console_body)["tableRevision"], 0)
+        _status, tasks_headers, _body = browser.get("/api/tasks?limit=5")
+        import sqlite3
+        from contextlib import closing
+
+        replacement = board.store.directory / "replacement.sqlite3"
+        with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
+            source.backup(target)
+            target.execute("UPDATE evaluation_state SET table_revision=97 WHERE id=1")
+            target.commit()
+        os.replace(replacement, board.store.db.path)
+        status, _headers, body = browser.get(
+            "/api/console", headers={"If-None-Match": console_headers["etag"]}
+        )
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(json.loads(body)["tableRevision"], 97)
+        self.assertNotEqual(_headers["etag"], console_headers["etag"])
+        projections = board.console.read_cache.calls["tasks"]["projections"]
+        status, _headers, replay = browser.get(
+            "/api/tasks?limit=5", headers={"If-None-Match": tasks_headers["etag"]}
+        )
+        self.assertEqual(
+            board.console.read_cache.calls["tasks"]["projections"], projections + 1,
+            "The tasks page belongs to the replaced epoch: the conditional read must re-enter "
+            "the projection instead of serving the pre-replacement cache entry",
+        )
+        self.assertIn(status, (200, 304))
 
     def test_task_objective_and_timeline_reads_are_conditional(self):
         board = self.board()

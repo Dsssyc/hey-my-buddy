@@ -5,11 +5,14 @@ projection depends on has changed. This module owns the honesty rules of that
 shortcut:
 
 * The database marker is ``PRAGMA data_version`` read on **one persistent
-  connection** of this cache. The value only moves when another connection
-  commits, so it covers every committed change — including this process's own
-  writes, which always travel through their own short-lived connections. A new
-  connection per check would restart the baseline and mistake real changes for
-  stillness, which is why the connection lives here and nowhere else.
+  connection** of this cache, prefixed by that connection's epoch. The value
+  only moves when another connection commits, so it covers every committed
+  change — including this process's own writes, which always travel through
+  their own short-lived connections. A new connection per check would restart
+  the baseline and mistake real changes for stillness, and a reconnection
+  (a replaced database file, a transient error) can repeat an earlier value;
+  the epoch makes every reconnect invalidate the whole cache, which is why
+  the connection lives here and nowhere else.
 * A projection is generated between two marker reads. If the marker moved in
   between, the body is never bound to the newer marker; generation retries and
   the final attempt is served uncached rather than guessing. Non-database
@@ -152,25 +155,33 @@ def gate_lease_deadline(database, now: float) -> float | None:
 
 
 class _MarkerConnection:
-    """One persistent SQLite connection whose ``data_version`` is the DB marker.
+    """One persistent SQLite connection whose ``(epoch, data_version)`` is the DB marker.
 
     Every board write commits through its own short-lived connection, so this
     connection always observes other-connection commits — the only kind there
-    is. An open Unix connection silently keeps reading a replaced database
-    file, so the file identity (device, inode) is recorded when the connection
-    opens and re-checked on every read: a path that now names a different file
-    (a restore or rollback that swapped the database underneath) closes the
-    connection and reports ``None``, which callers treat as "changed". An OS
-    error does the same.
+    is. ``PRAGMA data_version`` is per-connection state whose absolute value
+    can repeat: a replaced database file (a restore, a rollback) restarts it,
+    and a fresh connection on the same file re-reads the same value. A later
+    connection must therefore never vouch for bodies cached under an earlier
+    one, so the marker carries a connection epoch — a counter incremented on
+    every (re)connect — and every reconnect invalidates the whole cache.
+    Over-reporting costs one recomputation per entry; a repeated value would
+    freeze every other query and session on pre-replacement data.
+
+    The file identity (device, inode) is recorded when the connection opens
+    and re-checked on every read: a path that now names a different file
+    closes the connection and reports ``None`` (treated as "changed"), as
+    does any OS error. ``None`` is never a reusable marker value.
     """
 
     def __init__(self, database):
         self._database = database
         self._connection: sqlite3.Connection | None = None
         self._identity: tuple[int, int] | None = None
+        self._epoch = 0
         self._lock = threading.Lock()
 
-    def data_version(self) -> int | None:
+    def data_version(self) -> tuple[int, int] | None:
         with self._lock:
             try:
                 if self._connection is None:
@@ -179,10 +190,11 @@ class _MarkerConnection:
                     )
                     self._database._configure(self._connection)
                     self._identity = self._path_identity()
+                    self._epoch += 1
                 elif self._path_identity() != self._identity:
                     self._close_locked()
                     return None
-                return int(self._connection.execute("PRAGMA data_version").fetchone()[0])
+                return (self._epoch, int(self._connection.execute("PRAGMA data_version").fetchone()[0]))
             except (sqlite3.Error, OSError):
                 self._close_locked()
                 return None
@@ -357,17 +369,21 @@ class ReadCache:
     def marker(self, extra: tuple | Callable[[], tuple] = ()) -> tuple | None:
         """The current change marker, or ``None`` when it cannot be trusted.
 
-        ``extra`` may be a tuple or a callable returning one; a callable is
-        re-evaluated on every read so non-database state (for example the
-        console's session set) follows the same before/after double-read rule
-        as the database version.
+        The database component is ``(epoch, data_version)`` of one persistent
+        connection: the epoch increments on every reconnect, so a replaced
+        database or a transient connection error invalidates every cached
+        entry at once even when the new connection's ``data_version`` repeats
+        an earlier value. ``extra`` may be a tuple or a callable returning
+        one; a callable is re-evaluated on every read so non-database state
+        (for example the console's session set) follows the same
+        before/after double-read rule as the database version.
         """
-        version = self._marker_connection.data_version()
-        if version is None:
+        identity = self._marker_connection.data_version()
+        if identity is None:
             return None
         if callable(extra):
             extra = extra()
-        return (version, *extra)
+        return (*identity, *extra)
 
     def serve(
         self,
