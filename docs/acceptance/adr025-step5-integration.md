@@ -45,3 +45,11 @@ Host 范围外收尾：5-P2 可写范围之外的 codex/protocol.py 仍有相同
 第五步公共接线选择：CONTRACT_VERSION 与包版本由 0.28.0 提到 0.29.0，新增 worker_live_attach/detach 两个内部具名操作及 HarnessRunLive、WorkerRuntimeLive 的 request/observe/capabilities，不新增 CLI 命令、claim/renew 字段或数据库结构。WorkerLiveAttach/Detach 使用严格内部模型，服务接收的帧只含 Worker 端点、完整运行身份与 attempt actor，绝不含 controller 地址或能力。RunIdentity 六个字段原样移到 protocol/run_identity.py，由现有 run_contract 直接引用同一个类，JSON 规则没有变化；跨边界事实由 protocol 定义，避免新传输模型反向导入 buddy 一侧。该公共接线由 Host 统一拥有，微任务只在其唯一目录中使用；运行结果中的字段本步按实际消费者核对。C-Two 后端尚未内部验收，以上先固定公共格式，尚未启动依赖它的 Worker/服务实施微任务。
 
 Host 聚焦核对发现 5-P1 原可写范围之外的 live_channel 限额测试仍从 ZCode 协议页引用已搬入 session_receipts 的三项公共常量；Host 直接更新导入与引用位置，编号及实际比较值不变，不恢复旧别名。本轮先错误选择不存在的 test_live 模块（31 项 run_contract 已通过），新命令选择实际 test_live_channel 后发现上述旧引用；原失败日志保留，此次仅重跑受修正影响的 44 项。
+
+5-A 第二轮固定审查仍拒绝：真实函数的无模型探针构造 129 个 requestId 别名对应一条问题，全部 queued 且索引无界；owner 消费数为 0 时已有 observed=True/queued 状态；旧接口的空可读 LiveJournal.available=True 变为新后端 None。原 run continue-2 增加有界请求索引、标准库 owner 应答与实际 journal 发布；并通过本 run 问询补充无观察源/原生读失败的 observed/reason/error 来源缺口，公共 LiveSnapshot 字段与三操作均不扩大。首次三项修正保留，未整合此轮未通过源码。
+
+Claude 两次原生冒烟的私有根在核实停止后已由 Host 按各自创建时登记的确切路径整体回收；本检出 tmp 中保留各次实际请求、RunResult、公开回执与核对摘要并记录 SHA-256。仅删除这两个本次创建的根，没有操作原生登录目录、其他会话或日常数据。
+
+5-A 第三轮封存 09176996 的独立聚焦 129 项通过（13.473 秒，1 项原有平台 skip），仍按真实函数的并发/关闭探针拒绝：close 后仍 consume；并发别名成功后未绑定自己的 requestId，改问题可再次入队；settle 覆盖 owner 先发布的 delivery/limitation；consume(0) 不取已排队值。原 run continue-3 修复这四处，Host 没有代改范围内源码，不扩大完整检查。原日志与探针保留。
+
+5-A 第四份封存 8732af92 的固定副本中，53 项后端聚焦测试全部通过（12.893 秒），未重跑未变的其他 80 项。Host 原四处队列探针原样换到该封存源再次核对：close 请求不再消费；并发 r1/r2 均被预算内绑定且 r2 改问题回 request-payload-conflict；settle 保留实际 delivery/limitation 及原 seq；零等待正确取队列。源码五路径逐字节整合，后端保持三个具名 RPC，owner 本地 settle/publish 接口由真实 producer 接线，不直接驱动模型。通过本次内部验收后再开始依赖它的 Worker 实施。
