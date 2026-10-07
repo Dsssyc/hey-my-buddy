@@ -1499,6 +1499,58 @@ class BoardStore:
             raise BoardError("INVALID_ARGUMENT", "taskId must be a string")
         request = {"workerId": worker_id, "claimRequestId": claim_request_id, "taskId": explicit_task}
         self.workflow.prepare_dispatch(params)
+        # The candidates' shared-stash observations are read here, before the
+        # claim's write transaction, mirroring the claim's own candidate window:
+        # Git is never read inside a write transaction, and the turn this claim
+        # freezes binds the observation of this pass. Every transaction then
+        # fences on repository membership — the chosen run's repository must be
+        # a key this pass observed, on the first pass and on the bounded retry
+        # alike, because the targeted retry can legitimately find its run held
+        # by another worker and observe no repository for it at all. A first
+        # miss rolls back and retries once with that run as the selector, and
+        # the retry transaction may then admit only that run; a miss on the
+        # retry honestly defers (an empty claim, no receipt) and the next claim
+        # re-collects for whichever run it actually chooses. No turn ever starts
+        # from a repository this claim did not observe; the only honest
+        # unknowns left are genuine reading failures, never a missed candidate
+        # dressed up as one.
+        from ..tasks.workflow import ClaimStashCoverageRetry
+        retry_selector = explicit_task if isinstance(explicit_task, str) and explicit_task else None
+        for coverage_round in range(2):
+            stash_facts = self.workflow.collect_claim_stash_facts(params, selector=retry_selector)
+            try:
+                return self._claim_in_transaction(
+                    params,
+                    worker_id=worker_id,
+                    claim_request_id=claim_request_id,
+                    nonce=nonce,
+                    explicit_task=explicit_task,
+                    request=request,
+                    stash_facts=stash_facts,
+                    stash_retry_allowed=coverage_round == 0,
+                    restrict_to=retry_selector if coverage_round else None,
+                )
+            except ClaimStashCoverageRetry as retry:
+                retry_selector = retry.task_id
+        raise BoardError("CONFLICT", "The claim could not collect its chosen workspace's shared-stash observation")
+
+    def _claim_in_transaction(
+        self, params: dict, *, worker_id: str, claim_request_id: str, nonce: str,
+        explicit_task: str | None, request: dict, stash_facts: dict, stash_retry_allowed: bool,
+        restrict_to: str | None = None,
+    ) -> dict:
+        """The claim's one write transaction; a stash-coverage miss rolls it back.
+
+        Everything admitted here — attempt, lease, resources, turn, receipt —
+        commits together or not at all, exactly as before; the only new exits
+        are the coverage fence below, which fires before anything is written on
+        every pass, and ``restrict_to``: the bounded retry transaction admits
+        only the one run it re-collected for, so a concurrent change can never
+        make it start a different, unobserved run — or the same run whose
+        targeted pass found it held and observed nothing.
+        """
+        from ..tasks.workflow import ClaimStashCoverageRetry
+
         with self.db.write() as connection:
             receipt = self._receipt(
                 connection, claim_request_id, "worker.claim", request, self._subject(worker_id, nonce, explicit_task)
@@ -1546,6 +1598,14 @@ class BoardStore:
                 ]
                 # An explicit target is examined by ``_admission_blocker`` and the
                 # decision family check below; no candidate pre-filter applies to it.
+            elif restrict_to is not None:
+                # The coverage retry's own admission boundary: only the run whose
+                # repository the retry pass just collected may start here. If that
+                # run was legally taken away in between, this transaction observes
+                # no admissible work and leaves everything to the next claim.
+                candidates = [
+                    connection.execute("SELECT * FROM tasks WHERE task_id=?", (restrict_to,)).fetchone()
+                ]
             else:
                 candidates, full_families = self._claim_candidates(connection)
             chosen: sqlite3.Row | None = None
@@ -1681,6 +1741,32 @@ class BoardStore:
                 # queued work. Only a committed (nonempty) claim stores one.
                 self._notify(head)
                 return response
+            # Coverage fence before anything is admitted, on every pass: the
+            # chosen run's repository must be a key this claim's own
+            # pre-transaction pass observed — the run's identity alone proves
+            # nothing, because the targeted pass can legitimately find the run
+            # not queued (another worker holds it) and observe no repository for
+            # it at all. A miss with retry budget left rolls the whole
+            # transaction back for one targeted re-collection; a miss on the
+            # bounded retry honestly reports no admissible work and leaves the
+            # claim to the next poll, which re-collects for whichever run it
+            # actually chooses. Either way nothing is admitted and no receipt is
+            # stored on a miss; a repository whose reading genuinely failed is
+            # present as a key and may start with its honest ``unknown``.
+            repository = self.workflow.run_repository_path(connection, chosen["task_id"])
+            if repository is not None and not (
+                isinstance(stash_facts, dict)
+                and repository in (stash_facts.get("repositories") or {})
+            ):
+                if stash_retry_allowed:
+                    raise ClaimStashCoverageRetry(chosen["task_id"])
+                response = {"claim": None, "reason": "stash-observation-pending", "retryAfterMs": 1000}
+                head = self._head_of(connection)
+                # A transient observation like an empty claim: no commands row
+                # exists to replay, so a retried claimRequestId re-collects and
+                # can admit the same work with its own real observation.
+                self._notify(head)
+                return response
             spec = self.workflow.effective_spec(connection, chosen)
             generation = chosen_generation
             attempt_id = chosen_attempt_id or str(uuid.uuid4())
@@ -1789,7 +1875,8 @@ class BoardStore:
             for key in ("title", "objectiveId"):
                 response["claim"]["task"].get("workflow", {}).pop(key, None)
             turn_claim = self.workflow.begin_turn(
-                connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now
+                connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now,
+                stash_facts=stash_facts,
             )
             if turn_claim is not None:
                 # The service-owned turn identity and bounded context travel to the
@@ -2266,6 +2353,10 @@ class BoardStore:
                 **(result or {}),
                 "governedError": {"code": error.code, "message": error.message},
             }
+        # The seal-side shared-stash observation of this attempt's repository is
+        # read here, outside the result transaction; the turn's pinned fact binds
+        # it below. A failed or partial seal keeps the same honest collection.
+        seal_stash = self.workflow.collect_result_stash_facts(params)
         request = {
             "attemptId": attempt_id_param,
             "status": status,
@@ -2474,6 +2565,7 @@ class BoardStore:
                 payload=payload,
                 task_state=task_state,
                 now=now,
+                seal_stash=seal_stash,
             )
             if governed is not None:
                 response["workflow"] = governed
@@ -2517,6 +2609,9 @@ class BoardStore:
                 # record proves it never reached the spawn boundary. A missing PID
                 # or an expired lease is never accepted as evidence.
                 never_spawned = True
+        # Same outside-transaction boundary as the result path: a released turn
+        # that froze a start observation still pins its seal-side fact.
+        seal_stash = self.workflow.collect_result_stash_facts(params)
         with self.db.write() as connection:
             attempt, _worker = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
@@ -2571,7 +2666,8 @@ class BoardStore:
                 "SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)
             ).fetchone()
             self.workflow.attempt_released(
-                connection, task=task_row, attempt=released_attempt, now=now, reason=reason
+                connection, task=task_row, attempt=released_attempt, now=now, reason=reason,
+                seal_stash=seal_stash,
             )
             head = self._head_of(connection)
         self._notify(head)

@@ -9,6 +9,7 @@ sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import contextmanager
 from ... import locking
+from collections import Counter
 import hashlib
 import json
 import os
@@ -73,6 +74,29 @@ def _git(root, *args, data=None, env=None, allowed=(0,)):
 
 def _line(root, *args, **kwargs):
     return os.fsdecode(_git(root, *args, **kwargs).removesuffix(b"\n"))
+
+
+def _git_in(git_dir, *args, allowed=(0,)):
+    """Run one repository-only Git command against an explicit Git directory.
+
+    ``-C`` into a Git directory makes Git treat the checkout as bare, which
+    refuses worktree-requiring commands like ``stash list``. ``--git-dir``
+    names the repository exactly; commands that read history and reflogs
+    (``rev-parse``, ``reflog show``) need no work tree at all.
+    """
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
+    command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
+               "--git-dir", str(git_dir), *args]
+    try:
+        result = subprocess.run(command, input=None, capture_output=True, env=git_env, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BoardError("WORKSPACE_GIT_ERROR", str(error)) from error
+    if result.returncode not in allowed:
+        raise BoardError("WORKSPACE_GIT_ERROR", "Git workspace operation failed", operation=args[0],
+                         reason=result.stderr.decode(errors="replace")[-2000:])
+    return result.stdout
 
 
 def _identity(path):
@@ -776,6 +800,12 @@ def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
 #: record so a Host can restore, adopt or abandon the exact observed site later
 #: without turning the failed working tree into an authorized baseline.
 SCOPE_EVIDENCE_LIMIT = 256
+#: Bounded per-entry observation of one repository's shared stash list. The
+#: bound keeps a flooded stash reflog from inflating a frozen turn input; the
+#: ``truncated`` flag keeps the cut honest instead of silent.
+STASH_ENTRY_LIMIT = 64
+#: Bounded per-side entries carried by one frozen stash comparison record.
+STASH_COMPARISON_LIMIT = 16
 #: Bounded per-path content binding of one sealed output. Keeping the blob
 #: identity of every changed path lets integration verification compare the
 #: immutable artifact with an actual target checkout independently of the
@@ -1076,6 +1106,168 @@ def normalize_scope(values) -> list[str]:
         if not isinstance(values, list):
             raise BoardError("INVALID_WORKSPACE", "writeScope must be a list")
         return sorted({_relative(value, allow_root=True) for value in values})
+
+
+# -- shared stash observations (facts, never gates) ---------------------------
+def _shell_quoted(value: str) -> str:
+    """One POSIX single-quoted shell word; nothing inside is ever interpreted."""
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def _stash_unknown(repository_path, reason) -> dict:
+    return stash_observation_unknown(repository_path, reason)
+
+
+def stash_observation_unknown(repository_path, reason) -> dict:
+    """The honest unread observation for one repository: state ``unknown``.
+
+    An unknown is a fact about a failed reading, never an empty list and never
+    an error: callers freeze it beside the reason so a Host can tell "there
+    were no stash entries" from "the stash list could not be read".
+    """
+    return {"version": 1, "repositoryPath": str(repository_path), "state": "unknown",
+            "reason": str(reason)[-512:], "entries": None, "truncated": False, "totalCount": None}
+
+
+def shared_stash_inventory(repository_path) -> dict:
+    """One read-only observation of the stash entries a repository shares.
+
+    Managed checkouts are worktrees of the user's repository: ``refs/stash`` and
+    its reflog live in the common Git directory, so a stash created or removed in
+    any worktree — the user's own checkout included — is visible and removable in
+    every other one. The recorded ``repositoryPath`` may therefore be either a
+    worktree root or the repository's own Git directory (a snapshot's
+    ``snapshot.repositoryPath`` is the common Git dir, not a worktree); Git's own
+    ``rev-parse --git-common-dir`` resolves both shapes to the one directory
+    that actually owns the shared reflog, and ``reflog show`` reads it there
+    without needing any work tree. Each entry records its commit id and the full
+    description Git itself shows (``%gs``, the reflog subject; Git stores
+    newline-bearing messages flattened there, while the commit object keeps the
+    full text). A repository that cannot be read is an honest ``unknown``
+    observation, never an error: a fact that cannot be read must not block or
+    fail otherwise ready work.
+    """
+    path = str(repository_path)
+    try:
+        common = _line(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if not common:
+            return _stash_unknown(path, "the repository did not name a common Git directory")
+        if _git_in(common, "rev-parse", "--verify", "--quiet", "refs/stash", allowed=(0, 1)).strip():
+            payload = _git_in(common, "reflog", "show", "--format=%H%x00%gs%x00", "refs/stash")
+        else:
+            # No stash ref at all is a complete, empty observation.
+            payload = b""
+    except BoardError as error:
+        reason = error.details.get("reason") if isinstance(error.details, dict) else None
+        return _stash_unknown(path, reason or error.message)
+    tokens = payload.split(b"\0")
+    entries = []
+    for index in range(0, len(tokens) - 1, 2):
+        # ``--format`` terminates every entry with a newline, which lands on the
+        # next record's hash token; descriptions keep their own bytes verbatim.
+        commit = tokens[index][1:] if tokens[index].startswith(b"\n") else tokens[index]
+        name = commit.decode()
+        # Valid UTF-8 passes through exactly. Undecodable bytes become U+FFFD
+        # deterministically: the description is display text, the commit id is
+        # the exact recoverable identity, and canonical JSON must stay encodable.
+        description = tokens[index + 1].decode("utf-8", "replace")
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", name) is None:
+            return _stash_unknown(path, "the stash reflog did not parse as commit ids and descriptions")
+        entries.append({"commit": name, "description": description})
+    total = len(entries)
+    return {"version": 1, "repositoryPath": path, "state": "observed",
+            "entries": entries[:STASH_ENTRY_LIMIT], "truncated": total > STASH_ENTRY_LIMIT,
+            "totalCount": total}
+
+
+_STASH_CAUSE_NOTE = (
+    "Why a stash entry disappeared is unknown: the user or another session may have popped or"
+    " dropped it. Nothing was restored automatically and the turn is not judged failed on this"
+    " fact; review the recorded commit and description, then recover it with the recorded"
+    " git stash store command if it is wanted."
+)
+
+
+def shared_stash_comparison(start, seal) -> dict:
+    """Compare two stash observations by complete entries.
+
+    An entry is its commit id together with its description: the same commit
+    stashed twice with different descriptions is two entries, an identical
+    re-registration of the same pair is not a change, and the stash's stack
+    position is not part of its identity because popping one entry shifts every
+    index without losing content. ``state`` describes the quality of the
+    comparison: ``observed`` when both sides were completely read, ``partial``
+    when a side carried only its bounded entry list, ``unknown`` when a side
+    could not be read at all. A truncated side hides entries beyond its cut, so
+    disappearance can only be proven against a completely read seal side and
+    appearance only against a completely read start side; the unprovable
+    direction claims nothing and fabricates no loss — the real entries may
+    simply sit beyond the observed window. This record is evidence for a Host;
+    it restores nothing, judges nothing and can never fail a seal or a
+    verification.
+    """
+    def observed(record):
+        return (isinstance(record, dict) and record.get("version") == 1 and record.get("state") == "observed"
+                and isinstance(record.get("entries"), list)
+                and all(isinstance(item, dict) and isinstance(item.get("commit"), str)
+                        and isinstance(item.get("description"), str) for item in record["entries"]))
+
+    def counted(record):
+        return Counter((item["commit"], item["description"]) for item in record["entries"])
+
+    record = {"version": 1, "state": "unknown", "changed": None,
+              "lostEntries": [], "newEntries": [], "lostCount": 0, "newCount": 0, "truncated": False}
+    unknown = [side for side, value in (("start", start), ("seal", seal)) if not observed(value)]
+    if unknown:
+        record["unknownSides"] = unknown
+        return record
+    truncated_sides = [side for side, value in (("start", start), ("seal", seal)) if value.get("truncated")]
+    record["truncated"] = bool(truncated_sides)
+    # Only a completely read opposite side can prove a direction: entries missing
+    # from a truncated seal may exist beyond its cut, entries absent from a
+    # truncated start may have existed before its cut.
+    lost_provable = not seal.get("truncated")
+    new_provable = not start.get("truncated")
+    lost_entries, new_entries = [], []
+    if lost_provable:
+        lost = counted(start)
+        lost.subtract(counted(seal))
+        for (commit, description), count in sorted((item for item in lost.items() if item[1] > 0),
+                                                    key=lambda item: (-item[1], item[0][0], item[0][1])):
+            for _ in range(count):
+                lost_entries.append({"commit": commit, "description": description, "cause": "unknown",
+                                     "recoverCommand": f"git stash store -m {_shell_quoted(description)} {commit}"})
+    if new_provable:
+        new = counted(seal)
+        new.subtract(counted(start))
+        for (commit, description), count in sorted((item for item in new.items() if item[1] > 0),
+                                                    key=lambda item: (-item[1], item[0][0], item[0][1])):
+            for _ in range(count):
+                new_entries.append({"commit": commit, "description": description})
+    record.update(
+        lostEntries=lost_entries[:STASH_COMPARISON_LIMIT],
+        newEntries=new_entries[:STASH_COMPARISON_LIMIT],
+        lostCount=len(lost_entries),
+        newCount=len(new_entries),
+    )
+    if not truncated_sides:
+        record["state"] = "observed"
+        record["changed"] = bool(lost_entries or new_entries)
+    else:
+        record["state"] = "partial"
+        record["truncatedSides"] = truncated_sides
+        unproven = [direction for direction, provable in (("lost", lost_provable), ("new", new_provable))
+                    if not provable]
+        record["unprovenDirections"] = unproven
+        record["partialNote"] = (
+            "One observation was truncated to its bounded entry list, so "
+            + " and ".join(unproven)
+            + " entries beyond the observed window cannot be proven from these records; no such"
+            " disappearance or appearance is claimed."
+        )
+    if lost_entries:
+        record["causeNote"] = _STASH_CAUSE_NOTE
+    return record
 
 
 def _conflict_index(records):
@@ -1656,6 +1848,37 @@ def _workspace_identifier(value):
             and all(character in "0123456789abcdef" for character in value[3:]))
 
 
+def _attached_branch_report(checkout_root, record) -> dict:
+    """The honest diagnosis of a correctly registered worktree on a branch.
+
+    Registration and the allocation's lock can both be exactly right while the
+    checkout's HEAD sits on a branch a Worker created or switched to, and that
+    state is not the disposable detached checkout cleanup removes. This names
+    the exact branch and the one safe way for a Host to make the checkout
+    detachable again — ``switch --detach`` moves only HEAD, never a branch, tag
+    or other reference — and states that the board itself never detaches,
+    deletes or moves any branch or reference. The decision whether the branch
+    survives belongs to the Host, not to this report.
+    """
+    ref = record.get("branch") if isinstance(record.get("branch"), str) else ""
+    head = record.get("HEAD") if isinstance(record.get("HEAD"), str) else ""
+    name = ref.removeprefix("refs/heads/")
+    report = {
+        "branch": name or None,
+        "ref": ref or None,
+        "headCommit": head or None,
+        "note": "The checkout is registered and locked correctly, but its HEAD is attached to"
+                + (f" branch {name}" if name else " a branch")
+                + " instead of a detached commit, so it is not the disposable detached state"
+                " this cleanup removes.",
+    }
+    if head:
+        report["detachCommand"] = f"git -C {_shell_quoted(str(checkout_root))} switch --detach {_shell_quoted(head)}"
+        report["retry"] = ("After detaching, plan or apply the cleanup again; the branch, its ref"
+                           " and its commits are untouched and stay the Host's to keep or delete.")
+    return report
+
+
 def _path_present(path: Path) -> bool:
     """True while anything still occupies this exact path, including a dangling link.
 
@@ -1775,6 +1998,7 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
             "path": allocation["path"] if allocation else manifest["checkoutRoot"], "cwd": manifest["path"],
             "allocation": allocation, "worktree": False, "locked": None,
             "unsealedPaths": [], "refs": [], "sealedObservation": None,
+            "attachedBranch": None,
         }
         if allocation is None:
             result["reasons"].append("not-a-managed-worktree")
@@ -1819,8 +2043,20 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     outside the write scope still reports ``unsealed-changes``.
     """
     record = _worktree_record(repository, checkout_root)
-    if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
+    if record is None:
+        # Registration itself is missing: its own reason, never a claim about
+        # locks or branches that were not read.
         result["reasons"].append("unregistered-checkout")
+    elif record.get("locked") != "buddy:" + allocation["workspaceId"]:
+        # A worktree someone else locked stays theirs; the mismatch keeps its
+        # own reason instead of hiding behind "unregistered".
+        result["reasons"].append("lock-mismatch")
+    elif "detached" not in record:
+        # Registered and locked by exactly this allocation, but HEAD is attached
+        # to a branch. Report the branch and the safe detach; never detach,
+        # delete or move any branch or reference here.
+        result["reasons"].append("attached-branch")
+        result["attachedBranch"] = _attached_branch_report(checkout_root, record)
     else:
         result["worktree"] = True
         result["locked"] = record.get("locked")
@@ -1904,8 +2140,24 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
                 raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
         repository = Path(actual["repositoryPath"])
         record = _worktree_record(repository, checkout_root)
-        if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is not this allocation's registered worktree",
+        if record is not None and record.get("locked") == "buddy:" + allocation["workspaceId"] and "detached" not in record:
+            # Registration and lock are exactly this allocation's; only the
+            # attached HEAD blocks the removal. Refuse with the branch, the safe
+            # detach command and the retry — never detach, delete or move any
+            # branch or reference on the board's own authority.
+            report = _attached_branch_report(checkout_root, record)
+            raise BoardError(
+                "WORKSPACE_UNSAFE",
+                "The cleanup target is registered and locked but its HEAD is attached to branch "
+                + str(report.get("branch"))
+                + "; detach it with the recorded command and retry the cleanup",
+                path=str(checkout_root), attachedBranch=report,
+            )
+        if record is None:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target has no worktree registration",
+                             path=str(checkout_root))
+        if record.get("locked") != "buddy:" + allocation["workspaceId"]:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is locked by a different allocation",
                              path=str(checkout_root))
         removal["repositoryPath"] = str(repository)
         try:

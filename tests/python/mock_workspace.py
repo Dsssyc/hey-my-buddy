@@ -26,6 +26,9 @@ class MockWorkspace:
         self.fail_prepare: set[str] = set()
         self.fail_seal: set[str] = set()
         self.dirty = False
+        self.stash_inventories: dict[str, dict] = {}
+        self.stash_inventory_calls: list[str] = []
+        self.fail_stash_inventory = False
 
     # -- helpers ------------------------------------------------------------
     def _repository_root(self, cwd: str) -> str:
@@ -76,7 +79,11 @@ class MockWorkspace:
             "writeScope": list(intent.get("writeScope", [])),
             "integrator": intent.get("integrator"),
             "targetRef": intent.get("targetRef"),
-            "snapshot": {"included": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
+            # Like the real module's snapshot, every logical workspace of one
+            # source repository names the same shared repository path: the stash
+            # facts of a run key on it across turns and allocations.
+            "snapshot": {"repositoryPath": "mock+repo:" + self._repository_root(intent.get("cwd") or path),
+                         "included": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
         }
         manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
         return manifest
@@ -86,6 +93,31 @@ class MockWorkspace:
         # This double models identities, not Git's file inventory; actual partial
         # file selection is covered by the real-workspace preparation tests.
         return []
+
+    def shared_stash_inventory(self, repository_path) -> dict:
+        """The injected observation for one repository, or an honest unknown.
+
+        The inventory is what tests set (``stash_inventories``); the comparison
+        itself reuses the real module's pure function so the double only
+        replaces the Git read, exactly like the contract's module boundary.
+        """
+        self.stash_inventory_calls.append(str(repository_path))
+        if self.fail_stash_inventory:
+            raise BoardError("WORKSPACE_GIT_ERROR", "injected stash read failure")
+        record = self.stash_inventories.get(str(repository_path))
+        if isinstance(record, dict):
+            return dict(record)
+        from hey_my_buddy.blackboard.tasks.workspace import stash_observation_unknown
+        return stash_observation_unknown(repository_path, "not-configured-in-double")
+
+    def stash_observation_unknown(self, repository_path, reason) -> dict:
+        from hey_my_buddy.blackboard.tasks.workspace import stash_observation_unknown
+        return stash_observation_unknown(repository_path, reason)
+
+    @staticmethod
+    def shared_stash_comparison(start, seal) -> dict:
+        from hey_my_buddy.blackboard.tasks.workspace import shared_stash_comparison
+        return shared_stash_comparison(start, seal)
 
     def normalize_scope(self, values) -> list[str]:
         if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
@@ -199,7 +231,7 @@ class MockWorkspace:
             "kind": manifest.get("kind", "existing"), "checkoutId": manifest.get("checkoutId"),
             "repositoryId": manifest.get("repositoryId"), "path": manifest.get("checkoutRoot"),
             "cwd": manifest.get("path"), "allocation": None, "worktree": False, "locked": None,
-            "unsealedPaths": [], "refs": [], "sealedObservation": None,
+            "unsealedPaths": [], "refs": [], "sealedObservation": None, "attachedBranch": None,
         }
 
     def cleanup_remove(self, state_dir, manifest, *, retained=None):

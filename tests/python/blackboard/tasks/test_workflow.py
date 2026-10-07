@@ -1110,7 +1110,11 @@ class BoundedViewTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(set(view["truncated"]), {"turns", "requests", "children", "artifacts", "pendingRequests"})
         self.assertEqual(view["counts"]["turns"], 1)
-        self.assertEqual(view["counts"]["artifacts"], 2)
+        # The submitted input, the sealed output and the turn's frozen
+        # shared-stash fact record are each one fixed artifact.
+        self.assertEqual(view["counts"]["artifacts"], 3)
+        self.assertEqual({row["kind"] for row in view["artifacts"]},
+                         {"output", "input", "shared-refs"})
         self.assertEqual(view["truncated"]["turns"], 0)
         self.assertEqual(view["counts"]["openRequests"], 1)
         self.assertEqual(len(view["pendingRequests"]), 1)
