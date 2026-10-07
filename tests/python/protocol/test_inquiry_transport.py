@@ -1,248 +1,180 @@
-"""The one shared inquiry-bridge socket client (ADR-025 step 2-C2).
+"""Named live RPC transport through the actual bounded C-Two channel.
 
-The client moved mechanically from the blackboard inquiry module to
-:mod:`hey_my_buddy.protocol.inquiry_transport`, so both the board and the ZCode
-live binding speak the identical frames. These tests pin the preserved wire
-behavior over real local sockets: the id correlation, the transport window, the
-bounded reply and the exact refusal classification — including the specific
-peer code a refused answer carries, which the removed duplicate client used to
-fold into one generic refusal.
+Only ``cc.connect`` is replaced: one connection points at the actual endpoint
+handlers; malformed replies and SDK failures use the existing ``StubPeer``.
+No socket framing or vendor correlation protocol is reproduced here. The
+endpoint owner in the correlation test supplies a simulated settlement, not a
+native journal commit or a signed delivery receipt. The SDK's own RPC reply
+correlation belongs to the mature C-Two contract (ADR-023 decisions 7/8).
 """
 from __future__ import annotations
 
-import json
-import os
-import socket
-import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
+from contextlib import nullcontext
+from unittest.mock import patch
 
-from hey_my_buddy.protocol.inquiry_transport import (
-    BRIDGE_ERRORS,
-    MAX_TRANSPORT_TIMEOUT_MS,
-    MIN_TRANSPORT_TIMEOUT_MS,
-    bridge_request,
+from hey_my_buddy.buddy.harnesses import c_two_live as ctl
+from hey_my_buddy.buddy.harnesses import live as lv
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.json_codec import canonical_json, decode_strict_json
+from tests.python.buddy.harnesses.test_c_two_live import (
+    StubPeer,
+    TEST_CRM,
+    identity,
+    inquiry_request,
 )
 
 
-class SilentServer:
-    """A listener that accepts and never answers, for timeout classification."""
-
-    def __init__(self, path: Path):
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(str(path))
-        self.listener.listen(2)
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-        self.thread.start()
-
-    def _serve(self) -> None:
-        try:
-            connection, _ = self.listener.accept()
-            time.sleep(2.0)  # read nothing, answer nothing
-            connection.close()
-        except OSError:
-            pass
-
-    def close(self) -> None:
-        self.listener.close()
-        self.thread.join(timeout=2)
-
-
 class TransportTests(unittest.TestCase):
-    def short_socket_dir(self, prefix: str) -> Path:
-        """A short AF_UNIX directory on a standard-library fixture lifecycle.
+    def setUp(self):
+        self.run = identity()
+        self.endpoint = ctl.CTwoLiveEndpoint(
+            self.run, lv.LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
+            TEST_CRM, instance_id="a" * 64, token="b" * 64)
+        self.channel = ctl.CTwoLiveChannel(
+            self.run, TEST_CRM, name="Hana", address="ipc://cc" + "5" * 38,
+            instance_id="a" * 64, token="b" * 64)
+        self.addCleanup(self.endpoint.close, reason="test-finished")
 
-        The directory is one ``tempfile.TemporaryDirectory`` whose removal is
-        registered before the sockets and serving threads each test registers
-        after it, so unittest's last-registered-first cleanup order stops the
-        servers first and removes the directory only afterwards. Nothing the
-        module creates outlives its test.
-        """
-        # Keep the AF_UNIX address short: a nested workdir can exceed the
-        # platform's sun_path limit before the tested condition is reached.
-        temp = tempfile.TemporaryDirectory(prefix=prefix,
-                                           dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
-        self.addCleanup(temp.cleanup)
-        return Path(temp.name)
+    def connect(self, peer):
+        """Replace SDK network connection only; named dispatch remains real."""
+        patcher = patch.object(ctl.cc, "connect", return_value=nullcontext(peer))
+        connection = patcher.start()
+        self.addCleanup(patcher.stop)
+        return connection
 
-    def test_a_bridge_reply_round_trips_its_value(self):
-        directory = self.short_socket_dir("buddy-transport-ok-")
-        path = directory / "bridge.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(listener.close)
-        listener.bind(str(path))
-        listener.listen(2)
-        seen: list[dict] = []
+    def test_named_rpcs_keep_the_request_and_owner_settlement_correlated(self):
+        connection = self.connect(self.endpoint)
+        self.assertEqual(self.channel.capabilities().inquiry_delivery,
+                         "cooperative-checkpoint")
+        requests = [inquiry_request(request_id=f"r-{i}", question_id=f"q-{i}")
+                    for i in range(2)]
+        replies = [[], []]
+        threads = [threading.Thread(target=lambda i=i: replies[i].append(
+            self.channel.request(requests[i], timeout_ms=3000)), daemon=True)
+            for i in range(2)]
+        for thread in threads:
+            thread.start()
+        # These are actual owner queue entries, with no fabricated wire reply id.
+        consumed = [self.endpoint.consume_request(1.0) for _ in requests]
+        self.assertTrue(all(request is not None for request in consumed))
+        self.assertEqual({request.request_id for request in consumed}, {"r-0", "r-1"})
+        self.assertEqual(self.channel.observe(limit=10, timeout_ms=1500).inquiries, ())
+        for request in reversed(consumed):
+            self.endpoint.settle_request(request.request_id, lv.LiveReply(
+                status="queued", observed=True, state="queued",
+                native_correlation={"questionId": request.payload.question_id}))
+        for thread in threads:
+            thread.join(timeout=4)
+            self.assertFalse(thread.is_alive())
+        for index, box in enumerate(replies):
+            self.assertEqual(len(box), 1)
+            self.assertEqual((box[0].status, box[0].state), ("queued", "queued"))
+            self.assertEqual(box[0].native_correlation.value["questionId"], f"q-{index}")
+        snapshot = self.channel.observe(limit=10, timeout_ms=1500)
+        self.assertEqual({entry.question_id for entry in snapshot.inquiries}, {"q-0", "q-1"})
+        self.assertTrue(all(entry.status == "queued" for entry in snapshot.inquiries))
+        for call in connection.call_args_list:
+            self.assertEqual(call.args, (TEST_CRM,))
+            self.assertEqual(call.kwargs, {"name": "Hana", "address": "ipc://cc" + "5" * 38})
+        self.assertIsNone(self.endpoint.consume_request(0.0))
 
-        def serve() -> None:
-            connection, _ = listener.accept()
-            with connection:
-                request = json.loads(connection.recv(64 * 1024).split(b"\n", 1)[0])
-                seen.append(request)
-                connection.sendall((json.dumps({"version": 1, "id": request["id"], "ok": True,
-                                                "value": {"ready": True}}) + "\n").encode())
+    def test_sdk_connection_failure_is_unavailable_for_every_named_rpc(self):
+        self.connect(StubPeer([ConnectionError("connection refused")] * 3))
+        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual((reply.status, reply.reason_code),
+                         ("unavailable", "transport-unreachable"))
+        snapshot = self.channel.observe(limit=10, timeout_ms=1500)
+        self.assertEqual((snapshot.observed, snapshot.reason), (False, "transport-unreachable"))
+        with self.assertRaises(BoardError) as failure:
+            self.channel.capabilities()
+        self.assertEqual(failure.exception.code, "LIVE_UNAVAILABLE")
 
-        thread = threading.Thread(target=serve, daemon=True)
+    def test_owner_refusal_preserves_its_specific_code(self):
+        self.connect(self.endpoint)
+        box = []
+        thread = threading.Thread(target=lambda: box.append(
+            self.channel.request(inquiry_request(), timeout_ms=3000)), daemon=True)
         thread.start()
-        result = bridge_request({"socketPath": str(path), "token": "t" * 8}, "observe", {},
-                                timeout_ms=1000)
-        thread.join(timeout=2)
-        self.assertEqual(result, {"ok": True, "value": {"ready": True}})
-        self.assertEqual(seen[0]["method"], "observe")
-        self.assertEqual(seen[0]["version"], 1)
-        self.assertEqual(seen[0]["token"], "t" * 8)
-        self.assertTrue(seen[0]["id"])
+        request = self.endpoint.consume_request(1.0)
+        self.assertIsNotNone(request)
+        self.endpoint.settle_request(request.request_id, lv.LiveReply(
+            status="unavailable", reason_code="journal-unavailable", error_code="not-ready"))
+        thread.join(timeout=4)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual((box[0].status, box[0].reason_code, box[0].error_code),
+                         ("unavailable", "journal-unavailable", "not-ready"))
+        self.assertEqual(self.channel.observe(limit=10, timeout_ms=1500).inquiries, ())
 
-    def test_a_missing_or_refusing_socket_path_is_unreachable(self):
-        missing = self.short_socket_dir("buddy-transport-missing-") / "absent.sock"
-        self.assertEqual(bridge_request({"socketPath": str(missing), "token": "x"}, "observe", {})["reason"],
-                         "bridge-unreachable")
-        self.assertEqual(bridge_request({}, "observe", {})["reason"], "bridge-unreachable")
+    def test_unknown_owner_code_is_preserved_as_a_source_fact(self):
+        refusal = lv.LiveReply(status="unavailable", reason_code="owner-unavailable",
+                               error_code="owner-specific-code")
+        peer = StubPeer([canonical_json(refusal.to_payload())])
+        self.connect(peer)
+        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual((reply.reason_code, reply.error_code),
+                         ("owner-unavailable", "owner-specific-code"))
+        self.assertEqual(peer.calls[0][0], "request")
+        frame = ctl.LiveWireRequest.from_payload(decode_strict_json(peer.calls[0][1]))
+        self.assertEqual((frame.request_id, frame.identity), ("request-1", self.run))
 
-    def test_a_refused_answer_carries_the_bridges_own_code(self):
-        directory = self.short_socket_dir("buddy-transport-refused-")
-        path = directory / "bridge.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(listener.close)
-        listener.bind(str(path))
-        listener.listen(2)
+    def test_non_json_and_wrong_dto_replies_are_invalid_for_every_named_rpc(self):
+        for raw in ("not json", '{"extra":1}', '{"status":"queued","extra":1}',
+                    '{"status":"queued","status":"delivered"}'):
+            with self.subTest(reply=raw):
+                self.connect(StubPeer([raw] * 3))
+                reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+                self.assertEqual((reply.status, reply.reason_code), ("unavailable", "reply-invalid"))
+                snapshot = self.channel.observe(limit=10, timeout_ms=1500)
+                self.assertEqual((snapshot.observed, snapshot.reason), (False, "reply-invalid"))
+                with self.assertRaises(BoardError):
+                    self.channel.capabilities()
 
-        def serve() -> None:
-            connection, _ = listener.accept()
-            with connection:
-                request = json.loads(connection.recv(64 * 1024).split(b"\n", 1)[0])
-                connection.sendall((json.dumps({"version": 1, "id": request["id"], "ok": False,
-                                                "error": "not-ready"}) + "\n").encode())
+    def test_oversized_complete_reply_frames_are_refused_before_dto_decoding(self):
+        self.assertEqual(lv.MAX_LIVE_FRAME_BYTES, 64 * 1024)
+        # A DTO-valid reply enlarged with legal JSON whitespace catches the
+        # full-frame byte bound, independently of any individual DTO field cap.
+        values = (lv.LiveReply(status="queued", observed=True, state="queued"),
+                  lv.LiveSnapshot(observed=True),
+                  lv.LiveCapabilities(inquiry_delivery="cooperative-checkpoint"))
+        replies = [canonical_json(value.to_payload()) + " " * lv.MAX_LIVE_FRAME_BYTES
+                   for value in values]
+        self.connect(StubPeer(replies))
+        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        self.assertEqual((reply.status, reply.reason_code), ("unavailable", "reply-invalid"))
+        snapshot = self.channel.observe(limit=10, timeout_ms=1500)
+        self.assertEqual((snapshot.observed, snapshot.reason), (False, "reply-invalid"))
+        with self.assertRaises(BoardError):
+            self.channel.capabilities()
 
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        result = bridge_request({"socketPath": str(path), "token": "x"}, "ask",
-                                {"inquiryId": "i-1", "question": "hello"}, timeout_ms=1000)
-        thread.join(timeout=2)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "bridge-refused")
-        self.assertEqual(result["code"], "not-ready")
+    def test_transport_windows_reject_invalid_values_before_sdk_connection(self):
+        connection = self.connect(StubPeer([]))
+        self.assertEqual((lv.MIN_TRANSPORT_TIMEOUT_MS, lv.MAX_TRANSPORT_TIMEOUT_MS), (100, 5000))
+        for value in (99, 5001, 99_000, True, 1500.0):
+            with self.subTest(timeout=value):
+                with self.assertRaises(BoardError):
+                    self.channel.request(inquiry_request(), timeout_ms=value)
+                with self.assertRaises(BoardError):
+                    self.channel.observe(limit=10, timeout_ms=value)
+        connection.assert_not_called()
 
-    def test_an_unknown_refusal_code_is_not_invented_into_the_closed_set(self):
-        directory = self.short_socket_dir("buddy-transport-internal-")
-        path = directory / "bridge.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(listener.close)
-        listener.bind(str(path))
-        listener.listen(2)
-
-        def serve() -> None:
-            connection, _ = listener.accept()
-            with connection:
-                request = json.loads(connection.recv(64 * 1024).split(b"\n", 1)[0])
-                connection.sendall((json.dumps({"version": 1, "id": request["id"], "ok": False,
-                                                "error": "mysterious"}) + "\n").encode())
-
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        result = bridge_request({"socketPath": str(path), "token": "x"}, "observe", {}, timeout_ms=1000)
-        thread.join(timeout=2)
-        self.assertEqual((result["reason"], result["code"]), ("bridge-refused", "internal"))
-        # The closed refusal vocabulary itself is the existing one.
-        self.assertEqual(BRIDGE_ERRORS,
-                         ("bad-request", "unauthorized", "frame-too-large", "timeout",
-                          "unsupported-method", "not-ready", "agent-gone", "agent-not-running",
-                          "journal-unavailable", "conflict", "too-many", "internal"))
-
-    def test_a_foreign_reply_id_is_mismatched_not_accepted(self):
-        directory = self.short_socket_dir("buddy-transport-foreign-")
-        path = directory / "bridge.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(listener.close)
-        listener.bind(str(path))
-        listener.listen(2)
-
-        def serve() -> None:
-            # Read the request fully, then answer a foreign id, so the client's
-            # own frame can never be lost to a reset before the reply arrives.
-            connection, _ = listener.accept()
-            with connection:
-                request = json.loads(connection.recv(64 * 1024).split(b"\n", 1)[0])
-                connection.sendall((json.dumps({"version": 1, "id": "not-" + request["id"][:4],
-                                                "ok": True, "value": {}}) + "\n").encode())
-
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        result = bridge_request({"socketPath": str(path), "token": "x"}, "observe", {}, timeout_ms=1000)
-        thread.join(timeout=2)
-        self.assertEqual(result["reason"], "bridge-mismatched-response")
-
-    def test_a_non_json_reply_is_invalid_and_a_silent_socket_times_out(self):
-        directory = self.short_socket_dir("buddy-transport-bad-")
-        path = directory / "bridge.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(listener.close)
-        listener.bind(str(path))
-        listener.listen(2)
-
-        def serve() -> None:
-            connection, _ = listener.accept()
-            with connection:
-                connection.recv(64 * 1024)
-                connection.sendall(b"this is not json\n")
-
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        result = bridge_request({"socketPath": str(path), "token": "x"}, "observe", {}, timeout_ms=1000)
-        thread.join(timeout=2)
-        listener.close()
-        self.assertEqual(result["reason"], "bridge-invalid-response")
-
-        silent_path = directory / "silent.sock"
-        silent = SilentServer(silent_path)
-        self.addCleanup(silent.close)
+    def test_stalled_sdk_calls_expire_without_reporting_a_stopped_owner(self):
+        peer = StubPeer(["unused"] * 2, delay=0.35)
+        self.connect(peer)
         started = time.monotonic()
-        result = bridge_request({"socketPath": str(silent_path), "token": "x"}, "observe", {},
-                                timeout_ms=200)
-        self.assertEqual(result["reason"], "bridge-timeout")
-        self.assertLess(time.monotonic() - started, 1.5,
-                        "the caller's transport window reached the socket")
-        silent.close()
-
-    def test_an_oversized_reply_is_refused_not_truncated(self):
-        directory = self.short_socket_dir("buddy-transport-big-")
-        path = directory / "bridge.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(listener.close)
-        listener.bind(str(path))
-        listener.listen(2)
-        served = threading.Event()
-
-        def serve() -> None:
-            try:
-                connection, _ = listener.accept()
-                with connection:
-                    request = json.loads(connection.recv(64 * 1024).split(b"\n", 1)[0])
-                    blob = "x" * 80 * 1024
-                    # The client hangs up on the oversized reply; a broken pipe
-                    # here is the refusal working, not a server defect.
-                    connection.sendall((json.dumps({"version": 1, "id": request["id"], "ok": True,
-                                                    "value": {"blob": blob}}) + "\n").encode())
-            except OSError:
-                pass
-            finally:
-                served.set()
-
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        result = bridge_request({"socketPath": str(path), "token": "x"}, "observe", {}, timeout_ms=1000)
-        served.wait(timeout=5)
-        self.assertEqual(result["reason"], "bridge-response-too-large")
-
-    def test_the_transport_window_stays_the_existing_bounded_one(self):
-        self.assertEqual((MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS), (100, 5000))
-        # A caller's window is clamped into the same bounds the direct paths had.
-        directory = self.short_socket_dir("buddy-transport-clamp-")
-        result = bridge_request({"socketPath": str(directory / "absent.sock"), "token": "x"},
-                                "observe", {}, timeout_ms=99_000)
-        self.assertEqual(result["reason"], "bridge-unreachable")
+        reply = self.channel.request(inquiry_request(), timeout_ms=100)
+        self.assertEqual((reply.status, reply.reason_code),
+                         ("unavailable", "transport-window-expired"))
+        self.assertGreaterEqual(time.monotonic() - started, 0.09)
+        self.assertLess(time.monotonic() - started, 0.8)
+        snapshot = self.channel.observe(limit=10, timeout_ms=100)
+        self.assertEqual((snapshot.observed, snapshot.reason),
+                         (False, "transport-window-expired"))
+        # Drain the finite StubPeer stall before fixture cleanup. No subprocess
+        # was started, and this result is never used as shutdown evidence.
+        time.sleep(0.4)
 
 
 if __name__ == "__main__":

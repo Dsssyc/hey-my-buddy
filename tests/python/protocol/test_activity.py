@@ -6,16 +6,21 @@ subprocess starts, as AGENTS.md requires.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
-import threading
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
 from support import BoardTestCase
 
 from hey_my_buddy.protocol import activity as activity_module
-from hey_my_buddy.protocol.activity import ActivitySidecar, is_newer, normalize_activity, read_sidecar, validate_sidecar
+from hey_my_buddy.protocol.activity import ActivityPublisher, is_newer, normalize_activity
+from hey_my_buddy.buddy.harnesses import c_two_live as ctl
+from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
+from hey_my_buddy.buddy.roles import live as role_live
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal
@@ -119,83 +124,6 @@ class ActivityValidation(BoardTestCase):
                     normalize_activity(value)
                 self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
-    def test_sidecar_binding_is_enforced_and_rejections_are_quiet(self):
-        directory = self.workdir("attempt")
-        sidecar = ActivitySidecar(
-            directory,
-            task_id="task-1",
-            attempt_id="attempt-1",
-            generation=1,
-            min_interval_seconds=0.0,
-        )
-        written = sidecar.publish({"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1})
-        self.assertEqual(written, directory / "activity.json")
-        document = json.loads(written.read_text())
-        self.assertEqual(document["version"], activity_module.ACTIVITY_VERSION)
-        self.assertEqual((document["taskId"], document["attemptId"], document["generation"]), ("task-1", "attempt-1", 1))
-        # The path is never part of the payload, so a public response cannot leak it.
-        self.assertNotIn("path", document["activity"])
-
-        self.assertEqual(
-            read_sidecar(written, task_id="task-1", attempt_id="attempt-1", generation=1),
-            {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1},
-        )
-        for name, kwargs in {
-            "other task": {"task_id": "task-2", "attempt_id": "attempt-1", "generation": 1},
-            "other attempt": {"task_id": "task-1", "attempt_id": "attempt-2", "generation": 1},
-            "other generation": {"task_id": "task-1", "attempt_id": "attempt-1", "generation": 2},
-        }.items():
-            with self.subTest(name=name):
-                self.assertIsNone(read_sidecar(written, **kwargs))
-                with self.assertRaises(BoardError):
-                    validate_sidecar(document, **kwargs)
-
-        foreign = {**document, "version": activity_module.ACTIVITY_VERSION + 1}
-        self.assertIsNone(read_sidecar(_write(directory / "other.json", foreign), task_id="task-1", attempt_id="attempt-1", generation=1))
-        self.assertIsNone(read_sidecar(directory / "missing.json", task_id="task-1", attempt_id="attempt-1", generation=1))
-        broken = directory / "broken.json"
-        broken.write_text("{not json")
-        self.assertIsNone(read_sidecar(broken, task_id="task-1", attempt_id="attempt-1", generation=1))
-        for field in ("version", "generation"):
-            forged = {**document, field: True}
-            with self.subTest(bool_field=field), self.assertRaises(BoardError):
-                validate_sidecar(forged, task_id="task-1", attempt_id="attempt-1", generation=1)
-            self.assertIsNone(read_sidecar(_write(directory / f"bool-{field}.json", forged),
-                                           task_id="task-1", attempt_id="attempt-1", generation=1))
-
-    def test_sidecar_reader_rejects_oversized_symlink_fifo_and_deep_json(self):
-        directory = self.workdir("sidecar-read-bound")
-        kwargs = {"task_id": "task-1", "attempt_id": "attempt-1", "generation": 1}
-        huge = directory / "huge.json"
-        huge.write_bytes(b" " * (activity_module.MAX_SIDECAR_BYTES + 1))
-        self.assertIsNone(read_sidecar(huge, **kwargs))
-        valid = _write(directory / "valid.json", {"version": 1, "taskId": "task-1", "attemptId": "attempt-1",
-                                                 "generation": 1, "activity": {"phase": "starting", "eventSeq": 1}})
-        with mock.patch.object(activity_module.os, "read", wraps=os.read) as bounded_read:
-            self.assertEqual(read_sidecar(valid, **kwargs), {"phase": "starting", "eventSeq": 1})
-            self.assertEqual(bounded_read.call_args.args[1], activity_module.MAX_SIDECAR_BYTES + 1)
-        link = directory / "linked.json"
-        link.symlink_to(valid)
-        self.assertIsNone(read_sidecar(link, **kwargs))
-        deep = directory / "deep.json"
-        deep.write_bytes(b"[" * 1200 + b"]" * 1200)
-        self.assertIsNone(read_sidecar(deep, **kwargs))
-        fifo = directory / "activity.fifo"
-        os.mkfifo(fifo)
-        result = []
-        reader = threading.Thread(target=lambda: result.append(read_sidecar(fifo, **kwargs)), daemon=True)
-        reader.start()
-        reader.join(timeout=0.5)
-        blocked = reader.is_alive()
-        if blocked:
-            # Release an older blocking implementation so the test process can exit.
-            with fifo.open("wb", buffering=0) as writer:
-                writer.write(b"{}")
-            reader.join(timeout=1)
-        self.assertFalse(reader.is_alive(), "a FIFO must not block the renewal reader")
-        self.assertFalse(blocked, "the renewal reader blocked until another process opened the FIFO")
-        self.assertEqual(result, [None])
-
     def test_timestamp_recency_uses_utc_instant_without_rewriting_display_value(self):
         previous = normalize_activity({"phase": "starting", "eventSeq": 4,
                                        "observedAt": "2026-01-01T01:00:00+01:00"})
@@ -213,41 +141,25 @@ class ActivityValidation(BoardTestCase):
                                    "observedAt": "2026-01-01T00:00:00.0000001Z"})
         self.assertTrue(is_newer(fine, same), "fractional precision beyond microseconds still orders correctly")
 
-    def test_sidecar_updates_are_atomic_throttled_and_monotone(self):
-        directory = self.workdir("sidecar")
+    def test_callback_updates_are_throttled_and_monotone(self):
         clock = FakeClock()
-        sidecar = ActivitySidecar(
-            directory, task_id="t", attempt_id="a", generation=1, min_interval_seconds=2.0, clock=clock
-        )
+        observed = []
+        publisher = ActivityPublisher(lambda value: observed.append(value) or True,
+                                      min_interval_seconds=2.0, clock=clock)
         first = {"phase": "starting", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1}
-        self.assertIsNotNone(sidecar.publish(first))
-        path = directory / "activity.json"
-        stamp = path.read_text()
-        # Identical and older receipts never rewrite the file.
-        self.assertIsNone(sidecar.publish(dict(first)))
-        self.assertIsNone(
-            sidecar.publish({"phase": "starting", "observedAt": "2025-12-31T23:59:59.000Z", "eventSeq": 0})
-        )
+        self.assertTrue(publisher.publish(first))
+        self.assertFalse(publisher.publish(dict(first)))
+        self.assertFalse(publisher.publish(
+            {"phase": "starting", "observedAt": "2025-12-31T23:59:59.000Z", "eventSeq": 0}))
         clock.advance(0.5)
-        # A phase change is published immediately; a same-phase update waits for the window.
-        self.assertIsNotNone(
-            sidecar.publish({"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.500Z", "eventSeq": 2})
-        )
-        self.assertIsNone(
-            sidecar.publish({"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.700Z", "eventSeq": 3})
-        )
+        second = {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.500Z", "eventSeq": 2}
+        self.assertTrue(publisher.publish(second), "phase changes bypass the throttle")
+        third = {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.700Z", "eventSeq": 3}
+        self.assertFalse(publisher.publish(third))
+        self.assertEqual(publisher.current(), second, "coalescing does not advance the observation")
         clock.advance(2.0)
-        self.assertIsNotNone(
-            sidecar.publish({"phase": "waiting-model", "observedAt": "2026-01-01T00:00:02.700Z", "eventSeq": 3})
-        )
-        self.assertNotEqual(path.read_text(), stamp)
-        self.assertEqual(list(directory.glob("*.tmp")), [], "an atomic replace leaves no temporary file")
-        self.assertEqual(list(directory.glob(".*.tmp")), [])
-
-
-def _write(path: Path, value: dict) -> Path:
-    path.write_text(json.dumps(value))
-    return path
+        self.assertTrue(publisher.publish(third))
+        self.assertEqual(observed, [first, second, third])
 
 
 class ActivityProjection(BoardTestCase):
@@ -397,7 +309,13 @@ class ActivityProjection(BoardTestCase):
 
 
 class WorkerActivityForwarding(BoardTestCase):
-    """The Worker forwards a bound sidecar once, and ignores anything unbound."""
+    """Real Worker progress over private SQLite and a real bounded live channel.
+
+    The owned child is an explicit command fixture, not an installed harness.
+    Only the role binding is supplied: its channel uses the actual C-Two client,
+    strict wire DTOs and endpoint handler. The SDK connection alone is replaced
+    by an in-process endpoint; this provides no cross-process/native receipt.
+    """
 
     def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), timeout_seconds: int = 120):
         board = self.board(lease_seconds=lease_seconds)
@@ -449,66 +367,138 @@ class WorkerActivityForwarding(BoardTestCase):
         renewal = _Renewal(worker, claim, handle, implementation)
         return board, client, worker, attempt, directory, renewal
 
-    def test_one_bound_sidecar_is_forwarded_once_and_updates_are_forwarded(self):
+    def bounded_channel(self, attempt):
+        # Reuse the existing test CRM; the fake SDK connection below reaches
+        # real named handlers, without implementing a second transport.
+        contract = getattr(type(self), "_test_contract", None)
+        if contract is None:
+            fixture = Path(__file__).resolve().parents[1] / "buddy/harnesses/fixtures/c_two_live_peer.py"
+            spec = importlib.util.spec_from_file_location("activity_c_two_live_peer", fixture)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            contract = type(self)._test_contract = module.TEST_CRM
+        identity = RunIdentity(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
+                               generation=attempt["generation"], invocation_id="activity-invocation",
+                               turn_id="activity-turn", input_sha256="f" * 64)
+        endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
+                                       contract, instance_id="a" * 64, token="b" * 64)
+        channel = ctl.CTwoLiveChannel(identity, contract, name="Activity Fixture",
+                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64)
+        self.addCleanup(lambda: endpoint.close(reason="fixture-finished"))
+        self.addCleanup(lambda: channel.close(reason="fixture-finished"))
+        self.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=lambda *a, **kw: nullcontext(endpoint)))
+        self.enterContext(mock.patch.object(role_live, "handle_live_binding",
+                                           return_value=(role_live.LIVE_BOUND, channel)))
+        return endpoint, channel
+
+    @staticmethod
+    def activity_events(client):
+        return [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"]
+
+    def test_one_bound_channel_is_forwarded_once_and_updates_are_forwarded(self):
         board, client, worker, attempt, directory, renewal = self.live_attempt()
-        clock = FakeClock()
-        sidecar = ActivitySidecar(
-            directory,
-            task_id=attempt["taskId"],
-            attempt_id=attempt["attemptId"],
-            generation=attempt["generation"],
-            min_interval_seconds=0.0,
-            clock=clock,
-        )
+        endpoint, channel = self.bounded_channel(attempt)
+        publisher = ActivityPublisher(endpoint.publish_activity, min_interval_seconds=0.0)
         first = {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1}
-        sidecar.publish(first)
+        self.assertTrue(publisher.publish(first))
         renewal._forward_activity()
         self.assertEqual(client.get(runId=attempt["taskId"])["activity"], first)
         renewal._forward_activity()
-        events = [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"]
-        self.assertEqual(len(events), 1, "a repeated sidecar is not published twice")
+        self.assertEqual(len(self.activity_events(client)), 1, "a repeated live receipt is not published twice")
         self.assertEqual(
             [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.progress"],
-            [],
-            "forwarding native activity never fabricates a prose progress event",
-        )
-        second = {
-            "phase": "tool-running",
-            "observedAt": "2026-01-01T00:00:02.000Z",
-            "eventSeq": 2,
-            "toolName": "write_file",
-            "counts": {"toolCalls": 1},
-        }
-        sidecar.publish(second)
+            [], "forwarding native activity never fabricates a prose progress event")
+        second = {"phase": "tool-running", "observedAt": "2026-01-01T00:00:02.000Z", "eventSeq": 2,
+                  "toolName": "write_file", "counts": {"toolCalls": 1}}
+        self.assertTrue(publisher.publish(second))
         renewal._forward_activity()
         self.assertEqual(client.get(runId=attempt["taskId"])["activity"], second)
+        self.assertFalse(endpoint.publish_activity(first), "the endpoint also fences older source observations")
+        renewal._forward_activity()
+        self.assertEqual(len(self.activity_events(client)), 2)
+        self.assertIsNone(renewal.handle.process.poll(), "activity reads never stop the owned child")
 
-    def test_an_unbound_or_malformed_sidecar_is_never_forwarded(self):
+    def test_unavailable_binding_is_retried_without_activity_or_heartbeat(self):
         board, client, worker, attempt, directory, renewal = self.live_attempt()
-        path = directory / "activity.json"
-        valid = {
-            "version": activity_module.ACTIVITY_VERSION,
-            "taskId": attempt["taskId"],
-            "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"],
-            "activity": {"phase": "tool-running", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1},
-        }
-        _write(path, {**valid, "generation": attempt["generation"] + 1})
-        renewal._forward_activity()
-        _write(path, {**valid, "attemptId": "someone-else"})
-        renewal._forward_activity()
-        _write(path, {**valid, "activity": {**valid["activity"], "reasoning": "hidden"}})
-        renewal._forward_activity()
-        path.write_text("{broken")
-        renewal._forward_activity()
+        endpoint, channel = self.bounded_channel(attempt)
+        with mock.patch.object(role_live, "handle_live_binding",
+                               return_value=(role_live.LIVE_UNAVAILABLE, None)) as binding:
+            renewal._forward_activity()
+            renewal._forward_activity()
+            self.assertEqual(binding.call_count, 2, "unavailable does not become a cached stop fact")
         self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
-        self.assertEqual(
-            [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"], []
-        )
-        # A correctly bound sidecar is still accepted afterwards.
-        _write(path, valid)
+        self.assertEqual(self.activity_events(client), [])
+        self.assertIsNone(renewal.handle.process.poll())
+        # A failed source read stays an unavailable fact; it invents no activity.
+        endpoint.close(reason="source-unavailable")
         renewal._forward_activity()
-        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], valid["activity"])
+        self.assertEqual(self.activity_events(client), [])
+        self.assertEqual(
+            [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.progress"], [])
+        self.assertIsNone(renewal.handle.process.poll(), "unknown/unavailable does not mean stopped")
+
+    def test_rejected_progress_does_not_advance_the_worker_receipt(self):
+        board, client, worker, attempt, directory, renewal = self.live_attempt()
+        endpoint, channel = self.bounded_channel(attempt)
+        payload = {"phase": "tool-running", "eventSeq": 1}
+        endpoint.publish_activity(payload)
+        # Invalidate only this claim capability, exercising the real progress
+        # RPC and SQLite ownership fence instead of mocking progress failure.
+        renewal.nonce = "d" * 32
+        renewal._forward_activity()
+        self.assertIsNone(renewal._activity)
+        self.assertEqual(self.activity_events(client), [])
+        self.assertIsNone(renewal.handle.process.poll())
+        renewal.nonce = "c" * 32
+        renewal._forward_activity()
+        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], payload)
+        self.assertEqual(len(self.activity_events(client)), 1)
+
+    def test_replaced_generation_rejects_an_old_workers_live_receipt(self):
+        board, client, worker, attempt, directory, renewal = self.live_attempt()
+        endpoint, channel = self.bounded_channel(attempt)
+        first = {"phase": "starting", "eventSeq": 1}
+        endpoint.publish_activity(first)
+        renewal._forward_activity()
+        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], first)
+        # Shutdown evidence comes from this owned fixture handle before any
+        # retry is admitted; no native harness completion is claimed.
+        renewal.implementation.cancel(renewal.handle)
+        renewal.handle.wait(15)
+        self.assertIsNotNone(renewal.handle.process.poll())
+        client.submit_result("w-forward", attempt["attemptId"], attempt["generation"], "c" * 32,
+                             {"status": "failed", "result": {"status": "nonzero"}, "error": "fixture-stopped",
+                              "shutdownConfirmed": True, "terminationReason": "harness-error"})
+        client.retry(runId=attempt["taskId"], reason="replacement generation")
+        client.register_worker("w-forward-2", adapter="command", capabilities=["command"])
+        replacement = client.claim("w-forward-2", "claim-forward-2", "e" * 32,
+                                   worker_instance="instance-forward-2")["claim"]["attempt"]
+        self.assertEqual(replacement["generation"], attempt["generation"] + 1)
+        endpoint.publish_activity({"phase": "tool-running", "eventSeq": 2})
+        renewal._forward_activity()
+        self.assertEqual(renewal._activity, first, "a stale generation cannot advance the worker receipt")
+        self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
+        self.assertEqual(len(self.activity_events(client)), 1)
+
+    def test_unextracted_command_never_reads_an_activity_sidecar(self):
+        board, client, worker, attempt, directory, renewal = self.live_attempt()
+        # A command has only its existing DB projection. A retired file's
+        # contents carry no live contract and must not be opened at all.
+        existing = {"phase": "unknown", "eventSeq": 1}
+        client.progress("w-forward", attempt["attemptId"], attempt["generation"], "c" * 32,
+                        data={"activity": existing})
+        path = directory / "activity.json"
+        path.write_text("retired activity file")
+        with mock.patch.object(role_live, "handle_live_binding",
+                               return_value=(role_live.LIVE_UNEXTRACTED, None)), \
+                mock.patch.object(os, "open", wraps=os.open) as opened:
+            renewal._forward_activity()
+        activity_opens = [call for call in opened.call_args_list if Path(call.args[0]) == path]
+        self.assertEqual(activity_opens, [], "Worker must never read an activity sidecar, including command fallback")
+        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], existing)
+        self.assertEqual(len(self.activity_events(client)), 1)
+        self.assertIsNone(renewal._activity)
+        self.assertIsNone(renewal.handle.process.poll())
 
 
 class ActivityPublisherTest(BoardTestCase):
@@ -529,3 +519,29 @@ class ActivityPublisherTest(BoardTestCase):
         self.assertTrue(publisher.publish({"phase": "tool-running", "eventSeq": 3}))
         self.assertTrue(publisher.publish({"phase": "finishing", "eventSeq": 4}))
         self.assertEqual([v["eventSeq"] for v in observed], [1, 3, 4])
+
+    def test_failed_callback_does_not_advance_recency_or_throttle(self):
+        clock = FakeClock()
+        observed = []
+        outcomes = iter((True, False, RuntimeError("source unavailable"), True))
+        def send(value):
+            result = next(outcomes)
+            if isinstance(result, Exception):
+                raise result
+            if result:
+                observed.append(value)
+            return result
+        publisher = ActivityPublisher(send, min_interval_seconds=2.0, clock=clock)
+        first = {"phase": "starting", "eventSeq": 1}
+        second = {"phase": "starting", "eventSeq": 2}
+        self.assertTrue(publisher.publish(first))
+        clock.advance(2.0)
+        self.assertFalse(publisher.publish(second))
+        self.assertEqual(publisher.current(), first)
+        clock.advance(0.1)
+        with self.assertRaisesRegex(RuntimeError, "source unavailable"):
+            publisher.publish(second)
+        self.assertEqual(publisher.current(), first)
+        clock.advance(0.1)
+        self.assertTrue(publisher.publish(second), "failed sends advance neither recency nor throttle time")
+        self.assertEqual(observed, [first, second])
