@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from support import FakeClock
 from blackboard.evaluation.test_evaluation import EvaluationTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, family_key
+from protocol.fixtures import native_turn
 
 from hey_my_buddy.blackboard.evaluation import evaluation as evaluation_module
 
@@ -100,15 +101,15 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
         client.register_worker(worker_id, adapter=profile["adapter"], capabilities=[profile["adapter"]])
         claim = client.claim(worker_id, f"claim-{request_id}", "n" * 32, task_id=run_id)["claim"]
         turn, attempt = claim["turn"], claim["attempt"]
-        record = {
-            "version": 1, "taskId": run_id, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "turnId": turn["turnId"], "resumeMode": turn["resumeMode"], "previousSessionId": turn["input"].get("previousSessionId"),
-            "sessionId": f"fixture-{request_id}", "inputSha256": turn["inputSha256"],
-            "promptSha256": sha256_text("external maintenance fixture"),
-            "outcome": {"disposition": "completed", "summary": "model output", "remaining": [],
-                        "decisions": [], "artifacts": [], "request": None},
-            "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "flush": "awaited", "rootSessionMatched": True},
-        }
+        # A synthetic native fact in the current provenance format: it passes the
+        # real import validator, but no harness ran (protocol.fixtures.native_turn).
+        record = native_turn.claim_record(
+            claim,
+            outcome={"disposition": "completed", "summary": "model output", "remaining": [],
+                     "decisions": [], "artifacts": [], "request": None},
+            session_id=f"fixture-{request_id}",
+            prompt_sha256=sha256_text("external maintenance fixture"),
+        )
         client.submit_result(
             worker_id,
             attempt["attemptId"],

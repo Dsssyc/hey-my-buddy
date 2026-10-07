@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from mock_workspace import MockWorkspace
+from protocol.fixtures import native_turn
 from support import BoardTestCase
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
@@ -67,8 +68,13 @@ class WorkflowTestCase(BoardTestCase):
         return board.call("worker_claim", params)
 
     def turn_record(self, claim_response, *, disposition="completed", outcome=None, session_id="sess-1", **overrides):
-        claim = claim_response["claim"]
-        turn = claim["turn"]
+        """A synthetic governed turn record in the current provenance format.
+
+        This suite's boundary keeps its own executor stand-ins (the workspace is
+        the mock module), so the record passes the stand-in validator here while
+        staying in the real current format (``protocol.fixtures.native_turn``);
+        no harness ran and nothing here is real native verification.
+        """
         if outcome is None:
             if disposition == "completed":
                 outcome = {"disposition": "completed", "summary": "did the work", "remaining": [], "decisions": [],
@@ -88,25 +94,7 @@ class WorkflowTestCase(BoardTestCase):
                         "acceptance": "the design is approved",
                     },
                 }
-        record = {
-            "version": 1,
-            "taskId": claim["attempt"]["taskId"],
-            "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"],
-            "turnId": turn["turnId"],
-            "resumeMode": turn["resumeMode"],
-            "previousSessionId": turn["input"]["previousSessionId"],
-            "sessionId": session_id,
-            "promptSha256": "a" * 64,
-            "inputSha256": turn["inputSha256"],
-            "outcome": outcome,
-            "provenance": {
-                "tool": "buddy_finish_turn",
-                "turnEnd": "completed",
-                "flush": "awaited",
-                "rootSessionMatched": True,
-            },
-        }
+        record = native_turn.claim_record(claim_response["claim"], outcome=outcome, session_id=session_id)
         record.update(overrides)
         return record
 

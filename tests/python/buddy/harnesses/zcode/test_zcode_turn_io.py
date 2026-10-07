@@ -1,19 +1,29 @@
-"""Common governed input/receipt boundaries remain independent of each harness."""
+"""Common governed input/receipt boundaries remain independent of each harness.
+
+The turn records here are synthetic native facts in the current provenance
+formats (``protocol.fixtures.native_turn``): they pass the real registered
+validators, but no harness ran and nothing here is real native verification.
+"""
 import hashlib
 import json
 import unittest
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+from protocol.fixtures import native_turn
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 
 
 class SharedTurnIOTests(ZcodeFixtureCase):
-    def record(self, context):
+    def record(self, context, *, adapter="dsh", session_id="dsh-session"):
+        identity = {key: context.turn_input[key]
+                    for key in ("taskId", "attemptId", "generation", "turnId")}
+        provenance = (native_turn.zcode_provenance(identity, session_id) if adapter == "zcode"
+                      else native_turn.dsh_provenance(session_id))
         return {**{k: v for k, v in context.turn_input.items() if k not in ("context", "executionWorkspace")},
-                "inputSha256": turn_io.input_hash(context.turn_input), "sessionId": "dsh-session",
+                "inputSha256": turn_io.input_hash(context.turn_input), "sessionId": session_id,
                 "outcome": {"disposition": "completed", "summary": "finished", "remaining": [], "decisions": [], "artifacts": [], "request": None},
-                "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True, "flush": "awaited"}}
+                "provenance": provenance}
 
     def test_canonical_input_and_scoped_credential_are_distinct_private_files(self):
         context = self.context()
@@ -29,7 +39,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         self.assertFalse(context.credential_file().is_relative_to(context.directory))
         self.assertFalse((context.directory / "agent-credential.json").exists())
 
-    def test_adapter_specific_flush_does_not_bypass_common_identity_or_stop(self):
+    def test_adapter_specific_provenance_does_not_bypass_common_identity_or_stop(self):
         context = self.context()
         context.spec["adapter"] = "dsh"
         turn_io.prepare_turn(context)
@@ -41,19 +51,29 @@ class SharedTurnIOTests(ZcodeFixtureCase):
             invalid = {**record, field: value}
             context.turn_output_file().write_text(json.dumps(invalid))
             self.assertIsNotNone(turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
-        record["provenance"].pop("flush")
-        context.turn_output_file().write_text(json.dumps(record))
-        self.assertIn("flush", turn_io.read_turn(context, True, 0)[1], "the default path uses the real DSH validator")
-        self.assertIn("flush", turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
-        record["provenance"] = {"tool": "other", "turnEnd": "completed", "rootSessionMatched": True, "flush": "awaited"}
-        context.turn_output_file().write_text(json.dumps(record))
-        self.assertIn("terminal tool", turn_io.read_turn(context, True, 0)[1])
+        # Adapter-specific evidence stays adapter-owned: each mutation changes
+        # one real current field (verification, root session, order), and the
+        # default path resolves the same registered DSH validator.
+        for mutation, expected in (
+            ({"receiptVerified": False}, "finish-tool evidence"),
+            ({"nativeSessionId": "another-session"}, "root session"),
+            ({"settledOrdinal": 1}, "out of order"),
+        ):
+            invalid = {**record, "provenance": {**record["provenance"], **mutation}}
+            context.turn_output_file().write_text(json.dumps(invalid))
+            self.assertIn(expected, turn_io.read_turn(context, True, 0)[1] or "",
+                          "the default path uses the real DSH validator")
+            self.assertIn(expected, turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1] or "")
 
         zcode_context = self.context(index=2)
         zcode_context.spec["adapter"] = "zcode"
         turn_io.prepare_turn(zcode_context)
         zcode_context.turn_output_file().write_text(json.dumps(self.record(zcode_context)))
         self.assertIn("ZCode", turn_io.read_turn(zcode_context, True, 0)[1])
+        # The same common identity rules import the current zcode provenance.
+        zcode_context.turn_output_file().write_text(
+            json.dumps(self.record(zcode_context, adapter="zcode", session_id="zcode-session")))
+        self.assertIsNone(turn_io.read_turn(zcode_context, True, 0)[1])
 
     def test_immutable_receipts_cannot_overwrite_previous_evidence(self):
         path = self.root / "immutable.json"
