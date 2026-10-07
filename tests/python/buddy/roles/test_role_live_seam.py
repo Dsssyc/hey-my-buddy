@@ -210,11 +210,16 @@ class HandleBindingTests(unittest.TestCase):
         self.assertNotIn("a" * 64, json.dumps(encode_run_request(request())))
 
     def test_the_binding_states_are_the_three_the_consumer_acts_on(self):
+        # DSH is a registered harness now, so the unextracted state is reached
+        # by injecting its registration's absence explicitly — a registered
+        # module whose control lacks a request file is unavailable, not
+        # unextracted.
         unextracted = SimpleNamespace(
             role_run_control={"operation": "worker", "harness": "dsh"},
             role_run_identity=identity())
-        self.assertEqual(role_live.handle_live_binding(unextracted),
-                         (role_live.LIVE_UNEXTRACTED, None))
+        with mock.patch.dict(RUN_SEAMS, {"dsh": None}):
+            self.assertEqual(role_live.handle_live_binding(unextracted),
+                             (role_live.LIVE_UNEXTRACTED, None))
         bound_handle = self.handle()
         state, channel = role_live.handle_live_binding(bound_handle)
         self.assertEqual(state, role_live.LIVE_BOUND)

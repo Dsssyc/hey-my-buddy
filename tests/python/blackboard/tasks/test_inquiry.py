@@ -1,10 +1,13 @@
-"""Inquiry behaviour over the real service: bridge client, journal import and bounds.
+"""Inquiry behaviour over the real service: registered live seam, journal, bounds.
 
-The previous version of this file ran the Node job manager and a mock dsh. That
-manager is gone; the bridge socket still belongs to the Node dsh plugin, so this
-file tests the Python side of it directly: the wire protocol client, the JSONL
+DSH runs through its registered module and the shared cooperative bridge now,
+so this file exercises the board's real inquiry path for it: the stored public
+run request's complete identity is verified against the run's own control
+binding and governed turn input, the channel comes from the harness registry's
+registered live binding, and the one shared transport client speaks to
+FakeBridge — a model-less stand-in for the driver-side bridge socket. The JSONL
 journal importer, the recorded message facts and the honest answers for adapters
-that have no inquiry capability at all.
+that have no inquiry capability at all keep their direct tests beside it.
 """
 from __future__ import annotations
 
@@ -31,7 +34,15 @@ from hey_my_buddy.blackboard.tasks.inquiry import (
 
 
 class FakeBridge:
-    """A minimal stand-in for the Node plugin's Unix-socket protocol."""
+    """A minimal stand-in for the driver-side cooperative bridge's socket.
+
+    It speaks the shared wire protocol the one transport client uses — one
+    version-1 JSON frame per connection, one token, the ``observe`` and ``ask``
+    methods the registered dsh live binding issues — without any model or
+    native process. Its answers are steerable: ``observation`` overrides the
+    observe value's fields, ``state`` is the committed state an ask reports and
+    ``refusal`` makes the peer refuse with exactly that code.
+    """
 
     def __init__(self, directory: Path, *, token: str = "a" * 64):
         # The real adapter picks a short socket path for the same platform reason:
@@ -47,10 +58,9 @@ class FakeBridge:
         self.path = short / "inquiry.sock"
         self.token = token
         self.requests: list[dict] = []
-        self.answer: dict | None = None
+        self.state = "queued"
         self.refusal: str | None = None
-        self.activity = []
-        self.delivery_mode = None
+        self.observation: dict = {}
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(self.path))
         self.listener.listen(4)
@@ -70,37 +80,44 @@ class FakeBridge:
             with connection:
                 connection.settimeout(2)
                 try:
-                    raw = connection.recv(64 * 1024)
-                    request = json.loads(raw.split(b"\n", 1)[0])
+                    raw = bytearray()
+                    while b"\n" not in raw:
+                        block = connection.recv(4096)
+                        if not block:
+                            break
+                        raw.extend(block)
+                        if len(raw) > 16 * 1024:
+                            return
+                    request = json.loads(bytes(raw).split(b"\n", 1)[0])
                     self.requests.append(request)
-                    if request.get("token") != self.token:
-                        reply = {"version": 1, "id": request.get("id"), "ok": False, "error": "unauthorized"}
-                    elif request.get("method") == "observe":
-                        reply = {
-                            "version": 1,
-                            "id": request["id"],
-                            "ok": True,
-                            "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running",
-                                      "activity": self.activity, "deliveryMode": self.delivery_mode},
-                        }
-                    elif request.get("method") == "ask":
-                        if self.refusal:
-                            reply = {"version": 1, "id": request["id"], "ok": False, "error": self.refusal}
-                        else:
-                            reply = {"version": 1, "id": request["id"], "ok": True, "value": {"state": "delivered"}}
-                    else:
-                        reply = {
-                            "version": 1,
-                            "id": request["id"],
-                            "ok": True,
-                            "value": {"answer": self.answer} if self.answer else {},
-                        }
+                    reply = self._reply(request)
                 except (OSError, ValueError):
                     reply = {"version": 1, "id": None, "ok": False, "error": "bad-request"}
                 try:
                     connection.sendall((json.dumps(reply) + "\n").encode())
                 except OSError:
                     pass
+
+    def _reply(self, request: dict) -> dict:
+        if request.get("token") != self.token:
+            return {"version": 1, "id": request.get("id"), "ok": False, "error": "unauthorized"}
+        if request.get("method") == "observe":
+            value = {"ready": True, "observedAt": "2026-10-07T00:00:00.000Z", "sessionId": "s-1",
+                     "agentStatus": "running", "deliveryMode": "cooperative-checkpoint",
+                     "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call",
+                                   "toolName": "bash"}],
+                     **self.observation}
+            return {"version": 1, "id": request.get("id"), "ok": True, "value": value}
+        if request.get("method") == "ask":
+            if self.refusal:
+                return {"version": 1, "id": request.get("id"), "ok": False, "error": self.refusal}
+            return {"version": 1, "id": request.get("id"), "ok": True,
+                    "value": {"accepted": True, "state": self.state,
+                              "inquiryId": request.get("inquiryId"),
+                              "delivery": {"requestedDelivery": None,
+                                           "admittedDelivery": "cooperative-checkpoint",
+                                           "startsNewTurn": False, "extendsDeadline": False}}}
+        return {"version": 1, "id": request.get("id"), "ok": False, "error": "unsupported-method"}
 
     def close(self):
         self.stopping.set()
@@ -136,61 +153,111 @@ class TestInquiry(BoardTestCase):
     def _submit_dsh(self, client, cwd, *, request_id):
         return self._submit(client, cwd, request_id=request_id)
 
-    def _attempt_directory(self, board, client, task, cwd, argv=None, *, adapter="dsh",
-                           capabilities=("dsh", "inquiry")):
-        """Submit, claim and publish bridge credentials the way a coding adapter does."""
-        # This fixture publishes the same credentials the adapter writes without
-        # spawning a runner; the declared capabilities decide observe vs inquire.
-        task = self._submit(client, cwd, request_id="inq-task", adapter=adapter,
-                            provider="deepseek-official" if adapter == "dsh" else "fixture-zcode",
-                            model="deepseek-flash" if adapter == "dsh" else "fixture-glm",
-                            effort="off" if adapter == "dsh" else "low")
-        client.register_worker("w-inq", adapter=adapter, capabilities=list(capabilities))
+    def _attempt_directory(self, client):
+        """Submit, claim and publish the materials the registered live path binds.
+
+        The stored files are exactly what the accepted role launch writes: the
+        public ``role-run-request.json`` carrying the run's complete identity,
+        the private ``role-run-control.json`` naming the invocation and the
+        governed turn input, and the attempt's bridge credentials. The board's
+        real ``inquiry_observe`` verifies that relationship, binds the
+        registry's dsh live channel through the role seam and speaks to
+        FakeBridge over the one shared transport client; no production
+        inquiry or channel function is mocked.
+        """
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            FrozenJson,
+            PrivateStatePaths,
+            RunBudget,
+            RunConfiguration,
+            RunIdentity,
+            RunRequest,
+            encode_run_request,
+        )
+        from hey_my_buddy.buddy.roles.turn_io import input_hash
+        from hey_my_buddy.buddy.runtime.worker import fsync_json
+
+        task = self._submit(client, self.workdir(), request_id="inq-task")
+        client.register_worker("w-inq", adapter="dsh", capabilities=["dsh", "inquiry"])
         claim = client.claim("w-inq", "claim-inq-1", "a" * 32)
         self.assertIsNotNone(claim["claim"]["turn"])
         attempt = claim["claim"]["attempt"]
-        from hey_my_buddy.buddy.runtime.worker import fsync_json
-
         directory = self.directory / "attempts" / task["runId"] / attempt["attemptId"]
         directory.mkdir(parents=True, exist_ok=True)
-        private = ensure_private_dir(attempt_root(self.directory, adapter, task["runId"], attempt["attemptId"]))
+        private = ensure_private_dir(attempt_root(self.directory, "dsh", task["runId"], attempt["attemptId"]))
         bridge = FakeBridge(directory)
-        fsync_json(
-            private / "inquiry.json",
-            {
-                "socketPath": str(bridge.path),
-                "resultsPath": str(directory / "inquiry.results.jsonl"),
-                "errorPath": str(directory / "inquiry.sock.error.json"),
-                "token": bridge.token,
-            },
-        )
+        credentials = {
+            "socketPath": str(bridge.path),
+            "resultsPath": str(directory / "inquiry.results.jsonl"),
+            "errorPath": str(directory / "inquiry.sock.error.json"),
+            "token": bridge.token,
+        }
+        fsync_json(private / "inquiry.json", credentials)
+        turn_input = {"taskId": task["runId"], "attemptId": attempt["attemptId"],
+                      "generation": attempt["generation"], "turnId": "turn-dsh-live",
+                      "resumeMode": "initial", "previousSessionId": None,
+                      "context": {}}
+        identity = RunIdentity(task_id=task["runId"], attempt_id=attempt["attemptId"],
+                               generation=attempt["generation"], invocation_id="invocation-dsh-live",
+                               turn_id="turn-dsh-live", input_sha256=input_hash(turn_input))
+        fsync_json(directory / "turn-input.json", turn_input)
+        control = {"operation": "worker", "harness": "dsh", "invocationId": identity.invocation_id,
+                   "inputFile": str(directory / "turn-input.json"), "privateRoot": str(private),
+                   "directory": str(directory), "inquiry": credentials,
+                   "spec": {"provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"},
+                   "cwd": str(self.workdir()), "timeoutSeconds": 600}
+        fsync_json(private / "role-run-control.json", control)
+        request = RunRequest(
+            identity=identity, harness="dsh",
+            configuration=RunConfiguration(provider="deepseek-official", model="deepseek-flash", effort="off"),
+            cwd=str(self.workdir()),
+            private_state=PrivateStatePaths(invocation_root=str(private), native_root=str(private / "native")),
+            input_text="the governed turn input", tool_scope="write",
+            output_schema=FrozenJson({"type": "object"}),
+            budget=RunBudget(timeout_seconds=600))
+        fsync_json(private / "role-run-request.json", json.loads(encode_run_request(request)))
         return task, attempt, bridge
+
+    def _bound_fields(self, task, attempt):
+        """The identity fields every bound journal record of this attempt carries."""
+        return {"version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
+                "generation": attempt["generation"], "turnId": "turn-dsh-live", "sessionId": "s-1"}
 
     def test_observation_uses_the_real_bridge_protocol(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, _attempt, bridge = self._attempt_directory(client)
         try:
-            bridge.delivery_mode = "cooperative-checkpoint"
             result = board.call("inquiry_observe", {"runId": task["runId"]})
             self.assertTrue(result["bridge"]["observed"])
             self.assertTrue(result["live"]["available"])
             self.assertEqual(result["live"]["sessionId"], "s-1")
             self.assertEqual(result["live"]["deliveryMode"], "cooperative-checkpoint")
+            self.assertEqual(result["live"]["activity"][0]["toolName"], "bash")
             self.assertEqual(result["phase"], "active")
             self.assertEqual(result["inflight"] if "inflight" in result else result["execution"]["attemptState"], "starting")
             self.assertEqual(bridge.requests[-1]["method"], "observe")
+            self.assertEqual(bridge.requests[-1]["version"], 1)
+            self.assertEqual(bridge.requests[-1]["token"], bridge.token)
         finally:
             bridge.close()
 
     def test_observation_does_not_publish_native_tool_arguments(self):
         board = self.board()
-        task, _attempt, bridge = self._attempt_directory(board, board.client(), None, self.workdir())
+        task, _attempt, bridge = self._attempt_directory(board.client())
         try:
-            bridge.activity = [{"phase": "started", "tool": "bash", "at": 100, "seq": 1,
-                                "argumentPreview": "private-provider-key", "nested": {"prompt": "private-prompt"}}]
+            # A peer that smuggles native tool arguments inside its activity
+            # metadata loses its whole observation: the channel's strict live
+            # model refuses the look-alike value instead of sanitizing it, and
+            # nothing private is ever published.
+            bridge.observation = {"activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call",
+                                                "toolName": "bash",
+                                                "argumentPreview": "private-provider-key",
+                                                "nested": {"prompt": "private-prompt"}}]}
             result = board.call("inquiry_observe", {"runId": task["runId"]})
-            self.assertEqual(result["live"]["activity"][0]["tool"], "bash")
+            self.assertFalse(result["bridge"]["observed"])
+            self.assertEqual(result["bridge"]["reason"], "observation-unavailable")
+            self.assertFalse(result["live"]["available"])
             self.assertNotIn("private-provider-key", json.dumps(result))
             self.assertNotIn("private-prompt", json.dumps(result))
         finally:
@@ -199,13 +266,15 @@ class TestInquiry(BoardTestCase):
     def test_a_question_is_correlated_and_a_wrong_token_is_refused(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, _attempt, bridge = self._attempt_directory(client)
         try:
             result = board.call(
                 "inquiry_observe",
                 {"runId": task["runId"], "inquiryId": "q-live", "question": "what is blocking you?"},
             )
-            self.assertEqual(result["inquiry"]["state"], "delivered")
+            # Cooperative-checkpoint delivery: the ask itself only ever queues;
+            # delivery and answers arrive through the journal.
+            self.assertEqual(result["inquiry"]["state"], "queued")
             self.assertEqual(result["inquiry"]["correlation"], "inquiryId")
             self.assertEqual(bridge.requests[-1]["method"], "ask")
             self.assertEqual(bridge.requests[-1]["inquiryId"], "q-live")
@@ -216,38 +285,33 @@ class TestInquiry(BoardTestCase):
                 {"runId": task["runId"], "inquiryId": "q-two", "question": "and now?"},
             )
             self.assertEqual(second["bridge"]["error"], "unauthorized")
+            self.assertEqual(client.get_message("q-two", runId=task["runId"])["state"], "queued",
+                             "an unauthorized ask is a retryable refusal, never a terminal answer")
         finally:
             bridge.close()
 
     def test_the_real_bridge_journal_shape_is_imported_with_reply_tool_evidence(self):
-        """The Node bridge writes a string answer with sibling evidence fields."""
+        """The shared bridge journals a nested answer with its checkpoint tool evidence."""
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, attempt, bridge = self._attempt_directory(client)
+        bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
-            json.dumps(
-                {
-                    "inquiryId": "q-real",
-                    "state": "delivered",
-                    "messageId": "m-1",
-                    "deliveredAt": "2026-09-19T05:00:00.000Z",
-                }
-            )
+            json.dumps({**bound, "inquiryId": "q-real", "state": "queued",
+                        "question": "status?", "questionSha256": "f" * 64,
+                        "delivery": {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint",
+                                     "startsNewTurn": False, "extendsDeadline": False, "supported": True}})
             + "\n"
-            + json.dumps(
-                {
-                    "inquiryId": "q-real",
-                    "state": "answered",
-                    "answeredAt": "2026-09-19T05:00:04.000Z",
-                    "via": "tool:buddy_inquiry_reply",
-                    "toolCallId": "call-42",
-                    "messageId": "m-1",
-                    "answer": "the tests are still running",
-                    "answerBytes": 27,
-                    "truncated": False,
-                }
-            )
+            + json.dumps({**bound, "inquiryId": "q-real", "state": "delivered",
+                          "deliveredAt": "2026-10-07T05:00:00.000Z", "via": "tool:buddy_checkpoint",
+                          "toolCallId": "call-41"})
+            + "\n"
+            + json.dumps({**bound, "inquiryId": "q-real", "state": "answered",
+                          "answeredAt": "2026-10-07T05:00:04.000Z",
+                          "answer": {"text": "the tests are still running", "bytes": 27,
+                                     "via": "tool:buddy_answer_inquiry", "toolCallId": "call-42",
+                                     "at": "2026-10-07T05:00:04.000Z", "truncated": False}})
             + "\n"
         )
         try:
@@ -255,11 +319,15 @@ class TestInquiry(BoardTestCase):
             message = client.get_message("q-real", runId=task["runId"])
             self.assertEqual(message["state"], "answered")
             self.assertEqual(message["answer"]["text"], "the tests are still running")
-            self.assertEqual(message["answer"]["via"], "tool:buddy_inquiry_reply")
+            self.assertEqual(message["answer"]["via"], "tool:buddy_answer_inquiry")
             self.assertEqual(message["answer"]["toolCallId"], "call-42")
-            self.assertEqual(message["answer"]["at"], "2026-09-19T05:00:04.000Z")
+            self.assertEqual(message["answer"]["at"], "2026-10-07T05:00:04.000Z")
             self.assertEqual(message["answer"]["source"], "bridge-journal")
-            self.assertEqual(message["delivery"]["messageId"], "m-1")
+            # The shared bridge's delivery record is journal transport evidence
+            # whose keys are not the message store's bounded injection-delivery
+            # keys; the correlation that survives publicly is the reply-tool
+            # evidence asserted above (the retired Node bridge's messageId
+            # correlation went with its channel).
             # Re-importing the same journal is idempotent.
             board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-real", "question": "status?"})
             self.assertEqual(client.get_message("q-real", runId=task["runId"])["answer"]["text"], "the tests are still running")
@@ -269,12 +337,15 @@ class TestInquiry(BoardTestCase):
     def test_an_answered_journal_entry_without_text_never_becomes_answered(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, attempt, bridge = self._attempt_directory(client)
+        bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
-            json.dumps({"inquiryId": "q-empty", "state": "delivered"})
+            json.dumps({**bound, "inquiryId": "q-empty", "state": "delivered",
+                        "via": "tool:buddy_checkpoint", "toolCallId": "call-1"})
             + "\n"
-            + json.dumps({"inquiryId": "q-empty", "state": "answered", "via": "tool:buddy_inquiry_reply"})
+            + json.dumps({**bound, "inquiryId": "q-empty", "state": "answered",
+                          "via": "tool:buddy_answer_inquiry"})
             + "\n"
         )
         try:
@@ -289,12 +360,14 @@ class TestInquiry(BoardTestCase):
     def test_the_journal_is_idempotent_transport_evidence(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, attempt, bridge = self._attempt_directory(client)
+        bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
-            json.dumps({"inquiryId": "q-journal", "state": "delivered"})
+            json.dumps({**bound, "inquiryId": "q-journal", "state": "delivered"})
             + "\n"
-            + json.dumps({"inquiryId": "q-journal", "state": "answered", "answer": {"text": "from the journal"}})
+            + json.dumps({**bound, "inquiryId": "q-journal", "state": "answered",
+                          "answer": {"text": "from the journal"}})
             + "\n"
             + "{torn line\n"
         )
@@ -379,8 +452,8 @@ class TestInquiry(BoardTestCase):
 
         from hey_my_buddy.blackboard.tasks.inquiry import observe_capable
 
-        # DSH supports live injection; ZCode delivers at cooperative tool
-        # checkpoints. Neither capability is inferred by probing a native CLI.
+        # DSH and ZCode both deliver questions at their session's cooperative
+        # tool checkpoints. Neither capability is inferred by probing a native CLI.
         self.assertTrue(inquiry_capable("dsh"))
         self.assertTrue(observe_capable("dsh"))
         self.assertTrue(inquiry_capable("zcode"))
@@ -393,7 +466,7 @@ class TestInquiry(BoardTestCase):
     def test_journal_failure_refuses_the_question_without_ending_execution(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, _attempt, bridge = self._attempt_directory(client)
         try:
             bridge.refusal = "journal-unavailable"
             result = board.call("inquiry_observe", {
@@ -410,7 +483,12 @@ class TestInquiry(BoardTestCase):
     def test_a_question_refused_after_the_turn_ended_is_recorded_unavailable(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, _attempt, bridge = self._attempt_directory(client)
+        # The shared cooperative bridge itself ends a closed turn by refusing
+        # with not-ready and journaling its entries unavailable; the shared
+        # transport vocabulary still carries the terminal agent-gone code, and
+        # the board's handling of a peer that reports the owned turn gone is
+        # pinned here with the stand-in refusing exactly so.
         bridge.refusal = "agent-gone"
         try:
             result = board.call(
@@ -428,11 +506,13 @@ class TestInquiry(BoardTestCase):
     def test_a_journal_record_bound_to_another_task_can_never_answer(self):
         board = self.board()
         client = board.client()
-        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        task, _attempt, bridge = self._attempt_directory(client)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(json.dumps({
-            "inquiryId": "q-foreign", "state": "answered", "taskId": "another-task", "attemptId": "another-attempt",
-            "answer": "answer that belongs to a different run", "via": "tool:buddy_inquiry_reply",
+            "version": 1, "taskId": "another-task", "attemptId": "another-attempt", "generation": 0,
+            "turnId": "other-turn", "inquiryId": "q-foreign", "state": "answered",
+            "answer": {"text": "answer that belongs to a different run"},
+            "via": "tool:buddy_answer_inquiry",
         }) + "\n")
         try:
             result = board.call(

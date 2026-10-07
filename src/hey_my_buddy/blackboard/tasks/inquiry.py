@@ -1,9 +1,7 @@
 """Bounded, read-only observation of one attempt's inquiry bridge.
 
-Every coding harness that can accept native input while its turn runs owns its own
-private bridge: the Node dsh plugin hosts one inside the upstream process, and the
-ZCode controller hosts one next to its native app-server connection. The socket
-client itself is the one shared transport
+The ZCode and DSH controllers each bind the shared cooperative inquiry bridge
+to their current native run. The socket client is the one shared transport
 (:mod:`hey_my_buddy.protocol.inquiry_transport`); this module imports the
 journal and projects the bridge's facts onto the durable board message rows,
 which stay authoritative — the journal is idempotent transport evidence, and a
