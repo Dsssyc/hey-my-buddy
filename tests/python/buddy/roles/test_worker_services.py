@@ -79,6 +79,18 @@ class WorkerServicesCase(unittest.TestCase):
 
 
 class GovernedPromptTests(unittest.TestCase):
+    def test_scope_reminds_shared_git_ownership_without_rewriting_turn_protocol(self):
+        for resume in ("initial", "reconstructed-new-session", "native-session"):
+            with self.subTest(resume=resume):
+                prompt = worker_services.governed_prompt("task", {"resumeMode": resume}, "finish")
+                scope = prompt.split("\n\n")[0]
+                self.assertIn("share Git stash, branches and tags", scope)
+                self.assertIn("owner's repository", scope)
+                self.assertIn("do not use git stash", scope)
+                self.assertIn("create, switch, move or delete branches or tags", scope)
+                self.assertIn("leave changes in the workspace", scope)
+                self.assertIn("commit on the current detached HEAD", scope)
+
     def test_the_prompt_assembles_scope_finish_contract_hints_task_and_input_in_order(self):
         prompt = worker_services.governed_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__buddy_finish_turn")
         sections = prompt.split("\n\n")
