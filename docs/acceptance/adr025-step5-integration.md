@@ -37,3 +37,7 @@ Claude Code 的已批准两次冒烟可以独立于尚在执行的清理微任�
 5-P2 已内部签收 int-c02d7107-3783-4946-ac4c-0d405fe01732；受管检出回收计划 cln-92935fe9-d086-47b2-8ecd-2961f1f70b1d 已 applied，Host 核实路径消失后，将七份已读取的原始日志/变异摘要保留在本检出 tmp 的 manifest 中并记 SHA-256，再仅整体删除创建时登记的该微任务根。未扫描或清理别的临时对象。
 
 5-A 初版固定审查拒绝：相同 requestId 改 questionId 可重复入队、客户端同步 RPC 超时仅作事后分类、观察分页首条可超过整帧预算。由原 run continue 修正，未整合初版，不新增 buddy、不更换配置。只读固定审查使用 Codex 原生子代理，实施仍走 buddy。
+
+Host 范围外收尾：5-P2 可写范围之外的 codex/protocol.py 仍有相同 UTC 格式函数，唯一生产读取方为额度快照 observed_at。Host 改为直接引用已验收 native_support.utc_now，删除重复定义与 datetime 导入，格式与调用点不变；此项由 Host 修改并纳入聚焦检查。
+
+5-P1 与 5-P3 的两份整合记录均 verified 并内部签收；受管检出各按 cleanup-plan/apply 回收，原始聚焦、对照与变异材料已在本检出 tmp 中按各自 manifest 保留 SHA-256。Host 仅整体删除创建时登记的两个微任务根，核实路径均消失，无通配符删除。UTC 收尾的两模块聚焦检查通过（1.105 秒）；一次性元数据脚本误带 P3 artifact 标识，Host 在新归属记录中更正，原脚本/日志/元数据原样保留，没有更改实际检查结论或重跑。

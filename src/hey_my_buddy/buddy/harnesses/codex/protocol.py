@@ -7,16 +7,12 @@ import select
 import threading
 import time
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timezone
 
 from ....json_codec import canonical_json, decode_strict_json
+from ..native_support import utc_now
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 _WINDOWS_PIPE = os.name == "nt"
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class CodexProtocolError(Exception):
