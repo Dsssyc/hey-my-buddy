@@ -77,3 +77,17 @@ C-Two 点查口径由 Host 选择：按当前所有者已发布的事实查询�
 5-C2 固定产物 351b9f80 已核对十路径范围，并在独立固定副本运行四个 native_run 模块，197 项通过，46.222 秒。三个实际原生事件/callback/计数防护变异的绿/红原始日志已核对。Native producer 使用共同 endpoint 与 ActivityPublisher，Codex 原计数/节流单独保留；零安装版 harness/真实模型检查。公共桥、角色工厂与跨进程运输仍待后续整合，未声称此次聚焦已证明这些边界。
 
 整合缺陷由 Host 修复：5-C1 的真实 journal 发布器首次把带 delivery 的 InquiryState 交给 5-A 后端，重放时 _question_reply 将 FrozenJson 对象直接嵌入 JSON 字典，严格模型拒绝。Host 只把它投影为既有 .value（实际 JSON 值），保留全部 delivery、reason 和状态；新增重放传输回归 1 项通过。未代改 5-C1 范围实现。以 5-C1 未验收部分产物构建固定验证副本，覆盖已固定公共后端及已验收四个 producer，在 Host 可使用共享内存的环境运行 owner 15 项全部通过 1.660 秒，含两个真实跨进程 C-Two peer。仅消除公共整合和测试环境的阻塞，5-C1 仍未验收。
+
+5-C2 验收 accepted 后受管检出清理已应用，确切路径消失。Host 保留 59 份命名原始日志、变异/编号证据及摘要，再整体回收创建时登记的单个任务根（含私有 venv/cache）；未读凭据文件内容，未回收其他会话对象。
+
+5-B2 固定产物 daad210f 在 Host 允许 IPC 的固定副本中 23 项通过 5.833 秒，包含六个真实 peer。但审查发现 unbind 没有实际 named detach，WorkerLiveDetach 没有生产调用，服务登记不能正常回收；明确拒绝该产物并原 run continue。正式 rejected 操作因 awaiting-host 尚非 delivered 被黑板 NOT_READY 拒绝，原始响应保留；拒绝结论和具体缺陷写在同 run continue 与本登记。Host 未代改范围内代码。
+
+5-C3 首次路由 zcode/zai-api/GLM-5.3-Flash/max（决定 dec-ae3c4288-67de-482a-99be-677ef6cca72d）以供应方不可重试 code1308/429 失败；按用户许可原 run continue 为已在本步完成代码/测试迁移的 codex/openai/gpt-6.1-sol/high，未改路由偏好、供应方启用或登录。
+
+5-C4 首次路由 zcode/zai-api/GLM-5.3-Flash/max（决定 dec-ffa2e8ff-33a3-4e33-be3e-cb4ff3a4b6a9）返回不可重试1308/429，原 run continue 为本步完成过同类代码/测试迁移的 codex/openai/gpt-6.1-sol/high；未改用户设置或登录。
+
+5-C1 同配置两轮已完成模型文本后均报安装版 Codex native-shutdown-failed，最终两层任务停止确认；未记作正常模型交付。最新部分产物8e625a2在Host固定副本15项通过1.644秒，含两项实际跨进程，新增瘦身和相关防护已核对。Host按五路径摘要只代执行Git提交（24fc9e9c05963f43f527e46a1e8c22f017fa7408），未代改实现；同run仅收尾最终交付，不重复代码/测试工作。
+
+5-C1 Host代执行 checkout Git提交后，旧黑板 continuation保留的 includeUntracked 选择器因文件已 tracked 而失效（INVALID_WORKSPACE），准备阶段没有调用模型。Host仅用 git reset --mixed 恢复自己该次提交前的 HEAD/index，五文件摘要前后相等、封存8e625a2产物保留，原run再次仅收尾。不删除source、不改分支；此后新文件以系统封存的 outputCommit 为固定提交，避免重复改变检出追踪状态。
+
+5-B2 原run补正固定产物11f28f5a，五路径范围一致；Host固定副本32项全部通过5.921秒，含六项实际IPC peer与named detach、迟到attach补偿，真实登记数归零和正常socket消失断言有效。两项本轮变异原始红输出核对为4与2项断言失败，没有导入错误。重绑在旧attach和后续detach结束前被同key屏障拒绝，复用既有identity/instance契约，没有增加CAS字段。固定产物已整合，公共Worker/服务接线仍待整步验证。
