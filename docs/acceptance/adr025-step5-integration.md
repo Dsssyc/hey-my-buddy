@@ -177,3 +177,11 @@ D2实际attention回合指出native Codex自身同相位节流使hang场景model
 补齐计划中的新源码ZCode真实问询冒烟1次：此前额度拒绝来自微任务模型执行，不能当成原生核对未验证的证据。实际0.16.9、zai-api/GLM-5.3-Flash/max，run43b45b2f/attempt8a7f7c29由真实持有Worker执行；签收、Read、问询answered、严格结果identity、native gone与outer true均核对，两个capture socket存在→消失。Host独立严格解码及SHA核对通过，24份原始证据与私有fixture bundle保留后按登记exact root回收，未清其他对象。微任务执行次数不并入本步原生最小运行表；DSH2、ZCode1、Claude2（Claude早于通道切换）分别明确证据边界，Codex无额外真实模型冒烟。
 
 5-D2最终固定7be5bfc、产物71a39d79-9a57-44ea-b774-b446b99af322，8路径累计patch/SHA与全线两层停止核对。新增marker只在hang的turn/start响应/turn/started发出后写已有state；两取消用例有界等待标记，保持原判定与两层停止，不改正常/续接生产行为。Host在已合入ADR-027的固定副本2项通过12.005秒，删标记变异2项真实断言失败20.778秒，SHA792d91ac4f6a2d864b3da6c103f29807301860df356bc25e598ae2be01b35b98，无导入错误。整合只应用两个代码路径增量，保留ADR-027的fixture未列出模型拒绝场景；记录确切私有根改占位符、手动授权口径明确为Host继续输入，小更正不重跑。最初含记录的增量patch因原Host已改路径表述而不能apply，未写代码，改用代码增量与明确记录适配，不重写历史失败。
+
+D2最终integration-record第一次漏记ADR-027给Claude模型发现测试增加的accountStatus断言，返回INTEGRATION_UNVERIFIED，未创建登记。Host比对固定7be5bfc与目标b437090，确认四处差异恰为Codex/Claude上游保留及记录路径/措辞适配；补齐明确adjustedPaths与理由后登记int-831b6cad-a775-4fe3-93c3-6e577d583186核验通过。没有把上游变化伪称Worker本轮改动，没有代修范围代码缺陷。
+
+最终整批完整检查在b437090通过：uv run --frozen python -m hey_my_buddy.cli.checks，默认4并行、无jobs覆盖，3049项（原有skip1）/189文件全部调度通过，505.735秒、退出0。393份源码/测试/锁文件SHA与检查开始时完全相同；再发现3049唯一编号、189模块、零装载错误，与先前清单集合相等。原失败与取消用例返修/变异日志保留，之后仅记录收尾，不重复无变化检查。
+
+5-D1、5-D2、5-D3均绑定各自最终固定artifact与核验integration完成内部accepted；D3按用户单次授权由Host在准备失败后的awaiting-host边界完成，没有新模型回合。黑板按自身计划回收受管检出，确切路径已消失；Host分别保留17、33、18份命名材料/SHA（D3含两份实际变异源码差异），再按创建登记的三个确切任务根整体回收。D1第一次cleanup-apply回应WORKSPACE_CHANGED快照错误，后续cleanup-plan返回原计划applied且result.removed为true，物理路径同样消失；该回应错误保留，不猜测根因，不绕过黑板删除受管检出。Host收尾脚本曾因创建台账有path与root两种记录形状而KeyError、又把已applied误当待执行而断言退出，均在继续删除之前停下；修正只影响Host收尾脚本，没有生产或测试改动。
+
+最后保留最终wheel（SHA34b434e56fce375cb03c4587373d78f1ac154940ed2a24b3f3cb8deb519f4a41）及阶段中的原始运行/安装/契约/端点证据，按创建时登记的确切Host任务根整体回收。13个微任务任务根全部已回收，其他会话对象与其他C-Two残留未动；实施worktree仍供外部验收。第五步提交记录后停止，等待Claude Code Host验收，未安装或升级日常运行时。
