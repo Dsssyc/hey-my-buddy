@@ -16,7 +16,7 @@ DSH的ACP客户端已经提供resume_session，当前运行模块明确拒绝nat
 | --- | --- | --- |
 | C1 Worker主循环接线 | 新增tests/python/buddy/runtime/test_worker_live_wiring.py；docs/acceptance/dsh-native-resume-c1-worker-wiring.md | V-C1至V-C4：真实Worker tick发现就绪后登记；合法nonce下续租、对账成功后重新登记；退出关闭Worker端点；控制器结束后只清其捕获端点。复用LiveActivityForwardTests夹具、记录attach/detach的客户端与真实C-Two端点，不能只调用WorkerLiveRuntime。每处独立去掉目标接线必须使实际断言失败。 |
 | C2 公共事实防护 | 新增tests/python/buddy/harnesses/test_pending_ready_receipt_guards.py、tests/python/buddy/roles/test_checkpoint_shutdown_guard.py；docs/acceptance/dsh-native-resume-c2-guards.md | V-C5、V-C6：两种排队中同号异内容冲突；V-C7：完成回执inputSha256失配；V-C8、V-C9：就绪材料非普通文件、超过上限；V-C10：只有检查点、没有完整回合，任一停止层未知或未确认时不可续接。真实调用被测入口，复用已有夹具；每个目标条件单点去掉后失败。 |
-| C3 退休旁路与重复定义 | protocol/usage.py、buddy/roles/turn_io.py、buddy/roles/worker_services.py、buddy/harnesses/c_two_live.py（以上均在src/hey_my_buddy下）；tests/python/protocol/test_usage.py、tests/python/buddy/roles/test_worker_services.py、tests/python/buddy/harnesses/zcode/test_zcode.py、tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py；docs/acceptance/dsh-native-resume-c3-cleanup.md | V-C11：删除无生产调用方read_sidecar及独有常量/测试，保留仍用的用量归一化；V-C12：inquiry_paths不再写inquiry.json，测试改用真实返回控制材料，旧尝试文件仍能由现有回收函数处理；V-C13：回合提示去掉撤回说法；V-C14：传输时间窗沿用live.py的100至5000毫秒定义，不再重复。聚焦验证受影响模块、旧文件回收及边界值。 |
+| C3 退休旁路与重复定义 | protocol/usage.py、buddy/roles/turn_io.py、buddy/roles/worker_services.py、buddy/harnesses/c_two_live.py（以上均在src/hey_my_buddy下）；tests/python/protocol/test_usage.py、tests/python/buddy/roles/test_worker_services.py、tests/python/buddy/harnesses/zcode/test_zcode.py、tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py；docs/acceptance/dsh-native-resume-c3-cleanup.md | V-C11：删除无生产调用方read_sidecar及独有常量/测试，保留仍用的用量归一化；V-C12：inquiry_paths不再写inquiry.json，测试改用真实返回控制材料，旧尝试文件仍能由现有回收函数处理；V-C13：回合提示去掉撤回说法；V-C14：传输时间窗100至5000毫秒统一引用protocol/inquiry.py的既有定义，不再重复；harnesses/live.py的公共整合由Host处理。聚焦验证受影响模块、旧文件回收及边界值。 |
 
 三项从计划提交的同一固定基线在隔离受管worktree路由，可并行；C1/C2只加测试，不碰生产公共文件；C3只做列出的退休和等价适配，不削弱原保护。公共文件、角色、注册表与总体记录的整合归Host，接口缺口由交付提出。非普通文件条件若同时被底层安全打开方式拒绝，测试可以隔离底层打开原语并使用真实文件描述符，保留目标函数逻辑，明确这一验证边界；不把冗余防护、装载错误或超时当成目标条件已由断言守住。
 
@@ -59,4 +59,6 @@ R1在第一部分整合后开始；无模型结果若不能证明跨进程恢复
 
 ## 当前状态
 
-执行计划已写入；第一部分尚未提交微任务，DSH无模型核对、实现与2回合付费冒烟均未开始。本节在实际证据形成后更新，不预写通过结论。
+执行计划7391081已提交，宏任务obj-36c065d5-68b2-4e2d-abd4-e10512124d4c下C1/C2/C3均已路由、不指定buddy。第一部分正在执行，DSH无模型核对、实现与2回合付费冒烟均未开始。
+
+Host整合登记：开工核对确认时间窗重复的是protocol/inquiry.py与buddy/harnesses/live.py，c_two_live.py原本已经引用后者。保留两侧接口层protocol/inquiry.py的一份定义，Host仅改live.py的常量来源，取值不变；该文件不在并行微任务写入范围内。原C3任务仍保留，固定产物审查时按当前公共来源核对，不让其扩大写入范围。两项现有窗口边界测试与cli.test_repository_hygiene共7项通过（0.203秒、退出0），原始命令/日志留tmp；不重复完整检查。

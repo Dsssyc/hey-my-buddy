@@ -15,6 +15,7 @@ from ...protocol.internal_models import (
     check_text,
     fail,
 )
+from ...protocol.inquiry import MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS
 from .run_contract import RunIdentity
 from pydantic import Field, model_validator
 
@@ -23,8 +24,6 @@ from pydantic import Field, model_validator
 MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES_PER_RUN = 32
-MIN_TRANSPORT_TIMEOUT_MS = 100
-MAX_TRANSPORT_TIMEOUT_MS = 5000
 #: The suggested whole-frame bound across runs; it holds every bounded
 #: observation of the existing backends and never widens their own smaller
 #: per-bridge frame limits.
