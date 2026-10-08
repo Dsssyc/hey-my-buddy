@@ -289,7 +289,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | `GOVERNED_REQUIRED` | Coding work or a governed record was addressed through the advanced execution path; use the governed command |
 | `CONFIGURATION_REQUIRED` | A routing boundary must be resolved with a complete configuration or a reroute |
 | `CONFIGURATION_CONFLICT` | A supplied configuration does not preserve the goal's original hard constraints |
-| `CONFIGURATION_UNAVAILABLE` / `INVALID_CONFIGURATION` | The catalog does not offer the tuple, after one bounded re-read of that harness; details carry `remedy` and, when a trusted reading exists, `catalogReadAt`. On `continue`, `reason: "not-enabled"` with `enabled: false` means the catalog admits the tuple and the user has not enabled it, and `reason: "catalog-unavailable"` means it became unavailable just before the write / the installed tuple changed and must be chosen again |
+| `CONFIGURATION_UNAVAILABLE` / `INVALID_CONFIGURATION` | The catalog does not offer the tuple, after at most one bounded re-read of that harness per 180 seconds; details carry `reason: "catalog-unavailable"`, `remedy` and, when a trusted reading exists, `catalogReadAt`. On `continue`, `reason: "not-enabled"` with `enabled: false` means the catalog admits the tuple and the user has not enabled it / the installed tuple changed and must be chosen again |
 | `CATALOG_INVALID` / `CATALOG_UNAVAILABLE` | Native model discovery returned unusable data / was not performed |
 | `CATALOG_LIMIT` | The current native profile set exceeds 200 configurations; nothing was silently dropped |
 | `INVALID_WORKSPACE` | A workspace path or scope is absolute, escapes the checkout, names `.git` or does not exist |
