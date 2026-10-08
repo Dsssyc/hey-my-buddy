@@ -182,17 +182,17 @@ R04 第四轮 `f939a9de` 的 Host 15 个探针通过（872 ms、退出码 0）�
 
 ## 待 Claude Code Host 验收的整合边界
 
-五项范围与新宏任务保持本批归属；所有首次提交和原 run 的 continue 均省略 adapter/provider/model/effort，没有使用限流完整配置例外。本批独立补丁不修改 harnesses、实时协议、live_registry.py，也不修改 roles 中除 C1 提醒之外的内容；ADR、CONTEXT、AGENTS、README、待办、docs/reference 的本批独立差异为零，schema 仍为 15。core 的维护与 ADR-025 改动通过其整合提交原样引入。最终代码、默认并行完整检查、微任务验收与精确路径回收的实际结果在下面的 R12 收尾记录中给出。日常运行时、登录和凭据没有安装、升级或改动，模型调用仅限本批委派。
+五项范围与新宏任务保持本批归属；所有首次提交和原 run 的 continue 均省略 adapter/provider/model/effort，没有使用限流完整配置例外。本批独立补丁不修改 harnesses、实时协议、live_registry.py，也不修改 roles 中除 C1 提醒之外的内容；ADR、CONTEXT、AGENTS、README、待办、docs/reference 的本批独立差异为零，schema 仍为 15。core 的维护与 ADR-025 改动通过其整合提交原样引入。R12 保留补充指令到达前的微任务验收、回收和检查事实；合入 core 后最终代码的检查结论见 R13、R14。日常运行时、登录和凭据没有安装、升级或改动，模型调用仅限本批委派。
 
 最终 API 文件再独立重放 If-None-Match、解析后票号核对、所有结束路径清票、会话纪元和成功响应缓存上限五处移除，干净 34 项目标先通过、五处均产生实际断言失败，没有写入源码。此前旧锚点推进实现已被当前核对时钟替换，其旧变异不计作最终实现的防护；有效失败证据按功能目标关联各固定源码版本保存。最终源码与公开记录的仓库卫生预检退出 0，未含本机主目录的绝对路径。
 
 ## R12：合入 core 前的代码、完整检查与回收（历史结果）
 
-合入 core 前的候选代码提交为 `92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4`（`perf(console): reuse conditional reads and pause hidden polling`），工作树干净后执行唯一一次完整检查：`uv run --frozen python -m hey_my_buddy.cli.checks`。UTC 2026-10-07 18:42:08 开始、18:50:27 结束，约 498.921 秒，退出码 **0**；沿用默认并行数，Python 4 个 Worker、187/187 文件、2,987 项测试、跳过 1 项。每个测试使用检查器的全新私有状态和运行时，启动 uv 前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT。完整检查后核对四个构建产物与该提交逐字节相同、工作树没有源码或产物变化，随后只补验收记录。完整检查的 stdout 只给出上述 Python 数量，不把前端编号清点数量冒充它打印的执行数量。命令、完整提交号、开始/结束时刻、退出码和产物哈希见 [最终核对 JSON](console-reads-and-checkouts-verification.json)，原始日志留在 ignored `tmp/console-reads-host/full-check.log`。
+合入 core 前的候选代码提交为 `92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4`（`perf(console): reuse conditional reads and pause hidden polling`），当时工作树干净后执行了一次完整检查：`uv run --frozen python -m hey_my_buddy.cli.checks`。UTC 2026-10-07 18:42:08 开始、18:50:27 结束，约 498.921 秒，退出码 **0**；沿用默认并行数，Python 4 个 Worker、187/187 文件、2,987 项测试、跳过 1 项。每个测试使用检查器的全新私有状态和运行时，启动 uv 前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT。完整检查后核对四个构建产物与该提交逐字节相同、工作树没有源码或产物变化，随后只补验收记录。完整检查的 stdout 只给出上述 Python 数量，不把前端编号清点数量冒充它打印的执行数量。命令、完整提交号、开始/结束时刻、退出码和产物哈希见 [最终核对 JSON](console-reads-and-checkouts-verification.json)，原始日志留在 ignored `tmp/console-reads-host/full-check.log`。
 
 启动包装器最初误用了旧 ADR-027 任务的“最新 core 必须为祖先”门槛，在实际检查命令启动前退出；该次没有运行完整检查。更正 ignored 包装器为本批用户指定的 `54d15908` 起点后，运行了上述一次实际完整检查。开始时 `socu/buddy-core` 已推进到 `fbfa8eac881ee7da8d23465df155d270b8707b60`；当时按并行互不依赖的起始指令保留原起点，没有合入 ADR-025 的并行改动。此为补充合入指令到达前的历史边界，不能作为合入后代码的验证结论；新的整合与验证在 R13、R14 记录。
 
-Host 在最终代码完整检查通过后，对以下五个固定产物和各自已核对的 integration ID 登记 accepted；早期 rejected、失败回合、范围更正和原 run continue 均保留。这里的微任务验收与本批等待 Claude Code Host 验收是两个阶段。
+Host 在上述合入前候选的完整检查通过后，对以下五个固定产物和各自已核对的 integration ID 登记 accepted；早期 rejected、失败回合、范围更正和原 run continue 均保留。这里的微任务验收与本批等待 Claude Code Host 验收是两个阶段。
 
 | 微任务 | 固定产物 ID | 整合记录 ID | 精确回收路径 | 回收后的补丁／固定 refs 数量 |
 | --- | --- | --- | --- | --- |
@@ -217,3 +217,13 @@ R13 验证合并实际字节和本批相对 core 的写入边界，复用现有 
 R13 实际结果：13 个受影响模块、159 项测试、跳过 0，默认 4 个测试子进程，14.873 秒、退出码 0，私有根回收已确认。含真实服务注册、holding Worker 与 controller 的两跳 C-Two 夹具，只有模拟原生日志，没有模型调用。core 其余 139 个变动路径与该固定提交逐字节相同；service 的自动整合差异仅为上述三处 core 新增，workspace、Worker 提醒、控制台源码和四个现有构建产物未变化。相对 core 核对本批独立写入范围，受保护文档与实时通道的额外差异为零。
 
 为免将 core 自己新增的测试算成本批贡献，重新从固定 `fbfa8eac` 的 Git archive 和整合工作树收集 Python 编号：core 3,049 项、整合 3,162 项，新增 113、删除 0，新编号集合与合入前本批的 113 项完全相同；两次 discovery 无错误，只收集未执行。测试编号 JSON 的主基线改为固定 core，另保留合入前历史清单；前端源码未被 core 改动，667→728 的编号变化仍有效，没有重复其源码未变化的浏览器测试或性能测量。合入后真实原生程序和已安装日常运行时未验证，本次整合只使用私有测试与模拟原生夹具。
+
+## R14：合入 core 后的最终完整检查
+
+最终代码为整合提交 `5c9c9fcc119ca74e781a9daeea84d30fc1db03a5`（`merge: integrate buddy-core C-Two channels with console and checkout changes`），两父提交为原本批记录 `5884d76b` 与最新 core `fbfa8eac881ee7da8d23465df155d270b8707b60`。先核对 worktree 干净和 core 为祖先，再执行一次 `uv run --frozen python -m hey_my_buddy.cli.checks`：UTC 2026-10-08 01:25:10→01:33:27（Asia/Singapore 09:25→09:33），497.041 秒、退出码 **0**；默认 4 个 Worker，195/195 个文件、3,162 项测试、跳过 1 项，测试私有根回收完成。命令启动前清除全部继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT，不设置并行覆盖值。原始日志为 ignored `tmp/console-reads-host/post-core-full-check.log`，完整元数据在最终核对 JSON 的 fullCheck，旧结果留在 preCoreFullCheck。
+
+本批实际有补充指令到达前旧候选的一次完整检查，以及合入 core 后最终代码的一次完整检查；两个提交号与日志分别保留。新结果替代旧候选的最终验证结论，不称旧结果已覆盖 0.29.0。本次合并之后没有产品修复、没有额外运行完整入口；测试和最终检查都没有模型调用，没有安装或升级日常运行时，也没有修改登录、凭据或 schema。
+
+检查结束后 Host 再确认 HEAD 为上述整合提交、worktree 干净、当前最新 core 仍为 fbfa8eac 且为其祖先；4 个控制台构建产物同时与原始固定哈希和该整合提交的 Git 对象逐字节一致。相对 core 的本批范围核对通过：角色代码仍只有 C1 一句，受保护文档、harnesses、实时协议与 live_registry 的本批额外差异为零。既有浏览器和字节测量证据对应的控制台源码与产物未变化，合入后的服务读取、注册和实际两跳消费者另由 R13 与本次完整检查覆盖；没有宣称再次使用真实 CLI 或日常运行时验证。
+
+合入后完整检查通过之后只补记录；暂存全部最终记录后重跑 `cli.test_repository_hygiene`，5 项通过、退出码 0，没有再次执行完整检查。记录以本地提交交付，源码仍与已检查的 5c9c9fc 相同，保留本分支和 Host 工作树、不推送，停止等待 Claude Code Host 验收。五个微任务已 accepted、各自检出已按精确路径回收，历史产物与整合记录继续保留，不创建替代微任务或改写其执行事实。

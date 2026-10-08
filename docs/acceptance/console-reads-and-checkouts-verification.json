@@ -142,7 +142,7 @@
     "automaticMergeOverlap": [
       "src/hey_my_buddy/blackboard/service/service.py"
     ],
-    "status": "automatic merge and affected verification passed; final combined full check pending",
+    "status": "accepted core merged; affected and final combined full checks passed",
     "historicalFullCheckIsFinal": false,
     "mergeProof": {
       "coreCommit": "fbfa8eac881ee7da8d23465df155d270b8707b60",
@@ -176,6 +176,40 @@
       "tests": 159,
       "skipped": 0,
       "rawLog": "tmp/console-reads-host/post-core-focused.log"
-    }
+    },
+    "mergeCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+    "latestCoreAncestorVerified": true,
+    "builtAssetsByteIdenticalAfterFullCheck": true,
+    "worktreeCleanAfterFullCheck": true,
+    "scopeProofLog": "tmp/console-reads-host/post-core-final-scope.json"
+  },
+  "fullCheck": {
+    "command": "uv run --frozen python -m hey_my_buddy.cli.checks",
+    "codeCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+    "coreCommitAtStart": "fbfa8eac881ee7da8d23465df155d270b8707b60",
+    "requestedBaseCommit": "54d159082c3ec2bb995c897c0833da216876485c",
+    "coreMerged": true,
+    "verificationPhase": "post-core final combined code; pre-core run retained separately",
+    "parallelism": "default; no --jobs and no inherited BUDDY_CHECKS_JOBS",
+    "startedAt": "2026-10-08T01:25:10.476151+00:00",
+    "exitCode": 0,
+    "elapsedSeconds": 497.041,
+    "finishedAt": "2026-10-08T01:33:27.524663+00:00",
+    "pythonTestFiles": 195,
+    "pythonTests": 3162,
+    "pythonSkipped": 1,
+    "pythonWorkers": 4,
+    "rawLog": "tmp/console-reads-host/post-core-full-check.log",
+    "environment": "inherited BUDDY_*, ANTHROPIC_*, VIRTUAL_ENV and UV_PROJECT_ENVIRONMENT removed before uv; fresh private state/runtime and source checks"
+  },
+  "verificationBoundary": "Final combined code is the core merge commit; earlier preCoreFullCheck remains historical. Following changes are acceptance records only and receive focused repository hygiene verification.",
+  "recordOnlyHygiene": {
+    "command": "uv run --frozen python tmp/console-reads-host/run_affected.py cli.test_repository_hygiene",
+    "tests": 5,
+    "exitCode": 0,
+    "checkedSourceCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+    "recordsOnly": true,
+    "environment": "inherited-variable removal and fresh private roots",
+    "rawLog": "tmp/console-reads-host/post-core-hygiene-final.log"
   }
 }

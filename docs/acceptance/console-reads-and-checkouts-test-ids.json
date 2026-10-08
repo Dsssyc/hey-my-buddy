@@ -318,5 +318,6 @@
     ],
     "removed": []
   },
-  "postCoreCollection": "fixed core Git archive and auto-merged worktree; unittest discovery only, no tests executed during counting; frontend source/IDs unchanged by core"
+  "postCoreCollection": "fixed core Git archive and auto-merged worktree; unittest discovery only, no tests executed during counting; frontend source/IDs unchanged by core",
+  "postCoreCodeCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5"
 }
