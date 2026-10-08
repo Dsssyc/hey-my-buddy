@@ -42,10 +42,15 @@ describe("work-objective reads", () => {
   it("accepts the 0.15.1 nullable description and accepted count, refusing malformed ones", async () => {
     const good = objectiveTimelineFixture();
     const withDescription = { ...good, objective: { ...good.objective, description: "用户口述的目标描述。", counts: { ...good.objective.counts, accepted: 2 } } };
-    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(withDescription))) as typeof fetch);
+    // The read resolves to {timeline, verifiedAtMs}; verifiedAtMs is the
+    // response's own HTTP Date, pinned here with a fixed header value.
+    const verifiedAtMs = Date.parse("Mon, 05 Oct 2026 02:30:00 GMT");
+    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(withDescription),
+      { headers: { Date: new Date(verifiedAtMs).toUTCString() } })) as typeof fetch);
     await expect(api.objectiveTimeline("obj-1", {})).resolves.toMatchObject({
-      objective: { description: "用户口述的目标描述。", counts: { accepted: 2 } },
-      rows: expect.any(Array),
+      timeline: { objective: { description: "用户口述的目标描述。", counts: { accepted: 2 } },
+        rows: expect.any(Array) },
+      verifiedAtMs,
     });
     for (const malformed of [
       { ...good, objective: { ...good.objective, description: 7 } },
@@ -67,7 +72,10 @@ describe("work-objective reads", () => {
     const api = createApi("/private/", fetcher);
     const controller = new AbortController();
     await expect(api.objectiveTimeline("obj/a+b", { limit: 200 }, controller.signal)).resolves.toMatchObject({
-      objective: { objectiveId: "obj-1" }, totals: { rows: 6, allRows: 6 },
+      timeline: { objective: { objectiveId: "obj-1" }, totals: { rows: 6, allRows: 6 } },
+      // This fixture response carries no HTTP Date, so the client's
+      // verification time is the documented null fallback.
+      verifiedAtMs: null,
     });
     const [location, init] = fetcher.mock.calls[0];
     const url = new URL(String(location), "http://localhost");

@@ -211,5 +211,56 @@
     "recordsOnly": true,
     "environment": "inherited-variable removal and fresh private roots",
     "rawLog": "tmp/console-reads-host/post-core-hygiene-final.log"
+  },
+  "acceptanceRepair": {
+    "rejectedCommit": "0011980b8efd31fb705e9854fcb75c481b920dd2",
+    "originalRuns": {
+      "AF": "890cc404-0b42-47f2-b0f5-642fe5f69645",
+      "AS": "b9955292-15e2-45e6-98d9-e367109fc281"
+    },
+    "runId": "fc81b770-e862-4b1b-8727-3a191b2cfd47",
+    "objectiveId": "obj-772db233-6e51-4aef-97be-971c504eba46",
+    "hostId": "codex-adr027",
+    "artifactId": "682597f4-e2e4-47da-b065-4585cbc9498e",
+    "outputCommit": "3fab2aa4a3c9dfd662a720a121bc8264dc089309",
+    "writePaths": [
+      "apps/console/src/objective-api.test.ts",
+      "tests/python/console/test_console_reads_http.py"
+    ],
+    "routingFieldsOmitted": [
+      "adapter",
+      "provider",
+      "model",
+      "effort"
+    ],
+    "firstObjectiveReuseRefused": "CONFLICT; repository identity mismatch, same submitting Host; original records unchanged",
+    "productChanged": false,
+    "hostAffectedFrontend": {
+      "tests": 9,
+      "exitCode": 0
+    },
+    "hostAffectedPython": {
+      "tests": 19,
+      "exitCode": 0
+    },
+    "accessRevisionMutation": {
+      "target": "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_access_revision_alone_refreshes_the_same_cached_session",
+      "cleanExitCode": 0,
+      "mutantExitCode": 1,
+      "tests": 1,
+      "assertionFailures": 1,
+      "errors": 0,
+      "observed": "old conditional request got 304 instead of 200",
+      "kind": "in-memory method replacement; no product files written"
+    },
+    "hostBeforeFrontend": {
+      "tests": 9,
+      "failed": 2,
+      "passed": 7,
+      "exitCode": 1
+    },
+    "fullFrontendStatus": "pending on fixed integration commit",
+    "pythonFullRerun": false,
+    "previousPythonFullResult": "3162 tests at 5c9c9fc remains historical verification of identical product source, not execution of the new test"
   }
 }

@@ -594,6 +594,44 @@ class ConsoleReadSessionIsolationTests(ConsoleTestCase, WorkflowTestCase):
         self.assertFalse(snapshot["consoleAccess"]["requireLogin"])
         self.assertNotEqual(headers["etag"], _headers["etag"])
 
+    def test_access_revision_alone_refreshes_the_same_cached_session(self):
+        """The access revision is a marker component on its own (R15).
+
+        The settings test above flips ``requireLogin``, so deleting
+        ``access_revision`` from the marker would still pass it: the login-mode
+        switch and its session replacement move the marker themselves. Here one
+        valid logged-in session keeps its identity while the clocks, the
+        database, the assets and the session set all stay frozen, and only the
+        console access revision moves — a controlled revision fact injected
+        under this private fixture, not a real access-settings change. The old
+        validator must then answer 200 with the new revision, and only the new
+        validator may answer 304.
+        """
+        board = self.board()
+        _entry, browser = self.open_console(board)
+        now = [time.time()]
+        board.console._clock = lambda: now[0]
+        board.console.read_cache._clock = lambda: now[0]
+        board.console._sessions.clock = lambda: now[0]
+        status, headers, body = browser.get("/api/console")
+        self.assertEqual(status, 200, body[:300])
+        revision = json.loads(body)["consoleAccess"]["revision"]
+        # With every invalidation source frozen, the cached representation is
+        # an honest cache hit.
+        status, _headers, replay = browser.get("/api/console", headers={"If-None-Match": headers["etag"]})
+        self.assertEqual(status, 304, replay[:300])
+        self.assertEqual(replay, b"")
+        # The injected revision alone must move the marker.
+        with board.console._lock:
+            board.console.access_revision = revision + 1
+        status, refreshed, body = browser.get("/api/console", headers={"If-None-Match": headers["etag"]})
+        self.assertEqual(status, 200, body[:300])
+        self.assertNotEqual(refreshed["etag"], headers["etag"])
+        self.assertEqual(json.loads(body)["consoleAccess"]["revision"], revision + 1)
+        status, _headers, replay = browser.get("/api/console", headers={"If-None-Match": refreshed["etag"]})
+        self.assertEqual(status, 304, replay[:300])
+        self.assertEqual(replay, b"")
+
 
 if __name__ == "__main__":
     unittest.main()

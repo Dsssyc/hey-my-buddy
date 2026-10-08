@@ -4,7 +4,7 @@
   "collection": "unittest discovery and Vitest nonstatic list; collection did not execute tests",
   "python": {
     "baseline": 3049,
-    "final": 3162,
+    "final": 3163,
     "added": [
       "blackboard.evaluation.test_evaluation.ConsoleCoreTests.test_core_carries_the_state_keys_and_snapshot_wraps_them",
       "blackboard.service.test_console_reads.BoundaryTests.test_collect_deadline_takes_earliest_future_boundary",
@@ -114,6 +114,7 @@
       "console.test_console_reads_http.ConsoleReadCacheTests.test_task_objective_and_timeline_reads_are_conditional",
       "console.test_console_reads_http.ConsoleReadCacheTests.test_unchanged_polls_answer_304_without_reprojection",
       "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_a_cached_session_sees_another_session_login_without_a_database_change",
+      "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_access_revision_alone_refreshes_the_same_cached_session",
       "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_access_setting_changes_invalidate_the_snapshot",
       "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_activity_minute_change_invalidates_a_cached_snapshot",
       "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_cross_session_revoke_and_logout_refresh_a_cached_snapshot",
@@ -319,5 +320,11 @@
     "removed": []
   },
   "postCoreCollection": "fixed core Git archive and auto-merged worktree; unittest discovery only, no tests executed during counting; frontend source/IDs unchanged by core",
-  "postCoreCodeCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5"
+  "postCoreCodeCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+  "testOnlyRepair": {
+    "newPythonId": "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_access_revision_alone_refreshes_the_same_cached_session",
+    "frontendIdsChanged": false,
+    "pythonFullSuiteRerun": false,
+    "countBasis": "one added method, zero removed methods in immutable test-only patch; affected module and new target executed independently"
+  }
 }
