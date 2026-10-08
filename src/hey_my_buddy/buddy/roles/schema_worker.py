@@ -43,6 +43,14 @@ def outcome_schema(*, summary_description: str | None = None, suggested_profile:
 
 
 @dataclass(frozen=True)
+class WorkerReceiptOptions:
+    """Registered receipt projections over the same Worker collection path."""
+
+    ignored_quota_codes: tuple[str, ...] = ()
+    capture_session_from_validated_turn: bool = False
+
+
+@dataclass(frozen=True)
 class NativeSchemaWorker:
     prefixes: tuple[str, ...]
     schema: dict

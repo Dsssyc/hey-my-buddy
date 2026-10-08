@@ -286,6 +286,27 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(disarmed.tool_calls, 1)
         self.assertEqual(disarmed.settle_delivery(DELIVERED, ROOT), ())
 
+    def test_an_unarmed_collector_never_treats_the_builtin_call_as_delivery(self):
+        # The negative witness beside the armed positive above: under the
+        # actual native_schema_delivery=False branch, the exact same frames
+        # keep the built-in call an ordinary tool. The settlement verifies
+        # nothing, the call stays counted through the exclusion seam, and the
+        # finished package carries its facts instead of dropping them from the
+        # tool count — the switch constant alone proves none of that.
+        collector = ReadOnlyToolEvidence(dict(BINDING), native_schema_delivery=False)
+        for frame in (init_frame(), structured_use("toolu_so_1", DELIVERED),
+                      tool_result("toolu_so_1")):
+            collector.observe_frame(frame)
+        self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
+        self.assertEqual(collector.tool_calls, 1)
+        package = collector.finish(True, exclude_calls=collector.settle_delivery(DELIVERED, ROOT))
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
+        self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
+                         [("StructuredOutput", "start"), ("StructuredOutput", "end")])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                         tool_evidence.TOOLS_FORBIDDEN,
+                         "an unarmed StructuredOutput call is an ordinary forbidden tool")
+
     def test_settlement_releases_unverified_candidates_before_the_role_sees_the_count(self):
         # A candidate whose input never matches the final value is held while
         # it waits for its association, but the settlement that precedes the

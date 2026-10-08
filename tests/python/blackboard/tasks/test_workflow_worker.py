@@ -152,9 +152,8 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             # only from the imported, validated turn record — sessionIdSource
             # names that source, and no conflict fact exists to clear (the
             # unvalidated side of this rule is the Host's own
-            # DshPublishedReceiptTests witness). The sidecar on disk stays the
-            # activity witness, with the receipt's sidecarWritten fact beside
-            # it.
+            # DshPublishedReceiptTests witness). The retained native result
+            # supplies its activity facts after the short live endpoint ends.
             _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             native = (receipt.get("result") or {}).get("nativeSession") or {}
             self.assertEqual(native.get("storageScope"), "attempt-private-sessions")
@@ -168,25 +167,22 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertEqual(native.get("sessionIdSource"), "validated-turn")
             self.assertFalse(native.get("sessionIdConflict"))
 
-            # The DSH activity observer's bounded sidecar is attempt-bound and
-            # readable by the real helper the owning Worker uses.
-            from hey_my_buddy.protocol import activity as activity_module
-
+            # This is the retained final native fact, not a claim that a live
+            # observer polled before the short fixture turn ended.
+            from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+            native_result = decode_run_result(Path(receipt["logPaths"]["stdout"]).read_bytes())
+            self.assertEqual(native_result.identity.task_id, run_id)
+            self.assertEqual(native_result.identity.attempt_id, turn["attemptId"])
+            activity = native_result.activity.value
+            self.assertEqual(activity["phase"], "finishing")
+            self.assertEqual(activity["nativeSessionId"], turn["sessionId"])
+            self.assertEqual(activity["counts"], {"modelTurns": 1, "toolCalls": 1})
+            activity_meta = (receipt.get("result") or {}).get("activity") or {}
+            self.assertEqual(activity_meta["phase"], activity["phase"])
+            self.assertEqual(activity_meta["eventSeq"], activity["eventSeq"])
+            self.assertNotIn("sidecarWritten", activity_meta)
             attempt_directory = self.directory / "attempts" / run_id / turn["attemptId"]
-            sidecar = activity_module.read_sidecar(
-                activity_module.sidecar_path(attempt_directory),
-                task_id=run_id,
-                attempt_id=turn["attemptId"],
-                generation=1,
-            )
-            self.assertIsNotNone(sidecar, "the governed dsh run did not leave a bound activity sidecar")
-            self.assertEqual(sidecar["phase"], "finishing")
-            self.assertEqual(sidecar["nativeSessionId"], turn["sessionId"])
-            self.assertEqual(sidecar["counts"], {"modelTurns": 1, "toolCalls": 1})
-            # The receipt's own sidecar fact reports the same file the bound
-            # read just verified.
-            activity_meta = (receipt.get("result") or {}).get("nativeActivity") or {}
-            self.assertTrue(activity_meta.get("sidecarWritten"))
+            self.assertFalse((attempt_directory / "activity.json").exists())
 
             # The final acceptance is separate from execution and bound to the
             # actual sealed artifact, with its explicit integration decision.

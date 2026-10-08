@@ -137,7 +137,6 @@ class SupervisorHandle:
             environment["PYTHONPATH"] = target["pythonPath"]
         if target["stable"]:
             environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
-            environment["BUDDY_PYTHON"] = target["python"]
         log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             self.process = subprocess.Popen(

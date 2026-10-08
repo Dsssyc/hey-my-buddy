@@ -249,10 +249,9 @@ class LiveActivityForwardTests(unittest.TestCase):
 
     A registered harness's attempt activity reaches the board through its live
     channel, bound to the stored public run request's identity; the same
-    sidecar is never forwarded twice, a foreign attempt's sidecar is never
-    forwarded at all, and an unavailable channel says nothing about the native
-    process. A harness without a registered live binding keeps the original
-    sidecar path.
+    published activity is never forwarded twice, a foreign endpoint is refused,
+    and channel loss says nothing about the native process. An unextracted
+    command has no live activity channel or file fallback.
     """
 
     def setUp(self):
@@ -312,53 +311,78 @@ class LiveActivityForwardTests(unittest.TestCase):
                 output_schema=FrozenJson({"type": "object"}),
                 budget=RunBudget(timeout_seconds=600))
             worker_module.fsync_json(request_file, json.loads(encode_run_request(request)))
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint, LiveEndpointDescriptor
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        endpoint = CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
+                                    instance_id="c" * 64, token="d" * 64)
+        self.addCleanup(endpoint.close, reason="fixture-ended")
+        self.endpoints = getattr(self, "endpoints", {})
+        self.endpoints[str(directory)] = endpoint
+        ready_file = directory / "live-ready.json"
+        ready_file.write_text(json.dumps(LiveEndpointDescriptor(
+            address="fixture-address", name="Fixture Activity", instance_id="c" * 64, host_pid=42).to_payload()))
         control = {"operation": "worker", "harness": harness, "requestFile": str(request_file),
                    "directory": str(directory),
-                   "inquiry": {"socketPath": str(self.root / "absent.sock"), "token": "a" * 64,
-                               "resultsPath": str(directory / "inquiry.results.jsonl")}}
+                   "live": {"readyFile": str(ready_file), "instanceId": "c" * 64, "token": "d" * 64}}
         handle = types.SimpleNamespace(role_run_control=control, role_run_identity=identity,
-                                       cancel_requested=False)
+                                       pid=42, cancel_requested=False)
+        # Readiness/held-request validation, wire admission and forwarding all
+        # run. Only the SDK connection is local; no native PID is proven here.
+        def local_call(_channel, operation, text):
+            return getattr(self.endpoints[str(directory)], operation)(text)
+        patcher = mock.patch.object(CTwoLiveChannel, "_connect_and_call", local_call)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         return worker_module._Renewal(worker, claim, handle, implementation=object()), directory
 
-    def sidecar_write(self, directory: Path, *, task_id="task-live", attempt_id="attempt-live",
-                      generation=1, event_seq=1):
-        from hey_my_buddy.protocol.activity import ActivitySidecar
-
-        sidecar = ActivitySidecar(directory, task_id=task_id, attempt_id=attempt_id, generation=generation)
-        self.assertTrue(sidecar.publish({"phase": "streaming-model", "eventSeq": event_seq,
-                                         "counts": {"modelTurns": 1, "toolCalls": 0}}))
+    def publish_activity(self, directory: Path, *, task_id="task-live", attempt_id="attempt-live",
+                         generation=1, event_seq=1):
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        from hey_my_buddy.protocol.run_identity import RunIdentity
+        endpoint = self.endpoints[str(directory)]
+        source_identity = RunIdentity(**{**endpoint.identity.model_dump(), "task_id": task_id,
+                                         "attempt_id": attempt_id, "generation": generation})
+        if source_identity != endpoint.identity:
+            endpoint = CTwoLiveEndpoint(source_identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
+                                        instance_id="c" * 64, token="d" * 64)
+            self.endpoints[str(directory)] = endpoint
+            self.addCleanup(endpoint.close, reason="fixture-ended")
+        self.assertTrue(endpoint.publish_activity({"phase": "streaming-model", "eventSeq": event_seq,
+                                                   "counts": {"modelTurns": 1, "toolCalls": 0}}))
 
     def test_activity_flows_through_the_channel_and_never_repeats(self):
         renewal, directory = self.renewal()
         renewal._forward_activity()
-        self.assertEqual(renewal.worker.client.progress_calls, [], "nothing is published before any sidecar")
-        self.sidecar_write(directory, event_seq=3)
+        self.assertEqual(renewal.worker.client.progress_calls, [], "nothing is forwarded before native activity")
+        self.publish_activity(directory, event_seq=3)
         renewal._forward_activity()
         calls = renewal.worker.client.progress_calls
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["attemptId"], "attempt-live")
         self.assertEqual(calls[0]["data"]["activity"]["eventSeq"], 3)
         renewal._forward_activity()
-        self.assertEqual(len(renewal.worker.client.progress_calls), 1, "the same sidecar never repeats")
-        self.sidecar_write(directory, event_seq=4)
+        self.assertEqual(len(renewal.worker.client.progress_calls), 1, "the same publication never repeats")
+        self.publish_activity(directory, event_seq=4)
         renewal._forward_activity()
         self.assertEqual(len(renewal.worker.client.progress_calls), 2)
 
-    def test_a_foreign_attempts_sidecar_is_never_forwarded(self):
+    def test_a_foreign_attempts_endpoint_is_never_forwarded(self):
         renewal, directory = self.renewal()
-        self.sidecar_write(directory, attempt_id="another-attempt", event_seq=9)
+        self.publish_activity(directory, attempt_id="another-attempt", event_seq=9)
         renewal._forward_activity()
         self.assertEqual(renewal.worker.client.progress_calls, [])
 
     def test_a_stored_request_of_another_invocation_never_binds_or_bypasses(self):
         renewal, directory = self.renewal()
-        self.sidecar_write(directory, event_seq=3)
+        self.publish_activity(directory, event_seq=3)
         request_path = Path(renewal.handle.role_run_control["requestFile"])
         original = request_path.read_text()
         # Tamper the stored request after the handle was issued: its invocation
         # no longer matches the held identity, so no channel binds — and the
-        # extracted live path has no sidecar fallback. The sidecar sits there
-        # unread: nothing is forwarded this tick.
+        # extracted live path has no fallback: nothing is forwarded this tick.
         request = json.loads(original)
         request["identity"]["invocationId"] = "foreign-invocation"
         request_path.write_text(json.dumps(request))
@@ -373,21 +397,21 @@ class LiveActivityForwardTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["data"]["activity"]["eventSeq"], 3)
 
-    def test_an_unextracted_harness_keeps_the_original_sidecar_path(self):
+    def test_an_unextracted_command_has_no_live_activity_or_file_fallback(self):
         renewal, directory = self.renewal(with_request=False, harness="command")
         renewal.handle.role_run_control = {"operation": "worker", "harness": "command"}
         state, channel = renewal._attempt_activity_binding()
         self.assertEqual(state, "unextracted")
         self.assertIsNone(channel)
-        self.sidecar_write(directory, event_seq=3)
-        renewal._forward_activity()
-        calls = renewal.worker.client.progress_calls
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["data"]["activity"]["eventSeq"], 3)
+        (directory / "activity.json").write_text('{"phase":"streaming-model","eventSeq":3}')
+        with mock.patch("os.open", wraps=os.open) as opened:
+            renewal._forward_activity()
+        opened.assert_not_called()
+        self.assertEqual(renewal.worker.client.progress_calls, [])
 
     def test_a_channel_unavailability_is_not_a_stop(self):
         renewal, directory = self.renewal()
-        self.sidecar_write(directory, event_seq=3)
+        self.publish_activity(directory, event_seq=3)
         # A channel whose reads fail is an availability fact, never a stop: the
         # forwarding loop swallows it, forwards nothing and keeps running.
         state, channel = renewal._attempt_activity_binding()
@@ -395,7 +419,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         with mock.patch.object(channel, "observe", side_effect=BoardError("INTERNAL", "unreadable")):
             renewal._forward_activity()
         self.assertEqual(renewal.worker.client.progress_calls, [])
-        # The same sidecar still forwards once the channel reads again.
+        # The same live fact still forwards once the channel reads again.
         renewal._forward_activity()
         self.assertEqual(len(renewal.worker.client.progress_calls), 1)
 

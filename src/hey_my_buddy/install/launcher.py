@@ -16,7 +16,7 @@ import uuid
 
 LAUNCH_KEYS = {'BUDDY_MAX_CONCURRENT': (1, 32), 'BUDDY_WAIT_CAPACITY': (1, 1024)}
 HOST_INTERNAL_KEYS = frozenset({
-    'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY', 'BUDDY_PYTHON',
+    'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
     'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID',
     'BUDDY_SUPERVISOR_START_ID', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_HARNESS_RECORD_FILE',
     'BUDDY_ACCOUNT_SELECTION',
@@ -49,7 +49,7 @@ SERVICE_ENVIRONMENT_KEYS = frozenset({
     'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'ZCODE_DATA_BASE_DIR', 'DSH_HOME',
     # This program's private roots, interpreter selection and launch settings.
     'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
-    'BUDDY_PYTHON', 'BUDDY_WORKER_ID', 'BUDDY_WORKER_STATE',
+    'BUDDY_WORKER_ID', 'BUDDY_WORKER_STATE',
     'BUDDY_MAX_CONCURRENT', 'BUDDY_WAIT_CAPACITY', 'BUDDY_CONSOLE_PORT', 'BUDDY_LEASE_SECONDS',
     'BUDDY_MODEL_CATALOG_FILE', 'BUDDY_CLAUDE_SETTINGS_POLICY', 'BUDDY_DEBUG',
     'BUDDY_AGENT_SKILLS_DIR', 'BUDDY_CLAUDE_SKILLS_DIR', 'UV_BIN',
@@ -264,8 +264,7 @@ def runtime_environment(target: Path) -> dict[str, str]:
     # the selected CLI builds its request. The service allowlist above applies only
     # where a daemon or worker supervisor is created.
     env = {k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','VIRTUAL_ENV','UV_PROJECT_ENVIRONMENT'}}
-    env.update(BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name,
-               BUDDY_PYTHON=str(_runtime_python(target)))
+    env.update(BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name)
     return env
 
 

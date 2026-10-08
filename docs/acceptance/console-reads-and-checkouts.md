@@ -178,19 +178,19 @@ R04 第四轮 `f939a9de` 的 Host 15 个探针通过（872 ms、退出码 0）�
 
 最终源码用现有 Vite 与 tsc 构建，4 个产物的 SHA-256 固定保留，JS 为 index-BvBeWtDi.js；仅提交构建器的标准输出。真实 Chrome 的任务专用合成窗口请求了该新 JS，设置中的合法负向预检显示将跳过 4,000 项、拒绝 0 项的具体提醒，未再显示读取失败；首次取得旧缓存时间轴时，现在标记与实际 02:32 一致，原始生成时刻仍为 01:20。最终源码再放入真实后台标签 29.29 秒，零新 GET/POST；恢复约 109 ms 内启动快照、宏任务列表与时间轴三个零内容 304，现在标记推进到 02:34。时间差仅为观察值，不锁入回归测试。临时 IAB 标签、专用 Chrome 窗口与私有服务已回收；服务的确切 PID 停止后进程退出 0。截图与原始请求记录留在 ignored 专用目录，没有放入公开仓库。
 
-Python 测试编号 2,874→2,987，新增 113、删除 0；前端编号 667→728，新增编号 64、退出原编号 3（原预览契约与两条快照供数的执行历史入口改名或替换）。完整增删清单见 [测试编号 JSON](console-reads-and-checkouts-test-ids.json)，以真实 unittest discovery 和 Vitest 非静态收集获得；收集未运行测试。前端最终清点第一次输出与运行器的元数据文件同名，数据被覆盖，已作废并换独立文件重新收集成功，没有把元数据误当测试编号。
+合入 core 前的 Python 测试编号为 2,874→2,987，新增 113、删除 0；前端编号 667→728，新增编号 64、退出原编号 3（原预览契约与两条快照供数的执行历史入口改名或替换）。完整增删清单见 [测试编号 JSON](console-reads-and-checkouts-test-ids.json)，以真实 unittest discovery 和 Vitest 非静态收集获得；收集未运行测试。前端最终清点第一次输出与运行器的元数据文件同名，数据被覆盖，已作废并换独立文件重新收集成功，没有把元数据误当测试编号。
 
 ## 待 Claude Code Host 验收的整合边界
 
-五项范围与新宏任务保持本批归属；所有首次提交和原 run 的 continue 均省略 adapter/provider/model/effort，没有使用限流完整配置例外。源码不修改 harnesses、实时协议、live_registry.py，也不修改 roles 中除 C1 提醒之外的内容；ADR、CONTEXT、AGENTS、README、待办、docs/reference 均未改，schema 仍为 15。最终代码、默认并行完整检查、微任务验收与精确路径回收的实际结果在下面的 R12 收尾记录中给出。日常运行时、登录和凭据没有安装、升级或改动，模型调用仅限本批委派。
+五项范围与新宏任务保持本批归属；所有首次提交和原 run 的 continue 均省略 adapter/provider/model/effort，没有使用限流完整配置例外。本批独立补丁不修改 harnesses、实时协议、live_registry.py，也不修改 roles 中除 C1 提醒之外的内容；ADR、CONTEXT、AGENTS、README、待办、docs/reference 的本批独立差异为零，schema 仍为 15。core 的维护与 ADR-025 改动通过其整合提交原样引入。最终代码、默认并行完整检查、微任务验收与精确路径回收的实际结果在下面的 R12 收尾记录中给出。日常运行时、登录和凭据没有安装、升级或改动，模型调用仅限本批委派。
 
 最终 API 文件再独立重放 If-None-Match、解析后票号核对、所有结束路径清票、会话纪元和成功响应缓存上限五处移除，干净 34 项目标先通过、五处均产生实际断言失败，没有写入源码。此前旧锚点推进实现已被当前核对时钟替换，其旧变异不计作最终实现的防护；有效失败证据按功能目标关联各固定源码版本保存。最终源码与公开记录的仓库卫生预检退出 0，未含本机主目录的绝对路径。
 
-## R12：最终代码、完整检查与回收
+## R12：合入 core 前的代码、完整检查与回收（历史结果）
 
-最终代码提交为 `92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4`（`perf(console): reuse conditional reads and pause hidden polling`），工作树干净后执行唯一一次完整检查：`uv run --frozen python -m hey_my_buddy.cli.checks`。UTC 2026-10-07 18:42:08 开始、18:50:27 结束，约 498.921 秒，退出码 **0**；沿用默认并行数，Python 4 个 Worker、187/187 文件、2,987 项测试、跳过 1 项。每个测试使用检查器的全新私有状态和运行时，启动 uv 前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT。完整检查后核对四个构建产物与该提交逐字节相同、工作树没有源码或产物变化，随后只补验收记录。完整检查的 stdout 只给出上述 Python 数量，不把前端编号清点数量冒充它打印的执行数量。命令、完整提交号、开始/结束时刻、退出码和产物哈希见 [最终核对 JSON](console-reads-and-checkouts-verification.json)，原始日志留在 ignored `tmp/console-reads-host/full-check.log`。
+合入 core 前的候选代码提交为 `92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4`（`perf(console): reuse conditional reads and pause hidden polling`），工作树干净后执行唯一一次完整检查：`uv run --frozen python -m hey_my_buddy.cli.checks`。UTC 2026-10-07 18:42:08 开始、18:50:27 结束，约 498.921 秒，退出码 **0**；沿用默认并行数，Python 4 个 Worker、187/187 文件、2,987 项测试、跳过 1 项。每个测试使用检查器的全新私有状态和运行时，启动 uv 前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT。完整检查后核对四个构建产物与该提交逐字节相同、工作树没有源码或产物变化，随后只补验收记录。完整检查的 stdout 只给出上述 Python 数量，不把前端编号清点数量冒充它打印的执行数量。命令、完整提交号、开始/结束时刻、退出码和产物哈希见 [最终核对 JSON](console-reads-and-checkouts-verification.json)，原始日志留在 ignored `tmp/console-reads-host/full-check.log`。
 
-启动包装器最初误用了旧 ADR-027 任务的“最新 core 必须为祖先”门槛，在实际检查命令启动前退出；该次没有运行完整检查。更正 ignored 包装器为本批用户指定的 `54d15908` 起点后，运行了上述一次实际完整检查。开始时 `socu/buddy-core` 已推进到 `fbfa8eac881ee7da8d23465df155d270b8707b60`；本批按并行互不依赖的指令保留原起点，没有合入 ADR-025 的并行改动。该事实单列，未声称核对了最新 core 的整合结果。
+启动包装器最初误用了旧 ADR-027 任务的“最新 core 必须为祖先”门槛，在实际检查命令启动前退出；该次没有运行完整检查。更正 ignored 包装器为本批用户指定的 `54d15908` 起点后，运行了上述一次实际完整检查。开始时 `socu/buddy-core` 已推进到 `fbfa8eac881ee7da8d23465df155d270b8707b60`；当时按并行互不依赖的起始指令保留原起点，没有合入 ADR-025 的并行改动。此为补充合入指令到达前的历史边界，不能作为合入后代码的验证结论；新的整合与验证在 R13、R14 记录。
 
 Host 在最终代码完整检查通过后，对以下五个固定产物和各自已核对的 integration ID 登记 accepted；早期 rejected、失败回合、范围更正和原 run continue 均保留。这里的微任务验收与本批等待 Claude Code Host 验收是两个阶段。
 
@@ -206,4 +206,14 @@ Host 在最终代码完整检查通过后，对以下五个固定产物和各自
 
 现有守护进程在 accepted 后会调用 `cleanup_accepted_workspace`，沿用正常的受保护 plan/apply 并确认确切路径；这次五项实际 apply 的命令号均为既有 `accepted-cleanup-…-apply`，已按仅本批 run 的只读持久记录核对。Host 在同时发起 W1 回收时收到 WORKSPACE_CHANGED（采集时未跟踪文件消失），重放旧修订收到 REVISION_CONFLICT；A-S 的同时计划请求也收到 REVISION_CONFLICT。没有把这些失败回复记成成功，也没有手工删除或恢复；重新读取五项持久计划、实际路径与保留产物后确认回收已完成。异常回复及实际执行主体均保留在 ignored 原始记录和最终核对 JSON。
 
-最终验收记录变更后，仅重跑 `cli.test_repository_hygiene`，5 项测试通过、退出码 0；在暂存完整记录（含新增 JSON）后再以同一私有环境核对该项，未重复完整检查。最终源码、构建产物和上述完整检查提交保持相同。本批的标准机制、影响范围、测试编号变化、逐项失败注入、服务端字节/耗时、真实浏览器事实、对外变化和未验证边界均已列出；完成后停止，等待 Claude Code Host 验收，不开始其他工作。
+最终验收记录变更后，仅重跑 `cli.test_repository_hygiene`，5 项测试通过、退出码 0；在暂存完整记录（含新增 JSON）后再以同一私有环境核对该项，未重复完整检查。上述历史检查后的源码、构建产物与当时的检查提交相同。本批的标准机制、影响范围、测试编号变化、逐项失败注入、服务端字节/耗时、真实浏览器事实、对外变化和未验证边界均已列出；完成后停止，等待 Claude Code Host 验收，不开始其他工作。
+
+## R13：补充指令后的 core 整合计划
+
+2026-10-08 收到 Claude Code Host 补充：提交前合入最新 `socu/buddy-core`。确认本分支干净且 core 为 `fbfa8eac881ee7da8d23465df155d270b8707b60`，用原生 `git merge --no-ff --no-commit socu/buddy-core` 合入；没有冲突，没有手工修改 ADR-025 实现。两侧唯一共同改动的产品文件为 `service.py`：保留本批目录重读入场与账户绑定逻辑，加入 core 的 live_registry 初始化、C-Two Worker 通道工厂及 attach/detach 操作。workspace、Worker 提醒与控制台源码均没有 core 新增差异，契约随 core 为 0.29.0，数据库 schema 仍为 15。
+
+R13 验证合并实际字节和本批相对 core 的写入边界，复用现有 checks 的私有子进程环境、默认并行调度与回收，只跑受影响的服务初始化/目录消费者、HTTP 条件读取、两跳 C-Two 服务消费者、共享 stash claim/封存、Worker 提醒/角色消费者与控制台预览，不执行完整入口。R14 在这些结果稳定、整合提交固定且 worktree 干净后执行一次 `uv run --frozen python -m hey_my_buddy.cli.checks`，不设置并行数；此为合入后最终代码的完整检查，R12 的历史结果保留而不充作替代。新完整检查改变验证结论，所有状态与日志按实际结果填写；源码与资产不变的浏览器/字节测量仍绑定原来已验证的固定源码，不宣称重做了真实原生模型核对。
+
+R13 实际结果：13 个受影响模块、159 项测试、跳过 0，默认 4 个测试子进程，14.873 秒、退出码 0，私有根回收已确认。含真实服务注册、holding Worker 与 controller 的两跳 C-Two 夹具，只有模拟原生日志，没有模型调用。core 其余 139 个变动路径与该固定提交逐字节相同；service 的自动整合差异仅为上述三处 core 新增，workspace、Worker 提醒、控制台源码和四个现有构建产物未变化。相对 core 核对本批独立写入范围，受保护文档与实时通道的额外差异为零。
+
+为免将 core 自己新增的测试算成本批贡献，重新从固定 `fbfa8eac` 的 Git archive 和整合工作树收集 Python 编号：core 3,049 项、整合 3,162 项，新增 113、删除 0，新编号集合与合入前本批的 113 项完全相同；两次 discovery 无错误，只收集未执行。测试编号 JSON 的主基线改为固定 core，另保留合入前历史清单；前端源码未被 core 改动，667→728 的编号变化仍有效，没有重复其源码未变化的浏览器测试或性能测量。合入后真实原生程序和已安装日常运行时未验证，本次整合只使用私有测试与模拟原生夹具。

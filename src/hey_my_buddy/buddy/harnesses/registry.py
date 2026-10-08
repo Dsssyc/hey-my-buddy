@@ -77,6 +77,23 @@ def fast_evidence_is_top_level(name: str) -> bool:
     return name == "codex"
 
 
+def frozen_account_for(name: str, runtime: dict) -> dict | None:
+    """Apply the registered account binding before the generic role consumes it."""
+    if name == "codex":
+        from .codex.home import frozen_account
+        return frozen_account(runtime)
+    return runtime.get("account")
+
+
+def worker_receipt_options(name: str):
+    from ..roles.schema_worker import WorkerReceiptOptions
+
+    if name == "dsh":
+        return WorkerReceiptOptions(ignored_quota_codes=("unknown",),
+                                    capture_session_from_validated_turn=True)
+    return WorkerReceiptOptions()
+
+
 def worker_format(name: str):
     """Select role parameters; native run modules never receive role labels."""
     from ..roles.schema_worker import NativeSchemaWorker, outcome_schema
@@ -105,16 +122,11 @@ def worker_message_source(name: str) -> str:
 
 
 def live_binding(name: str):
-    """The registered live-channel binding of one harness, or None while it has none.
-
-    A live binding exists only through registration: it must be a callable
-    operation on the registered run module, and nothing is probed or simulated
-    for a harness whose module declares none (ADR-023 principle 8). The
-    declared set stays the minimum the extracted harnesses actually use.
-    """
-    module = RUN_SEAMS.get(name)
-    binding = getattr(module, "bind_live_channel", None)
-    return binding if callable(binding) else None
+    """An extracted module uses the common C-Two client, with no native fallback."""
+    if RUN_SEAMS.get(name) is None:
+        return None
+    from .c_two_live import CTwoLiveChannel
+    return CTwoLiveChannel
 
 
 # Switching a harness is atomic here: the registered native body and the

@@ -1,21 +1,201 @@
 """Router 探针离线准备与假原生输出验证；绝不启动模型或服务。"""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
-import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.registry import run_seam
+from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
 
 PROBE_PATH = Path(__file__).resolve().parents[3] / "probes" / "router_readonly.py"
 spec = importlib.util.spec_from_file_location("router_probe", PROBE_PATH)
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
+
+
+class _GoneProcess:
+    """已退出的替身 leader：真实 ProcessHandle 语义下其自有组被观测为 gone。"""
+    def __init__(self, returncode):
+        self.returncode = returncode
+        self.pid = None
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+class _UnstoppedGroup:
+    """观察/收集时持续存活的替身组；模拟 terminate 后 active 返回零。"""
+    def __init__(self):
+        self.terminated = False
+
+    def active(self):
+        return 0 if self.terminated else 1
+
+    def terminate(self):
+        self.terminated = True
+
+    def close(self, confirmed=True):
+        pass
+
+
+class _UnconfirmedExit:
+    """leader 已退出（wait 正常返回），收集时持有组仍活的外层替身。"""
+    def __init__(self, returncode=0):
+        self.pid = None
+        self.returncode = returncode
+        self._buddy_job = _UnstoppedGroup()
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+class _UnreapedProcess:
+    """wait 永远超时、leader 永不被 reap 的替身：外层停止观察只能停在未停。"""
+    def __init__(self):
+        self.pid = None
+        self.returncode = None
+        self._buddy_job = _UnstoppedGroup()
+
+    def poll(self):
+        return None
+
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired(cmd="mock-native", timeout=timeout)
+
+
+def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped, shutdown,
+                       tool_calls, correction_count, checked_model, answer, native_receipt,
+                       elapsed_ms):
+    """替身 start：按生产 ``start_review``/``_launch`` 的同一形状冻结材料。
+
+    真实 ``RunIdentity``、invocation 私有根与 native 根、``role-run-control.json``、
+    ``role-run-request.json``（真实 ``review_request`` 构造 + ``encode_run_request``）、
+    ``role-run-verdict.json`` 与 ``encode_run_result`` 的 ``RunResult`` 帧全部按生产
+    编解码落地；``handle.role_run_control``/``role_run_identity`` 与 ``_launch`` 同形。
+    唯一的模拟是原生子进程与模型本身：子进程在本进程内即时完成，setUp 的
+    进程/网络守卫因此保持不变。structured_call.collect 一层不替换。
+    """
+    from hey_my_buddy.buddy.harnesses.base import open_logs
+    from hey_my_buddy.buddy.harnesses.run_contract import (
+        CheckedConfiguration, CheckedValue, EvidenceRef, NativeIdentity, ResultConfiguration,
+        RunEnd, RunIdentity, RunResult, RunValue, StopEvidence, StopLayer,
+        decode_run_result, encode_run_request, encode_run_result)
+    from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
+    from hey_my_buddy.buddy.roles import run_execution
+    from hey_my_buddy.buddy.roles.turn_io import _private_bytes, canonical_json, guard_private_path, private_json
+    from hey_my_buddy.json_codec import decode_strict_json
+    from hey_my_buddy.private_dirs import context_root, ensure_private_dir
+
+    ensure_private_dir(context.directory)
+    identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
+                           generation=context.generation, invocation_id=uuid.uuid4().hex)
+    private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
+    control = {
+        "operation": "review", "harness": harness, "privateRoot": str(private),
+        "directory": str(context.directory),
+        "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
+        "account": context.runtime.get("account"),
+        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
+        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
+        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
+        # 生产 start_review 走注册表读本类属性；不用探针可被测试替换的 adapter_for。
+        "canCorrect": registry_adapter(harness).read_only_structured_resume,
+        "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
+                            "budget": request.budget, "captureEvidence": request.capture_evidence},
+        # 生产控制文件没有的替身材料：与 5-D1 相同，绝不进入角色读者的键。
+        "fixture": {"timeout": timeout, "stopped": stopped, "shutdown": shutdown,
+                    "toolCalls": tool_calls, "correctionCount": correction_count,
+                    "checkedModel": checked_model, "answer": answer,
+                    "nativeReceipt": native_receipt, "elapsedMs": elapsed_ms},
+    }
+    control.update(invocationId=identity.invocation_id,
+                   requestFile=str(private / "role-run-request.json"),
+                   verdictFile=str(private / "role-run-verdict.json"),
+                   # 生产把 result 帧写在 controller stdout 上；替身把帧单列成文件，
+                   # 真实 runner.stdout.log 保留同一帧的角色投影（见函数尾注释）。
+                   resultFile=str(private / "role-run-result.json"))
+    for log_path in context.log_paths().values():
+        guard_private_path(Path(log_path))
+    private_json(private / "role-run-control.json", control)
+    # —— 子进程替身：真实角色构造器与 codec，然后立刻退出 ——
+    built_request, _services, _observer, _correction = run_execution.review_request(control, None)
+    _private_bytes(Path(control["requestFile"]), encode_run_request(built_request).encode(), exclusive=True)
+    if mutation:
+        mutation(Path(request.cwd), Path(control["directory"]).parent)
+    if isinstance(answer, str):
+        # 模型交付了非 JSON 文本：raw 保留原文，parsed 为空。
+        value = RunValue(schema_status="invalid", raw=answer, parsed=None,
+                         correction_count=correction_count)
+    else:
+        model_answer = answer if answer is not None else {
+            "marker": (Path(request.cwd) / "marker.txt").read_text().strip(),
+            "outsideRead": "denied", "insideWrite": "denied", "outsideWrite": "denied",
+            "network": "denied", "observations": "模型自述"}
+        value = RunValue(schema_status="valid", raw=canonical_json(model_answer), parsed=model_answer,
+                         correction_count=correction_count)
+    evidence_refs = ()
+    if native_receipt is not None:
+        receipt_path = private / "native-receipt.json"
+        _private_bytes(receipt_path, canonical_json(native_receipt).encode(), exclusive=True)
+        raw = receipt_path.read_bytes()
+        evidence_refs = (EvidenceRef(kind="review-thread-receipt", location=str(receipt_path),
+                                     size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()),)
+    result = RunResult(
+        identity=built_request.identity, harness=harness,
+        end=RunEnd(status="ok", native_exit_code=0),
+        model_started=True,
+        configuration=ResultConfiguration(requested=built_request.configuration, checked=CheckedConfiguration(
+            provider=CheckedValue(value=context.spec["provider"]),
+            model=CheckedValue(value=checked_model or context.spec["model"]),
+            effort=CheckedValue(value=context.spec["effort"]))),
+        native_identity=NativeIdentity(session_id="mock-session", turn_id="mock-turn"),
+        value=value,
+        tool_evidence=tool_receipt({"adapter": harness, "taskId": context.task_id,
+                                    "attemptId": context.attempt_id, "generation": context.generation},
+                                   tool_calls, native_identity={"sessionId": "mock-session"})["toolEvidence"],
+        stop_evidence=StopEvidence(native=StopLayer(group_state="gone" if shutdown else "unknown")),
+        evidence_refs=evidence_refs,
+    )
+    verdict = {"stopReason": None, "elapsedMs": elapsed_ms}
+    private_json(Path(control["verdictFile"]), verdict, exclusive=True)
+    frame = encode_run_result(result)
+    _private_bytes(Path(control["resultFile"]), frame.encode(), exclusive=True)
+    # 留存的原生 runner 日志：生产子进程的 stdout 是 RunResult 帧；本夹具把同一帧的
+    # 角色投影作为脱敏样本写进 runner 日志，收集器读取绑定指名的帧文件。
+    stdout, stderr = open_logs(context.log_paths())
+    os.close(stdout)
+    os.close(stderr)
+    projected = run_execution._review_result(decode_run_result(frame), built_request, verdict)
+    Path(context.log_paths()["stdout"]).write_text(canonical_json(projected) + "\n", encoding="utf-8")
+    # timeout：wait 永远超时；stopped=False：leader 已退出但持有组永不确认消失。
+    if timeout:
+        process = _UnreapedProcess()
+    elif not stopped:
+        process = _UnconfirmedExit()
+    else:
+        process = _GoneProcess(0)
+    handle = ProcessHandle(process, own_group=True,
+                           log_paths={**context.log_paths(), "stdout": control["resultFile"]})
+    # 进程持有者冻结的同一两份绑定（_launch 的语义）。
+    handle.role_run_control = decode_strict_json(canonical_json(control))
+    handle.role_run_identity = identity
+    # 真实句柄行为之上的记录用 spy；wait/terminate 的真实语义不变。
+    handle.wait = Mock(side_effect=handle.wait)
+    handle.terminate = Mock(side_effect=handle.terminate)
+    return handle
 
 
 class RouterProbeTests(unittest.TestCase):
@@ -44,43 +224,34 @@ class RouterProbeTests(unittest.TestCase):
         ])
 
     def mock_execute(self, *, adapter="codex", mutation=None, timeout=False, stopped=True,
-                     shutdown=True, status="ok", payload=None, start_error=None):
+                     shutdown=True, tool_calls=5, correction_count=0, checked_model=None,
+                     answer=None, start_error=None, native_receipt=None, elapsed_ms=100):
+        """旧 payload 形参逐项映射：rawAnswer→answer，usage.toolCalls→tool_calls，
+        usage.elapsedMs→verdict 的 elapsedMs，correctionCount→correction_count，
+        resolved 覆写→checked_model，native 账号/凭据/调试/嵌套 JSON→native_receipt
+        （经 evidenceRef 被原生 evidence 投影真实读取）。collect 一层从不替换；
+        仅本模块自有的收集故障注入测试直接向 collect 注入异常。"""
         native = Mock(read_only_structured=True)
-        handle = Mock(spec=ProcessHandle, cancel_requested=False, process=Mock())
-        handle.wait.return_value = None if timeout else 0
-        handle.shutdown_confirmed.return_value = stopped
-        def start(context, request):
+        self.executed = None
+
+        def start(harness, context, request):
             if start_error:
                 raise start_error
-            context.directory.mkdir(mode=0o700)
-            marker = (Path(request.cwd) / "marker.txt").read_text().strip()
-            if mutation:
-                mutation(Path(request.cwd), self.root)
-            result = {
-                "status": status, "answerValid": True,
-                "rawAnswer": {"marker": marker, "outsideRead": "denied", "insideWrite": "denied",
-                              "outsideWrite": "denied", "network": "denied", "observations": "模型自述"},
-                "nativeIdentity": {"sessionId": "mock-session", "turnId": "mock-turn"},
-                "resolved": context.spec,
-                "usage": {"toolCalls": 5, "bytesRead": None, "elapsedMs": 100},
-                "correctionCount": 0,
-                "processState": {"shutdownConfirmed": shutdown, "nativeExitCode": 0},
-            }
-            if payload:
-                result.update(payload)
-            (context.directory / "runner.stdout.log").write_text(json.dumps(result))
-            (context.directory / "runner.stderr.log").write_text("")
-            handle.log_paths = context.log_paths()
-            handle.process.returncode = 0 if status == "ok" else 1
-            return handle
-        native.registered_start.side_effect = lambda _harness, context, request: start(context, request)
+            self.executed = _freeze_review_run(
+                harness, context, request, mutation=mutation, timeout=timeout,
+                stopped=stopped, shutdown=shutdown, tool_calls=tool_calls,
+                correction_count=correction_count, checked_model=checked_model, answer=answer,
+                native_receipt=native_receipt, elapsed_ms=elapsed_ms)
+            return self.executed
+
+        native.registered_start.side_effect = start
         with patch.object(probe, "adapter_for", return_value=native), \
              patch.object(probe, "start_review", native.registered_start), \
              patch.object(probe, "start_network_control", return_value=(Mock(), {
                  'url': 'http://127.0.0.1:54321/', 'hostStatus': 200,
              })):
             report = probe.run(self.args(adapter, execute=True))
-        return report, native, handle
+        return report, native, self.executed
 
     def start_guard(self, native, adapter):
         return patch.object(probe, "start_review")
@@ -187,27 +358,28 @@ class RouterProbeTests(unittest.TestCase):
         report, native, handle = self.mock_execute(start_error=RuntimeError("do not disclose account"))
         self.assertEqual(report["status"], "failed")
         native.registered_start.assert_called_once()
-        handle.terminate.assert_not_called()
+        # 启动失败时不存在任何被持有的句柄：没有可终止的子进程，也没有可扫描的对象。
+        self.assertIsNone(handle)
         self.assertNotIn("do not disclose", (self.root / "report.json").read_text())
 
     def test_invalid_answer_and_wrong_marker_fail(self):
         for raw in ("invalid json", {"marker": "wrong", "outsideRead": "denied", "insideWrite": "denied",
                                      "outsideWrite": "denied", "network": "denied", "observations": ""}):
             self.root = Path(self.temporary.name) / ("case-" + str(len(str(raw))))
-            report, _, _ = self.mock_execute(payload={"rawAnswer": raw})
+            report, _, _ = self.mock_execute(answer=raw)
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["checks"]["internalRead"]["status"], "failed")
 
     def test_observed_budget_overrun_fails(self):
-        report, _, _ = self.mock_execute(payload={"usage": {"toolCalls": 9, "bytesRead": None, "elapsedMs": 61000}})
+        report, _, _ = self.mock_execute(tool_calls=9, elapsed_ms=61000)
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["checks"]["budgetConsistent"]["status"], "failed")
 
     def test_more_than_two_codex_turns_or_identity_mismatch_fails(self):
-        report, _, _ = self.mock_execute(payload={"correctionCount": 2})
+        report, _, _ = self.mock_execute(correction_count=2)
         self.assertEqual(report["checks"]["budgetConsistent"]["status"], "failed")
         self.root = Path(self.temporary.name) / "identity"
-        report, _, _ = self.mock_execute(payload={"resolved": {"model": "wrong"}})
+        report, _, _ = self.mock_execute(checked_model="wrong")
         self.assertEqual(report["checks"]["requestIdentity"]["status"], "failed")
 
     def test_interrupt_during_collection_stops_owned_group(self):
@@ -227,14 +399,14 @@ class RouterProbeTests(unittest.TestCase):
         self.assertNotIn("private-account", log.read_text())
 
     def test_model_denial_claim_is_unverified_and_success_claim_fails(self):
-        report, _, _ = self.mock_execute(payload={"rawAnswer": {
+        report, _, _ = self.mock_execute(answer={
             "marker": None, "outsideRead": "succeeded", "insideWrite": "denied",
-            "outsideWrite": "denied", "network": "denied", "observations": ""}})
+            "outsideWrite": "denied", "network": "denied", "observations": ""})
         self.assertEqual(report["checks"]["boundaryDenials"]["status"], "failed")
 
     def test_redacts_report_and_retained_native_logs(self):
         with patch.dict(os.environ, {"TEST_API_KEY": "super-private-credential-value"}):
-            report, _, _ = self.mock_execute(payload={
+            report, _, _ = self.mock_execute(native_receipt={
                 "account": {"email": "person@example.com", "token": "unseen-secret"},
                 "credential": "unknown-credential",
                 "debug": 'Authorization: Bearer super-private-credential-value',
@@ -246,7 +418,7 @@ class RouterProbeTests(unittest.TestCase):
                            "unknown-key", "unknown-account", "unknown-credential"):
                 self.assertNotIn(secret, raw)
             self.assertIn("[REDACTED]", raw)
-        self.assertEqual(report["result"]["result"]["account"], "[REDACTED]")
+        self.assertEqual(report["result"]["result"]["nativePolicy"]["account"], "[REDACTED]")
 
     def test_presets_follow_router_contract_and_root_cannot_be_reused(self):
         for preset, expected in (("standard", (300, 24, 524288)), ("deep", (600, 64, 2097152))):

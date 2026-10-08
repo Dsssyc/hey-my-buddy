@@ -38,8 +38,8 @@ else in this package: the process-free service binding (:func:`prepare_services`
 and its mount), the no-spawn preparation check (:func:`check_preparation`), the
 turn provenance validator and the storage facts (:func:`validate_turn_provenance`,
 :func:`session_facts`), the fast channel's native evidence projection
-(:func:`native_evidence`), and the registered live binding
-(:func:`bind_live_channel`) over the shared cooperative inquiry bridge. Host
+(:func:`native_evidence`), and the controller-supplied live endpoint over
+the shared cooperative inquiry bridge. Host
 questions are only ever queued by the bridge and delivered at the root's own
 checkpoint tool call inside the admitted turn; the journal advances only after
 this driver verified the signed root-turn receipt. Native resume stays unwired:
@@ -51,7 +51,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import math
 import os
 import queue
 import re
@@ -59,7 +58,6 @@ import secrets
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
@@ -68,8 +66,19 @@ from ....private_dirs import ensure_private_dir, open_regular_fd
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
 from ..base import BoundSessionServices
-from ..inquiry_bridge import InquiryBridge, bind_live_channel as bind_checkpoint_channel
+from ..native_support import (
+    CancelFlag,
+    ObserverInterrupt,
+    execution_deadline,
+    identity_or_none,
+    shape_guard,
+    utc_now,
+)
+from ..inquiry_bridge import InquiryBridge
+from ..c_two_live import CTwoLiveEndpoint
+from ....protocol.activity import ActivityPublisher
 from ..run_contract import (
+    ActivityPackage,
     MAX_SCHEMA_BYTES,
     MAX_UNKNOWN_EVENT_TYPES,
     CheckedConfiguration,
@@ -80,13 +89,11 @@ from ..run_contract import (
     InterruptEvidence,
     LastAssistantMessagePackage,
     NativeFailurePackage,
-    NativeIdentity,
     PolicyFact,
     ResultConfiguration,
     RunConfiguration,
     RunEnd,
     RunFeedback,
-    RunIdentity,
     RunRequest,
     RunResult,
     SessionService,
@@ -177,15 +184,6 @@ _ABANDON_SECONDS = 5.0
 
 _END_REASONS = {"end_turn": None, "max_tokens": "native-max-tokens",
                 "max_turn_requests": "native-max-turn-requests", "refusal": "native-refusal"}
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def execution_deadline(timeout_seconds) -> float:
-    """The one overall native execution deadline; an explicit 0 means unlimited."""
-    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
 def tool_scope_launch(scope: str) -> tuple[list[dict], dict[str, str]]:
@@ -318,7 +316,7 @@ class SessionServices:
 
     The driver sees only this narrow binding: the mechanical mount, the role's
     outcome validator for finish-receipt verification, the optional inquiry
-    channel credentials and the activity sidecar directory. No board client,
+    channel credentials and the controller-owned live endpoint. No board client,
     database handle, execution context or credential file travels in it.
     ``native_stderr`` is the role's own path for the child's captured stderr
     tail; the ACP wrapper owns the capture, and the governed driver mirrors its
@@ -328,7 +326,7 @@ class SessionServices:
     mount: SessionServiceMount
     validate_outcome: Callable[[object], str | None]
     inquiry: dict | None = None
-    activity_dir: str | None = None
+    live: CTwoLiveEndpoint | None = None
     native_stderr: str | None = None
 
 
@@ -388,13 +386,12 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
                      attention_path: Path, session_tools, completion_tool: str,
                      validate_outcome,
                      inquiry: dict | None, inquiry_tools: tuple[str, ...],
-                     activity_dir: str, native_stderr: str) -> BoundSessionServices:
+                     native_stderr: str) -> BoundSessionServices:
     """Expose only the binding the role actually consumes, without a process.
 
-    The parameters are exactly the shared role controller's call
-    (:func:`hey_my_buddy.buddy.roles.run_execution.worker_request`).
-    ``native_stderr`` is accepted for that seam and consumed as the governed
-    stderr-tail mirror; DSH needs no other adaptation.
+    The role supplies the mechanical mount and outcome validator.
+    ``native_stderr`` is consumed as the governed stderr-tail mirror; the
+    controller injects its optional live endpoint after preparation.
     """
     mount = prepare_session_service(
         invocation_root=invocation_root, identity=identity, input_sha256=input_sha256,
@@ -407,7 +404,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
         completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
         answer_tool=mount.answer_tool,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome,
-                                 inquiry=inquiry, activity_dir=activity_dir,
+                                 inquiry=inquiry,
                                  native_stderr=native_stderr))
 
 
@@ -442,22 +439,13 @@ def _inquiry_event_metadata(message: dict) -> dict:
     return {"kind": kind if isinstance(kind, str) and kind else "event", "toolName": tool_name}
 
 
-def make_inquiry_bridge(credentials: dict, *, identity: dict, journal_path: str,
-                        attention_path: str | None = None) -> InquiryBridge:
+def make_inquiry_bridge(*, identity: dict, journal_path: str,
+                        attention_path: str | None = None,
+                        live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     """The shared cooperative bridge over this harness's own native error shape."""
-    return InquiryBridge(credentials, identity=identity, journal_path=journal_path,
-                         attention_path=attention_path, error_factory=NativeError,
+    return InquiryBridge(identity=identity, journal_path=journal_path,
+                         attention_path=attention_path, live=live, error_factory=NativeError,
                          event_metadata=_inquiry_event_metadata, limitation=CHECKPOINT_INQUIRY_NOTE)
-
-
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path):
-    """The registered live seam: the shared existing-facilities binding under DSH's
-    declared capability. Step five replaces the transport behind this one seam."""
-    from ..live import EXISTING_CAPABILITIES
-    return bind_checkpoint_channel(identity, credentials=credentials, journal_path=journal_path,
-                                   activity_path=activity_path,
-                                   capabilities=EXISTING_CAPABILITIES["dsh"])
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -574,17 +562,6 @@ def _check_service_descriptions(request: RunRequest, mount: SessionServiceMount)
 
 
 # -- the run state and the spawn stage --------------------------------------------
-
-
-class _CancelFlag:
-    """A ``threading.Event`` view of the seam's cancel callable."""
-
-    def __init__(self, cancelled: Callable[[], bool]):
-        self._cancelled = cancelled
-        self._event = threading.Event()
-
-    def is_set(self) -> bool:
-        return self._event.is_set() or bool(self._cancelled())
 
 
 @dataclasses.dataclass
@@ -799,10 +776,6 @@ class _RunFacts:
         }
 
 
-class _ObserverInterrupt(Exception):
-    """The role observer asked the driver to stop the native run."""
-
-
 class _Pump:
     """The one bounded queue between the ACP reader thread and the run loop.
 
@@ -858,7 +831,7 @@ class _AttentionPolicy:
 
     def decide(self, params):
         outcome, basis = self._policy.decide(params)
-        record = {"ts": _now(), "outcome": outcome.get("outcome"), "basis": basis[:400]}
+        record = {"ts": utc_now(), "outcome": outcome.get("outcome"), "basis": basis[:400]}
         if self._inquiry_bridge is not None:
             self._inquiry_bridge.note_attention(record)
             return outcome, basis
@@ -1195,7 +1168,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     if governed:
         _check_service_descriptions(request, services.mount)
     deadline = execution_deadline(request.budget.timeout_seconds)
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     dsh_home = ensure_private_dir(native_root / "dsh-home")
@@ -1211,12 +1184,12 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     inquiry_bridge: InquiryBridge | None = None
     if governed and services.inquiry is not None:
         inquiry_bridge = make_inquiry_bridge(
-            services.inquiry, identity={"taskId": request.identity.task_id,
+            identity={"taskId": request.identity.task_id,
                                         "attemptId": request.identity.attempt_id,
                                         "generation": request.identity.generation,
                                         "turnId": request.identity.turn_id},
             journal_path=str(services.inquiry.get("resultsPath") or ""),
-            attention_path=services.mount.bridge.get("attentionPath"))
+            attention_path=services.mount.bridge.get("attentionPath"), live=services.live)
         inquiry_bridge.start()
     client: AcpClient | None = None
     sessions: list[str] = []
@@ -1241,7 +1214,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         if feedback.action == "correct" and not settled:
             raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
         if feedback.action == "stop":
-            raise _ObserverInterrupt()
+            raise ObserverInterrupt()
         return feedback
 
     def fold(message: object) -> bool:
@@ -1298,7 +1271,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 state=state, facts=facts, tools=tools, activity=activity, sessions=sessions,
                 fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel)
             state.status = "ok"
-    except _ObserverInterrupt:
+    except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
         state.observer_stopped = True
@@ -1324,7 +1297,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
     record = session_record_facts(dsh_home, sessions) if sessions else None
-    return _build_result(request, state=state, tools=tools, client=client,
+    return _build_result(request, state=state, tools=tools, activity=activity, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
                          correction_count=correction_count, drained=drained,
                          invocation_root=invocation_root, record=record,
@@ -1355,7 +1328,7 @@ def _open_session(*, client: AcpClient, request: RunRequest, servers: list,
 
 
 def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, input_text: str,
-                        deadline: float, cancel: _CancelFlag, state: _RunState,
+                        deadline: float, cancel: CancelFlag, state: _RunState,
                         fold, notify, activity: DshActivity, denied: Callable[[], int],
                         send_cancel) -> dict:
     """The one prompt/observe site: send once, fold updates, honor stop feedback.
@@ -1443,7 +1416,7 @@ def _close_session(client: AcpClient, session_id: str) -> None:
 
 
 def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest,
-                          deadline: float, cancel: _CancelFlag, state: _RunState,
+                          deadline: float, cancel: CancelFlag, state: _RunState,
                           facts: _RunFacts, tools: DshToolFacts, activity: DshActivity,
                           sessions: list, fold, notify, denied, send_cancel) -> tuple[str | None, int]:
     """The final-message carrier: one fresh root session per executed correction.
@@ -1505,7 +1478,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
 
 
 def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
-                    services: SessionServices, deadline: float, cancel: _CancelFlag,
+                    services: SessionServices, deadline: float, cancel: CancelFlag,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
                     sessions: list, evidence: RootTurnEvidence,
                     inquiry_bridge: InquiryBridge | None, fold, notify,
@@ -1529,13 +1502,13 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         inquiry_bridge.activate(session_id)
     state.configured = True
     state.checked = _configure(client, session_id, snapshot, request.configuration)
-    sidecar = _activity_sidecar(request, services)
+    publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def governed_fold(message: object) -> bool:
         changed = fold(message)
-        if sidecar is not None and changed:
+        if changed:
             try:
-                sidecar.publish(activity.payload())
+                publisher.publish(activity.payload())
             except BoardError:
                 pass  # metadata must never fail the native turn
         return changed
@@ -1557,11 +1530,10 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         # or finished agent is never woken for an inquiry.
         inquiry_bridge.close()
     activity.phase = "finishing"
-    if sidecar is not None:
-        try:
-            sidecar.publish(activity.payload())
-        except BoardError:
-            pass
+    try:
+        publisher.publish(activity.payload())
+    except BoardError:
+        pass
     _close_session(client, session_id)
     # The close was acknowledged: the accepted finish's ordered native evidence
     # is complete and is retained for the role's turn record.
@@ -1569,22 +1541,11 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                                            event_count=state.event_count)
 
 
-def _activity_sidecar(request: RunRequest, services: SessionServices):
-    """The shared throttling sidecar when this run carries an activity directory."""
-    if not services.activity_dir:
-        return None
-    from ....protocol.activity import ActivitySidecar
-    directory = ensure_private_dir(Path(services.activity_dir))
-    return ActivitySidecar(directory, task_id=request.identity.task_id,
-                           attempt_id=request.identity.attempt_id,
-                           generation=request.identity.generation)
-
-
 # -- collection, stop facts and the result -------------------------------------------
 
 
 def _collect(*, client: AcpClient | None, pump: _Pump | None, state: _RunState,
-             tools: DshToolFacts, sessions: list, deadline: float, cancel: _CancelFlag,
+             tools: DshToolFacts, sessions: list, deadline: float, cancel: CancelFlag,
              fold, notify) -> bool | None:
     """Stop the owned group and read every late frame; unknown stays unknown.
 
@@ -1647,7 +1608,7 @@ def _drain_late(pump: _Pump | None, state: _RunState, fold, notify) -> bool:
         if changed and not role_stopped:
             try:
                 notify()
-            except _ObserverInterrupt:
+            except ObserverInterrupt:
                 complete = False
                 role_stopped = True
                 state.observer_stopped = True
@@ -1661,37 +1622,16 @@ def _drain_late(pump: _Pump | None, state: _RunState, fold, notify) -> bool:
     return complete
 
 
-def _identity_or_none(fields: dict) -> Any:
-    try:
-        return NativeIdentity(**fields)
-    except BoardError:
-        return None
-
-
-def _guard(shape: Any) -> Callable[[Any], Any]:
-    """One package field's own canonical-shape guard: a refused package is dropped alone."""
-    from pydantic import TypeAdapter
-    adapter = TypeAdapter(shape)
-
-    def check(value: Any) -> Any:
-        if value is None:
-            return None
-        try:
-            return adapter.validate_python(value)
-        except BoardError:
-            return None
-    return check
-
-
-_json_package = _guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
-_dsh_tool_package = _guard(ToolEvidencePackage)
-_usage_package = _guard(UsagePackage)
-_quota_package = _guard(NativeFailurePackage)
-_message_package = _guard(LastAssistantMessagePackage)
+_json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
+_dsh_tool_package = shape_guard(ToolEvidencePackage)
+_usage_package = shape_guard(UsagePackage)
+_quota_package = shape_guard(NativeFailurePackage)
+_message_package = shape_guard(LastAssistantMessagePackage)
+_activity_package = shape_guard(ActivityPackage)
 
 
 def _build_result(request: RunRequest, *, state: _RunState,
-                  tools: DshToolFacts, client: AcpClient | None, sessions: list,
+                  tools: DshToolFacts, activity: DshActivity, client: AcpClient | None, sessions: list,
                   evidence: RootTurnEvidence | None, raw_answer: str | None,
                   correction_count: int, drained: bool | None,
                   invocation_root: Path, record: dict | None = None,
@@ -1702,7 +1642,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     identity_fields: dict = {}
     if session_id:
         identity_fields["session_id"] = session_id
-    native_identity = _identity_or_none(identity_fields) if identity_fields else None
+    native_identity = identity_or_none(identity_fields) if identity_fields else None
     if state.status == "ok" and sessions and not stop.get("shutdown"):
         state.status = "error"
         state.reason = "native-shutdown-failed"
@@ -1773,6 +1713,8 @@ def _build_result(request: RunRequest, *, state: _RunState,
         last_assistant_message=(_message_package({"text": record["lastAssistant"],
                                                   "sourceId": record.get("lastAssistantSourceId")})
                                 if record and record.get("lastAssistant") else None),
+        activity=(_activity_package(activity.payload())
+                  if state.event_count or activity.counts["modelTurns"] else None),
         continuation=None,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),
         evidence_refs=_evidence_refs(client, invocation_root, state,
@@ -1848,7 +1790,7 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
         # The refused upgrade reached the agent but its attention record could
         # not be written: the fact is retained so the run never loses it.
         retain("attention-record", "attention-record.json",
-               {"error": state.attention_error, "ts": _now()})
+               {"error": state.attention_error, "ts": utc_now()})
 
     denied = connection_facts.get("deniedInteractions") or []
     decisions = connection_facts.get("permissionDecisions") or []
@@ -2015,7 +1957,7 @@ def _catalog(options: list, version: str) -> dict:
             model["efforts"] = list(efforts)
     return {
         "source": "dsh-acp-session-config", "adapter": "dsh", "harnessVersion": version,
-        "discoveredAt": _now(), "providers": list(providers.values()),
+        "discoveredAt": utc_now(), "providers": list(providers.values()),
         "discoveries": [{"adapter": "dsh", "status": "complete", "accountStatus": "not-applicable"}],
         "warnings": [
             "The no-prompt ACP surface exposes the declared model and effort selectors only; "
@@ -2031,7 +1973,7 @@ def _catalog(options: list, version: str) -> dict:
 
 __all__ = [
     "CHECKPOINT_INQUIRY_NOTE", "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
-    "bind_live_channel", "check_preparation", "execution_deadline", "make_inquiry_bridge",
+    "check_preparation", "execution_deadline", "make_inquiry_bridge",
     "native_evidence", "prepare_services", "prepare_session_service", "run", "run_discovery",
     "session_facts", "session_record_facts", "tool_scope_launch", "validate_turn_provenance",
 ]

@@ -30,16 +30,9 @@ them before any process starts. Model discovery (:func:`run_discovery`) is a
 separate initialize-only operation that reuses the same spawn and stop
 primitives and never sends a user message.
 
-3-B2 wiring: this module is also the registered seam's role surface. The
-shared role executor consumes :func:`check_preparation` before any spawn,
-:func:`prepare_run_services` for the one narrow path binding this harness
-actually uses (the activity sidecar directory — never the role control file,
-the worker input or a blackboard credential), :func:`session_facts` and
-:func:`validate_turn_provenance` on collection, and :func:`bind_live_channel`
-for the existing activity-reading live channel. ``services`` therefore accepts
-exactly that binding or ``None`` (a direct native module call); anything else
-is still refused. The legacy ``runner.py`` controller and its execution
-entries are gone; there is no second native path.
+The registered role surface carries preparation and native facts. The controller
+owns the common C-Two endpoint and injects it into RunServices; direct module
+fixtures can pass None and still collect the native final activity.
 """
 from __future__ import annotations
 
@@ -58,10 +51,18 @@ from typing import Any, Callable, Mapping
 from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
-from ....protocol.activity import ActivitySidecar
+from ....protocol.activity import ActivityPublisher
+from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
 from ..base import ProcessHandle
+from ..native_support import (
+    CancelFlag,
+    ObserverInterrupt,
+    execution_deadline,
+    identity_or_none,
+    utc_now,
+)
 from ...runtime.windows_process import owned_popen
 from ..run_contract import (
     CheckedConfiguration,
@@ -71,7 +72,6 @@ from ..run_contract import (
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
-    NativeIdentity,
     PolicyFact,
     ResultConfiguration,
     RunConfiguration,
@@ -109,7 +109,6 @@ from .protocol import (
     result_quota_denial,
     total_cost_usd,
 )
-from ..live import EXISTING_CAPABILITIES, ExistingLiveChannel
 from .tool_evidence import ReadOnlyToolEvidence
 
 _SETTINGS_FILE = "settings.json"
@@ -125,10 +124,6 @@ _DRAIN_SECONDS = 10.0
 #: does not declare; declaring one commits the module to reading that field,
 #: never to inferring the policy from the tool scope or the caller's role.
 supported_request_controls = ("network_allowed_domains", "additional_denied_tools")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, dict]:
@@ -210,42 +205,6 @@ def _latest_rejected(rate_limits: dict) -> tuple[str, object]:
         if rate_limits[rate_limit_type].get("status") == "rejected":
             return rate_limit_type, rate_limits[rate_limit_type].get("resetsAt")
     return "unknown", None
-
-
-def execution_deadline(timeout_seconds) -> float:
-    """The one overall native execution deadline; an explicit 0 means unlimited.
-
-    Only this deadline becomes infinite. The version probe and the per-request,
-    cancel and shutdown waits keep their own finite bounds, and the ``cancelled``
-    event still ends an unlimited turn.
-    """
-    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
-
-
-class _ObserverInterrupt(Exception):
-    """The role observer's stop; the driver interrupts the native run at once."""
-
-
-class _CancelFlag:
-    """A ``threading.Event`` view of the seam's cancel callable."""
-
-    def __init__(self, cancelled: Callable[[], bool]):
-        self._cancelled = cancelled
-        self._event = threading.Event()
-
-    def is_set(self) -> bool:
-        return self._event.is_set() or bool(self._cancelled())
-
-    def set(self) -> None:
-        self._event.set()
-
-    def wait(self, timeout: float) -> None:
-        deadline = time.monotonic() + max(0.0, timeout)
-        while not self.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(0.05, remaining))
 
 
 @dataclasses.dataclass
@@ -376,7 +335,7 @@ def _probe_version(command: list[str], cwd: str, environment: dict) -> str:
 
 
 def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment: dict,
-                  invocation_root: Path, deadline: float, cancel: _CancelFlag,
+                  invocation_root: Path, deadline: float, cancel: CancelFlag,
                   owned: list | None = None) -> _Spawn:
     """Spawn the one owned native CLI and connect its stdio protocol."""
     version = _probe_version(command, cwd, environment)
@@ -457,10 +416,10 @@ class _TurnCollector:
     pre-user model output at replay, keeping its projected facts.
     """
 
-    def __init__(self, request: RunRequest, sidecar: ActivitySidecar,
+    def __init__(self, request: RunRequest, publisher: ActivityPublisher,
                  observer: Callable[[Mapping[str, Any]], RunFeedback],
                  native_schema_delivery: bool = False):
-        self._sidecar = sidecar
+        self._publisher = publisher
         self._observer = observer
         self.tools = ReadOnlyToolEvidence({"adapter": "claude", "taskId": request.identity.task_id,
                                            "attemptId": request.identity.attempt_id,
@@ -546,7 +505,7 @@ class _TurnCollector:
     def publish_activity(self, phase: str, tool: str | None = None) -> None:
         if self.evidence is None:
             return
-        now = _now()
+        now = utc_now()
         payload = {"phase": phase, "observedAt": now, "eventSeq": self.evidence.event_seq,
                    "nativeSessionId": self.evidence.session_id, "lastNativeActivityAt": now,
                    "counts": {"modelTurns": self.evidence.model_messages,
@@ -556,10 +515,10 @@ class _TurnCollector:
             payload["toolName"] = tool[:80]
         self.last_activity = payload
         try:
-            self._sidecar.publish(payload)
+            self._publisher.publish(payload)
         except BoardError:
             # Metadata must never fail the native turn; the last payload stays
-            # the run's own activity fact instead of a look-alike file.
+            # the run's own activity fact even when live publication is refused.
             return
 
     def settled_notify(self, native_result: dict) -> None:
@@ -588,7 +547,7 @@ class _TurnCollector:
             raise BoardError("INVALID_ARGUMENT",
                              "claude takes no in-run correction; the native -p turn ends at its result")
         if feedback.action == "stop":
-            raise _ObserverInterrupt()
+            raise ObserverInterrupt()
 
 
 # -- phase 4: the shared send/wait/drain settlement ------------------------------
@@ -670,13 +629,6 @@ def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
 
 
 # -- phase 6: the factual result -------------------------------------------------
-
-
-def _identity_or_none(fields: dict) -> NativeIdentity | None:
-    try:
-        return NativeIdentity(**fields)
-    except BoardError:
-        return None
 
 
 def _usable(converter: Callable[[dict], Any], value: dict | None) -> dict | None:
@@ -825,7 +777,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     # the stream reported stays in the fact packages (the tool roots below),
     # never masquerading as this run's root.
     session_confirmed = evidence is not None and evidence.init_observed
-    native_identity = _identity_or_none({"session_id": session_id}) if session_confirmed and session_id else None
+    native_identity = identity_or_none({"session_id": session_id}) if session_confirmed and session_id else None
     stream_ended = state.drained is True
     # The delivery identification froze at settlement, before the role's
     # settled facts: this run's schema command line armed the collector, the
@@ -956,9 +908,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native Claude Code execution: the single native path of this harness."""
     if request.harness != "claude":
         raise BoardError("INVALID_ARGUMENT", "this run module drives claude", harness=request.harness)
-    if services is not None and not isinstance(services, BoundRunPaths):
+    if services is not None and not isinstance(services, RunServices):
         # No in-run session service exists on this harness; the one accepted
-        # binding is this module's own narrow activity-path binding, and a
+        # binding is this module's own controller endpoint binding, and a
         # direct native module call may pass None.
         raise BoardError("INVALID_ARGUMENT", "claude mounts no in-run session service")
     if request.session_services:
@@ -970,7 +922,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     preparation: _Preparation | None = None
     collector: _TurnCollector | None = None
     native_result: dict | None = None
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
 
     def request_interrupt() -> None:
         # A fresh short control budget permits a native interrupt after the
@@ -986,15 +938,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
     try:
         preparation = _prepare(request)
-        # The activity sidecar belongs to the attempt's real activity directory
-        # when the role bound one; a direct native module call without the
-        # binding keeps the invocation root, never inventing a second location.
-        activity_directory = Path(services.activity_dir) if services is not None else preparation.invocation_root
+        live = services.live if services is not None else None
         collector = _TurnCollector(
             request,
-            ActivitySidecar(activity_directory, task_id=request.identity.task_id,
-                            attempt_id=request.identity.attempt_id,
-                            generation=request.identity.generation),
+            ActivityPublisher(live.publish_activity if live else None),
             observer,
             # The delivery identification is armed by this run's own command
             # line carrying the native schema, never by the caller's role or
@@ -1022,7 +969,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.verified_delivery = collector.tools.settle_delivery(
             native_result.get("structured_output"), {"sessionId": preparation.session_id})
         collector.settled_notify(native_result)
-    except _ObserverInterrupt:
+    except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
         request_interrupt()
@@ -1033,7 +980,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.error_text = QUOTA_REJECTED_ERROR
         state.quota_failure = {"nativeCode": error.rate_limit_type,
                                "source": "claude/stream-json-rate-limit-event",
-                               "observedAt": _now(), "resetsAt": error.resets_at}
+                               "observedAt": utc_now(), "resetsAt": error.resets_at}
         request_interrupt()
     except ClaudeProtocolError as error:
         state.status = "cancelled" if error.code == "user-cancel" else "error"
@@ -1102,7 +1049,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     is confirmed stopped with a zero exit.
     """
     deadline = execution_deadline(timeout_seconds)
-    cancel = _CancelFlag(cancelled)
+    cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(invocation_root))
     ensure_private_dir(Path(native_root))
     incoming = dict(os.environ)
@@ -1153,28 +1100,15 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
 
 @dataclasses.dataclass(frozen=True)
-class BoundRunPaths:
-    """The one narrow binding a claude run consumes: where its activity sidecar goes.
+class RunServices:
+    """The controller-owned endpoint, optional for direct native fixtures."""
 
-    The role hands exactly the attempt's activity directory; the whole control
-    file, the worker input and every blackboard credential stay outside this
-    binding, and the run reads nothing else from it.
-    """
-
-    activity_dir: Path
+    live: CTwoLiveEndpoint | None = None
 
 
-def prepare_run_services(*, invocation_root: Path, native_root: Path, activity_dir: Path,
-                         account: dict | None, tool_scope: str) -> BoundRunPaths:
-    """Bind the paths one claude run actually uses; no process, no authority.
-
-    The shared worker/fast/review binding point passes every harness the same
-    narrow materials. This harness consumes only ``activity_dir`` — the frozen
-    account already reached the launch environment through the role's own
-    account seam, and the tool scope already reached the request — so the
-    remaining parameters are accepted and left unused, never re-derived.
-    """
-    return BoundRunPaths(activity_dir=Path(activity_dir))
+def prepare_run_services() -> RunServices:
+    """Create the binding; the controller injects its own live endpoint."""
+    return RunServices()
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -1265,28 +1199,5 @@ def validate_turn_provenance(record: dict) -> str | None:
     return "the Claude P1 session identity is invalid; native-session resume is not supported"
 
 
-def bind_live_channel(identity: RunIdentity, *, credentials: dict, journal_path: str | None,
-                      activity_path: Path) -> ExistingLiveChannel:
-    """The existing-facilities live binding of one governed claude run.
-
-    The one wired facility is activity: the channel reads the attempt's own
-    published sidecar, validated against the complete execution identity. This
-    harness delivers no inquiry — the declared capability is ``unsupported`` —
-    so no ask, journal or bridge observation is bound, and the narrow
-    materials the shared binding receives are left unused rather than routed
-    into a bypass.
-    """
-    def read_activity():
-        # The existing attempt-bound sidecar reader — validation, binding and
-        # throttling belong to it; a foreign attempt's file reads as nothing.
-        from ....protocol import activity as activity_protocol
-        return activity_protocol.read_sidecar(Path(activity_path),
-                                               task_id=identity.task_id,
-                                               attempt_id=identity.attempt_id,
-                                               generation=identity.generation)
-
-    return ExistingLiveChannel(identity, EXISTING_CAPABILITIES["claude"], read_activity=read_activity)
-
-
-__all__ = ["BoundRunPaths", "bind_live_channel", "check_preparation", "prepare_run_services",
+__all__ = ["RunServices", "check_preparation", "prepare_run_services",
            "run", "run_discovery", "session_facts", "validate_turn_provenance"]

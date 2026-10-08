@@ -1,37 +1,15 @@
-"""Bounded native-activity projection shared by adapters, Workers and the board.
-
-A native controller (DSH, ZCode, Codex, ...) observes its own phases, tool calls and
-waiting reasons. It publishes them through this module: one attempt-private
-``activity.json`` sidecar, updated atomically and throttled, which the Worker that
-owns the attempt forwards with ``worker_progress``. Nothing here is a scheduler and
-nothing here is a second source of truth — the service keeps only the latest bounded
-projection per attempt.
-
-The payload is a whitelist, never free text: phases come from a fixed set, counters
-are nonnegative integers, strings have explicit bounds, and unknown keys are
-rejected. Prompts, tool arguments, output text, credentials and hidden reasoning are
-never part of an activity, and a heartbeat is never fabricated into one.
-"""
+"""Bounded native activity facts, monotonicity and live publication coalescing."""
 from __future__ import annotations
 
 import json
-import os
+
 import re
-import stat
 import time
-import uuid
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, Callable
 
-from ..blackboard.store.db import utc_now
 from ..errors import BoardError
-
-#: The sidecar document version. A reader accepts exactly this version; there is no
-#: compatibility branch for older documents.
-ACTIVITY_VERSION = 1
-SIDECAR_FILE = "activity.json"
 
 #: The only phases a caller may report. ``unknown`` is an honest observed state, not
 #: permission to invent a percentage or an ETA.
@@ -67,16 +45,11 @@ MAX_TOOL_NAME = 64
 MAX_WAITING_REASON = 256
 MAX_EVENT_SEQ = 2**53 - 1
 MAX_COUNT = 2**31 - 1
-MAX_SIDECAR_BYTES = 16 * 1024
-
-#: The complete sidecar document: the version, the attempt binding and the payload.
-SIDECAR_FIELDS = frozenset({"version", "taskId", "attemptId", "generation", "updatedAt", "activity"})
 
 #: An ISO-8601 date-time prefix. The exact precision stays the controller's choice.
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?P<fraction>\d+))?(?:Z|[+-]\d{2}:\d{2})$")
 
-#: How often a controller may rewrite the sidecar without a phase change. Repeated
-#: token-level progress is coalesced into one durable observation.
+#: Same-phase token observations are coalesced within this publication window.
 DEFAULT_MIN_INTERVAL_SECONDS = 2.0
 
 
@@ -211,161 +184,54 @@ def is_newer(candidate: dict, previous: dict | None) -> bool:
     return recency(candidate) > recency(previous)
 
 
-def sidecar_path(directory: str | Path) -> Path:
-    """The attempt-private sidecar path; it is never part of a public response."""
-    return Path(directory) / SIDECAR_FILE
 
 
-def validate_sidecar(value: Any, *, task_id: str, attempt_id: str, generation: int) -> dict:
-    """Validate one sidecar document against its attempt binding.
-
-    Any version, binding or payload mismatch is an error: a sidecar from another
-    attempt, generation or task may never be forwarded as this attempt's activity.
-    """
-    if not isinstance(value, dict):
-        raise _invalid("an activity sidecar must be a JSON object")
-    unknown = sorted(set(value) - SIDECAR_FIELDS)
-    if unknown:
-        raise _invalid(f"Unknown activity sidecar field: {unknown[0]}", field=unknown[0])
-    if type(value.get("version")) is not int or value["version"] != ACTIVITY_VERSION:
-        raise _invalid("the activity sidecar version is not current", version=value.get("version"))
-    if value.get("taskId") != task_id or value.get("attemptId") != attempt_id:
-        raise _invalid("the activity sidecar belongs to a different task or attempt")
-    if type(generation) is not int or type(value.get("generation")) is not int or value["generation"] != generation:
-        raise _invalid("the activity sidecar belongs to a different attempt generation")
-    return normalize_activity(value.get("activity"))
 
 
-def read_sidecar(
-    path: str | Path,
-    *,
-    task_id: str,
-    attempt_id: str,
-    generation: int,
-) -> dict | None:
-    """Read one sidecar, returning ``None`` for anything unreadable or unbound.
-
-    A caller forwarding activity treats every failure the same way: nothing is
-    published, and an absent, malformed or foreign sidecar never becomes an event.
-    """
-    if not hasattr(os, "O_NOFOLLOW"):
-        return None
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
-        try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_SIDECAR_BYTES:
-                return None
-            raw = os.read(descriptor, MAX_SIDECAR_BYTES + 1)
-            if len(raw) > MAX_SIDECAR_BYTES:
-                return None
-        finally:
-            os.close(descriptor)
-        value = json.loads(raw)
-    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
-        return None
-    try:
-        return validate_sidecar(value, task_id=task_id, attempt_id=attempt_id, generation=generation)
-    except (BoardError, RecursionError):
-        return None
 
 
-def write_json_atomic(path: str | Path, value: dict) -> Path:
-    """Durably replace one small JSON file: temp + fsync + rename + fsync parent."""
-    path = Path(path)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream, ensure_ascii=False, allow_nan=False, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    os.replace(temporary, path)
-    directory_fd = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
-    return path
 
 
-class ActivitySidecar:
-    """Atomic, throttled, attempt-bound writer for one native controller.
+class ActivityPublisher:
+    """Normalize and coalesce actual observations before the live owner receives them."""
 
-    The controller owns the file; the Worker only reads it. A write happens when the
-    phase changes or when the throttle window has elapsed, and an identical or older
-    receipt is never rewritten, so token-level progress cannot flood the file.
-    """
-
-    def __init__(
-        self,
-        directory: str | Path,
-        *,
-        task_id: str,
-        attempt_id: str,
-        generation: int,
-        min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
-    ):
-        self.path = sidecar_path(directory)
-        self.task_id = task_id
-        self.attempt_id = attempt_id
-        self.generation = int(generation)
+    def __init__(self, publish: Callable[[dict], bool] | None, *,
+                 min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
+                 clock: Callable[[], float] = time.monotonic):
+        self._publish = publish
         self.min_interval_seconds = max(0.0, float(min_interval_seconds))
         self._clock = clock
         self._last: dict | None = None
         self._written_at: float | None = None
 
-    def publish(self, activity: dict) -> Path | None:
-        """Publish one receipt, returning the written path or ``None`` when coalesced."""
+    def publish(self, activity: dict) -> bool:
         payload = normalize_activity(activity)
         if not is_newer(payload, self._last):
-            return None
+            return False
         now = self._clock()
         phase_changed = self._last is None or payload["phase"] != self._last.get("phase")
-        if not phase_changed and self._written_at is not None:
-            if now - self._written_at < self.min_interval_seconds:
-                return None
-        document = {
-            "version": ACTIVITY_VERSION,
-            "taskId": self.task_id,
-            "attemptId": self.attempt_id,
-            "generation": self.generation,
-            "updatedAt": utc_now(),
-            "activity": payload,
-        }
-        write_json_atomic(self.path, document)
+        if not phase_changed and self._written_at is not None and now - self._written_at < self.min_interval_seconds:
+            return False
+        if self._publish is not None and not self._publish(payload):
+            return False
         self._last = payload
         self._written_at = now
-        return self.path
+        return True
 
     def current(self) -> dict | None:
         return None if self._last is None else dict(self._last)
 
-    def clear(self) -> None:
-        """Remove the sidecar; nothing is invented afterwards."""
-        self.path.unlink(missing_ok=True)
+
 
 
 __all__ = [
     "ACTIVITY_FIELDS",
-    "ACTIVITY_VERSION",
-    "ActivitySidecar",
+    "ActivityPublisher",
     "COUNT_FIELDS",
     "DEFAULT_MIN_INTERVAL_SECONDS",
     "PHASES",
-    "SIDECAR_FIELDS",
-    "SIDECAR_FILE",
     "equality_key",
     "is_newer",
     "normalize_activity",
-    "read_sidecar",
     "recency",
-    "sidecar_path",
-    "validate_sidecar",
-    "write_json_atomic",
 ]

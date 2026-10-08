@@ -67,6 +67,8 @@ CONTROL_OPERATIONS = (
     "worker_reconcile",
     "worker_renew",
     "worker_progress",
+    "worker_live_attach",
+    "worker_live_detach",
     "worker_result",
     "worker_release",
     "worker_list",
@@ -283,6 +285,14 @@ class BoardService(_BaseResource):
             # One coordinator, one evaluation store: the store hooks (claim, result,
             # cancel, recovery) and this resource must fence the same gate.
             store.decisions.evaluation = evaluation
+        from .live_registry import LiveRegistry
+        from ...buddy.harnesses.c_two_live import CTwoLiveChannel
+        from ...protocol.contracts import WorkerRuntimeLive
+        def worker_channel(attachment):
+            return CTwoLiveChannel(attachment.identity, WorkerRuntimeLive, name=attachment.name,
+                                   address=attachment.address, instance_id=attachment.instance_id,
+                                   token=attachment.live_token)
+        store.live_registry = LiveRegistry(store, channel_factory=worker_channel)
         self.started_at = utc_now()
 
     # -- service ------------------------------------------------------------
@@ -1035,6 +1045,12 @@ class BoardService(_BaseResource):
 
     def worker_renew(self, request_json: str) -> str:
         return self._guard("worker.renew", request_json, self.store.worker_renew)
+
+    def worker_live_attach(self, request_json: str) -> str:
+        return self._guard("worker.live_attach", request_json, self.store.live_registry.attach)
+
+    def worker_live_detach(self, request_json: str) -> str:
+        return self._guard("worker.live_detach", request_json, self.store.live_registry.detach)
 
     def worker_progress(self, request_json: str) -> str:
         return self._guard("worker.progress", request_json, self.store.worker_progress)

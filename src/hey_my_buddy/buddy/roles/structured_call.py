@@ -3,21 +3,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
-import sys
-import uuid
 
-from ..harnesses.base import AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle, ReadOnlyStructuredRequest
+from ..harnesses.base import AdapterOutcome, ExecutionContext, ProcessHandle
 from ..harnesses.controller import (
     collect_controller,
-    launch_controller,
     read_plain_evidence,
-    read_router_result,
     router_stop_confirmed,
 )
 from ...errors import BoardError
-from ...private_dirs import context_root, ensure_private_dir
+from ...private_dirs import ensure_private_dir
 from .turn_io import private_json, canonical_json, guard_private_path
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
@@ -107,10 +102,8 @@ def no_tool_prompt(prompt: str, schema: dict) -> str:
 
 def _account_environment(name: str, context: ExecutionContext, *, purpose: str) -> dict:
     """Consume the same service-frozen selection as the coding attempt."""
-    account = context.runtime.get('account')
-    if name == 'codex':
-        from ..harnesses.codex.home import frozen_account
-        account = frozen_account(context.runtime)
+    from ..harnesses.registry import frozen_account_for
+    account = frozen_account_for(name, context.runtime)
     if account is None:
         return context.environment
     if not isinstance(account, dict) or account.get('adapter') != name:
@@ -120,99 +113,6 @@ def _account_environment(name: str, context: ExecutionContext, *, purpose: str) 
         raise BoardError('INVALID_ARGUMENT', 'Account selection requires the private state directory')
     from ...blackboard.catalog.accounts import execution_environment
     return execution_environment(Path(state), account, context.environment, purpose=purpose)
-
-
-def start(name: str, context: ExecutionContext, request: ReadOnlyStructuredRequest) -> ProcessHandle:
-    from ..harnesses.registry import run_seam
-    if run_seam(name) is not None:
-        raise BoardError("UNSUPPORTED_ADAPTER", "Registered runs use the role execution seam", adapter=name)
-    if name == "dsh":
-        raise BoardError("UNSUPPORTED_ADAPTER", "Review on the Worker carrier is not implemented", adapter=name)
-    native_environment = _account_environment(name, context, purpose='review')
-    ensure_private_dir(context.directory)
-    control = {
-        "directory": str(context.directory), "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
-        "account": context.runtime.get('account'),
-        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
-        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
-        "sessionId": str(uuid.uuid4()), "access": "read",
-        "activityFile": str(context.directory / "activity.json"),
-        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
-        "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                            "budget": request.budget, "captureEvidence": request.capture_evidence},
-    }
-    path = context.directory / "readonly-control.json"
-    private_json(path, control)
-    from ..harnesses.runtime_selection import controller_environment
-    environment = controller_environment(context.directory, native_environment, read_only=True)
-    for log_path in context.log_paths().values():
-        guard_private_path(Path(log_path))
-    # The review budget reaching here is validated positive by the blackboard
-    # (a supplied timeoutSeconds of 0 or less is refused), so the outer layer's
-    # zero rule is unreachable and the +10 second grace always applies. The
-    # environment is built before the guard loop exactly as the baseline did;
-    # the command and cwd below are precomputed values.
-    return launch_controller(
-        prepare=lambda _environment: ([sys.executable, "-m", f"hey_my_buddy.buddy.harnesses.{name}.runner", "--control", str(path)],
-                         request.cwd, environment),
-        log_paths=context.log_paths(),
-        timeout_seconds=request.budget["timeoutSeconds"], unbounded_deadline=None, grace_seconds=10)
-
-
-def start_no_tool(name: str, context: ExecutionContext, request: NoToolStructuredRequest) -> ProcessHandle:
-    """Start a separate native controller without a workflow turn or agent authority."""
-    from ..harnesses.registry import run_seam
-    if run_seam(name) is not None:
-        raise BoardError("UNSUPPORTED_ADAPTER", "Registered runs use the role execution seam", adapter=name)
-    native_environment = _account_environment(name, context, purpose='router')
-    cwd = Path(request.cwd)
-    if (context.turn is not None or context.agent_credential is not None
-            or type(request.timeout_seconds) is not int or not 0 < request.timeout_seconds <= 60
-            or not isinstance(request.prompt, str) or not request.prompt.strip()
-            or not isinstance(request.output_schema, dict)):
-        raise BoardError("INVALID_ARGUMENT", "no-tool call requires a bounded prompt, schema and no workflow authority")
-    try:
-        if not cwd.is_absolute() or not cwd.is_dir() or cwd.is_symlink() or any(cwd.iterdir()):
-            raise ValueError("not an empty private directory")
-        info = cwd.stat()
-        if info.st_mode & 0o077 or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
-            raise ValueError("directory is not owner-private")
-    except (OSError, ValueError):
-        raise BoardError("INVALID_ARGUMENT", "no-tool cwd must be an existing empty private directory") from None
-    directory = ensure_private_dir(context.directory)
-    invocation_name = "no-tool-" + uuid.uuid4().hex
-    invocation = ensure_private_dir(context_root(context, name) / invocation_name)
-    evidence = directory / invocation_name
-    control = {
-        "directory": str(invocation), "nativeRoot": str(invocation / "native"), "evidenceRoot": str(evidence),
-        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
-        "account": context.runtime.get('account'),
-        "cwd": str(cwd.resolve()), "timeoutSeconds": request.timeout_seconds,
-        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
-        "noToolRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                          "captureEvidence": request.capture_evidence},
-    }
-    binding = _NoToolEvidence(name, context.task_id, context.attempt_id, context.generation,
-                              directory, invocation, evidence, canonical_json(control["noToolRequest"]))
-    path = context.directory / "no-tool-control.json"
-    private_json(path, control)
-    from ..harnesses.runtime_selection import controller_environment
-    environment = controller_environment(context.directory, native_environment, read_only=True)
-    if name == "dsh" and native_environment.get("DSH_HOME"):
-        environment["DSH_HOME"] = native_environment["DSH_HOME"]
-    for log_path in context.log_paths().values():
-        guard_private_path(Path(log_path))
-    # The request validated 0 < timeout_seconds <= 60, so the outer layer's
-    # zero rule is unreachable here and the deadline is always stamped.
-    handle = launch_controller(
-        prepare=lambda _environment: ([sys.executable, "-m", f"hey_my_buddy.buddy.harnesses.{name}.runner", "--control", str(path)],
-                         str(cwd), environment),
-        log_paths=context.log_paths(),
-        timeout_seconds=request.timeout_seconds, unbounded_deadline=None)
-    handle.no_tool = True
-    handle.no_tool_control = path
-    handle.no_tool_evidence = binding
-    return handle
 
 
 def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
@@ -239,24 +139,10 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
         private_json(evidence / "result.json", payload)
 
 
-def _collect_result(path: Path) -> dict:
-    """The Router channel's read rule over the shared plain evidence read.
-
-    The baseline exceptions fold to the channel's own invalid-native-result
-    sentinel, and a parsed non-object falls back the same way before any stop
-    judgment runs.
-    """
-    payload = read_router_result(path)
-    return payload if isinstance(payload, dict) else {"status": "error", "code": "invalid-native-result"}
-
-
 def collect(handle: ProcessHandle) -> AdapterOutcome:
-    if hasattr(handle, "role_run_control"):
-        from .run_execution import read_fast_result, read_review_result
-        project = read_review_result if handle.role_run_control["operation"] == "review" else read_fast_result
-        read = lambda path: project(handle, path)
-    else:
-        read = _collect_result
+    from .run_execution import read_fast_result, read_review_result
+    project = read_review_result if handle.role_run_control["operation"] == "review" else read_fast_result
+    read = lambda path: project(handle, path)
     collection = collect_controller(handle, read=read, stop=router_stop_confirmed)
     payload = collection.payload
     stopped = collection.stop_confirmed

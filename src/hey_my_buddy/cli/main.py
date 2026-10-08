@@ -304,7 +304,6 @@ def _worker_command_unlocked(action: str, params: dict) -> dict:
         environment["PYTHONPATH"] = target["pythonPath"]
     if target["stable"]:
         environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
-        environment["BUDDY_PYTHON"] = target["python"]
         # The explicit interpreter selects its own venv; PATH makes it the first
         # interpreter for tools that run in a delegated workspace.
         environment["PATH"] = str(Path(target["python"]).parent) + os.pathsep + environment.get("PATH", os.defpath)

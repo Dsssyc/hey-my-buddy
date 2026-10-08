@@ -54,11 +54,10 @@ class RegisteredReviewTests(NativeRunCase):
         with mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True) as bind:
             _result, request, _payload, code = self.review()
         self.assertEqual(code, 0)
-        values = bind.call_args.kwargs
-        self.assertEqual(set(values), {"invocation_root", "native_root", "activity_dir", "account", "tool_scope"})
-        self.assertEqual(values["tool_scope"], "read")
-        self.assertEqual(values["account"], {"adapter": "claude", "source": "native", "revision": 3})
-        self.assertEqual(str(values["activity_dir"]), request.private_state.invocation_root)
+        # This fixture's service factory has no declared inputs. Account and
+        # private roots remain held by the role; no unread factory arguments.
+        bind.assert_called_once_with()
+        self.assertTrue(request.private_state.invocation_root.startswith(str(self.base)))
         self.assertNotIn("account", request.to_payload())
         self.assertEqual(request.session_services, ())
 
