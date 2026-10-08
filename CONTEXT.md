@@ -102,5 +102,9 @@ A micro task explicitly authorized by the Host to help another micro task.
 **执行回合 / turn**:
 One Worker buddy execution ending in a result, assistance request or attention boundary.
 
+**换手 / handoff**:
+A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task, its Host and the micro tasks under it stay the same.
+_Avoid_: 接管, takeover (those name a Host taking over the ownership of a micro task)
+
 **验收 / acceptance**:
 The Host's evidence-backed judgment on a fixed artifact, separate from Worker completion.
