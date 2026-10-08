@@ -32,7 +32,7 @@ A buddy that executes turns of a micro task with attempt-scoped authority; it ma
 _Avoid_: a Buddy, coding Buddy
 
 **Lead 伙伴 / Lead buddy**:
-The buddy executing a micro task that carries delegation authority. Toward the Host that delegated that micro task it is a Worker: it reports only to that Host, which accepts its result, and it never talks to the user. Toward the micro tasks it creates it acts with Host authority: it delegates them, decides their boundaries, sends them back and accepts them. It is taken from the buddies the user lists for this purpose, and exists only when the user asks for it. Short form: Lead.
+The buddy executing a micro task that carries delegation authority. Toward the Host that delegated that micro task it is a Worker: it reports only to that Host, which accepts its result, and it never talks to the user. Toward the micro tasks created under that micro task it acts with Host authority: it delegates them, decides their boundaries, sends them back and accepts them. It is taken from the buddies the user lists for this purpose, and exists only when the user asks for it. Short form: Lead.
 _Avoid_: sub-Host, coordinator, orchestrator, manager, supervisor
 
 **委派权 / delegation authority**:
