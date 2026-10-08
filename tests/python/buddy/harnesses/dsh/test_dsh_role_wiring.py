@@ -209,8 +209,8 @@ class WorkerRegisteredRunTests(DshRoleCase):
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
         self.assertEqual(native["storageOwner"], "buddy-attempt")
-        self.assertFalse(native["bindingPresent"])
-        self.assertFalse(native["resumable"], "native resume stays unwired for dsh")
+        self.assertTrue(native["bindingPresent"])
+        self.assertTrue(native["resumable"], "the native facts carry a verified complete turn")
         self.assertIn("inquiry", outcome.result)
         self.assertTrue(outcome.result["inquiry"]["mounted"])
         self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")

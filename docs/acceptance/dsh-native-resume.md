@@ -1,6 +1,6 @@
 # DSH 原生续接：执行计划与验收记录
 
-当前整合状态：R1 的停止缺陷已在原 run 修正，固定产物 da175238 已独立核对、整合至 51a17bd，并按登记的确切路径回收受管检出与任务根；两层停止的完整证明仍待 Worker 冒烟。R2 用量读取缺陷在原 run 修正，固定产物 76560ad9 的 reader 与 native_resume 共 31 项独立通过，尚待最终变异和整合。R3 固定产物 c123f18d 的 12 项独立通过，但测试永久固定产品能力为 false，需在原 run 修正后复核。付费冒烟未授权、未运行，产品能力声明仍为 false。
+当前整合状态：第一部分 C1/C2/C3 已内部验收并回收；R1 固定 da175238 已独立核对、整合至 51a17bd 并按确切路径回收。R2 最新固定 1f87fe8f、R3 最新固定 7f5e21a3 已独立核对并逐文件整合；角色旧断言的范围外适配由 Host 登记如下。付费冒烟仍未授权、未运行，产品能力声明为 false，完整检查按计划留到真实核对和启用后的最终代码。
 
 Host 公共接线登记：独立诊断证明旧 DSH 回合上报 storageOwner=buddy-attempt 时，在候选能力开启后仍被共同判定选为 native-session，随后只能在原生模块因缺少 goal binding 失败。为满足升级后的重建规则，沿用既有 native_home_changed 判断，将原 Codex 的 buddy-goal 归属条件同时用于 DSH；仍用 private-native-home-required 原因，没有新增选择器、CLI 或 schema，其他三个 harness 的判断条件不变。该公共文件不在 R2/R3 写入范围，由 Host 整合；R3 将补新目录的正向事实与旧目录的重建断言，并去掉永久固定能力 false 的测试。原基线诊断失败与各交付初版结论均留存。
 
@@ -63,7 +63,7 @@ R1在第一部分整合后开始；无模型结果若不能证明跨进程恢复
 
 ## 当前状态
 
-执行计划7391081已提交，宏任务obj-36c065d5-68b2-4e2d-abd4-e10512124d4c下C1/C2/C3均已内部验收、整合并按确切路径回收。第一部分完成；Host独立无模型核对已通过，R1工具产物已退回原run修异常边界和停止口径；R2候选实现与R3既有共同机制的测试各自路由到隔离检出，尚未验收整合。2回合付费冒烟未开始，产品native-session能力仍未声明。以下保留各次整合的实际经过与当时的验证边界。
+第一部分 C1/C2/C3 与 R1 已内部验收并整合、回收；R2/R3 最终固定产物经独立聚焦与变异后已整合，待本批提交登记和回收。全局候选清单 3,116 个编号、196 个模块、装载错误 0；相对第一部分的 3,066 个编号，3,064 项未变集合相等，删除的两项均有改名对应，新增 52 项包含两个改名的新编号。真实 DSH 两回合仍未授权，产品 native-session 能力为 false，最终完整检查尚未运行。以下保留各次初版与返修的经过。
 
 Host整合登记：开工核对确认时间窗重复的是protocol/inquiry.py与buddy/harnesses/live.py，c_two_live.py原本已经引用后者。保留两侧接口层protocol/inquiry.py的一份定义，Host仅改live.py的常量来源，取值不变；该文件不在并行微任务写入范围内。原C3任务仍保留，固定产物审查时按当前公共来源核对，不让其扩大写入范围。两项现有窗口边界测试与cli.test_repository_hygiene共7项通过（0.203秒、退出0），原始命令/日志留tmp；不重复完整检查。
 
@@ -93,4 +93,18 @@ R2首回合失败代码duplicate-finish：完成工具后又安排工具，nativ
 
 公共目录接线的验证：旧 DSH 尝试归属诊断在原源码实际失败（错误选 native-session），接线后实际通过并返回 reconstructed-new-session / private-native-home-required。首次聚焦命令误写卫生模块名 install.test_repository_hygiene，两项请求形状测试已通过，但整次命令因装载错误退出 1；该次不计通过，保留原日志，随后用实际 cli.test_repository_hygiene 及 Codex 续接文件复核。
 
-公共目录接线复核：Codex 既有续接与卫生测试共 14 项通过（host-storage-owner-shared2，退出 0），原 Codex 私有目录与账户规则保持有效；第一条命令的装载错误不并入该通过数。
+公共目录接线复核：Codex 既有续接与卫生测试共 12 项通过（host-storage-owner-shared2，退出 0），原 Codex 私有目录与账户规则保持有效；第一条命令的装载错误不并入该通过数。
+
+Host 小记录更正：公共目录接线复核的通过数从 14 更正为日志实际的 12，做过的检查与退出结果未变。R2 的九处防护变异在固定 76560ad9 源码由 Host 独立重做全部实际断言失败；但 session_facts 仍把 goal/native 报为 buddy-attempt，已退回原 run 修事实归属与对应测试，未接受该产物。R3 同 run 修能力固定与旧尝试目录回退测试，公共接线为 714193c5，仍不改公共文件。
+
+R2/R3 最终固定核对：R2 的 reader/native_resume 在 76560ad9 上共 31 项通过；这两份源码及测试在 1f87fe8f 不变。1f87fe8f 的 native_run 65 项独立通过，首次与后续失败原样保留；九处旧防护变异在 76560ad9 均被 Host 独立实际断言抓住，新增归属的两处恒假/恒真变异在最终整合预览分别被新 goal 完整运行与旧 attempt 归属断言抓住。R3 在公共接线 714193c5 加最新两个测试文件的普通预览上 13 项通过，八处单点变异均被独立实际断言抓住；另一个普通副本只把 DshAdapter.native_resume 改为 true，13 项仍通过，证明测试不再永久固定产品值。这不是已验证真实模型能力。原两个微任务每次 continue 的 adapter/provider/model/effort 四项全部省略，未发生不可重试限流改配。
+
+Host 整合登记：R2/R3 的十一份交付文件按固定产物字节复制并保留 SHA256 清单；Host 在范围外 test_dsh_role_wiring 将正常完整回合的 bindingPresent 与 resumable 两个旧 false 断言改为 true，核对模块 12 项通过。公共 workflow.py 已复用旧 native_home_changed 归属条件；原有 workflow、workflow_routing 与卫生测试共 83 项通过（默认微任务聚焦命令，没有完整检查）。测试编号按固定清单：R2 原 94 → 131，两个改名旧 ID 对应两个新 ID，92 项未变集合相等、39 项新增（含改名新 ID）；R3 新增 13 项，未修改既有测试模块。最终全局清单仍将在整合代码和启用后重算。
+
+字段与调用方：没有新增公共请求/结果模型字段、CLI 或 schema；RecordBaseline、FrozenRecord、冻结与追加投影及新增参数都被 DSH 生产运行调用。resumeBoundary、bootstrapUpdates、sessionIdentitySource 是新增私有证据输出键，由生产路径留存到 dsh-session-record；角色不读取这三项，也不拿它们判定续接。它们用于说明用量边界、被排除的历史通知与无应答 ID 时的原生身份来源，验收探针和人工核对可读取；不能把这三项说成已有业务判定读取方，R2 原记录中“角色侧消费待 R3”在这里更正为实际输出/读取边界。共享格式与新增调用接口中无未使用项。
+
+Host 冒烟探针：tests/probes/dsh_native_resume_smoke.py 只复用真实 Worker、WorkerRunExecutor、WorkflowCoordinator、私有目录及现有会话工具和 C-Two 接线；看板事务是现有 InProcessBoard 的本机调用，探针恢复其真实健康/目录刷新，执行时仅在两个既有选择点注入能力开启的 DshAdapter 实例，产品声明保持不变。prepare 已在独立短根完成真实安装版 DSH 0.1.5-rc.1 的不调用模型检查，deepseek-official/deepseek-v4-flash/off 配置合法，模型调用 0。输入防护检查接受无重放的正确续接，拒绝重放随机内容、重构模式与异会话三种输入，均发生在启动前；尚未运行付费 execute，也不声称两层停止、跨回合记忆或本回合用量已真实证明。
+
+Host 探针审查与免费验证：不同模型只读审查指出过早提问会将同号请求永久记为 unavailable、用量缺失仍可能被记为 confirmed，均已修正。提问先无问题地观察真实持有者与 session 就绪；规范化用量必须为 attempt 范围、complete/partial 且有实际整数计数。三个无重放输入拒绝与五个未知/累计/布尔用量拒绝实际通过，不启动进程。离线假 ACP 的第三次试跑暴露范围外 workflow_agent 手工 Namespace 缺三项新默认参数，Host 补 replay_history/resume_echo_foreign_id/resume_foreign_root=false，并将其 quota 记录复用 sessions_dir 的公开 patch 根；生产代码未为此改动。前两次免费试跑在 fixture 未导入 catalog 时失败，未启动 Worker；第三次假程序初始化失败，第四次真实 Worker 完成且答复已落自己的 journal，但探针没有导入最后一次事实；现已在停止后用原同号问题导入最终 durable 事实。第五次离线试跑验证一个真实 Worker 完成、签名工具事实、问询 answered、两层停止与两个自己端点存在后消失，随后按设计因假程序给出固定答复而拒绝 memory 证明，没有启动第二回合。这些都是免费假程序验证，不是真实模型记忆证明，原失败不改写。
+
+Host 范围外 fixture 整合：test_workflow_worker 两个旧 binding/resumable=false 断言更新为真实已保存绑定的 true，当前产品能力 false 时目录归属仍按尝试；启用后将核对 goal 归属。该文件及卫生共 10 项通过（host-fixture-integration6，退出 0）。上一条带不存在 test_workflow_quota 的命令退出 1、含装载错误，不记整次通过；只重跑实际受影响文件与卫生。quota fixture 的公共 patch 根也以直接写入与可选 reader 验证原用量及 QUOTA 原码，退出 0；初次检查误把 reader 原码键写成下游 normalize 的 nativeCode，KeyError 已保留，修正检查脚本后通过，产品不用改。未运行完整检查、未调用模型、未安装升级、未改用户配置或登录、未读取用户凭据内容。

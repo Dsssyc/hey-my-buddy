@@ -119,7 +119,7 @@ class NativeRunCase(unittest.TestCase):
             budget=RunBudget(timeout_seconds=timeout))
 
     def worker_request(self, *, timeout: int = FAST_TIMEOUT, inquiry: bool = False,
-                       continuation=None):
+                       continuation=None, native_root=None):
         """The governed binding: a real mount, the real role validator and prompt.
 
         The binding is assembled through exactly the shared role controller's
@@ -156,7 +156,8 @@ class NativeRunCase(unittest.TestCase):
             harness="dsh",
             configuration=RunConfiguration(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
-            private_state=PrivateStatePaths(invocation_root=str(invocation), native_root=str(self.root)),
+            private_state=PrivateStatePaths(invocation_root=str(invocation),
+                                            native_root=str(native_root or self.root)),
             input_text=prompt, tool_scope="write",
             output_schema=run_contract.FrozenJson.from_value(worker_services.OUTCOME_SCHEMA,
                                                              "schema", maximum=MAX_SCHEMA_BYTES),
@@ -740,7 +741,7 @@ class MountTests(NativeRunCase):
         with self.assertRaises(BoardError):
             native_run._check_service_descriptions(wrong_schema, mount)
 
-    def test_the_seam_refuses_foreign_harnesses_services_and_native_resume(self):
+    def test_the_seam_refuses_foreign_harnesses_services_and_native_resume_off_worker(self):
         request, bound, _mount = self.worker_request()
         services = bound.services
         with self.assertRaises(BoardError):
@@ -748,11 +749,13 @@ class MountTests(NativeRunCase):
                 observer=worker_observer, services=services, cancelled=lambda: False)
         with self.assertRaises(BoardError):
             run(request, observer=worker_observer, services=object(), cancelled=lambda: False)
-        native_resume = run_contract.RunContinuation(mode="native-session",
-                                                     previous_session_id="previous-session")
+        # Native resume is the governed Worker carrier's path alone: a request
+        # without any session service — the fast carrier's own shape — is
+        # refused before anything else, never silently resumed or rebuilt.
+        carrier = RunRequest.from_payload(self.fast_request("prompt").to_payload() | {
+            "continuation": {"mode": "native-session", "previousSessionId": "previous-session"}})
         with self.assertRaises(BoardError):
-            run(self.variant_of(request, continuation=native_resume),
-                observer=worker_observer, services=services, cancelled=lambda: False)
+            run(carrier, observer=worker_observer, services=None, cancelled=lambda: False)
 
     @staticmethod
     def variant_of(request: RunRequest, **overrides) -> RunRequest:
@@ -972,7 +975,7 @@ class WorkerSeamTests(NativeRunCase):
 
 
 class ContinuationTests(NativeRunCase):
-    """Native resume stays unwired; a reconstruction rebuilds a new session."""
+    """A reconstruction rebuilds a fresh root and saves its own goal binding."""
 
     def test_a_reconstructed_new_session_continuation_runs_a_fresh_root(self):
         request, bound, mount = self.worker_request(
@@ -987,7 +990,18 @@ class ContinuationTests(NativeRunCase):
                             "the continuation rebuilds, never resumes the previous session")
         # Exactly one fresh root was opened.
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 1)
-        self.assertIsNone(result.continuation, "dsh saves no continuation binding facts")
+        # The complete verified turn saves this new root's reusable goal
+        # binding under the native root, and the continuation facts carry it.
+        self.assertTrue(result.continuation.resumable)
+        binding = self.root / (hashlib.sha256(
+            result.native_identity.session_id.encode()).hexdigest() + ".json")
+        self.assertEqual(json.loads(binding.read_text()),
+                         {"taskId": request.identity.task_id,
+                          "sessionId": result.native_identity.session_id,
+                          "cwd": request.cwd,
+                          "configuration": {"provider": "fake", "model": "m1", "effort": "high"}})
+        self.assertTrue(native_run.session_facts(self.root,
+                                                 result.native_identity.session_id)["bindingPresent"])
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
         provenance = json.loads(Path(reference.location).read_text())
         record = {"version": 1, "resumeMode": "reconstructed-new-session",
@@ -995,6 +1009,49 @@ class ContinuationTests(NativeRunCase):
                   "sessionId": result.native_identity.session_id, "provenance": provenance}
         self.assertIsNone(native_run.validate_turn_provenance(record),
                           "the rebuilt session passes the provenance validator")
+
+    def test_a_completed_goal_root_turn_reports_goal_owned_storage(self):
+        from hey_my_buddy import private_dirs
+        # The role's real placement for a governed Worker turn: the task's
+        # shared goal native root, exactly where private_dirs pins it.
+        goal = private_dirs.native_root(self.base / "goal-state", "dsh", "task")
+        request, bound, mount = self.worker_request(native_root=goal)
+        self.governed_agent_args(mount)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok")
+        facts = native_run.session_facts(goal, result.native_identity.session_id)
+        self.assertEqual(facts["storageOwner"], "buddy-goal",
+                         "a normal completion over the task's shared goal root is goal-owned")
+        self.assertEqual(facts["storageScope"], "task-shared-sessions")
+        self.assertTrue(facts["bindingPresent"])
+
+    def test_an_incomplete_governed_turn_saves_no_binding(self):
+        request, bound, mount = self.worker_request()
+        self.governed_agent_args(mount, no_finish=True)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "missing-finish")
+        self.assertIsNone(result.continuation,
+                          "a turn without its verified finish provenance is not resumable")
+        self.assertFalse(any(self.root.glob("*.json")),
+                         "no goal binding may exist for an incomplete turn")
+
+    def test_a_confirmed_turn_without_a_real_group_stop_saves_no_binding(self):
+        request, bound, mount = self.worker_request()
+        self.governed_agent_args(mount)
+        unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
+                       "leaderExited": True, "leaderExitCode": 0}
+        with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
+                mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+        self.assertIsNone(result.continuation,
+                          "without the really-gone group stop the session is not resumable")
+        self.assertFalse(any(self.root.glob("*.json")))
 
 
 class RoleSeamFunctionTests(unittest.TestCase):
@@ -1039,16 +1096,44 @@ class RoleSeamFunctionTests(unittest.TestCase):
             self.assertEqual(scan.call_count, 1 if selected is None else 0,
                              "a bound record decides without a discovery scan")
 
-    def test_session_facts_report_private_storage_and_no_binding(self):
-        facts = native_run.session_facts(Path("/private/native-root"), "session-1")
-        self.assertTrue(facts["captured"])
-        self.assertEqual(facts["storageOwner"], "buddy-attempt")
-        self.assertEqual(facts["nativeAppVisibility"], "not-listed-in-native-app")
-        self.assertEqual(facts["credentialsStore"], "harness-user-store")
-        self.assertFalse(facts["bindingPresent"], "native resume is unwired; no binding is saved")
-        absent = native_run.session_facts(Path("/private/native-root"), None)
-        self.assertFalse(absent["captured"])
-        self.assertIsNone(absent["sessionId"])
+    def test_session_facts_report_private_storage_and_the_real_binding_presence(self):
+        with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
+            root = Path(container) / "native-root"
+            root.mkdir(mode=0o700)
+            facts = native_run.session_facts(root, "session-1")
+            self.assertTrue(facts["captured"])
+            self.assertEqual(facts["storageOwner"], "buddy-attempt")
+            self.assertEqual(facts["storageScope"], "attempt-private-sessions")
+            self.assertEqual(facts["nativeAppVisibility"], "not-listed-in-native-app")
+            self.assertEqual(facts["credentialsStore"], "harness-user-store")
+            self.assertFalse(facts["bindingPresent"], "the binding fact is the file's absence")
+            # The binding file's real presence is the fact, keyed by the same
+            # sha256 name the run writes after a complete verified turn.
+            binding = root / (hashlib.sha256(b"session-1").hexdigest() + ".json")
+            binding.write_text('{"taskId": "task", "sessionId": "session-1"}')
+            self.assertTrue(native_run.session_facts(root, "session-1")["bindingPresent"])
+            absent = native_run.session_facts(root, None)
+            self.assertFalse(absent["captured"])
+            self.assertIsNone(absent["sessionId"])
+
+    def test_storage_ownership_follows_the_root_s_real_placement(self):
+        from hey_my_buddy import private_dirs
+        with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
+            state = Path(container) / "state"
+            # The same task's two real placements: the shared goal native root
+            # private_dirs pins for the governed Worker, and an old attempt's
+            # private root.
+            goal = private_dirs.native_root(state, "dsh", "task-1")
+            facts = native_run.session_facts(goal, None)
+            self.assertEqual(facts["storageOwner"], "buddy-goal",
+                             "the task's shared native root is goal-owned storage")
+            self.assertEqual(facts["storageScope"], "task-shared-sessions")
+            attempt = private_dirs.attempt_root(state, "dsh", "task-1", "attempt-1")
+            other = native_run.session_facts(attempt / "dsh-private", None)
+            self.assertNotEqual(other["storageOwner"], "buddy-goal",
+                                "an old attempt root is never misreported as goal storage")
+            self.assertEqual(other["storageOwner"], "buddy-attempt")
+            self.assertEqual(other["storageScope"], "attempt-private-sessions")
 
     def test_native_evidence_projects_the_launch_scope_and_stream_end(self):
         from hey_my_buddy.buddy.harnesses.run_contract import (
@@ -1095,8 +1180,14 @@ class RoleSeamFunctionTests(unittest.TestCase):
         # A reconstructed record that claims the previous session's identity is invalid.
         self.assertIsInstance(native_run.validate_turn_provenance(
             record(resumeMode="reconstructed-new-session", previousSessionId="session-1")), str)
+        # A native resume continues the exact previous session: the same
+        # identity passes, any other identity fails.
+        self.assertIsNone(native_run.validate_turn_provenance(
+            record(resumeMode="native-session", previousSessionId="session-1")))
         self.assertIsInstance(native_run.validate_turn_provenance(
-            record(resumeMode="native-session", previousSessionId="session-1")), str)
+            record(resumeMode="native-session", previousSessionId="previous-session")), str)
+        self.assertIsInstance(native_run.validate_turn_provenance(
+            record(resumeMode="native-session", previousSessionId=None)), str)
 
 
 class InquirySeamTests(NativeRunCase):
