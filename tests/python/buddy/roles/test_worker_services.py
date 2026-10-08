@@ -193,11 +193,17 @@ class FinishBoundaryTests(WorkerServicesCase):
         envelope = self.envelope(self.call("buddy_finish_turn", self.outcome("completed")), "buddy_finish_turn")
         self.assertEqual(envelope["reason"], "attention-outstanding")
 
-    def test_a_withdrawn_question_no_longer_blocks_completion(self):
-        self.queue()
-        with self.journal.open("a") as stream:
-            stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "discarded", **IDENTITY}) + "\n")
-        self.receipt(self.call("buddy_finish_turn", self.outcome("completed")))
+    def test_questions_no_longer_answerable_stop_blocking_completion(self):
+        # The blocking set is exactly the answerable journal states: once a
+        # question is answered or discarded, a completed finish mints its
+        # receipt — there is no separate product withdrawal state.
+        for terminal in ("answered", "discarded"):
+            with self.subTest(state=terminal):
+                self.queue()
+                with self.journal.open("a") as stream:
+                    stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": terminal,
+                                             **IDENTITY}) + "\n")
+                self.receipt(self.call("buddy_finish_turn", self.outcome("completed")))
 
 
 class InquiryToolTests(WorkerServicesCase):

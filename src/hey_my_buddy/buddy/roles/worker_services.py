@@ -124,8 +124,9 @@ def governed_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
         f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
         f"before finishing to pick up any queued Host questions (an empty list means none). Answer each listed "
         f"question with {answer_tool} using its exact inquiryId. A completed finish is refused while a question "
-        f"is still unanswered; a withdrawn or explicitly unavailable question no longer blocks it. Checkpointing "
-        "is voluntary and never on a timer, and no input is ever injected into your turn."
+        f"is still unanswered; a question the journal shows answered, discarded or otherwise no longer answerable "
+        f"does not block it. Checkpointing is voluntary and never on a timer, and no input is ever injected into "
+        "your turn."
     ) if checkpoint_tool and answer_tool else ""
     return "\n\n".join([
         "This is a governed Buddy root turn. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace.",
@@ -251,7 +252,8 @@ def inquiry_refusal(pending: list[dict]) -> str | None:
         "This turn cannot be completed while Host inquiries are still unanswered: "
         + " | ".join(listed)
         + f"{more}. Call buddy_checkpoint to pick them up, answer each with buddy_answer_inquiry, then retry "
-          "the finish; a withdrawn or explicitly unavailable question no longer blocks completion."
+          "the finish; a question the journal shows answered, discarded or otherwise no longer answerable no "
+          "longer blocks completion."
     )
 
 
