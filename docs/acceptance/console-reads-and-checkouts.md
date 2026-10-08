@@ -227,3 +227,11 @@ R13 实际结果：13 个受影响模块、159 项测试、跳过 0，默认 4 �
 检查结束后 Host 再确认 HEAD 为上述整合提交、worktree 干净、当前最新 core 仍为 fbfa8eac 且为其祖先；4 个控制台构建产物同时与原始固定哈希和该整合提交的 Git 对象逐字节一致。相对 core 的本批范围核对通过：角色代码仍只有 C1 一句，受保护文档、harnesses、实时协议与 live_registry 的本批额外差异为零。既有浏览器和字节测量证据对应的控制台源码与产物未变化，合入后的服务读取、注册和实际两跳消费者另由 R13 与本次完整检查覆盖；没有宣称再次使用真实 CLI 或日常运行时验证。
 
 合入后完整检查通过之后只补记录；暂存全部最终记录后重跑 `cli.test_repository_hygiene`，5 项通过、退出码 0，没有再次执行完整检查。记录以本地提交交付，源码仍与已检查的 5c9c9fc 相同，保留本分支和 Host 工作树、不推送，停止等待 Claude Code Host 验收。五个微任务已 accepted、各自检出已按精确路径回收，历史产物与整合记录继续保留，不创建替代微任务或改写其执行事实。
+
+## R15：Claude Code Host 退回后的测试修正计划
+
+2026-10-08，Claude Code Host 拒绝 `0011980b`：完整前端 728 项中两项 objective-api 仍断言旧 timeline 形状；access_revision 从快照标记移除没有失败证据。确认原 A-F `890cc404-0b42-47f2-b0f5-642fe5f69645` 与 A-S `b9955292-15e2-45e6-98d9-e367109fc281` 已 accepted 且检出回收，不能 continue。按本次授权选择新建一个关联两条原 run 的测试修正微任务，沿用 Host 与宏任务，首次四个 buddy 字段全部省略，经路由；不直接更改 Worker 的测试产物。
+
+修正写入范围仅 `apps/console/src/objective-api.test.ts` 与 `tests/python/console/test_console_reads_http.py`：修正两条成功断言为 `{timeline, verifiedAtMs}`，保留非法响应拒绝与路径/信号断言；补同一已缓存有效会话中访问修订变化的实际 HTTP 回归，冻结时间、数据库与其他失效来源，使去掉 access_revision 的隔离内存变异真的返回旧 304 而使新测试失败。明确区分受控修订事实注入与真实切换登录模式，不能再次由会话更换或 requireLogin 变化掩盖目标。Worker 只跑这两处受影响测试，不跑前端或 Python 的完整检查；日志置于新建 ignored 任务目录，保留确切路径，不删除、不用 stash、不创建或切换分支、公开记录用 ~ 或占位符。
+
+R15 由 Host 独立核对固定产物、受影响测试，以及恢复两个旧前端断言和移除后端 access_revision 的失败证据；代码/测试缺陷退回该新 run。R16 在固定整合提交上运行一次完整 `npm --prefix apps/console test`，记录命令、提交号、项数和实际退出码；只更改测试与记录，按用户指令不重复 Python 完整检查，只跑仓库卫生。旧 Python 完整检查的 3,162 项通过与之前缺失完整前端检查分别保留，不把 Python 命令说成包含前端。控制台产品源码、构建产物与对外行为无需修改；最后验收并核对自动受保护回收，停止等 Claude Code Host 验收，不合入新的 core 文档变化、不推送。
