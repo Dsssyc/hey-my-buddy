@@ -1,5 +1,9 @@
 # DSH 原生续接：执行计划与验收记录
 
+当前整合状态：R1 的停止缺陷已在原 run 修正，固定产物 da175238 已独立核对、整合至 51a17bd，并按登记的确切路径回收受管检出与任务根；两层停止的完整证明仍待 Worker 冒烟。R2 用量读取缺陷在原 run 修正，固定产物 76560ad9 的 reader 与 native_resume 共 31 项独立通过，尚待最终变异和整合。R3 固定产物 c123f18d 的 12 项独立通过，但测试永久固定产品能力为 false，需在原 run 修正后复核。付费冒烟未授权、未运行，产品能力声明仍为 false。
+
+Host 公共接线登记：独立诊断证明旧 DSH 回合上报 storageOwner=buddy-attempt 时，在候选能力开启后仍被共同判定选为 native-session，随后只能在原生模块因缺少 goal binding 失败。为满足升级后的重建规则，沿用既有 native_home_changed 判断，将原 Codex 的 buddy-goal 归属条件同时用于 DSH；仍用 private-native-home-required 原因，没有新增选择器、CLI 或 schema，其他三个 harness 的判断条件不变。该公共文件不在 R2/R3 写入范围，由 Host 整合；R3 将补新目录的正向事实与旧目录的重建断言，并去掉永久固定能力 false 的测试。原基线诊断失败与各交付初版结论均留存。
+
 2026-10-08，Codex Host；hostId沿用codex-adr025。输入socu/buddy-core的fbfa8eac，包含已验收的ADR-025第五步、ADR-027，包/契约0.29.0、schema15。实施分支socu/dsh-native-resume，检出为~/.codex/worktrees/dsh-native-resume/hey-my-buddy，不推送。先读[第五步Host验收](adr025-step5-host-review.md)，按其中已经确认的缺口处理第一部分，再实施DSH续接；第一部分不设单独外部验收停点。最终提交后停下，等Claude Code Host验收。
 
 ## 范围与已有机制
@@ -86,3 +90,7 @@ R2从d8fa086路由提交run 9ecbf183-04ba-4b90-98c0-b60fb1bfbe21，决定dec-877
 Host固定核对R1返修da1752381df4：两路径按字节合入，没有Host代改范围内源码。独立受控检查在初稿实际产生两项目标断言失败，返修两项通过0.327秒；单独移除停止gate与启动所有权处理的两个命名副本，各恰有一项实际断言失败、另一项保持绿，源与日志SHA留tmp。另用真实普通Python子进程模拟包装停止未确认，Probe持有原句柄后终止它：alive/未退出/未确认变为gone/退出-15/已确认，PID与PGID仍在记录；零DSH启动、零模型调用。停止finding与入库口径均明确只覆盖原生leader/组，旧“两层”材料保留为更正历史。正常ACP调用段未变，已有四次微任务与两次Host独立ACP运行的事实继续成立，不重复原生核对。源码探针不增加TestCase编号，全局清单仍需与整合最终树核对；完整检查留到最终代码。
 
 R2首回合失败代码duplicate-finish：完成工具后又安排工具，nativeFailure与quotaFailure均为空、系谱停止已确认；固定部分产物50a112299c5c只有八个授权路径，保持未验证、未接受。Host在该固定源码独立跑session_records 13、native_resume 15、native_run 63、session_storage 6，合计97项通过；没有完整检查或真实DSH/模型。原记录把新增模块的装载失败占位算作旧编号，这改变验证结论，连同正确交付末次完成要求在原run继续，四个配置字段全部省略；原duplicate-finish结果、部分产物及失败日志保留，没有限流配置覆盖。R2范围外的旧role-wiring断言和共同目录整合由Host处理并登记，微任务不扩大范围。
+
+公共目录接线的验证：旧 DSH 尝试归属诊断在原源码实际失败（错误选 native-session），接线后实际通过并返回 reconstructed-new-session / private-native-home-required。首次聚焦命令误写卫生模块名 install.test_repository_hygiene，两项请求形状测试已通过，但整次命令因装载错误退出 1；该次不计通过，保留原日志，随后用实际 cli.test_repository_hygiene 及 Codex 续接文件复核。
+
+公共目录接线复核：Codex 既有续接与卫生测试共 14 项通过（host-storage-owner-shared2，退出 0），原 Codex 私有目录与账户规则保持有效；第一条命令的装载错误不并入该通过数。

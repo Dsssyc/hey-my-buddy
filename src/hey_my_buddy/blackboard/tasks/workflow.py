@@ -5422,7 +5422,7 @@ class WorkflowCoordinator:
                 old_version = history[-1].get('harness', {}).get('version') if history else None
                 harness_changed = bool(old_version and health.get('version') and old_version != health['version'])
                 native_session = (result.get('result') or result).get('nativeSession') or {}
-                native_home_changed = (configuration['adapter'] == 'codex'
+                native_home_changed = (configuration['adapter'] in ('codex', 'dsh')
                                        and native_session.get('storageOwner') != 'buddy-goal')
                 from ..catalog.accounts import attempt_account, identity
                 current_attempt = connection.execute('SELECT * FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
