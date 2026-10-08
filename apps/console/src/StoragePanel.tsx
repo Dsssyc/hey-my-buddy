@@ -3,6 +3,8 @@ import type { ConsoleApi, StorageApplyResult, StoragePlan } from "./api";
 import { ApiError, errorText, uncertainResponse } from "./api";
 import { clockTime } from "./objective-display";
 import { useBackgroundInert } from "./modal";
+import { BackupAttention } from "./BackupAttention";
+import { useBackupPreflight } from "./use-backup-preflight";
 
 /** Fixed display order (0.16 storage panel); unknown ids stay visible after these. */
 const CATEGORY_ORDER = ["harnesses", "zcode", "workspaces", "runtimes", "backup", "durable"] as const;
@@ -85,12 +87,19 @@ type PlanPhase =
  * command identity so 重试同一请求 replays it. Orphan processes are listed
  * only. Reclamation is not an evaluation-table draft: the panel takes no draft,
  * no edit switch and no writer lease, so any authenticated window may use it.
+ *
+ * The backup preflight moved here from the periodic snapshot: the panel reads
+ * it once when it opens and again on the explicit 重新读取 action, and a
+ * closed panel never reads it.
  */
-export function StoragePanel({ api, csrfToken, connectionError }: {
+export function StoragePanel({ api, csrfToken, connectionError, active = true }: {
   api: ConsoleApi;
   csrfToken: string;
   connectionError: string;
+  /** True while the panel is on screen; a hidden or closed panel never reads the preflight. */
+  active?: boolean;
 }) {
+  const preflight = useBackupPreflight(api, active && !connectionError);
   const [phase, setPhase] = useState<PlanPhase>({ kind: "idle" });
   const [plan, setPlan] = useState<StoragePlan | null>(null);
   const [planError, setPlanError] = useState("");
@@ -206,7 +215,16 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
   return <section className="panel storage-panel" aria-busy={phase.kind === "planning" || phase.kind === "applying"} aria-label="存储">
     <div className="panel-heading">
       <h2>存储</h2>
+      <span className="preflight-status" role="status">{
+        preflight.loading ? "正在读取备份预检…"
+          : preflight.error ? `备份预检读取失败：${preflight.error}`
+            : preflight.report ? (preflight.report.needsAttention ? "" : "备份预检正常")
+              : "备份预检尚未读取"}</span>
+      <button type="button" className="button small-button" disabled={preflight.loading || !!connectionError}
+        title={connectionError || (preflight.loading ? "正在读取备份预检…" : "重新执行备份预检并显示结果")}
+        onClick={preflight.recheck}>重新读取备份预检</button>
     </div>
+    <BackupAttention report={preflight.report ?? undefined} />
     <div className="storage-overview" role="group" aria-label="占用概览">
       <div><span>总占用</span><strong title={plan ? byteText(totalBytes).title : undefined}>{plan ? byteText(totalBytes).text : "尚未检查"}</strong></div>
       <div><span>可回收</span><strong title={plan ? reclaimTotalText.title : undefined}>{plan ? reclaimTotalText.text : "尚未检查"}</strong></div>

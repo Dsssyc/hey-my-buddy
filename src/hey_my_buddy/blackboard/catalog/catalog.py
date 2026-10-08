@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -53,14 +54,43 @@ CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "ACCOUN
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 CATALOG_REMEDY = "Run buddy adapters with refresh:true"
 
+#: The one reason every catalog-caused refusal carries. The user's independent
+#: enabled gate keeps its own separate reason.
+CATALOG_UNAVAILABLE_REASON = "catalog-unavailable"
+
 _PENDING_PREFIX = "catalog-pending:"
 _READ_AT_PREFIX = "catalog-read-at:"
 _ACCOUNT_STATUS_PREFIX = "catalog-account-status:"
+_SCAN_AFTER_PREFIX = "catalog-scan-after:"
 
 #: ADR-027 rule 3: per-directory hooks the service registers so an explicitly
 #: rejected configuration can borrow the service's own bounded native refresh
 #: (its environment, account binding and subprocess deadlines) exactly once.
-_catalog_reread: dict[str, Callable[[str], None]] = {}
+#: The hook receives the reread claim's account binding and must carry it to
+#: its native read admission, so a claim made under one account never reads
+#: under whichever account is selected later.
+_catalog_reread: dict[str, Callable[[str, str | None], None]] = {}
+
+#: Bounded wait for a caller joining another caller's in-flight shared re-read.
+#: Past it the caller judges on the recorded facts; it never starts a second
+#: native read and never waits inside a database transaction.
+CATALOG_REREAD_JOIN_SECONDS = 55
+
+#: Guards the in-process flight registry and every window claim; the write
+#: transaction inside the claim fences other processes.
+_catalog_reread_gate = threading.Lock()
+
+
+class _CatalogRereadFlight:
+    """One claimed bounded native read of one harness and account binding."""
+
+    def __init__(self, account_key: str) -> None:
+        self.account_key = account_key
+        self.finished = threading.Event()
+
+
+#: In-flight shared reads, keyed by (directory, adapter, account binding).
+_catalog_reread_flights: dict[tuple[str, str, str], _CatalogRereadFlight] = {}
 
 
 def register_catalog_reread(directory: Path | str, hook: Callable[[str], None] | None) -> None:
@@ -69,6 +99,92 @@ def register_catalog_reread(directory: Path | str, hook: Callable[[str], None] |
         _catalog_reread.pop(str(directory), None)
     else:
         _catalog_reread[str(directory)] = hook
+
+
+def _binding_key(db, adapter: str) -> str:
+    from .accounts import binding_key
+    return binding_key(db, adapter)
+
+
+def _reread_binding_matches(directory: Path | str, adapter: str, account_key: str) -> bool:
+    """Whether the claimed read's account binding is still the selected one.
+
+    Checked immediately before the native call, outside any write transaction:
+    a switched or re-credentialed account cleared the window with the other
+    read facts, so the old claim must neither read under the new binding nor
+    keep the new account from claiming its own read. The reader receives the
+    claimed binding and re-checks it again at its own read admission, so a
+    switch in the remaining gap still never starts a native read.
+    """
+    from ..store.db import Database
+    with Database(directory).read() as db:
+        return _binding_key(db, adapter) == account_key
+
+
+def coordinate_catalog_reread(directory: Path | str, adapter: str, *, reader: Callable[[str], None],
+                              wait: bool, timeout: float | None = None) -> str:
+    """Claim, join or skip the one bounded native catalog read of this harness.
+
+    Rule 3's explicit-validation re-read and the health scan's stale-catalog
+    re-read share this single flight and the ``catalog-scan-after`` window
+    (SCAN_SECONDS), so one harness gets at most one bounded native read per
+    window however the reads are triggered. The flight key includes the
+    selection epoch, so an A→B→A round trip never joins the departed epoch's
+    in-flight read. Outcomes:
+
+    - ``started``: this caller claimed the window and ``reader`` ran with the
+      claimed account binding.
+    - ``joined``: this caller boundedly waited for another caller's in-flight
+      read; its facts are recorded, so re-judge on them.
+    - ``inflight``: another caller's read is in flight and this caller does not
+      wait (a health scan skips; the facts arrive with that read).
+    - ``window``: the window is open with nothing in flight; the recorded facts
+      rule and no native read starts.
+    - ``timeout``: the bounded join ran out; the recorded facts rule.
+    - ``aborted``: the account binding changed between the claim and the native
+      call, so ``reader`` did not run under the new binding.
+
+    The claim is one short write transaction; no waiting and no native call ever
+    happen inside a transaction, and the flight is unregistered even when
+    ``reader`` raises. A failed or unknown read still consumes its window; the
+    manual ``adapters refresh:true`` path forces its own read and never passes
+    here.
+    """
+    from ..store.db import Database
+    from ..service.harness_health import SCAN_SECONDS, _later
+    if timeout is None:
+        timeout = CATALOG_REREAD_JOIN_SECONDS
+    with _catalog_reread_gate:
+        with Database(directory).write() as db:
+            account_key = _binding_key(db, adapter)
+            key = (str(directory), adapter, account_key)
+            flight = _catalog_reread_flights.get(key)
+            joined = flight is not None
+            if flight is None:
+                row = db.execute("SELECT value FROM meta WHERE key=?", (_SCAN_AFTER_PREFIX + adapter,)).fetchone()
+                window = _parse_time(row[0]) if row is not None else None
+                if window is not None and datetime.now(timezone.utc) < window:
+                    return "window"
+                db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                           (_SCAN_AFTER_PREFIX + adapter, _later(SCAN_SECONDS)))
+                flight = _CatalogRereadFlight(account_key)
+                _catalog_reread_flights[key] = flight
+    if joined:
+        if not wait:
+            return "inflight"
+        if not flight.finished.wait(timeout):
+            return "timeout"
+        return "joined"
+    try:
+        if not _reread_binding_matches(directory, adapter, flight.account_key):
+            return "aborted"
+        reader(flight.account_key)
+        return "started"
+    finally:
+        with _catalog_reread_gate:
+            if _catalog_reread_flights.get(key) is flight:
+                _catalog_reread_flights.pop(key, None)
+        flight.finished.set()
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -277,9 +393,15 @@ def note_confirmed_read(db, adapter: str, *, now: str, account_status: str) -> N
 
 
 def clear_confirmed_read(db, adapter: str) -> None:
-    """Drop the confirmed-read and pending facts of a replaced account binding."""
+    """Drop the read facts a replaced account binding must not hand forward.
+
+    The confirmed-read time, the account-status fact, the open disappearance
+    windows and the bounded re-read window all belong to the account whose
+    native readings produced them; the next binding starts each of them fresh.
+    """
     _write_pending_map(db, adapter, {})
-    db.execute("DELETE FROM meta WHERE key IN (?,?)", (_READ_AT_PREFIX + adapter, _ACCOUNT_STATUS_PREFIX + adapter))
+    db.execute("DELETE FROM meta WHERE key IN (?,?,?)",
+               (_READ_AT_PREFIX + adapter, _ACCOUNT_STATUS_PREFIX + adapter, _SCAN_AFTER_PREFIX + adapter))
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -479,7 +601,7 @@ def discover(*, directory=None, database=None) -> dict:
 
 
 def _reject_unavailable(selected: dict, *, read_at: str | None, remedy: str) -> BoardError:
-    details = {"configuration": selected, "remedy": remedy}
+    details = {"configuration": selected, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": remedy}
     if read_at:
         details["catalogReadAt"] = read_at
     return BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available", **details)
@@ -491,7 +613,12 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     A buddy absent from the recorded catalog but still awaiting disappearance
     confirmation stays acceptable (ADR-027 rule 2). When the route is missing or
     unavailable, the board borrows the service's own bounded native refresh for
-    that one harness and re-checks once before rejecting (rule 3).
+    that one harness and re-checks once before rejecting (rule 3); that re-read
+    shares the harness's ``catalog-scan-after`` window and single flight with
+    the health scan, a concurrent request boundedly waits for an in-flight read
+    and re-judges on its facts, and every outcome — including a window hit or a
+    join that times out — re-judges on the facts as they are then recorded, so
+    a legally published catalog is never shadowed by the stale first rejection.
     """
     if not isinstance(configuration, dict) or set(configuration) != set(CONFIGURATION_FIELDS):
         raise BoardError("INVALID_ARGUMENT", "configuration requires exactly adapter, provider, model and effort")
@@ -518,7 +645,8 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
             raise BoardError("ADAPTER_UNAVAILABLE", health.get("remedy") or CATALOG_REMEDY, harness=health)
         if recorded is None:
             raise BoardError("CATALOG_UNAVAILABLE",
-                             f"No native model catalog is recorded; {CATALOG_REMEDY}", remedy=CATALOG_REMEDY)
+                             f"No native model catalog is recorded; {CATALOG_REMEDY}",
+                             reason=CATALOG_UNAVAILABLE_REASON, remedy=CATALOG_REMEDY)
         try:
             return _check_recorded(selected, CatalogView.from_payload(recorded.payload),
                                    pending_efforts=pending_efforts)
@@ -536,12 +664,24 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     hook = _catalog_reread.get(str(directory))
     if hook is None:
         raise first
-    try:
-        # ADR-027 rule 3: one bounded re-read of exactly this harness, borrowing
-        # the service's own refresh (environment, account binding, deadlines).
-        hook(selected["adapter"])
-    except (BoardError, OSError, ValueError, sqlite3.Error):
-        pass  # A failed bounded re-read leaves the rejection to speak for itself.
+
+    def run_reread(binding: str) -> None:
+        try:
+            # ADR-027 rule 3: one bounded re-read of exactly this harness,
+            # borrowing the service's own refresh (environment, account
+            # binding, deadlines). The claimed binding rides along so the
+            # service's read admission — not this synthetic boundary — decides
+            # whether the selection still holds it.
+            hook(selected["adapter"], binding)
+        except (BoardError, OSError, ValueError, sqlite3.Error):
+            pass  # A failed bounded re-read leaves the rejection to speak for itself.
+
+    coordinate_catalog_reread(directory, selected["adapter"], reader=run_reread, wait=True)
+    # Every outcome re-judges on the facts as they are now recorded. The open
+    # window and the bounded join timeout suppress only a second native read:
+    # a catalog another caller legally published after this caller's first
+    # judgment is already the board's current fact, and the stale first
+    # rejection must not shadow it.
     try:
         return judge()
     except BoardError as error:
@@ -564,10 +704,10 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
                                  legalEfforts=pending_efforts, configuration=selected)
             return selected
         raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available",
-                         configuration=selected)
+                         configuration=selected, reason=CATALOG_UNAVAILABLE_REASON)
     if not model["available"]:
         raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available",
-                         configuration=selected)
+                         configuration=selected, reason=CATALOG_UNAVAILABLE_REASON)
     if selected["effort"] not in model["efforts"]:
         raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model",
                          legalEfforts=model["efforts"], configuration=selected)

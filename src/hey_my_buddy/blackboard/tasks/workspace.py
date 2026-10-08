@@ -9,6 +9,7 @@ sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import contextmanager
 from ... import locking
+from collections import Counter
 import hashlib
 import json
 import os
@@ -48,14 +49,19 @@ def _errors():
         raise BoardError("INVALID_WORKSPACE", "Malformed workspace argument or recovery record") from error
 
 
-def _git(root, *args, data=None, env=None, allowed=(0,)):
+def _git_command(root, *args):
     # Do not inherit a caller's private index, repository, worktree or config
     # override. Read operations must not refresh the source index or run hooks.
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
-    git_env.update(env or {})
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
                "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", str(root), *args]
+    return command, git_env
+
+
+def _git(root, *args, data=None, env=None, allowed=(0,)):
+    command, git_env = _git_command(root, *args)
+    git_env.update(env or {})
     try:
         result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -68,6 +74,29 @@ def _git(root, *args, data=None, env=None, allowed=(0,)):
 
 def _line(root, *args, **kwargs):
     return os.fsdecode(_git(root, *args, **kwargs).removesuffix(b"\n"))
+
+
+def _git_in(git_dir, *args, allowed=(0,)):
+    """Run one repository-only Git command against an explicit Git directory.
+
+    ``-C`` into a Git directory makes Git treat the checkout as bare, which
+    refuses worktree-requiring commands like ``stash list``. ``--git-dir``
+    names the repository exactly; commands that read history and reflogs
+    (``rev-parse``, ``reflog show``) need no work tree at all.
+    """
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
+    command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
+               "--git-dir", str(git_dir), *args]
+    try:
+        result = subprocess.run(command, input=None, capture_output=True, env=git_env, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BoardError("WORKSPACE_GIT_ERROR", str(error)) from error
+    if result.returncode not in allowed:
+        raise BoardError("WORKSPACE_GIT_ERROR", "Git workspace operation failed", operation=args[0],
+                         reason=result.stderr.decode(errors="replace")[-2000:])
+    return result.stdout
 
 
 def _identity(path):
@@ -189,11 +218,127 @@ def _file_with_git_mode(root, relative, mode):
     return _file(root, relative, mode_hint=mode) if _WINDOWS else _file(root, relative)
 
 
-def _blob(root, data, *, write=False):
-    args = ["hash-object", "--no-filters", "--stdin"]
+def _blob_oid(data, fmt):
+    # The object number of already-read bytes: exactly what
+    # ``git hash-object --no-filters --stdin`` computes over the payload in the
+    # repository's own object format. No path is involved, so clean filters,
+    # CRLF conversion and autocrlf cannot change the result. An object format
+    # hashlib does not implement fails closed instead of guessing a length.
+    if fmt not in ("sha1", "sha256"):
+        raise BoardError("WORKSPACE_UNSUPPORTED", "The repository object format is not supported", format=fmt)
+    return hashlib.new(fmt, b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _known_objects(root, oids):
+    query = b"".join(oid.encode() + b"\n" for oid in oids)
+    present = set()
+    for line in _git(root, "cat-file", "--batch-check", data=query).splitlines():
+        name, _, description = line.partition(b" ")
+        if description.startswith(b"blob "):
+            present.add(name.decode())
+    return present
+
+
+def _write_objects(root, objects):
+    # One fast-import stream stores every missing payload as a blob in the same
+    # repository, carrying the exact bytes that were already read. The exported
+    # marks must reproduce the computed object numbers, so the write semantics
+    # stay hash-object's. Blob commands create no ref, branch, tag or stash.
+    # https://git-scm.com/docs/git-fast-import
+    with tempfile.TemporaryDirectory(prefix="buddy-objects-") as directory:
+        marks = Path(directory) / "marks"
+        with tempfile.TemporaryFile() as diagnostics:
+            command, git_env = _git_command(root, "fast-import", "--quiet", "--done",
+                                            "--export-marks=" + os.fspath(marks))
+            try:
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=diagnostics,
+                                           stderr=diagnostics, env=git_env)
+            except OSError as error:
+                raise BoardError("WORKSPACE_GIT_ERROR", str(error)) from error
+            code, recorded = 1, {}
+            try:
+                stream = process.stdin
+                stream.write(b"feature done\n")
+                for number, (oid, data) in enumerate(objects.items(), start=1):
+                    stream.write(b"blob\nmark :%d\ndata %d\n" % (number, len(data)))
+                    stream.write(data)
+                    stream.write(b"\n")
+                stream.write(b"done\n")
+                stream.close()
+                code = process.wait(timeout=60)
+                for line in marks.read_bytes().splitlines():
+                    name, _, oid = line.partition(b" ")
+                    recorded[name.decode()] = oid.decode()
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.wait()
+                raise BoardError("WORKSPACE_GIT_ERROR", str(error)) from error
+            except OSError as error:
+                raise BoardError("WORKSPACE_GIT_ERROR", "Git stopped reading workspace objects", reason=str(error)) from error
+            finally:
+                if not stream.closed:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
+            if code != 0:
+                diagnostics.seek(0)
+                raise BoardError("WORKSPACE_GIT_ERROR", "Git workspace operation failed", operation="fast-import",
+                                 reason=diagnostics.read().decode(errors="replace")[-2000:])
+    for number, (oid, _data) in enumerate(objects.items(), start=1):
+        if recorded.get(f":{number}") != oid:
+            raise BoardError("WORKSPACE_GIT_ERROR", "Git numbered workspace bytes differently than the computed object identity",
+                             expected=oid)
+
+
+def _batch_blobs(root, payloads, *, write):
+    """Object numbers for already-read payloads, in input order.
+
+    One Git process names the repository's object format; write=True adds one
+    existence pass and one fast-import stream for the payloads the repository
+    does not have yet, so the process count no longer grows with the file
+    count. Identities and stored bytes both come from the payloads themselves,
+    never from a second read of any path.
+    """
+    if not payloads:
+        return []
+    fmt = _line(root, "rev-parse", "--show-object-format")
+    oids = [_blob_oid(payload, fmt) for payload in payloads]
     if write:
-        args.append("-w")
-    return _line(root, *args, data=data)
+        present = _known_objects(root, oids)
+        missing = {}
+        for oid, payload in zip(oids, payloads):
+            if oid not in present:
+                missing.setdefault(oid, payload)
+        if missing:
+            _write_objects(root, missing)
+    return oids
+
+
+def _blob(root, data, *, write=False):
+    return _batch_blobs(root, [data], write=write)[0]
+
+
+def _batch_objects(root, oids):
+    """Read many committed objects' exact bytes from one Git process."""
+    if not oids:
+        return []
+    query = b"".join(oid.encode() + b"\n" for oid in oids)
+    payload = _git(root, "cat-file", "--batch", data=query)
+    results = []
+    position = 0
+    for oid in oids:
+        end = payload.find(b"\n", position)
+        name, _, description = payload[position:end].partition(b" ")
+        fields = description.split()
+        if name.decode() != oid or len(fields) != 2 or fields[0] != b"blob":
+            raise BoardError("WORKSPACE_GIT_ERROR", "Git did not return a workspace object", oid=oid)
+        start = end + 1
+        results.append(payload[start:start + int(fields[1])])
+        position = start + int(fields[1]) + 1
+    if position != len(payload):
+        raise BoardError("WORKSPACE_GIT_ERROR", "Git returned more workspace objects than requested")
+    return results
 
 
 def _entries(root, revision=None):
@@ -238,11 +383,14 @@ def _observe(root, selected, *, write=False, require_selected=False):
     head = _commit(root, "HEAD")
     index = _entries(root)
     tracked, untracked, included = {}, {}, {}
+    blobs = []
     for path in index:
         item = _file_with_git_mode(root, path, index[path][0])
         if item is not None:
             mode, data = item
-            tracked[path] = [mode, _blob(root, data, write=write)]
+            entry = [mode, None]
+            blobs.append((entry, data))
+            tracked[path] = entry
     for path in _untracked(root, selected):
         item = _file(root, path)
         if item is None:
@@ -250,7 +398,11 @@ def _observe(root, selected, *, write=False, require_selected=False):
         mode, data = item
         untracked[path] = [mode, _sha(data)]
         if _in_scope(path, selected):
-            included[path] = [mode, _blob(root, data, write=write)]
+            entry = [mode, None]
+            blobs.append((entry, data))
+            included[path] = entry
+    for (entry, _data), oid in zip(blobs, _batch_blobs(root, [data for _entry, data in blobs], write=write)):
+        entry[1] = oid
     if _WINDOWS:
         windows_paths.validate_unique([*index, *untracked])
     if require_selected:
@@ -477,17 +629,17 @@ def _worktree_record(root, target):
 def _materialize(root, entries):
     if _WINDOWS:
         windows_paths.validate_unique(entries)
-        for path, (mode, oid) in entries.items():
+    contents = iter(_batch_objects(root, [oid for _mode, oid in entries.values()]))
+    if _WINDOWS:
+        for (path, (mode, _oid)), data in zip(entries.items(), contents):
             _relative(path)
-            data = _git(root, "cat-file", "blob", oid)
             target = Path(root) / path
             if mode == "120000":
                 windows_paths.symlink(target, os.fsdecode(data))
             else:
                 windows_paths.write_new(target, data, create_parents=True)
         return
-    for path, (mode, oid) in entries.items():
-        data = _git(root, "cat-file", "blob", oid)
+    for (path, (mode, _oid)), data in zip(entries.items(), contents):
         with _parent(root, path, create=True) as (parent, name):
             if mode == "120000":
                 os.symlink(os.fsdecode(data), name, dir_fd=parent)
@@ -648,6 +800,12 @@ def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
 #: record so a Host can restore, adopt or abandon the exact observed site later
 #: without turning the failed working tree into an authorized baseline.
 SCOPE_EVIDENCE_LIMIT = 256
+#: Bounded per-entry observation of one repository's shared stash list. The
+#: bound keeps a flooded stash reflog from inflating a frozen turn input; the
+#: ``truncated`` flag keeps the cut honest instead of silent.
+STASH_ENTRY_LIMIT = 64
+#: Bounded per-side entries carried by one frozen stash comparison record.
+STASH_COMPARISON_LIMIT = 16
 #: Bounded per-path content binding of one sealed output. Keeping the blob
 #: identity of every changed path lets integration verification compare the
 #: immutable artifact with an actual target checkout independently of the
@@ -718,6 +876,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
     violations = set()
     adopted = set()
     excluded_changes = set()
+    pending = []
     for path, fingerprint in observation["untracked"].items():
         if path in excluded and excluded[path] == fingerprint:
             continue
@@ -726,7 +885,9 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
         item = _file(root, path)
         if item is None or [item[0], _sha(item[1])] != fingerprint:
             raise BoardError("WORKSPACE_CHANGED", "An output changed during sealing", path=path)
-        entry = [item[0], _blob(root, item[1], write=True)]
+        pending.append((path, item))
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
+        entry = [item[0], oid]
         if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
         elif allow_outside_scope:
@@ -947,6 +1108,168 @@ def normalize_scope(values) -> list[str]:
         return sorted({_relative(value, allow_root=True) for value in values})
 
 
+# -- shared stash observations (facts, never gates) ---------------------------
+def _shell_quoted(value: str) -> str:
+    """One POSIX single-quoted shell word; nothing inside is ever interpreted."""
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def _stash_unknown(repository_path, reason) -> dict:
+    return stash_observation_unknown(repository_path, reason)
+
+
+def stash_observation_unknown(repository_path, reason) -> dict:
+    """The honest unread observation for one repository: state ``unknown``.
+
+    An unknown is a fact about a failed reading, never an empty list and never
+    an error: callers freeze it beside the reason so a Host can tell "there
+    were no stash entries" from "the stash list could not be read".
+    """
+    return {"version": 1, "repositoryPath": str(repository_path), "state": "unknown",
+            "reason": str(reason)[-512:], "entries": None, "truncated": False, "totalCount": None}
+
+
+def shared_stash_inventory(repository_path) -> dict:
+    """One read-only observation of the stash entries a repository shares.
+
+    Managed checkouts are worktrees of the user's repository: ``refs/stash`` and
+    its reflog live in the common Git directory, so a stash created or removed in
+    any worktree — the user's own checkout included — is visible and removable in
+    every other one. The recorded ``repositoryPath`` may therefore be either a
+    worktree root or the repository's own Git directory (a snapshot's
+    ``snapshot.repositoryPath`` is the common Git dir, not a worktree); Git's own
+    ``rev-parse --git-common-dir`` resolves both shapes to the one directory
+    that actually owns the shared reflog, and ``reflog show`` reads it there
+    without needing any work tree. Each entry records its commit id and the full
+    description Git itself shows (``%gs``, the reflog subject; Git stores
+    newline-bearing messages flattened there, while the commit object keeps the
+    full text). A repository that cannot be read is an honest ``unknown``
+    observation, never an error: a fact that cannot be read must not block or
+    fail otherwise ready work.
+    """
+    path = str(repository_path)
+    try:
+        common = _line(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if not common:
+            return _stash_unknown(path, "the repository did not name a common Git directory")
+        if _git_in(common, "rev-parse", "--verify", "--quiet", "refs/stash", allowed=(0, 1)).strip():
+            payload = _git_in(common, "reflog", "show", "--format=%H%x00%gs%x00", "refs/stash")
+        else:
+            # No stash ref at all is a complete, empty observation.
+            payload = b""
+    except BoardError as error:
+        reason = error.details.get("reason") if isinstance(error.details, dict) else None
+        return _stash_unknown(path, reason or error.message)
+    tokens = payload.split(b"\0")
+    entries = []
+    for index in range(0, len(tokens) - 1, 2):
+        # ``--format`` terminates every entry with a newline, which lands on the
+        # next record's hash token; descriptions keep their own bytes verbatim.
+        commit = tokens[index][1:] if tokens[index].startswith(b"\n") else tokens[index]
+        name = commit.decode()
+        # Valid UTF-8 passes through exactly. Undecodable bytes become U+FFFD
+        # deterministically: the description is display text, the commit id is
+        # the exact recoverable identity, and canonical JSON must stay encodable.
+        description = tokens[index + 1].decode("utf-8", "replace")
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", name) is None:
+            return _stash_unknown(path, "the stash reflog did not parse as commit ids and descriptions")
+        entries.append({"commit": name, "description": description})
+    total = len(entries)
+    return {"version": 1, "repositoryPath": path, "state": "observed",
+            "entries": entries[:STASH_ENTRY_LIMIT], "truncated": total > STASH_ENTRY_LIMIT,
+            "totalCount": total}
+
+
+_STASH_CAUSE_NOTE = (
+    "Why a stash entry disappeared is unknown: the user or another session may have popped or"
+    " dropped it. Nothing was restored automatically and the turn is not judged failed on this"
+    " fact; review the recorded commit and description, then recover it with the recorded"
+    " git stash store command if it is wanted."
+)
+
+
+def shared_stash_comparison(start, seal) -> dict:
+    """Compare two stash observations by complete entries.
+
+    An entry is its commit id together with its description: the same commit
+    stashed twice with different descriptions is two entries, an identical
+    re-registration of the same pair is not a change, and the stash's stack
+    position is not part of its identity because popping one entry shifts every
+    index without losing content. ``state`` describes the quality of the
+    comparison: ``observed`` when both sides were completely read, ``partial``
+    when a side carried only its bounded entry list, ``unknown`` when a side
+    could not be read at all. A truncated side hides entries beyond its cut, so
+    disappearance can only be proven against a completely read seal side and
+    appearance only against a completely read start side; the unprovable
+    direction claims nothing and fabricates no loss — the real entries may
+    simply sit beyond the observed window. This record is evidence for a Host;
+    it restores nothing, judges nothing and can never fail a seal or a
+    verification.
+    """
+    def observed(record):
+        return (isinstance(record, dict) and record.get("version") == 1 and record.get("state") == "observed"
+                and isinstance(record.get("entries"), list)
+                and all(isinstance(item, dict) and isinstance(item.get("commit"), str)
+                        and isinstance(item.get("description"), str) for item in record["entries"]))
+
+    def counted(record):
+        return Counter((item["commit"], item["description"]) for item in record["entries"])
+
+    record = {"version": 1, "state": "unknown", "changed": None,
+              "lostEntries": [], "newEntries": [], "lostCount": 0, "newCount": 0, "truncated": False}
+    unknown = [side for side, value in (("start", start), ("seal", seal)) if not observed(value)]
+    if unknown:
+        record["unknownSides"] = unknown
+        return record
+    truncated_sides = [side for side, value in (("start", start), ("seal", seal)) if value.get("truncated")]
+    record["truncated"] = bool(truncated_sides)
+    # Only a completely read opposite side can prove a direction: entries missing
+    # from a truncated seal may exist beyond its cut, entries absent from a
+    # truncated start may have existed before its cut.
+    lost_provable = not seal.get("truncated")
+    new_provable = not start.get("truncated")
+    lost_entries, new_entries = [], []
+    if lost_provable:
+        lost = counted(start)
+        lost.subtract(counted(seal))
+        for (commit, description), count in sorted((item for item in lost.items() if item[1] > 0),
+                                                    key=lambda item: (-item[1], item[0][0], item[0][1])):
+            for _ in range(count):
+                lost_entries.append({"commit": commit, "description": description, "cause": "unknown",
+                                     "recoverCommand": f"git stash store -m {_shell_quoted(description)} {commit}"})
+    if new_provable:
+        new = counted(seal)
+        new.subtract(counted(start))
+        for (commit, description), count in sorted((item for item in new.items() if item[1] > 0),
+                                                    key=lambda item: (-item[1], item[0][0], item[0][1])):
+            for _ in range(count):
+                new_entries.append({"commit": commit, "description": description})
+    record.update(
+        lostEntries=lost_entries[:STASH_COMPARISON_LIMIT],
+        newEntries=new_entries[:STASH_COMPARISON_LIMIT],
+        lostCount=len(lost_entries),
+        newCount=len(new_entries),
+    )
+    if not truncated_sides:
+        record["state"] = "observed"
+        record["changed"] = bool(lost_entries or new_entries)
+    else:
+        record["state"] = "partial"
+        record["truncatedSides"] = truncated_sides
+        unproven = [direction for direction, provable in (("lost", lost_provable), ("new", new_provable))
+                    if not provable]
+        record["unprovenDirections"] = unproven
+        record["partialNote"] = (
+            "One observation was truncated to its bounded entry list, so "
+            + " and ".join(unproven)
+            + " entries beyond the observed window cannot be proven from these records; no such"
+            " disappearance or appearance is claimed."
+        )
+    if lost_entries:
+        record["causeNote"] = _STASH_CAUSE_NOTE
+    return record
+
+
 def _conflict_index(records):
     entries = {}
     for record in records:
@@ -961,30 +1284,45 @@ def _entry_state_matches(current, expected):
     return current == expected
 
 
-def _entry_is_authorized(root, entry, current):
-    authorized = entry.get("authorized")
-    if authorized is None:
-        return current is None
-    if not isinstance(current, dict) or current.get("mode") != authorized.get("mode"):
-        return False
-    item = _file_with_git_mode(root, entry["path"], authorized.get("mode"))
-    return item is not None and _blob(root, item[1]) == authorized.get("oid")
+def _site_conflicts(root, recorded, selected, index):
+    """Selected paths matching neither the recorded site nor its authorized state.
+
+    Each path keeps the recorded compare-and-swap — the observed state read, the
+    authorized content read, then the observed/authorized index check — while
+    one batch numbers the authorized bytes, so the Git process count stays
+    independent of the selected path count.
+    """
+    observed = {path: _observed_file(root, path, mode_hint=(index.get(path) or [None])[0]) for path in selected}
+    matches, pending = {}, []
+    for path in selected:
+        entry = recorded[path]
+        if _entry_state_matches(observed[path], entry.get("observed")):
+            matches[path] = True
+            continue
+        authorized = entry.get("authorized")
+        if authorized is None:
+            matches[path] = observed[path] is None
+        elif not isinstance(observed[path], dict) or observed[path].get("mode") != authorized.get("mode"):
+            matches[path] = False
+        else:
+            pending.append(path)
+    items = {path: _file_with_git_mode(root, path, recorded[path]["authorized"].get("mode")) for path in pending}
+    identities = iter(_batch_blobs(root, [items[path][1] for path in pending if items[path] is not None],
+                                   write=False))
+    for path in pending:
+        item = items[path]
+        matches[path] = item is not None and next(identities) == recorded[path]["authorized"].get("oid")
+    return [path for path in selected
+            if not matches[path] or _entry_state(index, path) not in (recorded[path].get("observedIndex"),
+                                                                      recorded[path].get("authorizedIndex"))]
 
 
-def _entry_matches(root, entry, index_entries):
-    """Compare-and-swap test: the recorded site or its already-authorized state."""
-    current = _observed_file(root, entry["path"], mode_hint=(index_entries.get(entry["path"]) or [None])[0])
-    if not _entry_state_matches(current, entry.get("observed")) and not _entry_is_authorized(root, entry, current):
-        return False
-    index = _entry_state(index_entries, entry["path"])
-    return index == entry.get("observedIndex") or index == entry.get("authorizedIndex")
-
-
-def _write_path(root, path, entry):
+def _write_path(root, path, entry, data=None):
     if _WINDOWS:
         _relative(path)
         target = Path(root) / path
-        data = _git(root, "cat-file", "blob", entry["oid"]) if entry is not None else None
+        if data is None and entry is not None:
+            data = _git(root, "cat-file", "blob", entry["oid"])
         windows_paths.restore(target, None if entry is None or entry["mode"] == "120000" else data,
                               symlink_target=os.fsdecode(data) if entry is not None and entry["mode"] == "120000" else None)
         return
@@ -997,7 +1335,8 @@ def _write_path(root, path, entry):
             raise BoardError("WORKSPACE_UNSUPPORTED", "A managed path is now a directory", path=path) from error
         if entry is None:
             return
-        data = _git(root, "cat-file", "blob", entry["oid"])
+        if data is None:
+            data = _git(root, "cat-file", "blob", entry["oid"])
         if entry["mode"] == "120000":
             os.symlink(os.fsdecode(data), name, dir_fd=parent)
         else:
@@ -1041,8 +1380,13 @@ def _reset_site(root, manifest, observation):
         if path in excluded and excluded[path] == fingerprint:
             continue
         selected.add(path)
-    for path in sorted(selected):
-        _write_path(root, path, _entry_state(initial, path))
+    ordered = sorted(selected)
+    states = {path: _entry_state(initial, path) for path in ordered}
+    needed = [path for path in ordered if states[path] is not None]
+    contents = iter(_batch_objects(root, [states[path]["oid"] for path in needed]))
+    payloads = dict(zip(needed, contents))
+    for path in ordered:
+        _write_path(root, path, states[path], data=payloads.get(path))
     _restore_index(root, {path: _entry_state(initial_index, path) for path in sorted(selected)
                           if _entry_state(current_index, path) != _entry_state(initial_index, path)})
     # An excluded cache was never captured by content, so a modified one cannot be
@@ -1146,11 +1490,14 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
         return _finish_record(repository, existing, directory, ref_name=output_id, ref_kind="abandoned",
                               record_name="abandoned.json", patch_name="abandoned.patch", bindings=_RECORD_BINDINGS)
     entries = dict(observation["tracked"])
+    pending = []
     for path in observation["untracked"]:
         item = _file(root, path)
         if item is None:
             raise BoardError("WORKSPACE_CHANGED", "A managed path disappeared during evidence capture", path=path)
-        entries[path] = [item[0], _blob(root, item[1], write=True)]
+        pending.append((path, item))
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
+        entries[path] = [item[0], oid]
     initial = _entries(root, manifest["inputCommit"])
     changed = sorted(path for path in set(initial) | set(entries) if initial.get(path) != entries.get(path))
     tree = _tree(root, entries)
@@ -1261,12 +1608,16 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             if not selected:
                 raise BoardError("WORKSPACE_CONFLICT", "The recorded failure site has no blocking path to restore")
             index = _entries(root)
-            conflicting = [path for path in selected if not _entry_matches(root, entries[path], index)]
+            conflicting = _site_conflicts(root, entries, selected, index)
             if conflicting:
                 raise BoardError("WORKSPACE_CONFLICT", "Selected paths changed after the recorded failure; the site is preserved",
                                  conflictingPaths=sorted(conflicting)[:32])
+            authorized = {path: entries[path].get("authorized") for path in selected}
+            needed = [path for path in selected if authorized[path] is not None]
+            contents = iter(_batch_objects(root, [authorized[path]["oid"] for path in needed]))
+            payloads = dict(zip(needed, contents))
             for path in selected:
-                _write_path(root, path, entries[path].get("authorized"))
+                _write_path(root, path, authorized[path], data=payloads.get(path))
             _restore_index(root, {path: entries[path].get("authorizedIndex") for path in selected
                                   if _entry_state(index, path) != entries[path].get("authorizedIndex")})
             after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True)
@@ -1497,6 +1848,37 @@ def _workspace_identifier(value):
             and all(character in "0123456789abcdef" for character in value[3:]))
 
 
+def _attached_branch_report(checkout_root, record) -> dict:
+    """The honest diagnosis of a correctly registered worktree on a branch.
+
+    Registration and the allocation's lock can both be exactly right while the
+    checkout's HEAD sits on a branch a Worker created or switched to, and that
+    state is not the disposable detached checkout cleanup removes. This names
+    the exact branch and the one safe way for a Host to make the checkout
+    detachable again — ``switch --detach`` moves only HEAD, never a branch, tag
+    or other reference — and states that the board itself never detaches,
+    deletes or moves any branch or reference. The decision whether the branch
+    survives belongs to the Host, not to this report.
+    """
+    ref = record.get("branch") if isinstance(record.get("branch"), str) else ""
+    head = record.get("HEAD") if isinstance(record.get("HEAD"), str) else ""
+    name = ref.removeprefix("refs/heads/")
+    report = {
+        "branch": name or None,
+        "ref": ref or None,
+        "headCommit": head or None,
+        "note": "The checkout is registered and locked correctly, but its HEAD is attached to"
+                + (f" branch {name}" if name else " a branch")
+                + " instead of a detached commit, so it is not the disposable detached state"
+                " this cleanup removes.",
+    }
+    if head:
+        report["detachCommand"] = f"git -C {_shell_quoted(str(checkout_root))} switch --detach {_shell_quoted(head)}"
+        report["retry"] = ("After detaching, plan or apply the cleanup again; the branch, its ref"
+                           " and its commits are untouched and stay the Host's to keep or delete.")
+    return report
+
+
 def _path_present(path: Path) -> bool:
     """True while anything still occupies this exact path, including a dangling link.
 
@@ -1616,6 +1998,7 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
             "path": allocation["path"] if allocation else manifest["checkoutRoot"], "cwd": manifest["path"],
             "allocation": allocation, "worktree": False, "locked": None,
             "unsealedPaths": [], "refs": [], "sealedObservation": None,
+            "attachedBranch": None,
         }
         if allocation is None:
             result["reasons"].append("not-a-managed-worktree")
@@ -1660,8 +2043,20 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     outside the write scope still reports ``unsealed-changes``.
     """
     record = _worktree_record(repository, checkout_root)
-    if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
+    if record is None:
+        # Registration itself is missing: its own reason, never a claim about
+        # locks or branches that were not read.
         result["reasons"].append("unregistered-checkout")
+    elif record.get("locked") != "buddy:" + allocation["workspaceId"]:
+        # A worktree someone else locked stays theirs; the mismatch keeps its
+        # own reason instead of hiding behind "unregistered".
+        result["reasons"].append("lock-mismatch")
+    elif "detached" not in record:
+        # Registered and locked by exactly this allocation, but HEAD is attached
+        # to a branch. Report the branch and the safe detach; never detach,
+        # delete or move any branch or reference here.
+        result["reasons"].append("attached-branch")
+        result["attachedBranch"] = _attached_branch_report(checkout_root, record)
     else:
         result["worktree"] = True
         result["locked"] = record.get("locked")
@@ -1745,8 +2140,24 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
                 raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
         repository = Path(actual["repositoryPath"])
         record = _worktree_record(repository, checkout_root)
-        if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is not this allocation's registered worktree",
+        if record is not None and record.get("locked") == "buddy:" + allocation["workspaceId"] and "detached" not in record:
+            # Registration and lock are exactly this allocation's; only the
+            # attached HEAD blocks the removal. Refuse with the branch, the safe
+            # detach command and the retry — never detach, delete or move any
+            # branch or reference on the board's own authority.
+            report = _attached_branch_report(checkout_root, record)
+            raise BoardError(
+                "WORKSPACE_UNSAFE",
+                "The cleanup target is registered and locked but its HEAD is attached to branch "
+                + str(report.get("branch"))
+                + "; detach it with the recorded command and retry the cleanup",
+                path=str(checkout_root), attachedBranch=report,
+            )
+        if record is None:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target has no worktree registration",
+                             path=str(checkout_root))
+        if record.get("locked") != "buddy:" + allocation["workspaceId"]:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is locked by a different allocation",
                              path=str(checkout_root))
         removal["repositoryPath"] = str(repository)
         try:

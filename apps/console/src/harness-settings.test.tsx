@@ -78,7 +78,7 @@ function snapshot(options: { harnesses?: HarnessHealth[] } = {}): HarnessSnapsho
     decisions: [],
     sampleCounts: {},
     modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }, { ...glm, limit: 2, active: 0 }],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
     harnesses: options.harnesses ?? harnesses(),
   };

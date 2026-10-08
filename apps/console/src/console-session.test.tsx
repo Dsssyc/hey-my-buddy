@@ -81,7 +81,7 @@ function fixture(options: {
     familyAnnotations: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", revision: 1, updatedAt: null }],
     preferences: [], familyPreferences: [], preferenceOverrides: [], evidence: [], decisions: [], sampleCounts: { [flashOff]: 4 },
     modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
-    tasks: { runs: options.records ?? [], total: (options.records ?? []).length },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
   const workflows = options.workflows ?? new Map<string, Workflow>();
@@ -138,8 +138,9 @@ function fixture(options: {
     }
     throw new ApiError("FORBIDDEN", "board refused a mutation");
   });
+  const records = options.records ?? [];
   const tasks = vi.fn(async (query: TaskQuery) => {
-    const runs = state.tasks.runs.filter(row => (!query.rootsOnly || row.delegation?.kind === "goal")
+    const runs = records.filter(row => (!query.rootsOnly || row.delegation?.kind === "goal")
       && (!query.query || row.task.includes(query.query)));
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
@@ -152,7 +153,7 @@ function fixture(options: {
     }
     return structuredClone(state);
   });
-  const api = { snapshot, tasks, command, task: vi.fn(async (runId: string) => state.tasks.runs.find(t => t.runId === runId)),
+  const api = { snapshot, tasks, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
@@ -167,7 +168,7 @@ function envelope(consoleSession: unknown, include = true) {
     configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    profiles: [], cards: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { runs: [] },
+    profiles: [], cards: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf",
     ...(include ? { consoleSession } : {}),
   };

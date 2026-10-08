@@ -38,6 +38,10 @@ function workflow(task: Task): Workflow {
 }
 function fixture(records: Task[] = []) {
   const profiles = catalog();
+  // The board-wide awaiting-Host root count the slim snapshot carries; the
+  // fixture computes it with the server's own dedup semantics.
+  const pendingCount = new Set(records.filter(t => t.workflow?.awaitingHost)
+    .map(t => t.delegation?.rootRunId || t.runId)).size;
   const snapshot: Snapshot = { csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
@@ -47,7 +51,7 @@ function fixture(records: Task[] = []) {
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
     modelConcurrency: [],
-    tasks: { runs: records, total: records.length },
+    tasks: { pendingCount },
     capabilities: { selection: false, maintenance: false, evaluationWriteGate: true } };
   const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,
     expiresAt: new Date(Date.now() + 120000).toISOString() };
@@ -57,20 +61,20 @@ function fixture(records: Task[] = []) {
       snapshot.gate = { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } };
       return grant;
     }
-    if (operation === "workflow_get") return workflows.get(String(params.runId)) || workflow(snapshot.tasks.runs.find(t => t.runId === params.runId)!);
+    if (operation === "workflow_get") return workflows.get(String(params.runId)) || workflow(records.find(t => t.runId === params.runId)!);
     throw new Error(`Unexpected write: ${operation}`);
   });
   const tasks = vi.fn(async (query: TaskQuery) => {
-    const runs = snapshot.tasks.runs.filter(t => (!query.rootsOnly || t.delegation?.kind === "goal")
+    const runs = records.filter(t => (!query.rootsOnly || t.delegation?.kind === "goal")
       && (!query.projectId || t.delegation?.project.id === query.projectId)
       && (!query.hostId || t.delegation?.sourceHostId === query.hostId)
       && (!query.query || t.task.includes(query.query)));
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
   const api = { snapshot: vi.fn(async () => structuredClone(snapshot)), tasks, command,
-    task: vi.fn(async (runId: string) => snapshot.tasks.runs.find(t => t.runId === runId)),
+    task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
-  return { snapshot, api, tasks, command, workflows };
+  return { snapshot, records, api, tasks, command, workflows };
 }
 
 afterEach(() => { cleanup(); window.location.hash = ""; });
@@ -100,6 +104,20 @@ describe("desktop console", () => {
     const button = screen.getByRole("button", { name: "刷新工作台" });
     await user.click(button);
     await waitFor(() => expect(button.getAttribute("title")).toContain("刷新失败：合成读取失败"));
+  });
+
+  it("shows the server's board-wide pending count in the top bar, never a count inferred from rows", async () => {
+    const f = fixture([goal("alpha")]);
+    // The fixture's rows contain no awaiting-Host goal at all; the count only
+    // comes from the slim snapshot's server-side field.
+    f.snapshot.tasks.pendingCount = 5;
+    const { container } = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "还没有工作目标" });
+    const badge = container.querySelector(".nav-count");
+    expect(badge?.textContent).toBe("5");
+    expect(badge?.getAttribute("title")).toBe("全部委派中等待 Host 决定的目标");
+    f.snapshot.tasks.pendingCount = 0;
+    await waitFor(() => expect(container.querySelector(".nav-count")).toBeNull(), { timeout: 5000 });
   });
 
   it("uses the exact top navigation and presents the 22 native configurations as six read-only model families", async () => {
@@ -234,12 +252,11 @@ describe("desktop console", () => {
     await screen.findByRole("button", { name: /目标 old/ });
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 240;
-    f.snapshot.tasks.runs.unshift({ ...goal("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
+    f.records.unshift({ ...goal("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     await waitFor(() => expect((screen.getByRole("button", { name: "刷新工作台" }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByRole("button", { name: /条新记录/ })).toBeNull();
-    f.snapshot.tasks.runs.unshift({ ...goal("new"), createdAt: "2026-09-24T11:00:00Z" });
-    f.snapshot.tasks.total = 2;
+    f.records.unshift({ ...goal("new"), createdAt: "2026-09-24T11:00:00Z" });
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     expect(await screen.findByRole("button", { name: /目标 new/ })).toBeTruthy();
     expect(scroll.scrollTop).toBe(240);
@@ -253,8 +270,7 @@ describe("desktop console", () => {
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await waitFor(() => expect(f.tasks).toHaveBeenCalledTimes(1));
     await screen.findByRole("heading", { name: "没有匹配的委派" });
-    f.snapshot.tasks.runs.push(goal("first"));
-    f.snapshot.tasks.total = 1;
+    f.records.push(goal("first"));
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     expect(await screen.findByRole("button", { name: /目标 first/ })).toBeTruthy();
   });

@@ -478,8 +478,6 @@ export type Snapshot = {
   decisions: Decision[];
   /** Read-only bounded selection health; absent data is unknown, not success. */
   routingHealth?: RoutingHealth;
-  /** Current read-only evidence inventory; absence means no observation. */
-  backupPreflight?: BackupPreflight;
   /** Recorded verification samples per profile; independent of published card prose. */
   sampleCounts: Record<string, number>;
   /**
@@ -488,7 +486,12 @@ export type Snapshot = {
    * read-only occupancy; publishing it is refused.
    */
   modelConcurrency: ModelConcurrencyEntry[];
-  tasks: { runs: Task[]; total: number };
+  /**
+   * The board-wide count of delegation roots awaiting their Host, computed by
+   * the service over every run. It is never inferred from a page of recent
+   * rows; the full execution records stay on the paginated `tasks` read.
+   */
+  tasks: { pendingCount: number };
   capabilities: Record<string, boolean>;
 };
 export type WriterGrant = {

@@ -8,6 +8,8 @@ health failure never masks or resurrects catalog state.
 """
 from datetime import datetime, timedelta, timezone
 import json
+import threading
+import time
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
@@ -57,14 +59,16 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})
         return next(item for item in listed['profiles'] if item['profileId'] == 'dsh:fixture:alpha:max')
 
-    def switch_catalog_account(self, *, source='native', credential_revision=1):
+    def switch_catalog_account(self, *, source='native', credential_revision=1, revision=1):
         # Only private, nonsecret selection metadata changes. No account flow,
         # environment provider, credential file or native discovery is used.
+        # The revision mirrors Accounts.set's selection epoch: every real flip
+        # bumps it, so an A→B→A round trip never reuses the departed epoch.
         if source == 'worker':
             self.enterContext(patch.object(accounts, 'capabilities', return_value={
                 name: True for name in accounts.CAPABILITIES}))
         with self.board.store.db.write() as db:
-            accounts._write(db, 'account-selection:dsh', {'source': source, 'revision': 1})
+            accounts._write(db, 'account-selection:dsh', {'source': source, 'revision': revision})
             accounts._write(db, 'account-credential:' + canonical_json(['dsh', source]), credential_revision)
             selected = accounts.selection(db, 'dsh')
             accounts._invalidate(db, 'dsh', selected)
@@ -87,7 +91,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
             self.assertEqual(catalog.pending_families(db), {})
         calls = []
-        catalog.register_catalog_reread(self.directory, calls.append)
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
         with self.assertRaises(BoardError) as rejected:
             self.validate()
         self.assertEqual(rejected.exception.code, 'CONFIGURATION_UNAVAILABLE')
@@ -216,6 +220,23 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.evaluation.record_catalog(reading(models=()))
         self.assert_old_account_model_is_excluded()
 
+    def test_account_round_trip_never_resurrects_the_old_accounts_read_facts(self):
+        # The identity check alone hides the old facts only while the binding
+        # differs; clearing them at the switch is what stops them from coming
+        # back when the original binding itself returns.
+        self.evaluation.record_catalog(reading())
+        self.evaluation.record_catalog(reading(models=()))
+        self.switch_catalog_account(source='worker', credential_revision=0)
+        self.switch_catalog_account(source='native', credential_revision=0)
+        with self.board.store.db.read() as db:
+            self.assertIsNone(catalog.catalog_read_at(db, 'dsh'),
+                              'Returning to the old identity never resurrects its read time')
+            self.assertEqual(catalog.catalog_account_status(db, 'dsh'), 'unknown',
+                             'The old confirmed account fact stays cleared')
+            self.assertEqual(catalog.pending_families(db), {},
+                             'The old account disappearance window never returns')
+            self.assertIsNone(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'))
+
     def test_c02_pending_model_is_still_accepted_explicitly(self):
         self.evaluation.record_catalog(reading())
         self.evaluation.record_catalog(reading(models=()))
@@ -235,28 +256,41 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             self.validate()
         self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
 
+    def scan_marker(self):
+        with self.board.store.db.read() as db:
+            row = db.execute("SELECT value FROM meta WHERE key='catalog-scan-after:dsh'").fetchone()
+        return row[0] if row else None
+
+    def expire_reread_window(self):
+        with self.board.store.db.write() as db:
+            db.execute("DELETE FROM meta WHERE key='catalog-scan-after:dsh'")
+
+    def reject_missing(self, identity=None):
+        with self.assertRaises(BoardError) as rejected:
+            self.validate(identity or {**IDENTITY, "model": "beta"})
+        return rejected.exception
+
     def test_c05_one_bounded_reread_then_a_rejection_that_names_the_facts(self):
         self.evaluation.record_catalog(reading())
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
 
         catalog.register_catalog_reread(self.directory, reread)
-        with self.assertRaises(BoardError) as rejected:
-            self.validate({**IDENTITY, "model": "beta"})
-        error = rejected.exception
+        error = self.reject_missing()
         self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"], "Exactly one bounded re-read of exactly that harness")
         self.assertEqual(error.details["catalogReadAt"], self.clock.value)
         self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
+        self.assertEqual(error.details["reason"], "catalog-unavailable")
         self.assertIn("adapters", error.details["remedy"])
 
     def test_c05_a_successful_reread_admits_the_route_without_rejection(self):
         self.evaluation.record_catalog(reading())
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=('alpha', 'beta')))
 
@@ -270,7 +304,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         read_at = self.clock.value
         self.clock.advance(60)
 
-        def reread(name):
+        def reread(name, binding):
             raise BoardError("ADAPTER_UNAVAILABLE", "fixture refresh failed")
 
         catalog.register_catalog_reread(self.directory, reread)
@@ -287,7 +321,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         read_at = self.clock.value
         harnesses = self.board.service.harnesses
 
-        def reread(name):
+        def reread(name, binding):
             record = harnesses.get(name)
             harnesses.invalidate(name, record["revision"], "HARNESS_HANDSHAKE_FAILED")
 
@@ -300,16 +334,428 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
         self.assertEqual(error.details["harness"]["reasonCode"], "HARNESS_HANDSHAKE_FAILED")
 
+    def test_c05_reread_is_limited_to_one_native_read_per_scan_window(self):
+        from hey_my_buddy.blackboard.service.harness_health import SCAN_SECONDS
+
+        self.evaluation.record_catalog(reading())
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        error = self.reject_missing()
+        self.assertEqual(calls, ["dsh"], "The first rejection in a fresh window reads once")
+        window = catalog._parse_time(self.scan_marker())
+        remaining = (window - datetime.now(timezone.utc)).total_seconds()
+        self.assertGreater(remaining, SCAN_SECONDS - 30, "The claim reuses the health scan window length")
+        self.assertLessEqual(remaining, SCAN_SECONDS)
+        for _ in range(3):
+            again = self.reject_missing()
+            self.assertEqual(again.details["reason"], "catalog-unavailable")
+            self.assertEqual(again.details["remedy"], catalog.CATALOG_REMEDY)
+            self.assertEqual(again.details["catalogReadAt"], self.clock.value)
+        self.assertEqual(calls, ["dsh"], "Repeat submissions inside the window start no native read")
+        self.expire_reread_window()
+        self.reject_missing()
+        self.assertEqual(calls, ["dsh", "dsh"], "After the window a rejection may read again")
+
+    def test_c05_a_window_noted_by_the_health_scan_bounds_validation_too(self):
+        from hey_my_buddy.blackboard.service.harness_health import _later
+
+        self.evaluation.record_catalog(reading())
+        with self.board.store.db.write() as db:
+            db.execute("INSERT INTO meta(key,value) VALUES('catalog-scan-after:dsh',?)"
+                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_later(60),))
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        self.reject_missing()
+        self.assertEqual(calls, [], "The health scan's open window bounds the validation re-read")
+
+    def test_c05_a_failed_reread_consumes_the_window(self):
+        self.evaluation.record_catalog(reading())
+        calls = []
+
+        def reread(name, binding):
+            calls.append(name)
+            raise BoardError("CATALOG_UNAVAILABLE", "fixture native read failed")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        first = self.reject_missing()
+        self.assertEqual(first.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertIsNotNone(self.scan_marker(), "The failed read still claims the window")
+        again = self.reject_missing()
+        self.assertEqual(again.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(again.details["catalogReadAt"], first.details["catalogReadAt"])
+        self.assertEqual(calls, ["dsh"], "The failed native read is not retried inside the window")
+
+    def test_c05_an_unknown_reread_consumes_the_window_and_keeps_the_facts(self):
+        self.evaluation.record_catalog(reading())
+        read_at = self.clock.value
+        calls = []
+
+        def reread(name, binding):
+            calls.append(name)
+            unknown = reading(models=(), account_status='unknown')
+            unknown['providers'] = []
+            self.evaluation.record_catalog(unknown)
+
+        catalog.register_catalog_reread(self.directory, reread)
+        first = self.reject_missing()
+        self.assertEqual(first.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(first.details["catalogReadAt"], read_at, "An unknown reading is not a successful read")
+        again = self.reject_missing()
+        self.assertEqual(again.details["catalogReadAt"], read_at)
+        self.assertEqual(calls, ["dsh"], "The unknown reading's window is not re-entered")
+
+    def test_c05_concurrent_validations_share_one_bounded_reread(self):
+        self.evaluation.record_catalog(reading())
+        started, release, calls = threading.Event(), threading.Event(), []
+
+        def reread(name, binding):
+            calls.append(name)
+            started.set()
+            self.assertTrue(release.wait(timeout=10), "The single-flight test lost its reader")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        outcomes = []
+
+        def submit_missing():
+            try:
+                self.validate({**IDENTITY, "model": "beta"})
+                outcomes.append("admitted")
+            except BoardError as error:
+                outcomes.append(error.code)
+
+        threads = [threading.Thread(target=submit_missing) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        self.assertTrue(started.wait(timeout=10), "No thread claimed the re-read")
+        release.set()
+        for thread in threads:
+            thread.join(timeout=10)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, ["CONFIGURATION_UNAVAILABLE"] * 4)
+        self.assertEqual(calls, ["dsh"], "Concurrent missing submissions share one native read")
+
+    def test_c05_a_concurrent_request_waits_for_the_shared_in_flight_reread(self):
+        # Host reproduction: with the shared re-read parked mid-flight, a second
+        # request for the same missing buddy must wait for it and be judged on
+        # the facts it publishes, not reject on the stale ones.
+        self.evaluation.record_catalog(reading())
+        target = {**IDENTITY, "model": "beta"}
+        entered, release, calls = threading.Event(), threading.Event(), []
+
+        def reread(name, binding):
+            calls.append(name)
+            entered.set()
+            self.assertTrue(release.wait(timeout=10), "The parked synthetic read was never released")
+            self.evaluation.record_catalog(reading(models=("alpha", "beta")))
+
+        catalog.register_catalog_reread(self.directory, reread)
+        outcomes, errors = [], []
+
+        def request():
+            try:
+                outcomes.append(self.validate(target))
+            except BoardError as error:
+                errors.append(error.code)
+
+        first = threading.Thread(target=request)
+        first.start()
+        self.assertTrue(entered.wait(timeout=10), "The shared read never started")
+        second = threading.Thread(target=request)
+        second.start()
+        second.join(timeout=0.3)
+        self.assertTrue(second.is_alive(), "A concurrent request waits for the in-flight read; it cannot finish first")
+        release.set()
+        first.join(timeout=10)
+        second.join(timeout=10)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(errors, [], "A concurrent request cannot reject stale facts while a shared successful re-read is in flight")
+        self.assertEqual(outcomes, [target, target], "Both requests are admitted by the one shared read")
+        self.assertEqual(calls, ["dsh"])
+
+    def test_c05_a_join_that_times_out_judges_on_the_recorded_facts(self):
+        self.evaluation.record_catalog(reading())
+        read_at = self.clock.value
+        entered, release, calls = threading.Event(), threading.Event(), []
+
+        def reread(name, binding):
+            calls.append(name)
+            entered.set()
+            self.assertTrue(release.wait(timeout=10), "The parked synthetic read was never released")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        waiter = {}
+
+        def request():
+            try:
+                self.validate({**IDENTITY, "model": "beta"})
+                waiter["outcome"] = "admitted"
+            except BoardError as error:
+                waiter["outcome"] = (error.code, error.details.get("reason"), error.details.get("catalogReadAt"))
+
+        first = threading.Thread(target=request)
+        first.start()
+        self.assertTrue(entered.wait(timeout=10))
+        with patch.object(catalog, "CATALOG_REREAD_JOIN_SECONDS", 0.3):
+            began = time.monotonic()
+            second = threading.Thread(target=request)
+            second.start()
+            second.join(timeout=10)
+            elapsed = time.monotonic() - began
+            self.assertFalse(second.is_alive())
+            release.set()
+            first.join(timeout=10)
+        self.assertLess(elapsed, 5, "The bounded join returns without hanging")
+        self.assertEqual(waiter["outcome"], ("CONFIGURATION_UNAVAILABLE", "catalog-unavailable", read_at),
+                         "A timed-out join falls back to the recorded facts")
+        self.assertEqual(calls, ["dsh"], "The timed-out join still starts no second native read")
+
+    def test_c05_a_new_account_claims_its_own_read_while_an_old_one_is_in_flight(self):
+        self.evaluation.record_catalog(reading())
+        old_entered, old_release, calls = threading.Event(), threading.Event(), []
+
+        def reread(name, binding):
+            calls.append(name)
+            if len(calls) == 1:
+                old_entered.set()
+                self.assertTrue(old_release.wait(timeout=10), "The parked old-account read was never released")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        old_outcomes = []
+
+        def old_request():
+            try:
+                old_outcomes.append(self.validate({**IDENTITY, "model": "beta"}))
+            except BoardError as error:
+                old_outcomes.append(error.code)
+
+        first = threading.Thread(target=old_request)
+        first.start()
+        self.assertTrue(old_entered.wait(timeout=10), "The old-account read never started")
+        self.switch_catalog_account(source="worker", credential_revision=0)
+        self.assertIsNone(self.scan_marker(), "The switch cleared the old account's window")
+        # Under the new binding this completes while the old flight is still parked.
+        with self.assertRaises(BoardError) as rejected:
+            self.validate({**IDENTITY, "model": "beta"})
+        self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(calls, ["dsh", "dsh"], "The new binding claimed and ran its own read")
+        old_release.set()
+        first.join(timeout=10)
+        self.assertFalse(first.is_alive())
+        self.assertEqual(old_outcomes, ["CONFIGURATION_UNAVAILABLE"])
+
+    def test_c05_a_binding_change_between_claim_and_native_aborts_the_read(self):
+        self.evaluation.record_catalog(reading())
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        real_matches = catalog._reread_binding_matches
+
+        def switch_then_match(directory, adapter, account_key):
+            # The account changes exactly between the claim and the native call.
+            self.switch_catalog_account(source="worker", credential_revision=0)
+            return real_matches(directory, adapter, account_key)
+
+        with patch.object(catalog, "_reread_binding_matches", switch_then_match):
+            with self.assertRaises(BoardError) as rejected:
+                self.validate({**IDENTITY, "model": "beta"})
+        error = rejected.exception
+        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.details["reason"], "catalog-unavailable")
+        self.assertEqual(calls, [], "A stale binding never starts a native read under the new account")
+        self.assertIsNone(self.scan_marker(), "The aborted claim leaves the new binding an open window")
+        with self.assertRaises(BoardError):
+            self.validate({**IDENTITY, "model": "beta"})
+        self.assertEqual(calls, ["dsh"], "The new binding claims and reads on its own")
+
+    def test_c05_a_window_hit_rejudges_facts_published_after_the_first_lookup(self):
+        # Host reproduction: the window is already open, and between this
+        # caller's first lookup and the window decision another legal confirmed
+        # publish lands. The open window suppresses only the native read; it
+        # must never shadow the now-recorded facts with the stale first
+        # rejection.
+        self.evaluation.record_catalog(reading())
+        with self.board.store.db.write() as db:
+            db.execute("INSERT INTO meta(key,value) VALUES('catalog-scan-after:dsh',?)"
+                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_later(120),))
+        marker = self.scan_marker()
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        target = {**IDENTITY, "model": "beta"}
+        real_coordinate = catalog.coordinate_catalog_reread
+
+        def publish_then_coordinate(*args, **kwargs):
+            self.evaluation.record_catalog(reading(models=("alpha", "beta")))
+            return real_coordinate(*args, **kwargs)
+
+        with patch.object(catalog, "coordinate_catalog_reread", publish_then_coordinate):
+            admitted = self.validate(target)
+        self.assertEqual(admitted, target, "A publish inside the open window is not shadowed by the stale first rejection")
+        self.assertEqual(calls, [], "The open window still starts no native read")
+        self.assertEqual(self.scan_marker(), marker, "The window itself is untouched")
+
+    def test_c05_a_timeout_rejudges_facts_published_while_the_shared_read_is_still_parked(self):
+        # The bounded join runs out while the shared read is still parked, but
+        # another legal confirmed publish already landed after this caller's
+        # first lookup. The timeout suppresses only a second native read; the
+        # re-judgment reads the facts as they are now recorded.
+        self.evaluation.record_catalog(reading())
+        target = {**IDENTITY, "model": "beta"}
+        entered, release, calls, arrivals = threading.Event(), threading.Event(), [], []
+
+        def reread(name, binding):
+            calls.append(name)
+            entered.set()
+            self.assertTrue(release.wait(timeout=10), "The parked synthetic read was never released")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        real_coordinate = catalog.coordinate_catalog_reread
+
+        def coordinate_after_the_first_judgment(*args, **kwargs):
+            arrivals.append(len(arrivals))
+            return real_coordinate(*args, **kwargs)
+
+        outcomes, errors = [], []
+
+        def request():
+            try:
+                outcomes.append(self.validate(target))
+            except BoardError as error:
+                errors.append(error.code)
+
+        first = threading.Thread(target=request)
+        first.start()
+        self.assertTrue(entered.wait(timeout=10), "The shared read never started")
+        with patch.object(catalog, "coordinate_catalog_reread", coordinate_after_the_first_judgment), \
+                patch.object(catalog, "CATALOG_REREAD_JOIN_SECONDS", 0.5):
+            second = threading.Thread(target=request)
+            second.start()
+            deadline = time.monotonic() + 10
+            while not arrivals and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(len(arrivals), 1, "The joining caller reached the coordination after its own first lookup")
+            self.evaluation.record_catalog(reading(models=("alpha", "beta")))
+            second.join(timeout=10)
+            self.assertFalse(second.is_alive(), "The timed-out join returns without hanging")
+            self.assertEqual(errors, [], "A publish before the timeout is not shadowed by the stale first rejection")
+            self.assertEqual(outcomes, [target], "The timed-out joiner is admitted by the facts recorded before its timeout")
+        release.set()
+        first.join(timeout=10)
+        self.assertFalse(first.is_alive())
+        self.assertEqual(outcomes, [target, target], "Both callers are admitted by the one recorded publish")
+        self.assertEqual(calls, ["dsh"], "The timeout still starts no second native read")
+
+    def test_c05_an_ab_a_round_trip_claims_a_fresh_flight_for_the_returned_selection(self):
+        # The returned selection holds the departed epoch's identity again but
+        # a fresh epoch: its request must claim and run its own read while the
+        # departed epoch's read is still parked, never join a flight keyed by
+        # identity alone.
+        self.evaluation.record_catalog(reading())
+        old_entered, old_release, calls = threading.Event(), threading.Event(), []
+
+        def reread(name, binding):
+            calls.append(name)
+            if len(calls) == 1:
+                old_entered.set()
+                self.assertTrue(old_release.wait(timeout=10), "The parked departed-epoch read was never released")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        outcomes = []
+
+        def departed_request():
+            try:
+                self.validate({**IDENTITY, "model": "beta"})
+            except BoardError as error:
+                outcomes.append(error.code)
+
+        departed = threading.Thread(target=departed_request)
+        departed.start()
+        self.assertTrue(old_entered.wait(timeout=10), "The departed epoch's read never started")
+        self.switch_catalog_account(source='worker', credential_revision=0, revision=1)
+        self.switch_catalog_account(source='native', credential_revision=0, revision=2)
+        self.assertIsNone(self.scan_marker(), "Each switch cleared the epoch's window")
+        with patch.object(catalog, "CATALOG_REREAD_JOIN_SECONDS", 1.0):
+            began = time.monotonic()
+            with self.assertRaises(BoardError) as rejected:
+                self.validate({**IDENTITY, "model": "beta"})
+            elapsed = time.monotonic() - began
+        self.assertLess(elapsed, 0.9, "The returned epoch claims immediately; it never waits on the departed epoch's flight")
+        self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE",
+                         "The cleared binding leaves the route refused on catalog facts")
+        self.assertEqual(calls, ["dsh", "dsh"], "The returned epoch ran its own read while the departed one stayed parked")
+        self.assertTrue(departed.is_alive(), "The departed epoch's flight is still parked")
+        old_release.set()
+        departed.join(timeout=10)
+        self.assertFalse(departed.is_alive())
+        self.assertEqual(outcomes, ["CONFIGURATION_UNAVAILABLE"])
+
+    def test_the_selection_binding_separates_epochs_and_ignores_health_revisions(self):
+        from hey_my_buddy.blackboard.catalog.accounts import binding_key
+
+        def current_binding():
+            with self.board.store.db.read() as db:
+                return binding_key(db, 'dsh')
+
+        departed = current_binding()
+        self.fail_health_then_recover()
+        self.assertEqual(current_binding(), departed, "A health observation revision is not a selection epoch")
+        self.switch_catalog_account(source='worker', credential_revision=0, revision=1)
+        worker = current_binding()
+        self.assertNotEqual(worker, departed)
+        self.switch_catalog_account(source='native', credential_revision=0, revision=2)
+        returned = current_binding()
+        self.assertNotEqual(returned, worker)
+        self.assertNotEqual(returned, departed, "The returned selection is a fresh epoch, not the departed one")
+
+    def test_c05_health_observation_revisions_do_not_reopen_the_reread_window(self):
+        self.evaluation.record_catalog(reading())
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        self.reject_missing()
+        self.assertEqual(calls, ["dsh"])
+        self.assertIsNotNone(self.scan_marker())
+        with self.board.store.db.read() as db:
+            revision_before = db.execute("SELECT revision FROM harness_health WHERE adapter='dsh'").fetchone()[0]
+        self.fail_health_then_recover()
+        with self.board.store.db.read() as db:
+            self.assertGreater(db.execute("SELECT revision FROM harness_health WHERE adapter='dsh'").fetchone()[0],
+                               revision_before, "The fixture really revised the health record")
+        again = self.reject_missing()
+        self.assertEqual(again.details["reason"], "catalog-unavailable")
+        self.assertEqual(calls, ["dsh"], "A health observation revision alone starts no second native read")
+
+    def test_c05_an_account_change_opens_a_fresh_reread_window(self):
+        self.evaluation.record_catalog(reading())
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        self.reject_missing()
+        self.assertEqual(calls, ["dsh"])
+        self.assertIsNotNone(self.scan_marker())
+        self.switch_catalog_account(source='worker', credential_revision=0)
+        self.assertIsNone(self.scan_marker(), "A new binding never inherits the old window")
+        self.reject_missing()
+        self.assertEqual(calls, ["dsh", "dsh"], "The new account's first rejection may read again")
+
+    def test_override_file_rejection_carries_the_reason_and_starts_no_native_read(self):
+        self.catalog_fixture(reading())
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        self.assertEqual(self.validate(), IDENTITY, "The operator pin still admits the listed route")
+        error = self.reject_missing()
+        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.details["reason"], "catalog-unavailable")
+        self.assertEqual(calls, [], "The operator pin replaces discovery; no native re-read applies")
+        self.assertNotIn("catalogReadAt", error.details)
+
     def test_cold_start_without_any_recorded_catalog_is_catalog_unavailable(self):
         catalog.register_catalog_reread(self.directory, None)
         with self.assertRaises(BoardError) as rejected:
             self.validate()
         self.assertEqual(rejected.exception.code, "CATALOG_UNAVAILABLE")
+        self.assertEqual(rejected.exception.details["reason"], "catalog-unavailable")
 
     def test_service_refresh_populates_the_catalog_for_a_cold_board(self):
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=('alpha', 'beta')))
 

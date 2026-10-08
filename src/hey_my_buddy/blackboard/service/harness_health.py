@@ -156,13 +156,18 @@ class HarnessHealth:
         self.board._notify(head)
         return self.refresh(name, force=True)
 
-    def refresh(self, name, *, force=False, preflight=False, account=None):
+    def refresh(self, name, *, force=False, preflight=False, account=None, expected_binding=None):
         name = _name(name)
         with self._locks[name]:
             old = self.get(name)
             from ..catalog.accounts import identity
             if account is not None and identity(account) != identity(old['account']):
                 raise BoardError('ACCOUNT_BINDING_CHANGED', 'The selected account changed before native preflight')
+            if expected_binding is not None and not self._binding_is_current(name, expected_binding):
+                # A reread claim made under one account binding never refreshes
+                # under another: the selection moved on between the claim and
+                # this admission, and the new binding claims its own read.
+                return old
             if (self.board.directory / 'upgrade.json').exists():
                 return old
             from ..catalog.accounts import assert_credentials_current
@@ -184,8 +189,7 @@ class HarnessHealth:
                 if self._stale_catalog(name, now):
                     current = self.get(name)
                     if current['available']:
-                        self.catalog_refresh(name, current)
-                        self._note_catalog_scan(name)
+                        self._shared_stale_catalog_read(name, current)
                         return self.get(name)
                 return old
             environment = self.environment()
@@ -211,8 +215,7 @@ class HarnessHealth:
                 if self._stale_catalog(name, now):
                     current = self.get(name)
                     if current['available']:
-                        self.catalog_refresh(name, current)
-                        self._note_catalog_scan(name)
+                        self._shared_stale_catalog_read(name, current)
                 return self.get(name)
             with self.board.db.write() as db:
                 if self._closed or (self.board.directory / 'upgrade.json').exists():
@@ -272,12 +275,28 @@ class HarnessHealth:
                 return current
             if name == "codex" and status == "ready":
                 self._codex_account_read(current)
-            if not self._closed and status == 'ready' and self.catalog_refresh and (
-                    force or old['status'] != 'ready' or old.get('version') != record.get('version')
-                    or not unchanged or (self._catalog_scan_due(name, now) and self._catalog_expired(name, now))):
-                self.catalog_refresh(name, current)
-                self._note_catalog_scan(name)
+            # Necessary eager reads (manual force, a status or version change, a
+            # moved binary) stay outside the shared window; only the stale-catalog
+            # read shares rule 3's claim and single flight.
+            if not self._closed and status == 'ready' and self.catalog_refresh:
+                if force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged:
+                    self.catalog_refresh(name, current, expected_binding)
+                    if expected_binding is None:
+                        # An unclaimed eager read notes its own window. A claimed
+                        # read (a reread claim passed its binding) already wrote
+                        # the window at its claim; noting again here could land
+                        # after a switch cleared it and steal the new binding's
+                        # fresh window even when admission skipped the read.
+                        self._note_catalog_scan(name)
+                elif self._stale_catalog(name, now):
+                    self._shared_stale_catalog_read(name, current)
             return self.get(name)
+
+    def _binding_is_current(self, name, expected_binding):
+        """Whether the selected account binding still equals a reread claim's one."""
+        from ..catalog.accounts import binding_key
+        with self.board.db.read() as db:
+            return binding_key(db, name) == expected_binding
 
     def _stale_catalog(self, name, now):
         """True when this harness owes one bounded stale-catalog re-read now.
@@ -288,6 +307,25 @@ class HarnessHealth:
         """
         return (not self._closed and self.catalog_refresh is not None
                 and self._catalog_scan_due(name, now) and self._catalog_expired(name, now))
+
+    def _shared_stale_catalog_read(self, name, current):
+        """Claim or skip the one bounded stale-catalog read, jointly with rule 3.
+
+        The claim, its window and its in-process flight are the same mechanism
+        an explicit validation rejection uses, so a health scan and an explicit
+        request never start two native reads for one harness inside one window.
+        The reader receives the claimed account binding and carries it to the
+        catalog read admission, so a claim never reads under a later selection.
+        An in-flight read is not waited for here — this refresh already holds the
+        per-harness lock, and the explicit side's reader borrows that same lock;
+        the facts arrive with the in-flight read, and the next scan window
+        retries on its own cadence. Necessary eager reads (manual force, status
+        or version changes) stay outside this boundary.
+        """
+        from ..catalog.catalog import coordinate_catalog_reread
+        coordinate_catalog_reread(self.board.directory, name,
+                                  reader=lambda binding: self.catalog_refresh(name, current, expected_binding=binding),
+                                  wait=False)
 
     def _catalog_scan_due(self, name, now):
         from ..evaluation.native_observations import _time

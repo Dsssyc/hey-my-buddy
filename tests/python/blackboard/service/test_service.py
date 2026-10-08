@@ -69,4 +69,30 @@ class CatalogRefreshServiceTests(BoardTestCase):
             hook("dsh")
         finally:
             self.service.harnesses.refresh = refresh
-        self.assertEqual(calls, [("dsh", {"force": True})])
+        self.assertEqual(calls, [("dsh", {"force": True, "expected_binding": None})],
+                         "A hook called without a claim binding refreshes unbound")
+
+
+class ConsoleSnapshotContractTests(BoardTestCase):
+    """The named console_snapshot operation keeps its full C-Two shape.
+
+    The console's periodic HTTP read moved to the slim projection in
+    ``hey_my_buddy.console.reads``; callers of the operation itself (C-Two,
+    CLI, probes) still get the task page and the backup preflight that were
+    always part of this contract.
+    """
+
+    def test_operation_keeps_tasks_and_preflight(self):
+        board = self.board()
+        snapshot = board.call("console_snapshot", {})
+        self.assertIn("runs", snapshot["tasks"])
+        self.assertIn("total", snapshot["tasks"])
+        self.assertIn("backupPreflight", snapshot)
+        self.assertIn("harnesses", snapshot)
+        self.assertIn("routingHealth", snapshot)
+        self.assertTrue(snapshot["capabilities"]["consoleAssets"] is False or
+                        snapshot["capabilities"]["consoleAssets"] is True)
+        # The slim console core and this operation agree on every shared key.
+        core = board.evaluation.console_core()
+        for key in core:
+            self.assertEqual(snapshot[key], core[key], key)

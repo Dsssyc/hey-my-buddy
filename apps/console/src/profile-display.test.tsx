@@ -62,7 +62,7 @@ function catalogSnapshot(): Snapshot {
     decisions: [],
     sampleCounts: { [flashOffId]: 6 },
     modelConcurrency: [],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
   };
 }

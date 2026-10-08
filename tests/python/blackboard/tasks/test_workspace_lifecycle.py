@@ -1538,6 +1538,123 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(replay["alreadyRemoved"])
         self.assertTrue(Path(artifact["diffPath"]).is_file())
 
+    # -- an attached branch blocks removal with its honest diagnosis ----------
+    def branch_ref(self, name):
+        return git(self.repo, "for-each-ref", f"refs/heads/{name}", "--format=%(objectname)").strip()
+
+    def test_an_attached_branch_blocks_removal_with_the_branch_and_the_detach_retry(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="attached-branch")
+        run_id = submitted["runId"]
+        # What the Worker did in the incident: created and switched to a branch in
+        # the managed checkout. Registration and the allocation lock stay correct.
+        git(checkout, "switch", "-q", "-c", "socu/worker-branch")
+        branch_commit = self.branch_ref("socu/worker-branch")
+        head = git(checkout, "rev-parse", "HEAD").strip()
+
+        planned = board.store.workflow.cleanup_plan({
+            "runId": run_id, "commandId": "plan-attached", "expectedRevision": view["revision"],
+            **self.control(view),
+        })
+        plan = planned["plan"]
+        self.assertEqual(plan["state"], "blocked")
+        self.assertIn("attached-branch", plan["reasons"])
+        self.assertNotIn("unregistered-checkout", plan["reasons"])
+        diagnosis = plan["evidence"]["workspace"]["attachedBranch"]
+        self.assertEqual(diagnosis["branch"], "socu/worker-branch")
+        self.assertEqual(diagnosis["ref"], "refs/heads/socu/worker-branch")
+        self.assertEqual(diagnosis["headCommit"], head)
+        self.assertTrue(diagnosis["detachCommand"].startswith("git -C '"))
+        self.assertIn("switch --detach", diagnosis["detachCommand"])
+        self.assertIn(head, diagnosis["detachCommand"])
+        self.assertIn("retry", diagnosis)
+        # The reclaim refusal surfaces the same Host-facing diagnosis.
+        with self.assertRaises(BoardError) as blocked:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertEqual(blocked.exception.code, "NOT_READY")
+        self.assertIn("attached-branch", blocked.exception.details["reasons"])
+        self.assertEqual(blocked.exception.details["reclaim"]["attachedBranch"]["branch"], "socu/worker-branch")
+        # The direct removal refuses with the same facts and touches nothing.
+        with self.assertRaises(BoardError) as raised:
+            workspace_module.cleanup_remove(self.directory, manifest)
+        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
+        self.assertIn("socu/worker-branch", raised.exception.message)
+        self.assertEqual(raised.exception.details["attachedBranch"]["branch"], "socu/worker-branch")
+        # The board never detached, deleted or moved anything.
+        self.assertTrue(checkout.exists())
+        self.assertEqual(self.branch_ref("socu/worker-branch"), branch_commit)
+        self.assertEqual(git(checkout, "rev-parse", "--abbrev-ref", "HEAD").strip(), "socu/worker-branch")
+
+    def test_after_the_recorded_detach_the_reclaim_completes(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="detach-then-reclaim")
+        run_id = submitted["runId"]
+        git(checkout, "switch", "-q", "-c", "socu/worker-branch")
+        with self.assertRaises(BoardError) as blocked:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertIn("attached-branch", blocked.exception.details["reasons"])
+        command = blocked.exception.details["reclaim"]["attachedBranch"]["detachCommand"]
+        completed = subprocess.run(["sh", "-c", command], cwd=self.repo,
+                                   env={**os.environ, **GIT_ENV}, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(git(checkout, "rev-parse", "HEAD").strip(),
+                         blocked.exception.details["reclaim"]["attachedBranch"]["headCommit"])
+        reclaimed = self.reclaim(board, self.view(board, run_id))
+        self.assertTrue(reclaimed["removed"])
+        self.assertFalse(checkout.exists())
+        # The branch and its commit stay exactly where they were: deleting them is
+        # the Host's decision, never the board's.
+        self.assertTrue(self.branch_ref("socu/worker-branch"))
+
+    def test_apply_reports_the_same_branch_diagnostic_as_the_inspection(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="apply-attached")
+        run_id = submitted["runId"]
+        planned = board.store.workflow.cleanup_plan({
+            "runId": run_id, "commandId": "plan-before-branch", "expectedRevision": view["revision"],
+            **self.control(view),
+        })
+        self.assertEqual(planned["plan"]["state"], "planned")
+        # The branch appears between planning and applying.
+        git(checkout, "switch", "-q", "-c", "socu/late-branch")
+        branch_commit = self.branch_ref("socu/late-branch")
+        with self.assertRaises(BoardError) as raised:
+            board.store.workflow.cleanup_apply({
+                "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "apply-attached",
+                "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
+                **self.control(view),
+            })
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("attached-branch", raised.exception.details["reasons"])
+        self.assertEqual(raised.exception.details["attachedBranch"]["branch"], "socu/late-branch")
+        self.assertTrue(checkout.exists())
+        self.assertEqual(self.branch_ref("socu/late-branch"), branch_commit)
+
+    def test_a_missing_registration_and_a_foreign_lock_keep_their_own_reasons(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="own-reasons")
+        run_id = submitted["runId"]
+        # A lock that belongs to someone else is a lock mismatch, not an
+        # "unregistered" claim and not a branch claim.
+        git(self.repo, "worktree", "unlock", str(checkout))
+        with self.assertRaises(BoardError) as mismatch:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertIn("lock-mismatch", mismatch.exception.details["reasons"])
+        self.assertNotIn("unregistered-checkout", mismatch.exception.details["reasons"])
+        self.assertNotIn("attached-branch", mismatch.exception.details["reasons"])
+        git(self.repo, "worktree", "lock", "--reason", "buddy:someone-else", str(checkout))
+        with self.assertRaises(BoardError) as foreign:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertIn("lock-mismatch", foreign.exception.details["reasons"])
+        # A registration Git no longer lists at all keeps its own reason too.
+        git(self.repo, "worktree", "unlock", str(checkout))
+        with mock.patch.object(workspace_module, "_worktree_record", return_value=None):
+            inspection = workspace_module.cleanup_inspect(self.directory, manifest)
+        self.assertIn("unregistered-checkout", inspection["reasons"])
+        self.assertNotIn("lock-mismatch", inspection["reasons"])
+        self.assertNotIn("attached-branch", inspection["reasons"])
+        self.assertIsNone(inspection["attachedBranch"])
+
 
 if __name__ == "__main__":
     unittest.main()

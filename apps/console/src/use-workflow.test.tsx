@@ -8,6 +8,13 @@ import type { Workflow } from "./workflow-types";
 
 afterEach(cleanup);
 
+/** Fakes the browser's Page Visibility; the real browser check belongs to the Host. */
+function setHidden(hidden: boolean) {
+  Object.defineProperty(document, "visibilityState", { value: hidden ? "hidden" : "visible", configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+afterEach(() => setHidden(false));
+
 function fixture() {
   const task: Task = {
     runId: "parent", task: "完成状态内核", status: "waiting-host", owner: "host-a", cwd: "/repo",
@@ -71,5 +78,21 @@ describe("read-only workflow read (0.15.1 U4)", () => {
     await act(async () => { result.current.reload(); });
     await waitFor(() => expect(f.calls.length).toBeGreaterThan(before));
     expect(f.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
+  });
+
+  it("stops the schedule while the page is hidden and reads once immediately on return", { timeout: 15000 }, async () => {
+    const f = fixture();
+    const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, true));
+    await waitFor(() => expect(result.current.value).not.toBeNull());
+    const before = f.calls.length;
+    act(() => setHidden(true));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3600)); });
+    expect(f.calls.length).toBe(before);
+    expect(result.current.value).not.toBeNull();
+    act(() => setHidden(false));
+    await waitFor(() => expect(f.calls.length).toBe(before + 1));
+    // The returned read re-fills the pane, then the 3-second cadence resumes.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3300)); });
+    expect(f.calls.length).toBe(before + 2);
   });
 });

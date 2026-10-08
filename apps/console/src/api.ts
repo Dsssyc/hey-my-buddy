@@ -1,4 +1,4 @@
-import type { Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
@@ -426,9 +426,153 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     }
     return data;
   }
+
+  /* ---- conditional reads (standard HTTP ETag / If-None-Match / 304) ---- */
+
+  /** One cached read representation: the validator and the parsed body it vouches for. */
+  type CachedRead = { etag: string; data: unknown };
+  /** LRU bound; unique filter/pagination URLs stay bounded per API instance. */
+  const MAX_CONDITIONAL_ENTRIES = 32;
+  const conditionalCache = new Map<string, CachedRead>();
+  /**
+   * Tickets of the reads currently outstanding, keyed by URL. Tickets come
+   * from one global monotonic counter, so a released and later re-created
+   * entry can never let a late reply masquerade as a newer request (no ABA),
+   * and the entry is released as soon as the request it names completes:
+   * per-URL state stays bounded by the reads actually in the air.
+   */
+  let ticketSource = 0;
+  const outstanding = new Map<string, number>();
+  /**
+   * Cache generation: every clear — a session change or a 401 expiry — bumps
+   * it and thereby voids the publication of every read already in the air, so
+   * a reply that belonged to the previous session can neither store a body
+   * nor hand one to the caller as a 304 hit.
+   */
+  let cacheGeneration = 0;
+  /** The browser session the cached bodies were read under; a new session starts empty. */
+  let sessionId: string | null = null;
+
+  function clearConditionalCache() {
+    conditionalCache.clear();
+    cacheGeneration += 1;
+  }
+
+  function storeConditionalRead(url: string, entry: CachedRead) {
+    conditionalCache.delete(url);
+    conditionalCache.set(url, entry);
+    while (conditionalCache.size > MAX_CONDITIONAL_ENTRIES) {
+      const oldest = conditionalCache.keys().next().value;
+      if (oldest === undefined) break;
+      conditionalCache.delete(oldest);
+    }
+  }
+
+  /**
+   * One conditional GET of a read route that answers ETag / If-None-Match / 304.
+   *
+   * The request's ticket is held from issue until its body has actually been
+   * consumed, and the publication verdict — current ticket, unchanged cache
+   * generation, un-aborted signal — is evaluated fresh at that moment, never
+   * from a header-time snapshot: a delayed body can therefore never publish
+   * an older representation over a newer same-URL reply. A 304 returns the
+   * representation this request itself offered for revalidation — never
+   * whatever body sits in the cache now — and only while it still belongs to
+   * this session; the empty 304 payload is never handed to the JSON parser,
+   * existing data is not lost and the outcome is not an error. Entries are
+   * keyed by the full URL (different filters or pages are different entries),
+   * live per API instance and per browser session — a session change or a 401
+   * expiry empties the cache and voids every in-flight publication. A reply
+   * that loses its ticket (a superseded read) returns its data but never
+   * rewrites a newer cache entry. The finally block releases the ticket
+   * latest-only on every completion path — network failure, abort, 304, parse
+   * error, status refusal and success alike — so settled per-URL state stays
+   * bounded and a newer pending ticket is never deleted. Compression is the
+   * server's standard response negotiation; the browser decompresses `fetch`
+   * bodies, so nothing here touches Content-Encoding.
+   */
+  /**
+   * The verification time of one response: its standard HTTP `Date` header,
+   * read per response and never stored with the representation. A 304 carries
+   * a fresh `Date` even when its body is the cached one, and a warm 200 from
+   * the service's read cache is stamped when served — so this is "when the
+   * server last verified this state", exactly what a display clock needs.
+   * Absent or unparseable (mocks, clock-less test doubles) reads as null and
+   * callers fall back to their own justified local clock.
+   */
+  function responseVerifiedAtMs(response: Response): number | null {
+    const header = response.headers.get("Date");
+    if (!header) return null;
+    const parsed = Date.parse(header);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  async function conditionalRead(path: string, signal?: AbortSignal, { refresh = false, domainNegativeReport = false }: { refresh?: boolean; domainNegativeReport?: boolean } = {}): Promise<{ data: unknown; verifiedAtMs: number | null }> {
+    const url = `${base}/api${path}`;
+    const cached = conditionalCache.get(url);
+    const atGeneration = cacheGeneration;
+    const ticket = ++ticketSource;
+    outstanding.set(url, ticket);
+    const headers: Record<string, string> = {};
+    if (cached && !refresh) headers["If-None-Match"] = cached.etag;
+    try {
+      let response: Response;
+      try {
+        response = await fetcher(url, { credentials: "same-origin", cache: "no-store", headers, signal });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ApiError("NETWORK", "无法连接本地黑板；请刷新重试。");
+      }
+      if (response.status === 304) {
+        if (cached && cacheGeneration === atGeneration && !signal?.aborted) {
+          return { data: cached.data, verifiedAtMs: responseVerifiedAtMs(response) };
+        }
+        // A 304 is only meaningful against a representation this instance still
+        // holds under this session; without one the body cannot be reconstructed
+        // and the read stays failed instead of guessing.
+        throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+      }
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+      }
+      // The body has arrived: only now is the publication verdict decided. The
+      // ticket was held through the body read, so this fresh check outranks any
+      // same-URL reply that completed meanwhile.
+      const stillCurrent = outstanding.get(url) === ticket;
+      const body = data as {
+        ok?: boolean;
+        error?: { code?: string; message?: string };
+      };
+      // The refusal envelope is exactly `{ok:false, error:{code,message}}`.
+      // Routes whose own DTO legitimately carries a top-level negative
+      // assessment (backup-preflight's ok:false with per-class reasons and no
+      // error object) are domain data, not failures — enabled per route so
+      // every other route's ok:false keeps refusing as before.
+      const envelopeError = body?.ok === false && body?.error !== undefined;
+      if (!response.ok || (body?.ok === false && (envelopeError || !domainNegativeReport))) {
+        if (envelopeError && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
+        throw new ApiError(
+          body?.error?.code || `HTTP_${response.status}`,
+          body?.error?.message || "请求未成功。",
+        );
+      }
+      if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {
+        const etag = response.headers.get("ETag");
+        if (etag) storeConditionalRead(url, { etag, data });
+      }
+      return { data, verifiedAtMs: responseVerifiedAtMs(response) };
+    } finally {
+      // Latest-only release: a superseded read never deletes the newer
+      // request's pending ticket, and a settled request leaves nothing behind.
+      if (outstanding.get(url) === ticket) outstanding.delete(url);
+    }
+  }
   return {
     async snapshot(signal?: AbortSignal): Promise<Snapshot> {
-      const data = (await request("/console", { signal })) as Snapshot;
+      const { data } = (await conditionalRead("/console", signal)) as { data: Snapshot };
       if (
         !data ||
         !Number.isInteger(data.tableRevision) ||
@@ -441,7 +585,9 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !Array.isArray(data.preferenceOverrides) ||
         !Array.isArray(data.familyAnnotations) ||
         !Array.isArray(data.modelConcurrency) ||
-        !Array.isArray(data.tasks?.runs) ||
+        !data.tasks ||
+        !Number.isSafeInteger(data.tasks.pendingCount) ||
+        data.tasks.pendingCount < 0 ||
         typeof data.csrfToken !== "string"
       ) {
         throw new ApiError(
@@ -450,8 +596,12 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         );
       }
       // A valid session descriptor is required; a missing or malformed one is
-      // never read as write access.
-      return { ...data, routingHealth: parseRoutingHealth(data.routingHealth), consoleSession: parseConsoleSession(data.consoleSession),
+      // never read as write access. A different session id empties the read
+      // cache: its bodies were read under the previous session.
+      const session = parseConsoleSession(data.consoleSession);
+      if (sessionId !== null && session.id !== sessionId) clearConditionalCache();
+      sessionId = session.id;
+      return { ...data, routingHealth: parseRoutingHealth(data.routingHealth), consoleSession: session,
         ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }) };
     },
     async command<T = unknown>(
@@ -480,7 +630,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
-      const data = await request(`/tasks?${query}`, { signal }) as TaskPage;
+      const { data } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage };
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
         throw new ApiError("INVALID_RESPONSE", "委派历史不完整；请检查服务版本。");
@@ -492,7 +642,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
-      const data = await request(`/objectives?${query}`, { signal }) as ObjectivePage;
+      const { data } = await conditionalRead(`/objectives?${query}`, signal) as { data: ObjectivePage };
       if (!data || !Array.isArray(data.objectives) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
@@ -501,19 +651,28 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       }
       return data;
     },
+    /**
+     * One timeline read: the parsed projection plus the response's own
+     * verification time (`verifiedAtMs`, from the standard HTTP `Date`
+     * header of the 200 or 304 — fresh per response even when the body is
+     * the service's cached projection; null when a response carries none).
+     * The display clock anchors on this, never on the body's own
+     * `observedAt`, which stays the recorded source fact of an older
+     * generation.
+     */
     async objectiveTimeline(
       objectiveId: string,
       params: { limit?: number; query?: string; filter?: ObjectiveFilter },
       signal?: AbortSignal,
-    ): Promise<ObjectiveTimeline> {
+    ): Promise<{ timeline: ObjectiveTimeline; verifiedAtMs: number | null }> {
       const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
-      const data = await request(
+      const { data, verifiedAtMs } = await conditionalRead(
         `/objectives/${encodeURIComponent(objectiveId)}/timeline?${query}`,
-        { signal },
-      ) as ObjectiveTimeline;
+        signal,
+      ) as { data: ObjectiveTimeline; verifiedAtMs: number | null };
       if (!data || typeof data.observedAt !== "string"
         || !data.objective || typeof data.objective.objectiveId !== "string"
         || !validObjectiveSummary(data.objective)
@@ -527,7 +686,33 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.filtered !== "boolean") {
         throw new ApiError("INVALID_RESPONSE", "工作目标时间轴不完整；请检查服务版本。");
       }
-      return data;
+      return { timeline: data, verifiedAtMs };
+    },
+    /**
+     * The on-demand backup preflight (`GET /api/backup-preflight`): the same
+     * report the periodic snapshot used to carry, computed only when the
+     * storage panel asks for it — never from the 3-second reads. `refresh`
+     * names an explicit re-check: it omits If-None-Match so the server's fresh
+     * walk is actually transferred instead of answered by a 304. The report
+     * itself is recomputed server-side on every read either way.
+     */
+    async backupPreflight(signal?: AbortSignal, { refresh = false }: { refresh?: boolean } = {}): Promise<BackupPreflight> {
+      // This route's report legitimately carries a negative assessment
+      // (ok:false with per-class reasons) as domain data; only a real refusal
+      // envelope (with an error object) is a failure.
+      const { data: report } = await conditionalRead("/backup-preflight", signal, { refresh, domainNegativeReport: true }) as { data: BackupPreflight | null };
+      const inventory = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value)
+        && Number.isSafeInteger((value as { count?: unknown }).count) && (value as { count: number }).count >= 0
+        && Array.isArray((value as { paths?: unknown }).paths) && (value as { paths: unknown[] }).paths.every(p => typeof p === "string")
+        && Array.isArray((value as { entries?: unknown }).entries) && (value as { entries: unknown[] }).entries.every(entry =>
+          !!entry && typeof entry === "object" && typeof (entry as { path?: unknown }).path === "string"
+          && typeof (entry as { reason?: unknown }).reason === "string");
+      if (!report || typeof report.policy !== "string" || typeof report.ok !== "boolean"
+        || typeof report.needsAttention !== "boolean"
+        || !inventory(report.copied) || !inventory(report.skipped) || !inventory(report.rejected)) {
+        throw new ApiError("INVALID_RESPONSE", "备份预检响应不完整，请检查服务版本。");
+      }
+      return report;
     },
     /**
      * `storage_plan` (0.16.0): a private, expiring reclamation plan. It scans

@@ -175,6 +175,47 @@ def _frozen_turn_routing(context: dict) -> dict | None:
     return {"decisionId": decision_id, "executionConfigurationRevision": revision}
 
 
+def _frozen_turn_shared_stash(context: dict, *, compact: bool = False) -> dict | None:
+    """The shared-stash observation frozen in one turn input, or ``None``.
+
+    A turn that predates the freezing has no stash fact; it is never re-derived
+    from a later reading, wall-clock time or the current repository state. A
+    malformed binding is reported as absent rather than invented, and the
+    compact view carries states and counts only — the complete bounded record
+    stays in the frozen input itself.
+    """
+    value = context.get("sharedStash")
+    if not isinstance(value, dict) or not isinstance(value.get("start"), dict):
+        return None
+    start = value["start"]
+    entries = start.get("entries")
+    summary = {
+        "repositoryPath": value.get("repositoryPath") if isinstance(value.get("repositoryPath"), str) else None,
+        "manifestSha256": value.get("manifestSha256") if isinstance(value.get("manifestSha256"), str) else None,
+        "start": {"state": start.get("state"), "entryCount": len(entries) if isinstance(entries, list) else None,
+                  "totalCount": start.get("totalCount"), "truncated": bool(start.get("truncated"))},
+    }
+    if not compact:
+        summary["start"]["entries"] = entries if isinstance(entries, list) else None
+    return summary
+
+
+class ClaimStashCoverageRetry(Exception):
+    """The claim chose a run whose repository this pass did not observe.
+
+    Raised inside the claim transaction before anything is admitted, so the
+    transaction rolls back and the claim retries once with the chosen run as an
+    explicit collection selector: every truly-started turn then freezes a real
+    observation of its own repository instead of a coverage miss dressed up as
+    a reading. Never a :class:`BoardError` — it must escape the store's error
+    handling, never reach a caller, and cost nothing when coverage held.
+    """
+
+    def __init__(self, task_id: str):
+        super().__init__(task_id)
+        self.task_id = task_id
+
+
 class WorkflowCoordinator:
     """Durable governance on top of :class:`hey_my_buddy.blackboard.store.store.BoardStore`."""
 
@@ -232,6 +273,9 @@ class WorkflowCoordinator:
             # predates the binding stays null: it is never inferred from the current
             # run, wall-clock timestamps or a matching model name.
             "routing": _frozen_turn_routing(context),
+            # This turn's own frozen shared-stash observation, taken before the turn
+            # started; never re-derived, and absent for turns that predate it.
+            "sharedStash": _frozen_turn_shared_stash(context, compact=compact),
             "tokenUsage": (json.loads(row["token_usage_json"]) if "token_usage_json" in row.keys() and row["token_usage_json"] else None),
             "account": context.get('account'),
         }
@@ -364,6 +408,12 @@ class WorkflowCoordinator:
                 view["changedPaths"] = changed[:32]
             if row["kind"] == "resolved-output":
                 view["action"] = manifest.get("action")
+        elif row["kind"] == WorkflowCoordinator.SHARED_REFS_KIND:
+            # The bounded Host projection of the turn's shared-stash facts; the
+            # full frozen record stays in the pinned manifest JSON.
+            summary = WorkflowCoordinator._shared_refs_summary(manifest)
+            if summary is not None:
+                view["sharedStash"] = summary
         else:
             view["path"] = manifest.get("path")
             view["baseCommit"] = manifest.get("baseCommit")
@@ -2469,11 +2519,11 @@ class WorkflowCoordinator:
             "SELECT enabled,available FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND effort=?",
             tuple(configuration[key] for key in schemas.CONFIGURATION_FIELDS),
         ).fetchone()
-        from ..catalog.catalog import CATALOG_REMEDY, catalog_read_at
+        from ..catalog.catalog import CATALOG_REMEDY, CATALOG_UNAVAILABLE_REASON, catalog_read_at
 
         read_at = catalog_read_at(connection, configuration["adapter"])
         if row is not None and not row["available"]:
-            details = {"configuration": configuration, "reason": "catalog-unavailable", "remedy": CATALOG_REMEDY}
+            details = {"configuration": configuration, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": CATALOG_REMEDY}
             if read_at:
                 details["catalogReadAt"] = read_at
             raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is no longer available", **details)
@@ -3356,13 +3406,15 @@ class WorkflowCoordinator:
         )
         return {"accepted": False, "disposition": disposition, "state": run_row["state"], "late": True}
 
-    def attempt_released(self, connection, *, task, attempt, now: str, reason: str) -> None:
+    def attempt_released(self, connection, *, task, attempt, now: str, reason: str,
+                         seal_stash: dict | None = None) -> None:
         """Settle a Worker's durable never-spawned release inside its transaction."""
         if self._run_optional(connection, task["task_id"]) is None:
             return
         if not self._stop_proven(connection, task):
             raise BoardError("SHUTDOWN_UNCONFIRMED", "A workflow release requires durable finished and confirmed stop evidence")
-        self.turn_concluded(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
+        self.turn_concluded(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now,
+                            seal_stash=seal_stash)
         self.child_settled(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
         self._release_reservations(connection, task["task_id"], now)
         self._revoke_credentials(connection, task["task_id"], now)
@@ -4274,8 +4326,14 @@ class WorkflowCoordinator:
                         "planId": plan["planId"]}
         if plan["state"] not in ("planned", "applying"):
             # An applying plan is not re-admitted here: cleanup_apply resumes it.
-            return {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
-                    "path": plan["path"]}
+            blocked = {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
+                       "path": plan["path"]}
+            attached = ((plan.get("evidence") or {}).get("workspace") or {}).get("attachedBranch")
+            if isinstance(attached, dict) and attached:
+                # The attached-branch diagnosis is Host-facing here too, not only
+                # an internal field of the plan's stored evidence.
+                blocked["attachedBranch"] = attached
+            return blocked
         try:
             # Planning advances the target only. An independently allocated
             # helper's revision cannot stand in for its controlling root's.
@@ -5015,10 +5073,10 @@ class WorkflowCoordinator:
             retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
         retention["checkoutRoot"] = inspection["path"]
         retention["cwd"] = inspection["cwd"]
-        evidence = {**evidence, "workspace": {key: inspection[key] for key in
+        evidence = {**evidence, "workspace": {key: inspection.get(key) for key in
                                               ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
                                                "locked", "unsealedPaths", "sealedObservation", "workspaceId",
-                                               "manifestWorkspaceId", "allocation")}}
+                                               "manifestWorkspaceId", "allocation", "attachedBranch")}}
         now = self.now()
         plan_id = f"cln-{uuid.uuid4()}"
         expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
@@ -5141,7 +5199,12 @@ class WorkflowCoordinator:
             # delete, so its reasons cannot block; anything still occupying the exact
             # planned path keeps every NOT_READY reason.
             if inspection["reasons"] and (path.exists() or path.is_symlink()):
-                raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=inspection["reasons"])
+                details = {"reasons": inspection["reasons"]}
+                if inspection.get("attachedBranch") is not None:
+                    # The one refusal whose remedy is the Host's: the exact branch,
+                    # the safe detach command and the retry, never an auto-detach.
+                    details["attachedBranch"] = inspection["attachedBranch"]
+                raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
@@ -5363,7 +5426,140 @@ class WorkflowCoordinator:
         return "workflow-failed"
 
     # -- turn lifecycle ------------------------------------------------------
-    def begin_turn(self, connection, *, task, attempt_id: str, generation: int, spec: dict, now: str) -> dict | None:
+    #: Bound on distinct repositories one claim's outside-transaction stash
+    #: collection reads per pass. A chosen run beyond the bound is covered by
+    #: the claim's coverage retry, never silently missed.
+    _CLAIM_STASH_REPOSITORIES = 8
+
+    def collect_claim_stash_facts(self, params: dict, *, selector: str | None = None) -> dict:
+        """Read the shared stash state of the claim's actual candidates, outside every transaction.
+
+        The candidate set mirrors the claim scan itself — the same bounded
+        queued-candidate window in the same arrival order (family exclusions are
+        not repeated: they can only shrink the claim's own choice, and the
+        retry below covers any drift) — so the observation the claim's write
+        transaction freezes is normally the observation of exactly the run it
+        admits, and changes that happened while the task merely sat queued are
+        already part of the starting fact. An explicit ``selector`` reads only
+        that run's repository: the retry pass after a coverage miss uses it to
+        collect the chosen run itself. Git is never read inside a write
+        transaction, and a repository that cannot be read keeps an honest
+        per-repository ``unknown``. Collection itself never fails a claim.
+        """
+        target = selector if isinstance(selector, str) and selector else None
+        if target is None:
+            target = params.get("taskId") or params.get("runId")
+            target = target if isinstance(target, str) and target else None
+        try:
+            with self.db.read() as connection:
+                if target is not None:
+                    rows = connection.execute(
+                        "SELECT r.workspace_manifest_json FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                        " WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND r.run_id=?",
+                        (target,),
+                    ).fetchall()
+                else:
+                    # The claim scan's own candidate window: both adapter classes
+                    # in arrival order under the same LIMIT the claim uses.
+                    from .scheduling import DECISION_ADAPTER
+                    rows = []
+                    for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
+                        rows.extend(connection.execute(
+                            "SELECT r.workspace_manifest_json, t.created_at, t.task_id"
+                            " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                            f" WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND {class_predicate}"
+                            " ORDER BY t.created_at, t.task_id LIMIT ?",
+                            (DECISION_ADAPTER, self.board.CLAIM_CANDIDATE_LIMIT),
+                        ).fetchall())
+                    rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
+            repositories: dict[str, dict | None] = {}
+            for row in rows:
+                try:
+                    manifest = json.loads(row["workspace_manifest_json"])
+                except (TypeError, ValueError):
+                    continue
+                path = (manifest.get("snapshot") or {}).get("repositoryPath") if isinstance(manifest, dict) else None
+                if isinstance(path, str) and path and path not in repositories and len(repositories) < self._CLAIM_STASH_REPOSITORIES:
+                    repositories[path] = None
+            module = workspace_module()
+            if not hasattr(module, "shared_stash_inventory"):
+                return {"repositories": repositories}
+            pass_reason = None
+            try:
+                for path in list(repositories):
+                    repositories[path] = module.shared_stash_inventory(path)
+            except BoardError as error:
+                pass_reason = _head(f"{error.code}: {error.message}", 512)
+            except (OSError, TypeError, ValueError) as error:
+                pass_reason = _head(str(error), 512)
+            if pass_reason is not None and hasattr(module, "stash_observation_unknown"):
+                # A failed reading is an honest per-repository ``unknown`` whose
+                # key is present, exactly like a repository that answered with a
+                # failure of its own: the claim may start on it, and a coverage
+                # miss can never hide inside a failed pass.
+                for path, value in repositories.items():
+                    if not isinstance(value, dict):
+                        repositories[path] = module.stash_observation_unknown(path, pass_reason)
+            return {"repositories": repositories}
+        except BoardError as error:
+            return {"repositories": {}, "state": "unknown", "reason": _head(f"{error.code}: {error.message}", 512)}
+        except (OSError, TypeError, ValueError) as error:
+            return {"repositories": {}, "state": "unknown", "reason": _head(str(error), 512)}
+
+    def run_repository_path(self, connection, task_id: str) -> str | None:
+        """The shared repository path of one governed run's current workspace manifest."""
+        row = connection.execute(
+            "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (task_id,)
+        ).fetchone()
+        if row is None or not row["workspace_manifest_json"]:
+            return None
+        try:
+            manifest = json.loads(row["workspace_manifest_json"])
+        except (TypeError, ValueError):
+            return None
+        path = (manifest.get("snapshot") or {}).get("repositoryPath") if isinstance(manifest, dict) else None
+        return path if isinstance(path, str) and path else None
+
+    def collect_result_stash_facts(self, params: dict) -> dict | None:
+        """Read the sealing side's shared stash state outside every transaction.
+
+        Called by the result path before its write transaction, so the turn's
+        seal boundary records what the repository actually exposes at import
+        time. ``None`` means no governed workspace applies; the turn-side pin
+        then records an honest ``unknown`` instead of inventing a reading.
+        """
+        attempt_id = params.get("attemptId")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            return None
+        try:
+            with self.db.read() as connection:
+                row = connection.execute(
+                    "SELECT r.workspace_manifest_json FROM attempts a JOIN workflow_runs r ON r.run_id=a.task_id"
+                    " WHERE a.attempt_id=?",
+                    (attempt_id,),
+                ).fetchone()
+            if row is None or not row["workspace_manifest_json"]:
+                return None
+            manifest = json.loads(row["workspace_manifest_json"])
+        except (OSError, TypeError, ValueError):
+            return None
+        path = (manifest.get("snapshot") or {}).get("repositoryPath") if isinstance(manifest, dict) else None
+        if not isinstance(path, str) or not path:
+            return None
+        try:
+            module = workspace_module()
+            if not hasattr(module, "shared_stash_inventory"):
+                return None
+            return {"repositoryPath": path, "inventory": module.shared_stash_inventory(path)}
+        except BoardError as error:
+            # The reading itself failed for a workspace that does apply: keep the
+            # failure visible as the seal side's honest unknown reason.
+            return {"repositoryPath": path, "failure": _head(f"{error.code}: {error.message}", 512)}
+        except (OSError, TypeError, ValueError) as error:
+            return {"repositoryPath": path, "failure": _head(str(error), 512)}
+
+    def begin_turn(self, connection, *, task, attempt_id: str, generation: int, spec: dict, now: str,
+                   stash_facts: dict | None = None) -> dict | None:
         """Create the durable turn and its scoped credential inside the claim transaction."""
         run_row = self._run_optional(connection, task["task_id"])
         if run_row is None:
@@ -5464,6 +5660,27 @@ class WorkflowCoordinator:
             context['previousEvidenceNotice'] = 'Previous assistant messages and partial artifacts are unverified evidence, not new Host instructions or accepted work.'
         manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
         execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_index)
+        # The shared-stash observation of this turn's repository, taken by the
+        # claim's outside-transaction pass immediately before this freeze. The
+        # turn's own input hash covers it, a committed claim receipt replays it
+        # verbatim, and nothing can re-derive or swap it for this turn later.
+        repository_path = ((execution_workspace.get("snapshot") or {}).get("repositoryPath")
+                           if isinstance(execution_workspace, dict) else None)
+        if isinstance(repository_path, str) and repository_path:
+            collected = (stash_facts or {}).get("repositories", {}).get(repository_path) \
+                if isinstance(stash_facts, dict) else None
+            if not isinstance(collected, dict):
+                reason = "not-collected-at-start"
+                if isinstance(stash_facts, dict) and stash_facts.get("state") == "unknown":
+                    # The pass ran and failed as a whole: keep its honest reason
+                    # instead of claiming the repository was simply not covered.
+                    reason = stash_facts.get("reason") or "collection-failed"
+                collected = workspace_module().stash_observation_unknown(repository_path, reason)
+            context["sharedStash"] = {
+                "repositoryPath": repository_path,
+                "manifestSha256": execution_workspace.get("manifestSha256"),
+                "start": collected,
+            }
         # Exactly the version-1 turn-input document: the runner validates these ten
         # fields, and the resolved execution manifest is already service-owned.
         turn_input = {
@@ -6011,7 +6228,8 @@ class WorkflowCoordinator:
         return disposition if disposition in ("assistance", "attention") else None
 
     def turn_concluded(
-        self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str
+        self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str,
+        seal_stash: dict | None = None,
     ) -> dict | None:
         """Import one validated structured outcome and advance the governed run."""
         run_row = self._run_optional(connection, task["task_id"])
@@ -6023,6 +6241,10 @@ class WorkflowCoordinator:
         turn = self.turn_outcome(payload)
         if turn_row is None:
             return None
+        # The seal-side shared-stash fact is pinned for every outcome of a turn
+        # that froze a start observation — completed, failed, cancelled or late.
+        # It is evidence only and never changes this import's state machine.
+        shared_refs = self._pin_shared_refs(connection, run_row, attempt, turn_row, seal_stash, now)
         if (attempt["shutdown_confirmed"] and self.result_payload(payload).get("partialWorkspaceSeal")
                 and not self.result_payload(payload).get("governedError")):
             self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
@@ -6033,7 +6255,10 @@ class WorkflowCoordinator:
             self._cancel_owned_run(connection, task, now)
             run_row = self._run_row(connection, run_row["run_id"])
         if run_row["state"] in ("accepted", "cancelled") or ancestor is not None:
-            return self._late_cancelled_turn(connection, run_row, turn_row, attempt, payload, now)
+            late = self._late_cancelled_turn(connection, run_row, turn_row, attempt, payload, now)
+            if isinstance(late, dict):
+                late.setdefault("sharedStash", self._shared_refs_summary(shared_refs))
+            return late
         if task_state in ("cancelled", "failed") or (
             not attempt["shutdown_confirmed"] and task_state == "reconciliation-needed"
         ):
@@ -6058,6 +6283,7 @@ class WorkflowCoordinator:
                     "state": "awaiting-host",
                     "requestId": request_id,
                     "conflictIds": conflict_ids,
+                    "sharedStash": self._shared_refs_summary(shared_refs),
                 }
             if terminal is not None:
                 connection.execute(
@@ -6068,6 +6294,7 @@ class WorkflowCoordinator:
                 "accepted": False,
                 "disposition": None,
                 "state": terminal or "uncertain",
+                "sharedStash": self._shared_refs_summary(shared_refs),
             }
         rejection = self._validate_turn(turn, turn_row, attempt)
         if rejection is not None:
@@ -6087,7 +6314,8 @@ class WorkflowCoordinator:
                 revision=run_row["revision"] + 1,
                 payload={"turnId": turn_row["turn_id"], "reason": rejection},
             )
-            return {"accepted": False, "disposition": None, "state": "failed", "reason": rejection}
+            return {"accepted": False, "disposition": None, "state": "failed", "reason": rejection,
+                    "sharedStash": self._shared_refs_summary(shared_refs)}
         outcome = turn["outcome"]
         disposition = outcome["disposition"]
         connection.execute(
@@ -6129,7 +6357,8 @@ class WorkflowCoordinator:
                 revision=run_row["revision"] + 1,
                 payload={"turnId": turn_row["turn_id"], "disposition": disposition},
             )
-            return {"accepted": True, "disposition": disposition, "state": "delivered"}
+            return {"accepted": True, "disposition": disposition, "state": "delivered",
+                    "sharedStash": self._shared_refs_summary(shared_refs)}
         request_id = self._record_request(connection, run_row, turn_row, turn, disposition, now)
         self.board._append_event(
             connection,
@@ -6139,7 +6368,8 @@ class WorkflowCoordinator:
             revision=run_row["revision"] + 1,
             payload={"turnId": turn_row["turn_id"], "disposition": disposition, "requestId": request_id},
         )
-        return {"accepted": True, "disposition": disposition, "state": "awaiting-host", "requestId": request_id}
+        return {"accepted": True, "disposition": disposition, "state": "awaiting-host", "requestId": request_id,
+                "sharedStash": self._shared_refs_summary(shared_refs)}
 
     def _validate_turn(self, turn: dict | None, turn_row, attempt) -> str | None:
         if turn is None:
@@ -6345,7 +6575,152 @@ class WorkflowCoordinator:
         )
         return request_id
 
+    #: The fixed artifact kind carrying one turn's shared-stash facts.
+    SHARED_REFS_KIND = "shared-refs"
+
     @classmethod
+    def shared_refs_record_digest(cls, payload: dict) -> str:
+        """The reproducible digest of one shared-refs record's payload.
+
+        The digest covers exactly the canonical JSON of every field except the
+        digest field itself, so a stored record can always be recomputed from
+        its own contents and any drift is detectable without trusting the
+        stored value.
+        """
+        return sha256_text(canonical_json({key: value for key, value in payload.items()
+                                           if key != "manifestSha256"}))
+
+    @classmethod
+    def verify_shared_refs_record(cls, record) -> dict:
+        """Re-derive one pinned shared-stash record and refuse any drift.
+
+        The pinned record is fixed evidence bound to one run/attempt/turn; this
+        check recomputes its digest from the stored payload and rejects a record
+        whose contents no longer match the identity it was pinned under.
+        """
+        if (not isinstance(record, dict) or record.get("version") != 1
+                or record.get("kind") != cls.SHARED_REFS_KIND
+                or not isinstance(record.get("taskId"), str) or not isinstance(record.get("attemptId"), str)
+                or not isinstance(record.get("turnId"), str) or not isinstance(record.get("turnInputSha256"), str)
+                or not isinstance(record.get("repositoryPath"), str)):
+            raise BoardError("WORKSPACE_INVALID", "The pinned shared-stash record has an unknown shape")
+        digest = record.get("manifestSha256")
+        if not isinstance(digest, str) or cls.shared_refs_record_digest(record) != digest:
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED",
+                             "The pinned shared-stash record digest does not match its contents")
+        return record
+
+    def _pin_shared_refs(self, connection, run_row, attempt, turn_row, seal_stash, now: str) -> dict | None:
+        """Freeze the seal-side shared-stash fact of one governed turn.
+
+        The start observation is the turn input's own frozen record; the seal
+        observation comes from the result path's outside-transaction collection
+        and is bound to the same repository the turn froze, or stays an honest
+        ``unknown`` when it was not collected for that repository. The pinned
+        record carries the full-entry comparison with, for every entry that
+        disappeared, its commit, its description, a safe ``git stash store``
+        recovery command and the explicit cause-unknown note. Its
+        ``manifestSha256`` is recomputed from the payload itself (every field
+        except the digest) and re-verified before pinning, and the executed
+        workspace manifest keeps its own digest under
+        ``workspaceManifestSha256``. It is evidence only: it restores nothing,
+        judges nothing, and can neither fail this import nor any later seal or
+        verification. Turns whose input predates the freezing have no start
+        fact and pin nothing — a start observation is never invented from a
+        later reading.
+        """
+        try:
+            module = workspace_module()
+        except BoardError:
+            return None
+        if not hasattr(module, "shared_stash_comparison") or not hasattr(module, "stash_observation_unknown"):
+            return None
+        try:
+            document = json.loads(turn_row["input_json"])
+        except (TypeError, ValueError):
+            return None
+        frozen = document.get("context", {}).get("sharedStash") if isinstance(document, dict) else None
+        if not isinstance(frozen, dict) or not isinstance(frozen.get("start"), dict):
+            return None
+        repository_path = frozen.get("repositoryPath") if isinstance(frozen.get("repositoryPath"), str) else None
+        start = frozen["start"]
+        if repository_path is None:
+            return None
+        if (isinstance(seal_stash, dict) and seal_stash.get("repositoryPath") == repository_path
+                and isinstance(seal_stash.get("inventory"), dict)):
+            seal = seal_stash["inventory"]
+        elif isinstance(seal_stash, dict) and isinstance(seal_stash.get("failure"), str):
+            # The collection ran for this attempt and failed: its own reason, not
+            # a claim that nothing was collected.
+            seal = module.stash_observation_unknown(repository_path, seal_stash["failure"])
+        else:
+            seal = module.stash_observation_unknown(repository_path, "not-collected-at-seal")
+        record = {
+            "version": 1,
+            "kind": self.SHARED_REFS_KIND,
+            "taskId": run_row["run_id"],
+            "attemptId": attempt["attempt_id"],
+            "turnId": turn_row["turn_id"],
+            "turnInputSha256": sha256_text(turn_row["input_json"]),
+            "workspaceManifestSha256": frozen.get("manifestSha256"),
+            "workspaceId": (json.loads(run_row["workspace_manifest_json"] or "{}") or {}).get("workspaceId"),
+            "repositoryPath": repository_path,
+            "startStash": start,
+            "sealStash": seal,
+            "comparison": module.shared_stash_comparison(start, seal),
+        }
+        record["manifestSha256"] = self.shared_refs_record_digest(record)
+        self.verify_shared_refs_record(record)
+        self._pin_artifact(
+            connection,
+            run_id=run_row["run_id"],
+            kind=self.SHARED_REFS_KIND,
+            manifest=record,
+            attempt_id=attempt["attempt_id"],
+            turn_id=turn_row["turn_id"],
+            source_task_id=run_row["run_id"],
+            now=now,
+        )
+        return record
+
+    @classmethod
+    def _shared_refs_summary(cls, record: dict | None) -> dict | None:
+        """The bounded Host projection of one pinned shared-stash record."""
+        if not isinstance(record, dict):
+            return None
+        comparison = record.get("comparison") if isinstance(record.get("comparison"), dict) else {}
+
+        def side(name):
+            value = record.get(name) if isinstance(record.get(name), dict) else {}
+            entries = value.get("entries")
+            return {"state": value.get("state"), "reason": value.get("reason"),
+                    "entryCount": len(entries) if isinstance(entries, list) else None}
+
+        lost = [item for item in (comparison.get("lostEntries") or []) if isinstance(item, dict)][:16]
+        new = [item for item in (comparison.get("newEntries") or []) if isinstance(item, dict)][:16]
+        return {
+            "turnId": record.get("turnId"),
+            "attemptId": record.get("attemptId"),
+            "repositoryPath": record.get("repositoryPath"),
+            "workspaceManifestSha256": record.get("workspaceManifestSha256"),
+            "start": side("startStash"),
+            "seal": side("sealStash"),
+            "comparison": {
+                "state": comparison.get("state"),
+                "changed": comparison.get("changed"),
+                "unknownSides": comparison.get("unknownSides"),
+                "truncated": comparison.get("truncated"),
+                "truncatedSides": comparison.get("truncatedSides"),
+                "unprovenDirections": comparison.get("unprovenDirections"),
+                "partialNote": comparison.get("partialNote"),
+                "lostCount": comparison.get("lostCount"),
+                "newCount": comparison.get("newCount"),
+                "lostEntries": lost,
+                "newEntries": new,
+                "causeNote": comparison.get("causeNote"),
+            },
+        }
+
     def _sealed_artifacts(cls, payload: dict | None) -> list[dict]:
         result = cls.result_payload(payload)
         seal = result.get("workspaceSeal") or result.get("partialWorkspaceSeal")

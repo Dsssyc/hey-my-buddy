@@ -154,7 +154,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "backupPreflight", "csrfToken", "tableRevision", "gate", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "tableRevision", "gate", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
@@ -162,7 +162,11 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertIn("httponly", browser.entry_headers["set-cookie"].lower())
         self.assertIn("samesite=strict", browser.entry_headers["set-cookie"].lower())
         self.assertIn("Max-Age=34560000", headers["set-cookie"])
-        self.assertEqual(headers["cache-control"], "no-store")
+        # Read routes keep one private browser copy that must always revalidate:
+        # the marker check happens on the server before any 304 leaves it.
+        self.assertEqual(headers["cache-control"], "private, max-age=0, must-revalidate")
+        self.assertEqual(headers["vary"], "Accept-Encoding")
+        self.assertTrue(headers["etag"].startswith('"'))
         self.assertIn("content-security-policy", headers)
         self.assertNotIn("access-control-allow-origin", headers)
         self.assertNotIn(board.service.token, body.decode())
@@ -464,7 +468,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         status, headers, body = browser.get("/api/tasks?limit=5")
         self.assertEqual(status, 200, body[:300])
         self.assertIn("application/json", headers["content-type"])
-        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["cache-control"], "private, max-age=0, must-revalidate")
         self.assertNotIn("access-control-allow-origin", headers)
         self.assertIn("Max-Age=34560000", headers["set-cookie"])
         payload = json.loads(body)
@@ -528,9 +532,15 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
             self.execution_task(board, f"bulk-{index:03d}")
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
-        self.assertEqual(snapshot["tasks"]["total"], 105)
-        self.assertEqual(len(snapshot["tasks"]["runs"]), 100)
-        cursor = snapshot["tasks"]["nextCursor"]
+        # The periodic snapshot carries only the pending count; the paged
+        # history route owns the full run list.
+        self.assertEqual(snapshot["tasks"], {"pendingCount": 0})
+        status, _headers, body = browser.get("/api/tasks?limit=100")
+        self.assertEqual(status, 200, body[:300])
+        first = json.loads(body)
+        self.assertEqual(first["total"], 105)
+        self.assertEqual(len(first["runs"]), 100)
+        cursor = first["nextCursor"]
         self.assertIsNotNone(cursor)
         status, _headers, body = browser.get(f"/api/tasks?limit=100&before={cursor}")
         self.assertEqual(status, 200, body[:300])
@@ -538,7 +548,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(page["total"], 105)
         self.assertEqual(len(page["runs"]), 5)
         self.assertIsNone(page["nextCursor"])
-        seen = {row["runId"] for row in snapshot["tasks"]["runs"]} | {row["runId"] for row in page["runs"]}
+        seen = {row["runId"] for row in first["runs"]} | {row["runId"] for row in page["runs"]}
         self.assertEqual(len(seen), 105)
 
     def test_history_parameters_are_whitelisted_typed_and_single(self):
@@ -839,7 +849,7 @@ class ConsoleObjectiveTests(ConsoleTestCase, WorkflowTestCase):
         _stated, browser = self.open_console(board)
         status, headers, body = browser.get("/api/objectives?limit=5&filter=all")
         self.assertEqual(status, 200, body[:300])
-        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["cache-control"], "private, max-age=0, must-revalidate")
         page = json.loads(body)
         self.assertEqual(page, json.loads(json.dumps(board.call("objective_list", {"limit": 5, "filter": "all"}))))
         self.assertEqual({item["objectiveId"] for item in page["objectives"]},

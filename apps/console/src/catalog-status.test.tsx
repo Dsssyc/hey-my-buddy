@@ -66,7 +66,7 @@ function fixture() {
     evidence: [], decisions: [],
     sampleCounts: {},
     modelConcurrency: [],
-    tasks: { runs: [], total: 0 },
+    tasks: { pendingCount: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };
   const grant: WriterGrant = {

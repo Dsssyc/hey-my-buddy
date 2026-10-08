@@ -1371,3 +1371,21 @@ class InstalledHarnessDiscoveryTests(BoardTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConsoleCoreTests(BoardTestCase):
+    """console_core is the shared board-state core behind both snapshot reads."""
+
+    def test_core_carries_the_state_keys_and_snapshot_wraps_them(self):
+        board = self.board()
+        core = board.evaluation.console_core()
+        for key in ("tableRevision", "gate", "configuration", "configurationError", "profiles",
+                    "modelConcurrency", "unavailableProfileCount", "preferences", "familyAnnotations",
+                    "familyPreferences", "preferenceOverrides", "cards", "sampleCounts", "evidence",
+                    "decisions", "pendingEvidence"):
+            self.assertIn(key, core)
+        snapshot = board.evaluation.snapshot({})
+        for key in core:
+            self.assertEqual(snapshot[key], core[key], key)
+        self.assertIn("runs", snapshot["tasks"])
+        self.assertIn("capabilities", snapshot)

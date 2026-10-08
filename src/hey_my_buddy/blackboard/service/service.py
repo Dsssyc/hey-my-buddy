@@ -540,8 +540,15 @@ class BoardService(_BaseResource):
     def evaluation_history(self, request_json: str) -> str:
         return self._guard("evaluation.history", request_json, self.evaluation.history)
 
-    def _refresh_harness_catalog(self, name, record):
+    def _refresh_harness_catalog(self, name, record, expected_binding=None):
         from ..catalog import catalog_store
+        if expected_binding is not None and not self.harnesses._binding_is_current(name, expected_binding):
+            # The read admission of a reread claim: the selection moved on after
+            # the claim (an A→B→A round trip keeps the identity but not the
+            # epoch), so this claim starts no native read under the new binding.
+            # The publication fence would keep its result from being adopted;
+            # this boundary keeps the read itself from starting.
+            return
         from ...buddy.harnesses.registry import adapter
         from ...buddy.harnesses.runtime_selection import bound
         observation = catalog_store.begin(self.evaluation, harnesses=[record])
@@ -563,13 +570,16 @@ class BoardService(_BaseResource):
             if error.code != 'UPGRADE_IN_PROGRESS':
                 self.harnesses.invalidate(name, record['revision'], error.code, account=record['account'])
 
-    def _reread_catalog_for_validation(self, name):
+    def _reread_catalog_for_validation(self, name, binding=None):
         """ADR-027 rule 3: one bounded re-read through the service's own refresh.
 
         The health refresh keeps the service environment, the account binding and
         the native subprocess deadlines; no second native channel exists here.
+        The reread claim's account binding rides along to the refresh admission
+        and its catalog read, so a claim made under one account never reads
+        under whichever account is selected later.
         """
-        self.harnesses.refresh(name, force=True)
+        self.harnesses.refresh(name, force=True, expected_binding=binding)
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):

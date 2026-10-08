@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { Snapshot, TaskQuery } from "./types";
+import type { Snapshot, Task, TaskQuery } from "./types";
 
 const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf",
@@ -50,7 +50,7 @@ const initial = (): Snapshot => ({
   decisions: [],
   sampleCounts: { "flash-off": 3 },
   modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
-  tasks: { runs: [], total: 0 },
+  tasks: { pendingCount: 0 },
   capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
 });
 
@@ -65,32 +65,29 @@ afterEach(() => {
 describe("console interactions", () => {
   it("renders a never-claimed cancellation read-only, without retry or acceptance controls", async () => {
     const state = initial();
-    state.tasks = {
-      total: 1,
-      runs: [
-        {
-          runId: "cancelled-before-claim",
-          task: "未执行的测试任务",
-          status: "cancelled",
-          owner: "fixture",
-          cwd: "/fixture",
-          revision: 2,
-          createdAt: "2026-09-22T00:00:00Z",
-          acceptedAt: null,
-          acceptanceVerdict: null,
-          activeAttemptId: null,
-          selectedAttemptId: null,
-          shutdownConfirmed: false,
-          resultAvailable: false,
-        },
-      ],
-    };
+    const records: Task[] = [
+      {
+        runId: "cancelled-before-claim",
+        task: "未执行的测试任务",
+        status: "cancelled",
+        owner: "fixture",
+        cwd: "/fixture",
+        revision: 2,
+        createdAt: "2026-09-22T00:00:00Z",
+        acceptedAt: null,
+        acceptanceVerdict: null,
+        activeAttemptId: null,
+        selectedAttemptId: null,
+        shutdownConfirmed: false,
+        resultAvailable: false,
+      },
+    ];
     const api = {
       snapshot: vi.fn(async () => state),
       command: vi.fn(async () => ({})),
-      task: vi.fn(async () => state.tasks.runs[0]),
-      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : state.tasks.runs,
-        total: rootsOnly ? 0 : state.tasks.total, nextCursor: null })),
+      task: vi.fn(async () => records[0]),
+      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : records,
+        total: rootsOnly ? 0 : records.length, nextCursor: null })),
       objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
@@ -113,31 +110,28 @@ describe("console interactions", () => {
 
   it("renders the persisted worker receipt and refuses retry when a process may survive", async () => {
     const state = initial();
-    state.tasks = {
-      total: 1,
-      runs: [
-        {
-          runId: "unconfirmed-run",
-          task: "停止证据测试",
-          status: "failed",
-          owner: "fixture",
-          cwd: "/fixture",
-          revision: 3,
-          createdAt: "2026-09-22T00:00:00Z",
-          acceptedAt: null,
-          acceptanceVerdict: null,
-          activeAttemptId: "attempt",
-          selectedAttemptId: "attempt",
-          shutdownConfirmed: false,
-          resultAvailable: true,
-        },
-      ],
-    };
+    const records: Task[] = [
+      {
+        runId: "unconfirmed-run",
+        task: "停止证据测试",
+        status: "failed",
+        owner: "fixture",
+        cwd: "/fixture",
+        revision: 3,
+        createdAt: "2026-09-22T00:00:00Z",
+        acceptedAt: null,
+        acceptanceVerdict: null,
+        activeAttemptId: "attempt",
+        selectedAttemptId: "attempt",
+        shutdownConfirmed: false,
+        resultAvailable: true,
+      },
+    ];
     const api = {
       snapshot: vi.fn(async () => state),
       command: vi.fn(),
       task: vi.fn(async () => ({
-        ...state.tasks.runs[0],
+        ...records[0],
         selectedAttempt: {
           result: {
             status: "failed",
@@ -146,8 +140,8 @@ describe("console interactions", () => {
           },
         },
       })),
-      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : state.tasks.runs,
-        total: rootsOnly ? 0 : state.tasks.total, nextCursor: null })),
+      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : records,
+        total: rootsOnly ? 0 : records.length, nextCursor: null })),
       objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();

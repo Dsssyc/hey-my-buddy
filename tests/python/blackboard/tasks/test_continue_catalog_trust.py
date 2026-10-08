@@ -73,7 +73,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         submitted = self.seed()
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=('alpha', 'beta')))
 
@@ -90,7 +90,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         read_at = self.clock.value
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)  # The bounded refresh runs and brings nothing new.
 
         catalog.register_catalog_reread(self.directory, reread)
@@ -103,7 +103,8 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(error.details.get("catalogReadAt"), read_at)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
-        self.assertNotIn("reason", error.details, "The cause is the catalog, not the user gate")
+        self.assertEqual(error.details.get("reason"), "catalog-unavailable",
+                         "The cause is the catalog, not the user gate")
         self.assertNotIn("enabled", error.details)
 
     def test_confirmed_unavailable_route_still_rejects_after_one_reread(self):
@@ -114,7 +115,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         confirmed_at = self.clock.value
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=()))  # The refresh still reports absence.
 
@@ -136,7 +137,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.evaluation.record_catalog(reading(models=()))
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=('alpha',)))
 
@@ -152,7 +153,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.evaluation.record_catalog(reading(models=()))
         self.clock.advance(3601)
         calls = []
-        catalog.register_catalog_reread(self.directory, calls.append)
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
         workflow = self.board.store.workflow
         validate = workflow._validated_configuration
 
@@ -195,18 +196,73 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertIsNone(self.overridden_event())
         self.assertEqual(workflow_state(), before, "No configuration, requeue, continuation, receipt or event writes")
 
+    def test_simultaneously_unavailable_and_disabled_reports_the_catalog_reason_first(self):
+        # The write-time gate meets a row that is both unavailable and not
+        # enabled: the catalog cause leads, and the not-enabled shape (with its
+        # enabled:false fact) is not used for it.
+        submitted = self.seed()
+        self.evaluation.record_catalog(reading(models=()))  # alpha pending inside the window
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        workflow = self.board.store.workflow
+        validate = workflow._validated_configuration
+
+        def confirm_after_validation(configuration):
+            admitted = validate(configuration)
+            self.assertEqual(admitted, IDENTITY)
+            self.clock.advance(3601)
+            self.evaluation.record_catalog(reading(models=()))  # Confirmed absence; still not enabled.
+            return admitted
+
+        with patch.object(workflow, "_validated_configuration", side_effect=confirm_after_validation):
+            with self.assertRaises(BoardError) as rejected:
+                self.continue_with(submitted, IDENTITY)
+        error = rejected.exception
+        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.details.get("reason"), "catalog-unavailable",
+                         "The catalog cause leads when both causes hold")
+        self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
+        self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
+        self.assertNotIn("enabled", error.details, "The not-enabled shape is a different refusal")
+        self.assertEqual(calls, [], "The write fence starts no native re-read")
+        self.assertEqual(self.profile_enabled("dsh:fixture:alpha:max"), False)
+
+    def test_override_file_route_without_a_profile_row_refuses_not_enabled(self):
+        # The operator's catalog file admits the route at validation without any
+        # recorded catalog, so no profile row exists when the write-time enabled
+        # gate looks for it; that missing row is itself the not-enabled refusal,
+        # with the explicit enabled:false fact and no catalog re-read.
+        self.catalog_fixture(reading())
+        submitted = self.submit(self.board, provider="fixture", model="alpha", effort="max")
+        with self.board.store.db.read() as db:
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM evaluation_profiles WHERE profile_id='dsh:fixture:alpha:max'").fetchone(),
+                "A file-validated route has no profile row until a catalog is recorded")
+        calls = []
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        with self.assertRaises(BoardError) as rejected:
+            self.continue_with(submitted, IDENTITY)
+        gate = rejected.exception
+        self.assertEqual(gate.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(gate.details.get("reason"), "not-enabled")
+        self.assertIn("enabled", gate.details, "The refusal states the enablement fact itself")
+        self.assertIs(gate.details["enabled"], False)
+        self.assertEqual(calls, [], "The operator pin admits validation without a native re-read")
+        self.assertIsNone(self.overridden_event())
+
     def test_disabled_and_catalog_refusals_carry_different_reasons_and_facts(self):
         submitted = self.seed()
         read_at = self.clock.value
         calls = []
-        catalog.register_catalog_reread(self.directory, calls.append)
+        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
         # An admitted catalog route whose profile the user never enabled.
         with self.assertRaises(BoardError) as disabled:
             self.continue_with(submitted, IDENTITY)
         gate = disabled.exception
         self.assertEqual(gate.code, "CONFIGURATION_UNAVAILABLE")
         self.assertEqual(gate.details.get("reason"), "not-enabled")
-        self.assertFalse(gate.details.get("enabled"))
+        self.assertIn("enabled", gate.details, "The user-gate refusal states the enablement fact itself")
+        self.assertIs(gate.details["enabled"], False)
         self.assertEqual(gate.details.get("catalogReadAt"), read_at, "The refusal still names the catalog read time")
         self.assertNotEqual(gate.details.get("remedy"), catalog.CATALOG_REMEDY)
         self.assertIn("Enable", gate.details["remedy"])
@@ -220,7 +276,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(absent.code, "CONFIGURATION_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(absent.details.get("remedy"), catalog.CATALOG_REMEDY)
-        self.assertNotIn("reason", absent.details)
+        self.assertEqual(absent.details.get("reason"), "catalog-unavailable")
         self.assertNotIn("enabled", absent.details)
         self.assertNotEqual(gate.message, absent.message)
         self.assertNotEqual(gate.details["remedy"], absent.details["remedy"])
@@ -229,7 +285,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         submitted = self.seed()  # alpha is listed; both profiles start disabled.
         calls = []
 
-        def reread(name):
+        def reread(name, binding):
             calls.append(name)
             self.clock.advance(60)
             self.evaluation.record_catalog(reading(models=('alpha', 'beta')))
