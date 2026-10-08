@@ -28,7 +28,7 @@ Host逐项核对固定artifact、累计patch与范围，独立运行聚焦原件
 | --- | --- | --- |
 | R1 无模型原生核对 | 新增tests/probes/dsh_native_resume_preflight.py；docs/acceptance/dsh-native-resume-r1-preflight.md | V-R1：已安装dsh --profile acp，在微任务私有sessions根新建空会话，关闭并确认进程组消失，再由另一进程用同一存储和session/resume恢复。核对能力、session/list/配置读回、传入本次MCP服务、会话标识来源、同一sessions根、错误分类和停止；全程不发送prompt、不调用模型、不读用户凭据内容。 |
 | R2 DSH候选原生运行与用量 | src/hey_my_buddy/buddy/harnesses/dsh/native_run.py；必要的新DSH内部模块；tests/python/buddy/harnesses/dsh/test_native_run.py、其DSH原生fixture及新增DSH续接/用量测试；docs/acceptance/dsh-native-resume-r2-native.md | V-R2：初始、新建重构、原生恢复三个已有模式；V-R3：恢复时完成/问询工具、活动和共同实时通道重新绑定本尝试；V-R4：model/effort读回、工具范围启动配置及session-title-llm/session-telemetry-otel关闭保留；V-R5：原会话不存在、拒绝或身份失配都失败，没有新建回退；V-R6：本回合仅新增记录用量，无法证明边界则未知。只在DSH范围实现，不启用能力声明。 |
-| R3 共同角色、存储与黑板核对 | Host整合公共文件；路由微任务只新增tests/python/buddy/roles/test_dsh_resume_storage.py、tests/python/blackboard/tasks/test_dsh_resume_selection.py；docs/acceptance/dsh-native-resume-r3-integration.md | V-R7：复用共同resumeMode选择，完整回合/停止、配置、账户、版本与工作区失配的重构原因；V-R8：同一微任务两尝试共用native根、不同微任务隔离，凭据/启动补丁/日志仍按尝试，原生存储排除备份并按既有规则留存和回收；核对三个其他harness、快速与审阅未变。 |
+| R3 共同角色、存储与黑板核对 | Host整合公共文件；路由微任务只新增tests/python/buddy/roles/test_dsh_resume_storage.py、tests/python/blackboard/tasks/test_dsh_resume_selection.py；docs/acceptance/dsh-native-resume-r3-integration.md | V-R7：复用共同resumeMode选择，完整回合/停止、配置、账户与版本的资格和重构原因；工作区/私有会话绑定失配的明确失败留在原生模块，与Codex/ZCode一致；V-R8：同一微任务两尝试共用native根、不同微任务隔离，凭据/启动补丁/日志仍按尝试，原生存储排除备份并按既有规则留存和回收；核对三个其他harness、快速与审阅未变。 |
 | Host真实核对与启用 | tests/probes下本次DSH专用冒烟脚本；总体记录、注册表/DSH适配器的必要整合归Host | V-R9：用户另行批准的2个很短DSH回合，第一回合埋下随机内容，第二回合原生续接并证明能读取它；保存第二次真实输入，确认未重放该内容、旧摘要或消息。核对前后同一原生session、签收和工具事实、两层停止及逐回合用量；成功后才声明native-session，并聚焦能力/共同路径测试。 |
 
 R1在第一部分整合后开始；无模型结果若不能证明跨进程恢复或新服务/配置能挂载，先停止说明，不以SDK、安装包静态分析或重放历史来代替。R2随后按实际公开ACP结果实现；R3依赖候选接口，公共缺口由Host先统一修改、提交，再由原run continue核对。两项可在不写公共文件的范围交错进行，不能覆盖对方文件。实际写入范围在每次submit中逐文件冻结，新增模块只在对应DSH范围并经scope-amend登记，不把表中的“必要”视为无限写权限。
@@ -59,7 +59,7 @@ R1在第一部分整合后开始；无模型结果若不能证明跨进程恢复
 
 ## 当前状态
 
-执行计划7391081已提交，宏任务obj-36c065d5-68b2-4e2d-abd4-e10512124d4c下C1/C2/C3均已内部验收、整合并按确切路径回收。第一部分完成；Host独立无模型核对已通过，R1探针工具的固定交付仍待核对；R2准备依据真实ACP结果提交，R3与2回合付费冒烟未开始，产品native-session能力仍未声明。以下保留各次整合的实际经过与当时的验证边界。
+执行计划7391081已提交，宏任务obj-36c065d5-68b2-4e2d-abd4-e10512124d4c下C1/C2/C3均已内部验收、整合并按确切路径回收。第一部分完成；Host独立无模型核对已通过，R1工具产物已退回原run修异常边界和停止口径；R2候选实现与R3既有共同机制的测试各自路由到隔离检出，尚未验收整合。2回合付费冒烟未开始，产品native-session能力仍未声明。以下保留各次整合的实际经过与当时的验证边界。
 
 Host整合登记：开工核对确认时间窗重复的是protocol/inquiry.py与buddy/harnesses/live.py，c_two_live.py原本已经引用后者。保留两侧接口层protocol/inquiry.py的一份定义，Host仅改live.py的常量来源，取值不变；该文件不在并行微任务写入范围内。原C3任务仍保留，固定产物审查时按当前公共来源核对，不让其扩大写入范围。两项现有窗口边界测试与cli.test_repository_hygiene共7项通过（0.203秒、退出0），原始命令/日志留tmp；不重复完整检查。
 
@@ -78,3 +78,7 @@ R1首回合因路由所选zcode/zai-api/GLM-5.3-Flash/max的供应方stream EADD
 Host独立V-R1无模型核对：复用现有AcpClient、materialize_acp_profile、source_binding_rows、private_dirs.native_root和既有MCP测试服务，在<host-root>/m/host-native-preflight2中按微任务放置sessions，两个进程分别使用a1/a2的私有DSH_HOME、profile、patch与frames。第一个进程new返回cdefaada-86de-4b74-bb9b-369fe55cad85，关闭且确认组消失；第二个进程向同一存储发送此标识的resume，配置读回与close都正常，组同样消失、leader退出0。新MCP服务两次都实际收到initialize、notifications/initialized、tools/list，只证明无模型挂载，不称工具执行证明。ACP声明resume/list/close，agentInfo为deepseek-harness-acp 0.0.1（这是ACP应用版本，不当作DSH发行版本）；resume响应只有configOptions，会话身份来自先前new与本次resume请求，未声称回读响应身份；两次list均为空，不靠list给恢复设置资格。共享目录确实生成该会话的session.v3.jsonl.zstd及session.lock，两个始终关闭的行按字面名称写入每次私有启动补丁。整个驱动只允许initialize/new/resume/list/set_config_option/close，没有prompt或authenticate，两个DSH原生进程、零模型调用；日常HOME、设置与凭据只按既有路径传给DSH。
 
 Host独立探针首轮在导入pydantic前失败：Host错误地解析了虚拟环境解释器符号链接，使用基础解释器，没有启动DSH；纠正后经已准备的uv环境在新的命名目录重做，保留首轮错误，不覆盖材料。第二轮驱动退出0后逐项核对公开回应、请求方法、不同私有home、MCP方法记录及真实组停止，不仅凭退出码判断。原始脚本、位置、回应与退出码留tmp/host-native-preflight1-*、host-native-preflight2-*及对应Host专用根；根在创建时登记，不删除、不扫描其他会话。实际原生可行性已经由Host核对，因此R2可依据这些公开事实开始；R1的工具交付仍须固定产物审查，不能拿Host探针替它的源码验收。没有启用产品能力、没有进行付费回合。
+
+R1初稿固定7e9f68e155db、artifact d01a92e1-4d7c-40b6-b28c-c12ec7611432仅改两份授权文件，累计patch范围与SHA及本回合系谱的停止确认均已核对。微任务的原生材料run1/run3各启动两次DSH ACP、未调用模型，另有discovery版本探测；run2在会话启动前因自身UnboundLocalError失败并保留。公开恢复事实与Host独立结果一致，补充确认已关闭会话才出现在list、恢复后effort不会继承前次会话内切换，因此候选实现仍须重新配置并读回。代码审查暂拒：A停止未确认时主流程仍可能启动B；AcpClient.start抛出LaunchOwnershipError时其自带句柄与停止证据没有入库；探针把同一原生进程的wrapper与组观察称作“两层停止”，实际未验证角色控制器外层。这些改变异常行为或验证结论，按原run continue返修，四个配置字段全部省略，不重做真实DSH、不取消重开；原固定产物和历史原生材料保留。
+
+R2从d8fa086路由提交run 9ecbf183-04ba-4b90-98c0-b60fb1bfbe21，决定dec-8777a58e-ae54-4b7b-9394-873a6d030edc选择zcode/zai-api/GLM-5.3/max；R3同基线路由提交run 5295ef5f-5496-4770-a6de-a43312efaec2，决定dec-275642f7-e904-4354-a673-5bccc821cd7b选择zcode/zai-api/GLM-5.3-Flash/max。两份首次参数均完全省略adapter/provider/model/effort。R2只写DSH模块、其fixture/测试与本任务记录，公共文件不碰；R3只加已列共同机制测试和记录，通过测试私有的候选执行器走现有选择与prepare，不运行R2活动代码、不声明生产能力，因此这部分可与R2并行。DSH本次home/profile/patch/frame隔离的实际原生执行由R2核对，R3不把共同prepare的目录边界测试称作原生运行。开工源码核对还细分了V-R7：工作区绑定失配是既有原生模块的明确恢复失败，黑板没有为它另设自动重建，计划按“复用已有判定、不静默回退”的用户要求更正，不增加公共判定或schema。
