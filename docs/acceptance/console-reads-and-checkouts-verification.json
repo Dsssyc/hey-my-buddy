@@ -202,15 +202,14 @@
     "rawLog": "tmp/console-reads-host/post-core-full-check.log",
     "environment": "inherited BUDDY_*, ANTHROPIC_*, VIRTUAL_ENV and UV_PROJECT_ENVIRONMENT removed before uv; fresh private state/runtime and source checks"
   },
-  "verificationBoundary": "Final combined code is the core merge commit; earlier preCoreFullCheck remains historical. Following changes are acceptance records only and receive focused repository hygiene verification.",
+  "verificationBoundary": "Product source remains the Python-checked 5c9c9fc; test-only corrective code at881dbd4e received independent affected Python tests, target-removal mutation, and the full 728-test frontend run. Following changes are records only and receive repository hygiene.",
   "recordOnlyHygiene": {
     "command": "uv run --frozen python tmp/console-reads-host/run_affected.py cli.test_repository_hygiene",
     "tests": 5,
     "exitCode": 0,
-    "checkedSourceCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+    "checkedSourceCommit": "881dbd4ee9a31bfab431e45659021215ad46d20e",
     "recordsOnly": true,
-    "environment": "inherited-variable removal and fresh private roots",
-    "rawLog": "tmp/console-reads-host/post-core-hygiene-final.log"
+    "rawLog": "tmp/console-reads-host/repair-hygiene-final.log"
   },
   "acceptanceRepair": {
     "rejectedCommit": "0011980b8efd31fb705e9854fcb75c481b920dd2",
@@ -259,8 +258,51 @@
       "passed": 7,
       "exitCode": 1
     },
-    "fullFrontendStatus": "pending on fixed integration commit",
+    "fullFrontendStatus": "passed",
     "pythonFullRerun": false,
-    "previousPythonFullResult": "3162 tests at 5c9c9fc remains historical verification of identical product source, not execution of the new test"
+    "previousPythonFullResult": "3162 tests at 5c9c9fc remains historical verification of identical product source, not execution of the new test",
+    "fullFrontend": {
+      "command": "npm --prefix apps/console test",
+      "commit": "881dbd4ee9a31bfab431e45659021215ad46d20e",
+      "node": "v24.21.0",
+      "fullFrontend": true,
+      "privateRoots": true,
+      "startedAt": "2026-10-08T07:29:40.313603+00:00",
+      "exitCode": 0,
+      "elapsedSeconds": 26.048,
+      "finishedAt": "2026-10-08T07:30:06.362837+00:00",
+      "tests": 728,
+      "testFiles": 56,
+      "rawLog": "tmp/console-reads-host/repair-front-full.log"
+    },
+    "integrationId": "int-79aed93f-845e-4de0-8ae4-3f6a7c1ef2e0",
+    "verdict": "accepted",
+    "cleanup": {
+      "planId": "cln-954a5291-37bf-40dc-b033-99db11e31bcb",
+      "state": "applied",
+      "appliedAt": "2026-10-08T07:33:41.193Z",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-f6efb30828c3289b89ba3c736d0879d7/checkout",
+      "checkoutAbsent": true,
+      "retainedPatches": 2,
+      "retainedRefs": 6,
+      "materialsRetained": "tmp/console-reads-host/repair-retained/"
+    },
+    "finalRecordHygiene": {
+      "command": "uv run --frozen python tmp/console-reads-host/run_affected.py cli.test_repository_hygiene",
+      "tests": 5,
+      "exitCode": 0,
+      "checkedSourceCommit": "881dbd4ee9a31bfab431e45659021215ad46d20e",
+      "recordsOnly": true,
+      "rawLog": "tmp/console-reads-host/repair-hygiene-final.log"
+    }
+  },
+  "preRepairRecordOnlyHygiene": {
+    "command": "uv run --frozen python tmp/console-reads-host/run_affected.py cli.test_repository_hygiene",
+    "tests": 5,
+    "exitCode": 0,
+    "checkedSourceCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+    "recordsOnly": true,
+    "environment": "inherited-variable removal and fresh private roots",
+    "rawLog": "tmp/console-reads-host/post-core-hygiene-final.log"
   }
 }

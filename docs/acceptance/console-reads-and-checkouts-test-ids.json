@@ -320,11 +320,14 @@
     "removed": []
   },
   "postCoreCollection": "fixed core Git archive and auto-merged worktree; unittest discovery only, no tests executed during counting; frontend source/IDs unchanged by core",
-  "postCoreCodeCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5",
+  "postCoreCodeCommit": "881dbd4ee9a31bfab431e45659021215ad46d20e",
   "testOnlyRepair": {
     "newPythonId": "console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_access_revision_alone_refreshes_the_same_cached_session",
     "frontendIdsChanged": false,
     "pythonFullSuiteRerun": false,
-    "countBasis": "one added method, zero removed methods in immutable test-only patch; affected module and new target executed independently"
-  }
+    "countBasis": "one added method, zero removed methods in immutable test-only patch; affected module and new target executed independently",
+    "commit": "881dbd4ee9a31bfab431e45659021215ad46d20e",
+    "preRepairCount": 3162
+  },
+  "preRepairCollectionCommit": "5c9c9fcc119ca74e781a9daeea84d30fc1db03a5"
 }

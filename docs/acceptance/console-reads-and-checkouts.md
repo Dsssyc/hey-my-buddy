@@ -243,3 +243,13 @@ R15 固定交付：新宏任务 `obj-772db233-6e51-4aef-97be-971c504eba46`，run
 Host 独立重跑 objective-api 9 项与 console HTTP 19 项，退出码均为 0。前端原来两处失败已在同一产品源码上复现（9 项中 2 fail / 7 pass、退出码 1），固定修正后 9 项全通过，恶劣输入、错误信封与中止断言均保持。新增访问修订回归保持同一有效登录会话，固定 console/read-cache/sessions 三处时钟、无数据库写入或资产/会话/登录模式变动；仅在私有夹具锁内注入 access_revision 增量，明确不冒充真实切换访问策略。旧 ETag 先 304，修订变化后必须 200、新 ETag 和新 consoleAccess.revision，随后只有新 ETag 才 304。
 
 Host 新用例单独运行退出 0；inspect/exec 与 mock.patch.object 只在进程内移除 Console.read_snapshot 标记中的 access_revision 后，同一用例退出 1，唯一失败为 `304 != 200`，无加载或其他错误，私有根回收确认。没有写入生产文件、没有将原切登录模式用例的其他失效源当作本项证据。新 Python 编号为 `console.test_console_reads_http.ConsoleReadSessionIsolationTests.test_access_revision_alone_refreshes_the_same_cached_session`；两文件 AST/固定差异确认只新增这一方法，合入 core 的编号清点为 3,049→3,163、新增 114、删除 0。此为测试结构的增量清点，旧完整检查仍只有 3,162 项实际执行，不声称执行了新的 Python 全量。前端编号与项数仍为 728；完整前端结果待 R16 填入。
+
+## R16：最终完整前端测试与修正验收
+
+固定整合提交 `881dbd4ee9a31bfab431e45659021215ad46d20e`（`test(console): cover access revision and timeline read envelopes`）上，worktree 干净后运行完整命令 `npm --prefix apps/console test`，没有文件筛选或降低范围：56/56 文件、728/728 项测试通过、退出码 **0**，Node 24.21.0，26.048 秒；UTC 2026-10-08 07:29:40→07:30:06（Asia/Singapore 15:29→15:30）。启动前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 和 UV_PROJECT_ENVIRONMENT，再设置全新的私有状态、运行时与明确预览 Python/源路径；使用 Vite/Vitest 默认运行机制。原始完整日志在 ignored `tmp/console-reads-host/repair-front-full.log`，命令、提交号、项数、时间和退出码在最终核对 JSON 的 acceptanceRepair.fullFrontend。
+
+本次是整个前端源码的一次完整执行；先前仅受影响的前端验证没有包含 objective-api，原 Python checks 也不包含前端，此前的完成结论漏了这一项。本次明确补上，不改写原 195 文件/3,162 项的 Python 完整检查事实；按用户的测试-only 指令不重复 Python 全量。产品源码与构建产物相对 0011980b 的 Git 差异为零，4 个构建产物 SHA-256 与原固定值一致，测试修改不会改变发布的界面、错误或事件，因此不重新构建或重做原已通过的浏览器、目录、Git 对象与其他变异核对。
+
+修正 run 的整合记录为 `int-79aed93f-845e-4de0-8ae4-3f6a7c1ef2e0`，绑定完整两路径固定产物与上述整合提交，Host 的三份验收记录另列 hostPaths。独立证据通过且完整前端退出 0 后登记 accepted；随后现有守护进程通过正常受保护 plan/apply 回收精确检出 `~/.local/share/hey-my-buddy/state/workspaces/ws-f6efb30828c3289b89ba3c736d0879d7/checkout`，计划 `cln-954a5291-37bf-40dc-b033-99db11e31bcb` 持久状态 applied。Host 核对路径与符号链接均不存在，2 份输出补丁实际存在，6 个固定 refs 的对象仍可读取；所需日志与一次性材料已先保留于 Host ignored 专用目录。Worker 未自行删除或回收，没有改变原 A-F/A-S 的历史事实。
+
+最终三份验收记录暂存后，仅重跑 `cli.test_repository_hygiene`，5 项通过、退出码 0；没有重跑 Python 完整检查或重复完整前端测试。记录以单独本地提交交付，测试源码仍与已检查的 881dbd4e 相同。本分支与 Host 工作树保留、不推送，没有再合入 core，完成后停止等待 Claude Code Host 验收。新断言与修订失效回归已验证，Windows 和日常已安装运行时没有新增验证，原记录的其他边界继续保留。
