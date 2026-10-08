@@ -59,7 +59,7 @@ R1在第一部分整合后开始；无模型结果若不能证明跨进程恢复
 
 ## 当前状态
 
-执行计划7391081已提交，宏任务obj-36c065d5-68b2-4e2d-abd4-e10512124d4c下C1/C2/C3均已内部验收、整合并按确切路径回收。第一部分完成；R1无模型核对微任务在原run恢复执行，尚无固定交付可验收；R2/R3与2回合付费冒烟未开始，产品native-session能力仍未声明。以下保留各次整合的实际经过与当时的验证边界。
+执行计划7391081已提交，宏任务obj-36c065d5-68b2-4e2d-abd4-e10512124d4c下C1/C2/C3均已内部验收、整合并按确切路径回收。第一部分完成；Host独立无模型核对已通过，R1探针工具的固定交付仍待核对；R2准备依据真实ACP结果提交，R3与2回合付费冒烟未开始，产品native-session能力仍未声明。以下保留各次整合的实际经过与当时的验证边界。
 
 Host整合登记：开工核对确认时间窗重复的是protocol/inquiry.py与buddy/harnesses/live.py，c_two_live.py原本已经引用后者。保留两侧接口层protocol/inquiry.py的一份定义，Host仅改live.py的常量来源，取值不变；该文件不在并行微任务写入范围内。原C3任务仍保留，固定产物审查时按当前公共来源核对，不让其扩大写入范围。两项现有窗口边界测试与cli.test_repository_hygiene共7项通过（0.203秒、退出0），原始命令/日志留tmp；不重复完整检查。
 
@@ -74,3 +74,7 @@ Host整合C2返修固定ab592692：三个新增文件逐字合入、13个新增�
 第一部分实际全局编号：3066项/192模块、零装载错误，原3049项减少5旧、增加22新，未变3044集合相等；原始完整编号与每个差异留tmp/cleanup-test-ids1.json和cleanup-id-accounting1.json。C1/C2/C3均内部accepted并按确切路径回收检出与短任务根，分别保留52/79/25份命名证据；Host自己的核对根仍保留供后续使用。R1在第一部分之后从aa98c88路由提交（run b8f6ed77-c4b1-46f4-a364-70bbc09aeb26），四个配置字段全部省略，只允许ACP无模型核对；R2/R3与2回合付费冒烟未开始，产品能力仍未声明。
 
 R1首回合因路由所选zcode/zai-api/GLM-5.3-Flash/max的供应方stream EADDRNOTAVAIL失败，quotaFailure为空，两层停止已确认；这不是DSH恢复核对的失败结论，也不按限流许可改配置。Host只读核对受管检出无改动、任务根仅有空t/m，没有可验收的探针或原生核对材料；没有据此推断原生能力已通过。使用原run的continue恢复，adapter/provider/model/effort四项继续全部省略，沿用路由决定dec-814189fa-9cb5-4f94-988b-ea22863895d4与同一受管检出、确切任务根，保留第一回合失败回应。恢复输入收紧到原两文件范围、公开ACP与已有客户端，明确不补prompt、不播种会话、不调用模型；未换buddy、未取消或重开。原始回应及恢复参数留tmp/r1-result1-result.json与r1-recover1-params.json；尚未获得原生核对结论。
+
+Host独立V-R1无模型核对：复用现有AcpClient、materialize_acp_profile、source_binding_rows、private_dirs.native_root和既有MCP测试服务，在<host-root>/m/host-native-preflight2中按微任务放置sessions，两个进程分别使用a1/a2的私有DSH_HOME、profile、patch与frames。第一个进程new返回cdefaada-86de-4b74-bb9b-369fe55cad85，关闭且确认组消失；第二个进程向同一存储发送此标识的resume，配置读回与close都正常，组同样消失、leader退出0。新MCP服务两次都实际收到initialize、notifications/initialized、tools/list，只证明无模型挂载，不称工具执行证明。ACP声明resume/list/close，agentInfo为deepseek-harness-acp 0.0.1（这是ACP应用版本，不当作DSH发行版本）；resume响应只有configOptions，会话身份来自先前new与本次resume请求，未声称回读响应身份；两次list均为空，不靠list给恢复设置资格。共享目录确实生成该会话的session.v3.jsonl.zstd及session.lock，两个始终关闭的行按字面名称写入每次私有启动补丁。整个驱动只允许initialize/new/resume/list/set_config_option/close，没有prompt或authenticate，两个DSH原生进程、零模型调用；日常HOME、设置与凭据只按既有路径传给DSH。
+
+Host独立探针首轮在导入pydantic前失败：Host错误地解析了虚拟环境解释器符号链接，使用基础解释器，没有启动DSH；纠正后经已准备的uv环境在新的命名目录重做，保留首轮错误，不覆盖材料。第二轮驱动退出0后逐项核对公开回应、请求方法、不同私有home、MCP方法记录及真实组停止，不仅凭退出码判断。原始脚本、位置、回应与退出码留tmp/host-native-preflight1-*、host-native-preflight2-*及对应Host专用根；根在创建时登记，不删除、不扫描其他会话。实际原生可行性已经由Host核对，因此R2可依据这些公开事实开始；R1的工具交付仍须固定产物审查，不能拿Host探针替它的源码验收。没有启用产品能力、没有进行付费回合。
