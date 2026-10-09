@@ -64,7 +64,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(left["path"], str(self.repo / "src"))
 
     def test_non_git_and_unborn_checkout_are_explicit_errors(self):
-        self.assert_error("WORKSPACE_UNSUPPORTED", workspace.inspect, str(self.root))
+        non_git = self.root / "non-git"
+        non_git.mkdir()
+        # TMPDIR may live inside a checkout. An invalid local Git pointer stops
+        # discovery from borrowing that ancestor as this fixture's repository.
+        (non_git / ".git").write_text("gitdir: missing-private-repository\n")
+        self.assert_error("WORKSPACE_UNSUPPORTED", workspace.inspect, str(non_git))
         unborn = self.root / "unborn"
         unborn.mkdir()
         self.git("init", "-q", cwd=unborn)
@@ -155,8 +160,14 @@ class WorkspaceTests(unittest.TestCase):
             if path.name == "manifest.json":
                 raise OSError("simulated crash")
             return original(path, data)
-        with patch.object(workspace, "_write_once", side_effect=interrupt):
-            self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
+        original_git = workspace._git
+        def failed_removal(root, *args, **kwargs):
+            if args[:2] == ("worktree", "remove"):
+                raise BoardError("WORKSPACE_GIT_ERROR", "simulated cleanup failure", argv=["git", *args])
+            return original_git(root, *args, **kwargs)
+        with patch.object(workspace, "_write_once", side_effect=interrupt), patch.object(workspace, "_git", side_effect=failed_removal):
+            error = self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
+        self.assertFalse(error.details["preparationCleanup"]["removed"])
         _, directory = workspace._workspace_directory(self.state, "request")
         changed = directory / "checkout/src/file.txt"
         changed.write_text("valuable unfinished work")

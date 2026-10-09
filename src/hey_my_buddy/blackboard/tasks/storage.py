@@ -169,6 +169,154 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     return reasons
 
 
+def _workspace_reference_rows(connection) -> list[tuple[str, dict]]:
+    """Physical references in retained facts, without filtering their state.
+
+    Integration targets need not be a run's execution workspace: verifying a
+    target ref can leave its checkout unchanged. Cleanup plans likewise retain
+    their exact path and identity even after reservations have been released.
+    Include durable inputs, results and receipts that can retain other physical
+    locations; identity alias metadata alone never counts as a reference.
+    """
+    return [(table, dict(row)) for table in (
+        'tasks', 'attempts', 'artifacts', 'objectives', 'resource_claims', 'messages',
+        'events', 'commands', 'decision_requests', 'harness_health', 'evaluation_evidence',
+        'workflow_runs', 'workflow_children', 'workspace_reservations',
+        'workflow_continuations', 'workflow_turns', 'workflow_artifacts',
+        'workflow_requests', 'workflow_scope_versions', 'workflow_workspace_conflicts',
+        'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions')
+        for row in connection.execute('SELECT * FROM ' + table)]
+
+
+def allocation_references(connection, manifest: dict, request_id: str | None = None) -> list[str]:
+    """An unregistered allocation has no retained board reference of any state."""
+    from . import workspace_identity
+    return _allocation_reference_reasons(_workspace_reference_rows(connection), manifest, request_id,
+                                         mapping=workspace_identity.load_alias_map(connection))
+
+
+def _allocation_reference_reasons(rows, manifest, request_id, *, mapping=None):
+    from . import workspace_identity
+    if mapping is None:
+        mapping = workspace_identity.active_aliases()
+    checkout = manifest['checkoutRoot']
+    allocation = str(Path(checkout).parent)
+    def refers(value):
+        if isinstance(value, dict):
+            return any(refers(item) for item in value.values())
+        if isinstance(value, list):
+            return any(refers(item) for item in value)
+        if not isinstance(value, str):
+            return False
+        if (value == manifest['workspaceId'] or value == request_id
+                or value == manifest.get('manifestSha256')
+                or workspace_identity.equivalent(value, manifest['checkoutId'], mapping=mapping)
+                or value == allocation or value.startswith(allocation + '/')):
+            return True
+        if os.path.isabs(value):
+            normalized = os.path.normpath(value)
+            if normalized == allocation or normalized.startswith(allocation + os.sep):
+                return True
+        return False
+    reasons = set()
+    for table, row in rows:
+        parsed = dict(row)
+        for field, value in row.items():
+            if isinstance(value, str) and (field.endswith('_json') or field in ('exclusive_resources', 'required_capabilities', 'log_paths')):
+                try:
+                    parsed[field] = json.loads(value)
+                except ValueError:
+                    # Unreadable structured board facts cannot prove absence of
+                    # a retained reference. Freeform task text is never parsed.
+                    reasons.add(table + '-reference-unproven')
+        if refers(parsed):
+            reasons.add(table + '-reference')
+    return sorted(reasons)
+
+
+def _orphan_workspace(store, directory: Path, reference_rows) -> dict:
+    """Only the original allocation record can prove an orphan's exact checkout."""
+    from . import workspace, workspace_identity
+    state = store.directory.resolve()
+    path = directory / 'checkout'
+    result = {'path': str(path), 'orphan': True, 'runId': None, 'reasons': [],
+              'manifest': None, 'allocationFacts': None}
+    try:
+        for item in (directory, path, directory / 'manifest.json', directory / 'request.json',
+                     directory / 'input.json', directory / '.lock'):
+            _guard_storage(item)
+        manifest = _read_storage_json(directory / 'manifest.json')
+        request = _read_storage_json(directory / 'request.json')
+        pinned = _read_storage_json(directory / 'input.json')
+        workspace._validate_manifest(manifest)
+        if (not isinstance(request.get('requestId'), str) or not request['requestId']
+                or not isinstance(request.get('intent'), dict) or not isinstance(pinned.get('snapshot'), dict)):
+            raise BoardError('STORAGE_UNSAFE', 'Original allocation records have invalid fields')
+        expected_id = 'ws-' + workspace._sha(workspace._json([str(state), request['requestId']]))[:32]
+        if (directory.parent != state / 'workspaces' or directory.name != expected_id
+                or manifest['workspaceId'] != directory.name or manifest['kind'] != 'worktree'
+                or manifest['checkoutRoot'] != str(path) or str(path.resolve()) != str(path)
+                or request.get('version') != 1 or request.get('intent', {}).get('kind') != 'worktree'
+                or pinned.get('inputCommit') != manifest['inputCommit']
+                or pinned.get('inputTree') != manifest['inputTree']
+                or pinned.get('snapshot', {}).get('stagedCommit') != manifest['snapshot']['stagedCommit']):
+            raise BoardError('STORAGE_UNSAFE', 'Original allocation records do not prove this checkout')
+        result['manifest'] = manifest
+        with workspace_identity.board_aliases(state):
+            result['reasons'].extend(_allocation_reference_reasons(reference_rows, manifest, request['requestId']))
+            proof = workspace.cleanup_inspect(state, manifest)
+        result['reasons'].extend(proof['reasons'])
+        result['proof'] = proof
+        repository = Path(manifest['snapshot']['repositoryPath'])
+        refs = {}
+        for suffix, commit in (('input', manifest['inputCommit']),
+                               ('staged', manifest['snapshot']['stagedCommit']),
+                               ('retained/input', manifest['inputCommit']),
+                               ('retained/staged', manifest['snapshot']['stagedCommit'])):
+            ref = 'refs/buddy/workspaces/' + directory.name + '/' + suffix
+            refs[ref] = workspace._line(repository, 'show-ref', '--verify', '--hash', ref)
+            if (suffix in ('input', 'staged') and manifest['snapshot'][suffix + 'Ref'] != ref
+                    or workspace._git(repository, 'symbolic-ref', '-q', ref, allowed=(0, 1)).strip()
+                    or refs[ref] != commit):
+                result['reasons'].append('fixed-reference-changed')
+        if workspace._git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'):
+            result['reasons'].append('unsealed-changes')
+        identities = {}
+        for name, item in (('allocation', directory), ('checkout', path), ('lock', directory / '.lock')):
+            identity = item.lstat()
+            if not (stat.S_ISREG(identity.st_mode) if name == 'lock' else stat.S_ISDIR(identity.st_mode)):
+                raise BoardError('STORAGE_UNSAFE', 'Original allocation physical identity is unproven')
+            identities[name] = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
+        result['allocationFacts'] = {'identities': identities, 'refs': refs,
+                                    'manifestSha256': manifest['manifestSha256'],
+                                    'requestSha256': workspace._sha(workspace._json(request)),
+                                    'inputSha256': workspace._sha(workspace._json(pinned))}
+    except (BoardError, OSError, ValueError, TypeError, KeyError) as error:
+        result['reasons'].append('allocation-unproven')
+        if isinstance(error, BoardError):
+            result['reasons'].append(error.code)
+            result['proofError'] = error.payload()
+    result['reasons'] = sorted(set(result['reasons']))
+    return result
+
+
+def _remove_orphan_workspace(store, candidate: dict) -> None:
+    from . import workspace
+    directory = Path(candidate['path']).parent
+    _guard_storage(directory)
+    # This is the same lock and order as submission: allocation, then board.
+    # Keep the DB writer fence through removal so admission cannot win between
+    # checking retained facts and deleting a checkout.
+    with workspace._lock(directory), store.db.write() as connection:
+        fresh = _orphan_workspace(store, directory, _workspace_reference_rows(connection))
+        if (fresh['reasons'] or fresh['allocationFacts'] != candidate.get('allocationFacts')
+                or fresh['manifest'] != candidate.get('manifest')
+                or tree_info(Path(candidate['path']))[1:] != (candidate['fingerprint'], True)):
+            raise BoardError('STORAGE_CHANGED', 'Orphan allocation changed or acquired a board reference',
+                             reasons=fresh['reasons'])
+        workspace.cleanup_remove(store.directory, fresh['manifest'])
+
+
 def inspect(store) -> dict:
     from . import workspace
     state = store.directory.resolve()
@@ -193,6 +341,7 @@ def inspect(store) -> dict:
     native_owners = {}
     workspace_inputs = []
     with store.db.read() as connection:
+        reference_rows = _workspace_reference_rows(connection)
         runs = connection.execute('SELECT * FROM workflow_runs').fetchall()
         for run in runs:
             task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
@@ -254,6 +403,21 @@ def inspect(store) -> dict:
         except BoardError:
             # Invalid ownership never licenses a filesystem guess.
             continue
+    workspace_root = state / 'workspaces'
+    if private_dirs.linked_component(workspace_root) is not None:
+        add('workspaces', workspace_root, ['linked-path'], orphan=True, runId=None)
+    elif workspace_root.is_dir():
+        for directory in sorted(workspace_root.iterdir()):
+            path = directory / 'checkout'
+            if path in seen:
+                continue
+            if not (path.exists() or private_dirs.linked_component(path) is not None):
+                add('workspaces', directory, ['allocation-unproven'], orphan=True, runId=None)
+                continue
+            orphan = _orphan_workspace(store, directory, reference_rows)
+            reasons = orphan.pop('reasons')
+            orphan.pop('path')
+            add('workspaces', path, reasons, **orphan)
     runtime_root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
     from ...home import default_state_dir
     foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
@@ -494,6 +658,12 @@ def apply(store, params: dict) -> dict:
                 continue
             try:
                 if candidate['category'] == 'workspaces':
+                    if fresh.get('orphan') is True:
+                        _remove_orphan_workspace(store, candidate)
+                        result['removed'].append({'id': fresh['id'], 'path': fresh['path'], 'bytes': fresh['bytes']})
+                        result['removedBytes'] += fresh['bytes']
+                        _save_receipt(receipt, result)
+                        continue
                     authority = {'sessionId': 'storage-maintenance'}
                     request = {'runId': fresh['runId'], 'commandId': command + ':' + fresh['id'], 'expectedRevision': fresh['revision']}
                     planned_workspace = store.workflow.cleanup_plan(request, console_authority=authority)

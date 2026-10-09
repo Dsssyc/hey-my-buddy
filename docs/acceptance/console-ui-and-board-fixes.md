@@ -125,3 +125,17 @@ U5 改前真实浏览器准备：私有合成 UI-before-02/03 使用原已验收
 真实改前已保存：1440×800、900×900、810×900、760×740，明/暗主题和时间轴/执行详情/模型列表与档位浮层/设置页面；截图均 ignored `tmp/console-ui-and-board-host/screenshots/U05-before-*.jpg`（工具实际返回JPEG），详细盒模型/层级/命中与关闭JSON同目录。全局已是border-box；时间片 transform translateY(-11px) 建层叠上下文，routing z1与标记局部z1不能越过后片段；失败结束标记中心 elementsFromPoint 先命中 Host wait，点击✕实际选择等待片段而非执行片段。短执行片段内边距0 6px使实际宽12px、短wait加1.5px边框实际15px，虽min-width4px；运行中/选中/焦点有22px高、outline偏移2px。徽标/档位分段/标题/执行详情目前未确认另一个背景越边缺陷，记录正常尺寸，不把推测算作问题。
 
 U3 改前：所测宽窄统计浮层矩形尚在当前面板内，未复现裁切；Esc、点击页面标题和Tab把焦点移到委派按钮后三种情况下details.open均仍true，已确认关闭缺陷。U5 的125%原生缩放尚未验证：内置浏览器仅提供viewport，快捷键后DPR/视口仍1/原值；Chrome私有页ERR_BLOCKED_BY_CLIENT；Codex原生应用访问被工具安全规则拒绝，不绕过。已向用户询问手动可用浏览器核对或登记工具限制，其他界面核对继续。
+
+U5 缩放限制已解决：用户手动在默认 Chrome 打开03私有页并调至125%，Host通过现有用户tab绑定；原生Chrome工具栏显示Zoom:125%，DOM DPR2.5、1209×644，真实截图U05-before-Chrome-125.jpg及命中JSON表明失败标记仍被wait遮挡。随后用原生Chrome应用输入切至100%，工具栏Zoom:100%、DPR2、1512×805，保存U05-before-Chrome-100-running.jpg。此前tab层快捷键无效保留事实，原生应用输入可用；没有改变浏览器安全/网络设置。125%不再列为未验证。
+
+BG-CLEAN（B05–B07/B11）第三回合返修固定8379b1490f4886a9a918eda22343104b987ba901，artifact7f5672fe-d759-44b7-a2c0-f895a1958bd9，累计patch sha2560474dd2b4ad36605a74c344f25609222bea5b56a79be650b5734f6f24a8c2d2a，8允许路径；相对退回版本只改4文件，workspace.py/workflow.py原防护不再改变。固定Git blob逐字节核对8改动文件，并核对Worker manifest的10份源码/测试哈希；完整core材料已先保留 round3-repaired/core-material，依赖缓存/venv排除，链接保留，未删旧材料。
+
+Host真实私有源码/状态/运行时受影响159项退出0，准确argv/log为ignored review-bg-clean/host-affected-repaired-command.json和host-affected-repaired.log。退回的公开整合探针现证明eligible=false、commands-reference/workflow_integrations-reference、target仍存在、removedPaths=[]；Host这次选整个派生class，额外包含49项受影响的检出生命周期/B1重启兼容项，共50项退出0、361.788秒，不把它误报成仅1项。17组独立物理源码副本变异各clean0→AssertionFAIL1，errors=0，源码哈希保持；完整清单/log在host-mutants-repaired/results.json。只读源码审查未发现剩余可确认缺陷；archive没有独立.git，审查里看到的HEAD是外层Host仓库、git diff空不能证明对应关系，固定对应以本Host逐文件sealed blob核对为依据，已更正登记。
+
+B2对外行为：准备后的拒绝/事务失败仅撤销本次新分配、未被持久事实引用且仍符合物理证明的精确checkout；复用、重放、并发赢家、协助共享锁和原固定清单不误删，撤销失败保留原准入错误与submissionCleanup事实。存储列出可证明孤立checkout，apply在allocation锁与SQLite写事务内重核对引用/物理证明。schema15共50业务表逐表审查（不计SQLite内部表），23表保留路径/身份/输入/结果/receipt/manifest摘要；workflow_integrations所有状态、workspace_cleanup_plans所有状态均纳入；B1 alias meta只作等价证明，不自行占有目录。已知拒绝且撤销后用新requestId重试，原历史清单不重绑；日常已有孤立项未手工清理。B4对外错误保留WORKSPACE_GIT_ERROR并带实际argv/operation/returncode，stdout/stderr各最多2000字符及截断标记，覆盖流式Git和continue attention错误details，原异常链保留。
+
+边界：公开workflow_submit/claim/seal/accept使用真实私有Git/SQLite，执行器/模型目录/native收据为现成测试替身；没有真实harness/Worker/模型调用。覆盖inventory前、plan后、apply初次inventory后、失败admission内的整合引用；其他引用状态/legacy alias/nested JSON/manifest摘要用受控SQLite事实。未验证外部忽略锁的写入者、断电窗口、尚未提交的并发验证或大型保留表性能；扫描保守且随保留行数线性。无DDL/schema/B1映射/历史receipt变更，日常服务/Worker/登录/运行时未操作。
+
+前端依赖准备：Host与buddy-core的package-lock.json/package.json逐字节相同，复用其已有node_modules（本工作树为本地ignored链接），使用已有Node24.19.0；默认Node25.8.1不在项目engine范围。仅本地Git exclude登记链接，未安装/升级任何依赖或日常运行时。
+
+B2/B4 整合前实际分支交叉核对：`uv run --frozen python tmp/console-ui-and-board-host/run_affected.py blackboard.tasks.test_objective_summary_cache console.test_console_objective_cache blackboard.tasks.test_console_objective_fixture console.test_console_gate_deadlines cli.test_repository_hygiene`，45 项退出 0、33.165 秒；包含 B3 缓存、B5 时间边界、已验收夹具和 stage 后卫生。固定159项的Host耗时456.103秒，原始命令/日志对应8379b149。补齐本段记录后单独重跑卫生，未跑完整检查。

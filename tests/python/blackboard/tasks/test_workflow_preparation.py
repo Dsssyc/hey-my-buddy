@@ -88,6 +88,48 @@ class PreparationTests(WorkflowTestCase):
                          result_mutator=(lambda report: report.update(workspaceSeal={"claim": "unvalidated"})) if unvalidated_seal else None)
         return board, parent, helper_id, failed, checkout
 
+    def test_failed_helper_admission_revokes_only_its_new_allocation(self):
+        board = self.board()
+        self.register(board)
+        parent = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        with patch.object(board.store.workflow, "_create_helpers", side_effect=BoardError("HELPER_ADMISSION_FAILED", "controlled helper rejection")):
+            with self.assertRaises(BoardError) as caught:
+                self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
+                    "requestId": "failed-new-helper", "task": "private helper", "cwd": str(self.repo),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                }])
+        self.assertEqual(caught.exception.code, "HELPER_ADMISSION_FAILED")
+        cleanup = caught.exception.details["helperPreparationCleanup"]
+        self.assertEqual(len(cleanup), 1)
+        self.assertTrue(cleanup[0]["removed"])
+        self.assertFalse(Path(cleanup[0]["path"]).exists())
+        self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute("SELECT task_id FROM tasks WHERE request_id='failed-new-helper'").fetchone())
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations").fetchone()[0], 1)
+
+    def test_continuation_attention_retains_actual_bounded_git_diagnostics(self):
+        board, run_id, _first, continuation_id = self.pending()
+        command = ["git", "-C", "<private-checkout>", "read-tree", "<fixed-tree>"]
+        failure = workspace._git_failure(command, "read-tree", returncode=128,
+                                         stdout=b"output" * 600, stderr=b"diagnostic" * 400)
+        with patch.object(workspace, "prepare", side_effect=failure):
+            self.claim(board, run_id=run_id, claim_request_id="git-error-claim")
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT payload_json FROM workflow_requests WHERE run_id=? AND kind='attention' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
+        payload = json.loads(row[0])
+        self.assertEqual(payload["continuationId"], continuation_id)
+        error = payload["preparationError"]
+        self.assertEqual(error["code"], "WORKSPACE_GIT_ERROR")
+        self.assertIn("details", error)
+        self.assertEqual(error["details"]["argv"], command)
+        self.assertEqual(error["details"]["returncode"], 128)
+        for field in ("stdout", "stderr", "reason"):
+            self.assertLessEqual(len(error["details"][field]), 2000)
+            self.assertTrue(error["details"][field + "Truncated"])
+
     def test_unvalidated_seal_in_failed_report_cannot_block_partial_recovery(self):
         board, parent, helper_id, failed, checkout = self.failed_helper(unvalidated_seal=True)
         view = board.call("workflow_get", {"runId": parent["runId"]})
