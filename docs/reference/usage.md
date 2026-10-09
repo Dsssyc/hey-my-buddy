@@ -92,7 +92,7 @@ Read `activeRequest`, the routing object, the current turn summary and fixed art
 
 The [assistance examples](workflow.md#host-boundaries-and-requests) provide complete helper packets and explain one-use automatic continuation. The [continuation and takeover examples](workflow.md#manual-continuation-and-takeover) cover new Host input, active-helper policy, `targetRunId` for an owned descendant, and transfer of control. Re-read after each decision: another pending request can become active. Nested requests retain their origin and are authorized by the Host.
 
-Each continuation gets a fresh attempt and recorded resume mode: DSH reconstructs a fresh session, while ZCode resumes its exact proven native session or explicitly reconstructs a new one after an unproven prior turn. The named integrator applies exact helper commits/patches and checks the combined result. The private console displays the recorded decisions read-only; the Host performs these operations through the CLI.
+Each continuation gets a fresh attempt and recorded resume mode: DSH and ZCode resume their exact proven native session, or explicitly reconstruct a new one after an unproven prior turn. The named integrator applies exact helper commits/patches and checks the combined result. The private console displays the recorded decisions read-only; the Host performs these operations through the CLI.
 
 ### 7. Inspect the final artifact, record integration and acknowledge
 
