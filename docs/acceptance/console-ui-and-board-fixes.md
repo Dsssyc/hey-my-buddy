@@ -139,3 +139,7 @@ B2对外行为：准备后的拒绝/事务失败仅撤销本次新分配、未�
 前端依赖准备：Host与buddy-core的package-lock.json/package.json逐字节相同，复用其已有node_modules（本工作树为本地ignored链接），使用已有Node24.19.0；默认Node25.8.1不在项目engine范围。仅本地Git exclude登记链接，未安装/升级任何依赖或日常运行时。
 
 B2/B4 整合前实际分支交叉核对：`uv run --frozen python tmp/console-ui-and-board-host/run_affected.py blackboard.tasks.test_objective_summary_cache console.test_console_objective_cache blackboard.tasks.test_console_objective_fixture console.test_console_gate_deadlines cli.test_repository_hygiene`，45 项退出 0、33.165 秒；包含 B3 缓存、B5 时间边界、已验收夹具和 stage 后卫生。固定159项的Host耗时456.103秒，原始命令/日志对应8379b149。补齐本段记录后单独重跑卫生，未跑完整检查。
+
+B2/B4 已整合 43f9996f451fc42749a6240a23f5f1301f8d09d5，integration int-f37c436f-344c-428f-9fc1-b1a686a31719 verified（8 matching、0 differing/missing），原 run accepted。accepted sweep 精确回收 cln-9a74bc79-6de0-465e-b29e-e07f206c189b applied，`~/.local/share/hey-my-buddy/state/workspaces/ws-4929a022c9efc6779a4da7b5f7d05645/checkout` 不存在，outputs/refs/receipt/core材料保留；Host plan请求与sweep冲突后重新读取确认，没有手工删除或进程操作。
+
+全部黑板微任务通过后开始 UI-FRAME（U02/U05）run c8f16418-db44-4ee1-a5e8-532d7d80b071，固定输入 43f9996f；首次四个配置字段与configuration全部省略，范围8个前端路径，不写Python/时间算法/其他UI项/分发资产。源码与依赖reuse、真实改前发现和语义命中验收写进packet。提交CLI未结束时Host曾过早解析空response，得到JSONDecodeError、无状态更改；等待同一CLI完成后才登记run/control、executing/queued与专用monitor，不重复submit。全程附着原服务，不启动恢复。
