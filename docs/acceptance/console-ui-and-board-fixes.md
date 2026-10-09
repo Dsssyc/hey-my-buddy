@@ -201,3 +201,7 @@ U03/U07明暗×宽窄真实矩阵screenshots/U03-U07-after-{light,dark}-{wide,co
 U10最终源码私有独立完整投影图：300000ms不折叠，300001ms与360000ms形成两个32px块；39块每个31.999px且scrollWidth1564/client816，fit/zoom不缩窄，真实水平滚动。完整性不足及clockSkew的私有投影均0空闲块，前者有截断事实提示；不复制日常看板、不调用模型，投影明确替换自身全部合成图而非遗漏真实数据。U10-after-exact-boundary/many-gaps/incomplete/clock-skew图片与JSON保留。普通区实际两次指针移动读数02:14→02:17、left16.2491%→28.5013%，空闲区显示完整起止/时长，实际指针离开后线/读数hidden=true；now约1px、opacity.35、pointer:none，鼠标线opacity.45且两者在片段下。U10-U11-after明暗宽窄图中744px是既有文字列表回退，因此该尺寸hidden读数线属预期，未算作普通图形读数通过；宽屏与前序图形窄面板实际指针证据有效。焦点改变本身不等于指针离开，错误方式被单独记录，最后实际指针检查通过。移动不重渲染主树、各种unsafe与映射边界由25变异/199受影响测试守住，真实浏览器正常warn/error为空。
 
 TIME对外变化：统计现成portal关闭/回焦；卡片两态“展开全部/收起”、隐藏选中/键盘定位返回及有界独立滚动；严格超过五分钟的安全空闲固定窄块及完整区间读数；弱化now与随指针读数线。U10不再有展开空闲段按钮，文字时间列表保留；schema不变。此次只源码整合，最终分发构建和两套完整检查仍在UI-NAV后一次执行。
+
+UI-TIME integration int-5c448492-f912-4b9a-86cb-b8d144dc9bea verified20，整合96fd6054，原run accepted revision19。UI-NAV现在顺序提交，从96fd6054明确输入，首次四字段与configuration全省略；精确35路径含共用API/types/读取hook/标题列表及对应测试，只做U08/U09，不改统计/Overview/图层/scale/MarkerPopover；styles限列表/本地工具栏，时间轴基础保留。复用localStorage查看习惯、SplitView现有rail、conditionalRead/HTTP Date、既有有界分页与abort/迟响应隔离；不增加周期读取。宏任务与Host沿用，完整检查仍未运行。
+
+TIME受管检出accepted sweep exactpath回收cln-57f5f64c-f361-4c60-941a-482a209ccb13 applied；`~/.local/share/hey-my-buddy/state/workspaces/ws-10b7ec46fa88af0f0e760ffc3781c361/checkout`已不存在，源/四回合材料在此前固定副本，未由Worker删除。UI-NAV run da651c9c-d26d-432f-85f7-10c861161b83已收到，首次路由configuration=null、未指定任何四字段，微任务输入96fd6054。
