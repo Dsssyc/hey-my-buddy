@@ -13,8 +13,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -315,58 +313,6 @@ class LastAssistantMessageTests(unittest.TestCase):
              "truncated": True}, source="fixture")
         self.assertTrue(normalized["truncated"])
         self.assertEqual(normalized["sourceBytes"], 200)
-
-
-class SidecarBoundaryTests(unittest.TestCase):
-    """The DSH observer's document is private, bounded and attempt-bound."""
-
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-usage-sidecar-")
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-
-    def write(self, document: dict, name: str = "native-usage.json") -> Path:
-        path = self.root / name
-        path.write_text(json.dumps(document))
-        return path
-
-    def document(self, **overrides) -> dict:
-        value = {"version": 1, "taskId": "task", "attemptId": "attempt", "generation": 1,
-                 "updatedAt": "2026-01-01T00:00:00Z",
-                 "nativeUsage": {"source": "dsh/session-assistant-usage"}}
-        value.update(overrides)
-        return value
-
-    def read(self, path: Path) -> dict | None:
-        return usage.read_sidecar(path, task_id="task", attempt_id="attempt", generation=1)
-
-    def test_a_bound_document_is_read_verbatim(self):
-        path = self.write({**self.document(), "nativeUsage": {"tokenUsage": {"inputTokens": 1, "outputTokens": 1}}})
-        document = self.read(path)
-        self.assertEqual(document["nativeUsage"]["tokenUsage"], {"inputTokens": 1, "outputTokens": 1})
-
-    def test_a_foreign_or_stale_binding_is_refused(self):
-        for overrides in ({"taskId": "other"}, {"attemptId": "other"}, {"generation": 2},
-                          {"version": 2}, {"nativeUsage": {}, "extra": True}):
-            with self.subTest(overrides=overrides):
-                self.assertIsNone(self.read(self.write(self.document(**overrides))))
-
-    def test_malformed_oversized_and_missing_documents_are_refused(self):
-        broken = self.root / "broken.json"
-        broken.write_text("{not json")
-        self.assertIsNone(self.read(broken))
-        self.assertIsNone(self.read(self.root / "missing.json"))
-        oversized = self.root / "oversized.json"
-        oversized.write_text(json.dumps({**self.document(), "pad": "x" * usage.MAX_SIDECAR_BYTES}))
-        self.assertIsNone(self.read(oversized))
-
-    def test_a_symlinked_document_is_refused(self):
-        if not hasattr(os, "O_NOFOLLOW"):
-            self.skipTest("this platform cannot refuse a symlinked sidecar")
-        target = self.write(self.document(), name="real.json")
-        link = self.root / "link.json"
-        link.symlink_to(target)
-        self.assertIsNone(self.read(link))
 
 
 if __name__ == "__main__":

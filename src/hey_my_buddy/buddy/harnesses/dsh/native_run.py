@@ -42,9 +42,21 @@ turn provenance validator and the storage facts (:func:`validate_turn_provenance
 the shared cooperative inquiry bridge. Host
 questions are only ever queued by the bridge and delivered at the root's own
 checkpoint tool call inside the admitted turn; the journal advances only after
-this driver verified the signed root-turn receipt. Native resume stays unwired:
+this driver verified the signed root-turn receipt. Native resume runs on the
+governed Worker carrier only: a ``native-session`` continuation continues the
+exact previous root session through the client's own ``session/resume`` — the
+resume request is the session identity's evidence source, because the observed
+resume answer carries none — after this run's own private goal binding
+(task, session, cwd, configuration) confirmed the session belongs to this goal;
 a ``reconstructed-new-session`` continuation rebuilds a fresh root session, and
-a ``native-session`` continuation is refused explicitly.
+the fast and review carriers never resume. A resumable binding is saved only
+after a complete native turn with verified provenance, the correct session
+binding and a confirmed group stop, and a missing binding, a native refusal or
+a foreign resumed identity fails the run honestly — never a silent new session.
+The fast and discovery carriers keep their own attempt-private roots; a Worker
+run pins its shared session rollout under the task's native root and keeps
+DSH_HOME, the profile, the launch patch and the frame logs inside this
+invocation's private root.
 """
 from __future__ import annotations
 
@@ -84,6 +96,7 @@ from ..run_contract import (
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
+    ContinuationFacts,
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
@@ -117,6 +130,12 @@ from .protocol import (
     RootTurnEvidence,
     decode_json,
     text_blocks,
+)
+from .session_records import (
+    RecordBaseline,
+    freeze_session_records,
+    resumed_session_record_facts,
+    session_record_facts,
 )
 
 #: The public child-environment key of DSH's read-only permission preset and its
@@ -153,23 +172,14 @@ _ALWAYS_DISABLED_ROWS = ("session-title-llm", "session-telemetry-otel")
 
 # -- the private session record's launch constants ------------------------------------
 
-#: DSH writes its session rollout under ``dshHomePath('sessions')``; this run's
-#: private ``DSH_HOME`` makes that root attempt-private already, and the launch
-#: patch re-pins the row so a bound user setting cannot move it out.
+#: DSH writes its session rollout under the sessions root this run's launch
+#: patch pins. A Worker run pins the task's shared native-root sessions
+#: directory — the directory a later attempt of the same micro-task resumes —
+#: while the fast and discovery carriers keep the rollout inside their own
+#: attempt-private ``DSH_HOME``.
 _SESSIONS_DIRNAME = "sessions"
-#: The public row id whose config root is re-pinned to the private sessions dir.
+#: The public row id whose config root is re-pinned to the sessions dir.
 _SESSION_ROOT_ROW = "session-persistence-jsonl"
-_RECORD_SUFFIXES = (".v3.jsonl.zstd", ".v3.jsonl")
-_RECORD_VERSION = 3
-_MAX_RECORD_FILES = 64
-_MAX_RECORD_DEPTH = 4
-#: Decompressed proportionate bounds: a record is read streaming, never wholly
-#: into memory, and a bound stop is an honestly partial fact, never a guess.
-_MAX_RECORD_TOTAL_BYTES = 64 * 1024 * 1024
-_MAX_RECORD_LINE_BYTES = 4 * 1024 * 1024
-_MAX_RECORD_STEPS = 512
-_RECORD_USAGE_FIELDS = ("inputTokens", "outputTokens", "totalTokens",
-                        "cacheReadTokens", "cacheWriteTokens", "reasoningTokens")
 
 _SESSION_TIMEOUT = 30.0
 _CONFIG_TIMEOUT = 30.0
@@ -468,27 +478,104 @@ def check_preparation(spec: dict, environment: dict) -> None:
                          adapter="dsh")
 
 
+# The private goal-binding file name of one native session: the sha256 of the
+# session id, exactly the naming the ZCode goal binding established, filed
+# directly under the task's native root.
+def _binding_path(native_root: Path, session_id: str) -> Path:
+    return Path(native_root) / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
+
+
+def _goal_binding(request: RunRequest, session_id: str) -> dict:
+    """The resumable goal binding of one session: task, session, cwd, configuration.
+
+    The configuration is the frozen requested selection — the same values the
+    native readback confirmed for the turn that wrote the binding.
+    """
+    return {"taskId": request.identity.task_id, "sessionId": session_id,
+            "cwd": request.cwd,
+            "configuration": {"provider": request.configuration.provider,
+                              "model": request.configuration.model,
+                              "effort": request.configuration.effort}}
+
+
+def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
+    """The request's continuation mode and the previous session it names."""
+    continuation = request.continuation
+    if continuation is None:
+        return "initial", None
+    previous = continuation.previous_session_id
+    if previous is not None and (not isinstance(previous, str) or not previous.strip()):
+        raise NativeError("invalid-resume-mode",
+                          "the previous native session identity must be null or a nonblank string")
+    if continuation.mode == "native-session":
+        if not isinstance(previous, str) or not previous:
+            raise NativeError("native-resume-unavailable",
+                              "native resume requires the exact previous session identity")
+        return "native-session", previous
+    return "reconstructed-new-session", previous
+
+
+#: The task-shared native root's placement is exactly ``private_dirs``' goal
+#: layout: ``<state>/harnesses/<adapter>/goals/<sha256(task_id)>/native``.
+#: Matching that placement is a fact about where the sessions root lives —
+#: an attempt root hangs under ``attempts/``, a fast carrier's root under its
+#: own private tree — never a proof about the vendor.
+_TASK_GOAL_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _goal_shared_native(native_root: Path) -> bool:
+    root = Path(native_root)
+    return (root.name == "native"
+            and root.parent.parent.name == "goals"
+            and _TASK_GOAL_DIGEST.fullmatch(root.parent.name) is not None)
+
+
 def session_facts(native_root: Path, session_id: str | None) -> dict:
     """Storage and visibility facts only; the role decides any reuse.
 
-    This run's rollout is pinned into the attempt's private ``DSH_HOME`` sessions
-    root by the launch patch, and the owning settings and credentials stay in the
-    user's DSH home by path only, so the installed app never lists this session.
-    DSH saves no continuation binding — native resume stays unwired — so the
-    honest binding fact is its absence, and reuse is always a rebuilt session.
+    The storage owner follows the root's real placement in ``private_dirs``'
+    layout: a Worker run whose rollout is pinned into the task's shared
+    native-root ``sessions`` directory — with DSH_HOME, the acp profile, the
+    patch and the frame logs in the invocation's private root — is
+    goal-owned storage, while a fast or review carrier's own private root
+    stays attempt-owned; the placement is a directory fact, and an old
+    attempt root is never misreported as goal storage. The owning settings
+    and credentials stay in the user's DSH home by path only, so the
+    installed app never lists this session. The binding fact is the private
+    goal binding's real presence on disk: it is written only after a
+    complete, verified, confirmed-stopped native turn, and its absence is
+    the honest fact — presence alone never proves the session resumable;
+    the run's continuation facts carry that verdict.
     """
+    binding = _binding_path(Path(native_root), session_id) if session_id else None
+    if _goal_shared_native(native_root):
+        scope, owner = "task-shared-sessions", "buddy-goal"
+        note = (
+            "a Worker run's session rollout lives under the task's shared native-root sessions "
+            "directory, pinned there by this run's private launch patch, while DSH_HOME, the acp "
+            "profile, the patch and the frame logs stay in this invocation's private root; the DSH "
+            "home, settings and credentials store stay with the owning harness by path only, so the "
+            "installed app lists none of it. A resumable goal binding (task, session, cwd, "
+            "configuration) is saved under the native root only after a complete native turn with "
+            "verified provenance and a confirmed group stop"
+        )
+    else:
+        scope, owner = "attempt-private-sessions", "buddy-attempt"
+        note = (
+            "this run's session rollout lives under a private sessions root of this carrier's own "
+            "private root, not the task's shared native root; the DSH home, settings and "
+            "credentials store stay with the owning harness by path only, so the installed app "
+            "lists none of it. A resumable goal binding (task, session, cwd, configuration) is "
+            "saved under the run's native root only after a complete native turn with verified "
+            "provenance and a confirmed group stop"
+        )
     return {
         "adapter": "dsh", "sessionId": session_id, "captured": session_id is not None,
-        "storageScope": "attempt-private-sessions", "storageOwner": "buddy-attempt",
+        "storageScope": scope, "storageOwner": owner,
         "nativeAppVisibility": "not-listed-in-native-app",
         "credentialsStore": "harness-user-store",
-        "bindingPresent": False,
-        "note": (
-            "this run's session rollout lives under its attempt-private DSH_HOME sessions root; the DSH "
-            "home, settings and credentials store stay with the owning harness by path only, so the "
-            "installed app lists none of it. DSH saves no continuation binding: native resume is not "
-            "wired, and every continuation rebuilds a new session"
-        ),
+        "bindingPresent": binding is not None and binding.is_file(),
+        "note": note,
     }
 
 
@@ -521,6 +608,9 @@ def validate_turn_provenance(record: dict) -> str | None:
     if mode == "reconstructed-new-session" and (
             previous is None or isinstance(previous, str) and previous.strip()
             and record.get("sessionId") != previous):
+        return None
+    if mode == "native-session" and isinstance(previous, str) and previous.strip() \
+            and record.get("sessionId") == previous:
         return None
     return "the dsh turn resume identity is invalid"
 
@@ -592,6 +682,12 @@ class _RunState:
     #: The accepted finish's ordered native evidence, retained for the role's
     #: turn record; any earlier failure leaves it unset.
     provenance: dict | None = None
+    #: The resumed turn's pre-prompt record freeze, taken after the native
+    #: resume answer; ``None`` on every fresh root session.
+    record_baseline: RecordBaseline | None = None
+    #: How many history notifications the resume replayed were drained as
+    #: bootstrap before this turn's prompt; ``None`` when nothing was resumed.
+    bootstrap_updates: int | None = None
     #: The launch wrapper's own stop evidence when its bookkeeping failed after
     #: the child existed: the process was held, so its group facts are real.
     spawn_failure: dict | None = None
@@ -602,28 +698,31 @@ def _remaining(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
-def _launch_agent(*, cwd: str, native_root: Path, invocation_root: Path, dsh_home: Path,
-                  scope_rows: list[dict], extra_env: dict[str, str],
+def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path, dsh_home: Path,
+                  sessions_root: Path, scope_rows: list[dict], extra_env: dict[str, str],
                   permission_policy) -> AcpClient:
     """Spawn the one owned ACP agent through the accepted private-launch wrapper.
 
-    ``DSH_HOME`` is always this run's private directory inside the native root,
-    the child environment keeps exactly the ``native_environment`` allow-list
-    plus the validated homes and the scope's public key, and the whole argv —
-    the selected DSH command, the ``acp`` profile and this run's patch — is
-    recorded in the wrapper's launch log. ``HOME`` stays inherited; a caller
-    that needs this run's private home names it through the wrapper itself,
-    which validates it like ``DSH_HOME``. Every launch of this module carries the same
-    patch order: the owning home's settings/credentials rows first, then the
-    private session-record root pin (so a bound setting cannot move the rollout
-    out of the private home), then the tool scope's rows, then the two
-    always-off rows last. Any failure after the child exists keeps the
-    ownership evidence on the error instead of dropping the child.
+    ``DSH_HOME`` is always a real private directory inside ``launch_root`` —
+    the invocation's own root for a Worker run, the run's native root for the
+    fast and discovery carriers — the child environment keeps exactly the
+    ``native_environment`` allow-list plus the validated homes and the scope's
+    public key, and the whole argv — the selected DSH command, the ``acp``
+    profile and this run's patch — is recorded in the wrapper's launch log.
+    ``HOME`` stays inherited; a caller that needs this run's private home names
+    it through the wrapper itself, which validates it like ``DSH_HOME``. Every
+    launch of this module carries the same patch order: the owning home's
+    settings/credentials rows first, then the private session-record root pin
+    (the task's shared native-root sessions directory for a Worker run, so a
+    bound setting cannot move the rollout anywhere else), then the tool
+    scope's rows, then the two always-off rows last. Any failure after the
+    child exists keeps the ownership evidence on the error instead of dropping
+    the child.
     """
     command = command_for("dsh", dict(os.environ))
     argv = [*command, "--profile", "acp"]
     rows = [*source_binding_rows(source_home(os.environ)),
-            {"id": _SESSION_ROOT_ROW, "config": {"root": str(dsh_home / _SESSIONS_DIRNAME)}},
+            {"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
             *scope_rows,
             *({"id": name, "disabled": True} for name in _ALWAYS_DISABLED_ROWS)]
     if rows:
@@ -632,9 +731,9 @@ def _launch_agent(*, cwd: str, native_root: Path, invocation_root: Path, dsh_hom
         argv += ["--patch", str(patch_path)]
     materialize_acp_profile(dsh_home)
     try:
-        return AcpClient.start(argv, private_root=native_root, dsh_home=dsh_home,
+        return AcpClient.start(argv, private_root=launch_root, dsh_home=dsh_home,
                                extra_env=extra_env or None, cwd=Path(cwd),
-                               frame_log=FrameMetaLog(native_root / "logs" / "frames.jsonl"),
+                               frame_log=FrameMetaLog(launch_root / "logs" / "frames.jsonl"),
                                permission_policy=permission_policy)
     except LaunchOwnershipError as error:
         # The child existed and the launch wrapper itself finalized it; the run
@@ -848,269 +947,6 @@ class _AttentionPolicy:
         return outcome, basis
 
 
-# -- the optional private session record ---------------------------------------------
-
-
-class _RecordStream:
-    """Bounded streaming lines of one record file, compressed or plain.
-
-    The ``.zstd`` variant streams through the project's pinned ``zstandard``
-    library — never a system ``zstd`` command, never a whole-record buffer —
-    and a missing library surfaces as the read fault it is. Every read stops
-    at its proportionate bound; a bound stop marks the record truncated
-    instead of pretending the file ended cleanly.
-    """
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.truncated = False
-
-    def lines(self) -> Iterator[bytes]:
-        source = self._decompressed if self.path.name.endswith(".zstd") else self._plain
-        pending = b""
-        total = 0
-        try:
-            for chunk in source():
-                total += len(chunk)
-                if total > _MAX_RECORD_TOTAL_BYTES:
-                    self.truncated = True
-                    return
-                pending += chunk
-                while True:
-                    index = pending.find(b"\n")
-                    if index < 0:
-                        break
-                    line, pending = pending[:index], pending[index + 1:]
-                    if len(line) > _MAX_RECORD_LINE_BYTES:
-                        self.truncated = True
-                        continue
-                    yield line
-                if len(pending) > _MAX_RECORD_LINE_BYTES:
-                    self.truncated = True
-                    pending = b""
-            if pending.strip():
-                yield pending
-        except Exception:  # noqa: BLE001 - an unreadable record is a partial fact, never a run failure
-            self.truncated = True
-
-    def _plain(self) -> Iterator[bytes]:
-        with self.path.open("rb") as handle:
-            while chunk := handle.read(262144):
-                yield chunk
-
-    def _decompressed(self) -> Iterator[bytes]:
-        import zstandard
-        with self.path.open("rb") as handle:
-            reader = zstandard.ZstdDecompressor().stream_reader(handle)
-            while chunk := reader.read(262144):
-                yield chunk
-
-
-class _RecordAccumulator:
-    """The attempt-wide fold of this run's matched session records.
-
-    The projection rules are the existing usage observer's, applied to the
-    private record instead of the in-process events: per-field sums over
-    non-negative safe integers, a field a contributing record lacked is
-    omitted instead of read as zero, cached input derives from the record's
-    own counters, and only a seen, completed turn end with no missing usage
-    and an untruncated read is complete. Everything else stays partial.
-    """
-
-    def __init__(self) -> None:
-        self.sums: dict[str, int] = {field: 0 for field in _RECORD_USAGE_FIELDS}
-        self.missed: set[str] = set()
-        self.records = 0
-        self.missing_usage = False
-        self.turn_end_seen = False
-        self.turn_end_completed = False
-        self.truncated = False
-        self.failure: dict | None = None
-        self.last_assistant: str | None = None
-        self.last_assistant_id: str | None = None
-        self.model: dict | None = None
-        self.steps: list[dict] = []
-        self.sessions: list[str] = []
-
-    def complete_field(self, field: str) -> bool:
-        return self.records > 0 and field not in self.missed
-
-    def fold_usage(self, usage: object, step: dict) -> None:
-        usable = False
-        if isinstance(usage, dict):
-            entry = dict(step)
-            for field in _RECORD_USAGE_FIELDS:
-                value = usage.get(field)
-                if type(value) is int and value >= 0:
-                    self.sums[field] += value
-                    entry[field] = value
-                    usable = True
-                else:
-                    self.missed.add(field)
-            if usable:
-                self.records += 1
-                if len(self.steps) < _MAX_RECORD_STEPS:
-                    self.steps.append(entry)
-                return
-        self.missing_usage = True
-
-    def cached_input(self) -> int | None:
-        if all(self.complete_field(field) for field in
-               ("totalTokens", "inputTokens", "outputTokens")):
-            derived = self.sums["totalTokens"] - self.sums["inputTokens"] - self.sums["outputTokens"]
-            if derived >= 0:
-                return derived
-        if self.complete_field("cacheReadTokens") and self.complete_field("cacheWriteTokens"):
-            return self.sums["cacheReadTokens"] + self.sums["cacheWriteTokens"]
-        return None
-
-    def usage(self) -> dict | None:
-        if not self.records:
-            return None
-        complete = (not self.missing_usage and self.turn_end_seen
-                    and self.turn_end_completed and not self.truncated)
-        projected: dict = {"source": "dsh/session-record", "inputBasis": "excludes-cached",
-                           "nativeRecords": self.records,
-                           "completeness": "complete" if complete else "partial"}
-        for field in ("inputTokens", "outputTokens"):
-            if self.complete_field(field):
-                projected[field] = self.sums[field]
-        cached = self.cached_input()
-        if cached is not None:
-            projected["cachedInputTokens"] = cached
-        if self.complete_field("reasoningTokens"):
-            projected["reasoningOutputTokens"] = self.sums["reasoningTokens"]
-        return projected
-
-
-def _record_candidates(root: Path) -> list[Path]:
-    """The bounded, deterministic scan for record files under the sessions root."""
-    found: list[Path] = []
-
-    def walk(directory: Path, depth: int) -> None:
-        if depth > _MAX_RECORD_DEPTH or len(found) >= _MAX_RECORD_FILES:
-            return
-        try:
-            with os.scandir(directory) as entries:
-                ordered = sorted(entries, key=lambda entry: entry.name)
-        except OSError:
-            return
-        for entry in ordered:
-            if len(found) >= _MAX_RECORD_FILES:
-                return
-            try:
-                if entry.is_file(follow_symlinks=False):
-                    if entry.name.endswith(_RECORD_SUFFIXES):
-                        found.append(Path(entry.path))
-                elif entry.is_dir(follow_symlinks=False):
-                    walk(Path(entry.path), depth + 1)
-            except OSError:
-                continue
-
-    walk(root, 0)
-    return found
-
-
-def _record_text(value: object) -> str:
-    """The plain text blocks of a record message's content array, concatenated."""
-    blocks = value if isinstance(value, list) else []
-    return "".join(block["text"] for block in blocks
-                   if isinstance(block, dict) and block.get("type") == "text"
-                   and isinstance(block.get("text"), str))
-
-
-def _fold_record(path: Path, session_ids: frozenset, acc: _RecordAccumulator) -> bool:
-    """Fold one record file in; return whether its header named one of this run's sessions.
-
-    The header's own session id is the only attribution: a foreign session's
-    record is skipped, never folded into this attempt's facts. A malformed
-    event line marks the read partial and the fold continues with the rest.
-    """
-    stream = _RecordStream(path)
-    session = None
-    for raw in stream.lines():
-        try:
-            event = decode_json(raw)
-        except (ValueError, RecursionError):
-            acc.truncated = True
-            continue
-        if not isinstance(event, dict):
-            continue
-        kind = event.get("type")
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        if session is None:
-            if (kind != "session" or event.get("version") != _RECORD_VERSION
-                    or not isinstance(event.get("id"), str)):
-                continue
-            if event["id"] not in session_ids:
-                return False
-            session = event["id"]
-            acc.sessions.append(session)
-            continue
-        if kind == "assistant/message":
-            message = data.get("message") if isinstance(data.get("message"), dict) else {}
-            source = message.get("source") if isinstance(message.get("source"), dict) else {}
-            acc.fold_usage(data.get("usage"), {
-                "session": session,
-                "turn": data.get("turn") if type(data.get("turn")) is int else None,
-                "step": data.get("step") if type(data.get("step")) is int else None})
-            if source.get("kind") == "model":
-                text = _record_text(message.get("content"))
-                if text.strip():
-                    acc.last_assistant = text
-                    acc.last_assistant_id = message.get("id") if isinstance(message.get("id"), str) else None
-                if isinstance(source.get("provider"), str) and isinstance(source.get("model"), str):
-                    acc.model = {"provider": source["provider"], "model": source["model"]}
-        elif kind == "turn/end":
-            reason = data.get("reason") if isinstance(data.get("reason"), dict) else {}
-            # The last turn end is this attempt's terminal reason.
-            acc.turn_end_seen = True
-            acc.turn_end_completed = reason.get("kind") == "completed"
-            if reason.get("kind") == "error":
-                error = reason.get("error") if isinstance(reason.get("error"), dict) else {}
-                code = error.get("code")
-                # Only the machine classification: a provider message can carry
-                # credentials and is never copied anywhere.
-                acc.failure = {"kind": "error",
-                               "code": code if type(code) is str and 0 < len(code) <= 64 else None}
-    if stream.truncated:
-        acc.truncated = True
-    return session is not None
-
-
-def session_record_facts(dsh_home: Path, session_ids) -> dict | None:
-    """This run's private session-record facts, or ``None`` when none matched.
-
-    The record is the optional source of the observed model identity, the
-    per-step usage and the retained root assistant text. Every failure mode —
-    a missing directory, a missing decompression library, a foreign or
-    malformed record, a bound stop — keeps the known facts standing, reports
-    the partial marker, and never raises into the run; an absent record is an
-    unknown, never a zero.
-    """
-    sessions = frozenset(s for s in session_ids if isinstance(s, str) and s)
-    root = Path(dsh_home) / _SESSIONS_DIRNAME
-    if not sessions or not root.is_dir():
-        return None
-    acc = _RecordAccumulator()
-    try:
-        candidates = _record_candidates(root)
-    except OSError:
-        return None
-    try:
-        for path in candidates:
-            _fold_record(path, sessions, acc)
-    except OSError:
-        acc.truncated = True
-    usage = acc.usage()
-    if usage is None and acc.model is None and acc.last_assistant is None and acc.failure is None:
-        return None
-    return {"usage": usage, "model": acc.model, "lastAssistant": acc.last_assistant,
-            "lastAssistantSourceId": acc.last_assistant_id,
-            "failure": acc.failure, "steps": acc.steps, "sessions": acc.sessions,
-            "recordsRead": len(candidates), "truncated": acc.truncated}
-
-
 # -- the one run -------------------------------------------------------------------
 
 
@@ -1159,19 +995,33 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     if not governed and request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "the request describes session services but this run mounts none")
-    # Native resume stays unwired (native_resume=false, an unverified optional
-    # capability): a continuation always rebuilds a new session, and a request
-    # that names the exact previous native session is refused explicitly.
-    if request.continuation is not None and request.continuation.mode != "reconstructed-new-session":
+    # The continuation is the request's own fact: only the governed Worker
+    # carrier resumes a native session; the fast and review carriers rebuild a
+    # fresh root session whatever they carry.
+    mode, previous = _continuation_of(request)
+    if mode == "native-session" and not governed:
         raise BoardError("INVALID_ARGUMENT",
-                         "dsh runs no native-session resume; only the reconstruction continuation is accepted")
+                         "dsh resumes a native session only through the governed Worker carrier; "
+                         "the fast and review carriers rebuild a fresh root session")
     if governed:
         _check_service_descriptions(request, services.mount)
     deadline = execution_deadline(request.budget.timeout_seconds)
     cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
-    dsh_home = ensure_private_dir(native_root / "dsh-home")
+    if governed:
+        # The Worker run's shared rollout root is the task's native root — the
+        # root a later attempt of the same micro-task resumes — while this
+        # invocation's own private root holds DSH_HOME, the profile, the launch
+        # patch, the bridge material and the frame logs. The fast and discovery
+        # carriers keep everything inside their own attempt-private native root.
+        sessions_root = ensure_private_dir(native_root / _SESSIONS_DIRNAME)
+        dsh_home = ensure_private_dir(invocation_root / "dsh-home")
+        launch_root = invocation_root
+    else:
+        dsh_home = ensure_private_dir(native_root / "dsh-home")
+        sessions_root = dsh_home / _SESSIONS_DIRNAME
+        launch_root = native_root
     state = _RunState()
     facts = _RunFacts()
     tools = DshToolFacts({"adapter": "dsh", "taskId": request.identity.task_id,
@@ -1238,11 +1088,27 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             pass  # the stop collection still owns the group; the cancel is a transport fact
 
     try:
+        if mode == "native-session":
+            # Eligibility confirms existence only: the private goal binding this
+            # run itself wrote for that exact session, goal, checkout and
+            # configuration. Nothing vendor-side is statically proven here, and
+            # a missing or foreign binding fails the run before any process
+            # exists, inside the same honest error result as every other stage.
+            try:
+                binding = decode_json(_binding_path(native_root, previous).read_bytes())
+            except (OSError, ValueError):
+                raise NativeError("native-resume-unavailable",
+                                  "the previous native session has no private goal binding") from None
+            if binding != _goal_binding(request, previous):
+                raise NativeError("native-resume-unavailable",
+                                  "the previous native session does not match this goal, "
+                                  "checkout and configuration")
         scope_rows, extra_env = tool_scope_launch(request.tool_scope)
         policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
                   if governed else PermissionPolicy())
-        client = _launch_agent(cwd=request.cwd, native_root=native_root,
+        client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
                                invocation_root=invocation_root, dsh_home=dsh_home,
+                               sessions_root=sessions_root,
                                scope_rows=scope_rows, extra_env=extra_env,
                                permission_policy=policy)
         state.harness_version = _initialize(client)
@@ -1260,7 +1126,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             _governed_round(client=client, pump=pump, request=request, services=services,
                             deadline=deadline, cancel=cancel, state=state, tools=tools,
                             activity=activity, sessions=sessions, evidence=evidence,
-                            inquiry_bridge=inquiry_bridge,
+                            inquiry_bridge=inquiry_bridge, sessions_root=sessions_root,
                             fold=fold, notify=notify,
                             denied=denied_count, send_cancel=send_cancel)
             state.status = "ok"
@@ -1296,12 +1162,41 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             inquiry_bridge.close()
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
-    record = session_record_facts(dsh_home, sessions) if sessions else None
+    if sessions:
+        if state.record_baseline is not None:
+            record = resumed_session_record_facts(sessions_root, state.record_baseline)
+            record["bootstrapUpdates"] = state.bootstrap_updates
+            record["sessionIdentitySource"] = "resume-request"
+        else:
+            record = session_record_facts(sessions_root, sessions)
+    else:
+        record = None
+    continuation = None
+    if governed and sessions and state.status == "ok" and state.provenance is not None \
+            and state.stop.get("shutdown") is True:
+        # The reusable binding needs the complete native turn, its verified
+        # provenance, the correct session binding and the really-gone group —
+        # a resumed turn keeps the binding it already verified; a fresh root
+        # writes its own once, and nothing else may stand in for either.
+        session_id = sessions[-1]
+        expected = _goal_binding(request, session_id)
+        try:
+            binding_file = _binding_path(native_root, session_id)
+            if binding_file.is_file():
+                bound = decode_json(binding_file.read_bytes()) == expected
+            else:
+                private_json(binding_file, expected, exclusive=True)
+                bound = True
+        except (OSError, ValueError, BoardError):
+            bound = False
+        if bound:
+            continuation = ContinuationFacts(resumable=True)
     return _build_result(request, state=state, tools=tools, activity=activity, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
                          correction_count=correction_count, drained=drained,
                          invocation_root=invocation_root, record=record,
-                         stderr_mirror=services.native_stderr if governed else None)
+                         stderr_mirror=services.native_stderr if governed else None,
+                         continuation=continuation)
 
 
 # -- the session/prompt stages shared by both carriers -------------------------------
@@ -1325,6 +1220,36 @@ def _open_session(*, client: AcpClient, request: RunRequest, servers: list,
     if bound is not None:
         bound.session_id = session_id
     return session_id, snapshot
+
+
+def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
+                    state: _RunState, tools: DshToolFacts, activity: DshActivity,
+                    sessions: list, previous: str) -> tuple[str, dict]:
+    """The one session-resume site: the exact previous root session, remounted.
+
+    The resume request itself names the session identity — the observed resume
+    answer carries no session id, so none is fabricated — and an answer that
+    does echo one accepts only the requested identity. The mounts are this
+    attempt's own: the completion and inquiry service the prompt verifies
+    against is the one this request bound, never the previous attempt's.
+    """
+    snapshot = _native_call(lambda: client.resume_session(previous, request.cwd,
+                                                          mcp_servers=servers,
+                                                          timeout=_SESSION_TIMEOUT),
+                            code="native-resume-failed",
+                            message="the native session could not be resumed")
+    echoed = snapshot.get("sessionId") if isinstance(snapshot, dict) else None
+    if isinstance(echoed, str) and echoed and echoed != previous:
+        raise NativeError("wrong-native-session",
+                          "the resumed native session identity differs from the requested session")
+    state.session_opened = True
+    sessions.append(previous)
+    tools.add_root(previous)
+    activity.session_id = previous
+    bound = getattr(state, "round_evidence", None)
+    if bound is not None:
+        bound.session_id = previous
+    return previous, snapshot
 
 
 def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, input_text: str,
@@ -1481,23 +1406,47 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                     services: SessionServices, deadline: float, cancel: CancelFlag,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
                     sessions: list, evidence: RootTurnEvidence,
-                    inquiry_bridge: InquiryBridge | None, fold, notify,
+                    inquiry_bridge: InquiryBridge | None, sessions_root: Path,
+                    fold, notify,
                     denied, send_cancel) -> None:
     """The governed completion-tool carrier: one root turn, one verified receipt.
 
     The same session-open, configuration and prompt sites run with the mounted
     session service; the value is the signed receipt's outcome and nothing else.
-    A failed or refused finish call keeps the turn alive for the root's own
-    corrected retry, exactly like the other carrier of this seam. The inquiry
-    bridge activates with the root session and closes at settlement: an idle or
-    finished agent is never woken for an inquiry.
+    A ``native-session`` continuation resumes the exact previous root session
+    instead of opening one — the pump's notifications that arrived before the
+    resume answer are the replayed history of that session, so they are drained
+    as bootstrap before the prompt and never counted as this turn's tool,
+    model-start, completion or activity facts, and the pre-prompt record freeze
+    bounds the turn's own usage. A failed or refused finish call keeps the turn
+    alive for the root's own corrected retry, exactly like the other carrier of
+    this seam. The inquiry bridge activates with the root session and closes at
+    settlement: an idle or finished agent is never woken for an inquiry.
     """
     mount = services.mount
     state.round_evidence = evidence
-    session_id, snapshot = _open_session(client=client, request=request,
-                                         servers=list(mount.mcp_servers),
-                                         state=state, tools=tools, activity=activity,
-                                         sessions=sessions)
+    mode, previous = _continuation_of(request)
+    if mode == "native-session":
+        session_id, snapshot = _resume_session(client=client, request=request,
+                                               servers=list(mount.mcp_servers), state=state,
+                                               tools=tools, activity=activity, sessions=sessions,
+                                               previous=previous)
+        # The ordering boundary of the public protocol: every notification the
+        # agent sent before its resume answer is replayed history, already
+        # enqueued by the reader thread in order; draining it here keeps the
+        # old turns' tool, model, receipt and activity facts out of this turn
+        # while retaining their count as the run's own bootstrap fact.
+        state.bootstrap_updates = len(pump.drain())
+        # Freeze the existing records after the resume answer and before this
+        # turn's prompt: whatever the turn appends beyond this boundary is the
+        # only usage, assistant text, model identity and turn end this run
+        # reports, and nothing is projected by subtracting cumulative counters.
+        state.record_baseline = freeze_session_records(sessions_root, session_id)
+    else:
+        session_id, snapshot = _open_session(client=client, request=request,
+                                             servers=list(mount.mcp_servers),
+                                             state=state, tools=tools, activity=activity,
+                                             sessions=sessions)
     if inquiry_bridge is not None:
         inquiry_bridge.activate(session_id)
     state.configured = True
@@ -1635,7 +1584,8 @@ def _build_result(request: RunRequest, *, state: _RunState,
                   evidence: RootTurnEvidence | None, raw_answer: str | None,
                   correction_count: int, drained: bool | None,
                   invocation_root: Path, record: dict | None = None,
-                  stderr_mirror: str | None = None) -> RunResult:
+                  stderr_mirror: str | None = None,
+                  continuation: ContinuationFacts | None = None) -> RunResult:
     """Assemble the factual result; every field reports what actually happened."""
     stop = state.stop
     session_id = sessions[-1] if sessions else None
@@ -1715,7 +1665,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
                                 if record and record.get("lastAssistant") else None),
         activity=(_activity_package(activity.payload())
                   if state.event_count or activity.counts["modelTurns"] else None),
-        continuation=None,
+        continuation=continuation,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),
         evidence_refs=_evidence_refs(client, invocation_root, state,
                                      record=record, stderr_mirror=stderr_mirror))
@@ -1858,10 +1808,11 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     native_root = ensure_private_dir(Path(native_root))
     dsh_home = ensure_private_dir(native_root / "dsh-home")
     # Discovery carries the same uniform patch as every launch of this module —
-    # the source binding, the private session-record root pin and the two
+    # the source binding, its own private session-record root pin and the two
     # always-off rows — with no tool-scope rows: it never sends a prompt.
-    client = _launch_agent(cwd=cwd, native_root=native_root, invocation_root=invocation_root,
-                           dsh_home=dsh_home, scope_rows=[], extra_env={},
+    client = _launch_agent(cwd=cwd, launch_root=native_root, invocation_root=invocation_root,
+                           dsh_home=dsh_home, sessions_root=dsh_home / _SESSIONS_DIRNAME,
+                           scope_rows=[], extra_env={},
                            permission_policy=PermissionPolicy())
     catalog_value: dict | None = None
     error: NativeError | None = None

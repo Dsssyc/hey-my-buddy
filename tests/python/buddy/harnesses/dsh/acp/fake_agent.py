@@ -10,6 +10,13 @@ test inject delayed responses, duplicate responses, garbage frames, a
 silently-exiting leader with a surviving group member, and a slow EOF. At
 startup it verifies it runs under a forced private HOME and DSH_HOME and exits
 when it has not.
+
+The resume face mirrors the Host-confirmed observations: a resumed session is
+found in the persistent store under the patch-pinned sessions root (the marker
+file this fake writes on new/resume), the answer carries the configuration
+options and no session id, the passed MCP servers are mounted exactly like a
+new session's, and the replayed history notifications go out before the resume
+answer — the ordering boundary the driver's bootstrap drain relies on.
 """
 from __future__ import annotations
 
@@ -124,6 +131,15 @@ class FakeAgent:
         self.wait_for_inquiry = args.wait_for_inquiry
         self.answer_inquiry = args.answer_inquiry
         self.forge_checkpoint = args.forge_checkpoint
+        # The native-resume face (additive): the persistent session store lives
+        # under the patch-pinned sessions root, the history replay precedes the
+        # resume answer, and the resumed turn's rollout scenarios exercise the
+        # driver's freeze/delta boundary.
+        self.patch_path = args.patch
+        self.replay_history = args.replay_history
+        self.resume_echo_foreign_id = args.resume_echo_foreign_id
+        self.resume_foreign_root = args.resume_foreign_root
+        self.resumed_session = None
         self.last_session_id = None
         self.cancel_event = threading.Event()
         self.prompt_count = 0
@@ -196,6 +212,68 @@ class FakeAgent:
             except subprocess.TimeoutExpired:
                 process.kill()
         self.stubs = []
+
+    # -- the persistent session store ------------------------------------------
+
+    def sessions_dir(self) -> Path:
+        """The sessions root this launch's patch pinned, like the installed agent.
+
+        The public ``session-persistence-jsonl`` row names the root DSH writes
+        its rollouts under; the fake reads it from its own patch so a Worker
+        run's records land in the task's shared native root while its DSH_HOME
+        stays invocation-private. An unreadable or absent patch falls back to
+        this fake's own ``DSH_HOME`` sessions directory.
+        """
+        if self.patch_path:
+            try:
+                for row in json.loads(Path(self.patch_path).read_text()):
+                    if (isinstance(row, dict) and row.get("id") == "session-persistence-jsonl"
+                            and isinstance(row.get("config"), dict)
+                            and isinstance(row["config"].get("root"), str)):
+                        return Path(row["config"]["root"])
+            except (OSError, ValueError, TypeError):
+                pass
+        return Path(os.environ["DSH_HOME"]) / "sessions"
+
+    def persist_session(self, session_id: str, session: dict) -> None:
+        """Record the session in the pinned root's store so another process can resume it."""
+        directory = self.sessions_dir()
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        marker = directory / f"{session_id}.fake-session.json"
+        marker.write_text(json.dumps({"cwd": session["cwd"], "model": session["model"],
+                                      "effort": session["effort"]}))
+
+    def restore_session(self, session_id):
+        """The persisted session state, or ``None`` when no store carries it."""
+        marker = self.sessions_dir() / f"{session_id}.fake-session.json"
+        try:
+            value = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        return {"cwd": value.get("cwd"), "model": value.get("model"),
+                "effort": value.get("effort")}
+
+    def replayed_history(self, session_id: str) -> None:
+        """Emit the previous turns' replayed notifications before the resume answer.
+
+        The shapes are the ones a history replay would carry — an old usage
+        snapshot, an old completed tool pair and an old message chunk — all
+        framed under the resumed session, all arriving before the answer so the
+        driver's bootstrap drain sees exactly the public protocol's ordering
+        boundary.
+        """
+        for update in (
+                {"sessionUpdate": "usage_update", "used": 500, "size": 1000000},
+                {"sessionUpdate": "tool_call", "toolCallId": "call_old_1", "kind": "other",
+                 "title": "mcp__old-attempt__old_tool", "status": "in_progress"},
+                {"sessionUpdate": "tool_call_update", "toolCallId": "call_old_1",
+                 "status": "completed"},
+                {"sessionUpdate": "agent_message_chunk",
+                 "content": {"type": "text", "text": "the previous turn's message"}},
+        ):
+            self.notify_client("session/update", {"sessionId": session_id, "update": update})
 
     # -- client requests -----------------------------------------------------
 
@@ -311,6 +389,7 @@ class FakeAgent:
             session_id = f"fake-session-{self.session_seq}"
             self.sessions[session_id] = {"cwd": params.get("cwd"),
                                          "model": '["fake","m1"]', "effort": "high"}
+            self.persist_session(session_id, self.sessions[session_id])
             return {"result": {"sessionId": session_id, "modes": None,
                                "configOptions": config_options(self.sessions[session_id]["model"],
                                                                self.sessions[session_id]["effort"]),
@@ -332,16 +411,47 @@ class FakeAgent:
                 {"sessionId": session_id, "cwd": session["cwd"], "title": None,
                  "updatedAt": None} for session_id, session in sorted(self.sessions.items())]}}
         if method == "session/resume":
+            if "mcpServers" not in params:
+                return {"error": {"code": -32602, "message": "mcpServers is required"}}
             session = self.sessions.get(params.get("sessionId"))
             if session is None:
+                session = self.restore_session(params.get("sessionId"))
+            if session is None:
                 return {"error": {"code": -32602, "message": "no such session"}}
-            return {"result": {"modes": None,
-                               "configOptions": config_options(session["model"], session["effort"])}}
+            self.sessions[params.get("sessionId")] = session
+            self.resumed_session = params.get("sessionId")
+            self.persist_session(params.get("sessionId"), session)
+            if self.replay_history:
+                self.replayed_history(params.get("sessionId"))
+            answer = {"result": {"modes": None,
+                                 "configOptions": config_options(session["model"], session["effort"])}}
+            if self.resume_echo_foreign_id:
+                # The observed answer carries no session id at all; an agent
+                # that echoes one naming another session is the mismatch case.
+                answer["result"]["sessionId"] = "foreign-resumed-root"
+                return answer
+            mounted = [self.mount_stub(entry) for entry in params.get("mcpServers") or []]
+            answer["result"]["mountedMcp"] = mounted
+            return answer
         if method == "session/close":
+            # The in-memory session ends; the persisted marker and rollout stay
+            # in the pinned root, exactly what a later native resume needs.
             self.sessions.pop(params.get("sessionId"), None)
             self.close_stubs()
             return {"result": {}}
         return {"error": {"code": -32601, "message": f"Method not found: {method}"}}
+
+    def framed_session(self, session_id: str) -> str:
+        """The session id this turn's update frames carry.
+
+        ``--resume-foreign-root`` frames every notification of the resumed
+        turn — tool calls, results, chunks — under a session this run never
+        requested: the mismatch case the driver's root-bound evidence must
+        refuse. The rollout keeps the real session id either way.
+        """
+        if self.resume_foreign_root and self.resumed_session:
+            return "foreign-live-root"
+        return session_id
 
     def run_prompt(self, message: dict) -> None:
         request_id = message["id"]
@@ -448,6 +558,7 @@ class FakeAgent:
         request_id = message["id"]
         params = message.get("params") or {}
         session_id = params.get("sessionId")
+        frame_id = self.framed_session(session_id)
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
         sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
@@ -470,10 +581,10 @@ class FakeAgent:
                       "title": title, "status": status}
             if content is not None:
                 update["content"] = content
-            self.notify_client("session/update", {"sessionId": session_id, "update": update})
+            self.notify_client("session/update", {"sessionId": frame_id, "update": update})
 
         def tool_result(call_id: str, status: str, text: str) -> None:
-            self.notify_client("session/update", {"sessionId": session_id, "update": {
+            self.notify_client("session/update", {"sessionId": frame_id, "update": {
                 "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": status,
                 "content": [{"type": "content", "content": {"type": "text", "text": text}}]}})
 
@@ -527,7 +638,7 @@ class FakeAgent:
             if fail_first:
                 # A native tool failure keeps the turn alive: the root corrects
                 # its call and retries inside the same native turn.
-                self.notify_client("session/update", {"sessionId": session_id, "update": {
+                self.notify_client("session/update", {"sessionId": frame_id, "update": {
                     "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "failed"}})
                 log(self.log_path, {"event": "finish-failed", "callId": call_id})
                 return ""
@@ -571,7 +682,7 @@ class FakeAgent:
                                                  "expectedArtifacts": [],
                                                  "acceptance": "the Host accepts the attention receipt"}}
                 finish(attention_outcome, "call_finish_3")
-        self.notify_client("session/update", {"sessionId": session_id,
+        self.notify_client("session/update", {"sessionId": frame_id,
                                               "update": {"sessionUpdate": "usage_update",
                                                          "used": 900, "size": 1000000}})
         self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
@@ -579,19 +690,26 @@ class FakeAgent:
     # -- the synthetic private session record ---------------------------------
 
     def write_session_record(self, session_id: str, prompt_text: str) -> None:
-        """Write one synthetic ``session.v3`` rollout under this fake's DSH_HOME.
+        """Write one synthetic ``session.v3`` rollout under the pinned sessions root.
 
         The shapes mirror the desensitized native fixture: a version-3 session
         header, a user message, turn/step markers, assistant messages whose
         ``source`` names the model and whose ``usage`` carries the native
         counters, and a terminal turn end. This is a fixture written by the
         fake agent, never a native record; it only exercises the driver's
-        optional record reader end to end.
+        optional record reader end to end. A resumed turn appends its own
+        block to the rollout the previous process left in the shared root —
+        the boundary the driver froze — with scenario switches for the shapes
+        that must leave the turn's usage unknown.
         """
         mode = self.session_record
         if not mode:
             return
-        directory = Path(os.environ["DSH_HOME"]) / "sessions"
+        if mode.startswith("resume"):
+            if self.resumed_session:
+                self.write_resumed_session_record(session_id, prompt_text, mode)
+            return
+        directory = self.sessions_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         source = {"kind": "model", "provider": "fake", "model": "m1"}
@@ -650,6 +768,101 @@ class FakeAgent:
             import zstandard
             path = directory / f"{session_id}.v3.jsonl.zstd"
             path.write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
+        log(self.log_path, {"event": "session-record-written", "mode": mode,
+                            "path": str(path), "sessionId": session_id})
+
+    def write_resumed_session_record(self, session_id: str, prompt_text: str, mode: str) -> None:
+        """The resumed turn's rollout block, appended to the frozen rollout.
+
+        The previous process left the session's rollout in the pinned root;
+        this turn appends its own user message, turn and steps with fresh
+        counters — the only records the driver may attribute to this turn. The
+        scenario switches produce the unprovable shapes: the rollout vanishing
+        (emptied in place), being rewritten with different history, shortened
+        below the frozen prefix, replaying the frozen lines byte-for-byte, or
+        growing past the reader's proportionate bound.
+        """
+        import zstandard
+        directory = self.sessions_dir()
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / f"{session_id}.v3.jsonl.zstd"
+        existing: list[bytes] = []
+        if path.is_file():
+            try:
+                existing = [line + b"\n" for line in zstandard.ZstdDecompressor() \
+                            .decompress(path.read_bytes()).splitlines() if line]
+            except (OSError, ValueError):
+                existing = []
+        now_ms = int(time.time() * 1000)
+        source = {"kind": "model", "provider": "fake", "model": "m1"}
+
+        def assistant(seq: int, step: int, text: str, usage) -> dict:
+            return {"type": "assistant/message", "seq": seq, "data": {
+                "turn": 2, "step": step,
+                "message": {"id": f"assistant-{session_id}-{seq}", "role": "assistant",
+                            "content": [{"type": "text", "text": text}], "source": source},
+                "usage": usage}}
+
+        seq = len(existing) + 1
+        events = [
+            {"type": "user/message", "seq": seq, "data": {
+                "id": f"user-{session_id}-2", "role": "user",
+                "content": [{"type": "text", "text": prompt_text}],
+                "source": {"kind": "user"}}},
+            {"type": "turn/start", "seq": seq + 1, "data": {"turn": 2}},
+            {"type": "step/start", "seq": seq + 2, "data": {"turn": 2, "step": 1}},
+            assistant(seq + 3, 1, "Reading the resumed fixture task.", {
+                "inputTokens": 3000, "outputTokens": 300, "totalTokens": 3450,
+                "cacheReadTokens": 150, "reasoningTokens": 30}),
+            {"type": "step/end", "seq": seq + 4, "data": {"turn": 2, "step": 1}},
+            {"type": "step/start", "seq": seq + 5, "data": {"turn": 2, "step": 2}},
+            assistant(seq + 6, 2, "the resumed final answer", {
+                "inputTokens": 4000, "outputTokens": 400, "totalTokens": 4600,
+                "cacheReadTokens": 200, "reasoningTokens": 40}),
+            {"type": "step/end", "seq": seq + 7, "data": {"turn": 2, "step": 2}},
+            {"type": "turn/end", "seq": seq + 8,
+             "data": {"turn": 2, "reason": {"kind": "completed"}}},
+        ]
+        if mode == "resume-missing":
+            # The rollout the freeze saw no longer carries its records: emptied
+            # in place, the matching file set the driver needs is gone.
+            path.write_bytes(b"")
+            log(self.log_path, {"event": "session-record-written", "mode": mode,
+                                "path": str(path), "sessionId": session_id})
+            return
+        if mode == "resume-rewrite":
+            rewritten = [json.dumps({"type": "session", "version": 3, "id": session_id,
+                                     "createdAt": now_ms, "cwd": os.getcwd(),
+                                     "isSeeded": False, "origin": "acp",
+                                     "delegationDepth": 0}).encode()]
+            rewritten += [json.dumps({"type": "assistant/message", "seq": index + 1, "data": {
+                "turn": 1, "step": 1,
+                "message": {"id": f"assistant-{session_id}-r{index}", "role": "assistant",
+                            "content": [{"type": "text", "text": "rewritten history"}],
+                            "source": source},
+                "usage": {"inputTokens": 9999, "outputTokens": 999,
+                          "totalTokens": 11111, "cacheReadTokens": 90,
+                          "reasoningTokens": 9}}}).encode()
+                for index in range(max(1, len(existing)))]
+            path.write_bytes(zstandard.ZstdCompressor().compress(b"\n".join(rewritten) + b"\n"))
+            log(self.log_path, {"event": "session-record-written", "mode": mode,
+                                "path": str(path), "sessionId": session_id})
+            return
+        if mode == "resume-shorten":
+            kept = existing[:max(1, len(existing) // 2)]
+            path.write_bytes(zstandard.ZstdCompressor().compress(b"".join(kept)))
+            log(self.log_path, {"event": "session-record-written", "mode": mode,
+                                "path": str(path), "sessionId": session_id})
+            return
+        lines = list(existing)
+        if mode == "resume-duplicate":
+            lines += existing
+        else:
+            lines += [json.dumps(event).encode() + b"\n" for event in events]
+        if mode == "resume-flood":
+            lines.insert(len(lines) - 1, json.dumps({"type": "fixture/oversized", "seq": seq + 7.5,
+                                                     "data": {"blob": "x" * (4 * 1024 * 1024)}}).encode() + b"\n")
+        path.write_bytes(zstandard.ZstdCompressor().compress(b"".join(lines)))
         log(self.log_path, {"event": "session-record-written", "mode": mode,
                             "path": str(path), "sessionId": session_id})
 
@@ -803,8 +1016,11 @@ def main() -> int:
                         help="tamper with the finish receipt so its signature fails")
     parser.add_argument("--session-record", default=None,
                         choices=["usage", "quota", "missing", "foreign", "corrupt",
-                                 "flood", "plain"],
-                        help="write one synthetic session.v3 rollout under this fake's DSH_HOME")
+                                 "flood", "plain", "resume", "resume-missing",
+                                 "resume-rewrite", "resume-shorten", "resume-duplicate",
+                                 "resume-flood"],
+                        help="write one synthetic session.v3 rollout under the patch-pinned sessions root; "
+                             "the resume* modes shape the resumed turn's rollout boundary")
     parser.add_argument("--stderr-note", default=None,
                         help="write one line to stderr at startup, for the tail mirror")
     parser.add_argument("--emit-foreign-chunk", action="store_true",
@@ -821,6 +1037,12 @@ def main() -> int:
                         help="mutate the checkpoint receipt under its stale signature")
     parser.add_argument("--stop-reason", default=None,
                         help="end the prompt with this stop reason instead of end_turn")
+    parser.add_argument("--replay-history", action="store_true",
+                        help="replay the previous turns' notifications before the resume answer")
+    parser.add_argument("--resume-echo-foreign-id", action="store_true",
+                        help="echo a foreign sessionId in the resume answer the observed agent omits")
+    parser.add_argument("--resume-foreign-root", action="store_true",
+                        help="frame the resumed turn's notifications under a session this run never requested")
     args = parser.parse_args()
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)

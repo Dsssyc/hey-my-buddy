@@ -400,8 +400,16 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 control = handle.role_run_control
                 self.assertEqual(set(control["inquiry"]), {"resultsPath"})
                 self.assertTrue(Path(control["live"]["readyFile"]).is_relative_to(context_root(context, "dsh")))
-                self.assertTrue((Path(control["nativeRoot"]) / "dsh-home/sessions").is_dir())
+                self.assertEqual(Path(control["nativeRoot"]), native_root(state, "dsh", context.task_id))
+                self.assertTrue((Path(control["nativeRoot"]) / "sessions").is_dir())
+                request = rc.decode_run_request(Path(control["requestFile"]).read_bytes())
+                self.assertTrue((Path(request.private_state.invocation_root) / "dsh-home").is_dir())
+                self.assertTrue(Path(request.private_state.invocation_root).is_relative_to(context_root(context, "dsh")))
+                records = list((Path(control["nativeRoot"]) / "sessions").rglob("*.v3.jsonl.zstd"))
+                self.assertTrue(records, "the native rollout is in the shared task root")
+                before_cleanup = {path: path.read_bytes() for path in records}
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)
+                self.assertEqual({path: path.read_bytes() for path in records}, before_cleanup)
                 self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
                 self.assertTrue(Path(handle.log_paths["stdout"]).is_file())
                 self.assert_partition(context)

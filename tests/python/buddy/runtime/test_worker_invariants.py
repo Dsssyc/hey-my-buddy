@@ -291,6 +291,7 @@ class LiveActivityForwardTests(unittest.TestCase):
             encode_run_request,
         )
         worker = Worker("w-live", self.state, client=self.RecordingClient(), log=silent)
+        self.addCleanup(worker.live.stop)
         claim = {"attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": generation},
                  "task": {"taskId": task_id,
                           "spec": {"adapter": harness, "cwd": str(self.work), "task": "live activity",

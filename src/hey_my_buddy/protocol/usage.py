@@ -31,11 +31,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import stat
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 #: Canonical document versions. A reader accepts exactly these versions.
@@ -64,11 +61,6 @@ MAX_WINDOW_NAME = 64
 MAX_WINDOWS = 8
 #: The retained native root assistant text, matching the Codex checkpoint bound.
 MAX_ASSISTANT_MESSAGE_BYTES = 65536
-MAX_SIDECAR_BYTES = 96 * 1024
-
-#: Sidecar document fields for one attempt's native usage observation.
-SIDECAR_VERSION = 1
-SIDECAR_FIELDS = frozenset({"version", "taskId", "attemptId", "generation", "updatedAt", "nativeUsage"})
 
 TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
@@ -489,40 +481,6 @@ def normalize_last_assistant_message(value: Any, *, source: str | None = None) -
     return normalized
 
 
-def read_sidecar(path: str | Path, *, task_id: str, attempt_id: str, generation: int) -> dict | None:
-    """Read one attempt-bound native-usage sidecar, or ``None``.
-
-    Mirrors the activity sidecar boundary: no symlink, a regular file, a bounded
-    size, valid JSON, the current document version and an exact attempt binding.
-    A foreign, malformed or oversized sidecar never contributes usage.
-    """
-    if not hasattr(os, "O_NOFOLLOW"):
-        return None
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
-        try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_SIDECAR_BYTES:
-                return None
-            raw = os.read(descriptor, MAX_SIDECAR_BYTES + 1)
-            if len(raw) > MAX_SIDECAR_BYTES:
-                return None
-        finally:
-            os.close(descriptor)
-        value = json.loads(raw)
-    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
-        return None
-    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != SIDECAR_VERSION:
-        return None
-    if set(value) - SIDECAR_FIELDS:
-        return None
-    if value.get("taskId") != task_id or value.get("attemptId") != attempt_id:
-        return None
-    if not _is_count(generation) or generation < 1 or type(value.get("generation")) is not int or value.get("generation") != generation:
-        return None
-    return value
-
-
 __all__ = [
     "ATTEMPT_SCOPE",
     "COMPLETENESS_VALUES",
@@ -534,8 +492,6 @@ __all__ = [
     "MAX_ASSISTANT_MESSAGE_BYTES",
     "QUOTA_FAILURE_VERSION",
     "QUOTA_VERSION",
-    "SIDECAR_FIELDS",
-    "SIDECAR_VERSION",
     "TOKEN_USAGE_VERSION",
     "classify_quota_code",
     "identifier",
@@ -544,5 +500,4 @@ __all__ = [
     "normalize_quota_failure",
     "normalize_quota_window",
     "normalize_token_usage",
-    "read_sidecar",
 ]

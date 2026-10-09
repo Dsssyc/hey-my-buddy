@@ -154,7 +154,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         """One synthetic ``session.v3`` rollout: partial usage, retained root
         assistant text, and the machine error turn end. A fixture written by the
         fake agent under this run's private DSH_HOME, never a native record."""
-        directory = Path(os.environ["DSH_HOME"]) / "sessions"
+        directory = self.sessions_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         source = {"kind": "model", "provider": "deepseek-official", "model": "deepseek-flash"}
@@ -228,7 +228,8 @@ def main() -> int:
         forge_receipt=False, stop_reason=None, hang_prompt=False, park_prompt=False,
         emit_tool_update=False, bare_final=False, session_record=None, stderr_note=None,
         emit_foreign_chunk=False, spam_unknown_kinds=0, late_tool_update=False,
-        wait_for_inquiry=0.0, answer_inquiry=False, forge_checkpoint=False)
+        wait_for_inquiry=0.0, answer_inquiry=False, forge_checkpoint=False,
+        replay_history=False, resume_echo_foreign_id=False, resume_foreign_root=False)
     namespace = SimpleNamespace(**{**vars(shared), "workflow_mode": args.workflow_mode,
                                    "native_error_code": args.native_error_code,
                                    "profile": args.profile, "patch": args.patch})
