@@ -63,7 +63,7 @@ class BoardClient:
                 raise transport.ServiceError(
                     "SERVICE_UNAVAILABLE", "No board service is running in this state directory"
                 )
-            return transport._request(endpoint, operation, params or {}, resource=resource)
+            return transport._request(endpoint, operation, params or {}, resource=resource, state_dir=self.state_dir)
         return transport.call_board(operation, params or {}, self.state_dir, resource=resource)
 
     # -- service ------------------------------------------------------------

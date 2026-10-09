@@ -91,6 +91,13 @@ class FakeClock:
         return self.value
 
 
+def shutdown_private_rpc() -> None:
+    """End this fixture's communication before another private state is selected."""
+    import c_two as cc
+    if not cc.shutdown().get("completed"):
+        raise AssertionError("Private test RPC shutdown is unconfirmed; preserve its state")
+
+
 def stop_private_workers(directory: Path, timeout: float = 35.0) -> None:
     """Keep this test's state until its detached supervisors release ownership.
 
@@ -160,7 +167,7 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
             if endpoint is not None:
                 try:
                     reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 20,
-                                                                    "reason": "private test cleanup"})
+                                                                    "reason": "private test cleanup"}, state_dir=directory)
                 except ServiceError:
                     # The endpoint may have disappeared during a restart. Recheck
                     # the lifetime locks and attach to its replacement if needed.
@@ -193,7 +200,7 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS}
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
     environment.update(
         BUDDY_STATE_DIR=str(directory),
         BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
@@ -202,6 +209,8 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         # A test child never shares the console backend's fixed default port; the
         # operating system assigns a private one. Tests may override this explicitly.
         BUDDY_CONSOLE_PORT="0",
+        BUDDY_CLAUDE_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
+        BUDDY_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
         # Model-facts refreshes stay offline: the pinned source is a private fixture
         # path, and a missing one is a retained snapshot, never a network request.
         BUDDY_MODEL_FACTS_FILE=str(directory / "model-facts-fixture.json"),
@@ -237,6 +246,7 @@ def private_state_dir(prefix: str = "buddy-test-"):
         restore_facts_source()
         stop_private_service(directory)
         stop_private_workers(directory)
+        shutdown_private_rpc()
         shutil.rmtree(directory)
 
 
@@ -362,12 +372,22 @@ class BoardTestCase(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     handle.kill()
                     handle.wait(timeout=5)
+        shutdown_private_rpc()
         shutil.rmtree(self.directory)
 
     def board(self, **options) -> InProcessBoard:
         board = InProcessBoard(self.directory, **options)
         self._stack.append(board)
         return board
+
+    @contextmanager
+    def rpc_connection(self, contract, *, name: str, address: str):
+        """A direct native connection in this fixture's private state domain."""
+        import c_two as cc
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.directory)
+        with cc.connect(contract, name=name, address=address) as proxy:
+            yield proxy
 
     def workdir(self, name: str = "work") -> Path:
         path = self.directory / name
@@ -395,6 +415,8 @@ class BoardTestCase(unittest.TestCase):
         """Start the real daemon in a child process and wait for health."""
         from hey_my_buddy.protocol.transport import _request, _read_endpoint, ServiceError
 
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.directory)
         environment = _child_environment(self.directory, env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
@@ -416,7 +438,7 @@ class BoardTestCase(unittest.TestCase):
                 endpoint = _read_endpoint(self.directory)
                 if endpoint:
                     try:
-                        health = _request(endpoint, "health", {})
+                        health = _request(endpoint, "health", {}, state_dir=self.directory)
                         break
                     except ServiceError:
                         pass

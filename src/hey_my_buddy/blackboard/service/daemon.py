@@ -595,8 +595,7 @@ class Daemon:
         )
 
     def run(self) -> int:
-        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.directory, 0o700)
+        self.control["rpc_profile"] = rpc_config.configure_server(self.directory)
         self.acquire_exclusive()
         try:
             self.store.initialize()
@@ -609,7 +608,6 @@ class Daemon:
             # Buddy's private C-Two profile goes in before the first register: the
             # pool, reassembly and execution capacity are set through C-Two's public
             # overrides, never through inherited environment variables.
-            self.control["rpc_profile"] = rpc_config.configure_server()
             cc.register(
                 BuddyControl,
                 service,

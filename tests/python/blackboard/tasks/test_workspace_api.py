@@ -7,8 +7,6 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import c_two as cc
-
 from support import InProcessBoard
 from console.test_console import Browser
 from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
@@ -55,7 +53,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
     def cli_call(self, board: InProcessBoard, method: str, params: dict) -> tuple[int, dict]:
         endpoint = {"address": "ipc://private-api-test", "token": "test-token"}
         with patch.object(transport, "ensure_service", return_value=endpoint), patch.object(
-            transport, "_request", side_effect=lambda _endpoint, operation, values, resource="control": board.call(operation, values)
+            transport, "_request", side_effect=lambda _endpoint, operation, values, resource="control", **kwargs: board.call(operation, values)
         ), contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
             code = cli.main([method, json.dumps(params)])
         return code, json.loads(output.getvalue())
@@ -94,7 +92,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         with self.daemon():
             endpoint = transport._read_endpoint(self.directory)
             self.assertIsNotNone(endpoint)
-            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
+            with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
                 for operation in OPERATIONS.values():
                     with self.subTest(operation=operation):
                         response = json.loads(getattr(control, operation)(json.dumps({

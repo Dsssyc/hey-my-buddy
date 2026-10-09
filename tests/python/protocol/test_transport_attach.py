@@ -68,6 +68,7 @@ class AttachFixture(unittest.TestCase):
         self.directory = Path(self.temp.name) / "state"
         self.directory.mkdir(mode=0o700)
         self.directory.chmod(0o700)
+        (self.directory / "ipc").mkdir(mode=0o700)
         self.endpoint_file = self.directory / "control.json"
         self.write_endpoint(ENDPOINT, 0o600)
         # The ping RPC is the only thing that may be touched: never the network.
@@ -75,6 +76,8 @@ class AttachFixture(unittest.TestCase):
         # This fixture observes bootstrap I/O, not runtime installation. Never
         # resolve an operator's runtime or create environments from a unit test.
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
+        sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
+        sockets.return_value.accept.return_value = (Mock(), None)
         self.addCleanup(patch.stopall)
 
     def write_endpoint(self, value, mode):
@@ -97,9 +100,13 @@ class ReadOnlyAttachTests(AttachFixture):
         self.directory.chmod(0o500)
         self.addCleanup(self.directory.chmod, 0o700)
         self.assertFalse(os.access(self.directory, os.W_OK), "fixture must be non-writable to prove read-only attach")
-        endpoint = ensure_service(self.directory)
-        self.assertEqual(endpoint, ENDPOINT)
+        before = snapshot(self.directory)
+        with MutationRecorder() as recorder:
+            self.assertEqual(ensure_service(self.directory), ENDPOINT)
+        recorder.assert_no_mutation()
         self.request.assert_called_once()
+        self.assertEqual(before, snapshot(self.directory), "read-only attach changed the filesystem")
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o500)
 
     def test_call_service_health_uses_read_only_attach_for_existing_service(self):
         before = snapshot(self.directory)
@@ -152,15 +159,17 @@ class TrustBoundaryTests(AttachFixture):
                 self.assertEqual(ensure_service(self.directory), ENDPOINT)
             spawned, created = recorder.popen.call_count, recorder.mkdir.call_count
         self.assertEqual(spawned, 1, "cold setup must still run when no endpoint can be trusted")
-        self.assertEqual(created, 1, "cold setup must create the state directory")
+        self.assertEqual(created, 0, "secure state and IPC directories already exist")
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")
 
     def test_group_or_world_accessible_directory_is_not_trusted(self):
         self.directory.chmod(0o755)
         self.assert_rejected_by_validation()
-        self.assertEqual(ensure_service(self.directory), ENDPOINT)
-        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
+        with self.assertRaises(ServiceError) as refused:
+            ensure_service(self.directory)
+        self.assertEqual(refused.exception.code, "LAUNCH_ACCESS_DENIED")
+        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o755)
 
     def test_private_but_unreadable_directory_is_not_trusted(self):
         self.directory.chmod(0o000)
@@ -297,6 +306,8 @@ class ColdStartTests(unittest.TestCase):
         child.wait.return_value = 0
         self.spawn.return_value = child
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
+        sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
+        sockets.return_value.accept.return_value = (Mock(), None)
         self.addCleanup(patch.stopall)
 
     def test_cold_start_creates_private_state_directory_and_spawns_daemon(self):
@@ -364,3 +375,82 @@ class ColdStartTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RpcReadOnlySetupTests(unittest.TestCase):
+    """The real RPC setup boundary must preserve missing or unsafe IPC paths."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="rpc-readonly-")
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name).resolve()
+        self.endpoint_file = self.directory / "control.json"
+        self.endpoint_file.write_text(json.dumps(ENDPOINT))
+        self.endpoint_file.chmod(0o600)
+
+    def test_missing_ipc_does_not_create_on_transport_or_board_client_attach(self):
+        from hey_my_buddy.protocol.client import BoardClient
+        with patch("hey_my_buddy.protocol.transport.cc.connect") as connect:
+            with MutationRecorder() as recorder:
+                self.assertIsNone(_attach_read_only(self.directory))
+                with self.assertRaises(ServiceError):
+                    BoardClient(self.directory, autostart=False).ping()
+            recorder.assert_no_mutation()
+            connect.assert_not_called()
+        self.assertFalse((self.directory / "ipc").exists())
+
+    def test_read_only_state_with_private_ipc_reaches_rpc_without_mutation(self):
+        from hey_my_buddy.protocol.client import BoardClient
+        from support import shutdown_private_rpc
+
+        ipc = self.directory / "ipc"
+        ipc.mkdir(mode=0o700)
+        before = snapshot(self.directory)
+        self.directory.chmod(0o500)
+        self.addCleanup(self.directory.chmod, 0o700)
+        self.addCleanup(shutdown_private_rpc)
+        self.assertFalse(os.access(self.directory, os.W_OK))
+        proxy = Mock()
+        proxy.__enter__ = Mock(return_value=proxy)
+        proxy.__exit__ = Mock(return_value=False)
+        proxy.ping.return_value = '{"status": "ok"}'
+        # Exercise the real endpoint validation and configure_client(create=False).
+        # Only the native connection is replaced; no socket bind or connect runs.
+        with patch("hey_my_buddy.protocol.transport.cc.connect", return_value=proxy) as connect:
+            with MutationRecorder() as recorder:
+                self.assertEqual(BoardClient(self.directory, autostart=False).ping(), {"status": "ok"})
+            recorder.assert_no_mutation()
+        self.assertEqual(connect.call_count, 2, "health attachment and requested ping must both reach RPC")
+        self.assertEqual(before, snapshot(self.directory))
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o500)
+        self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), 0o700)
+
+    def test_missing_state_does_not_create_on_board_client_attach(self):
+        from hey_my_buddy.protocol.client import BoardClient
+        missing = self.directory / "missing"
+        with MutationRecorder() as recorder:
+            with self.assertRaises(ServiceError):
+                BoardClient(missing, autostart=False).ping()
+        recorder.assert_no_mutation()
+        self.assertFalse(missing.exists())
+
+    def test_unsafe_ipc_is_not_chmodded_or_connected(self):
+        ipc = self.directory / "ipc"
+        ipc.mkdir(mode=0o750)
+        with patch("hey_my_buddy.protocol.transport.cc.connect") as connect:
+            with MutationRecorder() as recorder:
+                self.assertIsNone(_attach_read_only(self.directory))
+            recorder.assert_no_mutation()
+            connect.assert_not_called()
+        self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), 0o750)
+
+    def test_explicit_state_reaches_rpc_setup(self):
+        from hey_my_buddy.protocol.client import BoardClient
+        from hey_my_buddy.protocol import transport
+        proxy = Mock()
+        proxy.__enter__ = Mock(return_value=proxy)
+        proxy.__exit__ = Mock(return_value=False)
+        proxy.ping.return_value = '{"status": "ok"}'
+        with patch.object(transport.rpc_config, "configure_client") as configure, patch.object(transport.cc, "connect", return_value=proxy), patch.object(transport, "_attach_read_only", return_value=ENDPOINT):
+            self.assertEqual(BoardClient(self.directory, autostart=False).ping(), {"status": "ok"})
+            configure.assert_called_once_with(self.directory, create=False)

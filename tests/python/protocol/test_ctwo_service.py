@@ -15,9 +15,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-import c_two as cc
-
-from support import PYTHON_ROOT, BoardTestCase
+from support import BoardTestCase, _child_environment
 
 from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from hey_my_buddy.protocol.transport import _read_endpoint
@@ -31,13 +29,13 @@ class TestNamedContract(BoardTestCase):
         return endpoint
 
     def _wait_call(self, endpoint, operation: str, params: dict) -> dict:
-        with cc.connect(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as wait:
+        with self.rpc_connection(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as wait:
             return json.loads(getattr(wait, operation)(json.dumps({"token": endpoint["token"], **params})))
 
     def test_every_operation_is_named_and_authenticated(self):
         with self.daemon():
             endpoint = self._endpoint()
-            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
+            with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 ping = json.loads(board.ping(json.dumps({"token": endpoint["token"]})))
                 self.assertEqual(ping["contractVersion"], CONTRACT_VERSION)
                 self.assertEqual(ping["serviceId"], endpoint["serviceId"])
@@ -62,7 +60,7 @@ class TestNamedContract(BoardTestCase):
             endpoint = self._endpoint()
             capacity = self._wait_call(endpoint, "wait_capacity", {})
             self.assertEqual(capacity["capacity"], 1)
-            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
+            with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 reply = json.loads(
                     board.task_submit(
                         json.dumps(
@@ -121,8 +119,8 @@ class TestNamedContract(BoardTestCase):
             payload = json.dumps(
                 {"token": endpoint["token"], "requestId": "shared", "task": "do", "cwd": str(self.workdir()), "adapter": "external"}
             )
-            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as first:
-                with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as second:
+            with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as first:
+                with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as second:
                     one = json.loads(first.task_submit(payload))
                     two = json.loads(second.task_submit(payload))
                     self.assertEqual(one["task"]["runId"], two["task"]["runId"])
@@ -132,12 +130,7 @@ class TestNamedContract(BoardTestCase):
         with self.daemon():
             code, health = self.cli("health")
             self.assertEqual(code, 0, health)
-            environment = {
-                **os.environ,
-                "BUDDY_STATE_DIR": str(self.directory),
-                "PYTHONPATH": str(PYTHON_ROOT),
-                "VIRTUAL_ENV": "",
-            }
+            environment = _child_environment(self.directory)
             second = subprocess.run(
                 [sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"], env=environment, capture_output=True, text=True, timeout=60
             )

@@ -1,41 +1,19 @@
-"""Buddy's private C-Two IPC profile, applied through the public Python setup API.
+"""Private C-Two 0.7.3 endpoint and IPC profile.
 
-``configure_server()`` and ``configure_client()`` must run in each process before its
-first ``c_two.register()`` or ``c_two.connect()``. They call the released C-Two
-``set_server``/``set_client`` overrides and nothing else, so the tuning stays inside
-the Buddy process: it is not written to the environment, not exported to a coding
-child, and not applied to any other C-Two project on the machine.
-
-Measured facts behind the profile (installed ``c-two==0.5.1``):
-
-- ``pool_enabled=False`` is **not** an off switch. A server started that way still
-  maps a shared-memory region (measured: one 256 MiB ``SM=SHM`` segment, the default
-  ``pool_segment_size``), because the pooled client and server initialize the buddy
-  pool regardless. Buddy therefore never offers a fake "off" mode and keeps the pool
-  enabled while bounding it.
-- The pool is bounded to two 16 MiB segments instead of the default four 256 MiB
-  segments. The legal C-Two DTO here is a JSON string of at most 8 MiB
-  (``hey_my_buddy.protocol.transport.MAX_MESSAGE_BYTES``); its pickle envelope adds tens of bytes, so
-  one 16 MiB segment holds a maximum legal request and the second segment keeps
-  concurrent transfers from serializing on a single allocation.
-- Reassembly is configured separately and explicitly: a 16 MiB reassembly segment,
-  at most two of them, and a 16 MiB reassembled-payload ceiling. Payloads switch to
-  chunked transfer at 0.9 x segment size, so a maximum legal 8 MiB message never
-  chunks; the reassembly bound only covers a larger, over-limit transfer that would
-  otherwise fall back to the C-Two defaults (64 MiB x 4).
-- ``max_execution_workers`` is the server's callback capacity. The C-Two default of
-  10 is below Buddy's default wait admission (``BUDDY_WAIT_CAPACITY=32``); with the
-  default, thirty-two admitted waits delayed the next ordinary control call by 7.4 s
-  in a measured run. The profile raises it to the C-Two maximum of 64 so waits and
-  control operations (renew, result, cancel, health) do not starve each other.
-
-``report()`` publishes only these whitelisted overrides and the bounds they imply.
-A configured capacity is a ceiling: mapped shared memory and resident RSS are
-different, separately measured quantities and are never derived from it here.
+Apply before the first local register/connect. Unix roles use <state>/ipc,
+independent of inherited C2_IPC_ROOT; Windows retains the native Named Pipe domain.
+The buddy pool is disabled. Temporary shared-memory transfers remain possible:
+configuration and C-Two memory accounting are not process RSS.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import stat
 import threading
+
+from .. import home, private_dirs
+from ..errors import BoardError
 
 import c_two as cc
 
@@ -46,11 +24,9 @@ MAX_WAIT_CAPACITY = 48
 
 _MIB = 1024 * 1024
 
-#: Pool and reassembly overrides accepted by both ``set_server`` and ``set_client``.
+#: Non-pool and reassembly overrides accepted by both ``set_server`` and ``set_client``.
 POOL_OVERRIDES: dict[str, object] = {
-    "pool_enabled": True,
-    "pool_segment_size": 16 * _MIB,
-    "max_pool_segments": 2,
+    "pool_enabled": False,
     "reassembly_segment_size": 16 * _MIB,
     "reassembly_max_segments": 2,
     "max_reassembly_bytes": 16 * _MIB,
@@ -58,7 +34,7 @@ POOL_OVERRIDES: dict[str, object] = {
 }
 
 #: Server-only capacity overrides. ``max_execution_workers`` is capped at 64 by the
-#: released resolver; ``max_payload_size`` must not be smaller than a pool segment.
+#: released resolver. Message and frame ceilings remain independent of the pool.
 SERVER_OVERRIDES: dict[str, object] = {
     **POOL_OVERRIDES,
     "max_execution_workers": 64,
@@ -87,14 +63,9 @@ def _role_overrides(role: str) -> dict[str, object]:
 
 
 def _capacity(overrides: dict[str, object]) -> dict[str, int]:
-    segment = int(overrides["pool_segment_size"])
-    pool_segments = int(overrides["max_pool_segments"])
     reassembly_segment = int(overrides["reassembly_segment_size"])
     reassembly_segments = int(overrides["reassembly_max_segments"])
     return {
-        "poolSegmentBytes": segment,
-        "maxPoolSegments": pool_segments,
-        "poolCapacityBytes": segment * pool_segments,
         "reassemblySegmentBytes": reassembly_segment,
         "maxReassemblySegments": reassembly_segments,
         "reassemblyCapacityBytes": reassembly_segment * reassembly_segments,
@@ -131,34 +102,85 @@ def report(role: str = "server") -> dict:
         return _reports.setdefault(role, _build_report(role))
 
 
-def _apply(role: str) -> dict:
+def _validate_path(path: Path, *, private: bool = False, ipc: bool = False) -> bool:
+    """Reject unsafe existing entries; never repair their permissions."""
+    if '..' in path.parts or private_dirs.linked_component(path) is not None:
+        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains a linked or unsafe component")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if (not stat.S_ISDIR(info.st_mode)
+            or info.st_uid not in (os.geteuid(), 0)
+            or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)
+            or (private and (info.st_uid != os.geteuid() or info.st_mode & 0o077))
+            or (ipc and stat.S_IMODE(info.st_mode) != 0o700)):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path is not an owner-private directory", path=str(path))
+    return True
+
+
+def configure_local_endpoint(state_dir: str | Path | None = None, *, create: bool = True) -> Path | None:
+    """Select the private domain before local I/O; native C-Two fences active roots.
+
+    ``create=False`` requires both state and IPC directories to exist securely and
+    never creates or chmods them. Completed native shutdown allows a new selection.
+    """
+    if os.name == "nt":
+        cc.set_local_endpoint()
+        return None
+    state = private_dirs._absolute(Path(state_dir or os.environ.get("BUDDY_STATE_DIR") or home.default_state_dir()).expanduser())
+    root = state / "ipc"
+    for ancestor in reversed(state.parents):
+        _validate_path(ancestor)
+    for directory in (state, root):
+        exists = _validate_path(directory, private=True, ipc=directory == root)
+        if not exists:
+            if not create:
+                raise BoardError("PRIVATE_PATH_UNSAFE", "Private IPC directory is missing", path=str(directory))
+            # linked_component supplies the shared ancestor guard. An entry that
+            # races creation must pass the same strict check; never chmod it.
+            try:
+                directory.mkdir(mode=0o700, parents=True)
+            except FileExistsError:
+                pass
+        _validate_path(directory, private=True, ipc=directory == root)
+    # Do not cache the root in Python: Core owns the active-domain fence and the
+    # fresh session after a fully completed shutdown.
+    cc.set_local_endpoint(root=str(root))
+    return root
+
+
+def _apply(role: str, state_dir: str | Path | None, *, create: bool) -> dict:
     with _LOCK:
-        if role not in _configured:
+        configure_local_endpoint(state_dir, create=create)
+        # The public scope is absent before the role's first I/O and after complete
+        # shutdown. Reapply then; never ask C-Two to retune an active role.
+        scope = "server" if role == "server" else "runtime_outgoing"
+        active = cc.memory_stats()[scope] is not None
+        if active and role not in _configured:
+            raise BoardError("RPC_CONFIG_TOO_LATE", "Private RPC profile must precede local I/O", role=role)
+        if not active:
             overrides = _role_overrides(role)
             if role == "server":
                 cc.set_server(ipc_overrides=overrides)
             else:
                 cc.set_client(ipc_overrides=overrides)
-            _reports[role] = _build_report(role)
-            _configured.add(role)
+        _reports.setdefault(role, _build_report(role))
+        _configured.add(role)
         return _reports[role]
 
 
-def configure_server() -> dict:
-    """Apply the server profile before the first ``register``. Idempotent per process."""
-    if "server" in _configured:
-        return _reports["server"]
-    return _apply("server")
+def configure_server(state_dir: str | Path | None = None, *, create: bool = True) -> dict:
+    """Apply the server profile and private domain before the first register."""
+    return _apply("server", state_dir, create=create)
 
 
-def configure_client() -> dict:
-    """Apply the client profile before the first ``connect``. Idempotent per process."""
-    if "client" in _configured:
-        return _reports["client"]
-    return _apply("client")
+def configure_client(state_dir: str | Path | None = None, *, create: bool = True) -> dict:
+    """Apply the client profile and private domain before the first connect."""
+    return _apply("client", state_dir, create=create)
 
 
 def configured_roles() -> tuple[str, ...]:
-    """The roles this process has already applied."""
+    """The roles this process has applied."""
     with _LOCK:
         return tuple(sorted(_configured))

@@ -192,8 +192,8 @@ class Worker:
         log: Callable[[str], None] | None = None,
     ):
         from ...protocol.rpc_config import configure_server, configure_client
-        configure_server()
-        configure_client()
+        configure_server(state_dir)
+        configure_client(state_dir)
         self.worker_id = worker_id
         # One identity per worker *process*: a new process cannot prove it owns a
         # child that a previous process spawned, so it must never resume that work.
