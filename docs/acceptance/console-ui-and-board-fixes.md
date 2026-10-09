@@ -163,3 +163,5 @@ Host原run acknowledge/rejected（ui-frame-reject-layer-context-and-scope-r1，r
 UI-PREF（U01/U04/U06）run ffa427f6-dcd2-4346-bd9a-54b5010549af 已以60b55780固定输入路由提交，23精确路径，首次adapter/provider/model/effort/configuration全部省略；原宏任务/hostId保持。版本只读路由与Api/types由它独占，UI-FRAME八路径与它不共写；专用monitor等待固定边界。后续TIME/NAV只在相关前序验收后修改共享文件，完整检查仍未运行。
 
 固定FRAME真实浏览器预览的导航更正：Chrome自动goto57155被ERR_BLOCKED_BY_CLIENT拒绝；遵照工具的原生替代操作，在自有私有页窗口地址栏导航。第一次typeText丢失冒号、URL不正确，随后用AX setValue写精确URL成功加载，没有改变扩展/安全/网络设置，也没有绕过证书警告。私有预览PID70853、源829582e1、Popen/model0；旧改前03保持用于对照，均独立私有根。此次预览只证明退回版本的失败，不计最终图或最终构建产物。
+
+UI-PREF 首次路由zcode/zai-api/GLM-5.3-Flash/max再次不可重试429/1310失败，停止confirmed、get revision4、finalArtifactId空，材料review-ui-pref/round1-failed保留。按用户限流例外及后补Codex授权，在此原run完整codex/openai/gpt-6.1-sol/high continue（ui-pref-continue-rate-limit-1310-r1），当次目录enabled/available、quotaExhausted=false、家族active1/limit3，reason登记，revision5 executing/queued，新专用monitor。首提仍四字段全省略；未改设置、运行时或共享进程。浏览器验收清单browser-qa-checklist.json已在ignored目录按U01–U11与8个主题/窗口/原生缩放组合列必测状态，pending不算验证；最终素材只在ignored目录。
