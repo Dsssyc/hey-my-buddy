@@ -223,3 +223,9 @@ Host完成本轮attention：私有合成看板、真实IAB，f8e2a493源码及�
 私有HTTP503故障注入实际证明重试：50/63已有行时点击重试的285ms窗口内GET /api/tasks仅limit50等首屏参数、没有before，50行保留；3/3无cursor时265ms内仍GET首屏，3行保留，分别records-retry-http-proof/null-cursor-retry-http-proof.json。连接错误点击约28ms后GET /api/console，失败时显示上次成功核对时间；同期已有3秒tasks/console轮询碰巧发生，不将整个窗口的所有请求归因于按钮，隔离由对应单元/变异确认。故障只对私有GET读取，日常服务没有故障或改动，Mode恢复normal。首次旧源码尝试重试时正常poll先清掉错误，定位器无匹配，排除，未伪称实际复现误读下一页；缺陷由固定源码/受影响测试与返修负向测试确认。真实浏览器没有单独注入追加页失败/迟响应（这些由隔离回归/变异验证），不冒充真实网络证据。
 
 NAV对外变化：两个列表标题旁“切换到…”按钮与窄条/窄屏同名入口；浏览器本地的手动列表收起习惯；“刷新全部执行记录/刷新配置更新记录/刷新微任务详情”及“重试连接”；显示真实“核对时间…”或“核对时间未记录”，去顶栏刷新；记录读取失败的重试按实际失败类型重读，已加载窗口不丢。schema不变。最终发行构建和两套完整检查尚未执行；全部整合后只在最终代码执行一次。
+
+NAV整合19b122bc、integration int-9cb103c4-9534-4eca-82b0-00a0efd29cb3 verified30，原run accepted。全部9微任务均accepted且exactpath cleanup applied/checkout absent，原材料提前固定。标准npm构建19b122bc退出0，4个最终资产与f8e2a493独立私有预览逐字节相同，提交acaa5180；首次构建工具PATH缺npm，未启动任何build，使用本机既有Node/npm路径后成功，无安装升级。
+
+完整前端第一次命令npm --prefix apps/console test，提交acaa51802a5c85988c5d930cebbf5d7ce25e4fba：66文件、844项，834passed/10failed、6unhandled、退出1。失败完整日志固定final/frontend-first-failed.log与对应command JSON；失败分布WorkflowPanel.test、catalog-status.test、model-concurrency.test、theme.test。前两类依次为新独立cadence下旧mock触发/持久查看习惯未在用例之间隔离，theme版本API mock缺失；不将本次记为最终前端通过。已accepted的PREF/NAV不能continue，新建关联测试返修（同一宏任务、首次仍全省略配置走路由），仅4测试文件，保留全部已有断言/编号；生产源码字节不变才允许只处理夹具，否则attention。Python完整检查已在acaa5180同时启动，结果仍待确认，尚未宣称通过。
+
+关联测试返修run091248a0-0275-4e97-8cbe-ad8655a42178，首次4字段/configuration全部省略，路由ZCode max遇不可重试429/1310、无产物、shutdown confirmed；材料review-ui-final-tests/round1-limited，fresh available/enabled Codex后原run完整codex/openai/gpt-6.1-sol/high continue（ui-final-tests-continue-rate-limit-1310-r1，revision4→5），沿用限流例外。Python完整检查运行中另已输出未改动的Claude夹具1fail（early-result期望native-turn-started-early、得到native-init-missing）；单项私有复测1/1与随后3/3均退出0，4次通过不当作完整检查通过，也不据此武断归因。待整轮结果，保持Harness/roles文件未改，后续完整检查会顺序运行以避免两套套件叠加负载，默认并行数不变。
