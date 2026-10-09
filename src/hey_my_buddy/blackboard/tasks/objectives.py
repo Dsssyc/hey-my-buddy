@@ -18,6 +18,7 @@ import uuid
 from typing import Any
 
 from . import delegation
+from . import workspace_identity
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -120,6 +121,7 @@ def pending_root_count(store) -> int:
 def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest.get("repositoryId") or spec["cwd"]
+    aliases = workspace_identity.load_alias_map(connection)
     identifier = presentation.get("objectiveId")
     if presentation.get("objectiveOf") is not None:
         source = connection.execute("SELECT objective_id FROM workflow_runs WHERE run_id=?", (presentation["objectiveOf"],)).fetchone()
@@ -132,15 +134,20 @@ def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str
         row = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (identifier,)).fetchone()
         if row is None:
             raise BoardError("NOT_FOUND", "Unknown objectiveId")
-        if row["project_id"] != project_id or row["source_host_id"] != host_id:
-            raise BoardError("CONFLICT", "The objective belongs to another source project or submitting Host")
+        # A macro task recorded before the restart-stable identity accepts a new
+        # micro task of the same repository through the registered mapping; an
+        # unmapped recorded value still refuses, honestly, as another project.
+        if (not workspace_identity.equivalent(row["project_id"], project_id, mapping=aliases)
+                or row["source_host_id"] != host_id):
+            raise BoardError("CONFLICT", "The objective belongs to another source project or submitting Host",
+                             identityReason=workspace_identity.identity_reason(connection, row["project_id"]))
         return identifier
     if "objective" not in presentation:
         return None
     identifier = f"obj-{uuid.uuid4()}"
     connection.execute(
         "INSERT INTO objectives(objective_id,title,project_id,project_path,source_host_id,created_at,activity_at)"
-        " VALUES(?,?,?,?,?,?,?)", (identifier, presentation["objective"]["title"], project_id, spec["cwd"], host_id, now, now),
+        " VALUES(?,?,?,?,?,?,?)", (identifier, presentation["objective"]["title"], workspace_identity.canonical(project_id, mapping=aliases), spec["cwd"], host_id, now, now),
     )
     return identifier
 
@@ -353,8 +360,11 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
     if group_id.startswith("obj-"):
         objective = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (group_id,)).fetchone()
         title, title_source = objective["title"], "objective"
-        project = {"id": objective["project_id"], "path": objective["project_path"],
+        project = {"id": workspace_identity.canonical(objective["project_id"], mapping=workspace_identity.load_alias_map(connection)), "path": objective["project_path"],
                    "label": delegation.project_label(objective["project_path"], "未记录项目")}
+        identity_reason = workspace_identity.identity_reason(connection, objective["project_id"])
+        if identity_reason:
+            project["identityReason"] = identity_reason
         source_host, created_at = objective["source_host_id"], objective["created_at"]
         activity_seq, activity_at = objective["activity_seq"], objective["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]

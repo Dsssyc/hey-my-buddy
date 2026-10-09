@@ -13,6 +13,7 @@ from . import router_history, router_sequence
 from ...protocol import schemas
 from .router_boundary import build_boundary
 from ...errors import BoardError
+from ..tasks import workspace_identity
 
 _CHANGED_CODES = frozenset({
     "router-input-changed", "router-configuration-changed", "router-profile-changed",
@@ -296,16 +297,23 @@ def _continuation_context(connection, row, run_id, owner_run_id):
         return False, "An owned Router dispatch has no confirmed stop", helper_policy, run
     manifest = _json(run["workspace_manifest_json"], {})
     if manifest.get("checkoutId"):
+        aliases = workspace_identity.load_alias_map(connection)
+        variants = sorted(workspace_identity.identity_variants(manifest["checkoutId"], mapping=aliases))
         reservations = connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run_id,)).fetchall()
         current = next((item for item in reservations if item["state"] in ("held", "transferred")), None)
-        current = current or next((item for item in reservations if item["checkout_id"] == manifest["checkoutId"]), None)
+        current = current or next((item for item in reservations if workspace_identity.equivalent(item["checkout_id"], manifest["checkoutId"], mapping=aliases)), None)
         task = connection.execute("SELECT cwd FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-        if current is None or task is None or task["cwd"] != manifest.get("path") or any(current[key] != manifest.get(field) for key, field in (
+        if current is None or task is None or task["cwd"] != manifest.get("path") or any(
+                current[key] != manifest.get(field) if key not in ("checkout_id", "repository_id")
+                else not workspace_identity.equivalent(current[key], manifest.get(field), mapping=aliases)
+                for key, field in (
                 ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"), ("path", "path"), ("access", "access"))):
             return True, "The goal no longer owns its frozen checkout allocation", helper_policy, run
         conflicts = connection.execute(
-            "SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=? AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
-            (manifest["checkoutId"], run_id, manifest["access"])).fetchall()
+            "SELECT holder_task_id FROM workspace_reservations WHERE checkout_id IN ("
+            + ",".join("?" for _ in variants)
+            + ") AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
+            (*variants, run_id, manifest["access"])).fetchall()
         if conflicts and (current["state"] != "transferred" or any(
                 item["holder_task_id"] not in ids for item in conflicts)):
             return True, "Another owner holds the goal's checkout", helper_policy, run

@@ -21,6 +21,7 @@ import tempfile
 
 from ...errors import BoardError
 from . import windows_paths
+from . import workspace_identity
 
 _WINDOWS = os.name == "nt"
 
@@ -100,8 +101,11 @@ def _git_in(git_dir, *args, allowed=(0,)):
 
 
 def _identity(path):
-    stat = path.stat()
-    return _sha(_json([str(path), stat.st_dev, stat.st_ino]))
+    # Restart-stable: the device number changes across a system restart, while
+    # path plus inode still distinguishes a replaced directory at the same path.
+    # Recorded identities from before this form exist only through the board's
+    # provenance-carrying mapping; see ``workspace_identity``.
+    return workspace_identity.stable_identity(path)
 
 
 def _commit(root, ref):
@@ -660,7 +664,8 @@ def _prepare_worktree(source, target, pinned, reason):
             raise BoardError("WORKSPACE_CONFLICT", "The worktree target is not owned by this preparation", path=str(target))
         identity = inspect(str(target))
         observed = _stable_observation(target, [])
-        if identity["repositoryId"] != source["repositoryId"] or observed["head"] != pinned["inputCommit"] or observed["index"] != entries or observed["tracked"] != entries or observed["untracked"]:
+        if (not workspace_identity.matches(source["repositoryId"], identity["repositoryId"])
+                or observed["head"] != pinned["inputCommit"] or observed["index"] != entries or observed["tracked"] != entries or observed["untracked"]):
             raise BoardError("WORKSPACE_CONFLICT", "The interrupted worktree is incomplete or changed; it was preserved", path=str(target))
         return
     # --lock records ownership atomically with Git registration. A partially
@@ -707,8 +712,13 @@ def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
     with _errors():
         _validate_manifest(manifest)
         actual = inspect(manifest["path"])
-        for field in ("checkoutRoot", "checkoutId", "repositoryId"):
-            if actual[field] != manifest[field]:
+        if actual["checkoutRoot"] != manifest["checkoutRoot"]:
+            raise BoardError("WORKSPACE_CHANGED", "The execution checkout identity changed", field="checkoutRoot")
+        for field in ("checkoutId", "repositoryId"):
+            # A recorded identity from before the restart-stable form matches only
+            # through the board's provenance-carrying mapping; a replaced directory
+            # still computes a different actual identity and fails here.
+            if not workspace_identity.matches(manifest[field], actual[field]):
                 raise BoardError("WORKSPACE_CHANGED", "The execution checkout identity changed", field=field)
         root = Path(actual["checkoutRoot"])
         snapshot = manifest["snapshot"]
@@ -746,7 +756,7 @@ def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
     A new request_id explicitly captures new source input. Recovery never resets
     or removes a pre-existing target. Relative scopes address the checkout root.
     """
-    with _errors():
+    with _errors(), workspace_identity.board_aliases(state_dir):
         intent = _intent(intent)
         workspace_id, directory = _workspace_directory(state_dir, request_id)
         with _lock(directory):
@@ -778,11 +788,11 @@ def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
                     with _parent(target, str(relative / ".cwd-placeholder"), create=True):
                         pass
             actual = inspect(str(path))
-            if actual["repositoryId"] != source["repositoryId"]:
+            if not workspace_identity.matches(source["repositoryId"], actual["repositoryId"]):
                 raise BoardError("WORKSPACE_CHANGED", "The execution repository changed during preparation")
             selectors = intent["includeUntracked"] if intent["kind"] == "existing" else []
             observed = _stable_observation(Path(actual["checkoutRoot"]), selectors)
-            if intent["kind"] == "existing" and (actual["checkoutId"] != source["checkoutId"] or observed["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]):
+            if intent["kind"] == "existing" and (not workspace_identity.matches(source["checkoutId"], actual["checkoutId"]) or observed["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]):
                 raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
             snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=observed["fingerprint"])
             manifest = {"version": 1, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
@@ -967,7 +977,7 @@ def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
 
 def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
                  suffix: str, kind: str | None, allowed_paths: tuple = ()) -> dict:
-    with _errors():
+    with _errors(), workspace_identity.board_aliases(state_dir):
         _validate_manifest(manifest)
         if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
             raise BoardError("INVALID_WORKSPACE", "task_id and attempt_id must be stable identities")
@@ -983,7 +993,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             directory = workspace_dir / "outputs" / (output_id + suffix)
             _mkdir(directory)
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if _identity(repository) != manifest["repositoryId"]:
+            if not workspace_identity.matches(manifest["repositoryId"], _identity(repository)):
                 raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
             output = _record(directory / "output.json") or _record(directory / "pending.json")
             if output is not None:
@@ -1543,7 +1553,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
     All Git work happens here, outside any database transaction; the caller
     rechecks owner, revision and workspace identity before recording the result.
     """
-    with _errors():
+    with _errors(), workspace_identity.board_aliases(state_dir):
         _validate_manifest(manifest)
         if action not in RESOLUTION_ACTIONS:
             raise BoardError("INVALID_WORKSPACE", "Resolution action must be restore, adopt or abandon")
@@ -1572,7 +1582,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             blocking = sorted({path for record in records for path in record.get("blockingPaths") or []})
             root = Path(manifest["checkoutRoot"])
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if _identity(repository) != manifest["repositoryId"]:
+            if not workspace_identity.matches(manifest["repositoryId"], _identity(repository)):
                 raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
             verify(manifest, require_unchanged=False)
             observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
@@ -1674,9 +1684,9 @@ def _artifact_binding(original_input, final_input, artifact):
     if not isinstance(artifact, dict) or not isinstance(artifact.get("snapshot"), dict):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed output snapshot is missing")
     repository = Path(original_input["snapshot"]["repositoryPath"])
-    if (_identity(repository) != original_input["repositoryId"]
-            or final_input["repositoryId"] != original_input["repositoryId"]
-            or final_input["checkoutId"] != original_input["checkoutId"]
+    if (not workspace_identity.matches(original_input["repositoryId"], _identity(repository))
+            or not workspace_identity.equivalent(final_input["repositoryId"], original_input["repositoryId"])
+            or not workspace_identity.equivalent(final_input["checkoutId"], original_input["checkoutId"])
             or final_input["snapshot"]["repositoryPath"] != str(repository)):
         raise BoardError("WORKSPACE_CHANGED", "The artifact input repository or checkout identity changed")
     for manifest in (original_input, final_input):
@@ -1776,10 +1786,10 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         if overlap:
             raise BoardError("INVALID_WORKSPACE", "Host paths must be separate from artifact output paths", paths=overlap[:32])
         identity = inspect(path)
-        if repository_id is not None and identity["repositoryId"] != repository_id:
+        if repository_id is not None and not workspace_identity.matches(repository_id, identity["repositoryId"]):
             raise BoardError("WORKSPACE_CHANGED", "The integration target repository changed",
                              expectedRepositoryId=repository_id, actualRepositoryId=identity["repositoryId"])
-        if checkout_id is not None and identity["checkoutId"] != checkout_id:
+        if checkout_id is not None and not workspace_identity.matches(checkout_id, identity["checkoutId"]):
             raise BoardError("WORKSPACE_CHANGED", "The integration target checkout changed",
                              expectedCheckoutId=checkout_id, actualCheckoutId=identity["checkoutId"])
         root = Path(identity["checkoutRoot"])
@@ -1924,7 +1934,7 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
     path. The caller rechecks the Git ``buddy:<allocationId>`` lock against the
     returned identity before any deletion.
     """
-    with _errors():
+    with _errors(), workspace_identity.board_aliases(state_dir):
         _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
         checkout_root = manifest["checkoutRoot"]
@@ -1934,8 +1944,8 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
             workspace_id = candidate.get("workspaceId")
             if not _workspace_identifier(workspace_id):
                 continue
-            if (candidate.get("checkoutId") != manifest["checkoutId"]
-                    or candidate.get("repositoryId") != manifest["repositoryId"]
+            if (not workspace_identity.equivalent(candidate.get("checkoutId"), manifest["checkoutId"])
+                    or not workspace_identity.equivalent(candidate.get("repositoryId"), manifest["repositoryId"])
                     or candidate.get("checkoutRoot") != checkout_root
                     or not _inside(candidate.get("path"), checkout_root)):
                 continue
@@ -1958,7 +1968,8 @@ def _allocation_refs(repository, allocation_id, manifest, retained):
     identifiers = [allocation_id, manifest["workspaceId"]]
     for candidate in _allocation_candidates(manifest, retained):
         value = candidate.get("workspaceId")
-        if (candidate.get("checkoutId") == manifest["checkoutId"] and _workspace_identifier(value)
+        if (workspace_identity.equivalent(candidate.get("checkoutId"), manifest["checkoutId"])
+                and _workspace_identifier(value)
                 and value not in identifiers):
             identifiers.append(value)
     refs = []
@@ -1985,7 +1996,7 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
     paths a board-bound Host decision already promoted on this manifest; the
     proof never reads local adoption records on its own authority.
     """
-    with _errors():
+    with _errors(), workspace_identity.board_aliases(state_dir):
         _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
         allocation = resolve_allocation(state_dir, manifest, retained)
@@ -2015,8 +2026,10 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
         except BoardError:
             result["reasons"].append("checkout-missing")
             return result
-        for field in ("checkoutRoot", "checkoutId", "repositoryId"):
-            if actual[field] != manifest[field]:
+        if actual["checkoutRoot"] != manifest["checkoutRoot"]:
+            result["reasons"].append("identity-changed")
+        for field in ("checkoutId", "repositoryId"):
+            if not workspace_identity.matches(manifest[field], actual[field]):
                 result["reasons"].append("identity-changed")
         try:
             _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
@@ -2120,7 +2133,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
     this exact allocation's path counts as gone; a Git failure with anything still
     occupying the path stays fatal.
     """
-    with _errors():
+    with _errors(), workspace_identity.board_aliases(state_dir):
         _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
         allocation = resolve_allocation(state_dir, manifest, retained)
@@ -2135,8 +2148,10 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
         if not _path_present(checkout_root):
             return removal
         actual = inspect(str(checkout_root))
-        for field in ("checkoutRoot", "checkoutId", "repositoryId"):
-            if actual[field] != manifest[field]:
+        if actual["checkoutRoot"] != manifest["checkoutRoot"]:
+            raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field="checkoutRoot")
+        for field in ("checkoutId", "repositoryId"):
+            if not workspace_identity.matches(manifest[field], actual[field]):
                 raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
         repository = Path(actual["repositoryPath"])
         record = _worktree_record(repository, checkout_root)
