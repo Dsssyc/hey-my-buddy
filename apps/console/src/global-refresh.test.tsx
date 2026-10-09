@@ -1,20 +1,26 @@
-import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { refreshVisibleReads, useGlobalRefresh } from "./global-refresh";
+import { waitForRead } from "./global-refresh";
 
-describe("global refresh", () => {
-  it("awaits all visible readers and reports a failed read", async () => {
-    const first = vi.fn(async () => {});
-    const second = vi.fn(async () => { throw new Error("时间轴读取失败"); });
-    const hidden = vi.fn(async () => {});
-    const a = renderHook(() => useGlobalRefresh(first, true));
-    const b = renderHook(() => useGlobalRefresh(second, true));
-    const c = renderHook(() => useGlobalRefresh(hidden, false));
-    await expect(refreshVisibleReads()).rejects.toThrow("时间轴读取失败");
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).toHaveBeenCalledOnce();
-    expect(hidden).not.toHaveBeenCalled();
-    a.unmount(); b.unmount(); c.unmount();
-    await expect(refreshVisibleReads()).resolves.toBeUndefined();
+describe("local overlapping read wait", () => {
+  it("waits for the existing read to settle without starting another read", async () => {
+    vi.useFakeTimers();
+    try {
+      let pending = true, finished = false;
+      const wait = waitForRead(() => pending).then(() => { finished = true; });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(finished).toBe(false);
+      pending = false;
+      await vi.advanceTimersByTimeAsync(50);
+      await wait;
+      expect(finished).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it("bounds an unresponsive existing read and returns a retryable error", async () => {
+    vi.useFakeTimers();
+    try {
+      const result = expect(waitForRead(() => true)).rejects.toThrow("现有读取尚未完成");
+      await vi.advanceTimersByTimeAsync(30000);
+      await result;
+    } finally { vi.useRealTimers(); }
   });
 });

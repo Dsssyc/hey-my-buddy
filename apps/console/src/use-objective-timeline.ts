@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
-import { useGlobalRefresh, waitForRead } from "./global-refresh";
+import { waitForRead } from "./global-refresh";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 import type { ObjectiveTimeline } from "./objective-types";
 
@@ -90,7 +90,6 @@ export function useObjectiveTimeline(api: ConsoleApi, objectiveId: string | null
       if (version === generation.current) pending.current = false;
     }
   }, [api, objectiveId]);
-  useGlobalRefresh(() => read(true), active && !!objectiveId);
 
   // A new selection resets; a visibility toggle keeps the last good data and
   // just re-reads once on return, the same retention the task history keeps.

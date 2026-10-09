@@ -153,11 +153,27 @@ function fixture(options: {
     }
     return structuredClone(state);
   });
-  const api = { snapshot, tasks, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
+  const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+    snapshot, tasks, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
     expireSession: () => { loginExpired = true; } };
+}
+
+/** Foregrounding uses the existing visibility-gated snapshot read, without a global refresh. */
+async function readSnapshotOnForeground(snapshot: ConsoleApi["snapshot"]) {
+  const calls = vi.mocked(snapshot).mock.calls.length;
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  try {
+    visibility.mockReturnValue("hidden");
+    await act(async () => { fireEvent(document, new Event("visibilitychange")); });
+    visibility.mockReturnValue("visible");
+    await act(async () => { fireEvent(document, new Event("visibilitychange")); });
+    expect(vi.mocked(snapshot).mock.calls.length).toBeGreaterThan(calls);
+  } finally {
+    visibility.mockRestore();
+  }
 }
 
 afterEach(() => { cleanup(); window.location.hash = ""; document.documentElement.dataset.theme = ""; });
@@ -281,7 +297,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The cookie expires: the next authenticated poll reports a session that
     // can no longer write. This is the security bottom line, not a handoff.
     f.expireSession();
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await readSnapshotOnForeground(f.api.snapshot);
     await waitFor(() => expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true"));
     expect(screen.queryByText("只读会话")).toBeNull();
     expect(screen.queryByText(bannerNotice)).toBeNull();
@@ -301,14 +317,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(0);
     // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "委派记录" }));
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     expect(screen.getByRole("heading", { name: "选择一项委派" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
     await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
     await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await readSnapshotOnForeground(f.api.snapshot);
     await waitFor(() => expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true"));
     expect(f.operations).toEqual([]);
   });
@@ -327,7 +343,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The next poll is a 401: the page stays browsable with the login-expired
     // banner and no single-writer copy anywhere.
     f.expireSession();
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText(/登录已失效/)).toBeTruthy();
     expect(screen.queryByText(bannerNotice)).toBeNull();
     // Discovery and saving stay disabled with no edit switch to gate them.
@@ -339,7 +355,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect((await screen.findAllByText(/暂时不能发现模型/)).length).toBeGreaterThan(0);
     // Browsing and the read-only detail keep working.
     await user.click(screen.getByRole("link", { name: "委派记录" }));
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
     await screen.findByRole("heading", { name: /只读普通任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
@@ -366,7 +382,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The next poll reports the invalid login. The staged payload must not be
     // replayed or unfrozen: its command ID and unknown-result status persist.
     f.expireSession();
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await readSnapshotOnForeground(f.api.snapshot);
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     const retained = screen.getByLabelText("家族备注") as HTMLTextAreaElement;
@@ -484,7 +500,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       expect(screen.getByRole("button", { name: "取消等待" })).toBeTruthy();
       // The queue poll's renew is answered with the 401 login-expired refusal.
       f.expireSession();
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "刷新工作台" })); });
+      await readSnapshotOnForeground(f.api.snapshot);
       for (let i = 0; i < 50 && screen.queryByRole("button", { name: "取消等待" }); i++) {
         await act(async () => { await Promise.resolve(); });
       }
@@ -529,7 +545,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const first = fixture({ records, workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={first.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("button", { name: /普通待执行任务/ });
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(screen.getByRole("button", { name: /普通待执行任务/ }));
@@ -555,7 +571,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // writes to a delegation (0.15.1 U4).
     const writer = fixture({ records, workflows });
     render(<App suppliedApi={writer.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /待协助目标/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
     const writerDetail = screen.getByRole("complementary", { name: "任务详情" });
@@ -578,7 +594,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const f = fixture({ records: [awaiting], workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /可浏览任务/ }));
     await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
@@ -617,7 +633,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.type(await screen.findByLabelText("家族备注"), "断线草稿");
 
     await user.click(screen.getByRole("link", { name: /委派记录/ }));
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
     await screen.findByRole("heading", { name: /断线可取消任务/ });
@@ -629,8 +645,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
 
     // The authenticated poll now fails; the detail stays readable and empty of
     // write controls, and no mutation is dispatched from either session state.
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(await screen.findByText(/连接中断 · 请检查本地服务并刷新/)).toBeTruthy();
+    await readSnapshotOnForeground(f.api.snapshot);
+    expect(await screen.findByText(/连接中断 · 请检查本地服务/)).toBeTruthy();
     expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.
@@ -650,7 +666,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "断线草稿");
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText(/无法连接本地黑板/)).toBeTruthy();
     const save = screen.getByRole("button", { name: "保存" });
     expect(save.getAttribute("aria-disabled")).toBe("true");

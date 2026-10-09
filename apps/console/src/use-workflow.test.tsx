@@ -96,3 +96,27 @@ describe("read-only workflow read (0.15.1 U4)", () => {
     expect(f.calls.length).toBe(before + 2);
   });
 });
+
+
+describe("U09 independent workflow cadence", () => {
+  it("keeps its existing schedule when a local detail read publishes a newer task", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      const h = renderHook(({ task }) => useWorkflow(f.api, task, f.snapshot, true), { initialProps: { task: f.task } });
+      await act(async () => {});
+      expect(f.command).toHaveBeenCalledTimes(1);
+      const timers = vi.getTimerCount();
+      h.rerender({ task: { ...f.task, revision: f.task.revision + 1, workflow: { ...f.task.workflow!, revision: 8 } } });
+      await act(async () => {});
+      expect(f.command).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(timers);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(f.command).toHaveBeenCalledTimes(2);
+      act(() => { h.result.current.reload(); });
+      await act(async () => {});
+      expect(f.command).toHaveBeenCalledTimes(3);
+      h.unmount();
+    } finally { vi.useRealTimers(); }
+  });
+});

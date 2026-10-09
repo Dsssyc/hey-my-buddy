@@ -213,3 +213,13 @@ UI-NAV首交付固定03e65b865284e7c567479e5966b89516bb2318e0、artifact7d63d0f5
 在停止的回合上scope-amend ui-nav-amend-removed-header-security-tests-r1，scopeVersion1→2，revision8→9，仅追加console-session.test.tsx、edit-mode.test.tsx，不扩大产品范围；保留登录失效闩锁、CAS草稿、写租约、迟响应及导航的全部断言，使用新的合法读取触发和所需版本API夹具。独立只读审查另确认use-task-history.retry把已加载行误当append：第一页poll/local-refresh失败后读下一页，末页无cursor时无效；这是输入已有但属于U09错误重试范围的缺口。原run continue ui-nav-continue-retry-and-existing-security-tests-r1，revision9→10，四字段/configuration全省略，要求按失败读种类/范围重试、有界分页/选择/滚动不丢、能失败的回归与变异。未整合/接受首交付。
 
 更新记录现有evaluation_history是有界20项POST读取，离页只用current=false隔离迟响应，未有HTTP AbortController；本轮保留这个既有边界，不扩展发布命令的取消语义、不宣称在途请求已中止。其他原有AbortController与范围/generation隔离仍需保留，三处局部刷新不新增长期定时读取。首交付真实私有浏览器初查显示标题按钮、窄条双向切换/手动展开、标准HTTP核对时间与顶栏去刷新成立，最终明暗宽窄与错误重试矩阵仍待返修产物。
+
+UI-NAV返修固定f8e2a493ce4c3611490dc27c313fe98f04780111、artifact6589c062-9c71-46b4-8a6a-a6c97afcef3d，累积30路径全部Git blob相符、patch SHA已核对，最新只5路径（两份旧测试、local-refresh/use-task-history测试与hook）。Host20文件303项/tsc/独立预览退出0；60组物理副本clean0→目标Assertion1，主源码哈希不变。首交付也独立50组通过；Host初始隔离副本漏带现有SVG，38已完成、12导入错误/未完成排除，补实际SVG后只重跑12，不把导入错误当目标失败；首、返修所有真实日志/指纹/中间失败保留。返修测试按失败first/append/poll及scope/before重试，首屏null/非null cursor、失败追加页遇成功poll不清除失败、成功/换scope清理、迟失败和UI重试入口各有能失败的回归。54份会话/编辑既有测试保留数量与安全断言；无新增发布或取消语义。
+
+Host完成本轮attention：私有合成看板、真实IAB，f8e2a493源码及匹配私有预览；明暗×宽窄实际1190×661/744×611、DPR约1.21，U08-after-{light,dark}-{wide,compact}与U09-after同名八图/JSON、U08-U09-after-matrix.json。窄条标题切换/展开可键盘操作，手动收起跨页/重载保留，详情自动收起关闭后恢复手动前状态；已有选择时窄条与窄屏详情顶部各有入口，故语义定位器会有两个匹配，按实际所属region操作，不把重复的可达入口当失败。U08-after-selected-goal-dark-compact补选中目标状态；原始command勾选内部执行/search plain后3条可达及详情，未新增归属，U08-after-plain-command-{list,detail}。八图中的未选择目标空白区域只是没有选中目标，未算作目标时间轴证据。
+
+三处本地刷新实际可用：全部执行记录、更新记录、宏任务与全部记录两视图打开的微任务详情；核对时间来自标准HTTP Date，缺失明确未记录，手动详情刷新前未记录→刷新后实际服务器时间，未借updatedAt或客户端时间伪造。U09-after-{records-detail-refresh,objective-detail-refresh,configuration-local-refresh}补图与私有HTTP/operation日志。已加载63/63的末页窗口刷新后仍63/63，scrollTop4535.124前后相同，U09-after-loaded-window-preserved。公开产品仅保留当前有界读/现成可见性轮询，无全局广播或新增定时器，具体隔离/迟响应/保留选择由303受影响及60变异守住。
+
+私有HTTP503故障注入实际证明重试：50/63已有行时点击重试的285ms窗口内GET /api/tasks仅limit50等首屏参数、没有before，50行保留；3/3无cursor时265ms内仍GET首屏，3行保留，分别records-retry-http-proof/null-cursor-retry-http-proof.json。连接错误点击约28ms后GET /api/console，失败时显示上次成功核对时间；同期已有3秒tasks/console轮询碰巧发生，不将整个窗口的所有请求归因于按钮，隔离由对应单元/变异确认。故障只对私有GET读取，日常服务没有故障或改动，Mode恢复normal。首次旧源码尝试重试时正常poll先清掉错误，定位器无匹配，排除，未伪称实际复现误读下一页；缺陷由固定源码/受影响测试与返修负向测试确认。真实浏览器没有单独注入追加页失败/迟响应（这些由隔离回归/变异验证），不冒充真实网络证据。
+
+NAV对外变化：两个列表标题旁“切换到…”按钮与窄条/窄屏同名入口；浏览器本地的手动列表收起习惯；“刷新全部执行记录/刷新配置更新记录/刷新微任务详情”及“重试连接”；显示真实“核对时间…”或“核对时间未记录”，去顶栏刷新；记录读取失败的重试按实际失败类型重读，已加载窗口不丢。schema不变。最终发行构建和两套完整检查尚未执行；全部整合后只在最终代码执行一次。

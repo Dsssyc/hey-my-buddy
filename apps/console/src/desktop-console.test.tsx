@@ -1,8 +1,8 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { ConsoleApi } from "./api";
+import { readVerificationText, type ConsoleApi } from "./api";
 import type { Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
 
@@ -71,7 +71,8 @@ function fixture(records: Task[] = []) {
       && (!query.query || t.task.includes(query.query)));
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
-  const api = { snapshot: vi.fn(async () => structuredClone(snapshot)), tasks, command,
+  const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
+      snapshot: vi.fn(async () => structuredClone(snapshot)), tasks, command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { snapshot, records, api, tasks, command, workflows };
@@ -80,30 +81,39 @@ function fixture(records: Task[] = []) {
 afterEach(() => { cleanup(); window.location.hash = ""; });
 
 describe("desktop console", () => {
-  it("uses one header refresh for the visible objective list and reports completion", async () => {
+  it("removes the header refresh and displays the actual snapshot verification time", async () => {
     const f = fixture();
-    const user = userEvent.setup();
-    render(<App suppliedApi={f.api} />);
-    expect(await screen.findByRole("link", { name: "Hey my buddy" })).toHaveProperty("textContent", "Hey my buddy");
+    f.api.readVerifiedAt = () => Date.parse("2026-01-02T03:04:05Z");
+    const { container } = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "还没有工作目标" });
+    expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
+    const timestamp = container.querySelector(".snapshot-read-state")!;
+    expect(timestamp.textContent).toBe(`黑板快照 · ${readVerificationText(Date.parse("2026-01-02T03:04:05Z"))}`);
+    expect(timestamp.textContent).toContain("核对时间");
+    expect(timestamp.textContent).not.toContain("未记录");
     expect(screen.queryByText("已连接")).toBeNull();
-    await waitFor(() => expect(f.api.objectives).toHaveBeenCalled());
-    const before = (f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length;
-    expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
-    const button = screen.getByRole("button", { name: "刷新工作台" });
-    await user.click(button);
-    await waitFor(() => expect((f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before));
-    await waitFor(() => expect(button.getAttribute("title")).toContain("已刷新 ·"));
   });
 
-  it("reports a visible objective read failure in the header refresh tooltip", async () => {
+  it("retries a disconnected snapshot immediately without broadcasting other reads", async () => {
     const f = fixture();
-    const user = userEvent.setup();
-    render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有工作目标" });
-    (f.api.objectives as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("合成读取失败"));
-    const button = screen.getByRole("button", { name: "刷新工作台" });
-    await user.click(button);
-    await waitFor(() => expect(button.getAttribute("title")).toContain("刷新失败：合成读取失败"));
+    vi.useFakeTimers();
+    try {
+      render(<App suppliedApi={f.api} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.getByText("黑板快照 · 核对时间未记录")).toBeTruthy();
+      (f.api.snapshot as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("合成连接中断"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(screen.getByRole("button", { name: "重试连接" })).toBeTruthy();
+      const snapshotCount = (f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length;
+      const objectiveCount = (f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length;
+      const taskCount = f.tasks.mock.calls.length;
+      await act(async () => { screen.getByRole("button", { name: "重试连接" }).click(); });
+      expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBe(snapshotCount + 1);
+      expect((f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length).toBe(objectiveCount);
+      expect(f.tasks.mock.calls.length).toBe(taskCount);
+      expect(f.command).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "重试连接" })).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
 
   it("shows the server's board-wide pending count in the top bar, never a count inferred from rows", async () => {
@@ -168,8 +178,8 @@ describe("desktop console", () => {
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "flash 家族备注");
     await user.click(screen.getByRole("button", { name: /^deepseek-v4-pro/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "pro 家族备注");
-    // A read-only refresh keeps the draft; only Save would take a lease.
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    // Snapshot polling keeps the draft; only Save would take a lease.
+    await waitFor(() => expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1), { timeout: 4500 });
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "pro 家族备注");
     // The automatic card stays program-owned and cannot be typed into.
     expect(screen.getAllByText(/原评价 deepseek-v4-pro/).length).toBeGreaterThan(0);
@@ -202,7 +212,7 @@ describe("desktop console", () => {
     const f = fixture([root, other, helper]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("button", { name: /目标 alpha/ });
     expect(f.tasks.mock.calls[0][0]).toMatchObject({ rootsOnly: true });
     expect(screen.queryByRole("button", { name: /目标 helper/ })).toBeNull();
@@ -234,7 +244,7 @@ describe("desktop console", () => {
     const f = fixture([goal("alpha"), goal("alpine")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("button", { name: /目标 alpine/ });
     expect(screen.getByText("已加载 2 个委派目标")).toBeTruthy();
     await user.click(screen.getByLabelText("显示协助任务与内部执行"));
@@ -242,36 +252,38 @@ describe("desktop console", () => {
     expect(screen.queryByText("已加载 2 个委派目标")).toBeNull();
   });
 
-  it("reloads the visible filtered history when the global refresh is pressed", async () => {
+  it("reloads the visible filtered history when the local history refresh is pressed", async () => {
     const f = fixture([goal("old")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("button", { name: /目标 old/ });
     await user.selectOptions(screen.getByLabelText("项目筛选"), "source-project");
     await screen.findByRole("button", { name: /目标 old/ });
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 240;
     f.records.unshift({ ...goal("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    await waitFor(() => expect((screen.getByRole("button", { name: "刷新工作台" }) as HTMLButtonElement).disabled).toBe(false));
+    await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "刷新全部执行记录" }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByRole("button", { name: /条新记录/ })).toBeNull();
     f.records.unshift({ ...goal("new"), createdAt: "2026-09-24T11:00:00Z" });
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(await screen.findByRole("button", { name: /目标 new/ })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
+    expect(await screen.findByRole("button", { name: /条新记录 · 回到最新/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /目标 new/ })).toBeNull();
+    expect(await screen.findByRole("button", { name: /目标 old/ })).toBeTruthy();
     expect(scroll.scrollTop).toBe(240);
     expect(screen.queryByRole("button", { name: /目标 outside/ })).toBeNull();
   });
 
-  it("loads the first matching record from the global refresh after an empty history read", async () => {
+  it("loads the first matching record from the local history refresh after an empty history read", async () => {
     const f = fixture();
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await waitFor(() => expect(f.tasks).toHaveBeenCalledTimes(1));
     await screen.findByRole("heading", { name: "没有匹配的委派" });
     f.records.push(goal("first"));
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
     expect(await screen.findByRole("button", { name: /目标 first/ })).toBeTruthy();
   });
 
@@ -279,7 +291,7 @@ describe("desktop console", () => {
     const f = fixture([goal("one"), goal("two")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
     // The delegation detail exposes no Host input or write action (0.15.1 U4).
@@ -307,7 +319,7 @@ describe("desktop console", () => {
     f.workflows.set(record.runId, value);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 historical/ }));
     const detail = screen.getByRole("complementary", { name: "任务详情" });
     await waitFor(() => expect(within(detail).getByRole("tab", { name: "产物与验收" }).getAttribute("aria-selected")).toBe("true"));
@@ -326,7 +338,7 @@ describe("desktop console", () => {
     const f = fixture([first, second]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     // 0.16 T1: rows show the task intent, never the Worker summaries.
     expect(await screen.findByRole("button", { name: /目标 first-summary/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /目标 second-summary/ })).toBeTruthy();
@@ -351,7 +363,7 @@ describe("desktop console", () => {
     f.workflows.set(record.runId, value);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 older/ }));
     const detail = screen.getByRole("complementary", { name: "任务详情" });
     // 0.16 T1: the bounded refresh carries the newest concluded summary, but

@@ -7,7 +7,6 @@ import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 import { objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
-import { refreshVisibleReads } from "./global-refresh";
 import type { ObjectiveStopResult, ObjectiveTimeline } from "./objective-types";
 
 function snapshotFixture(): Snapshot {
@@ -146,7 +145,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(true);
     await waitFor(() => expect(within(document.querySelector(".run-view")!).getByRole("tab", { name: "执行记录" })
       .getAttribute("aria-selected")).toBe("true"));
-    expect(f.api.task).toHaveBeenCalledWith("r2");
+    expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal));
     // The delegation detail carries no Host write form anymore (U4).
     expect(document.querySelector(".workflow-controls")).toBeNull();
   });
@@ -182,8 +181,8 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
     (f.api.objectives as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ objectives: [], total: 0, nextCursor: null, cursor: 41, changed: false });
-    await act(async () => { await refreshVisibleReads(); });
-    await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(2));
+    // The existing bounded periodic read is the trigger; there is no shell broadcast.
+    await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(2), { timeout: 4500 });
     expect(document.querySelector(".run-view")).toBeTruthy();
     expect(document.querySelector(".locator")).toBeTruthy();
   });
@@ -210,7 +209,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await openSpan(f, "s-r2-e1");
     await f.user.click(await screen.findByRole("tab", { name: "协作与待办" }));
     await f.user.click(await screen.findByRole("button", { name: "r3" }));
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3"));
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3", expect.any(AbortSignal)));
     const crumbs = document.querySelector(".locator .crumbs") as HTMLElement;
     expect(crumbs.textContent).toContain("补充 schema 升级离线副本的验证测试");
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
@@ -236,7 +235,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-r");
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r2"));
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal)));
     expect(f.api.task).not.toHaveBeenCalledWith("run-d02b");
     expect(screen.getByRole("tab", { name: "路由依据" }).getAttribute("aria-selected")).toBe("true");
     await screen.findByText("第一轮的路由依据");

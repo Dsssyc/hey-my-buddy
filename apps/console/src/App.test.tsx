@@ -83,6 +83,7 @@ describe("console interactions", () => {
       },
     ];
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => state),
       command: vi.fn(async () => ({})),
       task: vi.fn(async () => records[0]),
@@ -92,7 +93,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
@@ -128,6 +129,7 @@ describe("console interactions", () => {
       },
     ];
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => state),
       command: vi.fn(),
       task: vi.fn(async () => ({
@@ -146,7 +148,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /停止证据测试/ }),
@@ -160,6 +162,7 @@ describe("console interactions", () => {
   it("viewing, editing locally and switching pages never sends a write or model request", async () => {
     const state = initial();
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
@@ -168,7 +171,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
     await user.click(screen.getByRole("link", { name: "Buddy 配置" }));
     await screen.findByRole("heading", { name: "模型 1" });
@@ -196,6 +199,7 @@ describe("console interactions", () => {
   it("opens Buddy 配置 from the retired #settings and #models bookmarks and keeps 设置 at #system", async () => {
     const state = initial();
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
@@ -236,6 +240,7 @@ describe("console interactions", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),

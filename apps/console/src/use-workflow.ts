@@ -3,7 +3,6 @@ import { ApiError, errorText } from "./api";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
-import { useGlobalRefresh } from "./global-refresh";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 
 /**
@@ -35,22 +34,18 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, vis
   const csrf = snapshot.csrfToken;
   const runId = task.runId;
   const pageVisible = useDocumentVisible();
-  useGlobalRefresh(async () => {
-    setValue(parseWorkflowReply(await api.command<Workflow>("workflow_get", { runId }, csrf), runId));
-    setError("");
-  }, visible);
   useEffect(() => {
     if (!visible || !pageVisible) return;
     // React 19 cleanup prevents an older request replacing a newer snapshot.
     // https://react.dev/reference/react/useEffect#fetching-data-with-effects
     // Page Visibility stops the schedule on a hidden page and the effect re-run
-    // on return reads once immediately; the header refresh stays available.
+    // on return reads once immediately; the existing retry remains available.
     let current = true;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       // Invocation-time document check: the visibilitychange cleanup can lag
       // the actual hide, and a timer firing inside that gap must not start a
-      // GET. The explicit header refresh stays available regardless.
+      // GET. The explicit retry stays available regardless.
       if (!documentVisibleNow()) return;
       try {
         const result = parseWorkflowReply(await api.command<Workflow>("workflow_get", { runId }, csrf), runId);
@@ -60,7 +55,7 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, vis
     }
     void poll();
     return () => { current = false; clearTimeout(timer); };
-  }, [api, runId, csrf, task.revision, task.workflow?.revision, reload, visible, pageVisible]);
+  }, [api, runId, csrf, reload, visible, pageVisible]);
 
   return {
     value, error,

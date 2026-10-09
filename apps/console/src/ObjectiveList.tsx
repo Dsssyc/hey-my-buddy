@@ -1,6 +1,8 @@
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ObjectiveFilter, ObjectiveSummary } from "./objective-types";
 import { Empty } from "./ui";
+import { readVerificationText } from "./api";
 import { Popover } from "./Popover";
 import {
   objectiveStateLabel, dayClock, displayTitle, relativeTime, TASK_SOURCE_NOTE, titleLineTooltip,
@@ -8,6 +10,7 @@ import {
 
 export type ObjectiveListProps = {
   rows: ObjectiveSummary[];
+  verifiedAtMs?: number | null;
   total: number;
   loading: boolean;
   error: string;
@@ -28,6 +31,8 @@ export type ObjectiveListProps = {
   /** Focus target restored when the drawer closes. */
   railButtonRef?: React.RefObject<HTMLButtonElement | null>;
   onToggleRail?: () => void;
+  listNavigation?: ReactNode;
+  onCollapse?: () => void;
   onFilterChange: (filter: ObjectiveFilter) => void;
   onQueryChange: (query: string) => void;
   onProjectChange: (projectId: string) => void;
@@ -160,27 +165,30 @@ export function ObjectiveList(props: ObjectiveListProps) {
       return next;
     });
   }
-  if (props.rail) {
-    return <section className="panel list-panel rail-panel" aria-label="工作目标列表（已收起）">
-      <button ref={props.railButtonRef} type="button" className="rail-expand" onClick={props.onToggleRail}
-        aria-expanded={false} title="展开工作目标列表">
-        <span className="rail-text" aria-hidden="true">工作目标 ›</span>
-      </button>
-    </section>;
-  }
   function loadMore() {
     if (loading || !nextCursor || !scroll.current) return;
     scrollIntent.current = false;
     void props.onMore();
   }
   const mainRows = show === "standalone" ? standalone : show === "all" ? rows : objectives;
-  return <section className="panel list-panel" aria-label="工作目标列表"
+  return <>
+    <section className="panel list-panel rail-panel" hidden={!props.rail} aria-label="工作目标列表（已收起）">
+      {props.listNavigation}
+      <button ref={props.railButtonRef} type="button" className="rail-expand" onClick={props.onToggleRail}
+        aria-expanded={false} aria-label="展开工作目标列表" title="展开工作目标列表">
+        <span className="rail-text" aria-hidden="true">工作目标 ›</span>
+      </button>
+    </section>
+    <section className="panel list-panel" hidden={props.rail} aria-label="工作目标列表"
     onPointerEnter={() => { pointerInside.current = true; }}
     onPointerLeave={() => { pointerInside.current = false; applyIfIdle(); }}>
-    <div className="panel-toolbar"><h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2>
+    <div className="panel-toolbar">{props.listNavigation}<h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2>
+      {props.onCollapse && <button type="button" className="button small-button list-collapse"
+        title="收起工作目标列表" aria-label="收起工作目标列表" aria-expanded={true} onClick={props.onCollapse}>‹</button>}
       {reorder && visible && <button type="button" className="objective-update" title="按最近活动重新排序"
         onClick={() => { apply(); if (scroll.current) scroll.current.scrollTop = 0; }}>有更新</button>}
     </div>
+    <p className="small muted local-read-state">{readVerificationText(props.verifiedAtMs)}</p>
     <div className="list-filters">
       <div className="list-filter-row">
         <label className="search"><span className="sr-only">搜索工作目标</span><input value={props.query} maxLength={200}
@@ -248,5 +256,5 @@ export function ObjectiveList(props: ObjectiveListProps) {
       {loading && <p className="loading-row" role="status">正在读取工作目标…</p>}
       {nextCursor && <button className="load-more" disabled={loading} onClick={loadMore}>加载更早工作目标</button>}
     </div>
-  </section>;
+  </section></>;
 }
