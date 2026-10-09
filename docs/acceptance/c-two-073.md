@@ -71,3 +71,17 @@ Host 在本批私有环境装发布的 c-two 0.7.3，用 57 字符且含空格�
 1-A 基线 `861f298e`，run `a242d4a2-07d5-4b6a-ab20-7eec024a2d10`；首次路由省略四项配置，决定 `dec-5c74bf7b-49f2-461a-b7b6-ae72457ca669` 选择 ZCode / zai-api / GLM-5.3-Flash / max，同样返回供应方不可重试 429/1310，未交付代码，两层停止确认。按用户授权，原 run continue 改为 Codex / openai / gpt-6.1-sol / high，未改路由与用户配置。
 
 V-09 的连接阶段前提核对未通过，1-C 暂停等待用户选择。Host 用发布0.7.3、独立私有 <HOST_TASK_TMP>/connect-deadline/ipc 启动模拟服务，拿到就绪后只对自己持有的服务进程组 SIGSTOP；独立客户端设置该私有根，记录 before-connect 后调用 cc.connect，3 秒仍未返回，尚未执行100ms with_call_options。外层只终止这个探针自己创建的客户端组；随后 SIGCONT 自己的服务并通过 stdin 正常关闭，探针整体退出0，未调用模型、未触及日常服务与默认域。原始 stdout/stderr 和脚本留在 tmp/c073-host/connect-deadline.*。公开 cc.connect 签名仅 crm_class/name/address，ClientIPCOverrides 没有连接期限字段；现有等待线程同时覆盖连接及调用，故不能把仅业务调用期限描述为完整等价替换。不自行保留部分保护或引入其他实现，已向用户说明并询问；1-A 独立 run 继续收尾。
+
+1-A 第一份固定输出 `73d326d0`（artifact `261370ab-5755-4655-ac4a-6364ec26e5fc`，SHA256 `f2d15856bac7f0739f20c2448bd0f02bc034fd897134ba8519e97c0149b64120`）未验收。14 个改动路径均在范围内；Worker 如实报告联网/IPC/ps 沙箱限制，锁仍0.6.0。Host 在固定源码的私有副本生成验证用锁（仅 c-two 0.6→0.7.3）并完成 uv sync --frozen，参考锁作为联网解析材料交给原 Worker，实施分支未代改其锁或代码。Host 实测库支持 state0500/ipc0700 完成注册/调用，而交付把state也强制0700、将旧只读成功测试改成拒绝，属于范围内行为回归。尝试登记 rejected 被当前0.27服务以 NOT_READY 拒绝（attention边界不能直接reject）；已用原run continue 明确打回，要求保留state既有owner-private语义、端点仍0700、恢复成功用例、交付锁和确切任务根。continue省略四项配置，无新run；独立的1-A返修继续，1-C仍暂停。
+
+1-A 首份输出的真实聚焦批次（固定生产代码，测试依赖使用Host生成的新锁）运行48项，47通过、1失败，退出1、87.039秒；不改写失败。失败为 RealDaemonControlTests 健康等待超时。Host独立复核 private_environment(work, BUDDY_STATE_DIR=work/state) 实际返回 BUDDY_STATE_DIR=work，原因是改用 support._child_environment 后它强制采用第一参数作状态根：服务端点和两个supervisor落在work，测试仍观察/清理work/state。该用例原收尾删除了自己的work后留下两个仅本测试创建的supervisor；Host只对 <HOST_TASK_TMP>/1a-native-first/<exact-fixture>/workers/local 与 local-2 写 stop.request，确认两进程不再存在，无信号/删除公共目录或日常Worker。确切路径和PID仅存tmp/c073-host/1a-first-survivor-stop.json；此夹具接线/收尾缺陷须原1-A继续修，不由Host代改。其他检查清理测试按预期制造的未完成证据也保留，不能把它们解释为本批生产残留。
+
+1-A 第二份固定输出 `6853febb`（artifact `5a1a2b86-ee53-481b-92eb-7d00f4a501f8`，SHA256 `82f8ba67baa86f59fbf00094edd7e2a03bf6e151bc7f66e6eb41ba9a8d3f7c8a`）已恢复只读 state 原语义并由 Worker 交付新锁；仍未验收，原run continue修上述daemon夹具缺陷，不指定四项配置。Host 在固定副本独立跑两个真实目标与 transport 整文件29项，退出0、2.015秒；删除根setter后真实原生回读为私有fallback而非state/ipc，目标assertEqual失败exit1；移除pool_enabled=False后真实outgoing SHM used_bytes=268,455,936，目标assertEqual(used,0)失败exit1。两变异均在各自私有域，不碰公共命名空间，不用CoreError当防护证据。
+
+V-06 的私有准备：第二份固定产物执行 uv build 成功生成 wheel/sdist；install.test_packaging 与 install.test_runtime 共44项退出0、42.818秒。另在本批自建的私有wheel环境，从该锁的 uv export 用 --require-hashes 安装10个依赖，读回 c-two0.7.3、pydantic2.13.5，其余原锁版本保持；没有安装日常运行时。此时1-A第三回合仍修夹具，部分产物未整合，不能把这些验证称为整批完成。
+
+1-A 最终固定输出 `552ea251`（artifact `5c67e96f-90da-4bff-b201-18515aec15ac`，SHA256 `78dd556eb338a9380a528144998ef4fe861b1b4354d99da560979842075b461b`）15个路径均在范围内，已核对源补丁、代码与库公开接口。Host独立跑 RPC、C-Two服务、transport、workspace API、checks cleanup/parallel 共82项，退出0、54.630秒；原48项失败保留。真实daemon满等待槽时 health/renew/cancel/result分别0.115/0.009/0.015/0.018秒，waits3.559秒；自身daemon/supervisor合作停止，无该夹具进程残留。检查清理三个用例故意构造的未完成状态及证据是预期行为。生产源码与上一固定输出一致，既有44项打包/运行时和wheel/sdist/按锁安装证据继续适用；已核对私有wheel的metadata与其内置uv.lock依赖为c-two0.7.3，安装位置只在Host任务根。
+
+Host从最终固定输出重新建立三份变异副本：去掉私有根setter，原生回读目录assertEqual失败；去掉关闭池配置，used_bytes=268,455,936而非0，assertEqual失败；把daemon夹具重新改成work覆盖state，实际Popen env根assertEqual失败。三项各exit1，正常82项exit0，不用库异常代替断言。第一次变异工具把源码副本与运行目录同名导致FileExistsError，尚未执行测试；保留该工具失败后换独立运行目录，未删文件绕过，也未算作防护证据。
+
+编号集合：起点3230→当前3248，202模块、加载错误0、无重复编号；未变3223，3个模块内改名、4个因旧池假设退出的用例、22个实际新增（包含0-A两项）。三改名及四删除理由见1-A记录，原始清单/集合差保存在tmp/c073-host与Host私有根；不把加载清单当作3248项实际运行结果。全部其他源码与文档的原测试编号保留。
