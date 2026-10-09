@@ -1,6 +1,6 @@
 # DSH 原生续接：执行计划与验收记录
 
-当前整合状态：第一部分 C1/C2/C3 已内部验收并回收；R1 固定 da175238 已独立核对、整合至 51a17bd 并按确切路径回收。R2 最新固定 1f87fe8f、R3 最新固定 7f5e21a3 已独立核对并逐文件整合；角色旧断言的范围外适配由 Host 登记如下。付费冒烟仍未授权、未运行，产品能力声明为 false，完整检查按计划留到真实核对和启用后的最终代码。
+当前整合状态：两部分已完成；C1/C2/C3 与 R1/R2/R3 全部已内部验收、整合并回收。本次获批的两个真实 DSH 回合已独立核对，产品 native-session 能力已启用。最终代码 a8bb2461 的完整检查默认四个 worker，退出 0；3,116 项、196 个文件（1 项既有跳过）。仅保留实施检出与被忽略 tmp/ 内的原始证据，停止等 Claude Code Host 外部验收；不推送、不安装或升级日常运行时。
 
 Host 公共接线登记：独立诊断证明旧 DSH 回合上报 storageOwner=buddy-attempt 时，在候选能力开启后仍被共同判定选为 native-session，随后只能在原生模块因缺少 goal binding 失败。为满足升级后的重建规则，沿用既有 native_home_changed 判断，将原 Codex 的 buddy-goal 归属条件同时用于 DSH；仍用 private-native-home-required 原因，没有新增选择器、CLI 或 schema，其他三个 harness 的判断条件不变。该公共文件不在 R2/R3 写入范围，由 Host 整合；R3 将补新目录的正向事实与旧目录的重建断言，并去掉永久固定能力 false 的测试。原基线诊断失败与各交付初版结论均留存。
 
@@ -120,3 +120,11 @@ Host 范围外 fixture 整合：test_workflow_worker 两个旧 binding/resumable
 完整检查首轮与范围外整合修正：37b608c0 上按默认并行数运行 uv run --frozen python -m hey_my_buddy.cli.checks，退出 1、502.393 秒，196 文件中两份失败：buddy.harnesses.test_adapter_usage 与 test_private_adapter_invariants。它们不在 R2/R3 微任务范围，整合后才与新布局相遇：usage 的两个变体 shim 仍去 DSH_HOME/sessions 改记录，线程找不到已搬到 goal/sessions 的文件并令假程序 prompt 超时；另三处断言还要求记录在 attempt 私有根、或 nativeRoot/dsh-home/sessions 存在。这不是已登记的取消/并行数负载偶发，独立重跑仍同样失败；未将首轮改记通过。Host 修范围外两个测试文件：shim 复用既有 sessions_dir；记录断言按真实 native_root 的同微任务目标位置；DSH_HOME 断言按实际请求 invocationRoot；确认记录在 goal 内且清理本尝试凭据后原字节保留。其余 harness 的测试分支不改。27 项聚焦通过；将公共 persistence root 单点错指回 attempt DSH_HOME 后，两个迁移测试均实际断言失败（两个测试、三处子用例断言），恢复原件 27 项仍通过。
 
 新增编号改名登记：buddy.harnesses.test_adapter_usage.DshUsageContractTests.test_the_run_reads_only_its_attempt_private_session_record → test_the_run_reads_only_its_task_private_session_record，仅此一项改名、无新增或删除语义。生产源码及真实两回合证明不因这次测试整合而改变；没有追加模型调用。下一轮完整检查针对修正后的固定提交，保留首轮日志与退出 1，仍使用默认并行数。
+
+最终整步检查：代码提交 a8bb24617dec8cfd3d30101559c5383067d41647，命令 uv run --frozen python -m hey_my_buddy.cli.checks，无 --jobs 且未设置 BUDDY_CHECKS_JOBS，运行器按默认四个 worker 执行。退出码 0，577.359 秒，3,116 项（1 项既有 skip）、196/196 文件通过，检查运行器自己创建的私有根正常收尾。此次没有并行/取消负载偶发，前一次目录迁移失败的退出 1 不改写、不并入通过。该命令是仓库规定的完整检查，raw 日志及结果分别在 tmp/dsh-native-resume/<phase>/final-full-check2.log 与 -result.json。其后只改记录，不重跑完整检查，只按要求运行仓库卫生。
+
+最终编号对照：相对输入 core 的原 3,049 个编号，第一部分的变化见 C1/C2/C3 与 cleanup-id-accounting；相对第一部分的 3,066 个编号，最终 3,116，3,063 项未变集合相等，三项被移除的旧编号均为明确一一对应的改名（R2 两项与此次 task-private 用量一项），新增 53 项含这三个改名新编号，装载错误 0；原始逐项清单与新增/改名差分放 tmp/，模块从 189 经第一部分 192 到最终 196。未缩减验证范围。
+
+最终清理与交接：C1/C2/C3/R1/R2/R3 的受管检出与各短根已按自身登记路径回收；Host 本次创建的唯一审查/检查短根及已运行的私有探针短根，在完整检查结束、两层停止证据确认、原始文件与 SHA 清单留存后，分别以一个确切路径整体删除，实际根均不存在。没有通配符删除，没有按名称/日期/PID 推断归属，没有触及其他会话、分支/标签/stash 或日常数据。保留探针的两次实际请求/结果、签收/问询/停止 JSON 与唯一原始 zstd 会话记录到本检出被忽略 tmp/，未复制或读取用户凭据文件。实施分支仍为 socu/dsh-native-resume，供外部验收，未推送。
+
+对外可见变化供 Claude Code Host 维护文档：DSH 符合共同资格时原生恢复同一微任务会话，旧 attempt 私有存储会以 private-native-home-required 重建；会话共享 goal 根，配置/启动补丁/凭据控制仍尝试私有且沿原路径由 DSH 读取用户设置与凭据；恢复用量只计有证明的新增段，缺失记未知；选定原生恢复后的不存在/拒绝/身份不符明确失败、没有自动新建回退。完成、问询、活动、C-Two 及两个始终关闭的启动项已实际工作。另三个 harness、快速/审阅、公开 CLI/schema、Host 所有权文档与日常安装未改。新增公共格式的未使用字段/类/参数为零；新增内部类型/参数有生产调用，三个私有证据输出键的业务读取边界在上文如实列出。
