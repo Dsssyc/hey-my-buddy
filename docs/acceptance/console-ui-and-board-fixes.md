@@ -159,3 +159,7 @@ UI-FRAME 用户授权后的 reroute 仍选 zcode/zai-api/GLM-5.3-Flash/max，原
 UI-FRAME DSH输出因越界修改Host步骤记录而封存失败。完整观察源码/越界文件/材料已保留review-ui-frame/round4-scope-failed；Host用workspace-resolve restore（ui-frame-restore-outside-scope-record-r1，conflict wsc-ab045d89-caf6-4c3e-8ba4-d13897971eeb）登记并精确恢复该文档，得到允许范围3文件固定829582e1e3a5daa1366786cd2a1fb211ad21a1ba、artifact9d55963d-1fdc-43db-addb-c758e636d531。95项/7文件Host测试退出0，私有Vite预览构建退出0，未写分发资产；真实Chrome1512×805/DPR2仍失败：marker中心第一项wait，点击✕选择wait，failureSelected=false，父transform仍translateY。截图/JSON为screenshots/U02-rejected-frame-*，不能计改后验收。Source3blob匹配已核对，原声明字符串测试不足。
 
 Host原run acknowledge/rejected（ui-frame-reject-layer-context-and-scope-r1，revision19）后，按用户后补“可以用codex”的具体配置授权用完整codex/openai/gpt-6.1-sol/high在原run继续（ui-frame-continue-codex-user-authorized-repair-r1，revision20），目录enabled/available、quotaExhausted=false、家族active0/limit3，顶层reason登记；这是用户后补允许Codex的例外，不能把它说成一般退回都可指定配置。要求修正父层叠上下文与真实点击、补能失败的回归、承认越界且不再写文档；范围仍8前端路径，原失败与未验收事实保留，未安装/操作日常进程或登录。
+
+UI-PREF（U01/U04/U06）run ffa427f6-dcd2-4346-bd9a-54b5010549af 已以60b55780固定输入路由提交，23精确路径，首次adapter/provider/model/effort/configuration全部省略；原宏任务/hostId保持。版本只读路由与Api/types由它独占，UI-FRAME八路径与它不共写；专用monitor等待固定边界。后续TIME/NAV只在相关前序验收后修改共享文件，完整检查仍未运行。
+
+固定FRAME真实浏览器预览的导航更正：Chrome自动goto57155被ERR_BLOCKED_BY_CLIENT拒绝；遵照工具的原生替代操作，在自有私有页窗口地址栏导航。第一次typeText丢失冒号、URL不正确，随后用AX setValue写精确URL成功加载，没有改变扩展/安全/网络设置，也没有绕过证书警告。私有预览PID70853、源829582e1、Popen/model0；旧改前03保持用于对照，均独立私有根。此次预览只证明退回版本的失败，不计最终图或最终构建产物。
