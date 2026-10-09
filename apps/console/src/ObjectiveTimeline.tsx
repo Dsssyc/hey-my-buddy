@@ -786,7 +786,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       const solidShare = Math.min(100, solidWidth / Math.max(width, 0.3) * 100);
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="solid" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <span className="solid" style={{ width: `${solidShare}%` }} aria-hidden="true" />
+        <span className="sp-text sp-solid-text" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
         <i className="end-mark warn" style={{ left: `calc(${solidShare}% - 8px)` }} aria-hidden="true">?</i>
         <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 ? "结束未确认" : ""}</span>
       </button>;
@@ -880,8 +881,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       onDoubleClick={() => {
                         if (single) props.onOpenItem(single);
                       }}>
-                      <span aria-hidden="true">{glyph.glyph}</span>
-                      {glyph.count > 0 && <sup className="mk-count" aria-hidden="true">{glyph.count}</sup>}
+                      <span className="tl-mark-text" aria-hidden="true">{glyph.glyph}
+                        {glyph.count > 0 && <sup className="mk-count">{glyph.count}</sup>}
+                      </span>
                     </button>;
                   })}
                   {!hidden && active && openClusterView && openClusterView.items.length > 1 && <MarkerPopover
@@ -948,7 +950,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       className={"tl-item flag " + (row.acceptanceVerdict === "rejected" ? "reject" : "accept") + (settleSelected ? " selected" : "") + (runSelected ? " run-member" : "")}
                       style={{ left: `${settleLeft}%` }} data-x={settleLeft}
                       tabIndex={focusKey === settle.key ? 0 : -1} aria-label={itemAria(settle)} title={itemAria(settle)}
-                      {...itemHandlers(settle.key)}>{row.acceptanceVerdict === "rejected" ? "!" : "✓"}</button>}
+                      {...itemHandlers(settle.key)}><span className="tl-mark-text" aria-hidden="true">{row.acceptanceVerdict === "rejected" ? "!" : "✓"}</span></button>}
                   </div>
                 </div>;
               })}

@@ -340,7 +340,10 @@ button.tl-label:hover { background: var(--subtle); }
 .new-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); animation: tl-new-fade 3s ease-out forwards; }
 @keyframes tl-new-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 .trunc-chip { font-size: 10px; font-weight: 500; color: var(--warning); }
-.tl-track { position: relative; min-width: 0; }
+/* Spans must not establish stacking contexts: their backgrounds stay below
+   every span's marks and text, even while selected, hovered or focused. Only
+   the pointer-transparent decoration rises to the interaction layer. */
+.tl-track { position: relative; min-width: 0; --tl-layer-detail: 1; --tl-layer-text: 2; --tl-layer-interaction: 3; }
 .tl-row > .tl-track { z-index: 2; }
 .tl-overlay { position: absolute; top: 0; bottom: 0; left: var(--label-w); right: 0; pointer-events: none; z-index: 1; }
 .fold-band { position: absolute; top: 0; bottom: 0; border-inline: 1px dashed var(--line-strong); background: repeating-linear-gradient(90deg, transparent 0 7px, var(--line) 7px 8px), var(--subtle); }
@@ -355,25 +358,47 @@ button.tl-label:hover { background: var(--subtle); }
 .now-chip { position: absolute; right: 3px; bottom: 3px; padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 3; }
 /* Track items (spans, markers, flags) sit on the track; row labels keep their
    sticky grid placement and are never pulled out of the row by this rule. */
-.tl-track > .sp, .tl-track > .mk, .tl-track > .flag { position: absolute; top: 50%; transform: translateY(-50%); }
+.tl-track > :is(.sp, .mk, .flag) { position: absolute; top: calc(50% - var(--tl-item-height) / 2); }
 .tl-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.sp { height: 22px; min-width: 4px; padding: 0 6px; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; text-align: left; white-space: nowrap; overflow: visible; }
-.sp-text { display: block; overflow: hidden; text-overflow: ellipsis; position: relative; }
-.sp.queue { height: 8px; padding: 0; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--line-strong); }
-/* A short routing hit area can overlap the next execution bar at fit zoom. */
-.sp.routing { height: 22px; padding: 0; border: 1px solid var(--line-strong); color: var(--ink); z-index: 1; }
-.sp.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); color: var(--warning); }
-.sp.wait.open { border-right: 0; border-radius: 3px 0 0 3px; }
-.sp.wait.cancelled { border-color: var(--muted); color: var(--muted); }
+.tl-track > :is(.sp, .mk, .flag):focus-visible { outline: none; }
+/* The shape layer deliberately paints in the DOM order browsers give positioned
+   boxes: a later span's shape can never cover an earlier span's end mark or
+   text, because they paint in the shared detail and text layers above shapes. */
+.sp { --tl-item-height: 22px; display: flex; align-items: center; height: var(--tl-item-height); min-width: 4px; padding: 0; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; line-height: var(--tl-item-height); text-align: left; white-space: nowrap; overflow: visible; }
+/* Text on its own layer: readable over every later span, while the geometry
+   stays the percentage width alone. */
+.sp-text { display: block; pointer-events: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; position: relative; z-index: var(--tl-layer-text, 2); }
+.sp.queue { --tl-item-height: 8px; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); }
+.sp::before { content: ""; position: absolute; inset: 0; box-sizing: border-box; border-radius: inherit; pointer-events: none; }
+.sp.queue::before, .sp.routing::before { border: 1px solid var(--line-strong); }
+/* Failed routing retains its established readable minimum; its cross uses the
+   mark layer without lifting the overlapping routing background. */
+.sp.routing { color: var(--ink); }
+/* Borders are decorations inside the recorded geometry, so even a routing
+   double border cannot inflate a short span or its hit target. */
+.sp.wait { background: var(--warning-wash); color: var(--warning); }
+.sp.wait::before { border: 1.5px dashed var(--warning); }
+.sp.wait.open { border-radius: 3px 0 0 3px; }
+.sp.wait.open::before { border-right: 0; }
+.sp.wait.cancelled { color: var(--muted); }
+.sp.wait.cancelled::before { border-color: var(--muted); }
 .sp.failed { box-shadow: 0 0 0 1.5px var(--danger); }
 .sp.exec.cancelled { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 42%, transparent) 0 2px, transparent 2px 6px); }
 .sp.striped { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 38%, transparent) 0 1.5px, transparent 1.5px 5px); }
 .sp.running { background: linear-gradient(90deg, var(--c) 72%, color-mix(in srgb, var(--c) 40%, transparent)); }
-.sp.unknown { background: transparent; border: 1.5px dotted var(--c); color: var(--ink); padding: 0; }
-.sp.unknown .solid { position: absolute; inset: -1.5px auto -1.5px -1.5px; background: var(--c); border-radius: 2px; color: var(--on-cfg); padding: 0 6px; line-height: 22px; overflow: hidden; }
+/* Unknown-stop geometry is unchanged; the solid shape and its label are
+   siblings so the shape cannot carry text above other marks. */
+.sp.unknown { background: transparent; color: var(--ink); }
+.sp.unknown::before { border: 1.5px dotted var(--c); }
+.sp.unknown .solid { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 2px; pointer-events: none; }
+.sp-solid-text { position: absolute; inset: 0 auto 0 0; padding: 0 6px; line-height: 22px; color: var(--on-cfg); }
 .sp.unknown .sp-tail { color: var(--muted); font-size: 10px; line-height: 20px; }
-.sp.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
-.sp.failed.selected { box-shadow: 0 0 0 1.5px var(--danger), 0 0 0 3px var(--surface), 0 0 0 5px var(--focus); }
+.sp::after, .mk::after, .flag::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: var(--tl-layer-interaction, 3); }
+.sp.run-member::after, .flag.run-member::after { box-shadow: 0 0 0 1px var(--focus); }
+.sp.selected::after, .mk.selected::after, .flag.selected::after { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
+.sp.failed.selected::after { box-shadow: 0 0 0 1.5px var(--danger), 0 0 0 3px var(--surface), 0 0 0 5px var(--focus); }
+.sp:hover::after, .mk:hover::after, .flag:hover::after { outline: 1px solid var(--line-strong); outline-offset: 2px; }
+.sp:focus-visible::after, .mk:focus-visible::after, .flag:focus-visible::after { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* State changes keep the routing texture shared with the legend. */
 .sp.routing.review.running, .sp.routing.review.failed, .sp.routing.review.cancelled, .sp.routing.review.unknown {
   background-color: var(--subtle);
@@ -384,34 +409,42 @@ button.tl-label:hover { background: var(--subtle); }
   background-color: var(--subtle);
   background-image: repeating-linear-gradient(90deg, var(--muted) 0 1px, transparent 1px 5px);
 }
-.sp.routing.running { border-style: double; border-width: 3px; }
-.sp.routing.failed { min-width: 14px; border-color: var(--danger); }
+/* An inset outline keeps the double stroke inside even the 4px minimum. */
+.sp.routing.running::before { border: 0; outline: 3px double var(--line-strong); outline-offset: -3px; }
+.sp.routing.failed { min-width: 14px; }
 .sp.routing.fallback { min-width: 24px; }
+.sp.routing.failed::before { border-color: var(--danger); }
 .sp.routing.fallback.failed .routing-cross { right: 12px; }
-.sp.routing.cancelled { border: 1.5px dashed var(--muted); }
-.sp.routing.unknown { border: 1.5px dotted var(--line-strong); }
+.sp.routing.cancelled::before { border: 1.5px dashed var(--muted); }
+.sp.routing.unknown::before { border: 1.5px dotted var(--line-strong); }
 .swatch.routing { position: relative; border: 1px solid var(--line-strong); }
 .swatch.routing.running { border-style: double; border-width: 3px; }
 .swatch.routing.failed { border-color: var(--danger); }
 .swatch.routing.cancelled { border: 1.5px dashed var(--muted); }
 .swatch.routing.unknown { border: 1.5px dotted var(--line-strong); }
-.routing-cross { position: absolute; inset: 0; pointer-events: none; }
+.routing-cross { position: absolute; inset: 0; z-index: var(--tl-layer-detail, 1); }
 .routing-cross::before, .routing-cross::after {
   content: ""; position: absolute; top: 50%; left: 50%; width: 9px; height: 1px;
   background: var(--danger); transform: translate(-50%, -50%) rotate(45deg);
 }
 .routing-cross::after { transform: translate(-50%, -50%) rotate(-45deg); }
-.routing-fallback-mark { position: absolute; top: -8px; right: -5px; min-width: 13px; height: 13px; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--surface); color: var(--ink); font-size: 11px; font-style: normal; line-height: 11px; text-align: center; pointer-events: none; z-index: 2; }
-.end-mark { position: absolute; top: -7px; right: -7px; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid currentColor; background: var(--surface); font-size: 9px; font-weight: 700; line-height: 12px; text-align: center; font-style: normal; z-index: 1; }
+/* A retired-history defect mark also lifts above the shape layer. */
+.routing-fallback-mark { position: absolute; top: -8px; right: -5px; min-width: 13px; height: 13px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--surface); color: var(--ink); font-size: 11px; font-style: normal; line-height: 11px; text-align: center; z-index: var(--tl-layer-detail, 1); }
+/* End marks share the track detail layer and keep pointer hits on their owning
+   button. The animated pulse is visual only. */
+.end-mark { position: absolute; top: -7px; right: -7px; width: 15px; height: 15px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid currentColor; background: var(--surface); font-size: 9px; font-weight: 700; line-height: 12px; text-align: center; font-style: normal; z-index: var(--tl-layer-detail, 1); }
 .end-mark.bad { color: var(--danger); } .end-mark.muted { color: var(--muted); } .end-mark.warn { color: var(--warning); }
-.pulse { position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--c); animation: tl-pulse 1.6s ease-in-out infinite; }
+.pulse { position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--c); animation: tl-pulse 1.6s ease-in-out infinite; pointer-events: none; z-index: var(--tl-layer-detail, 1); }
 @keyframes tl-pulse { 50% { transform: scale(1.7); opacity: .35; } }
-.mk, .flag { width: 18px; height: 18px; margin-left: -9px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 16px; text-align: center; }
-.mk.accept, .flag.accept { color: var(--accent); border-color: var(--accent-line); }
-.mk.reject, .flag.reject { color: var(--danger); border-color: var(--danger-line); }
-.mk.cancel { color: var(--danger); border-color: var(--danger-line); }
-.mk.decide { color: var(--warning); border-color: var(--warning-line); }
-.mk.cluster { font-weight: 700; background: var(--subtle); }
+/* Event markers and acceptance flags stay above the bars they annotate. */
+.mk, .flag { --tl-item-height: 18px; width: 18px; height: var(--tl-item-height); margin-left: -9px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font-size: 10px; line-height: 16px; text-align: center; }
+.mk::before, .flag::before { content: ""; position: absolute; inset: 0; box-sizing: border-box; border: 1px solid var(--tl-mark-border, var(--line-strong)); border-radius: inherit; background: var(--tl-mark-bg, var(--surface)); pointer-events: none; z-index: var(--tl-layer-detail, 1); }
+.tl-mark-text { display: block; position: relative; padding: 1px; z-index: var(--tl-layer-text, 2); }
+.mk.accept, .flag.accept { color: var(--accent); --tl-mark-border: var(--accent-line); }
+.mk.reject, .flag.reject { color: var(--danger); --tl-mark-border: var(--danger-line); }
+.mk.cancel { color: var(--danger); --tl-mark-border: var(--danger-line); }
+.mk.decide { color: var(--warning); --tl-mark-border: var(--warning-line); }
+.mk.cluster { font-weight: 700; --tl-mark-bg: var(--subtle); }
 .flag { border-radius: 50%; font-weight: 700; }
 .tl-state { padding: 28px 20px; color: var(--muted); font-size: 13px; }
 .tl-state[role="alert"] { color: var(--danger); }
@@ -494,10 +527,7 @@ button.tl-label:hover { background: var(--subtle); }
 .marker-popover-main > .muted { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .marker-popover-row .button { margin-right: 6px; flex-shrink: 0; }
 .marker-popover-hint { margin: 0; padding: 4px 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
-.mk.open { outline: 2px solid var(--focus); outline-offset: 1px; }
-.mk.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
-/* Row-level selection: every span and flag of the selected run gets a thin outline. */
-.sp.run-member, .flag.run-member { box-shadow: 0 0 0 1px var(--focus); }
+.mk.open::after { outline: 2px solid var(--focus); outline-offset: 1px; }
 .tl-label.opened-run { box-shadow: inset 3px 0 var(--accent); }
 .opened-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); }
 .tl-entry.opened { box-shadow: inset 3px 0 var(--accent); background: var(--subtle); }
@@ -929,7 +959,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .timeline-view-switch .button[aria-pressed="true"] { color: var(--accent); background: var(--accent-wash); }
 .timeline-view-switch .button + .button { border-left: 1px solid var(--line); }
 .fold-button { top: 5px; bottom: auto; height: 28px; min-width: 24px; flex-direction: row; padding: 0; font-size: 15px; line-height: 1; }
-.sp:hover, .mk:hover, .flag:hover { filter: brightness(1.16); outline: 1px solid var(--line-strong); outline-offset: 2px; }
 .inspector-dock-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-dock-toggle { min-width: 28px; min-height: 28px; font-size: 16px; }
 .timeline-view > .inspector-separator { flex-shrink: 0; }
