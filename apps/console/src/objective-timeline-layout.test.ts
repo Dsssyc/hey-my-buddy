@@ -111,7 +111,7 @@ describe("objective timeline layout occupancy", () => {
     expect(layout.startMs).toBe(BASE);
     expect(layout.endMs).toBe(BASE + 40 * MINUTE);
     expect(layout.gaps.map(bounds)).toEqual([[MINUTE, 31 * MINUTE]]);
-    expect(layout.gaps[0]!.collapsed).toBe(false);
+    expect(layout.gaps[0]!.collapsed).toBe(true);
   });
 
   it("keeps an unconfirmed finished attempt occupied through observation", () => {
@@ -273,78 +273,35 @@ describe("objective timeline layout occupancy", () => {
     expect(layout.endMs).toBe(BASE + 30 * MINUTE);
     expect(layout.gaps.map(bounds)).toEqual([[10 * MINUTE, 20 * MINUTE]]);
     expect(layout.canFold).toBe(true);
-    expect(layout.gaps[0]!.collapsed).toBe(false);
+    expect(layout.gaps[0]!.collapsed).toBe(true);
   });
 });
 
 describe("objective timeline idle folding", () => {
-  it("folds only empty intervals strictly longer than 30 minutes", () => {
-    const exactly = createTimelineLayout(twoAttempts(TIMELINE_FOLD_THRESHOLD_MS));
+  it("folds only empty intervals strictly longer than five minutes", () => {
+    expect(TIMELINE_FOLD_THRESHOLD_MS).toBe(5 * MINUTE);
+    const exactly = createTimelineLayout(twoAttempts(5 * MINUTE));
     expect(exactly.gaps).toHaveLength(1);
     expect(exactly.gaps[0]!.collapsed).toBe(false);
     expect(exactly.canFold).toBe(true);
 
-    const longer = createTimelineLayout(twoAttempts(TIMELINE_FOLD_THRESHOLD_MS + 1));
+    const longer = createTimelineLayout(twoAttempts(5 * MINUTE + 1));
     expect(longer.gaps).toHaveLength(1);
     expect(longer.gaps[0]!.collapsed).toBe(true);
   });
 
-  it("restores full time width for an expanded gap id without moving the id", () => {
-    const gapMs = 2 * HOUR;
-    const folded = createTimelineLayout(twoAttempts(gapMs));
-    const gap = folded.gaps[0]!;
-    expect(gap.collapsed).toBe(true);
-
-    const expanded = createTimelineLayout(twoAttempts(gapMs), new Set([gap.id]));
-    expect(expanded.gaps[0]!.id).toBe(gap.id);
-    expect(expanded.gaps[0]!.collapsed).toBe(false);
-    expect(width(expanded.gaps[0]!)).toBeGreaterThan(width(gap));
-    // Unfolded width follows real duration: 10min + 120min + 10min over the domain.
-    expect(width(expanded.gaps[0]!)).toBeCloseTo((gapMs / (gapMs + 20 * MINUTE)) * 100, 6);
-    expect(expanded.gaps[0]!.fromPercent).toBeGreaterThan(0);
-  });
-
-  it("caps each folded break at 3% and all folded breaks at 40%", () => {
-    const spans: TimelineSpan[] = [];
-    for (let index = 0; index < 21; index += 1) {
-      spans.push(span({ spanId: `s${index}`, startAt: at(index * 61 * MINUTE), endAt: at(index * 61 * MINUTE + MINUTE) }));
-    }
-    const layout = createTimelineLayout(timeline({ spans }));
-    const folded = layout.gaps.filter(gap => gap.collapsed);
-    expect(folded).toHaveLength(20);
-    for (const gap of folded) expect(width(gap)).toBeLessThanOrEqual(3 + 1e-9);
-    const total = folded.reduce((sum, gap) => sum + width(gap), 0);
-    expect(total).toBeCloseTo(40, 6);
-    expect(layout.position(layout.endMs)).toBe(100);
-  });
-
-  it("uses the full 3% per break when the 40% budget is not binding", () => {
-    const spans: TimelineSpan[] = [];
-    for (let index = 0; index < 10; index += 1) {
-      spans.push(span({ spanId: `t${index}`, startAt: at(index * 61 * MINUTE), endAt: at(index * 61 * MINUTE + MINUTE) }));
-    }
-    const layout = createTimelineLayout(timeline({ spans }));
-    const folded = layout.gaps.filter(gap => gap.collapsed);
-    expect(folded).toHaveLength(9);
-    for (const gap of folded) expect(width(gap)).toBeCloseTo(3, 9);
-    expect(folded.reduce((sum, gap) => sum + width(gap), 0)).toBeCloseTo(27, 6);
-  });
-
-  it("keeps one break expanded while its sibling stays folded", () => {
+  it("keeps deterministic fixed-break identities across refreshes and sibling gaps", () => {
     const spans = [
       span({ spanId: "a", startAt: at(0), endAt: at(10 * MINUTE) }),
-      span({ spanId: "b", startAt: at(10 * MINUTE + 2 * HOUR), endAt: at(20 * MINUTE + 2 * HOUR) }),
-      span({ spanId: "c", startAt: at(20 * MINUTE + 4 * HOUR), endAt: at(30 * MINUTE + 4 * HOUR) }),
+      span({ spanId: "b", startAt: at(130 * MINUTE), endAt: at(140 * MINUTE) }),
+      span({ spanId: "c", startAt: at(260 * MINUTE), endAt: at(270 * MINUTE) }),
     ];
-    const folded = createTimelineLayout(timeline({ spans }));
-    expect(folded.gaps.map(gap => gap.collapsed)).toEqual([true, true]);
-
-    const expanded = createTimelineLayout(timeline({ spans }), new Set([folded.gaps[0]!.id]));
-    expect(expanded.gaps[1]!.collapsed).toBe(true);
-    expect(width(expanded.gaps[1]!)).toBeCloseTo(3, 9);
-    // Domain 270min: 30min occupied + 120min expanded gap stay linear over the remaining 97%.
-    expect(width(expanded.gaps[0]!)).toBeCloseTo((120 / 150) * 97, 6);
-    expect(expanded.gaps[0]!.fromPercent).toBeCloseTo((10 / 150) * 97, 6);
+    const first = createTimelineLayout(timeline({ spans }));
+    const refreshed = createTimelineLayout(timeline({ spans: [...spans].reverse(), observedAt: at(4 * HOUR) }));
+    expect(first.gaps.map(gap => gap.collapsed)).toEqual([true, true]);
+    expect(refreshed.gaps).toEqual(first.gaps);
+    expect(width(first.gaps[0]!)).toBeCloseTo(width(first.gaps[1]!), 8);
+    expect(first.position(first.endMs)).toBe(100);
   });
 
   it("keeps the real scale when nothing unfolded remains to fold against", () => {
@@ -617,12 +574,7 @@ describe("objective timeline layout invariants", () => {
       }
       const scopeComplete = random() < 0.75;
       const slice = timeline({ spans, events, observedAt: at(900 * MINUTE), scopeComplete });
-      const first = createTimelineLayout(slice);
-      const expanded = new Set<string>();
-      if (first.gaps.length > 0 && random() < 0.4) {
-        expanded.add(first.gaps[Math.floor(random() * first.gaps.length)]!.id);
-      }
-      const layout = createTimelineLayout(slice, expanded);
+      const layout = createTimelineLayout(slice);
 
       const { startMs, endMs } = layout;
       if (startMs === null || endMs === null) {
@@ -649,13 +601,12 @@ describe("objective timeline layout invariants", () => {
 
       const ids = new Set<string>();
       const candidates = layout.gaps.filter(gap =>
-        layout.canFold && !expanded.has(gap.id) && gap.endMs - gap.startMs > TIMELINE_FOLD_THRESHOLD_MS);
+        layout.canFold && gap.endMs - gap.startMs > TIMELINE_FOLD_THRESHOLD_MS);
       // With no interval keeping its real width (an all-empty domain) folding is
       // skipped entirely, so folded breaks can never have to absorb the whole axis.
       const allEmpty = candidates.length > 0
         && candidates.length === layout.gaps.length
         && layout.gaps.reduce((sum, gap) => sum + (gap.endMs - gap.startMs), 0) === endMs - startMs;
-      let collapsedTotal = 0;
       for (const gap of layout.gaps) {
         expect(ids.has(gap.id)).toBe(false);
         ids.add(gap.id);
@@ -669,11 +620,8 @@ describe("objective timeline layout invariants", () => {
         expect(layout.position(gap.endMs)).toBeCloseTo(gap.toPercent, 9);
         if (gap.collapsed) {
           expect(layout.canFold).toBe(true);
-          expect(expanded.has(gap.id)).toBe(false);
           expect(allEmpty).toBe(false);
           expect(gap.endMs - gap.startMs).toBeGreaterThan(TIMELINE_FOLD_THRESHOLD_MS);
-          expect(width(gap)).toBeLessThanOrEqual(3 + 1e-9);
-          collapsedTotal += width(gap);
         } else if (candidates.includes(gap) && !allEmpty) {
           expect(gap.collapsed).toBe(true);
         }
@@ -681,7 +629,6 @@ describe("objective timeline layout invariants", () => {
       for (let index = 1; index < layout.gaps.length; index += 1) {
         expect(layout.gaps[index]!.startMs).toBeGreaterThanOrEqual(layout.gaps[index - 1]!.endMs);
       }
-      expect(collapsedTotal).toBeLessThanOrEqual(40 + 1e-9);
       if (allEmpty) expect(layout.gaps.every(gap => !gap.collapsed)).toBe(true);
       if (!layout.canFold) expect(layout.gaps.every(gap => !gap.collapsed)).toBe(true);
     }

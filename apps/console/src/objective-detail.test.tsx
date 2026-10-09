@@ -151,12 +151,13 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     expect(document.querySelector(".workflow-controls")).toBeNull();
   });
 
-  it("returns to the timeline by button and by Escape, restoring focus, outline and expanded gaps", async () => {
+  it("returns to the timeline by button and by Escape, restoring focus, outline and fixed idle blocks", async () => {
     stubViewport(true);
     const f = harness();
     await openObjective(f);
-    // Expand one folded break first; it must survive the detail round-trip.
-    await f.user.click((await screen.findAllByRole("button", { name: /已折叠，展开/ }))[0]!);
+    // The fixed idle blocks survive the detail round-trip.
+    const idleCount = document.querySelectorAll(".idle-block").length;
+    expect(idleCount).toBeGreaterThan(0);
     await openSpan(f, "s-r1-e");
     const span = document.querySelector('.tl-list [data-key="span:s-r1-e"]') as HTMLButtonElement;
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
@@ -164,7 +165,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     expect(document.activeElement).toBe(span);
     // Opening pinned the selection, so the outline survives the return.
     expect(span.className).toContain("selected");
-    expect(screen.getByRole("button", { name: /^收起空闲/ })).toBeTruthy();
+    expect(document.querySelectorAll(".idle-block")).toHaveLength(idleCount);
     // Reopen and return with Escape while focus is outside any field.
     await openSpan(f, "s-r1-e");
     fireEvent.keyDown(document.body, { key: "Escape" });

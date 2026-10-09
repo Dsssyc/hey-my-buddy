@@ -28,7 +28,6 @@ function baseProps(timeline: ObjectiveTimelineData | null, overrides: Record<str
   const props: ObjectiveTimelineProps = {
     summary: timeline?.objective ?? null, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
-    expandedGapIds: new Set<string>(), onToggleGap: vi.fn(), onSetExpanded: vi.fn(),
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
   };

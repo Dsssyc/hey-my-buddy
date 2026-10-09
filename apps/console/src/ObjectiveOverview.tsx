@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData } from "./objective-types";
 import { Badge } from "./ui";
+import { Popover, popoverButtonProps } from "./Popover";
 import { excerpt } from "./task-state";
 import {
   TASK_SOURCE_NOTE, categoryTone, clockTime, displayTitle, durationText,
@@ -38,9 +39,9 @@ export function DelegationDetailRows({ taskSummary, resultSummary }: {
  * title lines plus the result line, so one-line titles never make the strip
  * jump. No visible index; screen readers get “第 n 个委派，共 m 个”.
  */
-function DelegationCard({ rollup, index, total, selected, tabbable, onSelect, onOpen }: {
+function DelegationCard({ rollup, index, total, selected, tabbable, onFocus, onSelect, onOpen }: {
   rollup: RunRollup; index: number; total: number; selected: boolean; tabbable: boolean;
-  onSelect: (runId: string) => void; onOpen: (runId: string) => void;
+  onFocus: () => void; onSelect: (runId: string) => void; onOpen: (runId: string) => void;
 }) {
   const state = rowStateInfo(rollup.row);
   const title = displayTitle(rollup.row.titleSource, rollup.row.title);
@@ -52,7 +53,7 @@ function DelegationCard({ rollup, index, total, selected, tabbable, onSelect, on
     aria-pressed={selected} tabIndex={tabbable ? 0 : -1}
     aria-label={`第 ${index + 1} 个委派，共 ${total} 个：${title.text}，${state.label}（单击选中，双击打开详情）`}
     onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(rollup.row.runId); } }}
-    title={titleLineTooltip(title)}
+    title={titleLineTooltip(title)} onFocus={onFocus}
     onClick={() => onSelect(rollup.row.runId)}
     onDoubleClick={() => onOpen(rollup.row.runId)}>
     <span className="delegation-card-top">
@@ -116,31 +117,94 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
 }) {
   const roots = useMemo(() => rootRollups(timeline), [timeline]);
   const [cardFocus, setCardFocus] = useState(0);
+  const bandRoot = useRef<HTMLDivElement>(null);
   const stripRoot = useRef<HTMLDivElement>(null);
   const [stripWidth, setStripWidth] = useState(800);
+  const [singleColumn, setSingleColumn] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  useEffect(() => {
-    const strip = stripRoot.current;
-    if (!strip || typeof ResizeObserver === "undefined") return;
-    const measure = () => { if (strip.clientWidth > 0) setStripWidth(strip.clientWidth); };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(strip);
-    return () => observer.disconnect();
-  }, [collapsed, timeline.objective.objectiveId]);
-  useEffect(() => setShowAll(false), [timeline.objective.objectiveId]);
-  if (!roots.length) return null;
+  useEffect(() => { setShowAll(false); setCardFocus(0); }, [timeline.objective.objectiveId]);
   const stripId = "delegation-strip-region";
   // The strip has 20px inline padding on each side and 8px between cards.
-  const cardsPerRow = Math.max(1, Math.floor((stripWidth - 40 + 8) / 270));
+  const cardsPerRow = singleColumn ? 1 : Math.max(1, Math.floor((stripWidth - 40 + 8) / 270));
   const firstTwoRows = cardsPerRow * 2;
   const selectedIndex = roots.findIndex(rollup => rollup.row.runId === selectedRunId);
-  const visibleCount = showAll || selectedIndex >= firstTwoRows ? roots.length : Math.min(roots.length, firstTwoRows);
+  useEffect(() => {
+    if (selectedIndex >= firstTwoRows) setShowAll(true);
+  }, [selectedRunId, timeline.objective.objectiveId, firstTwoRows]);
+  const visibleCount = showAll ? roots.length : Math.min(roots.length, firstTwoRows);
+  const hiddenIndices = [selectedIndex, cardFocus].filter((index, position, indices) =>
+    index >= visibleCount && index < roots.length && indices.indexOf(index) === position);
+  useEffect(() => {
+    const band = bandRoot.current;
+    const strip = stripRoot.current;
+    if (!band) return;
+    if (!strip) {
+      band.style.minHeight = "";
+      band.style.maxHeight = "";
+      return;
+    }
+    const panel = band.closest<HTMLElement>(".timeline-view");
+    const fixedSections = () => panel ? [...panel.children].filter((child): child is HTMLElement => child instanceof HTMLElement
+      && child !== band && !child.matches(".timeline-body, .tl-body")) : [];
+    const controls = [...band.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== strip);
+    const px = (value: string) => Number.parseFloat(value) || 0;
+    const outerHeight = (element: HTMLElement) => {
+      const style = getComputedStyle(element);
+      return element.offsetHeight + px(style.marginTop) + px(style.marginBottom);
+    };
+    let observer: ResizeObserver | null = null;
+    const measure = () => {
+      if (strip.clientWidth > 0) setStripWidth(strip.clientWidth);
+      const stripStyle = getComputedStyle(strip);
+      const column = stripStyle.flexDirection === "column";
+      setSingleColumn(column);
+      // A height-bounded column must not wrap into hidden horizontal columns.
+      strip.style.flexWrap = column ? "nowrap" : "wrap";
+      if (!panel || panel.clientHeight <= 0) return; // retain geometry while hidden
+      // The separator and warning banner can appear after the first render.
+      const fixed = fixedSections();
+      for (const element of fixed) observer?.observe(element);
+      const body = panel.querySelector<HTMLElement>(":scope > .timeline-body, :scope > .tl-body");
+      const timelineMinimum = body ? px(getComputedStyle(body).minHeight) || 120 : 120;
+      const bandStyle = getComputedStyle(band);
+      const minimum = controls.reduce((sum, element) => sum + outerHeight(element), 0)
+        + px(stripStyle.minHeight) + px(bandStyle.borderTopWidth) + px(bandStyle.borderBottomWidth);
+      const available = panel.clientHeight - fixed.reduce((sum, element) => sum + outerHeight(element), 0) - timelineMinimum;
+      // Respect both the available column and a modest share of it. If even
+      // the controls plus a usable scrollport cannot fit, the column's normal
+      // overflow fallback keeps every section reachable instead of clipping.
+      band.style.minHeight = `${minimum}px`;
+      band.style.maxHeight = `${Math.max(minimum, Math.min(panel.clientHeight * 0.4, available))}px`;
+    };
+    measure();
+    observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    for (const element of [strip, band, ...(panel ? [panel] : []), ...fixedSections(), ...controls]) observer?.observe(element);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [collapsed, timeline.objective.objectiveId, roots.length, showAll, hiddenIndices.join(","),
+    timeline.filtered, timeline.truncated.rows, timeline.truncated.spans, timeline.truncated.events]);
+  useEffect(() => {
+    if (collapsed || selectedRunId === null) return;
+    const frame = requestAnimationFrame(() => stripRoot.current?.querySelector<HTMLButtonElement>(".delegation-card.selected")
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, [collapsed, selectedRunId, showAll]);
+  if (!roots.length) return null;
+  function focusCard(index: number) {
+    const card = stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card")[index];
+    card?.focus({ preventScroll: true });
+    card?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }
+  function revealCard(index: number) {
+    setCardFocus(index);
+    setShowAll(true);
+    requestAnimationFrame(() => focusCard(index));
+  }
   function onStripKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (!roots.length) return;
-    let next = cardFocus;
-    if (event.key === "ArrowRight") next = Math.min(cardFocus + 1, roots.length - 1);
-    else if (event.key === "ArrowLeft") next = Math.max(cardFocus - 1, 0);
+    if (!(event.target as HTMLElement).closest(".delegation-card")) return;
+    let next = Math.min(cardFocus, roots.length - 1);
+    if (event.key === "ArrowRight") next = Math.min(next + 1, roots.length - 1);
+    else if (event.key === "ArrowLeft") next = Math.max(next - 1, 0);
     else if (event.key === "Home") next = 0;
     else if (event.key === "End") next = roots.length - 1;
     else return;
@@ -148,27 +212,39 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
     setCardFocus(next);
     if (next >= visibleCount) {
       setShowAll(true);
-      requestAnimationFrame(() => stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card")[next]?.focus());
-    } else stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card")[next]?.focus();
+      requestAnimationFrame(() => focusCard(next));
+    } else focusCard(next);
   }
-  return <div className={"delegation-band" + (collapsed ? " collapsed" : "")}>
+  return <div ref={bandRoot} className={"delegation-band" + (collapsed ? " collapsed" : "")}>
+    <div className="delegation-band-head">
     <button type="button" className="delegation-band-toggle" aria-expanded={!collapsed} aria-controls={stripId}
       onClick={onToggleCollapsed}>
       <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 委派（{roots.length}）
     </button>
+    {!collapsed && roots.length > firstTwoRows && <button type="button" className="button small-button delegation-show-all"
+      aria-expanded={showAll} aria-controls={stripId}
+      onClick={() => {
+        if (showAll && stripRoot.current) stripRoot.current.scrollTop = 0;
+        setShowAll(value => !value);
+      }}>{showAll ? "收起" : `展开全部 ${roots.length} 个`}</button>}
+    </div>
     {!collapsed && (roots.length === 1
-      ? <div className="delegation-strip single-root"><SingleDelegationCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
+      ? <div ref={stripRoot} className="delegation-strip single-root"><SingleDelegationCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
       : <div className="delegation-strip" id={stripId} ref={stripRoot} role="group"
         aria-label="委派卡（按创建顺序）" onKeyDown={onStripKeyDown}>
         {roots.slice(0, visibleCount).map((rollup, index) => <DelegationCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
           selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, visibleCount - 1)}
-          onSelect={onSelectRun} onOpen={onOpenRun} />)}
-        {visibleCount < roots.length && <button type="button" className="button small-button delegation-show-all"
-          onClick={() => setShowAll(true)}>展开全部 {roots.length} 个</button>}
+          onFocus={() => setCardFocus(index)} onSelect={onSelectRun} onOpen={onOpenRun} />)}
         {(timeline.truncated.rows || timeline.filtered) && <span className="muted strip-bound">
           显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
         </span>}
       </div>)}
+    {!collapsed && hiddenIndices.length > 0 && <div className="delegation-current">
+      {hiddenIndices.map(hiddenIndex => <button key={hiddenIndex} type="button" className="button small-button delegation-hidden-current"
+          onClick={() => revealCard(hiddenIndex)}>
+          {selectedIndex === hiddenIndex ? "已选中" : "键盘位置"}：第 {hiddenIndex + 1} 个 · {displayTitle(roots[hiddenIndex]!.row.titleSource, roots[hiddenIndex]!.row.title).text} · 返回卡片
+        </button>)}
+    </div>}
   </div>;
 }
 
@@ -189,7 +265,11 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
   /** Compact form at viewport heights of 800px or less (P2.1). */
   compact?: boolean;
 }) {
+  const statsButton = useRef<HTMLButtonElement>(null);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const statsId = useId();
   const shown = timeline?.objective ?? summary;
+  useEffect(() => setStatsOpen(false), [shown?.objectiveId]);
   const metrics = useMemo(() => (timeline ? objectiveMetrics(timeline) : null), [timeline]);
 
   if (!shown) return null;
@@ -211,8 +291,11 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
     <div className="objective-vitals">
       <Badge tone={categoryTone(shown.state)}>{objectiveProgressText(shown)}</Badge>
       <span title={shown.lastActivityAt}>最近活动 {clockTime(shown.lastActivityAt)}（{relativeTime(shown.lastActivityAt, Date.now())}）</span>
-    <details className="time-stats">
-      <summary>时间统计</summary>
+    <button key={shown.objectiveId} ref={statsButton} type="button" className="time-stats button small-button" aria-haspopup="dialog"
+      {...popoverButtonProps(statsId, statsOpen)} onClick={() => setStatsOpen(value => !value)}>时间统计</button>
+    {statsOpen && <Popover key={shown.objectiveId} id={statsId} anchor={statsButton.current} label="时间统计"
+      boundary={statsButton.current?.closest<HTMLElement>(".timeline-view") ?? statsButton.current?.closest<HTMLElement>(".panel")}
+      returnFocusOnDismiss onClose={() => setStatsOpen(false)} width="34em" className="time-stats-popover">
       <div className="time-stats-body">
         {!timeline
           ? <p className="small muted">{loading ? "时间统计：读取中" : "时间统计：未记录"}</p>
@@ -228,7 +311,7 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
           </>}
         <p className="small muted record-source">来源 Host {shown.sourceHostId || "未记录"} · 当前 Host {shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</p>
       </div>
-    </details>
+    </Popover>}
     </div>
   </header>;
 }

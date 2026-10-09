@@ -347,14 +347,9 @@ button.tl-label:hover { background: var(--subtle); }
 .tl-row > .tl-track { z-index: 2; }
 .tl-overlay { position: absolute; top: 0; bottom: 0; left: var(--label-w); right: 0; pointer-events: none; z-index: 1; }
 .fold-band { position: absolute; top: 0; bottom: 0; border-inline: 1px dashed var(--line-strong); background: repeating-linear-gradient(90deg, transparent 0 7px, var(--line) 7px 8px), var(--subtle); }
-.expanded-band { position: absolute; top: 0; bottom: 0; background: var(--subtle); border-inline: 1px dotted var(--line-strong); }
 .now-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); }
 .guide-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--focus); }
 .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); padding: 3px 0 0 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
-.fold-button { position: absolute; top: 2px; bottom: 2px; min-width: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 2px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 9px; line-height: 1.25; overflow: hidden; z-index: 3; }
-.fold-button:hover { color: var(--accent); border-color: var(--accent); }
-.collapse-button { position: absolute; top: 5px; height: 22px; display: flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 10px; white-space: nowrap; z-index: 3; }
-.collapse-button:hover { color: var(--accent); border-color: var(--accent); }
 .now-chip { position: absolute; right: 3px; bottom: 3px; padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 3; }
 /* Track items (spans, markers, flags) sit on the track; row labels keep their
    sticky grid placement and are never pulled out of the row by this rule. */
@@ -729,7 +724,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .tl-grid .tl-overlay { right: var(--track-end, 0px); }
 /* A fitted break may be narrower than its label; the band stays honest and
    the full wording lives in the button's name and tooltip. */
-.fold-button { min-width: 0; }
 .shared-popover:focus:not(:focus-visible) { outline: none; }
 
 /* P2.1: compact header form at short viewports. */
@@ -940,25 +934,25 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 }
 
 /* Console polish: keep the timeline canvas as the scrolling surface. */
-.timeline-view { overflow: hidden; }
+.timeline-view { overflow-x: hidden; overflow-y: auto; }
 .tl-head { flex-shrink: 0; max-height: none; min-height: 0; overflow: visible; padding-block: 8px; gap: 4px; }
 .tl-head .objective-title-row h2 { flex: 1 1 0; }
 .tl-head .objective-title-row .objective-description { flex: 1 1 0; min-width: 0; display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .tl-head .objective-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
-.tl-head .time-stats { position: relative; border: 0; }
-.tl-head .time-stats > summary { padding: 2px 0; white-space: nowrap; cursor: pointer; }
-.tl-head .time-stats-body { position: absolute; z-index: 8; top: calc(100% + 3px); right: 0; inline-size: min(34em, calc(100vw - 32px)); max-block-size: min(50vh, 340px); overflow-y: auto; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
+.tl-head .time-stats { white-space: nowrap; }
 .timeline-view > .tl-head, .timeline-view > .delegation-band, .timeline-view > .tl-toolbar { flex-shrink: 0; min-height: 0; overflow: visible; }
+.timeline-view > .delegation-band { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
+.timeline-view > .delegation-band.collapsed { flex: 0 0 auto; min-height: 0; max-height: none; }
 .timeline-view > .timeline-body, .timeline-view > .tl-body { min-height: 120px; }
-.delegation-strip { flex-wrap: wrap; overflow: hidden; gap: 6px 8px; }
+.delegation-strip { flex: 1 1 auto; min-height: 48px; flex-wrap: wrap; align-content: flex-start; overflow-x: hidden; overflow-y: auto; gap: 6px 8px; }
 .delegation-card { width: min(262px, 100%); }
+.delegation-strip > .delegation-card, .delegation-strip > .strip-bound { flex-shrink: 0; }
 .delegation-show-all { align-self: center; }
 .timeline-legend-popover { inline-size: min(36em, calc(100vw - 16px)); display: grid; gap: 10px; padding: 12px; }
 .timeline-view-switch { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
 .timeline-view-switch .button { border: 0; border-radius: 0; min-height: 28px; }
 .timeline-view-switch .button[aria-pressed="true"] { color: var(--accent); background: var(--accent-wash); }
 .timeline-view-switch .button + .button { border-left: 1px solid var(--line); }
-.fold-button { top: 5px; bottom: auto; height: 28px; min-width: 24px; flex-direction: row; padding: 0; font-size: 15px; line-height: 1; }
 .inspector-dock-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-dock-toggle { min-width: 28px; min-height: 28px; font-size: 16px; }
 .timeline-view > .inspector-separator { flex-shrink: 0; }
@@ -985,3 +979,20 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-review-config select { flex: 1; width: auto; min-width: 0; height: 32px; padding: 4px 8px; }
 .harness-review > .button { height: 32px; padding-block: 4px; }
 .harness-review > p { flex-basis: 100%; margin: 0; }
+
+/* Proven idle breaks keep fixed pixels; their readouts never widen the axis. */
+.idle-block { position: absolute; top: 5px; height: 28px; display: flex; align-items: center; justify-content: center; padding: 0; border-inline: 1px dashed var(--line-strong); border-radius: 3px; background: repeating-linear-gradient(135deg, transparent 0 4px, var(--line) 4px 5px), var(--subtle); color: var(--muted); font-size: 12px; z-index: 3; }
+.idle-block:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.fold-band { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--line) 4px 5px), var(--subtle); }
+.now-line { width: 1px; margin-left: 0; background: var(--muted); opacity: .35; }
+.now-chip { background: var(--subtle); color: var(--muted); }
+.timeline-readout-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .45; }
+.timeline-readout { position: absolute; top: 42px; padding: 2px 5px; border-radius: 3px; background: var(--surface); color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.timeline-readout-line[hidden], .timeline-readout[hidden] { display: none; }
+
+.time-stats-popover .time-stats-body { padding: 0; overflow-wrap: anywhere; }
+.delegation-band-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding-inline-end: 20px; }
+.delegation-band-head > .delegation-band-toggle { flex: 1 1 auto; width: auto; min-width: 0; }
+.delegation-band-head > .delegation-show-all { flex: 0 0 auto; }
+.delegation-current { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 20px; min-width: 0; }
+.delegation-hidden-current { max-inline-size: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

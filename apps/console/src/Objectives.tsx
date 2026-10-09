@@ -20,8 +20,6 @@ import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { displayTitle } from "./objective-display";
 import { useBackgroundInert } from "./modal";
 
-const EMPTY_SET: ReadonlySet<string> = new Set();
-
 /* 0.15.1 U1 geometry (docs/design/objective-browser-0.15.1.md §1–2): the
    viewport picks the layout; above 760px an open detail collapses the list to
    a 48px rail and docks the detail beside the timeline. D = detail column,
@@ -166,7 +164,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   // The pinned inspector selection, kept per objective so switching back restores it.
   const [selectionByObjective, setSelectionByObjective] = useState<Map<string, InspectorSelection>>(() => new Map());
-  const [expandedByObjective, setExpandedByObjective] = useState<Map<string, Set<string>>>(() => new Map());
   const list = useObjectiveList(api, { query, projectId, hostId, filter }, active);
   const timeline = useObjectiveTimeline(api, selected, active);
   // The list row is freshest, but a list refresh must never unmount an open
@@ -291,17 +288,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   function navigateRun(runId: string) {
     setDetail({ runId });
   }
-  function toggleGap(gapId: string) {
-    setExpandedByObjective(previous => {
-      const current = previous.get(selected ?? "") ?? new Set<string>();
-      const next = new Set(current);
-      if (next.has(gapId)) next.delete(gapId); else next.add(gapId);
-      return new Map(previous).set(selected ?? "", next);
-    });
-  }
-  function setExpanded(gapIds: Set<string>) {
-    setExpandedByObjective(previous => new Map(previous).set(selected ?? "", gapIds));
-  }
 
   // Esc closes the transient drawer first, then the detail, while this tab
   // owns the page and the keystroke did not start inside a field or a dialog.
@@ -335,8 +321,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [drawerOpen]);
-
-  const expanded = selected ? expandedByObjective.get(selected) ?? EMPTY_SET : EMPTY_SET;
 
   // The header's stop control: one objective-level action, its honest status,
   // and the replay entry for a lost reply. Read-only sessions see the reason.
@@ -399,9 +383,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     selection={selection}
     headerActions={stopControl}
     profiles={snapshot.profiles}
-    expandedGapIds={expanded}
-    onToggleGap={toggleGap}
-    onSetExpanded={setExpanded}
     onSelectItem={selectItem}
     onOpenItem={openItem}
     onSelectRun={selectRun}
