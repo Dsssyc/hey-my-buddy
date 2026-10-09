@@ -41,7 +41,7 @@ B1 需要用户决定的数据方案：升级时按已记录路径与现有 Git 
 | BG-LIST：B3 | BG-ID 后，`tasks/objectives.py` 的汇总，console/read_cache/server 的宏任务读取、对应目标/HTTP/合成夹具测试；与 BG-CLEAN 函数边界分开，若需要共享 workflow 则串行整合。 |
 | BG-GATE：B5 | 独立新测试 `tests/python/console/test_console_gate_deadlines.py`，现有 gate/console 实现只读；不与 BG-LIST 写同一测试文件。 |
 | UI-FRAME：U2、U5 | 黑板部分整合后先做：ObjectiveTimeline/ui/styles 与相关组件测试，基于 Host 改前浏览器排查和共享盒模型清单，建立分层/尺寸基础。 |
-| UI-TIME：U3、U7、U10、U11 | UI-FRAME 验收后：ObjectiveOverview/ObjectiveTimeline、timeline layout/scale、Popover/MarkerPopover、相关 CSS 与测试；顺序写时间轴/样式文件，保持已验收基础。 |
+| UI-TIME：U3、U7、U10、U11 | UI-FRAME 验收后：ObjectiveOverview/ObjectiveTimeline、Objectives 的空闲展开状态与调用、timeline layout/scale、Popover/MarkerPopover、相关 CSS 与测试；顺序写时间轴/样式文件，保持已验收基础。 |
 | UI-SHELL：U1、U4、U6、U8、U9 | 时间轴 writer 验收后或无共享文件时并行：DecisionDetails、BuddyConfig/theme、Settings/App/Objectives/Tasks/RunDetail/配置记录、api/types 和版本数据的必要 console 读取，相关测试；不改时间轴/Overview/CSS，共享 CSS 需求先发给 Host 在下一顺序回合授权。 |
 
 每个 packet 将按实际源码收窄为精确文件/函数，并重复禁止删除、stash、分支操作、日常重启、完整检查和凭据/模型调用的边界；需要新文件先列入范围。同文件的不同微任务只有前一份验收后才启动，产品/测试/行为缺陷退回该原 run；Host 只处理明确的单句记录更正。ADR、CONTEXT、AGENTS、README、待办与 docs/reference 不改；DSH、buddy/harnesses、buddy/roles、实时通道、C-Two 0.7 与跨边界引用不纳入。
@@ -95,3 +95,5 @@ B1 已整合为 eff7ba4eba7ecd05f28d2eefab0d939bd743f785，integration int-508a2
 后续黑板两个微任务均以已接受 B1 的 eff7ba4e 为固定输入、同一宏任务，首次全部省略 adapter/provider/model/effort 和 configuration：BG-CLEAN（B2/B4）run 6aeb46e1-31ee-40e1-b5bd-85b9cfa69d04，允许 workspace/workflow/storage 和 7 个受影响测试路径；BG-LIST（B3）run 372ac45d-40b4-4e30-809e-79f3c042a0e0，允许 objectives、必要的有界 summary cache、console 宏任务读取和对应测试共 9 路径，只读已验收夹具。两者分别持有受管检出和仅等待的 monitor，四个字段也不部分填写。暂为 executing/queued，不计交付或验收；界面实现仍未开始。
 
 BG-CLEAN/BG-LIST 首回合由路由选 zcode/zai-api/GLM-5.3/max，均以供应方不可重试 rate_limited 429/1310（stream）失败，self/descendants confirmed，finalArtifactId 空，不验收。原始 get/result/首次 packet 分别保留 review-bg-clean/round1-limited/ 与 review-bg-list/round1-limited/。Host 按限流例外在各自原 run 以完整 codex/openai/gpt-6.1-sol/high 继续（bg-clean-continue-rate-limit-1310-r1、bg-list-continue-rate-limit-1310-r1），都返回 revision 5、executing/queued；当次 model-profiles 为 enabled/available、quotaExhausted=false，实际家族 active 0 / limit 3。BG-LIST 命令 reason 中 active 误写成 1，Host 在此直接更正登记为 0，原命令原文保留；不改变验证结论或配置资格。一次误用不存在的 profiles 只返回 UNKNOWN_METHOD，无写入，随后改用已登记的 model-profiles。日常服务/Worker/设置/登录未操作。
+
+界面范围只读盘点补充（尚未启动实现）：Objectives.tsx 持有 expandedByObjective/toggleGap/setExpanded，故 UI-TIME 同时负责其空闲展开状态与调用的移除，UI-SHELL 在它验收后顺序写该文件的列表/视图部分。全局刷新订阅还在 use-objective-list/use-objective-timeline/use-task-history/use-workflow/EvaluationHistory；UI-SHELL packet 将按实际本地刷新依赖列入精确文件与测试，不能遗留需要顶栏按钮才能更新的读取。共享 Popover 已有 portal、可见范围定位和外点/Esc/焦点关闭机制，沿用它；统计按钮的回焦按条目验证，不改变其他浮层的既有语义。
