@@ -300,6 +300,40 @@ class ResumeBoundaryTests(SessionRecordCase):
         self.assertEqual(facts["resumeBoundary"]["reason"], "baseline-unreadable")
         self.assertIsNone(facts["usage"])
 
+    def test_a_non_session_first_line_keeps_the_resume_usage_unknown(self):
+        # A later session header cannot prove where the target session's
+        # existing records began when the file's first line is not that header.
+        prefix = {"type": "user/message", "id": SESSION, "seq": 0,
+                  "data": {"id": "orphan"}}
+        self.write_rollout([prefix, *turn_one()], compressed=False)
+
+        baseline = self.freeze()
+        self.assertFalse(baseline.reliable)
+        facts = resumed_session_record_facts(self.sessions, baseline)
+        self.assertFalse(facts["resumeBoundary"]["proven"])
+        self.assertEqual(facts["resumeBoundary"]["reason"], "baseline-unreadable")
+        self.assertIsNone(facts["usage"])
+
+    def test_a_freeze_read_stopped_at_the_size_bound_keeps_usage_unknown(self):
+        # Keep each line below the line cap while the real stream exceeds its
+        # total-byte cap, so freeze_session_records itself encounters the bound.
+        path = self.sessions / f"{SESSION}.v3.jsonl"
+        payload = "x" * (1024 * 1024)
+        padding = json.dumps({"type": "fixture/padding", "data": {"blob": payload}})
+        with path.open("w", encoding="utf-8") as rollout:
+            rollout.write(json.dumps(turn_one()[0]) + "\n")
+            for _ in range(66):
+                rollout.write(padding)
+                rollout.write("\n")
+        self.assertGreater(path.stat().st_size, session_records._MAX_RECORD_TOTAL_BYTES)
+
+        baseline = self.freeze()
+        self.assertFalse(baseline.reliable)
+        facts = resumed_session_record_facts(self.sessions, baseline)
+        self.assertFalse(facts["resumeBoundary"]["proven"])
+        self.assertEqual(facts["resumeBoundary"]["reason"], "baseline-unreadable")
+        self.assertIsNone(facts["usage"])
+
 
 if __name__ == "__main__":  # pragma: no cover - direct execution convenience
     unittest.main()
