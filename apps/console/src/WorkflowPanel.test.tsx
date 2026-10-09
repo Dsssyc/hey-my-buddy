@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WorkflowPanel } from "./WorkflowPanel";
 import type { IntegrationRecord, Workflow } from "./workflow-types";
@@ -186,7 +186,7 @@ describe("governed workflow console (0.15.1 read-only)", () => {
   const summary = "回合摘要正文。".repeat(70);
   f.workflow.currentTurn!.summary = summary;
   const user = userEvent.setup();
-  const view = render(<WorkflowPanel {...f.props} initialSection="overview" />);
+  render(<WorkflowPanel {...f.props} initialSection="overview" />);
   await screen.findByText("记录细节（目标与回合）");
   await user.click(screen.getByText("记录细节（目标与回合）"));
   const button = await screen.findByRole("button", { name: "展开" });
@@ -202,8 +202,11 @@ describe("governed workflow console (0.15.1 read-only)", () => {
   await user.click(screen.getByRole("button", { name: "收起" }));
   expect(paragraph.textContent).toBe(summary.slice(0, 360) + "… 展开");
   await user.click(screen.getByRole("button", { name: "展开" }));
+  const readsBeforeTurnChange = f.command.mock.calls.length;
   f.workflow.currentTurn!.turnId = "turn-b";
-  f.props.task.revision += 1;
-  view.rerender(<WorkflowPanel {...f.props} task={{ ...f.props.task }} initialSection="overview" />);
+  // Remote workflow changes arrive on its own 3-second read cadence.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 3000)); });
+  expect(f.command).toHaveBeenCalledTimes(readsBeforeTurnChange + 1);
+  await expect(f.command.mock.results.at(-1)!.value).resolves.toMatchObject({ currentTurn: { turnId: "turn-b" } });
   await waitFor(() => expect(screen.getByRole("button", { name: "展开" }).getAttribute("aria-expanded")).toBe("false"));
  });
