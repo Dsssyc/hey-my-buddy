@@ -1,6 +1,7 @@
 import type { ConsoleApi } from "./api";
 import type { ThemeChoice } from "./theme";
 import { StoragePanel } from "./StoragePanel";
+import { RuntimeVersion } from "./RuntimeVersion";
 import { ConsoleAccessSettings } from "./ConsoleAccessSettings";
 import type { ConsoleAccess } from "./types";
 
@@ -37,6 +38,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
       </div>
     </section>
     <ConsoleAccessSettings api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
+    <RuntimeVersion api={api} active={active} />
     <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} active={active} />
   </div>;
 }

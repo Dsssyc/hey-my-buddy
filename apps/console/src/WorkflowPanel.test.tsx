@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WorkflowPanel } from "./WorkflowPanel";
 import type { IntegrationRecord, Workflow } from "./workflow-types";
@@ -180,3 +180,30 @@ describe("governed workflow console (0.15.1 read-only)", () => {
     expect(screen.getByText("已验收")).toBeTruthy();
   });
 });
+
+ it("switches the recorded turn summary in place and resets for a different turn", async () => {
+  const f = fixture();
+  const summary = "回合摘要正文。".repeat(70);
+  f.workflow.currentTurn!.summary = summary;
+  const user = userEvent.setup();
+  const view = render(<WorkflowPanel {...f.props} initialSection="overview" />);
+  await screen.findByText("记录细节（目标与回合）");
+  await user.click(screen.getByText("记录细节（目标与回合）"));
+  const button = await screen.findByRole("button", { name: "展开" });
+  const paragraph = button.closest("p")!;
+  expect(paragraph.textContent).toBe(summary.slice(0, 360) + "… 展开");
+  const details = paragraph.closest("details")!;
+  expect(details.querySelectorAll(".task-description")).toHaveLength(1);
+  expect(within(details).queryByText(summary)).toBeNull();
+  await user.click(button);
+  expect(paragraph.textContent).toBe(summary + " 收起");
+  expect(within(details).getAllByText(summary)).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "收起" }).getAttribute("aria-expanded")).toBe("true");
+  await user.click(screen.getByRole("button", { name: "收起" }));
+  expect(paragraph.textContent).toBe(summary.slice(0, 360) + "… 展开");
+  await user.click(screen.getByRole("button", { name: "展开" }));
+  f.workflow.currentTurn!.turnId = "turn-b";
+  f.props.task.revision += 1;
+  view.rerender(<WorkflowPanel {...f.props} task={{ ...f.props.task }} initialSection="overview" />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "展开" }).getAttribute("aria-expanded")).toBe("false"));
+ });

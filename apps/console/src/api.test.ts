@@ -590,3 +590,25 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
     await expect(commandApi(unfinished).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
 });
+
+describe("on-demand running and installed version facts", () => {
+  const facts = { softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null };
+  const version = { running: { ...facts, mode: "source" }, installed: null };
+  it("reads only the authenticated version GET, with same-origin credentials and no cache", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(version)));
+    const api = createApi("/session", fetcher as typeof fetch);
+    await expect(api.runtimeVersion()).resolves.toEqual(version);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/session/api/runtime-version", expect.objectContaining({ credentials: "same-origin", cache: "no-store" }));
+  });
+  it("refuses malformed or missing version facts and propagates session loss", async () => {
+    for (const broken of [null, {}, { running: { ...facts, mode: "unknown" }, installed: null },
+      { ...version, running: { ...version.running, softwareVersion: "" } },
+      { ...version, running: { ...version.running, sourceCommit: undefined } },
+      { ...version, installed: { ...facts, schemaVersion: "15" } }]) {
+      const api = createApi("", vi.fn(async () => new Response(JSON.stringify(broken))) as typeof fetch);
+      await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+    const api = createApi("", vi.fn(async () => new Response(JSON.stringify({ error: { code: "CONSOLE_SESSION_EXPIRED", message: "expired" } }), { status: 401 })) as typeof fetch);
+    await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "CONSOLE_SESSION_EXPIRED" });
+  });
+});

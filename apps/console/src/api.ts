@@ -1,4 +1,4 @@
-import type { BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { RuntimeVersionInfo, VersionFacts, BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
@@ -394,6 +394,19 @@ export function commandHarnesses(reply: unknown): HarnessHealth[] {
   return harnessRows((reply as { harnesses?: unknown } | null)?.harnesses);
 }
 
+export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
+  const info = value as RuntimeVersionInfo | null;
+  const facts = (record: VersionFacts | null) => !!record && typeof record === "object" && !Array.isArray(record)
+    && (["softwareVersion", "contractVersion", "sourceCommit", "installedAt"] as const).every(key =>
+      record[key] === null || typeof record[key] === "string" && !!record[key].trim())
+    && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
+  if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
+    || !(info.installed === null || facts(info.installed))) {
+    throw new ApiError("INVALID_RESPONSE", "版本信息无法识别，请检查服务版本。");
+  }
+  return info;
+}
+
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
   const base = prefix.replace(/\/+$/, "");
   async function request(path: string, init: RequestInit = {}) {
@@ -687,6 +700,10 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         throw new ApiError("INVALID_RESPONSE", "工作目标时间轴不完整；请检查服务版本。");
       }
       return { timeline: data, verifiedAtMs };
+    },
+    /** Version facts are read once by visible settings, independent of snapshots. */
+    async runtimeVersion(signal?: AbortSignal): Promise<RuntimeVersionInfo> {
+      return parseRuntimeVersion(await request("/runtime-version", { signal }));
     },
     /**
      * The on-demand backup preflight (`GET /api/backup-preflight`): the same
