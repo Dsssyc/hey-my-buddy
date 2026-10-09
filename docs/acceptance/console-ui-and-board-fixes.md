@@ -16,7 +16,7 @@
 
 B1 对比点逐项：`workspace.inspect`（公共/私有 Git 目录）；`prepare/_snapshot/_materialize`（来源与分配身份）；`verify/_validate_manifest`（原清单与当前检出）；`begin_turn` 与 stash 采集认领（仓库绑定）；`seal` 与部分/放弃产物（原仓库/检出）；`resolve`（冲突恢复对象）；`_artifact_binding/verify_sealed_output`（固定输入/输出原仓库）；`integration_verify`（目标仓库与检出）；`_allocation_provenance/cleanup_inspect/cleanup_remove`（分配、锁、封存、回收）；`workflow._reserve/_release` 与预约冲突（checkout_id 的独占索引）；`workspace_reservations`；`workflow_integrations` 的目标身份；`workspace_cleanup_plans`；`objectives.attach_objective`（旧宏任务 project_id 与新微任务来源）；宏任务列表/时间轴及 delegation 的 project 归属、projectId 筛选；replay、continue、dispatch 准备与 startup recovery 的已存清单。微任务交付须用源码搜索补齐每处调用及间接对比，不能只改最初报错的宏任务入口。
 
-B1 需要用户决定的数据方案：升级时按已记录路径与现有 Git 分配/固定引用证明重新建立稳定锚点；可变的宏任务归属和预约索引使用稳定键，旧固定清单、inputSha256、manifestSha256、输出摘要和已接受记录原文保持。在 schema 15 的现有 meta 中登记有来源的旧→新身份映射，身份比对通过映射核对当前路径/inode，并防止旧预约与新预约重复占用。缺路径、证据不足或碰撞的项目不猜测、不删除，保留旧值并在读取中带未完成原因。只在私有夹具演练和实现升级入口，本任务不对日常看板执行迁移或安装。此方案会改变数据库里的身份索引/映射数据，属于用户要求先停下说明的“迁移数据”；未批准前不实现或执行该迁移。
+B1 需要用户决定的数据方案：升级时按已记录路径与现有 Git 分配/固定引用证明重新建立稳定锚点；可变的宏任务归属和预约索引使用稳定键，旧固定清单、inputSha256、manifestSha256、输出摘要和已接受记录原文保持。在 schema 15 的现有 meta 中登记有来源的旧→新身份映射，身份比对通过映射核对当前路径/inode，并防止旧预约与新预约重复占用。缺路径、证据不足或碰撞的项目不猜测、不删除，保留旧值并在读取中带未完成原因。只在私有夹具演练和实现升级入口，本任务不对日常看板执行迁移或安装。此方案会改变数据库里的身份索引/映射数据，属于用户要求先停下说明的“迁移数据”；用户于 2026-10-09 明确“我确认授权”，批准实现该方案并在私有夹具验证；本批不在日常看板执行迁移或安装。
 
 ## 界面方案与写入分组
 
@@ -53,3 +53,7 @@ B01：不同设备号、同路径/inode 重启模拟，新仓库/检出身份不
 U01–U11 各有受影响回归与目标行为移除失败证据；布局层级和盒尺寸用真实 DOM/computed style/截图证明，不靠 jsdom 推断可见。U12 为真实浏览器矩阵：新生成私有合成服务，不使用日常状态/凭据；明/暗主题 × 宽/窄窗口，另覆盖 <=800px 高度、常见 100%/125% 缩放、悬停/选中/键盘焦点/运行/失败；条目点名的贴边片段、折行统计、隐藏选中卡、无不可用选项、断线重试、不完整/不可靠时间轴、多个固定空闲块逐项覆盖。U5 先留改前截图与症状/原因清单。每项至少一张改后截图，路径 `tmp/console-ui-and-board-host/screenshots/U01-…png` 至 `U11-…png`，U05-before/after 单列，均 ignored 不提交；矩阵与每图实际 viewport/theme/状态在记录里写明。
 
 V01：全部固定产物独立全路径/哈希、实际受影响检查、隔离变异先干净通过后目标失败，保留原始失败与退回事实；测试编号以实际枚举变化登记。V02：最终源码从标准 Vite/tsc 重建并提交资产，核对字节。V03：最终代码干净提交上各一次 Python 完整检查 `uv run --frozen python -m hey_my_buddy.cli.checks`（默认并行）和完整前端 `npm --prefix apps/console test`，分别记录真实项数、提交号、退出码；只有失败或代码再变才再运行，记录变化仅跑仓库卫生。原始日志/夹具/屏幕图统一放 ignored `tmp/console-ui-and-board-host/`。完成后验收 microtask 并按确切路径正常回收，保留 Host 工作树供 Claude Code Host 验收，停止其他工作。
+
+2026-10-09 恢复执行：原计划提交 c4cabf70 与原起点 613faa40 保留。为落实日常服务不启动/恢复的规则，Host 使用已安装 CLI 的原验证、权限处理与命令映射，但在本次客户端进程内把自动启动入口替换为现成 `transport._attach_read_only`（与公开 BoardClient.autostart=False 同样的附着机制），所有 health/submit/await/继续/验收调用只能附着既有服务；辅助代码在 ignored 目录，不更改安装包或日常服务。客户端拒绝 install/upgrade/restart/stop/worker-start/worker-stop 等命令。此为用户的进程约束优先于 skill 默认启动行为，不是变更产品 CLI。日常服务 PID 4965 已通过只读进程表观察为运行中，版本证书以实际 health 回复为准。
+
+首批明确范围：BG-ID 允许 workspace.py、workflow.py、objectives.py、delegation.py 的身份消费者，install/upgrade.py 的已授权升级入口，必要的新 tasks/workspace_identity.py 与 store/workspace_identity_migration.py，以及对应身份/预约/升级测试；schema 与数据库 DDL 不改。固定清单/产物原文不得重写。BG-GATE 只允许新增 tests/python/console/test_console_gate_deadlines.py，与 BG-ID 不共写。微任务都禁止自行 git commit，改动留给黑板封存。日常 health 证书为 0.27.0、schema 15、PID 4965、7 个已有 Worker，未启动/已停止列表为空；这是日常版本事实，私有源码验证仍使用本批代码。
