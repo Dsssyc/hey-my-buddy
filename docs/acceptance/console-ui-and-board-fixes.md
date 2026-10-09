@@ -207,3 +207,9 @@ UI-TIME integration int-5c448492-f912-4b9a-86cb-b8d144dc9bea verified20，整合
 TIME受管检出accepted sweep exactpath回收cln-57f5f64c-f361-4c60-941a-482a209ccb13 applied；`~/.local/share/hey-my-buddy/state/workspaces/ws-10b7ec46fa88af0f0e760ffc3781c361/checkout`已不存在，源/四回合材料在此前固定副本，未由Worker删除。UI-NAV run da651c9c-d26d-432f-85f7-10c861161b83已收到，首次路由configuration=null、未指定任何四字段，微任务输入96fd6054。
 
 UI-NAV首次路由zcode/zai-api/GLM-5.3-Flash/max；供应方stream阶段不可重试429/1310，resultMeta.exitCode1、shutdownConfirmed=true、无封存输出。原get/result固定review-ui-nav/round1-limited，fresh model-profiles确认Codex high enabled/available且quotaExhausted=false；原run完整codex/openai/gpt-6.1-sol/high continue（ui-nav-continue-rate-limit-1310-r1，revision4→5），按用户限流例外。第一次Host准备脚本编码错误未写请求，随后错误的顶层adapter参数被INVALID_ARGUMENT拒绝、没有状态变更；纠正为现有configuration完整四字段/input/reason结构后提交，不能把拒绝误记为回合。未刷新凭据、安装或重启日常进程；首交付仍需Host验收。
+
+UI-NAV首交付固定03e65b865284e7c567479e5966b89516bb2318e0、artifact7d63d0f5-6484-4948-9028-a5d518f5c46a，累积28路径、patch与Git blobs校验后全部相符，完整Worker材料round2-fixed/ui-nav-u08-u09-7728保留。Host18文件239项/tsc/私有预览退出0；另外两份直接受影响的旧测试在固定源码上13failed/41passed（54项）、1unhandled TypeError（过时runtimeVersion mock），不能把局部通过当最终前端通过。Host冻结助手被旧Python的tarfile filter参数阻塞，第一次测试未启动（路径尚未提取），随后使用既有项目Python完整提取并核对，未计入测试结论。
+
+在停止的回合上scope-amend ui-nav-amend-removed-header-security-tests-r1，scopeVersion1→2，revision8→9，仅追加console-session.test.tsx、edit-mode.test.tsx，不扩大产品范围；保留登录失效闩锁、CAS草稿、写租约、迟响应及导航的全部断言，使用新的合法读取触发和所需版本API夹具。独立只读审查另确认use-task-history.retry把已加载行误当append：第一页poll/local-refresh失败后读下一页，末页无cursor时无效；这是输入已有但属于U09错误重试范围的缺口。原run continue ui-nav-continue-retry-and-existing-security-tests-r1，revision9→10，四字段/configuration全省略，要求按失败读种类/范围重试、有界分页/选择/滚动不丢、能失败的回归与变异。未整合/接受首交付。
+
+更新记录现有evaluation_history是有界20项POST读取，离页只用current=false隔离迟响应，未有HTTP AbortController；本轮保留这个既有边界，不扩展发布命令的取消语义、不宣称在途请求已中止。其他原有AbortController与范围/generation隔离仍需保留，三处局部刷新不新增长期定时读取。首交付真实私有浏览器初查显示标题按钮、窄条双向切换/手动展开、标准HTTP核对时间与顶栏去刷新成立，最终明暗宽窄与错误重试矩阵仍待返修产物。
