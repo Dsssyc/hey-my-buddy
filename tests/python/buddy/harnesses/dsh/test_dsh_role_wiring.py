@@ -108,6 +108,8 @@ class DshRoleCase(unittest.TestCase):
 class DescriptionSeamTests(DshRoleCase):
     def test_the_description_has_no_legacy_execution_entries(self):
         description = adapter("dsh")
+        self.assertIs(description.native_resume, True)
+        self.assertIn("native-session", description.capabilities)
         self.assertNotIsInstance(description, Adapter)
         for entry in ("prepare", "start", "collect", "cancel", "start_no_tool_structured",
                       "start_read_only_structured", "arguments", "inquiry_paths",
@@ -208,7 +210,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(result.native_identity.session_id, turn["sessionId"])
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
-        self.assertEqual(native["storageOwner"], "buddy-attempt")
+        self.assertEqual(native["storageOwner"], "buddy-goal")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"], "the native facts carry a verified complete turn")
         self.assertIn("inquiry", outcome.result)
