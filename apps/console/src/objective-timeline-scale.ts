@@ -19,8 +19,8 @@ function collapsedCount(layout: TimelineLayout): number {
   return layout.gaps.filter(gap => gap.collapsed).length;
 }
 
-/** Fit real activity into the room left after fixed idle blocks, allowing necessary overflow. */
-export function fitPixelsPerMinute(layout: TimelineLayout, viewportWidth: number): number {
+/** Fit real activity after optional leading room and fixed idle blocks, allowing necessary overflow. */
+export function fitPixelsPerMinute(layout: TimelineLayout, viewportWidth: number, leadingPx = 0): number {
   const { foldedMs, durationMs } = layoutNumbers(layout);
   const collapsed = collapsedCount(layout);
   const realMs = Math.max(0, durationMs - foldedMs);
@@ -28,7 +28,8 @@ export function fitPixelsPerMinute(layout: TimelineLayout, viewportWidth: number
   const gapTotalPx = collapsed * TIMELINE_IDLE_PX;
   const realMinutes = realMs / 60_000;
   if (realMinutes <= 0) return Number.POSITIVE_INFINITY;
-  const realPx = collapsed > 0 ? Math.max(viewport - gapTotalPx, MIN_REAL_TRACK_PX) : viewport;
+  const room = viewport > leadingPx ? viewport - leadingPx : 1;
+  const realPx = collapsed > 0 ? Math.max(room - gapTotalPx, MIN_REAL_TRACK_PX) : room;
   return realPx / realMinutes;
 }
 
@@ -37,23 +38,24 @@ export function fitPixelsPerMinute(layout: TimelineLayout, viewportWidth: number
  * eligibility and times remain the layout's decisions. Fit may scroll when
  * many blocks leave too little room for real activity; neither blocks nor the
  * real-time axis are squeezed to zero. Manual zoom clamps to the fit scale.
+ * Leading room is opt-in; the default preserves the original time mapping.
  */
-export function scaleTimeline(layout: TimelineLayout, viewportWidth: number, pixelsPerMinute?: number): TimelineLayout & { widthPx: number } {
+export function scaleTimeline(layout: TimelineLayout, viewportWidth: number, pixelsPerMinute?: number, leadingPx = 0): TimelineLayout & { widthPx: number } {
   const collapsed = layout.gaps.filter(gap => gap.collapsed);
   const { foldedMs, foldedPercent, durationMs } = layoutNumbers(layout);
   const realMs = Math.max(0, durationMs - foldedMs);
   const viewport = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : 800;
-  const fitPpm = fitPixelsPerMinute(layout, viewport);
+  const fitPpm = fitPixelsPerMinute(layout, viewport, leadingPx);
   const ppm = pixelsPerMinute !== undefined && Number.isFinite(pixelsPerMinute)
     ? Math.max(pixelsPerMinute, fitPpm) : fitPpm;
   const gapPx = TIMELINE_IDLE_PX;
   const widthPx = realMs > 0
-    ? Math.max(viewport, realMs / 60_000 * ppm + collapsed.length * gapPx)
+    ? Math.max(viewport, leadingPx + realMs / 60_000 * ppm + collapsed.length * gapPx)
     : viewport;
-  const realScale = (widthPx - collapsed.length * gapPx) / (100 - foldedPercent);
+  const realScale = (widthPx - leadingPx - collapsed.length * gapPx) / (100 - foldedPercent);
 
   function remap(percent: number): number {
-    let previous = 0, pixels = 0;
+    let previous = 0, pixels = leadingPx;
     for (const gap of collapsed) {
       if (percent < gap.fromPercent) return 100 * (pixels + (percent - previous) * realScale) / widthPx;
       pixels += (gap.fromPercent - previous) * realScale;

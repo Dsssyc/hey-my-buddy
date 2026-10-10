@@ -28,6 +28,8 @@ const FALLBACK_LABEL_PX = 240;
  * 适应窗口 has no internal horizontal overflow.
  */
 const TRACK_END_PX = 12;
+/** Room for opening glyphs beside the sticky label column, at every scale. */
+const TRACK_START_PX = 16;
 /** The inspector drawer's default and keyboard-adjusted geometry (P2.1). */
 const DRAWER_DEFAULT_PX = 168;
 const DRAWER_MIN_PX = 44;
@@ -37,6 +39,14 @@ const DRAWER_USEFUL_PX = 96;
 /** The timeline keeps this height before the drawer may take more (P2.1). */
 const TIMELINE_MIN_PX = 200;
 const ZOOM_STEP = 1.5;
+/** Matches the label's left 16px / right 8px CSS insets. */
+const SPAN_TEXT_INSET_PX = 24;
+/** Terminal circles reserve another 8px inside execution and solid labels. */
+const TERMINAL_TEXT_INSET_PX = 32;
+/** A central cross needs its real width, independently of the 14px shape. */
+const ROUTING_CROSS_MIN_PX = 18;
+/** Percentage subtraction can lose a fraction of a nanopixel at exact thresholds. */
+const PIXEL_EPSILON = 1e-9;
 
 /**
  * The natural (unshrunk) outer height of a fixed section of the column. Using
@@ -305,7 +315,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   // The time scale ends TRACK_END_PX before the canvas edge (see above).
   const effectiveViewport = Math.max(1, (viewport ?? FALLBACK_VIEWPORT_PX) - TRACK_END_PX);
   const fitPpm = useMemo(
-    () => layout ? fitPixelsPerMinute(layout, effectiveViewport) : Number.POSITIVE_INFINITY,
+    () => layout ? fitPixelsPerMinute(layout, effectiveViewport, TRACK_START_PX) : Number.POSITIVE_INFINITY,
     [layout, effectiveViewport],
   );
   // Pixels are a pure function of the measured viewport, so content sizing can
@@ -313,7 +323,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   // is clamped to [fit, MAX].
   const clampedZoom = zoom === null ? null : Math.max(0, Math.min(zoom, Math.max(fitPpm, MAX_PIXELS_PER_MINUTE)));
   const scaled = useMemo(
-    () => layout ? scaleTimeline(layout, effectiveViewport, clampedZoom ?? undefined) : null,
+    () => layout ? scaleTimeline(layout, effectiveViewport, clampedZoom ?? undefined, TRACK_START_PX) : null,
     [layout, effectiveViewport, clampedZoom],
   );
   const currentPpm = clampedZoom ?? fitPpm;
@@ -328,7 +338,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (percent === null) return;
     const labelW = labelWidthPx();
     const trackX = percent / 100 * scaled.widthPx;
-    element.scrollLeft = Math.max(0, Math.round(labelW + trackX - anchor.screenX));
+    element.scrollLeft = Math.max(0, labelW + trackX - Math.max(labelW + TRACK_START_PX, anchor.screenX));
   }, [scaled, layout, canvasKey]);
 
   const spansByRun = useMemo(() => {
@@ -650,7 +660,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     // Fixed idle blocks leave the remaining pixels to real activity.
     const collapsedGapPx = scaled.gaps.filter(gap => gap.collapsed)
       .reduce((total, gap) => total + (gap.toPercent - gap.fromPercent) / 100 * widthPx, 0);
-    const pxPerMinute = (widthPx - collapsedGapPx) / realMinutes;
+    const pxPerMinute = (widthPx - TRACK_START_PX - collapsedGapPx) / realMinutes;
     const steps = [15, 30, 60, 120, 240, 480, 1440];
     const stepMinutes = steps.find(step => step * pxPerMinute >= 64) ?? 1440;
     const stepMs = stepMinutes * 60000;
@@ -728,8 +738,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     const left = scaled.position(facts.startMs)!;
     const style = paletteIndex(palette, span.configuration);
     const right = facts.endMs !== null ? scaled.position(facts.endMs) : null;
-    const width = right !== null ? Math.max(right - left, 0.3) : 0.3;
+    const width = right !== null ? Math.max(right - left, 0) : 0;
     const widthPxSpan = width / 100 * widthPx;
+    const terminal = span.kind === "execution" && (facts.outcome === "failed" || facts.outcome === "cancelled");
+    const textPx = Math.max(0, widthPxSpan - (terminal ? TERMINAL_TEXT_INSET_PX : SPAN_TEXT_INSET_PX)) + PIXEL_EPSILON;
+    // Child offsets use real pixels: CSS minimum shapes never move an instant.
+    const endStyle: CSSProperties = { left: `${widthPxSpan - 7.5}px`, right: "auto" };
     const selected = selection?.type === "item" && selection.key === facts.item.key;
     const runHighlighted = selectedRunId === row.runId;
     const classes = ["tl-item", "sp", span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : span.kind === "host" ? "wait" : "exec"];
@@ -757,40 +771,51 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (span.kind === "routing") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        {facts.outcome === "failed" && <i className="routing-cross" aria-hidden="true" />}
+        {facts.outcome === "failed" && widthPxSpan + PIXEL_EPSILON >= ROUTING_CROSS_MIN_PX && <i className="routing-cross" aria-hidden="true" />}
       </button>;
     }
     if (span.kind === "host") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="sp-text">{widthPxSpan >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : widthPxSpan >= 64 ? "等待 Host" : widthPxSpan >= 34 ? "等待" : ""}</span>
+        <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{textPx >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : textPx >= 64 ? "等待 Host" : textPx >= 34 ? "等待" : ""}</span>
       </button>;
     }
     // The bar label uses the friendly name (0.16 0.3); the raw identity stays
     // in the aria label and tooltip.
     const shortModel = namer(span.configuration).text;
-    const label = widthPxSpan >= 150
+    const label = textPx >= 150
       ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
-      : widthPxSpan >= 72 ? `第${span.turnIndex ?? "?"}轮` : widthPxSpan >= 30 ? String(span.turnIndex ?? "·") : "";
+      : textPx >= 72 ? `第${span.turnIndex ?? "?"}轮` : textPx >= 30 ? String(span.turnIndex ?? "·") : "";
     if (facts.outcome === "unknown" && facts.recordedEndMs !== null) {
       // Solid to the last recorded instant, dotted tail reserved through the
       // observation instant by the Host layout.
-      const solidWidth = Math.max(scaled.position(facts.recordedEndMs)! - left, 0.3);
-      const solidShare = Math.min(100, solidWidth / Math.max(width, 0.3) * 100);
+      const solidWidthPx = Math.max(0, (scaled.position(facts.recordedEndMs)! - left) / 100 * widthPx);
+      const tailLeftPx = solidWidthPx + 10;
+      const tailWidthPx = Math.max(0, widthPxSpan - tailLeftPx);
+      // Compare the existing placed intervals on this row. Touching endpoints
+      // and spans without a usable duration do not occupy the unknown tail.
+      const tailOverlaps = facts.endMs !== null && facts.endMs > facts.recordedEndMs
+        && (spansByRun.get(row.runId) ?? []).some(other => {
+          if (other.spanId === span.spanId) return false;
+          const next = factsBySpan.get(other.spanId);
+          return next?.startMs != null && next.endMs !== null
+            && next.endMs > next.startMs
+            && next.startMs < facts.endMs! && next.endMs > facts.recordedEndMs!;
+        });
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="solid" style={{ width: `${solidShare}%` }} aria-hidden="true" />
-        <span className="sp-text sp-solid-text" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
-        <i className="end-mark warn" style={{ left: `calc(${solidShare}% - 8px)` }} aria-hidden="true">?</i>
-        <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 ? "结束未确认" : ""}</span>
+        <span className="solid" style={{ width: `${solidWidthPx}px` }} aria-hidden="true" />
+        <span className="sp-text sp-solid-text" style={{ width: `${solidWidthPx}px` }}>{solidWidthPx - TERMINAL_TEXT_INSET_PX + PIXEL_EPSILON >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <i className="end-mark warn" style={{ left: `${solidWidthPx - 7.5}px`, right: "auto" }} aria-hidden="true">?</i>
+        <span className="sp-text sp-tail" style={{ left: `${tailLeftPx}px`, width: `${tailWidthPx}px` }}>{tailWidthPx - SPAN_TEXT_INSET_PX + PIXEL_EPSILON >= 50 && !tailOverlaps ? "结束未确认" : ""}</span>
       </button>;
     }
-    const endMark = facts.outcome === "failed" ? <i className="end-mark bad" aria-hidden="true">✕</i>
-      : facts.outcome === "cancelled" ? <i className="end-mark muted" aria-hidden="true">⊘</i>
+    const endMark = facts.outcome === "failed" ? <i className="end-mark bad" style={endStyle} aria-hidden="true">✕</i>
+      : facts.outcome === "cancelled" ? <i className="end-mark muted" style={endStyle} aria-hidden="true">⊘</i>
         : facts.outcome === "running" ? <i className="pulse" aria-hidden="true" /> : null;
     return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
       data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-      <span className="sp-text">{label}</span>{endMark}
+      <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{label}</span>{endMark}
     </button>;
   }
 
@@ -813,7 +838,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
             onScroll={() => { if (openCluster !== null) requestClusterClose(false); }}
             onKeyDown={onCanvasKeyDown}>
             <div ref={gridRef} className="tl-grid" role="group" aria-label="工作目标时间轴"
-              style={{ width: `calc(var(--label-w) + ${Math.round(widthPx) + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
+              style={{ width: `calc(var(--label-w) + ${widthPx + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
               <div className="tl-row axis">
                 <div className="tl-label">委派 / 时间</div>
                 <div className="tl-track">

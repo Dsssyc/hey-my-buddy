@@ -59,11 +59,41 @@ const readout = () => document.querySelector<HTMLOutputElement>(".timeline-reado
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("U10 idle evidence and U11 native readout", () => {
+  it("aligns the opening event guide, pointer readout and now line with the leading-room map through zoom", () => {
+    geometry();
+    const timeline = data();
+    timeline.rows = timeline.rows.map(row => ({ ...row, acceptedAt: null }));
+    timeline.events = [{ ...objectiveTimelineFixture().events[0]!, seq: 1, at: at(0) }];
+    render(<ObjectiveTimeline {...props(timeline)} />);
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".markers-toggle")!);
+    const zoomIn = screen.getByRole("button", { name: "放大" }) as HTMLButtonElement;
+    const levels = ["fit", "+2", "max"];
+    for (const level of levels) {
+      if (level === "+2") { fireEvent.click(zoomIn); fireEvent.click(zoomIn); }
+      if (level === "max") for (let i = 0; i < 20 && !zoomIn.disabled; i++) fireEvent.click(zoomIn);
+      const overlay = document.querySelector<HTMLElement>(".tl-overlay")!;
+      const width = overlay.getBoundingClientRect().width;
+      const event = document.querySelector<HTMLElement>('[data-key="events:1"]')!;
+      // Focus enables the event guide; the existing sticky label boundary applies.
+      fireEvent.focus(event);
+      const guide = document.querySelector<HTMLElement>(".guide-line")!;
+      expect(Number.parseFloat(guide.style.left) / 100 * width).toBeCloseTo(16, 8);
+      expect(Number(event.dataset.x) / 100 * width).toBeCloseTo(16, 8);
+      const scroller = document.querySelector<HTMLElement>(".tl-scroll")!;
+      scroller.scrollLeft = 0;
+      move(240 + 16);
+      expect(readout().textContent).toBe(clockTime(at(0)));
+      expect(Number.parseFloat(line().style.left) / 100 * width).toBeCloseTo(16, 8);
+      const now = document.querySelector<HTMLElement>(".now-line")!;
+      expect(Number.parseFloat(now.style.left) / 100 * width).toBeCloseTo(width, 8);
+    }
+  });
+
   it("reads real time from the existing map, reads complete idle ranges, then disappears", () => {
     geometry();
     const timeline = data();
     render(<ObjectiveTimeline {...props(timeline)} />);
-    const scale = scaleTimeline(createTimelineLayout(timeline), 748);
+    const scale = scaleTimeline(createTimelineLayout(timeline), 748, undefined, 16);
     expect(line().hidden).toBe(true);
     move(240 + scale.position(at(5))! / 100 * 748);
     expect(line().hidden).toBe(false);
@@ -84,7 +114,7 @@ describe("U10 idle evidence and U11 native readout", () => {
     const timeline = data();
     render(<ObjectiveTimeline {...props(timeline)} />);
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
-    const scale = scaleTimeline(createTimelineLayout(timeline), 748, (748 - 32) / 20 * 1.5);
+    const scale = scaleTimeline(createTimelineLayout(timeline), 748, (748 - 16 - 32) / 20 * 1.5, 16);
     const scroller = document.querySelector<HTMLElement>(".tl-scroll")!;
     const overlay = document.querySelector<HTMLElement>(".tl-overlay")!;
     const xAt = (minute: number) => overlay.getBoundingClientRect().left + scale.position(at(minute))! / 100 * overlay.getBoundingClientRect().width;
@@ -147,7 +177,7 @@ describe("U10 idle evidence and U11 native readout", () => {
     act(() => block.focus());
     expect(screen.queryByRole("dialog", { name: "空闲区间" })).not.toBeNull();
     const dialog = screen.getByRole("dialog", { name: "空闲区间" });
-    const scale = scaleTimeline(createTimelineLayout(data()), 748);
+    const scale = scaleTimeline(createTimelineLayout(data()), 748, undefined, 16);
     expect(dialog.textContent).toBe(idleReadout(scale.gaps[0]!));
     expect(block.style.width).toBe("32px");
     fireEvent.keyDown(dialog, { key: "Escape" });

@@ -4,7 +4,8 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ObjectiveTimeline } from "./ObjectiveTimeline";
 import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
+import { ObjectiveList } from "./ObjectiveList";
+import { listFixture, objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
 import { Status } from "./ui";
 import type { ObjectiveTimeline as ObjectiveTimelineData, TimelineRow, TimelineSpan } from "./objective-types";
 
@@ -88,7 +89,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".sp.unknown::before").border).toBe("1.5px dotted var(--c)");
   });
 
-  it("preserves the short span's percentage position/width without an inline box-model override", () => {
+  it("U5.3: keeps a millisecond span at its recorded width without a box-model override", () => {
     const data = timeline([
       { spanId: "short", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z", endAt: "2026-09-26T01:14:00.001Z", resultStatus: "failed", shutdownConfirmed: true },
       { spanId: "wait", kind: "host", state: "open", startAt: "2026-09-26T01:14:00.001Z", endAt: null },
@@ -96,7 +97,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     const { container } = render(<ObjectiveTimeline {...props(data)} />);
     const failed = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:short"]')!;
     const wait = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:wait"]')!;
-    expect(failed.style.width).toBe("0.3%");
+    expect(Number.parseFloat(failed.style.width)).toBeCloseTo((772 / 788) * 100 / (418 * 60 * 1000), 12);
     expect(failed.style.left).toMatch(/%$/);
     expect(failed.style.padding).toBe("");
     expect(wait.previousElementSibling).toBe(failed);
@@ -106,13 +107,16 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".sp.queue").getPropertyValue("--tl-item-height")).toBe("8px");
   });
 
-  it("keeps end and event decoration sizes fixed and clips reading padding inside the label", () => {
+  it("U5.4: keeps fixed decoration sizes and reserves 16px beside terminal circles", () => {
     expect(rule(".end-mark").width).toBe("15px");
     expect(rule(".end-mark").height).toBe("15px");
     expect(rule(".end-mark").lineHeight).toBe("12px");
     expect(rule(".mk").width).toBe("18px");
     expect(rule(".mk").marginLeft).toBe("-9px");
-    expect(rule(".sp-solid-text").padding).toBe("0px 6px");
+    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    const solidText = document.querySelector(".tl-scroll .sp-solid-text")!;
+    expect(getComputedStyle(solidText).paddingLeft).toBe("16px");
+    expect(getComputedStyle(solidText).paddingRight).toBe("16px");
     expect(rule(".sp-text").overflow).toBe("hidden");
     expect(rule(".sp-text").textOverflow).toBe("ellipsis");
     expect(rule(".sp.unknown .solid").padding).toBe("");
@@ -120,6 +124,35 @@ describe("U5: duration geometry and borders share one boundary", () => {
 });
 
 describe("U5: audited controls retain the shared global box model and normal sizes", () => {
+  it("lets the rendered list use its full width without reserving an idle scrollbar gutter", () => {
+    const rows = listFixture();
+    const { getByLabelText } = render(<ObjectiveList
+      rows={rows} total={rows.length} loading={false} error="" nextCursor={null} reorder={null}
+      filter="all" query="" projectId="" hostId="" choices={{ projects: [], hosts: [] }}
+      selected={null} rail={false}
+      onFilterChange={vi.fn()} onQueryChange={vi.fn()} onProjectChange={vi.fn()} onHostChange={vi.fn()}
+      onSelect={vi.fn()} onRetry={vi.fn()} onMore={vi.fn()} onApplyReorder={vi.fn()}
+    />);
+    const scroll = getByLabelText("工作目标条目");
+    const css = getComputedStyle(scroll);
+    expect(css.getPropertyValue("scrollbar-gutter")).toBe("auto");
+    expect(css.overflowY).toBe("auto");
+    expect(css.overflowX).toBe("hidden");
+    expect(["0", "0px"]).toContain(css.minHeight);
+    expect(css.getPropertyValue("overscroll-behavior")).toBe("contain");
+    expect(css.getPropertyValue("scrollbar-width")).not.toBe("none");
+    expect(css.getPropertyValue("touch-action")).not.toBe("none");
+    expect(scroll.tabIndex).toBe(0);
+    scroll.focus();
+    expect(document.activeElement).toBe(scroll);
+    const entries = scroll.querySelectorAll(".group-heading, .task-row");
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      expect(getComputedStyle(entry).width).toBe("100%");
+      expect(getComputedStyle(entry).boxSizing).toBe("border-box");
+    }
+  });
+
   it("uses the existing global border-box reset for badges, segments, filters, titles and floating layers", () => {
     const { container } = render(<>
       <Status status="waiting-host" />
@@ -137,5 +170,31 @@ describe("U5: audited controls retain the shared global box model and normal siz
     expect(getComputedStyle(container.querySelector(".segmented button")!).padding).toBe("5px 9px");
     expect(getComputedStyle(container.querySelector("input")!).width).toBe("16px");
     expect(rule("*").boxSizing).toBe("border-box");
+  });
+});
+
+describe("U6.4: reading insets stay inside real label widths", () => {
+  it("gives ordinary, terminal, solid and tail text their reading space inside real geometry", () => {
+    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    for (const selector of [".exec:not(.unknown) .sp-text", ".wait .sp-text", ".sp-solid-text", ".sp-tail"]) {
+      const labels = document.querySelectorAll<HTMLElement>(`.tl-scroll ${selector}`);
+      expect(labels.length, selector).toBeGreaterThan(0);
+      for (const label of labels) {
+        const css = getComputedStyle(label);
+        expect(css.paddingLeft, selector).toBe("16px");
+        expect(css.paddingRight, selector).toBe(label.matches(".sp-solid-text, .exec.failed > .sp-text, .exec.cancelled > .sp-text") ? "16px" : "8px");
+        expect(css.boxSizing, selector).toBe("border-box");
+        expect(css.overflow, selector).toBe("hidden");
+        expect(css.textOverflow, selector).toBe("ellipsis");
+        expect(css.pointerEvents, selector).toBe("none");
+        expect(css.flexShrink, selector).toBe("0");
+        expect(label.style.width, selector).toMatch(/px$/);
+        const parent = getComputedStyle(label.parentElement!);
+        expect(parent.paddingLeft).toBe("0px");
+        expect(parent.paddingRight).toBe("0px");
+        expect(parent.borderLeftWidth).toBe("0px");
+        expect(parent.borderRightWidth).toBe("0px");
+      }
+    }
   });
 });

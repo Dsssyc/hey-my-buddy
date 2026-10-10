@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
@@ -15,13 +16,13 @@ const page = (objectives: ObjectiveSummary[], nextCursor: string | null = null, 
   ({ objectives, total: objectives.length, nextCursor, cursor: 10, changed });
 const query: ObjectiveQuery = { query: "", projectId: "p1", hostId: "", filter: "all" };
 
-function harness(readVerifiedAt?: (value: unknown) => number | null) {
+function harness(readVerifiedAt?: (value: unknown) => number | null, active = true, strict = false) {
   const requests: { query: ObjectiveQuery; signal?: AbortSignal; resolve: (value: ObjectivePage) => void; reject: (error: Error) => void }[] = [];
   const objectives = vi.fn((params: ObjectiveQuery, signal?: AbortSignal) => new Promise<ObjectivePage>((resolve, reject) => {
     requests.push({ query: params, signal, resolve, reject });
   }));
   const api = { objectives, readVerifiedAt } as unknown as ConsoleApi;
-  const hook = renderHook(({ query, active }) => useObjectiveList(api, query, active), { initialProps: { query, active: true } });
+  const hook = renderHook(({ query, active }) => useObjectiveList(api, query, active), { initialProps: { query, active }, wrapper: strict ? StrictMode : undefined });
   return { ...hook, requests, objectives };
 }
 const startRead = () => act(async () => { await vi.advanceTimersByTimeAsync(500); });
@@ -256,15 +257,15 @@ describe("work-objective list hook", () => {
     expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["busy", "quiet", "older"]);
   });
 
-  it("gates the first mount debounce when the document hides before cleanup", async () => {
+  it("D2-O00 allows the initial mount debounce when the document hides before cleanup", async () => {
     const objectives = vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false }));
     const api = { objectives } as unknown as ConsoleApi;
     renderHook(({ query }: { query: ObjectiveQuery }) => useObjectiveList(api, query, true), { initialProps: { query } });
     // The document hides before the visibilitychange cleanup lands; the
-    // mount debounce fires inside that gap and must not produce a GET.
+    // initial mount debounce still supplies the one allowed first GET.
     Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(objectives).not.toHaveBeenCalled();
+    expect(objectives).toHaveBeenCalledTimes(1);
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
   });
 
@@ -282,9 +283,10 @@ describe("work-objective list hook", () => {
   });
 
   it("invalidates a scope changed while hidden: the new first page loads on return, never the old range", async () => {
-    const f = harness();
+    const f = harness(() => 1234);
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("old-scope", 1)], "old-cursor")));
+    expect(f.result.current.verifiedAtMs).toBe(1234);
     act(() => setHidden(true));
     const nextQuery: ObjectiveQuery = { ...query, projectId: "p2" };
     f.rerender({ query: nextQuery, active: true });
@@ -292,7 +294,11 @@ describe("work-objective list hook", () => {
     // new query's answer; the return then reads the new scope's first page.
     expect(f.result.current.rows).toEqual([]);
     expect(f.result.current.nextCursor).toBeNull();
+    expect(f.result.current.verifiedAtMs).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
     act(() => setHidden(false));
+    expect(f.objectives).toHaveBeenCalledTimes(2);
     await startRead();
     expect(f.requests[1]!.query).toMatchObject({ ...nextQuery, limit: 50 });
     expect(f.requests[1]!.query).not.toHaveProperty("before");
@@ -330,7 +336,7 @@ describe("work-objective list hook", () => {
     f.unmount();
   });
 
-  it("stops the poll on document visibility, reads once immediately on return, and never reads a mount that is hidden", async () => {
+  it("D2-O09 stops the poll on document visibility, reads once immediately on return, and reads a hidden mount once", async () => {
     const f = harness();
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
@@ -346,11 +352,11 @@ describe("work-objective list hook", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(f.objectives).toHaveBeenCalledTimes(3);
     f.unmount();
-    // A hook mounted while the page is hidden starts no read at all.
+    // A hook mounted while hidden supplies its first read, without polling.
     setHidden(true);
     const g = harness();
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(g.objectives).not.toHaveBeenCalled();
+    expect(g.objectives).toHaveBeenCalledTimes(1);
     g.unmount();
     setHidden(false);
   });
@@ -416,5 +422,124 @@ describe("U09 objective list verification", () => {
     await startRead();
     await act(async () => f.requests[4].resolve(page([summary("new-scope", 99)])));
     expect(f.result.current.verifiedAtMs).toBeNull();
+  });
+});
+
+
+describe("D2 hidden initialization (O)", () => {
+  it("D2-O01 reads hidden content and verification once, pauses polling and reads immediately on return", async () => {
+    setHidden(true);
+    const f = harness(() => 1234);
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    expect(f.requests[0].query).toMatchObject({ ...query, limit: 50 });
+    expect(f.requests[0].query).not.toHaveProperty("before");
+    await act(async () => f.requests[0].resolve(page([summary("initial", 1)], "older")));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["initial"]);
+    expect(f.result.current.verifiedAtMs).toBe(1234);
+    expect(f.result.current.loading).toBe(false);
+    expect(f.result.current.nextCursor).toBe("older");
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    act(() => setHidden(false));
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    await act(async () => f.requests[1].resolve(page([summary("initial", 1)], "older")));
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    expect(f.result.current.nextCursor).toBe("older");
+  });
+
+  it("D2-O02 leaves an inactive list unread and initializes its first hidden activation once in StrictMode", async () => {
+    setHidden(true);
+    const f = harness(() => 1234, false, true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).not.toHaveBeenCalled();
+    f.rerender({ query, active: true });
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    await act(async () => f.requests[0].resolve(page([summary("initial", 1)])));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["initial"]);
+    expect(f.result.current.verifiedAtMs).toBe(1234);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+  });
+
+  it("D2-O03 cleans up the hidden mount debounce in StrictMode without duplicating or reading after unmount", async () => {
+    setHidden(true);
+    const f = harness(undefined, true, true);
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    f.unmount();
+    expect(f.requests[0].signal?.aborted).toBe(true);
+    const g = harness(undefined, true, true);
+    g.unmount();
+    await startRead();
+    expect(g.objectives).not.toHaveBeenCalled();
+  });
+
+  it("D2-O04 aborts a hidden initial request on unmount and ignores a late response and verification", async () => {
+    setHidden(true);
+    const f = harness(() => 9999);
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    const before = f.result.current;
+    f.unmount();
+    expect(f.requests[0].signal?.aborted).toBe(true);
+    await act(async () => f.requests[0].resolve(page([summary("late", 9)], "late-cursor")));
+    expect(f.result.current).toBe(before);
+    expect(f.result.current.rows).toEqual([]);
+    expect(f.result.current.verifiedAtMs).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+  });
+
+  it("D2-O05 fences a superseded hidden initial response and waits for visibility before reading its replacement", async () => {
+    setHidden(true);
+    const f = harness(() => 4321);
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    const changed = { ...query, projectId: "another-project" };
+    f.rerender({ query: changed, active: true });
+    expect(f.requests[0].signal?.aborted).toBe(true);
+    expect(f.result.current.rows).toEqual([]);
+    expect(f.result.current.nextCursor).toBeNull();
+    expect(f.result.current.verifiedAtMs).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    act(() => setHidden(false));
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    expect(f.requests[1].query).toMatchObject({ ...changed, limit: 50 });
+    expect(f.requests[1].query).not.toHaveProperty("before");
+    await act(async () => f.requests[0].resolve(page([summary("late", 9)], "late-cursor")));
+    expect(f.result.current.rows).toEqual([]);
+    expect(f.result.current.verifiedAtMs).toBeNull();
+    expect(f.result.current.loading).toBe(true);
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    await act(async () => f.requests[1].resolve(page([summary("fresh", 2)], "fresh-cursor")));
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["fresh"]);
+    expect(f.result.current.verifiedAtMs).toBe(4321);
+    expect(f.result.current.nextCursor).toBe("fresh-cursor");
+  });
+
+  it.each(["empty", "failure"])("D2-O06 pauses after a hidden initial %s and reads once immediately on return", async outcome => {
+    setHidden(true);
+    const f = harness(() => 1234);
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      if (outcome === "empty") f.requests[0].resolve(page([]));
+      else f.requests[0].reject(new Error("initial unavailable"));
+    });
+    expect(f.result.current.rows).toEqual([]);
+    expect(f.result.current.verifiedAtMs).toBe(outcome === "empty" ? 1234 : null);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(f.objectives).toHaveBeenCalledTimes(1);
+    act(() => setHidden(false));
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    await act(async () => f.requests[1].resolve(page([summary("fresh", 2)])));
+    await startRead();
+    expect(f.objectives).toHaveBeenCalledTimes(2);
+    expect(f.result.current.rows.map(row => row.objectiveId)).toEqual(["fresh"]);
   });
 });

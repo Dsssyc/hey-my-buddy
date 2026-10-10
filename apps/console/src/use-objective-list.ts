@@ -26,6 +26,8 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   const [revision, setRevision] = useState(0);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
   const visible = useDocumentVisible();
+  const previousVisible = useRef(visible);
+  const initialReadStarted = useRef(false);
   const pageRef = useRef(page), latestRef = useRef(latest);
   pageRef.current = page;
   latestRef.current = latest;
@@ -48,6 +50,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
     if (mode === "poll" && needsFirst.current) mode = "first";
     if (mode === "more" && !current.current.cursor) return;
     const version = generation.current, controller = new AbortController();
+    initialReadStarted.current = true;
     request.current = controller; pending.current = true;
     if (mode !== "poll") { setLoading(true); setError(""); }
     try {
@@ -170,41 +173,33 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
     ++generation.current; request.current?.abort(); pending.current = false; setLoading(false);
     armed.current = false;
     const cleanup = () => { ++generation.current; request.current?.abort(); pending.current = false; };
+    const becameVisible = visible && !previousVisible.current;
+    previousVisible.current = visible;
     if (!active) return cleanup;
     const sameScope = loadedKey.current === key + revision;
     if (!sameScope) {
-      // A scope change invalidates the previous answer no matter the
-      // visibility: rows and cursor of the old range must never pose as the
-      // new query's result while the page is hidden. Becoming visible re-runs
-      // this effect and loads the new first page then.
+      // Invalidate old rows and paging even while hidden. Only the first
+      // activation may read in the background; later queries wait for return.
       loadedKey.current = key + revision;
       resetScope();
-      if (!visible) return cleanup;
-      setLoading(true);
-      armed.current = true;
-      const timer = setTimeout(() => {
-        armed.current = false;
-        // First mount / scope change also debounces: re-check the document at
-        // fire time — hiding before the visibilitychange cleanup lands must
-        // not produce this automatic GET.
-        if (documentVisibleNow()) void fetchPage("first");
-      }, 180);
-      return () => { clearTimeout(timer); armed.current = false; cleanup(); };
     }
-    // Same scope: legitimately read rows and their pagination survive the
-    // visibility toggle (a hidden page is not an unmount).
-    if (pageRef.current.rows.length && !needsFirst.current) return cleanup;
-    // No rows yet (a mount while hidden, or a failed load): a hidden page
-    // starts no read, and becoming visible re-runs this effect and loads then.
-    if (!visible) return cleanup;
-    if (!needsFirst.current) resetScope();
+    // Loaded rows and paging survive a visibility toggle.
+    if (sameScope && pageRef.current.rows.length && !needsFirst.current) return cleanup;
+    // Consume the exception when a request starts, not when an effect arms:
+    // StrictMode cleanup must leave the replacement debounce a first read.
+    const initialRead = !initialReadStarted.current;
+    if (!visible && !initialRead) return cleanup;
+    if (sameScope && !needsFirst.current) resetScope();
+    // The cadence effect supplies the single immediate read on return,
+    // including an empty result or a query invalidated while hidden.
+    if (becameVisible) return cleanup;
     setLoading(true);
     armed.current = true;
     const timer = setTimeout(() => {
       armed.current = false;
-      // The document may have hidden inside the debounce window (before the
-      // visibilitychange state update landed): re-check at fire time.
-      if (documentVisibleNow()) void fetchPage("first");
+      // Initialization alone may ignore visibility. Later scope debounces
+      // still re-check it if the document hides before cleanup lands.
+      if (initialRead || documentVisibleNow()) void fetchPage("first");
     }, 180);
     return () => { clearTimeout(timer); armed.current = false; cleanup(); };
   }, [active, visible, key, revision, fetchPage]);

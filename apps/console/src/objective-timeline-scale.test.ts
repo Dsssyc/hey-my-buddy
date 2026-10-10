@@ -19,6 +19,43 @@ function data(count = 2): Pick<ObjectiveTimeline, "spans" | "events" | "observed
 const gapPx = (gap: { fromPercent: number; toPercent: number }, widthPx: number) => (gap.toPercent - gap.fromPercent) * widthPx / 100;
 
 describe("timeline track pixel scale", () => {
+  it("reserves optional leading pixels in fit while preserving real distances and fixed gaps", () => {
+    const layout = createTimelineLayout(data(4));
+    for (const viewport of [260, 800]) {
+      const fitPpm = fitPixelsPerMinute(layout, viewport - 12, 16);
+      expect(fitPpm).toBeCloseTo((viewport - 12 - 16 - 3 * 32) / 40, 8);
+      for (const ppm of [undefined, fitPpm * 2.25, 60]) {
+        const scaled = scaleTimeline(layout, viewport - 12, ppm, 16);
+        const pixel = (minute: number) => scaled.position(at(minute))! / 100 * scaled.widthPx;
+        expect(pixel(0)).toBeCloseTo(16, 8);
+        expect(pixel(400)).toBeCloseTo(scaled.widthPx, 8);
+        expect(pixel(5) - pixel(0)).toBeCloseTo(5 * (ppm ?? fitPpm), 8);
+        for (const gap of scaled.gaps) expect(gapPx(gap, scaled.widthPx)).toBeCloseTo(32, 8);
+        if (ppm === undefined) expect(scaled.widthPx + 12).toBe(viewport);
+        else expect(scaled.widthPx).toBeCloseTo(16 + 40 * ppm + 3 * 32, 8);
+      }
+    }
+  });
+
+  it("keeps omitted leading room identical to explicit zero, including point domains", () => {
+    expect(fitPixelsPerMinute(createTimelineLayout(data(1)), 0.5)).toBe(0.05);
+    const point = data(1);
+    point.spans[0]!.endAt = point.spans[0]!.startAt;
+    for (const input of [data(4), point]) {
+      const layout = createTimelineLayout(input);
+      for (const ppm of [undefined, 60]) {
+        const original = scaleTimeline(layout, 800, ppm);
+        const zero = scaleTimeline(layout, 800, ppm, 0);
+        expect(zero.widthPx).toBe(original.widthPx);
+        expect(zero.gaps).toEqual(original.gaps);
+        for (const minute of [0, 5, 140, 400]) expect(zero.position(at(minute))).toBe(original.position(at(minute)));
+      }
+    }
+    const scaled = scaleTimeline(createTimelineLayout(point), 788, undefined, 16);
+    expect(scaled.position(at(0))! / 100 * scaled.widthPx).toBeCloseTo(16 + (788 - 16) / 2, 10);
+    expect(scaled.startMs).toBe(scaled.endMs);
+  });
+
   it("keeps every idle break at exactly 32px across widths, counts and zoom", () => {
     expect(TIMELINE_IDLE_PX).toBe(32);
     for (const count of [2, 4, 25, 80]) {
