@@ -37,6 +37,8 @@ const DRAWER_USEFUL_PX = 96;
 /** The timeline keeps this height before the drawer may take more (P2.1). */
 const TIMELINE_MIN_PX = 200;
 const ZOOM_STEP = 1.5;
+/** Matches the label's 8px CSS inset on each side. */
+const SPAN_TEXT_INSET_PX = 16;
 
 /**
  * The natural (unshrunk) outer height of a fixed section of the column. Using
@@ -728,8 +730,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     const left = scaled.position(facts.startMs)!;
     const style = paletteIndex(palette, span.configuration);
     const right = facts.endMs !== null ? scaled.position(facts.endMs) : null;
-    const width = right !== null ? Math.max(right - left, 0.3) : 0.3;
+    const width = right !== null ? Math.max(right - left, 0) : 0;
     const widthPxSpan = width / 100 * widthPx;
+    const textPx = Math.max(0, widthPxSpan - SPAN_TEXT_INSET_PX);
+    // Child offsets use real pixels: CSS minimum shapes never move an instant.
+    const endStyle: CSSProperties = { left: `${widthPxSpan - 7.5}px`, right: "auto" };
     const selected = selection?.type === "item" && selection.key === facts.item.key;
     const runHighlighted = selectedRunId === row.runId;
     const classes = ["tl-item", "sp", span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : span.kind === "host" ? "wait" : "exec"];
@@ -763,20 +768,21 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (span.kind === "host") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="sp-text">{widthPxSpan >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : widthPxSpan >= 64 ? "等待 Host" : widthPxSpan >= 34 ? "等待" : ""}</span>
+        <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{textPx >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : textPx >= 64 ? "等待 Host" : textPx >= 34 ? "等待" : ""}</span>
       </button>;
     }
     // The bar label uses the friendly name (0.16 0.3); the raw identity stays
     // in the aria label and tooltip.
     const shortModel = namer(span.configuration).text;
-    const label = widthPxSpan >= 150
+    const label = textPx >= 150
       ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
-      : widthPxSpan >= 72 ? `第${span.turnIndex ?? "?"}轮` : widthPxSpan >= 30 ? String(span.turnIndex ?? "·") : "";
+      : textPx >= 72 ? `第${span.turnIndex ?? "?"}轮` : textPx >= 30 ? String(span.turnIndex ?? "·") : "";
     if (facts.outcome === "unknown" && facts.recordedEndMs !== null) {
       // Solid to the last recorded instant, dotted tail reserved through the
       // observation instant by the Host layout.
-      const solidWidth = Math.max(scaled.position(facts.recordedEndMs)! - left, 0.3);
-      const solidShare = Math.min(100, solidWidth / Math.max(width, 0.3) * 100);
+      const solidWidthPx = Math.max(0, (scaled.position(facts.recordedEndMs)! - left) / 100 * widthPx);
+      const tailLeftPx = solidWidthPx + 10;
+      const tailWidthPx = Math.max(0, widthPxSpan - tailLeftPx);
       // Compare the existing placed intervals on this row. Touching endpoints
       // and spans without a usable duration do not occupy the unknown tail.
       const tailOverlaps = facts.endMs !== null && facts.endMs > facts.recordedEndMs
@@ -789,18 +795,18 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         });
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="solid" style={{ width: `${solidShare}%` }} aria-hidden="true" />
-        <span className="sp-text sp-solid-text" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
-        <i className="end-mark warn" style={{ left: `calc(${solidShare}% - 8px)` }} aria-hidden="true">?</i>
-        <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 && !tailOverlaps ? "结束未确认" : ""}</span>
+        <span className="solid" style={{ width: `${solidWidthPx}px` }} aria-hidden="true" />
+        <span className="sp-text sp-solid-text" style={{ width: `${solidWidthPx}px` }}>{solidWidthPx - SPAN_TEXT_INSET_PX >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <i className="end-mark warn" style={{ left: `${solidWidthPx - 7.5}px`, right: "auto" }} aria-hidden="true">?</i>
+        <span className="sp-text sp-tail" style={{ left: `${tailLeftPx}px`, width: `${tailWidthPx}px` }}>{tailWidthPx - SPAN_TEXT_INSET_PX >= 50 && !tailOverlaps ? "结束未确认" : ""}</span>
       </button>;
     }
-    const endMark = facts.outcome === "failed" ? <i className="end-mark bad" aria-hidden="true">✕</i>
-      : facts.outcome === "cancelled" ? <i className="end-mark muted" aria-hidden="true">⊘</i>
+    const endMark = facts.outcome === "failed" ? <i className="end-mark bad" style={endStyle} aria-hidden="true">✕</i>
+      : facts.outcome === "cancelled" ? <i className="end-mark muted" style={endStyle} aria-hidden="true">⊘</i>
         : facts.outcome === "running" ? <i className="pulse" aria-hidden="true" /> : null;
     return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
       data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-      <span className="sp-text">{label}</span>{endMark}
+      <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{label}</span>{endMark}
     </button>;
   }
 

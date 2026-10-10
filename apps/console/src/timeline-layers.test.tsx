@@ -253,11 +253,13 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     expect([...updated.children].map(child => child.className)).toEqual(childClasses);
   });
 
+  // This 100-minute fit canvas is 788px: tail text needs 76px total
+  // (10px mark clearance, 16px insets and five 10px glyphs).
   it.each([
-    { name: "below", end: "02:36:01", text: "" },
-    { name: "at", end: "02:36:00", text: "结束未确认" },
-    { name: "above", end: "02:35:59", text: "结束未确认" },
-  ])("retains the original 4-percent tail width threshold $name the boundary", ({ end, text }) => {
+    { name: "below", end: "02:30:21.396", text: "" },
+    { name: "at", end: "02:30:21.319", text: "结束未确认" },
+    { name: "above", end: "02:30:21.243", text: "结束未确认" },
+  ])("uses the pixel tail text threshold with mark clearance and insets $name the boundary", ({ end, text }) => {
     const data = unknownTailTimeline();
     data.observedAt = at("02:40:00");
     data.spans[0]!.startAt = at("01:00:00");
@@ -269,10 +271,10 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
   it.each([
     { end: "01:18:00", text: "" },
     { end: "01:18:30", text: "" },
-    { end: "01:19:00", text: "等待" },
-    { end: "01:19:30", text: "等待 Host" },
+    { end: "01:19:00", text: "" },
+    { end: "01:19:30", text: "等待" },
     { end: "01:21:00", text: "等待 Host · 3 分" },
-  ])("preserves the Host short-bar label through $end", ({ end, text }) => {
+  ])("fits the Host short-bar label after both reading insets through $end", ({ end, text }) => {
     const data = unknownTailTimeline();
     data.spans.push(span({ ...following, startAt: at("01:18:00"), endAt: at(end), state: "finished" }));
     render(<ObjectiveTimeline {...props(data)} />);
@@ -293,8 +295,8 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
   it.each([
     { end: "01:18:30", text: "" },
     { end: "01:19:00", text: "2" },
-    { end: "01:19:30", text: "第2轮" },
-  ])("preserves the following execution short-bar label through $end", ({ end, text }) => {
+    { end: "01:19:30", text: "2" },
+  ])("fits the following execution short-bar label after both reading insets through $end", ({ end, text }) => {
     const data = unknownTailTimeline();
     data.spans.push(span({ ...following, kind: "execution", state: "finished", endAt: at(end),
       turnIndex: 2, shutdownConfirmed: true }));
@@ -329,5 +331,175 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     expect(unknown.querySelector(".sp-tail")!.textContent).toBe("");
     expect(unknown.querySelector(".end-mark.warn")!.textContent).toBe("?");
     expect(unknown.getAttribute("aria-label")).toContain("结束未确认");
+  });
+});
+
+// A continuous four-hour record keeps a long canvas without relying on idle
+// folding or mocked DOM measurements. At max, one second is exactly one px.
+const GEOMETRY_START = Date.parse("2026-09-26T01:12:00Z");
+const geometryAt = (ms: number) => new Date(GEOMETRY_START + ms).toISOString();
+function geometryTimeline(subject: Partial<TimelineSpan>, observedMs = 240 * 60000): ObjectiveTimelineData {
+  const data = timeline();
+  const spans = [
+    span({ spanId: "geometry", startAt: geometryAt(0), endAt: geometryAt(3000), turnIndex: 1,
+      shutdownConfirmed: true, ...subject }),
+    span({ spanId: "domain", runId: "r2", kind: "host", state: "finished",
+      startAt: geometryAt(0), endAt: geometryAt(240 * 60000) }),
+  ];
+  return { ...data, observedAt: geometryAt(observedMs), rows: [row({}), row({ runId: "r2", rootRunId: "r2" })],
+    spans, totals: { ...data.totals, spans: spans.length, rows: 2, allRows: 2 } };
+}
+function zoomGeometry(level: "fit" | "+2" | "max") {
+  const button = document.querySelector<HTMLButtonElement>('[aria-label="放大"]')!;
+  if (level === "+2") { fireEvent.click(button); fireEvent.click(button); }
+  if (level === "max") {
+    for (let i = 0; i < 20 && !button.disabled; i++) fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+  }
+}
+function geometryTrackPx() {
+  const grid = document.querySelector<HTMLElement>(".tl-grid")!;
+  // The grid contains a sticky label column plus a 12px end reserve. The
+  // remaining declared track width is the percentage containing block.
+  return Number(/\+ ([\d.]+)px/.exec(grid.style.width)![1]) - 12;
+}
+function spanPx(element: HTMLElement) {
+  const track = geometryTrackPx();
+  return { left: Number.parseFloat(element.style.left) / 100 * track,
+    width: Number.parseFloat(element.style.width) / 100 * track };
+}
+function markCentre(element: HTMLElement) {
+  const css = getComputedStyle(element);
+  expect(css.right).toBe("auto");
+  // Computed style serializes fractional px with limited decimal precision.
+  return Number.parseFloat(css.left) + Number.parseFloat(css.width) / 2;
+}
+
+describe("U6.1: real duration geometry on a long canvas", () => {
+  it.each(["fit", "+2", "max"] as const)("keeps zero, millisecond and three-second spans at their true width at %s", level => {
+    const data = geometryTimeline({});
+    const kinds = ["execution", "queue", "routing", "host"] as const;
+    data.spans = [...data.spans.slice(1), ...kinds.flatMap(kind => [0, 1, 3000].map(ms =>
+      span({ spanId: `${kind}-${ms}`, kind, startAt: geometryAt(120000), endAt: geometryAt(120000 + ms),
+        shutdownConfirmed: true, resultStatus: kind === "routing" ? "failed" : undefined })))];
+    data.totals.spans = data.spans.length;
+    render(<ObjectiveTimeline {...props(data)} />);
+    zoomGeometry(level);
+    const expectedTrack = level === "max" ? 14400 : level === "+2" ? 1773 : 788;
+    expect(geometryTrackPx()).toBe(expectedTrack);
+    const ppm = expectedTrack / 240;
+    for (const kind of kinds) for (const ms of [0, 1, 3000]) {
+      const element = bar(`span:${kind}-${ms}`)!;
+      const geometry = spanPx(element);
+      expect(geometry.left).toBeCloseTo(2 * ppm, 8);
+      expect(geometry.width).toBeCloseTo(ms / 60000 * ppm, 8);
+      expect(geometry.left + geometry.width).toBeCloseTo((120000 + ms) / 60000 * ppm, 8);
+      expect(getComputedStyle(element).minWidth).toBe(kind === "routing" ? "14px" : "4px");
+      expect(element.title).not.toBe("");
+      expect(element.getAttribute("aria-label")).toBe(element.title);
+      if (kind === "execution" || kind === "host") expect(element.querySelector(".sp-text")!.textContent).toBe("");
+    }
+  });
+});
+
+describe("U6.2: end instants are independent of minimum shapes", () => {
+  it.each((["failed", "cancelled", "unknown"] as const).flatMap(outcome =>
+    (["fit", "+2", "max"] as const).map(level => ({ outcome, level }))))("anchors $outcome ends including zero-duration records at $level", ({ outcome, level }) => {
+    for (const ms of [0, 1, 3000]) {
+      const unknown = outcome === "unknown";
+      const data = geometryTimeline({ startAt: geometryAt(120000), endAt: geometryAt(120000 + ms),
+        resultStatus: unknown ? undefined : outcome, uncertain: unknown, shutdownConfirmed: !unknown },
+        unknown ? 120000 + ms + 2000 : undefined);
+      const view = render(<ObjectiveTimeline {...props(data)} />);
+      zoomGeometry(level);
+      const pxPerMs = geometryTrackPx() / (240 * 60000);
+      const element = bar("span:geometry")!;
+      const geometry = spanPx(element);
+      const mark = element.querySelector<HTMLElement>(".end-mark")!;
+      expect(mark.textContent).toBe(unknown ? "?" : outcome === "failed" ? "✕" : "⊘");
+      expect(mark.getAttribute("aria-hidden")).toBe("true");
+      expect(geometry.left + markCentre(mark)).toBeCloseTo((120000 + ms) * pxPerMs, 4);
+      expect(geometry.width).toBeCloseTo((ms + (unknown ? 2000 : 0)) * pxPerMs, 8);
+      expect(element.title).not.toBe("");
+      expect(element.getAttribute("aria-label")).toBe(element.title);
+      if (unknown) {
+        const solid = element.querySelector<HTMLElement>(".solid")!;
+        const text = element.querySelector<HTMLElement>(".sp-solid-text")!;
+        const tail = element.querySelector<HTMLElement>(".sp-tail")!;
+        expect(Number.parseFloat(solid.style.width)).toBeCloseTo(ms * pxPerMs, 8);
+        expect(text.style.width).toBe(solid.style.width);
+        expect(text.textContent).toBe("");
+        expect(Number.parseFloat(tail.style.left)).toBeCloseTo(ms * pxPerMs + 10, 8);
+        expect(Number.parseFloat(tail.style.width)).toBe(0);
+        expect(tail.textContent).toBe("");
+        expect(element.classList.contains("unknown")).toBe(true);
+      }
+      view.unmount();
+    }
+  });
+
+  it("keeps a wholly zero-duration unknown record at one instant", () => {
+    render(<ObjectiveTimeline {...props(geometryTimeline({ endAt: geometryAt(0), uncertain: true, shutdownConfirmed: false }, 0))} />);
+    zoomGeometry("max");
+    const element = bar("span:geometry")!;
+    expect(spanPx(element).width).toBe(0);
+    expect(Number.parseFloat(element.querySelector<HTMLElement>(".solid")!.style.width)).toBe(0);
+    expect(markCentre(element.querySelector<HTMLElement>(".end-mark")!)).toBe(0);
+    expect(element.querySelector(".sp-solid-text")!.textContent).toBe("");
+    expect(element.querySelector(".sp-tail")!.textContent).toBe("");
+    expect(element.getAttribute("aria-label")).toBe(element.title);
+  });
+
+  it.each([0, 1, 3000])("keeps a %i ms unknown tail and its observation endpoint without a percentage floor", ms => {
+    const data = geometryTimeline({ endAt: geometryAt(2000), uncertain: true, shutdownConfirmed: false }, 2000 + ms);
+    render(<ObjectiveTimeline {...props(data)} />);
+    zoomGeometry("max");
+    const element = bar("span:geometry")!;
+    const geometry = spanPx(element);
+    expect(geometry.width).toBeCloseTo(2 + ms / 1000, 8);
+    const solid = element.querySelector<HTMLElement>(".solid")!;
+    expect(Number.parseFloat(solid.style.width)).toBeCloseTo(2, 8);
+    expect(markCentre(element.querySelector<HTMLElement>(".end-mark")!)).toBeCloseTo(2, 8);
+    expect(geometry.width - Number.parseFloat(solid.style.width)).toBeCloseTo(ms / 1000, 8);
+    expect(element.querySelector(".sp-tail")!.textContent).toBe("");
+  });
+});
+
+describe("U6.3: label thresholds use the width remaining after insets", () => {
+  it.each([
+    { kind: "execution" as const, threshold: 46, before: "", at: "1" },
+    { kind: "execution" as const, threshold: 88, before: "1", at: "第1轮" },
+    { kind: "execution" as const, threshold: 166, before: "第1轮", at: "第1轮 · 配置未记录" },
+    { kind: "host" as const, threshold: 50, before: "", at: "等待" },
+    { kind: "host" as const, threshold: 80, before: "等待", at: "等待 Host" },
+    { kind: "host" as const, threshold: 126, before: "等待 Host", at: "等待 Host · 2 分" },
+  ])("fits $kind text below, at and above $threshold px", ({ kind, threshold, before, at }) => {
+    for (const delta of [-0.001, 0, 0.001]) {
+      const data = geometryTimeline({ kind, endAt: geometryAt(Math.round((threshold + delta) * 1000)) });
+      const view = render(<ObjectiveTimeline {...props(data)} />);
+      zoomGeometry("max");
+      const element = bar("span:geometry")!;
+      const text = element.querySelector<HTMLElement>(".sp-text")!;
+      expect(text.textContent).toBe(delta < 0 ? before : at);
+      expect(Number.parseFloat(text.style.width)).toBeCloseTo(threshold + delta, 8);
+      expect(element.getAttribute("aria-label")).toBe(element.title);
+      view.unmount();
+    }
+  });
+
+  it.each(["solid", "tail"] as const)("fits unknown %s text after insets and mark clearance on a long max canvas", part => {
+    for (const delta of [-0.001, 0, 0.001]) {
+      const solidMs = part === "solid" ? Math.round((88 + delta) * 1000) : 120000;
+      const tailMs = part === "tail" ? Math.round((76 + delta) * 1000) : 120000;
+      const data = geometryTimeline({ endAt: geometryAt(solidMs), uncertain: true, shutdownConfirmed: false }, solidMs + tailMs);
+      const view = render(<ObjectiveTimeline {...props(data)} />);
+      zoomGeometry("max");
+      const element = bar("span:geometry")!;
+      const text = element.querySelector(part === "solid" ? ".sp-solid-text" : ".sp-tail")!;
+      expect(text.textContent).toBe(delta < 0 ? "" : part === "solid" ? "第1轮 · 配置未记录" : "结束未确认");
+      expect(markCentre(element.querySelector<HTMLElement>(".end-mark")!)).toBeCloseTo(solidMs / 1000, 8);
+      expect(element.getAttribute("aria-label")).toBe(element.title);
+      view.unmount();
+    }
   });
 });

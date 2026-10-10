@@ -370,7 +370,7 @@ button.tl-label:hover { background: var(--subtle); }
 .sp { --tl-item-height: 22px; display: flex; align-items: center; height: var(--tl-item-height); min-width: 4px; padding: 0; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; line-height: var(--tl-item-height); text-align: left; white-space: nowrap; overflow: visible; }
 /* Text on its own layer: readable over every later span, while the geometry
    stays the percentage width alone. */
-.sp-text { display: block; pointer-events: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; position: relative; z-index: var(--tl-layer-text, 2); }
+.sp-text { padding: 0 8px; box-sizing: border-box; flex-shrink: 0; display: block; pointer-events: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; position: relative; z-index: var(--tl-layer-text, 2); }
 .sp.queue { --tl-item-height: 8px; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); }
 .sp::before { content: ""; position: absolute; inset: 0; box-sizing: border-box; border-radius: inherit; pointer-events: none; }
 .sp.queue::before, .sp.routing::before { border: 1px solid var(--line-strong); }
@@ -389,13 +389,13 @@ button.tl-label:hover { background: var(--subtle); }
 .sp.exec.cancelled { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 42%, transparent) 0 2px, transparent 2px 6px); }
 .sp.striped { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 38%, transparent) 0 1.5px, transparent 1.5px 5px); }
 .sp.running { background: linear-gradient(90deg, var(--c) 72%, color-mix(in srgb, var(--c) 40%, transparent)); }
-/* Unknown-stop geometry is unchanged; the solid shape and its label are
+/* Unknown-stop geometry follows the recorded time; the solid shape and its label are
    siblings so the shape cannot carry text above other marks. */
 .sp.unknown { background: transparent; color: var(--ink); }
 .sp.unknown::before { border: 1.5px dotted var(--c); }
 .sp.unknown .solid { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 2px; pointer-events: none; }
-.sp-solid-text { position: absolute; inset: 0 auto 0 0; padding: 0 6px; line-height: 22px; color: var(--on-cfg); }
-.sp.unknown .sp-tail { color: var(--muted); font-size: 10px; line-height: 20px; }
+.sp-solid-text { position: absolute; inset: 0 auto 0 0; line-height: 22px; color: var(--on-cfg); }
+.sp.unknown .sp-tail { position: absolute; color: var(--muted); font-size: 10px; line-height: 20px; }
 .sp::after, .mk::after, .flag::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: var(--tl-layer-interaction, 3); }
 .sp.run-member::after, .flag.run-member::after { box-shadow: 0 0 0 1px var(--focus); }
 .sp.selected::after, .mk.selected::after, .flag.selected::after { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }

@@ -4,6 +4,8 @@ import { ObjectiveTimeline, type ObjectiveTimelineProps } from "./ObjectiveTimel
 import { objectiveTimelineFixture, OPUS } from "./objective-fixtures";
 import { buildInspectorCard } from "./inspector-card";
 import { spanFacts, spanOutcome } from "./objective-display";
+import { createTimelineLayout } from "./objective-timeline-layout";
+import { scaleTimeline } from "./objective-timeline-scale";
 import type { TimelineSpan } from "./objective-types";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -94,7 +96,19 @@ describe("routing timeline interactions", () => {
     expect(bar.querySelector(".routing-cross")).toBeTruthy();
     expect(bar.querySelector(".routing-fallback-mark")).toBeNull();
     expect([span.startAt, span.endAt]).toEqual(recordedTimes);
-    expect(bar.style.width).toBe("0.3%");
+    // The unmeasured 800px track reserves 12px after the final instant.
+    // Use the existing scale so this fixture's folded gaps remain accounted for.
+    const scale = scaleTimeline(createTimelineLayout(timeline), 800 - 12);
+    expect(Date.parse(span.endAt!) - Date.parse(span.startAt!)).toBe(1);
+    const start = scale.position(span.startAt)!;
+    const end = scale.position(span.endAt)!;
+    expect(bar.style.left).toMatch(/%$/);
+    expect(bar.style.width).toMatch(/%$/);
+    const left = Number.parseFloat(bar.style.left);
+    const width = Number.parseFloat(bar.style.width);
+    expect(left).toBeCloseTo(start, 10);
+    expect(width).toBeCloseTo(end - start, 12);
+    expect(left + width).toBeCloseTo(end, 10);
     const stylesheet = document.createElement("style");
     stylesheet.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     document.head.append(stylesheet);

@@ -89,7 +89,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".sp.unknown::before").border).toBe("1.5px dotted var(--c)");
   });
 
-  it("preserves the short span's percentage position/width without an inline box-model override", () => {
+  it("U5.3: keeps a millisecond span at its recorded width without a box-model override", () => {
     const data = timeline([
       { spanId: "short", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z", endAt: "2026-09-26T01:14:00.001Z", resultStatus: "failed", shutdownConfirmed: true },
       { spanId: "wait", kind: "host", state: "open", startAt: "2026-09-26T01:14:00.001Z", endAt: null },
@@ -97,7 +97,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     const { container } = render(<ObjectiveTimeline {...props(data)} />);
     const failed = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:short"]')!;
     const wait = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:wait"]')!;
-    expect(failed.style.width).toBe("0.3%");
+    expect(Number.parseFloat(failed.style.width)).toBeCloseTo(100 / (418 * 60 * 1000), 12);
     expect(failed.style.left).toMatch(/%$/);
     expect(failed.style.padding).toBe("");
     expect(wait.previousElementSibling).toBe(failed);
@@ -107,13 +107,15 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".sp.queue").getPropertyValue("--tl-item-height")).toBe("8px");
   });
 
-  it("keeps end and event decoration sizes fixed and clips reading padding inside the label", () => {
+  it("U5.4: keeps fixed decoration sizes and shares an 8px reading inset inside every label", () => {
     expect(rule(".end-mark").width).toBe("15px");
     expect(rule(".end-mark").height).toBe("15px");
     expect(rule(".end-mark").lineHeight).toBe("12px");
     expect(rule(".mk").width).toBe("18px");
     expect(rule(".mk").marginLeft).toBe("-9px");
-    expect(rule(".sp-solid-text").padding).toBe("0px 6px");
+    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    const solidText = document.querySelector(".tl-scroll .sp-solid-text")!;
+    expect(getComputedStyle(solidText).padding).toBe("0px 8px");
     expect(rule(".sp-text").overflow).toBe("hidden");
     expect(rule(".sp-text").textOverflow).toBe("ellipsis");
     expect(rule(".sp.unknown .solid").padding).toBe("");
@@ -167,5 +169,31 @@ describe("U5: audited controls retain the shared global box model and normal siz
     expect(getComputedStyle(container.querySelector(".segmented button")!).padding).toBe("5px 9px");
     expect(getComputedStyle(container.querySelector("input")!).width).toBe("16px");
     expect(rule("*").boxSizing).toBe("border-box");
+  });
+});
+
+describe("U6.4: reading insets stay inside real label widths", () => {
+  it("gives ordinary, solid and tail text the same internal space without inflating span geometry", () => {
+    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    for (const selector of [".exec:not(.unknown) .sp-text", ".wait .sp-text", ".sp-solid-text", ".sp-tail"]) {
+      const labels = document.querySelectorAll<HTMLElement>(`.tl-scroll ${selector}`);
+      expect(labels.length, selector).toBeGreaterThan(0);
+      for (const label of labels) {
+        const css = getComputedStyle(label);
+        expect(css.paddingLeft, selector).toBe("8px");
+        expect(css.paddingRight, selector).toBe("8px");
+        expect(css.boxSizing, selector).toBe("border-box");
+        expect(css.overflow, selector).toBe("hidden");
+        expect(css.textOverflow, selector).toBe("ellipsis");
+        expect(css.pointerEvents, selector).toBe("none");
+        expect(css.flexShrink, selector).toBe("0");
+        expect(label.style.width, selector).toMatch(/px$/);
+        const parent = getComputedStyle(label.parentElement!);
+        expect(parent.paddingLeft).toBe("0px");
+        expect(parent.paddingRight).toBe("0px");
+        expect(parent.borderLeftWidth).toBe("0px");
+        expect(parent.borderRightWidth).toBe("0px");
+      }
+    }
   });
 });
