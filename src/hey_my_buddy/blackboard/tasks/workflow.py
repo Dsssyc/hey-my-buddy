@@ -1777,7 +1777,7 @@ class WorkflowCoordinator:
                     facts["reasons"] = reasons
                 else:
                     directory = Path(self.board.directory) / "workspaces" / manifest["workspaceId"]
-                    inspected = storage._orphan_workspace(self.board, directory, storage._workspace_reference_rows(connection))
+                    inspected = storage._orphan_workspace(self.board, directory)
                     if inspected["reasons"]:
                         facts["reasons"] = inspected["reasons"]
                         if inspected.get("proofError"):
