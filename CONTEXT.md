@@ -89,6 +89,10 @@ _Avoid_: Worker (for the process)
 A user's overall piece of work, holding one or more micro tasks and used to group them for browsing and archival. It does not schedule work or grant control authority.
 _Avoid_: 工作目标, objective
 
+**归档 / archive**:
+What the user does to put a macro task away: it leaves the default list and nothing is deleted, and it can be restored. Deletion is a separate act, by the user or at the end of a retention period the user chose.
+_Avoid_: 归档 for deletion
+
 **微任务 / micro task**:
 One bounded piece of work that a Host buddy delegates, owns and accepts; it may span several Worker turns. Every micro task belongs to at most one macro task.
 _Avoid_: 委派 (as a noun), delegation, governed goal
