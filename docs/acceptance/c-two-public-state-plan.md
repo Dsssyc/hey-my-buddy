@@ -180,3 +180,5 @@ Host 没有修改微任务代码或测试，只整合固定补丁及在本计划
 - `tests/python/test_private_directories.py`
 
 微任务首次四项配置全部省略经路由；供应方实际不可重试限流才按原许可用完整配置/理由同 run 恢复并登记。只跑受影响文件，不跑整批完整检查或付费冒烟。Worker 开始时建立短任务根、记下确切路径，TMPDIR/BUDDY_CHECKS_TMPDIR 指入其中，不手动删除任何文件目录、不用 git stash、不新建切换移动删除分支标签、不自行提交；一次性材料和变异留根交付，由 Host 验收后按确切根回收。清除继承 BUDDY_/ANTHROPIC_/C2_ 与虚拟环境，空 HOME、私有 state/runtime、固定 catalog/sentinel，绝不触达真实原生发现、凭据、日常服务或公共端点。日常委派 Too many open files 立即停止报告，不重启或替换。范围内缺陷原 run continue，Host 不代改；独立固定产物审查、实际聚焦和目标变异之后再整合签收，三步全部整合后最后完整检查并停等整批 Host。
+
+3-C 新 run `df9f35ac-5df8-43b9-89e3-58e0b5ef3bb8` 绑定计划提交 `5f7e3b2a`，首次四项配置全部省略，路由决定 `dec-50783657-382b-46b8-8977-c900b7b3753e`，初响应 revision 1、awaiting-model-selection。有且只有一个仅监控的 await，不以工具等待超时当作交付。3-B 的 Worker 精确任务根 `/tmp/c073-b-cIzzzx` 已留存 20,894 份源码、变异、日志和台账后按该一个根整体回收，removed=true；留存哈希与回收账为 `tmp/c073-host/path-state-retained-evidence.json`。没有手动删除受管检出、其他会话或日常对象。
