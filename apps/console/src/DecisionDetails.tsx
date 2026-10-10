@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InlineText } from "./inline-text";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { DecisionAudit, DecisionModel } from "./decision-types";
@@ -77,8 +78,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <div className="row-between"><h3>{audit.kind === "maintain" ? "整理结果" : "选择依据"}</h3>
       <Badge tone={!abstention && ["failed", "needs-host", "stale", "cancelled"].includes(audit.status) ? "amber" : "neutral"}>
         {abstention ? decisionStatus.abstention : decisionStatus[audit.status] || audit.status}</Badge></div>
-    <p className="read-text decision-reason">{reason.length > 360 ? reason.slice(0, 360) + "…" : reason}</p>
-    {reason.length > 360 && <details><summary>展开完整依据</summary><p className="read-text">{reason}</p></details>}
+    <InlineText key={audit.decisionId} recordId={audit.decisionId} text={reason} className="read-text decision-reason" />
     {audit.error && audit.error !== audit.reason && <p className="error-message">{audit.error}</p>}
     <dl className="facts">
       {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}

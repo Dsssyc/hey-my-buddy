@@ -5,7 +5,7 @@
  * timestamps and Host markers with one instant. This module turns those facts
  * into a one-dimensional 0..100 coordinate so narrow and wide layouts can share
  * the same mapping without DOM measurements, and it folds long empty intervals
- * into explicit expandable breaks.
+ * into explicit idle breaks.
  *
  * Nothing here invents evidence: an interval that was not recorded is never
  * repaired into a duration, a terminal record with missing timing never becomes
@@ -17,12 +17,11 @@
 import type { ObjectiveTimeline, TimelineSpan } from "./objective-types";
 
 /** Empty intervals strictly longer than this fold when the view is eligible. */
-export const TIMELINE_FOLD_THRESHOLD_MS = 30 * 60 * 1000;
+export const TIMELINE_FOLD_THRESHOLD_MS = 5 * 60 * 1000;
 const HOST_MARKER_PADDING_MS = 60 * 1000;
 
-/** Width budget of one collapsed break, and of all collapsed breaks together, in percent. */
-const COLLAPSED_GAP_PERCENT = 3;
-const COLLAPSED_TOTAL_PERCENT = 40;
+/** A finite proxy weight for the normalized map; the pixel adapter sets the fixed idle width. */
+const IDLE_WEIGHT_MS = 60 * 1000;
 
 /** A timeline whose whole domain is a single instant still needs one coordinate. */
 const POINT_POSITION_PERCENT = 50;
@@ -54,12 +53,12 @@ const OPEN_SPAN_STATES = new Set([
  * edge), never by an idle guess.
  */
 export type TimelineGap = {
-  /** Deterministic from the original boundaries (`gap-<startMs>-<endMs>`), so a refresh keeps expanded ids. */
+  /** Deterministic from the original boundaries (`gap-<startMs>-<endMs>`), so a refresh keeps the same idle identity. */
   id: string;
   /** Original boundary instants in epoch milliseconds. */
   startMs: number;
   endMs: number;
-  /** True when the break renders at its small fixed share instead of its real duration. */
+  /** True when the break renders at its compressed proxy weight instead of its real duration. */
   collapsed: boolean;
   /** Normalized 0..100 coordinate of the rendered break; `toPercent - fromPercent` is its visible width. */
   fromPercent: number;
@@ -239,12 +238,12 @@ function isCollapsed(unit: Unit): boolean {
  * Cuts the domain at every recorded instant, classifies each atomic interval as
  * occupied or empty, decides folding per gap, and assigns 0..100 widths.
  *
- * Width allocation: each collapsed break takes `min(3%, 40% / count)`, the
- * remaining width is split linearly by real duration over the unfolded
- * intervals, and folded ids from `expandedGapIds` keep their full width.
+ * Width allocation: each idle break has a one-minute proxy weight in this
+ * normalized map; other intervals retain their real duration. The pixel
+ * adapter replaces that proxy with a constant-width block.
  * Folding is skipped entirely when no interval would keep its real width (a
  * domain made only of empty stretches) and when the view is not eligible, so
- * the caps always hold and an all-empty axis keeps its real scale.
+ * an all-empty axis keeps its real scale.
  */
 function buildUnits(
   startMs: number,
@@ -252,7 +251,6 @@ function buildUnits(
   instants: readonly number[],
   occupied: readonly Interval[],
   canFold: boolean,
-  expandedGapIds: ReadonlySet<string> | undefined,
 ): Unit[] {
   if (endMs === startMs) return [];
   const bounds = [...new Set(instants)].sort((left, right) => left - right);
@@ -277,24 +275,21 @@ function buildUnits(
   const candidates = new Set<Unit>();
   for (const unit of units) {
     if (unit.gap === null) continue;
-    if (canFold && unit.endMs - unit.startMs > TIMELINE_FOLD_THRESHOLD_MS && !expandedGapIds?.has(unit.gap.id)) {
+    if (canFold && unit.endMs - unit.startMs > TIMELINE_FOLD_THRESHOLD_MS) {
       candidates.add(unit);
     }
   }
   const unfoldedMs = units.reduce((total, unit) => total + (candidates.has(unit) ? 0 : unit.endMs - unit.startMs), 0);
   const folding = candidates.size > 0 && unfoldedMs > 0;
   if (folding) for (const unit of candidates) unit.gap!.collapsed = true;
-  const collapsedCount = folding ? candidates.size : 0;
-  const collapsedPercent = collapsedCount === 0 ? 0 : Math.min(COLLAPSED_GAP_PERCENT, COLLAPSED_TOTAL_PERCENT / collapsedCount);
-  // Fold-free layouts keep every interval (candidate included) on the real scale.
-  const realMs = folding ? unfoldedMs : units.reduce((total, unit) => total + (unit.endMs - unit.startMs), 0);
-  const realPercent = folding ? 100 - collapsedPercent * collapsedCount : 100;
+  const weightMs = units.reduce((total, unit) => total +
+    (folding && isCollapsed(unit) ? IDLE_WEIGHT_MS : unit.endMs - unit.startMs), 0);
 
   let cumulative = 0;
   for (const unit of units) {
     const width = folding && isCollapsed(unit)
-      ? collapsedPercent
-      : (realPercent * (unit.endMs - unit.startMs)) / realMs;
+      ? 100 * IDLE_WEIGHT_MS / weightMs
+      : 100 * (unit.endMs - unit.startMs) / weightMs;
     unit.fromPercent = Math.min(cumulative, 100);
     cumulative += width;
     unit.toPercent = Math.min(cumulative, 100);
@@ -336,18 +331,15 @@ function createPosition(startMs: number, endMs: number, units: readonly Unit[]) 
  * Gaps: empty intervals between the unioned occupancy, split at every recorded
  * instant. Host markers reserve a one-minute neighborhood clipped to the domain;
  * this is conservative visual spacing, not a claim of Host execution duration.
- * Folding applies only to intervals strictly longer than 30 minutes,
+ * Folding applies only to intervals strictly longer than 5 minutes,
  * only when `scopeComplete` is true (and, when present, no truncation flag is
- * set) and every needed timestamp is usable and non-reversed, and never to an
- * id passed in `expandedGapIds`. Folding also needs at least one interval that
- * keeps its real width to fold against.
+ * set) and every needed timestamp is usable and non-reversed. Folding needs
+ * at least one interval that keeps its real width to fold against.
  *
  * @param timeline Read-only slice of `ObjectiveTimeline` the layout may read.
- * @param expandedGapIds Gap ids whose breaks the user expanded; they keep full width.
  */
 export function createTimelineLayout(
   timeline: Pick<ObjectiveTimeline, "spans" | "events" | "observedAt" | "scopeComplete">,
-  expandedGapIds?: ReadonlySet<string>,
 ): TimelineLayout {
   const observedAtMs = parseTimelineInstant(timeline.observedAt);
   const instants: number[] = [];
@@ -393,7 +385,7 @@ export function createTimelineLayout(
   }
 
   const canFold = timeline.scopeComplete === true && timingTrustworthy && !hasOmittedScope(timeline);
-  const units = buildUnits(startMs, endMs, instants, mergeIntervals(intervals), canFold, expandedGapIds);
+  const units = buildUnits(startMs, endMs, instants, mergeIntervals(intervals), canFold);
   const gaps: TimelineGap[] = [];
   for (const unit of units) {
     if (unit.gap === null) continue;

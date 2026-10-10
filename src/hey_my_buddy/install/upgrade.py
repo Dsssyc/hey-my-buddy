@@ -535,6 +535,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 routing_migration, expected = migrate_routing_configuration(state, expected)
                 journal.update(phase='migrated', routingMigration=routing_migration, expected=expected)
                 write_journal(marker, journal)
+                from ..blackboard.store.workspace_identity_migration import migrate_workspace_identity
+                identity_migration, expected = migrate_workspace_identity(state, expected)
+                journal.update(phase='identity-migrated', identityMigration=identity_migration, expected=expected)
+                write_journal(marker, journal)
                 journal['privateMigration'] = {**readiness['plan'], 'applied': False}
                 write_journal(marker, journal)
                 private_summary = private_migration.apply(state, journal, lambda value: write_journal(marker, value))

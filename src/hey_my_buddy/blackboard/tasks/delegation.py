@@ -34,6 +34,7 @@ import sqlite3
 from typing import Any, Sequence
 
 from ...errors import BoardError
+from . import workspace_identity
 
 #: Task kinds derived from durable relations, never from a label.
 DELEGATION_KINDS = ("goal", "helper", "decision", "execution")
@@ -197,7 +198,7 @@ SELECT
           ORDER BY reservation.rowid LIMIT 1),
         json_extract(root_task.spec_json, '$.cwd'),
         json_extract(t.spec_json, '$.cwd')
-    ) END AS project_id,
+    ) END AS recorded_project_id,
     COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS objective,
     COALESCE(json_extract(r.execution_configuration_json, '$.adapter'), t.adapter) AS effective_adapter,
     COALESCE(json_extract(r.execution_configuration_json, '$.model'), json_extract(t.spec_json, '$.model'))
@@ -231,7 +232,17 @@ LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.
-TASK_HISTORY_SQL = f"SELECT * FROM ({RELATION_SQL}) AS resolved"
+#:
+#: ``project_id`` is the recorded attribution resolved to its current stable form
+#: through the board's registered old→new identity mapping, so a macro task
+#: recorded before the restart-stable identity and a new micro task of the same
+#: repository group, list and filter together instead of splitting across the
+#: two digests; an unmapped value stays exactly as recorded. The raw digest
+#: stays available as ``recorded_project_id``.
+TASK_HISTORY_SQL = f"""SELECT resolved.*,
+       {workspace_identity.canonical_sql('resolved.recorded_project_id')} AS project_id,
+       {workspace_identity.identity_reason_sql('resolved.recorded_project_id')} AS project_identity_reason
+  FROM ({RELATION_SQL}) AS resolved"""
 
 
 def _complete_configuration(value: Any) -> dict | None:
@@ -273,7 +284,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
     parent_run = row["delegated_parent_run_id"] if isinstance(row["delegated_parent_run_id"], str) else None
     root_run = row["root_run_id"] if isinstance(row["root_run_id"], str) else None
     configuration = _complete_configuration(row["run_configuration_json"] if governed else row["spec_json"])
-    return {
+    result = {
         "kind": kind,
         "sourceHostId": source_host if root_run else None,
         "currentHostId": current_host if root_run else None,
@@ -286,6 +297,10 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         },
         "configuration": configuration,
     }
+    reason = row["project_identity_reason"]
+    if isinstance(reason, str) and reason:
+        result["project"]["identityReason"] = reason
+    return result
 
 
 def resolve(connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
@@ -330,7 +345,12 @@ def history_where(
         # tasks (no governed run) are excluded.
         clauses.append("governed_run_id IS NOT NULL AND child_parent_run_id IS NULL")
     if project_id:
-        clauses.append("project_id = ?")
+        # The derived column is already canonical (``TASK_HISTORY_SQL``); the
+        # requested value may still be a recorded old digest, so it resolves
+        # through the same mapping inside the query itself.
+        clauses.append(
+            "project_id = (SELECT " + workspace_identity.canonical_sql("requested.project_id")
+            + " FROM (SELECT ? AS project_id) AS requested)")
         values.append(project_id)
     if host_id:
         clauses.append("(source_host_id = ? OR current_host_id = ?)")

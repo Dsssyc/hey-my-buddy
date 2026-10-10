@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
-import { useGlobalRefresh, waitForRead } from "./global-refresh";
+import { waitForRead } from "./global-refresh";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 import type { Task, TaskPage, TaskQuery } from "./types";
+
+function oldestVerification(left: number | null, right: number | null): number | null {
+  return left === null || right === null ? null : Math.min(left, right);
+}
 
 /** The poll window of the records view's own first page; never a snapshot page. */
 const POLL_LIMIT = 50;
@@ -13,6 +17,8 @@ const POLL_LIMIT = 50;
  * change while the displayed rows reload; the list itself never renders it.
  */
 const KNOWN_LIMIT = 100;
+
+type FailedRead = { kind: "first" | "append" | "poll"; scope: string; before?: string };
 
 /**
  * True when `row` sits at or past `floor` in the records route's own keyset
@@ -43,28 +49,43 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
   const [newIds, setNewIds] = useState<ReadonlySet<string>>(() => new Set());
   const [known, setKnown] = useState<Task[]>([]);
   const [loading, setLoading] = useState(active), [error, setError] = useState("");
+  const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
   const visible = useDocumentVisible();
   const pageRef = useRef(page);
   pageRef.current = page;
   const key = JSON.stringify(query);
-  const current = useRef({ query, active, cursor: page.nextCursor });
-  current.current = { query, active, cursor: page.nextCursor };
+  const current = useRef({ query, active, cursor: page.nextCursor, scope: key + revision });
+  current.current = { query, active, cursor: page.nextCursor, scope: key + revision };
+  const failedRead = useRef<FailedRead | null>(null);
+  const clearReadFailure = (kind: FailedRead["kind"]) => {
+    // A first-page poll cannot prove that an unread append page succeeded.
+    if (kind === "poll" && failedRead.current?.kind === "append") return;
+    failedRead.current = null;
+    setError("");
+  };
   // Ignore superseded responses when filters change; abort on unmount/hide.
   // https://react.dev/reference/react/useEffect#fetching-data-with-effects
-  const fetchPage = useCallback(async (append: boolean, strict = false) => {
-    if (!current.current.active || (append && !current.current.cursor)) return;
+  const fetchPage = useCallback(async (append: boolean, strict = false, before?: string) => {
+    const cursor = append ? before ?? current.current.cursor : null;
+    if (!current.current.active || (append && !cursor)) return;
+    const readScope = current.current.scope;
+    const scope = generation.current;
     if (pending.current) {
       if (!strict) return;
       await waitForRead(() => pending.current);
-      if (!current.current.active) return;
+      if (!current.current.active || scope !== generation.current) return;
     }
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true; setLoading(true); setError("");
     try {
-      const next = await api.tasks({ ...current.current.query, limit: 50, ...(append ? { before: current.current.cursor! } : {}) }, controller.signal);
-      if (version !== generation.current || controller.signal.aborted) return;
+      const next = await api.tasks({ ...current.current.query, limit: 50, ...(append ? { before: cursor! } : {}) }, controller.signal);
+      if (version !== generation.current || readScope !== current.current.scope || controller.signal.aborted) return;
+      clearReadFailure(append ? "append" : "first");
+      const checked = api.readVerifiedAt?.(next) ?? null;
+      setVerifiedAtMs(previous => append ? oldestVerification(previous, checked) : checked);
       setKnown(previous => mergeKnown(previous, next.runs));
       setPage(previous => {
         const rows = append ? [...previous.runs] : [];
@@ -80,7 +101,10 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
       // pending 回到最新 notice it has just overtaken.
       if (!append) setNewIds(new Set());
     } catch (failure) {
-      if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (version === generation.current && readScope === current.current.scope && !controller.signal.aborted && !isAbortError(failure)) {
+        failedRead.current = { kind: append ? "append" : "first", scope: readScope, ...(append ? { before: cursor! } : {}) };
+        setError(errorText(failure));
+      }
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) { pending.current = false; setLoading(false); }
@@ -95,20 +119,25 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
    */
   const pollLatest = useCallback(async (strict = false) => {
     if (!current.current.active) return;
+    const readScope = current.current.scope;
+    const scope = generation.current;
     if (pending.current) {
       if (!strict) return;
       await waitForRead(() => pending.current);
-      if (!current.current.active) return;
+      if (!current.current.active || scope !== generation.current) return;
     }
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true;
     try {
       const next = await api.tasks({ ...current.current.query, limit: POLL_LIMIT }, controller.signal);
-      if (version !== generation.current || controller.signal.aborted) return;
-      setError("");
+      if (version !== generation.current || readScope !== current.current.scope || controller.signal.aborted) return;
+      clearReadFailure("poll");
+      let checked = api.readVerifiedAt?.(next) ?? null;
       const updates = new Map(next.runs.map(row => [row.runId, row]));
       const loaded = new Set(pageRef.current.runs.map(row => row.runId));
-      const evictProven = () => setPage(previous => ({
+      const evictProven = () => {
+        setVerifiedAtMs(checked);
+        setPage(previous => ({
         // A proven poll covers the whole loaded window: rows the matching
         // scope no longer returns have stopped matching (left the 等待 Host
         // or 进行中 filter, however deep they were paginated) and leave the
@@ -117,6 +146,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
         total: next.total,
         nextCursor: previous.nextCursor,
       }));
+      };
       // The first page publishes immediately — in-place refresh, live total,
       // choices memory and the 回到最新 notice — so a continuation walk can
       // never delay what the page shows.
@@ -134,6 +164,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
         evictProven();
         return;
       }
+      setVerifiedAtMs(previous => oldestVerification(previous, checked));
       setPage(previous => ({
         runs: previous.runs.map(row => updates.get(row.runId) ?? row),
         total: next.total,
@@ -162,7 +193,8 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
         // honest in-place refresh already on screen is preserved as-is.
         if (!documentVisibleNow()) break;
         const continuation = await api.tasks({ ...current.current.query, limit: POLL_LIMIT, before: cursor }, controller.signal);
-        if (version !== generation.current || controller.signal.aborted) return;
+        if (version !== generation.current || readScope !== current.current.scope || controller.signal.aborted) return;
+        checked = oldestVerification(checked, api.readVerifiedAt?.(continuation) ?? null);
         for (const row of continuation.runs) updates.set(row.runId, row);
         covered += continuation.runs.length;
         const last = continuation.runs[continuation.runs.length - 1];
@@ -175,21 +207,25 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
       setKnown(previous => mergeKnown(previous, [...updates.values()]));
       if (proven) evictProven();
     } catch (failure) {
-      if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (version === generation.current && readScope === current.current.scope && !controller.signal.aborted && !isAbortError(failure)) {
+        failedRead.current = { kind: "poll", scope: readScope };
+        setError(errorText(failure));
+      }
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) { pending.current = false; }
     }
   }, [api]);
-  useGlobalRefresh(() => fetchPage(false, true), active);
   const loadedKey = useRef<string | null>(null);
   // True while the load effect has an armed (debounced) first-page read; the
   // cadence effect stands down until it fires, so a mount or scope change
   // never performs the first read twice.
   const armed = useRef(false);
   const resetScope = () => {
+    failedRead.current = null; setError("");
     setPage({ runs: [], total: 0, nextCursor: null });
     setNewIds(new Set());
+    setVerifiedAtMs(null);
   };
   useEffect(() => {
     ++generation.current; request.current?.abort(); pending.current = false; setLoading(false);
@@ -254,6 +290,28 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     void poll();
     return () => { stopped = true; clearTimeout(timer); };
   }, [active, visible, pollLatest, fetchPage]);
-  return { ...page, newIds, known, loading, error, more: () => fetchPage(true), retry: () => fetchPage(page.runs.length > 0),
+  const refresh = async () => {
+    if (refreshing || !current.current.active) return;
+    const scope = generation.current;
+    const readScope = current.current.scope;
+    const kind = pageRef.current.runs.length ? "poll" : "first";
+    setRefreshing(true);
+    try {
+      if (pageRef.current.runs.length) await pollLatest(true);
+      else await fetchPage(false, true);
+    } catch (failure) {
+      if (scope === generation.current && readScope === current.current.scope && !isAbortError(failure)) {
+        failedRead.current = { kind, scope: readScope };
+        setError(errorText(failure));
+      }
+    } finally { setRefreshing(false); }
+  };
+  const retry = () => {
+    const failed = failedRead.current;
+    if (!failed || failed.scope !== current.current.scope || !current.current.active) return;
+    if (failed.kind === "poll") return pollLatest();
+    return fetchPage(failed.kind === "append", false, failed.before);
+  };
+  return { ...page, newIds, known, loading, error, verifiedAtMs, refreshing, refresh, more: () => fetchPage(true), retry,
     reset: () => setRevision(n => n + 1) };
 }

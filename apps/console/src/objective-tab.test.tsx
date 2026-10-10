@@ -56,15 +56,15 @@ describe("委派记录 tab views", () => {
     const f = harness();
     const user = f.user;
     await screen.findByRole("heading", { name: "选择一个工作目标" });
-    await user.click(screen.getByRole("button", { name: "全部执行记录" }));
+    await user.click(screen.getByRole("button", { name: "切换到全部执行记录" }));
     // The existing records view: its toolbar, checkbox and rows stay as before.
-    expect(await within(screen.getByRole("region", { name: "委派列表" })).findByRole("heading", { name: "委派记录" })).toBeTruthy();
+    expect(await within(screen.getByRole("region", { name: "委派列表" })).findByRole("heading", { name: "全部执行记录" })).toBeTruthy();
     expect(screen.getByLabelText("显示协助任务与内部执行")).toHaveProperty("checked", false);
     await user.click(screen.getByLabelText("显示协助任务与内部执行"));
     expect(await screen.findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
     expect(f.api.tasks).toHaveBeenCalledWith(expect.objectContaining({ rootsOnly: false }), expect.any(AbortSignal));
     // Switching back keeps the objectives data and hides the records view.
-    await user.click(screen.getByRole("button", { name: "工作目标" }));
+    await user.click(screen.getByRole("button", { name: "切换到工作目标" }));
     expect(await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ })).toBeTruthy();
     const checkbox = screen.getByLabelText("显示协助任务与内部执行") as HTMLInputElement;
     expect(checkbox.closest("[hidden]")).not.toBeNull();

@@ -199,6 +199,7 @@ function fixture(options: Options = {}) {
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     storagePlan: vi.fn(async (csrfToken: string) => command("storage_plan", {}, csrfToken)),
     storageApply: vi.fn(),
+    runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null }, installed: null })),
   } as unknown as ConsoleApi;
   return { api, command, operations, published };
 }
@@ -225,6 +226,8 @@ const saveButton = () => within(screen.getByRole("region", { name: "未保存的
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
+  vi.restoreAllMocks();
   window.location.hash = "";
   document.documentElement.dataset.theme = "";
 });

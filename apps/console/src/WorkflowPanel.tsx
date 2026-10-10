@@ -8,6 +8,7 @@ import { useWorkflow } from "./use-workflow";
 import { RoutingPanel } from "./RoutingPanel";
 import { Status } from "./ui";
 import { excerpt } from "./task-state";
+import { InlineText } from "./inline-text";
 import { DetailTabs } from "./DetailTabs";
 import { RoutingDetails } from "./RoutingDetails";
 import { TaskActivityView } from "./task-activity";
@@ -137,8 +138,8 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>验收记录</dt><dd>{value.task.acceptanceVerdict === "accepted" ? "已验收" : value.task.acceptanceVerdict === "rejected" ? "验收问题" : "未验收"}</dd>
             </dl>
 
-            <p className="task-description">{excerpt(value.currentTurn?.summary || "暂无回合摘要", 360)}</p>
-            {(value.currentTurn?.summary?.length || 0) > 360 && <details><summary>展开回合摘要</summary><p className="task-description">{value.currentTurn?.summary}</p></details>}
+            <InlineText key={`${task.runId}:${value.currentTurn?.turnId}`} recordId={`${task.runId}:${value.currentTurn?.turnId}`}
+              text={value.currentTurn?.summary || "暂无回合摘要"} className="task-description" />
             {value.currentTurn?.summaryTruncated && <p className="small muted">摘要已截断</p>}
             {!!value.currentTurn?.remaining?.length && <ul>{value.currentTurn.remaining.map((item, i) => <li key={i}>{item}</li>)}</ul>}
             <details><summary>展开完整任务</summary><p className="read-text">{task.task}</p></details>

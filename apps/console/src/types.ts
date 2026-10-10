@@ -539,3 +539,16 @@ export type ProfilePage = {
   tableRevision: number;
   nextCursor: string | null;
 };
+
+/** Facts from the serving process and its recorded installation, read on demand. */
+export type VersionFacts = {
+  softwareVersion: string | null;
+  contractVersion: string | null;
+  schemaVersion: number | null;
+  sourceCommit: string | null;
+  installedAt: string | null;
+};
+export type RuntimeVersionInfo = {
+  running: VersionFacts & { mode: "runtime" | "source" };
+  installed: VersionFacts | null;
+};

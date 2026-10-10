@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi, parseRoutingHealth, validRoutingConfiguration } from "./api";
+import { createApi, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
 import { objectiveTimelineFixture, OBSERVED_AT } from "./objective-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
@@ -51,6 +51,19 @@ describe("snapshot upgrade boundary and routing health", () => {
         .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
     await expect(apiFor({ ...snapshot, configurationError: error }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+  it("preserves snapshot parsing while reporting its own revalidation time", async () => {
+    const date = "Fri, 09 Oct 2026 18:05:00 GMT";
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(snapshot), { headers: { ETag: '"snapshot"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: date } }));
+    const api = createApi("", fetcher);
+    const first = await api.snapshot();
+    const second = await api.snapshot();
+    expect(api.readVerifiedAt(first)).toBeNull();
+    expect(api.readVerifiedAt(second)).toBe(Date.parse(date));
+    expect(second).toEqual(first);
+    expect(second.consoleSession).toEqual(snapshot.consoleSession);
   });
   it("refuses legacy single and dual slots at the live snapshot parser", async () => {
     await expect(apiFor({ ...snapshot, configuration: { ...configuration, routerProfileId: "head" } }).snapshot())
@@ -144,6 +157,100 @@ describe("delegation history reads", () => {
     const cancelled = new DOMException("cancelled", "AbortError");
     const api = createApi("/private", vi.fn(async () => { throw cancelled; }) as typeof fetch);
     await expect(api.tasks({ rootsOnly: true }, new AbortController().signal)).rejects.toBe(cancelled);
+  });
+});
+
+describe("local read verification evidence", () => {
+  const early = "Fri, 09 Oct 2026 18:00:00 GMT";
+  const later = "Fri, 09 Oct 2026 18:05:00 GMT";
+  const page = { runs: [{ runId: "raw", updatedAt: "2001-01-01T00:00:00Z" }], total: 1, nextCursor: null };
+  const response = (body: unknown, date?: string, etag = '"read"') => new Response(JSON.stringify(body), {
+    headers: { ETag: etag, ...(date === undefined ? {} : { Date: date }) },
+  });
+
+  it("keeps history DTOs unchanged and binds fresh 200/304 dates to each displayed read", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(page, early))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }));
+    const api = createApi("/private", fetcher);
+    const first = await api.tasks({ limit: 50, before: "bounded" });
+    const second = await api.tasks({ limit: 50, before: "bounded" });
+    expect(first).toEqual(page);
+    expect(second).toEqual(page);
+    expect(Object.keys(second)).toEqual(["runs", "total", "nextCursor"]);
+    expect(api.readVerifiedAt(first)).toBe(Date.parse(early));
+    expect(api.readVerifiedAt(second)).toBe(Date.parse(later));
+    expect(fetcher.mock.calls[1][1]?.headers).toEqual({ "If-None-Match": '"read"' });
+  });
+
+  it("keeps missing and malformed response clocks unknown rather than using updatedAt or the client clock", async () => {
+    const clientClock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2030-01-01T00:00:00Z"));
+    try {
+      for (const date of [undefined, "not a server date"]) {
+        const api = createApi("", vi.fn<typeof fetch>().mockResolvedValue(response(page, date)));
+        const data = await api.tasks({ limit: 50 });
+        expect(api.readVerifiedAt(data)).toBeNull();
+        expect(readVerificationText(api.readVerifiedAt(data))).toBe("核对时间未记录");
+      }
+      expect(readVerificationText(undefined)).toBe("核对时间未记录");
+      expect(readVerificationText(NaN)).toBe("核对时间未记录");
+      expect(readVerificationText(Date.parse(early))).toBe(`核对时间 ${new Date(early).toLocaleString("zh-CN", { hour12: false })}`);
+    } finally {
+      clientClock.mockRestore();
+    }
+  });
+
+  it("does not overwrite newer displayed verification when an older 304 finishes late", async () => {
+    let release!: (reply: Response) => void;
+    const pending = new Promise<Response>(resolve => { release = resolve; });
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(page, early))
+      .mockImplementationOnce(() => pending)
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }));
+    const api = createApi("", fetcher);
+    const first = await api.tasks({});
+    const oldRead = api.tasks({});
+    const newest = await api.tasks({});
+    release(new Response(null, { status: 304, headers: { Date: early } }));
+    const older = await oldRead;
+    expect(api.readVerifiedAt(newest)).toBe(Date.parse(later));
+    expect(api.readVerifiedAt(older)).toBe(Date.parse(early));
+    expect(api.readVerifiedAt(first)).toBe(Date.parse(early));
+    expect(api.readVerifiedAt(await api.tasks({}))).toBe(Date.parse(later));
+  });
+
+  it("uses bounded conditional task details with an abort signal and a separate response clock", async () => {
+    const details = { task: { runId: "run/a", updatedAt: "2001-01-01T00:00:00Z" }, attempts: [], turns: [] };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(details, early))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }));
+    const api = createApi("/private", fetcher);
+    const controller = new AbortController();
+    const first = await api.task("run/a", controller.signal);
+    const secondRead = api.task("run/a", controller.signal);
+    await expect(secondRead).resolves.toEqual(details);
+    const second = await secondRead;
+    expect(first).toEqual(details);
+    expect(second).toEqual(details);
+    expect(api.readVerifiedAt(first)).toBe(Date.parse(early));
+    expect(api.readVerifiedAt(second)).toBe(Date.parse(later));
+    expect(fetcher.mock.calls[0]).toEqual(["/private/api/tasks/run%2Fa", expect.objectContaining({ signal: controller.signal })]);
+    expect(fetcher.mock.calls[1][1]?.headers).toEqual({ "If-None-Match": '"read"' });
+    const cancelled = new DOMException("cancelled", "AbortError");
+    const abortedApi = createApi("", vi.fn<typeof fetch>().mockRejectedValue(cancelled));
+    await expect(abortedApi.task("run/a", controller.signal)).rejects.toBe(cancelled);
+  });
+
+  it("attaches the command HTTP Date to configuration history without extending the result shape", async () => {
+    const result = { entries: [{ id: "entry", updatedAt: "2001-01-01T00:00:00Z" }], nextCursor: "older" };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ ok: true, result }, later));
+    const api = createApi("", fetcher);
+    const data = await api.command("evaluation_history", { limit: 50 }, "csrf");
+    expect(data).toEqual(result);
+    expect(api.readVerifiedAt(data)).toBe(Date.parse(later));
+    expect(api.readVerifiedAt({ ...result })).toBeNull();
+    expect(fetcher.mock.calls[0][1]?.body).toBe(JSON.stringify({ operation: "evaluation_history", params: { limit: 50 } }));
   });
 });
 
@@ -588,5 +695,27 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
     await expect(commandApi(mismatch).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     const unfinished = { planId: "plan-9", removedBytes: 4, removed: [{ id: "c1", path: "/p/one", bytes: 4 }], skipped: [], complete: false };
     await expect(commandApi(unfinished).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+});
+
+describe("on-demand running and installed version facts", () => {
+  const facts = { softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null };
+  const version = { running: { ...facts, mode: "source" }, installed: null };
+  it("reads only the authenticated version GET, with same-origin credentials and no cache", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(version)));
+    const api = createApi("/session", fetcher as typeof fetch);
+    await expect(api.runtimeVersion()).resolves.toEqual(version);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/session/api/runtime-version", expect.objectContaining({ credentials: "same-origin", cache: "no-store" }));
+  });
+  it("refuses malformed or missing version facts and propagates session loss", async () => {
+    for (const broken of [null, {}, { running: { ...facts, mode: "unknown" }, installed: null },
+      { ...version, running: { ...version.running, softwareVersion: "" } },
+      { ...version, running: { ...version.running, sourceCommit: undefined } },
+      { ...version, installed: { ...facts, schemaVersion: "15" } }]) {
+      const api = createApi("", vi.fn(async () => new Response(JSON.stringify(broken))) as typeof fetch);
+      await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+    const api = createApi("", vi.fn(async () => new Response(JSON.stringify({ error: { code: "CONSOLE_SESSION_EXPIRED", message: "expired" } }), { status: 401 })) as typeof fetch);
+    await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "CONSOLE_SESSION_EXPIRED" });
   });
 });

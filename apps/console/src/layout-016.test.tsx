@@ -39,7 +39,6 @@ function baseProps(timeline: ObjectiveTimelineData | null, overrides: Record<str
   const props: ObjectiveTimelineProps = {
     summary: timeline?.objective ?? null, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
-    expandedGapIds: new Set<string>(), onToggleGap: vi.fn(), onSetExpanded: vi.fn(),
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
   };
@@ -91,9 +90,9 @@ describe("§1/§2/§4 fit width and the zoom anchor", () => {
     // 900 − 240 = 660: exactly the viewport, never a 380px floor or a
     // band-budget minimum that would force horizontal scrolling.
     expect(canvasPx()).toBe(660);
-    const bands = [...document.querySelectorAll<HTMLElement>(".fold-band")].map(band => Number.parseFloat(band.style.width) / 100 * trackPx());
+    const bands = [...document.querySelectorAll<HTMLElement>(".fold-band")].map(band => Number.parseFloat(band.style.width));
     expect(bands.length).toBeGreaterThan(0);
-    for (const band of bands) expect(band).toBeLessThanOrEqual(64 + 1e-6);
+    for (const band of bands) expect(band).toBe(32);
     expect(bands.reduce((sum, band) => sum + band, 0)).toBeLessThanOrEqual(trackPx() * 0.4 + 1e-6);
   });
 
@@ -346,7 +345,10 @@ describe("§9 the inspector drawer stays reachable", () => {
     render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
     await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     const root = document.querySelector(".timeline-view")!;
-    const drawerObserver = observers.find(observer => observer.targets.includes(root))!;
+    // The card-band budget also observes the column; target the drawer's
+    // observer, which observes the timeline body as well as fixed sections.
+    const drawerObserver = observers.find(observer => observer.targets.includes(root)
+      && observer.targets.some(target => target.matches(".timeline-body, .tl-body")))!;
     const resize = (height: number) => {
       column = height;
       act(() => { drawerObserver.callback([], drawerObserver as unknown as ResizeObserver); });

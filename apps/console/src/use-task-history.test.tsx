@@ -430,3 +430,237 @@ describe("delegation history", () => {
     f.unmount();
   });
 });
+
+describe("U09 local records refresh", () => {
+  it("refreshes only the bounded loaded window in place and keeps the paging cursor without adding a schedule", async () => {
+    const f = harness();
+    await startRead();
+    const rows = descending("loaded", 100);
+    await act(async () => f.requests[0].resolve(page(rows.slice(0, 50), "page-2")));
+    act(() => { void f.result.current.more(); });
+    await act(async () => f.requests[1].resolve(page(rows.slice(50), "unloaded-page-3")));
+    const timers = vi.getTimerCount();
+    act(() => { void f.result.current.refresh(); });
+    expect(f.result.current.refreshing).toBe(true);
+    expect(f.requests[2].query).toEqual({ ...query, limit: 50 });
+    await act(async () => f.requests[2].resolve({ ...page(rows.slice(0, 50).map(row => ({ ...row, revision: 2 })), "walk-2"), total: 200 }));
+    expect(f.requests).toHaveLength(4);
+    expect(f.requests[3].query).toEqual({ ...query, limit: 50, before: "walk-2" });
+    await act(async () => f.requests[3].resolve({ ...page(rows.slice(50).map(row => ({ ...row, revision: 2 })), "unloaded-many"), total: 200 }));
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(rows.map(row => row.runId));
+    expect(f.result.current.runs.every(row => row.revision === 2)).toBe(true);
+    expect(f.result.current.nextCursor).toBe("unloaded-page-3");
+    expect(f.result.current.total).toBe(200);
+    expect(f.requests).toHaveLength(4);
+    expect(f.result.current.refreshing).toBe(false);
+    expect(vi.getTimerCount()).toBe(timers);
+  });
+
+  it("keeps loaded records and cursor on a failed local refresh and retries the same scope", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("kept")], "older")));
+    act(() => { void f.result.current.refresh(); });
+    await act(async () => f.requests[1].reject(new Error("local read failed")));
+    expect(f.result.current.error).toBe("local read failed");
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(["kept"]);
+    expect(f.result.current.nextCursor).toBe("older");
+    expect(f.result.current.refreshing).toBe(false);
+    act(() => { void f.result.current.refresh(); });
+    expect(f.requests[2].query).toEqual(f.requests[1].query);
+    await act(async () => f.requests[2].resolve(page([task("kept", 2)])));
+    expect(f.result.current.error).toBe("");
+    expect(f.result.current.runs[0].revision).toBe(2);
+    expect(f.result.current.nextCursor).toBe("older");
+  });
+
+  it("aborts and ignores a local refresh response after the filter changes", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("old-scope")], "old-cursor")));
+    act(() => { void f.result.current.refresh(); });
+    const nextQuery = { ...query, projectId: "another-project" };
+    f.rerender({ query: nextQuery, active: true });
+    expect(f.requests[1].signal?.aborted).toBe(true);
+    await startRead();
+    await act(async () => f.requests[1].resolve(page([task("wrong-row")], "wrong-cursor")));
+    expect(f.result.current.runs).toEqual([]);
+    expect(f.result.current.newIds.size).toBe(0);
+    expect(f.result.current.known.some(row => row.runId === "wrong-row")).toBe(false);
+    expect(f.result.current.nextCursor).toBeNull();
+    expect(f.result.current.loading).toBe(true);
+    await act(async () => f.requests[2].resolve(page([task("new-scope")], "new-cursor")));
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(["new-scope"]);
+    expect(f.result.current.nextCursor).toBe("new-cursor");
+  });
+
+  it("does not carry a queued local refresh into a later filter scope", async () => {
+    const f = harness();
+    await startRead();
+    act(() => { void f.result.current.refresh(); });
+    const nextQuery = { ...query, hostId: "another-host" };
+    f.rerender({ query: nextQuery, active: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(f.requests).toHaveLength(1);
+    await startRead();
+    expect(f.requests).toHaveLength(2);
+    expect(f.requests[1].query).toMatchObject(nextQuery);
+    await act(async () => f.requests[1].resolve(page([task("current")])));
+    await act(async () => f.requests[0].resolve(page([task("late")])));
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(["current"]);
+    expect(f.requests).toHaveLength(2);
+  });
+
+  it("reports actual page verification conservatively across loaded pages and never uses record timestamps", async () => {
+    const checks = new WeakMap<object, number | null>();
+    const f = harness();
+    // The same hook API object is reachable through its read function; expose
+    // a checked-response sidechannel without changing the page DTO.
+    const api = { tasks: f.tasks, readVerifiedAt: (value: unknown) => checks.get(value as object) ?? null } as unknown as ConsoleApi;
+    f.unmount();
+    const h = renderHook(() => useTaskHistory(api, query, true));
+    await startRead();
+    const first = page([task("first")], "older"); checks.set(first, 1000);
+    await act(async () => f.requests[0].resolve(first));
+    expect(h.result.current.verifiedAtMs).toBe(1000);
+    act(() => { void h.result.current.more(); });
+    const older = page([task("older")], "more"); checks.set(older, 500);
+    await act(async () => f.requests[1].resolve(older));
+    expect(h.result.current.verifiedAtMs).toBe(500);
+    act(() => { void h.result.current.refresh(); });
+    const refreshed = page([task("first", 2), task("older", 2)]); checks.set(refreshed, 2000);
+    await act(async () => f.requests[2].resolve(refreshed));
+    expect(h.result.current.verifiedAtMs).toBe(2000);
+    act(() => { void h.result.current.refresh(); });
+    await act(async () => f.requests[3].resolve(page([task("first", 3), task("older", 3)])));
+    expect(h.result.current.verifiedAtMs).toBeNull();
+  });
+});
+
+describe("U09 retry the failed history read", () => {
+  it.each([null, "older-page"])("retries a failed local first-page refresh in place with cursor %s", async cursor => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("selected")], cursor)));
+    const timers = vi.getTimerCount();
+    act(() => { void f.result.current.refresh(); });
+    await act(async () => f.requests[1].reject(new Error("local first page unavailable")));
+    expect(f.result.current.error).toBe("local first page unavailable");
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(3);
+    expect(f.requests[2].query).toEqual({ ...query, limit: 50 });
+    await act(async () => f.requests[2].resolve(page([task("selected", 2), task("new")], "server-first-page-cursor")));
+    expect(f.result.current.runs.map(row => [row.runId, row.revision])).toEqual([["selected", 2]]);
+    expect(f.result.current.newIds.has("new")).toBe(true);
+    expect(f.result.current.nextCursor).toBe(cursor);
+    expect(f.result.current.error).toBe("");
+    expect(vi.getTimerCount()).toBe(timers);
+  });
+
+  it.each([null, "older-page"])("retries a failed scheduled first-page poll with cursor %s", async cursor => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("loaded")], cursor)));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1].reject(new Error("poll unavailable")));
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(3);
+    expect(f.requests[2].query).toEqual({ ...query, limit: 50 });
+    await act(async () => f.requests[2].resolve(page([task("loaded", 2)])));
+    expect(f.result.current.runs.map(row => [row.runId, row.revision])).toEqual([["loaded", 2]]);
+    expect(f.result.current.nextCursor).toBe(cursor);
+    expect(f.result.current.error).toBe("");
+  });
+
+  it("preserves a failed append and its cursor through a successful first-page poll until append retry succeeds", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("loaded")], "failed-append-cursor")));
+    act(() => { void f.result.current.more(); });
+    await act(async () => f.requests[1].reject(new Error("append unavailable")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[2].resolve(page([task("loaded", 2)])));
+    expect(f.result.current.error).toBe("append unavailable");
+    expect(f.result.current.nextCursor).toBe("failed-append-cursor");
+    act(() => { void f.result.current.retry(); void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(4);
+    expect(f.requests[3].query).toEqual({ ...query, limit: 50, before: "failed-append-cursor" });
+    await act(async () => f.requests[3].resolve(page([task("older")], "next-append-cursor")));
+    expect(f.result.current.runs.map(row => [row.runId, row.revision])).toEqual([["loaded", 2], ["older", 1]]);
+    expect(f.result.current.nextCursor).toBe("next-append-cursor");
+    expect(f.result.current.error).toBe("");
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(4);
+  });
+
+  it("restarts a failed refresh continuation from page one and preserves the bounded loaded window", async () => {
+    const f = harness();
+    const rows = descending("loaded", 100);
+    await startRead();
+    await act(async () => f.requests[0].resolve(page(rows.slice(0, 50), "loaded-page-2")));
+    act(() => { void f.result.current.more(); });
+    await act(async () => f.requests[1].resolve(page(rows.slice(50), "unloaded-page-3")));
+    act(() => { void f.result.current.refresh(); });
+    await act(async () => f.requests[2].resolve(page(rows.slice(0, 50).map(row => ({ ...row, revision: 2 })), "first-walk-cursor")));
+    expect(f.requests).toHaveLength(4);
+    await act(async () => f.requests[3].reject(new Error("continuation unavailable")));
+    expect(f.result.current.runs).toHaveLength(100);
+    expect(f.result.current.nextCursor).toBe("unloaded-page-3");
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(5);
+    expect(f.requests[4].query).toEqual({ ...query, limit: 50 });
+    await act(async () => f.requests[4].resolve(page(rows.slice(0, 50).map(row => ({ ...row, revision: 3 })), "fresh-walk-cursor")));
+    expect(f.requests).toHaveLength(6);
+    expect(f.requests[5].query).toEqual({ ...query, limit: 50, before: "fresh-walk-cursor" });
+    await act(async () => f.requests[5].resolve(page(rows.slice(50).map(row => ({ ...row, revision: 3 })), "more-unloaded")));
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(rows.map(row => row.runId));
+    expect(f.result.current.runs.every(row => row.revision === 3)).toBe(true);
+    expect(f.result.current.nextCursor).toBe("unloaded-page-3");
+    expect(f.result.current.error).toBe("");
+    expect(f.requests).toHaveLength(6);
+  });
+
+  it("discards the failed read when filters change and never retries its cursor in the new scope", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("old")], "old-append")));
+    act(() => { void f.result.current.more(); });
+    await act(async () => f.requests[1].reject(new Error("old append failed")));
+    const nextQuery = { ...query, projectId: "another-project" };
+    f.rerender({ query: nextQuery, active: true });
+    expect(f.result.current.error).toBe("");
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(2);
+    await startRead();
+    expect(f.requests).toHaveLength(3);
+    expect(f.requests[2].query).toEqual({ ...nextQuery, limit: 50 });
+    await act(async () => f.requests[2].resolve(page([task("current")], "current-cursor")));
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(3);
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(["current"]);
+  });
+
+  it("isolates a superseded retry response and late failure from the current scope's failed append", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0].resolve(page([task("old")], "old-cursor")));
+    act(() => { void f.result.current.refresh(); });
+    await act(async () => f.requests[1].reject(new Error("old poll failed")));
+    act(() => { void f.result.current.retry(); });
+    const nextQuery = { ...query, hostId: "new-host" };
+    f.rerender({ query: nextQuery, active: true });
+    expect(f.requests[2].signal?.aborted).toBe(true);
+    await startRead();
+    await act(async () => f.requests[3].resolve(page([task("current")], "current-append")));
+    act(() => { void f.result.current.more(); });
+    await act(async () => f.requests[4].reject(new Error("current append failed")));
+    await act(async () => f.requests[2].reject(new Error("late wrong failure")));
+    expect(f.result.current.error).toBe("current append failed");
+    act(() => { void f.result.current.retry(); });
+    expect(f.requests).toHaveLength(6);
+    expect(f.requests[5].query).toEqual({ ...nextQuery, limit: 50, before: "current-append" });
+    await act(async () => f.requests[5].resolve(page([task("current-older")])));
+    expect(f.result.current.runs.map(row => row.runId)).toEqual(["current", "current-older"]);
+    expect(f.result.current.error).toBe("");
+  });
+});

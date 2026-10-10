@@ -18,6 +18,7 @@ import uuid
 from typing import Any
 
 from . import delegation
+from . import workspace_identity
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -120,6 +121,7 @@ def pending_root_count(store) -> int:
 def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest.get("repositoryId") or spec["cwd"]
+    aliases = workspace_identity.load_alias_map(connection)
     identifier = presentation.get("objectiveId")
     if presentation.get("objectiveOf") is not None:
         source = connection.execute("SELECT objective_id FROM workflow_runs WHERE run_id=?", (presentation["objectiveOf"],)).fetchone()
@@ -132,15 +134,20 @@ def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str
         row = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (identifier,)).fetchone()
         if row is None:
             raise BoardError("NOT_FOUND", "Unknown objectiveId")
-        if row["project_id"] != project_id or row["source_host_id"] != host_id:
-            raise BoardError("CONFLICT", "The objective belongs to another source project or submitting Host")
+        # A macro task recorded before the restart-stable identity accepts a new
+        # micro task of the same repository through the registered mapping; an
+        # unmapped recorded value still refuses, honestly, as another project.
+        if (not workspace_identity.equivalent(row["project_id"], project_id, mapping=aliases)
+                or row["source_host_id"] != host_id):
+            raise BoardError("CONFLICT", "The objective belongs to another source project or submitting Host",
+                             identityReason=workspace_identity.identity_reason(connection, row["project_id"]))
         return identifier
     if "objective" not in presentation:
         return None
     identifier = f"obj-{uuid.uuid4()}"
     connection.execute(
         "INSERT INTO objectives(objective_id,title,project_id,project_path,source_host_id,created_at,activity_at)"
-        " VALUES(?,?,?,?,?,?,?)", (identifier, presentation["objective"]["title"], project_id, spec["cwd"], host_id, now, now),
+        " VALUES(?,?,?,?,?,?,?)", (identifier, presentation["objective"]["title"], workspace_identity.canonical(project_id, mapping=aliases), spec["cwd"], host_id, now, now),
     )
     return identifier
 
@@ -288,45 +295,69 @@ def objective_list(store, params: dict) -> dict:
     before_value = schemas.optional_string(params, "before", max_length=512)
     before = _decode_cursor(before_value, applied) if before_value is not None else None
     match = " AND ".join(["governed_run_id IS NOT NULL", *clauses])
+    from . import objective_summary_cache as memo
+
+    # The materialized relation carries only scalars consumed by the summary and
+    # the SQL matching flag. In particular no t.* / result / manifest / outcome
+    # body is copied merely to notice a change. One relation serves matching,
+    # total, order, page membership and the per-group dependency marker.
+    narrow = ",".join(f"h.{column}" for column in memo.MEMBER_COLUMNS)
+    page_values = list(values)
+    page_where = ""
+    if before is not None:
+        seq, group_id, _issued_head = before
+        page_where = "WHERE (activity_seq < ? OR (activity_seq = ? AND group_id < ?))"
+        page_values.extend([seq, seq, group_id])
     groups_sql = f"""
-WITH members AS ({MEMBERS_SQL}),
-matched AS (SELECT group_id, COUNT(*) AS matching FROM members WHERE {match} GROUP BY group_id),
+WITH members AS MATERIALIZED (
+    SELECT {narrow}, COALESCE(root.objective_id, 'run:' || h.root_run_id) AS group_id,
+           h.matching
+      FROM (SELECT h.*, CASE WHEN {match} THEN 1 ELSE 0 END AS matching
+              FROM ({memo.THIN_HISTORY_SQL}) h) h
+      JOIN workflow_runs root ON root.run_id=h.root_run_id
+),
+matched AS (SELECT group_id FROM members WHERE matching=1 GROUP BY group_id),
 groups AS (
-    SELECT group_id,
-           COALESCE(o.activity_seq, root.activity_seq) AS activity_seq,
-           COALESCE(o.activity_at, root.activity_at) AS activity_at
+    SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq
       FROM matched
-      LEFT JOIN objectives o ON o.objective_id = matched.group_id
-      LEFT JOIN workflow_runs root
-        ON o.objective_id IS NULL AND matched.group_id LIKE 'run:%' AND root.run_id = substr(matched.group_id, 5)
-)
+      LEFT JOIN objectives o ON o.objective_id=matched.group_id
+      LEFT JOIN workflow_runs root ON o.objective_id IS NULL
+        AND matched.group_id LIKE 'run:%' AND root.run_id=substr(matched.group_id,5)
+),
+page AS (SELECT * FROM groups {page_where}
+          ORDER BY activity_seq DESC, group_id DESC LIMIT ?),
+stats AS (SELECT COUNT(*) AS total, COALESCE(MAX(activity_seq),0) AS latest FROM groups)
+SELECT stats.total,stats.latest,page.group_id AS page_group_id,page.activity_seq,members.*
+  FROM stats LEFT JOIN page ON 1=1 LEFT JOIN members ON members.group_id=page.group_id
+ ORDER BY page.activity_seq DESC,page.group_id DESC,members.task_id
 """
-    with store.db.read() as connection:
+    cache = memo.for_store(store)
+    # Lock precedes the read transaction so concurrent list calls serialize
+    # snapshots, not just insertion. WAL permits a concurrent writer; all facts
+    # below (including a cache miss's _summary) remain from this one snapshot.
+    with cache.lock, store.db.read() as connection:
         head = _head(connection)
-        total = int(connection.execute(f"{groups_sql} SELECT COUNT(*) AS count FROM groups", values).fetchone()["count"])
-        page_values = list(values)
-        page_where = ""
-        changed = False
-        if before is not None:
-            seq, group_id, issued_head = before
-            page_where = "WHERE (activity_seq < ? OR (activity_seq = ? AND group_id < ?))"
-            page_values.extend([seq, seq, group_id])
-            # A group whose activity is newer than the first page may now belong above
-            # this boundary; the client offers a refresh instead of silently reordering.
-            changed = connection.execute(
-                f"{groups_sql} SELECT 1 FROM groups WHERE activity_seq > ? LIMIT 1", [*values, issued_head]
-            ).fetchone() is not None
-        rows = connection.execute(
-            f"{groups_sql} SELECT group_id, activity_seq, activity_at FROM groups {page_where}"
-            " ORDER BY activity_seq DESC, group_id DESC LIMIT ?",
-            [*page_values, limit + 1],
-        ).fetchall()
-        page = rows[:limit]
-        summaries = [_summary(connection, row["group_id"], clauses, values) for row in page]
+        rows = connection.execute(groups_sql, [*page_values, limit + 1]).fetchall()
+        total = int(rows[0]["total"])
+        changed = before is not None and int(rows[0]["latest"]) > before[2]
+        groups = {}
+        for row in rows:
+            if row["page_group_id"] is not None:
+                groups.setdefault(row["page_group_id"], []).append(row)
+        page = list(groups)[:limit]
+        markers, reusable = memo.dependencies(connection, {group: groups[group] for group in page})
+        filters = json.dumps(applied, sort_keys=True, ensure_ascii=False)
+        information = store.db.path.stat()
+        board = (information.st_dev, information.st_ino)
+        summaries = [cache.get(
+            (board, group, filters), markers[group],
+            lambda group=group: _summary(connection, group, clauses, values),
+            reusable=reusable[group],
+        ) for group in page]
         issued_head = before[2] if before is not None else head
         next_cursor = (
-            _encode_cursor(int(page[-1]["activity_seq"] or 0), page[-1]["group_id"], applied, issued_head)
-            if len(rows) > limit else None
+            _encode_cursor(int(groups[page[-1]][0]["activity_seq"] or 0), page[-1], applied, issued_head)
+            if len(groups) > limit else None
         )
     return {"objectives": summaries, "total": total, "nextCursor": next_cursor, "cursor": head, "changed": changed}
 
@@ -353,8 +384,11 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
     if group_id.startswith("obj-"):
         objective = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (group_id,)).fetchone()
         title, title_source = objective["title"], "objective"
-        project = {"id": objective["project_id"], "path": objective["project_path"],
+        project = {"id": workspace_identity.canonical(objective["project_id"], mapping=workspace_identity.load_alias_map(connection)), "path": objective["project_path"],
                    "label": delegation.project_label(objective["project_path"], "未记录项目")}
+        identity_reason = workspace_identity.identity_reason(connection, objective["project_id"])
+        if identity_reason:
+            project["identityReason"] = identity_reason
         source_host, created_at = objective["source_host_id"], objective["created_at"]
         activity_seq, activity_at = objective["activity_seq"], objective["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]

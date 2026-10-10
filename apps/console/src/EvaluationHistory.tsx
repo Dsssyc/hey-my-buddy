@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
+import { errorText, readVerificationText } from "./api";
 import type { Snapshot } from "./types";
 import { formatDate } from "./ui";
-import { useGlobalRefresh } from "./global-refresh";
 
 /** Bounded page size: the console never asks for an unbounded publication range. */
 export const HISTORY_PAGE_SIZE = 20;
@@ -102,17 +101,12 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
   snapshot: Snapshot; api: ConsoleApi; active: boolean; onBack: () => void;
 }) {
   const [page, setPage] = useState<EvaluationHistoryPage | null>(null);
+  const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
   const [before, setBefore] = useState<number | undefined>();
   const [cursors, setCursors] = useState<(number | undefined)[]>([]);
   const [error, setError] = useState(""), [busy, setBusy] = useState(true), [retry, setRetry] = useState(0);
   const csrf = useRef(snapshot.csrfToken);
   csrf.current = snapshot.csrfToken;
-  useGlobalRefresh(async () => {
-    const value = await api.command<EvaluationHistoryPage>("evaluation_history",
-      { limit: HISTORY_PAGE_SIZE, ...(before === undefined ? {} : { before }) }, csrf.current);
-    setPage(parseHistoryPage(value));
-    setError("");
-  }, active);
   useEffect(() => {
     if (!active) return;
     // A late page from a previously inspected cursor must not replace this one.
@@ -123,7 +117,10 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
       { limit: HISTORY_PAGE_SIZE, ...(before === undefined ? {} : { before }) },
       csrf.current,
     ).then(value => {
-      if (current) setPage(parseHistoryPage(value));
+      if (current) {
+        setPage(parseHistoryPage(value));
+        setVerifiedAt(api.readVerifiedAt?.(value) ?? null);
+      }
     }).catch(reason => { if (current) setError(errorText(reason)); })
       .finally(() => { if (current) setBusy(false); });
     return () => { current = false; };
@@ -133,7 +130,9 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
       <button className="button small-button" onClick={onBack}>返回 Buddy 配置</button></div>
       </header>
     <div className="detail-body">
-      <div className="row-between"><h3>已发布版本{page ? ` · ${page.total}` : ""}</h3></div>
+      <div className="row-between"><h3>已发布版本{page ? ` · ${page.total}` : ""}</h3>
+        <button type="button" className="button small-button" aria-label="刷新配置更新记录" title="只重新读取当前页的配置更新记录" disabled={!active || busy} onClick={() => setRetry(n => n + 1)}>刷新记录</button></div>
+      <p className="small muted local-read-toolbar">{readVerificationText(verifiedAt)}</p>
       {error && <p role="alert" className="error-message">{error}
         <button className="button small-button" disabled={busy} onClick={() => setRetry(n => n + 1)}>重试读取</button></p>}
       {busy && <p role="status" className="small muted">正在读取更新记录…</p>}
@@ -145,10 +144,10 @@ export function EvaluationHistory({ snapshot, api, active, onBack }: {
       </li>)}</ul>
       <div className="actions history-pagination">
         {cursors.length > 0 && <button className="button small-button" disabled={busy} onClick={() => {
-          setBefore(cursors[cursors.length - 1]); setCursors(all => all.slice(0, -1)); setPage(null);
+          setBefore(cursors[cursors.length - 1]); setCursors(all => all.slice(0, -1)); setPage(null); setVerifiedAt(null);
         }}>较新记录</button>}
         {page?.nextCursor != null && <button className="button small-button" disabled={busy} onClick={() => {
-          setCursors(all => [...all, before]); setBefore(page.nextCursor!); setPage(null);
+          setCursors(all => [...all, before]); setBefore(page.nextCursor!); setPage(null); setVerifiedAt(null);
         }}>加载更早记录</button>}
       </div>
     </div>

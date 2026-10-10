@@ -4,6 +4,22 @@ import type { ObjectivePage, ObjectiveTimeline } from "./objective-types";
 import { objectiveTimelineFixture } from "./objective-fixtures";
 
 describe("work-objective reads", () => {
+  it("reports objective list verification from each HTTP response without changing its envelope", async () => {
+    const page: ObjectivePage = { objectives: [], total: 0, nextCursor: null, cursor: 41, changed: false };
+    const firstDate = "Fri, 09 Oct 2026 18:00:00 GMT";
+    const secondDate = "Fri, 09 Oct 2026 18:05:00 GMT";
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(page), { headers: { Date: firstDate, ETag: '"objectives"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: secondDate } }));
+    const api = createApi("/private", fetcher);
+    const first = await api.objectives({ limit: 50 });
+    const second = await api.objectives({ limit: 50 });
+    expect(first).toEqual(page);
+    expect(second).toEqual(page);
+    expect(api.readVerifiedAt(first)).toBe(Date.parse(firstDate));
+    expect(api.readVerifiedAt(second)).toBe(Date.parse(secondDate));
+    expect(fetcher.mock.calls[1][1]?.headers).toEqual({ "If-None-Match": '"objectives"' });
+  });
   it("sends list filters through GET /api/objectives with the caller's abort signal", async () => {
     const page: ObjectivePage = { objectives: [], total: 7, nextCursor: "keyset+cursor/==", cursor: 41, changed: true };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(page)));

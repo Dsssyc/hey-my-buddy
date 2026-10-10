@@ -10,6 +10,7 @@ export function useConsole(api: ConsoleApi) {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const mounted = useRef(false),
     sequence = useRef(0);
+  const initialRead = useRef(true);
   const visible = useDocumentVisible();
   const refresh = useCallback(
     async (signal?: AbortSignal, strict = false) => {
@@ -35,30 +36,36 @@ export function useConsole(api: ConsoleApi) {
     },
     [api],
   );
-  // Abort + cleanup prevents stale reads after unmount/StrictMode remount.
+  // Each mount (including StrictMode effect replay) gets its bootstrap read.
+  // Visibility changes only restart the scheduling effect below.
+  useEffect(() => {
+    mounted.current = true;
+    initialRead.current = true;
+    return () => { mounted.current = false; };
+  }, [refresh]);
+  // Abort + sequence cleanup prevents stale reads after unmount/StrictMode replay.
   // https://react.dev/reference/react/useEffect#fetching-data-with-effects
-  // The poll also gates on Page Visibility: a hidden page stops reading and
-  // stops scheduling (an in-flight read is left to finish once, bounded);
+  // The first snapshot reads even on a hidden page. Subsequent polling gates
+  // on Page Visibility: a hidden page stops reading and stops scheduling;
   // returning to the foreground re-runs this effect, which reads immediately.
   // The invocation-time document check closes the cleanup gap: a timer that
   // fires while the document is already hidden but the visibilitychange state
   // update has not landed yet must not start a GET. Explicit actions
   // (重新连接, header refresh) never gate on visibility.
   useEffect(() => {
-    mounted.current = true;
-    if (!visible) {
-      return () => { mounted.current = false; };
-    }
+    const first = initialRead.current;
+    initialRead.current = false;
+    if (!first && !visible) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      if (!documentVisibleNow()) return;
+    const poll = async (bootstrap = false) => {
+      if (!bootstrap && !documentVisibleNow()) return;
       await refresh(controller.signal);
       if (!controller.signal.aborted && documentVisibleNow()) timer = setTimeout(poll, 3000);
     };
-    void poll();
+    void poll(first);
     return () => {
-      mounted.current = false;
+      ++sequence.current;
       controller.abort();
       clearTimeout(timer);
     };

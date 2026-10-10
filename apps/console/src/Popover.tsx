@@ -9,8 +9,10 @@ import type { ReactNode } from "react";
  */
 type PopoverEntry = { id: object; close: () => void };
 const openPopovers = new Set<PopoverEntry>();
+let popoverGeneration = 0;
 
 function claimPopover(id: object, close: () => void): () => void {
+  popoverGeneration += 1;
   for (const entry of openPopovers) if (entry.id !== id) entry.close();
   const entry: PopoverEntry = { id, close };
   openPopovers.add(entry);
@@ -38,6 +40,10 @@ export type PopoverProps = {
   children: ReactNode;
   /** Inline size of the floating panel; clamped to the viewport. */
   width?: string;
+  /** Optional visible panel boundary, intersected with the viewport. */
+  boundary?: HTMLElement | null;
+  /** Restore the trigger after outside press or focus departure too. */
+  returnFocusOnDismiss?: boolean;
   /** Extra class for the panel. */
   className?: string;
   /** Element id, so a trigger's `aria-controls` can name the dialog. */
@@ -49,22 +55,41 @@ export type PopoverProps = {
  * trigger, clamped into the viewport with an 8px margin, flipping above when
  * below has no room. Outside click, Escape and focus leaving the
  * trigger+popover pair close it; Escape returns focus to the trigger while an
- * outside click never steals focus. The popover is `role="dialog"` without
+ * outside click never steals focus by default. Statistics opt into returning
+ * their own trigger for explicit dismissal. The popover is `role="dialog"` without
  * aria-modal, and only one shared popover exists at a time — including the
  * Host event popup, which reuses this lifecycle. Viewport resizes and scrolls
  * re-run the same placement so an unchanged-size popover stays anchored to
  * its trigger and inside the viewport.
  */
-export function Popover({ anchor, label, onClose, children, width, className, id }: PopoverProps) {
+export function Popover({ anchor, label, onClose, children, width, className, id, boundary, returnFocusOnDismiss = false }: PopoverProps) {
   const root = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number; maxWidth?: number; maxHeight?: number } | null>(null);
   const owner = useRef({}).current;
   const placeRef = useRef<() => void>(() => {});
   // Owners may pass a fresh callback each render; the lifecycle listeners and
   // the single-popover claim stay registered once per anchor.
   const onCloseRef = useRef(onClose);
   useLayoutEffect(() => { onCloseRef.current = onClose; });
-  const close = useRef(() => onCloseRef.current()).current;
+  const active = useRef(true);
+  const dismissOptions = useRef({ anchor, returnFocusOnDismiss });
+  useLayoutEffect(() => { dismissOptions.current = { anchor, returnFocusOnDismiss }; });
+  const close = useRef((reason: "hidden" | "replace" | "pointer" | "escape" | "focus" = "hidden") => {
+    if (!active.current) return;
+    active.current = false;
+    onCloseRef.current();
+    const options = dismissOptions.current;
+    if (reason === "escape") {
+      if (anchorVisible(options.anchor)) options.anchor.focus();
+    } else if (options.returnFocusOnDismiss && (reason === "pointer" || reason === "focus")) {
+      // Native pointer focus finishes after pointerdown. A later shared claim
+      // invalidates this restoration, including before its React cleanup.
+      const generation = popoverGeneration;
+      window.requestAnimationFrame(() => {
+        if (generation === popoverGeneration && anchorVisible(options.anchor)) options.anchor.focus();
+      });
+    }
+  }).current;
   const visible = anchorVisible(anchor);
 
   // A portal is outside the hidden tab's DOM subtree. Close it when its
@@ -81,28 +106,51 @@ export function Popover({ anchor, label, onClose, children, width, className, id
       if (!panel) return;
       const rect = anchor.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
-      const maxLeft = window.innerWidth - panelRect.width - VIEWPORT_MARGIN_PX;
-      const left = Math.max(VIEWPORT_MARGIN_PX, Math.min(rect.left, maxLeft));
-      const below = rect.bottom + panelRect.height + 4;
-      const top = below <= window.innerHeight - VIEWPORT_MARGIN_PX
-        ? rect.bottom + 4
-        : Math.max(VIEWPORT_MARGIN_PX, rect.top - panelRect.height - 4);
+      const boundaryRect = boundary?.getBoundingClientRect();
+      const bounds = {
+        left: Math.max(VIEWPORT_MARGIN_PX, boundaryRect ? boundaryRect.left + VIEWPORT_MARGIN_PX : VIEWPORT_MARGIN_PX),
+        right: Math.min(window.innerWidth - VIEWPORT_MARGIN_PX, boundaryRect ? boundaryRect.right - VIEWPORT_MARGIN_PX : window.innerWidth - VIEWPORT_MARGIN_PX),
+        top: Math.max(VIEWPORT_MARGIN_PX, boundaryRect ? boundaryRect.top + VIEWPORT_MARGIN_PX : VIEWPORT_MARGIN_PX),
+        bottom: Math.min(window.innerHeight - VIEWPORT_MARGIN_PX, boundaryRect ? boundaryRect.bottom - VIEWPORT_MARGIN_PX : window.innerHeight - VIEWPORT_MARGIN_PX),
+      };
+      const availableHeight = Math.max(0, bounds.bottom - bounds.top);
+      // Bound panels open to the right of the trigger, reducing their width
+      // when needed instead of extending left across the panel's edge.
+      const left = boundary
+        ? Math.max(bounds.left, Math.min(rect.left, bounds.right))
+        : Math.max(bounds.left, Math.min(rect.left, bounds.right - panelRect.width));
+      const maxWidth = boundary ? Math.max(0, bounds.right - left) : undefined;
+      const panelHeight = boundary ? Math.min(panelRect.height, availableHeight) : panelRect.height;
+      const below = rect.bottom + panelHeight + 4;
+      const top = boundary
+        ? Math.max(bounds.top, below <= bounds.bottom ? rect.bottom + 4
+          : Math.min(rect.top - panelHeight - 4, bounds.bottom - panelHeight))
+        : below <= bounds.bottom ? rect.bottom + 4 : Math.max(bounds.top, rect.top - panelHeight - 4);
+      const maxHeight = boundary ? availableHeight : undefined;
       setPosition(previous => previous && previous.left === left && previous.top === top
-        ? previous : { left, top });
+        && previous.maxWidth === maxWidth && previous.maxHeight === maxHeight
+        ? previous : { left, top, maxWidth, maxHeight });
     };
     placeRef.current = place;
     place();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(place);
     observer.observe(root.current!);
+    observer.observe(anchor);
+    if (boundary) observer.observe(boundary);
     return () => {
       observer.disconnect();
       placeRef.current = () => {};
     };
-  }, [anchor, children, close, visible]);
+  }, [anchor, boundary, children, close, visible]);
 
   // Opening claims the single shared slot; closing (any way) releases it.
-  useEffect(() => visible ? claimPopover(owner, close) : undefined, [owner, close, visible]);
+  useEffect(() => {
+    if (!visible) return;
+    active.current = true;
+    const release = claimPopover(owner, () => close("replace"));
+    return () => { active.current = false; release(); };
+  }, [owner, close, visible]);
 
   useEffect(() => {
     if (!anchor || !visible) return;
@@ -125,7 +173,7 @@ export function Popover({ anchor, label, onClose, children, width, className, id
       const target = event.target as HTMLElement | null;
       if (root.current?.contains(target)) return;
       if (anchor?.contains(target)) return;
-      close();
+      close("pointer");
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
@@ -134,11 +182,10 @@ export function Popover({ anchor, label, onClose, children, width, className, id
   // Escape closes and returns focus to the trigger button.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || !active.current || !anchorVisible(anchor)) return;
       event.preventDefault();
       event.stopPropagation();
-      close();
-      anchor?.focus();
+      close("escape");
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
@@ -158,7 +205,7 @@ export function Popover({ anchor, label, onClose, children, width, className, id
         const active = document.activeElement;
         if (active && root.current?.contains(active)) return;
         if (active && anchor?.contains(active)) return;
-        close();
+        close("focus");
       });
     };
     let frame = 0;
@@ -187,7 +234,8 @@ export function Popover({ anchor, label, onClose, children, width, className, id
   return createPortal(<div ref={root} id={id} role="dialog" aria-label={label} tabIndex={-1}
     className={"shared-popover" + (className ? ` ${className}` : "")}
     style={{ left: position ? `${position.left}px` : undefined, top: position ? `${position.top}px` : undefined,
-      visibility: position ? "visible" : "hidden", width }}>
+      visibility: position ? "visible" : "hidden", width,
+      maxWidth: position?.maxWidth, maxHeight: position?.maxHeight }}>
     {children}
   </div>, document.body);
 }

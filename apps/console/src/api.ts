@@ -1,4 +1,4 @@
-import type { BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { RuntimeVersionInfo, VersionFacts, BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
@@ -179,6 +179,13 @@ export function uncertainResponse(error: unknown): boolean {
 
 export function isAbortError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
+/** Server verification of the displayed read; missing evidence stays explicit. */
+export function readVerificationText(verifiedAtMs: number | null | undefined): string {
+  return typeof verifiedAtMs === "number" && Number.isFinite(verifiedAtMs)
+    ? `核对时间 ${new Date(verifiedAtMs).toLocaleString("zh-CN", { hour12: false })}`
+    : "核对时间未记录";
 }
 
 /* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
@@ -394,8 +401,34 @@ export function commandHarnesses(reply: unknown): HarnessHealth[] {
   return harnessRows((reply as { harnesses?: unknown } | null)?.harnesses);
 }
 
+export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
+  const info = value as RuntimeVersionInfo | null;
+  const facts = (record: VersionFacts | null) => !!record && typeof record === "object" && !Array.isArray(record)
+    && (["softwareVersion", "contractVersion", "sourceCommit", "installedAt"] as const).every(key =>
+      record[key] === null || typeof record[key] === "string" && !!record[key].trim())
+    && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
+  if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
+    || !(info.installed === null || facts(info.installed))) {
+    throw new ApiError("INVALID_RESPONSE", "版本信息无法识别，请检查服务版本。");
+  }
+  return info;
+}
+
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
   const base = prefix.replace(/\/+$/, "");
+  // Metadata belongs to a returned representation, without extending any DTO.
+  // Each read gets its own root object: revalidation of a cached body cannot
+  // rewrite the verification evidence of data already displayed elsewhere.
+  const verificationTimes = new WeakMap<object, number | null>();
+  function readVerifiedAt(value: unknown): number | null {
+    return value !== null && typeof value === "object" ? verificationTimes.get(value) ?? null : null;
+  }
+  function verifiedRead<T>(value: T, verifiedAtMs: number | null): T {
+    if (value === null || typeof value !== "object") return value;
+    const representation = (Array.isArray(value) ? [...value] : { ...value }) as T & object;
+    verificationTimes.set(representation, verifiedAtMs);
+    return representation;
+  }
   async function request(path: string, init: RequestInit = {}) {
     let response: Response;
     try {
@@ -424,7 +457,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         body?.error?.message || "请求未成功。",
       );
     }
-    return data;
+    return verifiedRead(data, responseVerifiedAtMs(response));
   }
 
   /* ---- conditional reads (standard HTTP ETag / If-None-Match / 304) ---- */
@@ -497,8 +530,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
    * a fresh `Date` even when its body is the cached one, and a warm 200 from
    * the service's read cache is stamped when served — so this is "when the
    * server last verified this state", exactly what a display clock needs.
-   * Absent or unparseable (mocks, clock-less test doubles) reads as null and
-   * callers fall back to their own justified local clock.
+   * Absent or unparseable (mocks, clock-less test doubles) reads as null;
+   * verification displays must never substitute a client or record clock.
    */
   function responseVerifiedAtMs(response: Response): number | null {
     const header = response.headers.get("Date");
@@ -571,8 +604,9 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     }
   }
   return {
+    readVerifiedAt,
     async snapshot(signal?: AbortSignal): Promise<Snapshot> {
-      const { data } = (await conditionalRead("/console", signal)) as { data: Snapshot };
+      const { data, verifiedAtMs } = (await conditionalRead("/console", signal)) as { data: Snapshot; verifiedAtMs: number | null };
       if (
         !data ||
         !Number.isInteger(data.tableRevision) ||
@@ -601,8 +635,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const session = parseConsoleSession(data.consoleSession);
       if (sessionId !== null && session.id !== sessionId) clearConditionalCache();
       sessionId = session.id;
-      return { ...data, routingHealth: parseRoutingHealth(data.routingHealth), consoleSession: session,
-        ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }) };
+      return verifiedRead({ ...data, routingHealth: parseRoutingHealth(data.routingHealth), consoleSession: session,
+        ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }) }, verifiedAtMs);
     },
     async command<T = unknown>(
       operation: string,
@@ -620,36 +654,37 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
         throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
       }
-      return data.result;
+      return verifiedRead(data.result, readVerifiedAt(data));
     },
-    async task(runId: string) {
-      return request(`/tasks/${encodeURIComponent(runId)}`);
+    async task(runId: string, signal?: AbortSignal) {
+      const { data, verifiedAtMs } = await conditionalRead(`/tasks/${encodeURIComponent(runId)}`, signal);
+      return verifiedRead(data, verifiedAtMs);
     },
     async tasks(params: TaskQuery, signal?: AbortSignal): Promise<TaskPage> {
       const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
-      const { data } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage };
+      const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
         throw new ApiError("INVALID_RESPONSE", "委派历史不完整；请检查服务版本。");
       }
-      return data;
+      return verifiedRead(data, verifiedAtMs);
     },
     /** Read-only work-objective list for any logged-in session; no lease or model call. */
     async objectives(params: ObjectiveQuery, signal?: AbortSignal): Promise<ObjectivePage> {      const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
-      const { data } = await conditionalRead(`/objectives?${query}`, signal) as { data: ObjectivePage };
+      const { data, verifiedAtMs } = await conditionalRead(`/objectives?${query}`, signal) as { data: ObjectivePage; verifiedAtMs: number | null };
       if (!data || !Array.isArray(data.objectives) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.objectives.every(validObjectiveSummary)) {
         throw new ApiError("INVALID_RESPONSE", "工作目标列表不完整；请检查服务版本。");
       }
-      return data;
+      return verifiedRead(data, verifiedAtMs);
     },
     /**
      * One timeline read: the parsed projection plus the response's own
@@ -687,6 +722,10 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         throw new ApiError("INVALID_RESPONSE", "工作目标时间轴不完整；请检查服务版本。");
       }
       return { timeline: data, verifiedAtMs };
+    },
+    /** Version facts are read once by visible settings, independent of snapshots. */
+    async runtimeVersion(signal?: AbortSignal): Promise<RuntimeVersionInfo> {
+      return parseRuntimeVersion(await request("/runtime-version", { signal }));
     },
     /**
      * The on-demand backup preflight (`GET /api/backup-preflight`): the same
@@ -794,4 +833,6 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     return data.result;
   }
 }
-export type ConsoleApi = ReturnType<typeof createApi>;
+export type ConsoleApi = Omit<ReturnType<typeof createApi>, "readVerifiedAt"> & {
+  readVerifiedAt?: (value: unknown) => number | null;
+};

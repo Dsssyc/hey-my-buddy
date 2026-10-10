@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
+import { errorText, readVerificationText } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
 import { Empty, formatDate, Status } from "./ui";
 import { excerpt, needsReview, taskStatus, taskTitle, titleTooltip } from "./task-state";
@@ -8,10 +9,10 @@ import { TaskDetails } from "./TaskDetails";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { SplitView } from "./SplitView";
 import { useTaskHistory } from "./use-task-history";
-import { useGlobalRefresh } from "./global-refresh";
 
-export function Tasks({ snapshot, api, refresh, active = true }: {
+export function Tasks({ snapshot, api, refresh, active = true, listNavigation, listCollapsed = false, onCollapseList, onExpandList }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
+  listNavigation?: ReactNode; listCollapsed?: boolean; onCollapseList?: () => void; onExpandList?: () => void;
 }) {
   const [filter, setFilter] = useState<TaskQuery["filter"]>("all"), [query, setQuery] = useState("");
   const [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState(""), [internal, setInternal] = useState(false);
@@ -22,19 +23,14 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   // the rows, the first-page poll keeps them current, and the snapshot never
   // contributes rows to this list.
   const history = useTaskHistory(api, { rootsOnly: !internal, query, projectId, hostId, filter }, active);
-  useGlobalRefresh(async () => {
-    if (!selected) return;
-    const value = await api.task(selected);
-    if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== selected || !("task" in value)) throw new Error("委派详情不完整。");
-    setRemote(value as Task);
-    setDetailError("");
-  }, active && !!selected);
   const tasks = history.runs;
   const listed = tasks.find(t => t.runId === selected);
   const saved = remote?.runId === selected ? remote : undefined;
   const task = saved && (!listed || saved.revision > listed.revision || saved.revision === listed.revision && (saved.workflow?.revision || 0) >= (listed.workflow?.revision || 0)) ? saved : listed;
   const updateSelected = useCallback((next: Task) => setRemote(previous =>
-    previous?.runId === next.runId && previous.revision === next.revision && previous.workflow?.revision === next.workflow?.revision ? previous : next), []);
+    previous?.runId === next.runId && (previous.revision > next.revision
+      || (previous.workflow?.revision ?? 0) > (next.workflow?.revision ?? 0)
+      || previous.revision === next.revision && previous.workflow?.revision === next.workflow?.revision) ? previous : next), []);
   const scroll = useRef<HTMLDivElement>(null);
   const scrollIntent = useRef(false);
   const anchor = useRef<{ runId: string; top: number } | null>(null);
@@ -61,12 +57,12 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   const newRecords = history.newIds.size;
   useEffect(() => {
     if (!selected || task || !active) return;
-    let current = true; setDetailError("");
-    api.task(selected).then(value => {
+    let current = true; const controller = new AbortController(); setDetailError("");
+    api.task(selected, controller.signal).then(value => {
       if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== selected || !("task" in value)) throw new Error("委派详情不完整。");
       if (current) setRemote(value as Task);
     }).catch(error => { if (current) setDetailError(errorText(error)); });
-    return () => { current = false; };
+    return () => { current = false; controller.abort(); };
   }, [api, selected, active, !!task]);
   function selectTask(id: string | null) {
     const next = tasks.find(t => t.runId === id);
@@ -88,8 +84,17 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
     anchor.current = null;
   }, [history.runs.length, history.loading]);
   const reload = async () => { const result = await refresh(); history.reset(); return result; };
-  const list = <section className="panel list-panel" aria-label="委派列表">
-    <div className="panel-toolbar"><h2>委派记录</h2></div>
+  const list = <>
+    {listCollapsed && <section className="panel list-panel rail-panel" aria-label="全部执行记录列表（已收起）">
+      {listNavigation}
+      <button type="button" className="rail-expand" aria-label="展开全部执行记录列表" title="展开全部执行记录列表" onClick={onExpandList}><span className="rail-text">全部执行记录</span></button>
+    </section>}
+    <section className="panel list-panel" aria-label="委派列表" hidden={listCollapsed}>
+    <div className="panel-toolbar list-title-toolbar">{listNavigation}<h2>全部执行记录</h2>
+      {onCollapseList && <button type="button" className="icon-button" aria-label="收起全部执行记录列表" title="收起全部执行记录列表" onClick={onCollapseList}>‹</button>}
+      <button type="button" className="button small-button" aria-label="刷新全部执行记录" title="刷新全部执行记录" disabled={history.refreshing || history.loading} onClick={() => void history.refresh()}>刷新</button>
+    </div>
+    <p className="small muted local-read-state">{readVerificationText(history.verifiedAtMs)}</p>
     <div className="list-filters">
       <div className="segmented" aria-label="任务筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
         <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>
@@ -130,10 +135,17 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
       {history.loading && <p className="loading-row" role="status">正在读取委派记录…</p>}
       {history.nextCursor && <button className="load-more" disabled={history.loading} onClick={loadMore}>加载更早记录</button>}
     </div>
-  </section>;
+  </section></>;
   const detail = <aside className="panel detail-panel" aria-label="任务详情">
+    {selected && <div className="panel-toolbar list-mobile-navigation">{listNavigation}
+      <h2>全部执行记录</h2>
+      <button type="button" className="button small-button" onClick={listCollapsed ? onExpandList : onCollapseList}
+        aria-label={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"} title={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"}>{listCollapsed ? "展开列表" : "收起列表"}</button>
+    </div>}
     {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onTaskUpdate={updateSelected} /> :
       <div className="detail-placeholder"><h2>{selected ? "正在读取委派…" : "选择一项委派"}</h2>{detailError && <p>{detailError}</p>}</div>}
   </aside>;
-  return <SplitView selected={!!selected} list={list} detail={detail} />;
+  return <>
+    <SplitView selected={!!selected} rail={listCollapsed} list={list} detail={detail} />
+  </>;
 }

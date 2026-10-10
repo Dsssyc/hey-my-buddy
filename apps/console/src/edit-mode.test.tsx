@@ -112,6 +112,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
     throw new Error(`Unexpected command: ${operation}`);
   });
   const api = {
+    runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot: vi.fn(async () => structuredClone(state)),
     command,
     task: vi.fn(),
@@ -133,6 +134,21 @@ const note = () => screen.getByLabelText("家族备注") as HTMLTextAreaElement;
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });
 const PUBLISHED = "已发布新版本";
+
+/** Foregrounding uses the existing visibility-gated snapshot read, without a global refresh. */
+async function readSnapshotOnForeground(snapshot: ConsoleApi["snapshot"]) {
+  const calls = vi.mocked(snapshot).mock.calls.length;
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  try {
+    visibility.mockReturnValue("hidden");
+    await act(async () => { fireEvent(document, new Event("visibilitychange")); });
+    visibility.mockReturnValue("visible");
+    await act(async () => { fireEvent(document, new Event("visibilitychange")); });
+    expect(vi.mocked(snapshot).mock.calls.length).toBeGreaterThan(calls);
+  } finally {
+    visibility.mockRestore();
+  }
+}
 
 afterEach(() => {
   cleanup();
@@ -393,10 +409,10 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     await user.type(note(), "，未保存");
-    // Another writer published V3; the poll (here the refresh button) only
+    // Another writer published V3; the foreground snapshot read only
     // re-reads state and must not rebase, rewrite or discard the local draft.
     f.setSnapshot({ ...f.snapshot(), tableRevision: 3, familyAnnotations: [flashNote("他人 V3", 2)] });
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await readSnapshotOnForeground(f.api.snapshot);
     const banner = await waitFor(() => document.querySelector<HTMLElement>(".conflict-banner")!);
     expect(banner).toBeTruthy();
     expect(note().value).toBe("原备注，未保存");
@@ -492,7 +508,7 @@ describe("direct editing and the save bar", () => {
           counts: { profiles: 9, cards: 6, preferences: 1, provided: ["profiles", "cards"] }, createdAt: "2026-09-01T10:00:00Z" }],
         nextCursor: null, total: 41 }
       : { revisions: recent, nextCursor: 21, total: 41 });
-    const api = { snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
+    const api = { runtimeVersion: f.api.runtimeVersion, snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
     const user = userEvent.setup();
     await openBuddy(api, user);
     await user.click(screen.getByRole("button", { name: "更新记录" }));
@@ -517,7 +533,7 @@ describe("direct editing and the save bar", () => {
       { revision: 12, kind: "human", actor: "console",
         counts: { profileSettings: 1, preferenceChanges: 1, annotationChanges: 2 }, createdAt: "2026-09-25T10:00:00Z" },
     ], nextCursor: null, total: 2 }));
-    const api = { snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
+    const api = { runtimeVersion: f.api.runtimeVersion, snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
     const user = userEvent.setup();
     await openBuddy(api, user);
     await user.click(screen.getByRole("button", { name: "更新记录" }));

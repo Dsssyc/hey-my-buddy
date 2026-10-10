@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { THEME_STORAGE_KEY, applyStoredTheme } from "./theme";
-import type { Snapshot } from "./types";
+import type { RuntimeVersionInfo, Snapshot } from "./types";
 
 function snapshot(): Snapshot {
   return {
@@ -21,6 +21,12 @@ function snapshot(): Snapshot {
 function api(): ConsoleApi {
   return {
     snapshot: vi.fn(async () => snapshot()),
+    // This source fixture has no recorded runtime or installation version facts.
+    runtimeVersion: vi.fn(async (): Promise<RuntimeVersionInfo> => ({
+      running: { mode: "source", softwareVersion: null, contractVersion: null,
+        schemaVersion: null, sourceCommit: null, installedAt: null },
+      installed: null,
+    })),
     command: vi.fn(),
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),

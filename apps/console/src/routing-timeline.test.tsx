@@ -22,7 +22,6 @@ function props(timeline: ReturnType<typeof objectiveTimelineFixture>): Objective
   return {
     summary: timeline.objective, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set(), hidden: false, openedKey: null, openedRunId: null, selection: null,
-    expandedGapIds: new Set(), onToggleGap: vi.fn(), onSetExpanded: vi.fn(),
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
   };

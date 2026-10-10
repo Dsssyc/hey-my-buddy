@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
-import { useGlobalRefresh, waitForRead } from "./global-refresh";
+import { waitForRead } from "./global-refresh";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 import type { ObjectivePage, ObjectiveQuery, ObjectiveSummary } from "./objective-types";
 
@@ -22,6 +22,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   const [latest, setLatest] = useState<Map<string, ObjectiveSummary>>(() => new Map());
   const [loading, setLoading] = useState(active), [error, setError] = useState("");
   const [reorder, setReorder] = useState<{ count: number | null } | null>(null);
+  const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
   const visible = useDocumentVisible();
@@ -58,6 +59,9 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
         ...(mode === "more" ? { before: current.current.cursor! } : {}),
       }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
+      const checked = api.readVerifiedAt?.(next) ?? null;
+      setVerifiedAtMs(previous => mode === "first" || mode === "poll" && next.nextCursor === null
+        ? checked : previous === null || checked === null ? null : Math.min(previous, checked));
       setError("");
       // Both load modes merge into the existing freshest map, so a page load
       // never discards newer poll data for already-known rows.
@@ -148,7 +152,6 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
     setReorder(null);
     void fetchPage("first");
   }, [reorder, fetchPage]);
-  useGlobalRefresh(() => fetchPage("poll", true), active);
 
   const loadedKey = useRef<string | null>(null);
   // True while the load effect has an armed (debounced) first-page read; the
@@ -161,6 +164,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
     needsFirst.current = false;
     setLatest(new Map());
     setReorder(null);
+    setVerifiedAtMs(null);
   };
   useEffect(() => {
     ++generation.current; request.current?.abort(); pending.current = false; setLoading(false);
@@ -231,7 +235,7 @@ export function useObjectiveList(api: ConsoleApi, query: ObjectiveQuery, active:
   // Freshest summaries win for display; committed order stays until applied.
   const rows = page.rows.map(row => latest.get(row.objectiveId) ?? row);
   return {
-    rows, total: page.total, nextCursor: page.nextCursor, loading, error, reorder,
+    rows, verifiedAtMs, total: page.total, nextCursor: page.nextCursor, loading, error, reorder,
     more: () => void fetchPage("more"),
     retry: () => void fetchPage(needsFirst.current || pageRef.current.rows.length === 0 ? "first" : "poll"),
     reset: () => setRevision(value => value + 1),
