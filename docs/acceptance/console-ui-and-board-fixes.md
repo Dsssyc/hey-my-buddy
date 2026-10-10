@@ -439,3 +439,7 @@ Claude Code Host 通过后以 f1372949 合入，随后发现 U2 的结束未确�
 PA07：私有合成看板的三个宏任务，适应窗口与放大两级，逐行测量非空 .sp-text 的实际文字范围并截图；PA08：真实后台加载列表已读取并有内容，隐藏期间无周期读取、切回立即读取，保留请求日志与截图。PA09：最终前端全量 npm --prefix apps/console test；PA10：重新构建发行产物并在最终源码的全新固定副本重构建，逐字节一致；PA11：tests/python/console、tests/python/install 与仓库卫生，使用私有状态及运行时根、清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT。本轮不跑 Python 完整检查。真实服务验证只用私有服务，日常服务故障则停下报告。
 
 PA-T aeb6fcd0-ce4c-4769-be7a-e0e3068366f4 与 PA-L 38fd3783-03bf-488f-9d84-92b870912c5d 的首次提交均省略四字段，经默认路由选 ZCode GLM-5.3-Flash/max；两份首次回合均被供应方不可重试限流 429/1310 拒绝，无产物、停机已确认。保留初次 get/result/await，于同一 run 使用 codex/openai/gpt-6.1-sol/high 完整配置 continue；续接前配置已启用、可用且 quotaExhausted=false。证据位于 tmp/console-ui-and-board-host/post-acceptance-ui-20261010/，本轮未变更共享偏好或日常运行时。
+
+### 用户补充：侧栏不保留空白槽
+
+用户在本轮私有预览截图指出项目横条和条目比侧栏背景窄，要求去掉空隙。实际测得 list-scroll offsetWidth=328、clientWidth=313、scrollHeight=clientHeight=548，虽不需要滚动，scrollbar-gutter:stable 仍预留 15 CSS px。新增 PA-S 关联原 UI-FRAME，唯一写入 apps/console/src/styles.css 与 ui-box-model.test.tsx，取消列表的强制滚动条预留，复用标准 scrollbar-gutter:auto 与现有 overflow 行为；其他页面的槽不改，不加元素、设置、补偿宽度或隐藏滚动条。PA12：列表无需滚动时项目横条和条目右边缘与背景齐平；PA13：内容需要滚动时仍能滚动、无横向溢出。只跑受影响测试，由 Host 在真实浏览器保存前后尺寸与截图；补充源改动之后重新运行最终前端全量、重构建并逐字节核对，再运行指定 Python 范围和卫生，前一份 905 项通过及 316 项 Python 通过仍保留为中间验证。
