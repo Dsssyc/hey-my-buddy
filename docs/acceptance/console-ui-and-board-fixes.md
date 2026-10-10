@@ -67,6 +67,45 @@ R-F固定 artifact `8a8a8469-5977-473d-9583-2a391f318330`（tracked差异0）、
 
 R-E借用夹具修正固定 `0cd0a019`、artifact `752b5fc1-58bf-4e33-a192-ef09d2e46c34`；最新delta仅test_workspace.py。模板改可选getattr，缺属性/显式None都限定调用现成WorkspaceTests._seed_repository(self)，正常共享类仍copytree独立文件+真实index refresh，不要求Router新增模板或绑定seed方法。新增1编号复用实际RouterInputTests的原公开捕获用例，absent/None两个subTest完整执行原setup/原断言/正常cleanup；原25Workspace方法AST逐字相同，全范围原144方法/863源码断言保留。Host固定artifact的整个Router19+新增1+两原index/capture正向，共22项27.028秒退出0、正常最终私有收尾0；独立只去掉fallback的真实Git准备、其他源码和断言相同，新1项两个subTest均在result.wasSuccessful原断言失败，顶层errors0/退出1。先前移除整个条件分支的None-copy反例另存，不用导入/工具异常替代此纯准备移除证据。Worker8项正向case0/ps受限checker1及纯准备移除1项2fail保留；全部方法借用者搜过，其他19处helper借用/2import关系有原初始化/真实继承，没有扩大写范围。Python总编号将3400→3421（新增21无删除），最终完整检查仍要在这份修正整合后的源码重新执行，前端尚未全量。性能/RF来源函数与所导入fixture未变，完整量测保留并另做最终源码绑定；第一轮失败/845.184秒不抹掉。
 
+### 返修最终门禁（2026-10-10）
+
+最终代码 `9f5df5050c0bac50aec0194f0eaafe442f4bd850`，检查前 `git merge --no-edit socu/buddy-core` 返回already up to date，core为 `1a9decd95736a15a5ec4b4db6526e4cb48666326`，当时C-Two 0.7.4接入尚未合入；本轮没有安装/升级或停止/重启/替换日常服务、Worker，不动登录/凭据。`uv run --frozen python -m hey_my_buddy.cli.checks` 默认4workers，212文件、3421项（skipped1）、退出0、768.087秒；结束后顺序 `npm --prefix apps/console test`，66文件、854项、退出0、32.878秒。原先b093门禁与本轮41ac退出1/845.184秒、Router19/5ERROR及复现、原R-E退回/修正全部保留。代码、测试与资产后续不再改；后面的交付提交只写记录和重跑卫生，不重跑完整两套。
+
+Python相对b093：3400→3421、新增21、删除0，模块212不变；分别storage9、identity1、migration6、backup1、summary3、workspace借用1，旧编号全部保留。前端844→854、新增10、删除0；旧隐藏首次读取用例改名1（新语义首次必须读取），单列改名，不伪计删除与新增；此后的fixture修正仅Python，不改变前端。最终完整检查/编号列表/原方法AST与变异源版本在ignored `host-review-repair-20261010/`，新编号回归不是只照搬实现，每个目标移除都有原功能/物理/缓存/事务断言失败。
+
+构建 `npm --prefix apps/console run build` 在f1a969fa退出0，提交发行产物为 `41ac6c9e`；从该提交全新Git归档重新构建退出0，4文件逐字节等于已提交产物和真实Chrome使用的9a8构建。9f5d之后前端源码/4产物无变化，绑定 `final-fresh-build-proof.json` 与 `assets-final-source-binding-9f5d.json`。CSS/图标内容相同，JS内容与index.html按正常Vite发行过程更新；不安装开发依赖，不提交截图。
+
+独立目标移除本轮32组，各固定源版本/具体目标/受影响编号/正常与失败日志及hash可在 `host-independent-mutation-register.json` 核对；含首次copy survivor之后原run修正、新raw request保护、caller契约和借用fallback的继续返修，不把导入/工具/ps错误计作目标失败。用户点名的旧七处逐项落地：目录/request绑定、Python别名两锚点哈希、writer内再查、checkout-root具体原因、真实cache-hit副本和独立attempt事实都有移除失败；identity-collision因同一真实目录/path/inode重建映射，除真实SHA碰撞外不可达，保留并说明，split-read窗口另有失败回归。旧40/33与原8前端变异是上一轮事实，保留但不与本轮组数相加。
+
+### 本批受影响文件的用时
+
+下表均取默认完整检查各文件的子进程秒数，包括导入/正常case与class收尾，不是fixture-only计时；前一轮负载不同，实际观察值不作为因果加速证明。中间失败轮保留在可提交JSON内。
+
+| 文件 | 原验收前完整秒 | 返修最终完整秒 | 保留或无法再减的成本 |
+| --- | ---: | ---: | --- |
+| `test_console_objective_fixture` | 5.2 | 5.2 | 固定结构/HTTP完整行为验证，本身已短，不加共享框架 |
+| `test_objective_summary_cache` | 33.8 | 9.2 | 类级一次生成、每例SQLite backup/clock/cache/Python隔离；API与命中断言保留 |
+| `test_storage_orphans` | 177.0 | 189.0 | 27→36项，真实Git分配、全部残留引用、移除/竞态/锁证明逐例保留；fixture准备已经ABBA下降，不能共享被删除的allocation |
+| `test_workspace_git_errors` | 0.3 | 0.2 | 13项真实命令/有界诊断已短，原变体与断言不减 |
+| `test_workspace_identity` | 13.0 | 9.1 | 4→5项，实际path/inode/hash与独立loader拒绝保留；初始仓库模板复用 |
+| `test_workspace_submission_cleanup` | 90.9 | 80.9 | 每次invocation的新分配、并发赢者/写入围栏/原错误/实际移除不能缓存，初始Git准备复用 |
+| `test_console_gate_deadlines` | 1.5 | 1.7 | 真实租约时间边界与HTTP条件请求；本身已短，不人为缩超时 |
+| `test_console_objective_cache` | 9.7 | 17.5 | 各session/访问权限/事件标记、真实HTTP/304的独立状态不可混用，未改这份快文件 |
+| `test_console_version_info` | 2.8 | 6.4 | 实际版本根/未知/安装事实与HTTP读取，不改短文件或加入模板框架 |
+| `test_workspace_identity_migration` | 98.5 | 103.3 | 35→41项，真实Git/锚点/触发器/回滚与精确计划外防护必须保留；profile约89.7%正文成本为实际Git |
+| `test_workspace_lifecycle` | 425.6 | 360.6 | 49项真实prepare/seal/integrate/accept/reclaim/历史/停止事实保留；代表正文213次Git不减，Host profile的Git累计5.410秒/该用例正文6.017秒 |
+| `test_workflow_preparation` | 213.6 | 182.5 | 真实pending/helper/owner/continuation/冻结交接不能缓存；初始Git模板复用 |
+| `test_workspace` | 86.1 | 81.0 | 25→26项，inode、binary/CRLF/空/大文件、mode/symlink、index字节与对象格式保留；借用者原seed与共享者refresh各自正确 |
+| `test_upgrade_migration` | 7.2 | 8.5 | 初始schema14准备类级一次，各例独立DB；实际备份/迁移/维护锁/回滚不共享 |
+
+整体842.853→768.087秒，仍超过10分钟。已减少可复用准备，保留全部原断言/编号与本轮21新增；没有通过缩超时、跳收尾、模拟被测正向或缓存真实Git/身份/回收来压时长。Host fixture-only ABBA已独立证明准备次数与耗时下降，R-B39项195→10 Git、R-E49/30/20/25类245/150/100/150→54/55/25/56；它们执行了正常准备/收尾但正文为0，不能计作额外测试通过或用来代替上表完整用时。无法压到600秒的具体正文与新增守护成本如表，加载波动单列观察，不武断归因。本批10新增文件总用时与累计变动文件用时由可提交JSON逐项给出，不重复算同文件。
+
+### 对外可见变化与验证边界
+
+孤立存储候选只列仍有物理检出的未知分配；正常回收、Host借用或黑板已认识的记录目录不再反复以orphan出现。规划不为零候选扫引用，有候选只流式扫/解析一次；实际应用仍在writer内重查所有保留事实，保守性未减。身份升级复用既有指纹与SQLite FILE排序，空计划无写事务；无法证明身份和identity-collision仍保留明确原因。宏任务cache命中副本与attempt标记是测试补足，服务端行为没有新增UI。设置版本默认仅软件版本/安装时间，三项技术事实默认收起；源码一行说明，未知仍未记录，无新API读取。页面后台加载先读一次，隐藏只暂停周期读取，前台恢复立即一次；没有新提示/开关。
+
+未验证到：日常数据库未读/复制/写入，全部容量/代价是私有合成配方；没有在真实运行Native owners的日常盘上做孤立规划/应用或恢复归因，process_inventory明示是私有fixture seam。未进行任何真实模型调用（除授权委派）；未安装本批源码到日常运行时。真实浏览器的原生切换命令时间不能代表visibility事件时间，“立即一次”的严格边界由fake-clock与目标移除守住，真实隐藏窗与恢复GET/304已记录。SHA碰撞防御不能构造真实碰撞，理由明列；新依赖C-Two 0.7.4在本次检查前尚未合入，未伪称验证新依赖。所有图片仍ignored，四主题/窗口图与后台读数路径保留。本Host分支不推送，等待Claude Code Host验收；微任务的Host验收/精确检出回收将在门禁之后登记，不表示Claude验收已通过。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。

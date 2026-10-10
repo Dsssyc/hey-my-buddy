@@ -656,7 +656,9 @@
     "Time is observed, never asserted; RSS includes fresh-process imports and excludes preceding preparation.",
     "No files manually removed; product storage_apply removes exactly its proven orphan checkout.",
     "All old materials, fixed private Git facts, seeds, logs and outputs retained.",
-    "Host must run full recipe on final integrated backend/latest core and perform final standard gates."
+    "Final Python and frontend suites passed sequentially on9f5df505; later delivery commits change records only.",
+    "No daily database copy, upgrade/install/restart or native model invocation for validation; private synthetic native-owner inventory is a declared test seam.",
+    "Overall Python suite still exceeds600seconds; real Git/history/ownership checks and all old assertions are retained, fixture-only ABBA reductions are distinct from wall time."
   ],
   "nativeResidualObservation": {
     "heldLocks": {
@@ -669,5 +671,152 @@
     "readOnlyObservation": true,
     "benchmarkRootPreserved": true,
     "noNativeServiceOwnersLaunched": true
+  },
+  "finalChecks": {
+    "codeCommit": "9f5df5050c0bac50aec0194f0eaafe442f4bd850",
+    "python": {
+      "command": [
+        "uv",
+        "run",
+        "--frozen",
+        "python",
+        "-m",
+        "hey_my_buddy.cli.checks"
+      ],
+      "files": 212,
+      "tests": 3421,
+      "skipped": 1,
+      "exitCode": 0,
+      "defaultParallelWorkers": 4,
+      "seconds": 768.0870489170193
+    },
+    "frontend": {
+      "command": [
+        "npm",
+        "--prefix",
+        "apps/console",
+        "test"
+      ],
+      "files": 66,
+      "tests": 854,
+      "exitCode": 0,
+      "seconds": 32.8780893329822
+    },
+    "sequence": "Python complete, then frontend complete",
+    "firstFailedReworkPython": {
+      "commit": "41ac6c9e",
+      "files": 212,
+      "testsAttempted": 3420,
+      "successfulFileTests": 3401,
+      "failedFile": "blackboard.routing.test_router",
+      "failedFileTests": 19,
+      "errors": 5,
+      "exitCode": 1,
+      "seconds": 845.1835482910101,
+      "cause": "E fixture borrowing contract regression; not load attribution"
+    }
+  },
+  "testFileSeconds": [
+    {
+      "module": "blackboard.tasks.test_console_objective_fixture",
+      "beforeAcceptedFullSeconds": 5.2,
+      "firstReworkFailedFullSeconds": 3.9,
+      "finalPassingFullSeconds": 5.2
+    },
+    {
+      "module": "blackboard.tasks.test_objective_summary_cache",
+      "beforeAcceptedFullSeconds": 33.8,
+      "firstReworkFailedFullSeconds": 8.6,
+      "finalPassingFullSeconds": 9.2
+    },
+    {
+      "module": "blackboard.tasks.test_storage_orphans",
+      "beforeAcceptedFullSeconds": 177.0,
+      "firstReworkFailedFullSeconds": 174.8,
+      "finalPassingFullSeconds": 189.0
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_git_errors",
+      "beforeAcceptedFullSeconds": 0.3,
+      "firstReworkFailedFullSeconds": 0.2,
+      "finalPassingFullSeconds": 0.2
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_identity",
+      "beforeAcceptedFullSeconds": 13.0,
+      "firstReworkFailedFullSeconds": 9.6,
+      "finalPassingFullSeconds": 9.1
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_submission_cleanup",
+      "beforeAcceptedFullSeconds": 90.9,
+      "firstReworkFailedFullSeconds": 70.7,
+      "finalPassingFullSeconds": 80.9
+    },
+    {
+      "module": "console.test_console_gate_deadlines",
+      "beforeAcceptedFullSeconds": 1.5,
+      "firstReworkFailedFullSeconds": 1.8,
+      "finalPassingFullSeconds": 1.7
+    },
+    {
+      "module": "console.test_console_objective_cache",
+      "beforeAcceptedFullSeconds": 9.7,
+      "firstReworkFailedFullSeconds": 12.6,
+      "finalPassingFullSeconds": 17.5
+    },
+    {
+      "module": "console.test_console_version_info",
+      "beforeAcceptedFullSeconds": 2.8,
+      "firstReworkFailedFullSeconds": 3.5,
+      "finalPassingFullSeconds": 6.4
+    },
+    {
+      "module": "install.test_workspace_identity_migration",
+      "beforeAcceptedFullSeconds": 98.5,
+      "firstReworkFailedFullSeconds": 154.6,
+      "finalPassingFullSeconds": 103.3
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_lifecycle",
+      "beforeAcceptedFullSeconds": 425.6,
+      "firstReworkFailedFullSeconds": 404.0,
+      "finalPassingFullSeconds": 360.6
+    },
+    {
+      "module": "blackboard.tasks.test_workflow_preparation",
+      "beforeAcceptedFullSeconds": 213.6,
+      "firstReworkFailedFullSeconds": 201.9,
+      "finalPassingFullSeconds": 182.5
+    },
+    {
+      "module": "blackboard.tasks.test_workspace",
+      "beforeAcceptedFullSeconds": 86.1,
+      "firstReworkFailedFullSeconds": 75.1,
+      "finalPassingFullSeconds": 81.0
+    },
+    {
+      "module": "install.test_upgrade_migration",
+      "beforeAcceptedFullSeconds": 7.2,
+      "firstReworkFailedFullSeconds": 10.3,
+      "finalPassingFullSeconds": 8.5
+    }
+  ],
+  "finalSourceBinding": {
+    "measurementCommit": "bbf6f9d6",
+    "checkCommit": "9f5df5050c0bac50aec0194f0eaafe442f4bd850",
+    "performanceSourceDigestAndBothImportedFixtureHashesUnchanged": true,
+    "frontendBuildCommit": "41ac6c9e",
+    "allFrontendSourceAndFourAssetsUnchangedSinceFreshBuild": true
+  },
+  "newTenFileTotalsSeconds": {
+    "before": 432.7,
+    "final": 422.5,
+    "fileCount": 10
+  },
+  "allFourteenAffectedFileTotalsSeconds": {
+    "before": 1165.2,
+    "final": 1055.1,
+    "fileCount": 14
   }
 }
