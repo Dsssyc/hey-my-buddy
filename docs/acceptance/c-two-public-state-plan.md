@@ -101,3 +101,82 @@ Host 从固定源码独立重建 13 份目标变异并运行原目标测试：�
 实际 loader 3,500→3,512，214→215 模块，旧 3,500 编号集合全保留、删除 0、新增 12、重复和装载错误 0；新编号和集合证明在 `path-state-fixed-ids.json`、`path-state-id-delta.json`。旧 PS-07 及 rpc_config 链接断言按用户决定迁移到状态边界内，公开根链接改由 PATH-01 正向保护；旧 transport 的 owner setup 断言按恢复的 mkdir/chmod 改为实测行为，只读 guard 未削弱。产品 preflight 不再读取 BUDDY_CHECKS_TMPDIR，标准 tempfile 使用 TMPDIR；这项测试设施耦合没有生产必要。0755 只表示 rpc_config 可选 IPC 域，服务所有者冷启动和启动会修正 0700；只读 attach 不创建或改权限。
 
 Host 没有修改微任务代码或测试，只整合固定补丁及在本计划登记独立补核和本地分类器说明。此结论仅为 3-B 内部微任务验收；整批仍等最终完整检查和 Claude Code Host。Worker 原记录的“待 Host 补核”保留原提交绑定，不回写成 Worker 做过真实成功验证。
+
+## 用户补充 3-C：边界一次解析，内部必填
+
+3-B 已整合 `8183fd05e0536f14446b5ca3f621f42fbfd6605e`，黑板整合 `int-cab5da29-2f54-45f8-acfd-86ea7b5a6a39` verified，原 run accepted/completed revision 10。其受管检出清理计划 `cln-f40af380-421e-4051-b21e-3471783333d6` 已 apply，removed=true；Worker 报告的 `/tmp/c073-b-cIzzzx` 尚保留，留存证据后由 Host 按确切根回收。两份修复成果保留，新 3-C 在 3-B 内部验收之后串行启动，没有同接缝的并行写入。
+
+用户新要求抵达时，绑定 `8183fd05` 的默认并行全检已经启动，随后主动中断，命令会话退出 130，不是通过或完整结果。保留原启动/进程/输出及 `public-path-final-check-interrupted.json`；中断时检查器自己的 teardown 也被打断，Host 只对创建时绑定的该检查私有根重新调用现有 teardown_private_root，合作收尾与观测均完成、根已删除，没有信号/扫描清理日常服务。该检查不得当作最终完整检查证据，最终一次移到 3-C 整合后的源码上。
+
+3-C 用一个串行微任务处理同一状态接缝。选择 `transport.get_state_dir` 作为唯一公开可选目录解析函数；CLI、BoardClient（保留既有调用时选择和注入 call 的边界）、call_service、call_board、ensure_service、request_stop 先解析，之后传真实 Path。公开入口相互复用时调用必要的必填内部 helper，避免重复选默认、重复读取环境或重复解析，不增加兼容包装。内部 _request/_healthy/_attach_read_only/preflight、rpc_config 三个 configure、C-Two endpoint/channel、roles/live 和 runtime/live 的参数一律必填，不读环境、不接受 None、不重做已成立的目录不变量。删除 rpc_config.resolve_state_dir 和 PRIVATE_STATE_REQUIRED 运行时规则；private_dirs.context_root 的同名内部兜底也纳入审查范围，不能换名字保留另一份冗余规则。
+
+守护进程、Worker supervisor、控制器在进程入口一次读取父进程传来的真实根，缺失立即失败，不默认解析；同进程 helper 继续显式传 Path。保留 3-B 的私有 ipc 链接/路径防护和所有者 mkdir/chmod700、结构错误原样上报，只读 attach 不创建不改权限。_healthy 只把明确的服务无应答当作不健康；端点目录尚不存在直接判断，结构/配置/响应错误不能吞掉后触发冷启动。LiveWireRequest.deadline_monotonic 为必填有限数，发送方从创建请求时携带原始期限，服务端直接使用；删掉旧缺字段容忍，连接与调用期限仍由 C-Two 现成接口执行，原时间窗防止晚送达。
+
+| 编号 | 3-C 验收 |
+| --- | --- |
+| SC-01 | 公开可选目录只留列举的入口及唯一解析 helper；显式/环境/默认优先级、调用时选择与空 HOME 默认真实 CLI/启动器/BoardClient 回归保留 |
+| SC-02 | 内部状态参数全部必填真实 Path，无环境/客户端回退、无 resolve_state_dir/PRIVATE_STATE_REQUIRED；缺参数自然开发错误，不补重复运行时校验 |
+| SC-03 | 自有内部进程无父目录在入口失败，未创建默认状态；有明确根成功，角色/Worker/daemon 接线显式传递 |
+| SC-04 | 保留 PATH-01..04 的真实链接服务、0755 两处修正、0500 只读与结构 CLI code/message/path；已验收原探针/历史故障不改写 |
+| SC-05 | 缺 deadlineMonotonic 的服务端请求拒绝、不排队不送达；合法/过期期限行为不变，连接/调用仍用原失败码和 transport_phase |
+| SC-06 | 默认入口删解析、服务端重新允许缺期限时，目标测试各失败；必要的迁移防护做故障注入，不能以任意导入/沙箱/停止失败替代 |
+| SC-07 | _healthy 的真实无应答允许返回不健康，结构及其他错误直接失败；不存在的 ipc 用条件，避免异常控制正常流程 |
+| SC-08 | 实际 loader 对照 3,512 基线；新增/删除/改名逐项列出，删规则的测试写明对应规则，未变化集合相等；全部整合后的最终源默认并行数完整检查一次 |
+
+唯一写入范围按已查到的 configure、endpoint/channel、runtime 与 controller 调用方列为下面的精确清单，包含必要生产入口、private_dirs 内部兜底及对应测试、fixture/support、新专属记录；Host 独占计划、整批记录和最终整合。微任务不自行增范围，发现新调用方必须提出并经本轮 continue 修订 scope；不能以动态重导出、环境补值、兼容函数或异常兜底绕过。保护文档仍由 Claude Code Host 维护；本轮取代的生产注释、未使用 helper 和旧规则测试删掉，历史验收记录保留并由新记录说明替代关系。
+
+- `docs/acceptance/c-two-state-boundaries.md`
+- `src/hey_my_buddy/blackboard/service/daemon.py`
+- `src/hey_my_buddy/blackboard/service/service.py`
+- `src/hey_my_buddy/buddy/harnesses/c_two_live.py`
+- `src/hey_my_buddy/buddy/roles/live.py`
+- `src/hey_my_buddy/buddy/roles/run_controller.py`
+- `src/hey_my_buddy/buddy/roles/run_execution.py`
+- `src/hey_my_buddy/buddy/roles/structured_call.py`
+- `src/hey_my_buddy/buddy/runtime/api.py`
+- `src/hey_my_buddy/buddy/runtime/live.py`
+- `src/hey_my_buddy/buddy/runtime/supervisor.py`
+- `src/hey_my_buddy/buddy/runtime/worker.py`
+- `src/hey_my_buddy/cli/main.py`
+- `src/hey_my_buddy/private_dirs.py`
+- `src/hey_my_buddy/protocol/client.py`
+- `src/hey_my_buddy/protocol/rpc_config.py`
+- `src/hey_my_buddy/protocol/transport.py`
+- `tests/python/blackboard/routing/test_stage2_review_scope.py`
+- `tests/python/blackboard/service/test_daemon.py`
+- `tests/python/blackboard/tasks/test_inquiry.py`
+- `tests/python/buddy/harnesses/claude/test_native_run.py`
+- `tests/python/buddy/harnesses/codex/test_native_run.py`
+- `tests/python/buddy/harnesses/dsh/test_dsh_role_wiring.py`
+- `tests/python/buddy/harnesses/dsh/test_native_run.py`
+- `tests/python/buddy/harnesses/dsh/test_no_tool_dsh.py`
+- `tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`
+- `tests/python/buddy/harnesses/test_c_two_live.py`
+- `tests/python/buddy/harnesses/test_inquiry_owner.py`
+- `tests/python/buddy/harnesses/test_live_channel.py`
+- `tests/python/buddy/harnesses/zcode/test_native_run.py`
+- `tests/python/buddy/harnesses/zcode/test_zcode.py`
+- `tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py`
+- `tests/python/buddy/roles/test_registered_review.py`
+- `tests/python/buddy/roles/test_registered_run_wiring.py`
+- `tests/python/buddy/roles/test_role_live_seam.py`
+- `tests/python/buddy/roles/test_schema_worker.py`
+- `tests/python/buddy/runtime/fixtures/live_runtime_peer.py`
+- `tests/python/buddy/runtime/test_live.py`
+- `tests/python/buddy/runtime/test_live_lifecycle_integration.py`
+- `tests/python/buddy/runtime/test_worker_invariants.py`
+- `tests/python/cli/test_cli.py`
+- `tests/python/cli/test_host_cli.py`
+- `tests/python/cli/test_support_cleanup.py`
+- `tests/python/protocol/test_activity.py`
+- `tests/python/protocol/test_ctwo_integration.py`
+- `tests/python/protocol/test_inquiry_transport.py`
+- `tests/python/protocol/test_path_state.py`
+- `tests/python/protocol/test_public_state.py`
+- `tests/python/protocol/test_rpc_config.py`
+- `tests/python/protocol/test_state_boundaries.py`
+- `tests/python/protocol/test_transport_attach.py`
+- `tests/python/support.py`
+- `tests/python/test_private_directories.py`
+
+微任务首次四项配置全部省略经路由；供应方实际不可重试限流才按原许可用完整配置/理由同 run 恢复并登记。只跑受影响文件，不跑整批完整检查或付费冒烟。Worker 开始时建立短任务根、记下确切路径，TMPDIR/BUDDY_CHECKS_TMPDIR 指入其中，不手动删除任何文件目录、不用 git stash、不新建切换移动删除分支标签、不自行提交；一次性材料和变异留根交付，由 Host 验收后按确切根回收。清除继承 BUDDY_/ANTHROPIC_/C2_ 与虚拟环境，空 HOME、私有 state/runtime、固定 catalog/sentinel，绝不触达真实原生发现、凭据、日常服务或公共端点。日常委派 Too many open files 立即停止报告，不重启或替换。范围内缺陷原 run continue，Host 不代改；独立固定产物审查、实际聚焦和目标变异之后再整合签收，三步全部整合后最后完整检查并停等整批 Host。
