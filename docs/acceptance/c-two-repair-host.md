@@ -222,3 +222,11 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/session；结构化交付沿用既有角色接缝。控制器 shutdownConfirmed=true、退出 0，原生 groupState=gone、nativeExitCode=0，角色两层停止确认。stream-json 用量事实 nativeRecords=1、inputTokens=17,694（含 cachedInputTokens=17,684）、outputTokens=409、reasoningOutputTokens=307。Worker 与私有服务停止、SDK shutdown.completed=true，三个实际端点均 absent，socketResiduals=[]。
 
 原始证据为 `tmp/c073-host/claude-approved-smoke-{started,result,proof}.json` 与 `claude-approved-smoke.log`，固定 run/result/交付/签收/端点材料保留在 `<CLAUDE_SMOKE_ROOT>`；没有设置 CLAUDE_CONFIG_DIR 或 CODEX_HOME，没有改登录或读凭据文件。真实冒烟累计为 Codex 1 次、Claude Code 1 次，DSH 与 ZCode 仍未运行，继续各自请求批准；这一记录更正没有代码变化，按既有规则只重跑仓库卫生检查。
+
+## 用户单次批准的 DSH 真实 Worker 冒烟
+
+用户另行回复“批准这一次 DSH 回合”后，仅运行 DSH/deepseek-official/deepseek-v4-flash/off 的一个 Worker 回合，没有重跑。源提交 `6f1aa5003917e53d6cf38a5f62e54dc3a80ba311`，生产代码与完整检查候选相同。经已安装 DSH 的 ACP 与现有角色、运行模块、C-Two 通道，命令退出 0、9.616 秒，角色 ok/completed，私有 run `5c03e3a1-7e65-40ab-8e32-fe95c32ee346` 的 artifact `bfd16765-afd5-4cd2-b618-b9f3f8fec591` 已 accepted/completed，签收前状态 delivered；运行模块的 harnessVersion 如实报告 `0.0.1`。
+
+工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/session。控制器停止确认、退出 0，原生 groupState=gone、nativeExitCode=0，角色两层停止确认；Worker、私有服务与 SDK 也确认停止。三个实际端点均 absent，socketResiduals=[]，没有项目自行推算套接字路径并删除。私有会话用量 source=dsh/session-record、scope=attempt、completeness=complete、nativeRecords=2、inputTokens=22,737（含 cachedInputTokens=12,032）、outputTokens=150；这里只记录本回合原生报告，没有把多回合累计数当作本回合。
+
+证据为 `tmp/c073-host/dsh-approved-smoke-{started,result,proof}.json`、`dsh-approved-smoke.log` 与 `<DSH_SMOKE_ROOT>` 中的固定交付/签收/用量/停止/端点材料。使用产品既有私有 DSH_HOME 与启动配置，没有改用户交互使用的 DSH、登录或凭据。真实冒烟累计为 Codex、Claude Code、DSH 各一次，ZCode 仍未调用，须另行批准。
