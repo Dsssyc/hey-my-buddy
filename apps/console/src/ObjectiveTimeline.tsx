@@ -777,12 +777,22 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       // observation instant by the Host layout.
       const solidWidth = Math.max(scaled.position(facts.recordedEndMs)! - left, 0.3);
       const solidShare = Math.min(100, solidWidth / Math.max(width, 0.3) * 100);
+      // Compare the existing placed intervals on this row. Touching endpoints
+      // and spans without a usable duration do not occupy the unknown tail.
+      const tailOverlaps = facts.endMs !== null && facts.endMs > facts.recordedEndMs
+        && (spansByRun.get(row.runId) ?? []).some(other => {
+          if (other.spanId === span.spanId) return false;
+          const next = factsBySpan.get(other.spanId);
+          return next?.startMs != null && next.endMs !== null
+            && next.endMs > next.startMs
+            && next.startMs < facts.endMs! && next.endMs > facts.recordedEndMs!;
+        });
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
         <span className="solid" style={{ width: `${solidShare}%` }} aria-hidden="true" />
         <span className="sp-text sp-solid-text" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
         <i className="end-mark warn" style={{ left: `calc(${solidShare}% - 8px)` }} aria-hidden="true">?</i>
-        <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 ? "结束未确认" : ""}</span>
+        <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 && !tailOverlaps ? "结束未确认" : ""}</span>
       </button>;
     }
     const endMark = facts.outcome === "failed" ? <i className="end-mark bad" aria-hidden="true">✕</i>

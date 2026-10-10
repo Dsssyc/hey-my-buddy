@@ -102,6 +102,16 @@ function props(data: ObjectiveTimelineData, overrides: Record<string, unknown> =
 
 const bar = (key: string) => document.querySelector<HTMLElement>(`.tl-scroll [data-key="${key}"]`);
 
+function unknownTailTimeline(): ObjectiveTimelineData {
+  const data = timeline();
+  return {
+    ...data, observedAt: "2026-09-26T01:30:00Z",
+    spans: [span({ spanId: "s-unknown", startAt: "2026-09-26T01:14:00Z", endAt: "2026-09-26T01:18:00Z",
+      uncertain: true, shutdownConfirmed: false, turnIndex: 1, configuration: data.spans[0]!.configuration })],
+    totals: { ...data.totals, spans: 1 },
+  };
+}
+
 describe("U2: span descendants share the track stacking context", () => {
   it.each(["default", "selected", "run-member", "hover", "keyboard focus"])("keeps adjacent failed execution / Host wait parents transparent in %s state", state => {
     const data = timeline();
@@ -181,5 +191,143 @@ describe("U2: span descendants share the track stacking context", () => {
     expect(rules(".sp.run-member::after").some(rule => rule.style.boxShadow !== "")).toBe(true);
     expect(rules(".sp:hover::after").some(rule => rule.style.outline !== "")).toBe(true);
     expect(rules(".sp:focus-visible::after").some(rule => rule.style.outline !== "")).toBe(true);
+  });
+});
+
+describe("U2: unknown-tail text yields to overlapping spans on the same row", () => {
+  const at = (time: string) => `2026-09-26T${time}Z`;
+  const following = { spanId: "s-next", kind: "host" as const, state: "open", startAt: at("01:18:00"), endAt: null };
+
+  it.each<{ name: string; next: Partial<TimelineSpan>; overlaps: boolean }>([
+    { name: "open Host wait at the recorded end", next: {}, overlaps: true },
+    { name: "closed Host wait inside the tail", next: { state: "finished", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
+    { name: "later execution", next: { kind: "execution", state: "finished", startAt: at("01:20:00"), endAt: at("01:22:00"), shutdownConfirmed: true }, overlaps: true },
+    { name: "later queue", next: { kind: "queue", state: "claimed", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
+    { name: "later routing", next: { kind: "routing", state: "finished", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
+    { name: "span crossing the recorded end", next: { startAt: at("01:16:00"), endAt: at("01:20:00") }, overlaps: true },
+    { name: "one millisecond past the tail start", next: { startAt: at("01:16:00"), endAt: at("01:18:00.001") }, overlaps: true },
+    { name: "one millisecond before the tail end", next: { startAt: at("01:29:59.999"), endAt: at("01:32:00") }, overlaps: true },
+    { name: "earlier disjoint span", next: { startAt: at("01:15:00"), endAt: at("01:16:00") }, overlaps: false },
+    { name: "later disjoint span", next: { startAt: at("01:31:00"), endAt: at("01:32:00") }, overlaps: false },
+    { name: "end touching the tail start", next: { startAt: at("01:16:00"), endAt: at("01:18:00") }, overlaps: false },
+    { name: "start touching the tail end", next: { startAt: at("01:30:00"), endAt: at("01:32:00") }, overlaps: false },
+    { name: "zero-duration span inside the tail", next: { startAt: at("01:20:00"), endAt: at("01:20:00") }, overlaps: false },
+    { name: "reversed span", next: { startAt: at("01:22:00"), endAt: at("01:20:00") }, overlaps: false },
+    { name: "overlap on another row", next: { runId: "r2" }, overlaps: false },
+    { name: "missing start", next: { startAt: null }, overlaps: false },
+    { name: "invalid start", next: { startAt: "invalid" }, overlaps: false },
+    { name: "terminal execution with missing end", next: { kind: "execution", state: "finished", shutdownConfirmed: true }, overlaps: false },
+    { name: "invalid end", next: { state: "finished", endAt: "invalid" }, overlaps: false },
+    { name: "open execution with an observed end", next: { kind: "execution", state: "running" }, overlaps: true },
+  ])("handles $name while preserving the unknown evidence", ({ next, overlaps }) => {
+    const data = unknownTailTimeline();
+    const view = render(<ObjectiveTimeline {...props(data)} />);
+    const unknown = bar("span:s-unknown")!;
+    expect(unknown.querySelector(".sp-tail")!.textContent).toBe("结束未确认");
+    const title = unknown.title;
+    const aria = unknown.getAttribute("aria-label");
+    const solidText = unknown.querySelector(".sp-solid-text")!.textContent;
+    expect(solidText).toContain("第1轮");
+    const childClasses = [...unknown.children].map(child => child.className);
+    const other = span({ ...following, ...next });
+    // Source order is deliberately not chronology: use the row's facts,
+    // rather than treating only later DOM siblings as possible overlaps.
+    view.rerender(<ObjectiveTimeline {...props({ ...data,
+      rows: other.runId === "r1" ? data.rows : [...data.rows, row({ runId: "r2", rootRunId: "r2" })],
+      spans: [other, ...data.spans],
+      totals: { ...data.totals, rows: other.runId === "r1" ? 1 : 2, spans: 2 },
+    })} />);
+    const updated = bar("span:s-unknown")!;
+    expect(updated.querySelector(".sp-tail")!.textContent).toBe(overlaps ? "" : "结束未确认");
+    expect(updated.title).toBe(title);
+    expect(updated.getAttribute("aria-label")).toBe(aria);
+    expect(aria).toContain("结束未确认");
+    expect(updated.classList.contains("unknown")).toBe(true);
+    // jsdom cannot resolve var() inside this border shorthand. The unchanged
+    // unknown class must still match the original dotted pseudo-border rule.
+    expect(rules(".sp.unknown::before").some(rule => rule.style.border.includes("dotted"))).toBe(true);
+    const mark = updated.querySelector(".end-mark.warn")!;
+    expect(mark.textContent).toBe("?");
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+    expect(updated.querySelector(".sp-solid-text")!.textContent).toBe(solidText);
+    expect([...updated.children].map(child => child.className)).toEqual(childClasses);
+  });
+
+  it.each([
+    { name: "below", end: "02:36:01", text: "" },
+    { name: "at", end: "02:36:00", text: "结束未确认" },
+    { name: "above", end: "02:35:59", text: "结束未确认" },
+  ])("retains the original 4-percent tail width threshold $name the boundary", ({ end, text }) => {
+    const data = unknownTailTimeline();
+    data.observedAt = at("02:40:00");
+    data.spans[0]!.startAt = at("01:00:00");
+    data.spans[0]!.endAt = at(end);
+    render(<ObjectiveTimeline {...props(data)} />);
+    expect(bar("span:s-unknown")!.querySelector(".sp-tail")!.textContent).toBe(text);
+  });
+
+  it.each([
+    { end: "01:18:00", text: "" },
+    { end: "01:18:30", text: "" },
+    { end: "01:19:00", text: "等待" },
+    { end: "01:19:30", text: "等待 Host" },
+    { end: "01:21:00", text: "等待 Host · 3 分" },
+  ])("preserves the Host short-bar label through $end", ({ end, text }) => {
+    const data = unknownTailTimeline();
+    data.spans.push(span({ ...following, startAt: at("01:18:00"), endAt: at(end), state: "finished" }));
+    render(<ObjectiveTimeline {...props(data)} />);
+    expect(bar("span:s-next")!.querySelector(".sp-text")!.textContent).toBe(text);
+    expect(bar("span:s-unknown")!.querySelector(".sp-tail")!.textContent).toBe(end === "01:18:00" ? "结束未确认" : "");
+  });
+
+  it("keeps a short solid execution label empty when the tail text is suppressed", () => {
+    const data = unknownTailTimeline();
+    data.spans[0]!.endAt = at("01:15:00");
+    data.spans.push(span(following));
+    render(<ObjectiveTimeline {...props(data)} />);
+    const unknown = bar("span:s-unknown")!;
+    expect(unknown.querySelector(".sp-solid-text")!.textContent).toBe("");
+    expect(unknown.querySelector(".sp-tail")!.textContent).toBe("");
+  });
+
+  it.each([
+    { end: "01:18:30", text: "" },
+    { end: "01:19:00", text: "2" },
+    { end: "01:19:30", text: "第2轮" },
+  ])("preserves the following execution short-bar label through $end", ({ end, text }) => {
+    const data = unknownTailTimeline();
+    data.spans.push(span({ ...following, kind: "execution", state: "finished", endAt: at(end),
+      turnIndex: 2, shutdownConfirmed: true }));
+    render(<ObjectiveTimeline {...props(data)} />);
+    expect(bar("span:s-next")!.querySelector(".sp-text")!.textContent).toBe(text);
+    expect(bar("span:s-unknown")!.querySelector(".sp-tail")!.textContent).toBe("");
+  });
+
+  it.each(["start", "end"])("preserves the existing missing execution %s behavior", missing => {
+    const data = unknownTailTimeline();
+    if (missing === "start") data.spans[0]!.startAt = null;
+    else data.spans[0]!.endAt = null;
+    data.spans.push(span(following));
+    render(<ObjectiveTimeline {...props(data)} />);
+    if (missing === "start") {
+      expect(bar("span:s-unknown")).toBeNull();
+      expect(document.querySelector(".tl-row .trunc-chip")!.textContent).toContain("1 段时间缺失");
+    } else {
+      const unknown = bar("span:s-unknown")!;
+      expect(unknown.querySelector(".sp-tail")).toBeNull();
+      expect(unknown.getAttribute("aria-label")).toContain("结束未确认");
+    }
+    expect(bar("span:s-next")).not.toBeNull();
+  });
+
+  it.each(["missing", "invalid", "before recorded end"])("does not invent an unknown tail with %s observation time", reason => {
+    const data = unknownTailTimeline();
+    data.observedAt = reason === "missing" ? "" : reason === "invalid" ? "invalid" : at("01:17:00");
+    data.spans.push(span(following));
+    render(<ObjectiveTimeline {...props(data)} />);
+    const unknown = bar("span:s-unknown")!;
+    expect(unknown.querySelector(".sp-tail")!.textContent).toBe("");
+    expect(unknown.querySelector(".end-mark.warn")!.textContent).toBe("?");
+    expect(unknown.getAttribute("aria-label")).toContain("结束未确认");
   });
 });
