@@ -49,3 +49,15 @@ Host 核对固定补丁与风险接缝、实际聚焦测试、目标故障注入
 三个失败为新夹具范围内缺陷：cold-service/cold-board 的生产启动环境只传 src，替换为测试助手后没有补 tests/python，报 `ModuleNotFoundError: No module named 'support'`；readonly 把正在运行服务的 SQLite 状态树改成 0500，health 失败后未在 finally 恢复，收尾 stop 也失败并留下自己创建的 daemon。已按原 run continue（不指定配置，revision 9）打回，要求在测试内补齐私有启动环境、用实际 RPC 加现成变更观察器验证只读接入，并在任何失败下恢复夹具权限后 stop/wait，不能修改公共 launcher/support 或弱化断言。原始日志为 `public-state-host-{green,attach,rpc-config}.{json,log}`，首次完整新文件失败保留。
 
 Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等的实例操作：PID 32358、serviceId `01bc5a84-ecdb-42a4-9626-9f00b5c5069d`。将该实例 state 的 0500 恢复 0700，使用既有显式-root stop helper 合作停止；helper 返回 0、服务锁释放，首次随即 PID 仍在，原观察与工具断言失败保留。稍后单独确认该 PID 消失、控制端点已移除；没有发送信号，没有采用其他会话的进程，没有宣称由 Host 对非直属 Popen 完成 wait。该操作是失败夹具的运行收尾，不是代改微任务代码。两个阶段证据为 `public-state-first-residual-stop.json` 与 `public-state-first-residual-stop-confirmed.json`，不把后一个结果覆写到前一个。
+
+## 2026-10-11 第二次 Host 复核补充：3-B 排队
+
+用户要求同一轮再修三处路径/权限/错误回归，复核记录只读取自 `e8f57266:docs/acceptance/c-two-074-host-review.md`，core 仍冻结 `12eb4fcd`。3-B 必须在 3-A 内部验收后开始，不并行修改 transport 接缝；目前仅准备计划与只读探针证据，未委派或修改产品。最终完整检查移到 3-A 与 3-B 全部整合后的源上一次执行，既有付费冒烟不重跑。
+
+用户提供的 path_probe 已复制并核对哈希，分别在候选 `8e793196` 与基线 `12eb4fcd` 的独立归档副本运行，模型调用为 0。仅在探针外层记录并把 tempfile.mkdtemp 创建物约束到各自短私有任务根，原探针逻辑和产品源未改。候选符号链接路径 preflight 报 LAUNCH_ACCESS_DENIED、未解析到真实目录；0755 preflight 同码失败且保持 0755；基线两项均通过，路径变为真实目录、0755 变 0700；两份新 HOME 默认预检都通过。外层两个命令均退出 0，0.279 / 0.144 秒；退出 0 只表示比较完成，不能写成候选被测预检成功。证据与创建路径台账为 `tmp/c073-host/path-preflight-red-owned-root.json` 及该根中原探针/两个 stdout、stderr。两副本使用当前已锁定 0.7.4 解释器；该探针只覆盖文件、本地预检与公开路径选择，不外推旧运行时传输互通。
+
+3-B 的生产选择：公开 get_state_dir 恢复基线的真实路径解析，角色下收到规范后的状态根；状态根之内的 ipc 等私有区继续拒绝链接和 `..`，不能从文件系统根拒绝用户选择的外部链接祖先。服务所有者在 cold_start_preflight 与 Daemon.run 恢复 mkdir/chmod 0700；只读 attach 不创建不 chmod。结构性 BoardError 原代码、消息与路径原样向上报告；系统拒绝写入/本地 IPC 才用 LAUNCH_ACCESS_DENIED，不能把所有 BoardError 当沙箱。移除 preflight 对 BUDDY_CHECKS_TMPDIR 的认识，使用已有通用临时目录机制/正常 TMPDIR，探针仍保留短私有根和合作收尾，不引入新的运行通道。
+
+3-B 唯一写入范围拟为 `src/hey_my_buddy/protocol/{transport,rpc_config}.py`、`src/hey_my_buddy/blackboard/service/daemon.py`、`tests/python/protocol/{test_public_state,test_rpc_config,test_transport_attach}.py`、`tests/python/blackboard/service/test_daemon.py` 及新 `docs/acceptance/c-two-path-state-repair.md`；开始时绑定已验收 3-A 的整合提交。没有额外客户端、角色、注册表、support、launcher 或其他公共文件写权，缺口交 Host 统一整合。新增 PATH-01 链接可达的私有状态 CLI health 真实成功且返回真实根；PATH-02 state/ipc 链接仍拒绝并报告自身路径；PATH-03 0755 冷启动/直接服务启动后为 0700、0500 只读 attach 不 chmod；PATH-04 CLI 保留结构拒绝代码/路径，与模拟系统权限拒绝分开；PATH-05 各删除真实路径解析、所有者修正、错误保留后目标断言失败，并保留既有内部缺根拒绝与旧编号。每项真实服务采用空 HOME、私有根、固定模型目录与 sentinel；范围内缺陷原 run continue。
+
+“已有 0755 状态可用”的旧记载仅在 rpc_config 能选域这一层成立，不是普通冷启动已可用；不抹掉历史证据，在 3-B 验收记录明确修正口径。3-A 当前针对公开状态参数的链接/路径断言随新用户决定逐项迁移到状态内部 guard，列编号与故障注入，不偷偷删除旧防护。整批最后核对编号和默认并行全检；之后只改记录跑卫生，然后停等整合 Host 明确结论。
