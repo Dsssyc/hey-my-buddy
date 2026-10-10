@@ -146,3 +146,21 @@ Host 分别对该 core 的归档副本与合并后的源码执行 loader，执�
 | `protocol.test_rpc_config.IsolatedTransportTests.test_pool_enabled_false_still_maps_shared_memory` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
 | `protocol.test_rpc_config.ProfileTests.test_configure_applies_once_and_writes_no_environment` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
 | `protocol.test_rpc_config.ProfileTests.test_profile_is_bounded_and_offers_no_fake_off_switch` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+
+## 合入新 core 后完整检查及五份夹具补齐
+
+`0648162d45b473ed9580a118694e17595dc8a567` 已包含指定 `1f7e8b60`，完整命令 `uv run --frozen python -m hey_my_buddy.cli.checks` 未带 jobs，退出 1，665.333 秒；213 个模块中 207 个通过、6 个失败，通过模块汇总执行 3,359 项、跳过 1 项。3,473 是独立 loader 的全量编号数，不称为全通过。开始/结束 load 分别约 24.27 / 24.52，仅记录观察，不作为失败原因。完整原始日志、运行根、提交绑定与失败头为 `final-repair-check-{started,result}.json`、`final-repair-check.log`、`final-repair-failure-inventory.json`，未覆盖先前 26 模块失败的日志。
+
+六份失败文件为 `buddy.runtime.test_repair_recovery`、`buddy.harnesses.zcode.test_zcode_native`、`buddy.harnesses.dsh.test_dsh_role_wiring`、`buddy.harnesses.zcode.test_zcode_inquiry`、`install.test_backup_preflight`、`protocol.test_transport_attach`。恢复测试在 daemon 启动前被 HOME 归属校验拒绝；DSH 问询与 ZCode 活动 Host peer 未给角色接缝传本 fixture 的根；备份 preflight 在构造子环境创建 HOME 之前取快照；RPC attach 仍把 SDK 允许的 0750 ipc 当 unsafe，mock 又绕过真正的首次 I/O 校验。两份独立只读审查与实际源码一致；没有因此恢复产品父目录权限要求或 SDK 当前域回退。
+
+安装版 ZCode 的首次 2 errors / 3 failures 只证明 app-server 提前 exit 1，没有底层 stderr 或模型 mock 请求证明。Host 在私有根把本测试自建 wrapper 的 stderr 重定向到自建日志、正常清理前保留后单文件运行，六项通过，20.221 秒；之后未改源码的原文件再独立运行，六项通过，19.693 / 20.072 秒。保留首次失败和两份后续结果，不将其原因写成负载。实际模型服务只为已有 localhost 响应夹具，付费模型调用仍为 0。原始证据为 `installed-zcode-isolated-diagnostic.{json,log}`、`installed-zcode-unmodified-isolated.{json,log}`。
+
+本轮补齐微任务 2-F 仍执行 Host 已授权的内部显式状态、私有子环境和 SDK 首次 I/O 校验规则，产品行为不再扩大。唯一写入为下列五份测试和新 `docs/acceptance/c-two-final-fixture-repair.md`，不修改 support、产品、角色、注册表或 schema：
+
+- `tests/python/buddy/runtime/test_repair_recovery.py`：复用已有私有子环境构造，不能用整个继承环境覆盖 HOME；原恢复与停止防护保留。
+- `tests/python/buddy/harnesses/dsh/test_dsh_role_wiring.py`：Host peer 显式传本 fixture 状态根，正常问询签收与停止断言保留。
+- `tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py`：活动 peer 复用已有本 fixture 的显式状态接缝，原两项活动刷新断言保留。
+- `tests/python/install/test_backup_preflight.py`：先建立夹具环境再取只读业务快照，不能删除快照或“不得写入”的断言。
+- `tests/python/protocol/test_transport_attach.py`：按已接受规则区分 0750 可连接与可写端点被 SDK 拒绝；保留无 chmod、只读、路径边界，替换已失效的项目预先拒绝期待并登记编号/断言差异。
+
+首次经路由省略全部四项配置，仍用同一宏任务；不指定 buddy 的返修、同 run 的不可重试限流恢复、唯一写入范围、Worker 不删除、共享 refs/stash 禁令、私有根与无真实模型规则全部保留。仅跑五份受影响测试并核对目标单点变异，Host 固定审查后整合。下一次完整检查只在这一批最终代码上运行，保留两次已失败的完整检查；没有安装或重启日常服务/Worker，没有清扫公共 IPC 或日常状态。
