@@ -10,6 +10,7 @@ import os
 import secrets
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import c_two as cc
@@ -61,6 +62,16 @@ class WorkerLiveRuntime:
         self._worker_instance = check_text(worker_instance, "workerInstance", maximum=128)
         if not callable(resolve_channel):
             raise fail("resolve_channel must be callable")
+        # BoardClient supplies the explicit state. For an injected client, the
+        # Worker has already selected its domain before constructing this runtime.
+        # Use that native selection, never a fresh environment-based selection.
+        selected = getattr(client, "state_dir", None)
+        if selected is None and os.name != "nt":
+            root = cc.local_endpoint_context().root
+            if root is None or Path(root).name != "ipc":
+                raise fail("Worker live runtime requires the owning private state directory")
+            selected = Path(root).parent
+        self._state_dir = selected
         self._client = client
         self._resolve_channel = resolve_channel
         self._instance_id = secrets.token_hex(32)
@@ -74,8 +85,8 @@ class WorkerLiveRuntime:
         self._retiring: dict[tuple[str, str, int], _Binding] = {}
         self._resolving: dict[tuple[str, str, int], object] = {}
         self._stopped = False
-        rpc_config.configure_server()
-        rpc_config.configure_client()
+        rpc_config.configure_server(self._state_dir)
+        rpc_config.configure_client(self._state_dir)
 
     def start(self) -> LiveEndpointDescriptor:
         """Register this one Worker resource and read back its actual address."""

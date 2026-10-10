@@ -93,6 +93,7 @@ class FakeC2:
 
 class FakeBoard:
     def __init__(self):
+        self.state_dir = Path(os.environ["BUDDY_STATE_DIR"])
         self.attachments = []
         self.hook = lambda attachment: None
         self.detach_hook = lambda withdrawal: None
@@ -154,13 +155,16 @@ class RecordingChannel(ctl.CTwoLiveChannel):
 
 class WorkerLiveUnitTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.enterContext(patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
         self.events = []
         self.c2 = FakeC2(self.events)
         self.enterContext(patch.object(live, "cc", self.c2))
         self.enterContext(patch.object(live.rpc_config, "configure_server",
-                                      lambda: self.events.append(("server-profile",))))
+                                      lambda state: self.events.append(("server-profile", state))))
         self.enterContext(patch.object(live.rpc_config, "configure_client",
-                                      lambda: self.events.append(("client-profile",))))
+                                      lambda state: self.events.append(("client-profile", state))))
         self.board = FakeBoard()
         self.channel = RecordingChannel()
         self.handle = SimpleNamespace(role_run_identity=identity(), pid=123)
@@ -191,11 +195,21 @@ class WorkerLiveUnitTests(unittest.TestCase):
         self.assertEqual(attachment.address, self.c2.address)
         self.assertEqual([e[0] for e in self.events],
                          ["server-profile", "client-profile", "register", "address", "attach"])
+        self.assertEqual(self.events[0][1], self.board.state_dir)
+        self.assertEqual(self.events[1][1], self.board.state_dir)
         self.assertIs(self.events[2][1], WorkerRuntimeLive)
         self.runtime.stop()
         self.runtime.stop()
         self.assertEqual([e[0] for e in self.events[-2:]], ["unregister", "shutdown"])
         self.assertFalse(self.runtime.bind(claim(), self.handle, "nonce-1"))
+
+    def test_explicit_client_root_wins_over_environment(self):
+        with patch.dict(os.environ, {"BUDDY_STATE_DIR": "<FOREIGN_STATE>"}):
+            runtime = live.WorkerLiveRuntime(self.board, "worker-other", "process-other",
+                                            lambda handle: ("bound", self.channel))
+        self.assertEqual(self.events[-2:], [("server-profile", self.board.state_dir),
+                                          ("client-profile", self.board.state_dir)])
+        runtime.stop()
 
     def test_b2_02_actual_actor_identity_and_independent_worker_token(self):
         attachment = self.bound()
@@ -694,10 +708,19 @@ def materials():
 class Peer:
     def __init__(self):
         self.root = materials()
-        env = {key: value for key, value in os.environ.items() if key not in SANITIZED}
+        env = {key: value for key, value in os.environ.items() if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+               and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+        self.state = Path(os.environ["BUDDY_STATE_DIR"])
+        from hey_my_buddy.protocol import rpc_config
+        rpc_config.configure_client(self.state)
+        env.update(BUDDY_STATE_DIR=str(self.state), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
+                   TMPDIR=str(self.root))
         env.update(C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="", PYTHONDONTWRITEBYTECODE="1")
         self.stderr = (self.root / "peer-stderr.log").open("x")
-        self.process = subprocess.Popen([sys.executable, str(PEER), "worker"], stdin=subprocess.PIPE,
+        self.process = subprocess.Popen([sys.executable, "-c",
+            "import os,runpy,sys; module=runpy.run_path(sys.argv[1]); "
+            "module['FakeBoardClient'].state_dir=os.environ['BUDDY_STATE_DIR']; module['worker']()",
+            str(PEER)], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=self.stderr, text=True, env=env)
         self.controllers = []
         try:
@@ -741,7 +764,7 @@ class Peer:
         values = dict(name=attachment.name, address=attachment.address,
                       instance_id=attachment.instance_id, token=attachment.live_token)
         values.update(changes)
-        return ctl.CTwoLiveChannel(attachment.identity, WorkerRuntimeLive, **values)
+        return ctl.CTwoLiveChannel(attachment.identity, WorkerRuntimeLive, state_dir=self.state, **values)
 
     def stop(self):
         try:
@@ -765,12 +788,23 @@ def peer():
         process.stop()
 
 
-def socket_path(descriptor):
-    return Path(ctl.C_TWO_IPC_DIRECTORY) / (descriptor.address.removeprefix("ipc://") + ".sock")
+def endpoint_status(descriptor):
+    return cc.inspect_endpoint(descriptor.address)["status"]
 
 
-@unittest.skipUnless(os.name == "posix", "recorded local C-Two socket layout is POSIX")
+@unittest.skipUnless(os.name == "posix", "native local endpoint maintenance is POSIX")
 class WorkerLiveRealPeerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.state = materials() / "state"
+        cls.environment = patch.dict(os.environ, {"BUDDY_STATE_DIR": str(cls.state)})
+        cls.environment.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cc.shutdown()
+        cls.environment.stop()
+
     def test_b2_15_real_owner_journal_commit_precedes_queued_and_observe_carries_facts(self):
         with peer() as process:
             attachment = process.bind(paused=True)
@@ -812,7 +846,7 @@ class WorkerLiveRealPeerTests(unittest.TestCase):
             self.assertEqual(conflict.reason_code, "request-payload-conflict")
             self.assertEqual(len(process.controller(op="journal")["records"]), 1)
 
-    def test_b2_17_real_same_name_different_addresses_and_normal_socket_disappearance(self):
+    def test_b2_17_real_same_name_different_addresses_and_normal_endpoint_disappearance(self):
         with peer() as first, peer() as second:
             one, two = first.bind(), second.bind()
             self.assertEqual(one.name, two.name)
@@ -825,8 +859,8 @@ class WorkerLiveRealPeerTests(unittest.TestCase):
             self.assertEqual(len(second.controller(op="journal")["records"]), 0)
             self.assertEqual(second.channel(two).request(request(), timeout_ms=2000).status, "queued")
             descriptors = [first.descriptor, second.descriptor, *first.controllers, *second.controllers]
-            self.assertTrue(all(socket_path(d).is_socket() for d in descriptors))
-        self.assertTrue(all(not socket_path(d).exists() for d in descriptors))
+            self.assertTrue(all(endpoint_status(d) == "present" for d in descriptors))
+        self.assertTrue(all(endpoint_status(d) == "absent" for d in descriptors))
         self.assertEqual(first.process.returncode, 0)
         self.assertEqual(second.process.returncode, 0)
 
@@ -878,7 +912,7 @@ class WorkerLiveRealPeerTests(unittest.TestCase):
             attachment = process.bind()
             controller_descriptor = process.controllers[0]
             process.controller(op="stop")
-            self.assertFalse(socket_path(controller_descriptor).exists())
+            self.assertEqual(endpoint_status(controller_descriptor), "absent")
             channel = process.channel(attachment)
             result = channel.request(request(), timeout_ms=500)
             self.assertEqual(result.status, "unavailable")

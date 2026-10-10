@@ -43,8 +43,7 @@ results stay with the production code that owns them.
 
 On the client side the whole connect and call runs under the caller's
 transport window through one bounded standard-library mechanism
-(:meth:`CTwoLiveChannel._call`): C-Two 0.6.0 exposes no per-call timeout on
-its public client surface, so a daemon worker carries the attempt and the
+(:meth:`CTwoLiveChannel._call`): a daemon worker carries the attempt and the
 caller waits only until the deadline; repeated timeouts hold at most a fixed
 number of permits and never block ``close`` or process exit.
 """
@@ -55,7 +54,6 @@ import os
 import queue
 import re
 import secrets
-import stat
 import threading
 import time
 from pathlib import Path
@@ -99,13 +97,6 @@ from .live import (
 )
 from .run_contract import RunIdentity
 from pydantic import Field
-
-#: The machine-wide C-Two IPC directory observed by the accepted F-C1 probe on
-#: macOS (``/tmp/c_two_ipc/<server_id>.sock``, independent of ``TMPDIR``). The
-#: cross-platform layout itself belongs to C-Two; where the derived path does
-#: not exist the endpoint simply captures no socket identity and every later
-#: cleanup refuses instead of guessing.
-C_TWO_IPC_DIRECTORY = "/tmp/c_two_ipc"
 
 #: The bounded admission buffer between the RPC threads and the owner loop. It
 #: never exceeds the per-run inquiry budget, so a full queue is the defensive
@@ -255,36 +246,19 @@ class LiveWireQuery(InternalModel):
     identity: RunIdentity
 
 
-class EndpointSocketFact(InternalModel):
-    """This endpoint's socket file: the exact path and the file identity.
-
-    The identity is the ``(st_dev, st_ino)`` pair captured right after this
-    endpoint's own registration; a replaced file at the same path never shows
-    the same pair, so a later cleanup can tell its own dead endpoint's file
-    from whatever now occupies the path.
-    """
-
-    address: Text(256)
-    path: Text(1024)
-    device: NonNegativeInt
-    inode: NonNegativeInt
-
-
 class LiveEndpointDescriptor(InternalModel):
-    """The publishable facts of one started endpoint; the token is not among them.
+    """Bounded private readiness facts; the credential is native opaque JSON.
 
-    ``address`` is the value read back through ``cc.server_address()`` and the
-    only routing key; ``name`` is the display-only person name; ``hostPid`` is
-    the process that registered the endpoint and binds the holder's cleanup
-    evidence to it; ``socket`` is present only when this endpoint's own file
-    identity was actually captured.
+    The holder consumes ``endpointCredential`` through C-Two's codec. Address,
+    instance and the held process PID remain independent binding checks.
+    Windows has no reap credential and uses the native default pipe domain.
     """
 
     address: Text(256)
     name: Text(128)
     instance_id: Hex64
     host_pid: NonNegativeInt
-    socket: Optional[EndpointSocketFact] = None
+    endpoint_credential: OptionalText(8192) = None
 
 
 class ConfirmedProcessGone(InternalModel):
@@ -301,11 +275,12 @@ class ConfirmedProcessGone(InternalModel):
     group_gone: bool
 
 
-CleanupOutcomeValue = Literal["deleted", "already-absent", "refused"]
+CleanupOutcomeValue = Literal["reaped", "already-absent", "busy", "stale-target",
+                              "unverified", "io-error", "not-applicable"]
 
 
 class CleanupOutcome(InternalModel):
-    """What one cleanup attempt did with exactly this endpoint's file."""
+    """The public native reap fact, or a holder binding refusal."""
 
     outcome: CleanupOutcomeValue
     reason: OptionalText(256) = None
@@ -383,6 +358,8 @@ def write_ready_material(path: str | Path, descriptor: LiveEndpointDescriptor) -
     if not isinstance(descriptor, LiveEndpointDescriptor):
         raise fail("descriptor must be a LiveEndpointDescriptor value")
     text = canonical_json(descriptor.to_payload())
+    if len(text.encode()) > 16384:
+        raise fail("live readiness material exceeds its frame bound")
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         os.write(fd, text.encode())
@@ -390,43 +367,38 @@ def write_ready_material(path: str | Path, descriptor: LiveEndpointDescriptor) -
         os.close(fd)
 
 
-def cleanup_abandoned_socket(descriptor: LiveEndpointDescriptor,
-                             evidence: ConfirmedProcessGone) -> CleanupOutcome:
-    """Delete exactly this endpoint's socket file after a confirmed vanishing.
+def cleanup_owned_endpoint(descriptor: LiveEndpointDescriptor,
+                           evidence: ConfirmedProcessGone, *,
+                           context: cc.LocalEndpointContext | None = None) -> CleanupOutcome:
+    """Reap once through C-Two only after the held leader and group are gone.
 
-    The rule is conservative at every step: the evidence must name this
-    endpoint's own host process, carry its reaped exit code and observe the
-    group gone; the file at the captured path must still carry the captured
-    ``(device, inode)`` identity. Anything unknown, replaced or unconfirmed
-    refuses, and no other file is ever touched — old residue in the shared
-    IPC directory is never scanned.
+    The supplied context is the holder's configured private domain, never a
+    domain derived from the untrusted readiness credential. No file paths or
+    native identity fields are constructed here; C-Two owns the codec and reap.
     """
     if not isinstance(descriptor, LiveEndpointDescriptor):
         raise fail("descriptor must be a LiveEndpointDescriptor value")
     if not isinstance(evidence, ConfirmedProcessGone):
         raise fail("evidence must be a ConfirmedProcessGone value")
     if evidence.exit_code is None or evidence.group_gone is not True:
-        return CleanupOutcome(outcome="refused", reason="vanishing-not-confirmed")
+        return CleanupOutcome(outcome="unverified", reason="vanishing-not-confirmed")
     if evidence.pid != descriptor.host_pid:
-        return CleanupOutcome(outcome="refused", reason="process-identity-mismatch")
-    socket_fact = descriptor.socket
-    if socket_fact is None:
-        return CleanupOutcome(outcome="refused", reason="socket-identity-unknown")
+        return CleanupOutcome(outcome="unverified", reason="process-identity-mismatch")
+    if descriptor.endpoint_credential is None:
+        return CleanupOutcome(outcome="not-applicable" if os.name == "nt" else "unverified",
+                              reason="endpoint-credential-unavailable")
     try:
-        info = os.lstat(socket_fact.path)
-    except FileNotFoundError:
-        return CleanupOutcome(outcome="already-absent", reason=None)
-    except OSError as error:
-        return CleanupOutcome(outcome="refused", reason=f"socket-stat-failed:{error.errno}")
-    if (info.st_dev, info.st_ino) != (socket_fact.device, socket_fact.inode):
-        return CleanupOutcome(outcome="refused", reason="socket-file-replaced")
-    try:
-        os.unlink(socket_fact.path)
-    except FileNotFoundError:
-        return CleanupOutcome(outcome="already-absent", reason=None)
-    except OSError as error:
-        return CleanupOutcome(outcome="refused", reason=f"socket-unlink-failed:{error.errno}")
-    return CleanupOutcome(outcome="deleted", reason=None)
+        credential = cc.EndpointCredential.from_json(descriptor.endpoint_credential)
+        trusted = context if context is not None else cc.local_endpoint_context()
+    except (ValueError, TypeError):
+        return CleanupOutcome(outcome="unverified", reason="endpoint-credential-invalid")
+    if credential.address != descriptor.address:
+        return CleanupOutcome(outcome="unverified", reason="endpoint-address-mismatch")
+    if (credential.context.platform, credential.context.namespace_id, credential.context.root) != \
+            (trusted.platform, trusted.namespace_id, trusted.root):
+        return CleanupOutcome(outcome="unverified", reason="endpoint-domain-mismatch")
+    result = cc.reap_endpoint(descriptor.address, credential, context=trusted)
+    return CleanupOutcome(outcome=result["status"], reason=result.get("reason"))
 
 
 class CTwoLiveEndpoint:
@@ -529,10 +501,15 @@ class CTwoLiveEndpoint:
         address = cc.server_address()
         if not isinstance(address, str) or not address:
             raise fail("the registered live endpoint reported no server address")
+        inspected = cc.inspect_endpoint(address)
+        credential = inspected["credential"]
+        if inspected["status"] != "present" and inspected["status"] != "not-applicable":
+            raise BoardError("LIVE_UNAVAILABLE", "Registered endpoint credential is unavailable",
+                             reason=inspected["status"])
         self._descriptor = LiveEndpointDescriptor(
             address=check_text(address, "address", maximum=256),
             name=self._name, instance_id=self._instance_id, host_pid=os.getpid(),
-            socket=self._capture_socket_fact(address))
+            endpoint_credential=credential.to_json() if credential is not None else None)
         return self._descriptor
 
     def consume_request(self, timeout_s: float) -> LiveRequest | None:
@@ -966,27 +943,6 @@ class CTwoLiveEndpoint:
         self._entries = tuple(sorted(merged, key=lambda entry: entry.seq))
         return self._entries
 
-    def _capture_socket_fact(self, address: str) -> EndpointSocketFact | None:
-        """Capture this endpoint's own socket file identity, or nothing.
-
-        The path is derived from the address through the layout the accepted
-        F-C1 probe observed; when the derived path is absent or not a socket
-        file the endpoint records no identity and every later cleanup refuses
-        rather than touching a file it cannot name.
-        """
-        if os.name != "posix" or not address.startswith("ipc://"):
-            return None
-        server_id = address[len("ipc://"):]
-        path = Path(C_TWO_IPC_DIRECTORY) / f"{server_id}.sock"
-        try:
-            info = os.stat(path)
-        except OSError:
-            return None
-        if not stat.S_ISSOCK(info.st_mode):
-            return None
-        return EndpointSocketFact(address=address, path=str(path),
-                                  device=info.st_dev, inode=info.st_ino)
-
     def _refusal_reply(self, reason_code: str) -> str:
         return canonical_json(
             LiveReply(status="unavailable", reason_code=reason_code).to_payload())
@@ -1055,7 +1011,7 @@ class CTwoLiveChannel:
     """
 
     def __init__(self, identity: RunIdentity, contract: type, *, name: str, address: str,
-                 instance_id: str, token: str):
+                 instance_id: str, token: str, state_dir: str | Path | None = None):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(contract, type):
@@ -1063,6 +1019,8 @@ class CTwoLiveChannel:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
+        from ...protocol.transport import get_state_dir
+        self._state_dir = get_state_dir(state_dir)
         self._identity = identity
         self._contract = contract
         self._name = check_text(name, "name", maximum=128)
@@ -1191,7 +1149,7 @@ class CTwoLiveChannel:
 
     def _connect_and_call(self, operation: str, text: str) -> str:
         """One fresh connection and one named call; the profile is applied first."""
-        rpc_config.configure_client()
+        rpc_config.configure_client(self._state_dir)
         with cc.connect(self._contract, name=self._name, address=self._address) as peer:
             if operation == "capabilities":
                 return peer.capabilities(text)
@@ -1207,8 +1165,8 @@ def _decode_reply(raw: Any, label: str) -> Any:
 
 
 __all__ = [
-    "C_TWO_IPC_DIRECTORY", "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
-    "ConfirmedProcessGone", "EndpointSocketFact", "LiveEndpointDescriptor", "LiveWireObserve",
+    "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
+    "ConfirmedProcessGone", "LiveEndpointDescriptor", "LiveWireObserve",
     "LiveWireQuery", "LiveWireRequest", "MAX_INFLIGHT_LIVE_CALLS", "MAX_PENDING_LIVE_REQUESTS",
-    "authenticate_live_frame", "decode_live_wire_frame", "cleanup_abandoned_socket", "random_person_name", "write_ready_material",
+    "authenticate_live_frame", "decode_live_wire_frame", "cleanup_owned_endpoint", "random_person_name", "write_ready_material",
 ]

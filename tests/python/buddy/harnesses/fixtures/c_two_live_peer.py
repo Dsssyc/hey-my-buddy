@@ -5,7 +5,7 @@ process and answers a one-line JSON command protocol on stdin, so the tests
 drive a real registered endpoint, a real owner loop and the real clean
 lifecycle. Imported (by file path) instead, it exposes ``TEST_CRM`` — the
 minimal three-operation contract the peer registers and the in-process tests
-connect with. No harness, model or credential is ever touched.
+connect with. No harness, model or account credential is ever touched.
 """
 from __future__ import annotations
 
@@ -103,9 +103,12 @@ def serve() -> int:
                 cc.register(TEST_CRM, StallingLive(float(command["stallSeconds"])),
                             name=stalled_name,
                             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                inspected = cc.inspect_endpoint(cc.server_address())
+                credential = inspected["credential"]
                 descriptor = ctl.LiveEndpointDescriptor(
                     address=cc.server_address(), name=stalled_name,
-                    instance_id=secrets.token_hex(32), host_pid=os.getpid())
+                    instance_id=secrets.token_hex(32), host_pid=os.getpid(),
+                    endpoint_credential=credential.to_json() if credential is not None else None)
                 _write_token(command["tokenPath"], secrets.token_hex(32))
                 _reply({"ok": True, "descriptor": descriptor.to_payload(),
                         "configuredRoles": list(rpc_config.configured_roles())})
@@ -191,13 +194,6 @@ def serve() -> int:
 
 
 def main() -> int:
-    extra = sys.argv[3:]
-    if extra and extra[0] == "rebind":
-        # A replacement-scenario peer: rebind the dead endpoint's exact
-        # server_id so C-Two itself replaces the socket file at that address.
-        rpc_config.configure_server()
-        cc.set_server(server_id=extra[1])
-        rpc_config.configure_client()
     return serve()
 
 

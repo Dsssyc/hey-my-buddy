@@ -24,7 +24,6 @@ import json
 import os
 import shutil
 import signal
-import socket as socket_module
 import stat
 import subprocess
 import sys
@@ -32,6 +31,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -163,6 +163,11 @@ class FakeC2:
 
     def server_address(self):
         return self.address
+
+    def inspect_endpoint(self, address):
+        return {"status": "present", "credential": SimpleNamespace(
+            to_json=lambda: "opaque-native-credential")}
+
 
 
 class WireFrameTests(unittest.TestCase):
@@ -925,6 +930,12 @@ class EndpointObservationTests(unittest.TestCase):
 
 
 class EndpointLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
+        self.addCleanup(cc.shutdown)
+
     def test_both_profiles_are_applied_before_the_register_call(self):
         fake = FakeC2()
         real_cc = ctl.cc
@@ -940,7 +951,7 @@ class EndpointLifecycleTests(unittest.TestCase):
             self.assertEqual(concurrency.mode, cc.ConcurrencyMode.PARALLEL)
             self.assertEqual((described.address, described.name, described.host_pid),
                              (fake.address, "Ava", os.getpid()))
-            self.assertIsNone(described.socket)
+            self.assertEqual(described.endpoint_credential, "opaque-native-credential")
             started = endpoint(name="Bo")
             started.start()
             with self.assertRaises(BoardError):
@@ -952,82 +963,93 @@ class EndpointLifecycleTests(unittest.TestCase):
         self.assertEqual(fake.unregistered, ["Bo"])
         self.assertEqual(fake.shutdowns, 1)
 
-    def test_the_socket_identity_is_captured_from_the_registered_address(self):
-        with tempfile.TemporaryDirectory() as directory:
-            server_id = "cc" + "1" * 38
-            socket_path = Path(directory) / f"{server_id}.sock"
-            listener = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
-            listener.bind(str(socket_path))
-            self.addCleanup(listener.close)
-            real_directory = ctl.C_TWO_IPC_DIRECTORY
-            real_cc = ctl.cc
-            ctl.C_TWO_IPC_DIRECTORY = directory
-            ctl.cc = FakeC2(address=f"ipc://{server_id}")
-            try:
-                described = endpoint(name="Dana").start()
-            finally:
-                ctl.cc = real_cc
-                ctl.C_TWO_IPC_DIRECTORY = real_directory
-            info = os.stat(socket_path)
-            self.assertEqual((described.socket.device, described.socket.inode),
-                             (info.st_dev, info.st_ino))
-            # The captured identity is exactly what the cleanup later compares,
-            # and the one confirmed-vanished evidence deletes only this file.
-            evidence = ctl.ConfirmedProcessGone(pid=described.host_pid, exit_code=0,
-                                                group_gone=True)
-            self.assertEqual(ctl.cleanup_abandoned_socket(described, evidence).outcome,
-                             "deleted")
-            self.assertFalse(os.path.exists(socket_path))
+    def test_native_codec_rejects_malformed_material(self):
+        for value in ("not-json", "{}"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                cc.EndpointCredential.from_json(value)
+
+    def test_native_credential_json_is_preserved_without_reencoding(self):
+        fake = FakeC2()
+        with mock.patch.object(ctl, "cc", fake):
+            described = endpoint(name="Dana").start()
+        self.assertEqual(described.endpoint_credential, "opaque-native-credential")
 
 
 class CleanupPrimitiveTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        rpc_config.configure_client(self.temp.name)
+        self.addCleanup(cc.shutdown)
         self.descriptor = ctl.LiveEndpointDescriptor(
-            address="ipc://cc" + "2" * 38, name="Edith", instance_id="a" * 64,
-            host_pid=4242, socket=ctl.EndpointSocketFact(
-                address="ipc://cc" + "2" * 38, path="/tmp/c_two_ipc/cc" + "2" * 38 + ".sock",
-                device=1, inode=99))
+            address="ipc://fixture", name="Edith", instance_id="a" * 64,
+            host_pid=4242, endpoint_credential="opaque-native-credential")
+        self.context = cc.local_endpoint_context()
+        self.credential = SimpleNamespace(address=self.descriptor.address, context=self.context)
+        self.codec = self.enterContext(mock.patch.object(cc.EndpointCredential, "from_json",
+                                                        return_value=self.credential))
+        self.reap = self.enterContext(mock.patch.object(cc, "reap_endpoint", return_value={
+            "status": "reaped", "reason": None}))
 
-    def gone(self, **overrides) -> ctl.ConfirmedProcessGone:
+    def gone(self, **overrides):
         values = dict(pid=4242, exit_code=-9, group_gone=True)
         values.update(overrides)
         return ctl.ConfirmedProcessGone(**values)
 
     def test_unconfirmed_or_foreign_evidence_refuses(self):
-        cases = [
+        for evidence, reason in [
             (self.gone(exit_code=None), "vanishing-not-confirmed"),
             (self.gone(group_gone=False), "vanishing-not-confirmed"),
             (self.gone(pid=9999), "process-identity-mismatch"),
-        ]
-        for evidence, reason in cases:
-            outcome = ctl.cleanup_abandoned_socket(self.descriptor, evidence)
-            self.assertEqual((outcome.outcome, outcome.reason), ("refused", reason), reason)
+        ]:
+            with self.subTest(reason=reason):
+                outcome = ctl.cleanup_owned_endpoint(self.descriptor, evidence)
+                self.assertEqual((outcome.outcome, outcome.reason), ("unverified", reason))
+                self.reap.assert_not_called()
 
     def test_an_unknown_identity_refuses_without_touching_anything(self):
-        unknown = ctl.LiveEndpointDescriptor(address="ipc://cc" + "3" * 38, name="Fen",
-                                             instance_id="a" * 64, host_pid=4242)
-        self.assertEqual(ctl.cleanup_abandoned_socket(unknown, self.gone()).reason,
-                         "socket-identity-unknown")
+        unknown = self.descriptor.model_copy(update={"endpoint_credential": None})
+        self.assertEqual(ctl.cleanup_owned_endpoint(unknown, self.gone()).outcome, "unverified")
+        self.reap.assert_not_called()
 
-    def test_a_replaced_file_refuses_and_a_missing_file_is_already_absent(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "replaced.sock"
-            path.write_text("someone else's file now")
-            replaced = ctl.LiveEndpointDescriptor(
-                address=self.descriptor.address, name="Edith", instance_id="a" * 64,
-                host_pid=4242, socket=ctl.EndpointSocketFact(
-                    address=self.descriptor.address, path=str(path), device=1, inode=99))
-            outcome = ctl.cleanup_abandoned_socket(replaced, self.gone())
-            self.assertEqual((outcome.outcome, outcome.reason),
-                             ("refused", "socket-file-replaced"))
-            self.assertTrue(path.exists())
-            absent = ctl.LiveEndpointDescriptor(
-                address=self.descriptor.address, name="Edith", instance_id="a" * 64,
-                host_pid=4242, socket=ctl.EndpointSocketFact(
-                    address=self.descriptor.address, path=str(Path(directory) / "gone.sock"),
-                    device=1, inode=99))
-            self.assertEqual(ctl.cleanup_abandoned_socket(absent, self.gone()).outcome,
-                             "already-absent")
+    def test_address_and_foreign_domain_refuse_before_reap(self):
+        self.credential.address = "ipc://another"
+        self.assertEqual(ctl.cleanup_owned_endpoint(self.descriptor, self.gone()).reason,
+                         "endpoint-address-mismatch")
+        self.credential.address = self.descriptor.address
+        self.credential.context = SimpleNamespace(platform=self.context.platform,
+            namespace_id="another-private-state", root="<OTHER_PRIVATE_ROOT>")
+        self.assertEqual(ctl.cleanup_owned_endpoint(self.descriptor, self.gone()).reason,
+                         "endpoint-domain-mismatch")
+        self.reap.assert_not_called()
+
+    def test_public_reap_facts_are_preserved_once(self):
+        for status in ("reaped", "already-absent", "busy", "stale-target", "unverified",
+                       "io-error", "not-applicable"):
+            with self.subTest(status=status):
+                self.reap.reset_mock()
+                self.reap.return_value = {"status": status, "reason": "native-fact"}
+                outcome = ctl.cleanup_owned_endpoint(self.descriptor, self.gone())
+                self.assertEqual((outcome.outcome, outcome.reason), (status, "native-fact"))
+                self.codec.assert_called_with("opaque-native-credential")
+                self.reap.assert_called_once_with(self.descriptor.address, self.credential,
+                                                  context=self.context)
+
+    def test_stale_target_from_public_reap_is_preserved_without_retry(self):
+        # A same-address replacement cannot be constructed by assuming that
+        # set_server(server_id=...) fixes the registered endpoint address.
+        # Exercise our wrapper's handling of the public result independently.
+        self.reap.return_value = {"status": "stale-target", "reason": "target-changed"}
+        outcome = ctl.cleanup_owned_endpoint(self.descriptor, self.gone(), context=self.context)
+        self.assertEqual((outcome.outcome, outcome.reason), ("stale-target", "target-changed"))
+        self.reap.assert_called_once_with(self.descriptor.address, self.credential, context=self.context)
+
+    def test_windows_no_credential_is_not_applicable(self):
+        with mock.patch.object(ctl.os, "name", "nt"):
+            result = ctl.cleanup_owned_endpoint(self.descriptor.model_copy(
+                update={"endpoint_credential": None}), self.gone())
+        self.assertEqual(result.outcome, "not-applicable")
+        self.reap.assert_not_called()
 
 
 class ReadyMaterialTests(unittest.TestCase):
@@ -1035,7 +1057,7 @@ class ReadyMaterialTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "live-ready.json"
             descriptor = ctl.LiveEndpointDescriptor(address="ipc://cc" + "4" * 38, name="Gaia",
-                                                    instance_id="a" * 64, host_pid=os.getpid())
+                                                    instance_id="a" * 64, host_pid=os.getpid(), endpoint_credential="opaque-native-credential")
             ctl.write_ready_material(path, descriptor)
             info = os.stat(path)
             self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
@@ -1044,6 +1066,15 @@ class ReadyMaterialTests(unittest.TestCase):
                              descriptor)
             with self.assertRaises(OSError):
                 ctl.write_ready_material(path, descriptor)
+
+    def test_escaped_opaque_json_cannot_exceed_ready_frame(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oversized-ready.json"
+            descriptor = ctl.LiveEndpointDescriptor(address="ipc://fixture", name="Ada",
+                instance_id="a"*64, host_pid=1, endpoint_credential="\\"*8192)
+            with self.assertRaises(BoardError):
+                ctl.write_ready_material(path, descriptor)
+            self.assertFalse(path.exists())
 
 
 class StubPeer:
@@ -1088,6 +1119,10 @@ class StubPeer:
 
 class ChannelUnitTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
+        self.addCleanup(cc.shutdown)
         self.run = identity()
         self.channel = ctl.CTwoLiveChannel(self.run, TEST_CRM, name="Hana",
                                            address="ipc://cc" + "5" * 38,
@@ -1215,16 +1250,19 @@ class LivePeer:
     """The subprocess driver: start, command, stop and reap one real endpoint."""
 
     def __init__(self, root: Path, *, name: str | None, run: RunIdentity,
-                 delivery: str, rebind: str | None = None, stall: float | None = None):
+                 delivery: str, stall: float | None = None):
         self.directory = Path(tempfile.mkdtemp(prefix="endpoint-", dir=root))
         environment = {key: value for key, value in os.environ.items()
-                       if key not in SANITIZED_VARIABLES}
+                       if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+                       and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
         source = str(REPO_ROOT / "src")
         tests = str(REPO_ROOT / "tests" / "python")
         inherited = environment.get("PYTHONPATH")
         environment["PYTHONPATH"] = os.pathsep.join(
             [source, tests] + ([inherited] if inherited else []))
         environment["BUDDY_DEV_SOURCE"] = "1"
+        environment["BUDDY_STATE_DIR"] = str(root / "state")
+        environment["BUDDY_RUNTIME_ROOT"] = str(root / "runtime")
         environment["HOME"] = str(self.directory / "home")
         environment["TMPDIR"] = str(self.directory / "tmp")
         environment["C2_RELAY_ANCHOR_ADDRESS"] = ""
@@ -1232,11 +1270,10 @@ class LivePeer:
         (self.directory / "home").mkdir(mode=0o700)
         (self.directory / "tmp").mkdir(mode=0o700)
         command = [sys.executable, "-c", PEER_LAUNCHER, str(FIXTURE_PATH), PEER_MODULE_NAME]
-        if rebind is not None:
-            command += ["rebind", rebind]
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=environment, text=True, cwd=str(self.directory), start_new_session=True)
+        self.group_gone = False
         self.ready_path = self.directory / "live-ready.json"
         self.token_path = self.directory / "live-token"
         start = {"op": "start", "identity": run.to_payload(), "delivery": delivery,
@@ -1288,7 +1325,16 @@ class LivePeer:
         code = self.process.wait(timeout=15)
         if code != 0:
             raise AssertionError(f"the peer exited with {code}: {self.diagnostics()}")
+        try:
+            os.killpg(self.process.pid, 0)
+        except ProcessLookupError:
+            self.group_gone = True
+        self.assert_group_gone()
         return reply
+
+    def assert_group_gone(self):
+        if not self.group_gone:
+            raise AssertionError("the peer's owned process group is not confirmed gone")
 
     def kill_group(self) -> int:
         pgid = os.getpgid(self.process.pid)
@@ -1299,6 +1345,7 @@ class LivePeer:
             try:
                 os.killpg(pgid, 0)
             except ProcessLookupError:
+                self.group_gone = True
                 return code
             time.sleep(0.02)
         raise AssertionError("the killed peer's process group is still observable")
@@ -1314,7 +1361,7 @@ class LivePeer:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
-        for stream in (self.process.stdout, self.process.stderr):
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream is not None:
                 stream.close()
 
@@ -1336,10 +1383,13 @@ class LivePeerCase(unittest.TestCase):
         self.evidence_directory.mkdir()
         self.peers: list[LivePeer] = []
         self.identity = identity()
+        rpc_config.configure_client(self.root / "state")
+        self.endpoint_context = cc.local_endpoint_context()
 
     def tearDown(self):
         for peer in self.peers:
             peer.reap()
+        cc.shutdown()
 
     def record(self, name: str, facts: dict) -> None:
         facts = {"name": name, **facts}
@@ -1348,10 +1398,10 @@ class LivePeerCase(unittest.TestCase):
         print(f"[c-two-live evidence] {path}: {canonical_json(facts)}")
 
     def spawn(self, *, name: str | None = None, run: RunIdentity | None = None,
-              delivery: str = "cooperative-checkpoint", rebind: str | None = None,
+              delivery: str = "cooperative-checkpoint",
               stall: float | None = None) -> LivePeer:
         peer = LivePeer(self.root, name=name, run=run or self.identity, delivery=delivery,
-                        rebind=rebind, stall=stall)
+                        stall=stall)
         self.peers.append(peer)
         return peer
 
@@ -1361,7 +1411,7 @@ class LivePeerCase(unittest.TestCase):
         return ctl.CTwoLiveChannel(run or self.identity, TEST_CRM, name=peer.name,
                                    address=address or peer.address,
                                    instance_id=instance_id or peer.instance_id,
-                                   token=token if token is not None else peer.token)
+                                   token=token if token is not None else peer.token, state_dir=self.root / "state")
 
     def deliver(self, peer: LivePeer, channel: ctl.CTwoLiveChannel, request: lv.LiveRequest,
                 reply: dict | None = None, *, timeout_ms: int = 5000) -> lv.LiveReply:
@@ -1396,9 +1446,9 @@ class LivePeerCase(unittest.TestCase):
 class SubprocessLifecycleTests(LivePeerCase):
     def test_one_run_one_endpoint_with_a_clean_stop(self):
         peer = self.spawn()
-        socket_path = Path(peer.descriptor.socket.path)
+        context = self.endpoint_context
         self.assertEqual(peer.configured_roles, ["client", "server"])
-        self.assertTrue(socket_path.exists())
+        self.assertEqual(cc.inspect_endpoint(peer.address, context=context)["status"], "present")
         self.assertTrue(peer.ready_path.exists())
         self.assertEqual(stat.S_IMODE(os.stat(peer.ready_path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(peer.token_path).st_mode), 0o600)
@@ -1417,12 +1467,15 @@ class SubprocessLifecycleTests(LivePeerCase):
         self.assertEqual(channel.capabilities().inquiry_delivery, "cooperative-checkpoint")
         stop_reply = peer.stop()
         self.assertIsNone(stop_reply["addressAfter"])
+        cleanup = ctl.cleanup_owned_endpoint(peer.descriptor, ctl.ConfirmedProcessGone(
+            pid=peer.process.pid, exit_code=peer.process.returncode, group_gone=peer.group_gone), context=context)
+        self.assertEqual(cleanup.outcome, "already-absent")
         self.record("normal-lifecycle", {
-            "create": {"path": str(socket_path), "inode": peer.descriptor.socket.inode},
+            "create": {"address": peer.address, "status": "present"},
             "stop": {"exitCode": peer.process.returncode, "addressAfter": None},
-            "delete": {"exists": socket_path.exists()},
+            "reap": {"outcome": cleanup.outcome},
         })
-        self.assertFalse(socket_path.exists())
+        self.assertEqual(cc.inspect_endpoint(peer.address, context=context)["status"], "absent")
 
     def test_the_owner_settles_the_real_handoff_with_refusal_then_retry(self):
         peer = self.spawn()
@@ -1459,7 +1512,8 @@ class SubprocessLifecycleTests(LivePeerCase):
         # refused by that endpoint's own binding.
         crossing = ctl.CTwoLiveChannel(second_identity, TEST_CRM,
                                        name="SameName", address=first.address,
-                                       instance_id=first.instance_id, token=first.token)
+                                       instance_id=first.instance_id, token=first.token,
+                                       state_dir=self.root / "state")
         refused = crossing.request(inquiry_request(run=second_identity), timeout_ms=1500)
         self.assertEqual((refused.status, refused.reason_code),
                          ("unavailable", "identity-mismatch:attemptId"))
@@ -1493,7 +1547,7 @@ class SubprocessLifecycleTests(LivePeerCase):
 
     def test_wrong_and_oversized_frames_over_real_transport(self):
         peer = self.spawn()
-        rpc_config.configure_client()
+        rpc_config.configure_client(self.root / "state")
         oversized = "x" * (lv.MAX_LIVE_FRAME_BYTES + 1)
         with cc.connect(TEST_CRM, name=peer.name, address=peer.address) as raw:
             for raw_text, expected in (("not json", "frame-invalid"), ("{}", "frame-invalid"),
@@ -1547,9 +1601,8 @@ class SubprocessLifecycleTests(LivePeerCase):
     def test_a_killed_endpoint_is_unavailable_and_never_stopped(self):
         peer = self.spawn()
         channel = self.channel(peer)
-        socket_path = Path(peer.descriptor.socket.path)
-        inode = peer.descriptor.socket.inode
-        self.assertTrue(socket_path.exists())
+        context = self.endpoint_context
+        self.assertEqual(cc.inspect_endpoint(peer.address, context=context)["status"], "present")
         self.assertEqual(self.deliver(peer, channel, inquiry_request()).status, "queued")
         exit_code = peer.kill_group()
         self.assertLess(exit_code, 0)
@@ -1563,47 +1616,46 @@ class SubprocessLifecycleTests(LivePeerCase):
         with self.assertRaises(BoardError):
             channel.capabilities()
         evidence = ctl.ConfirmedProcessGone(pid=peer.process.pid, exit_code=exit_code,
-                                            group_gone=True)
-        outcome = ctl.cleanup_abandoned_socket(peer.descriptor, evidence)
+                                            group_gone=peer.group_gone)
+        outcome = ctl.cleanup_owned_endpoint(peer.descriptor, evidence, context=context)
         self.record("sigkill-cleanup", {
-            "create": {"path": str(socket_path), "inode": inode},
+            "create": {"address": peer.address, "status": "present"},
             "stop": {"exitCode": exit_code, "killedBy": "SIGKILL"},
             "delete": {"outcome": outcome.outcome, "reason": outcome.reason,
-                       "exists": socket_path.exists()},
+                       "status": cc.inspect_endpoint(peer.address, context=context)["status"]},
         })
-        self.assertEqual(outcome.outcome, "deleted")
-        self.assertFalse(socket_path.exists())
+        self.assertEqual(outcome.outcome, "reaped")
+        self.assertEqual(cc.inspect_endpoint(peer.address, context=context)["status"], "absent")
         # The client side is still only closed, never told the process stopped.
         channel.close(reason="worker-gave-up")
         self.assertEqual(channel.request(inquiry_request(), timeout_ms=1500).reason_code,
                          "channel-closed")
 
-    def test_a_replaced_socket_file_is_refused_by_the_cleanup(self):
+    def test_a_live_endpoint_is_busy(self):
+        peer = self.spawn()
+        credential = cc.EndpointCredential.from_json(peer.descriptor.endpoint_credential)
+        result = cc.reap_endpoint(peer.address, credential,
+                                  context=cc.local_endpoint_context())
+        self.assertEqual(result["status"], "busy")
+        self.assertEqual(cc.inspect_endpoint(peer.address)["status"], "present")
+        peer.stop()
+
+    def test_a_credential_for_another_endpoint_is_stale_target(self):
+        # This public SDK scenario has different logical targets. It does not
+        # claim to create a replacement incarnation at the same address.
         first = self.spawn()
-        socket_path = Path(first.descriptor.socket.path)
-        self.assertTrue(socket_path.exists())
-        exit_code = first.kill_group()
-        self.assertLess(exit_code, 0)
-        server_id = first.address[len("ipc://"):]
-        replacement = self.spawn(rebind=server_id)
-        self.assertEqual(replacement.address, first.address)
-        self.assertNotEqual(replacement.descriptor.socket.inode,
-                            first.descriptor.socket.inode)
-        evidence = ctl.ConfirmedProcessGone(pid=first.process.pid, exit_code=exit_code,
-                                            group_gone=True)
-        outcome = ctl.cleanup_abandoned_socket(first.descriptor, evidence)
-        self.record("replaced-file-cleanup", {
-            "create": {"path": str(socket_path), "inode": first.descriptor.socket.inode},
-            "stop": {"exitCode": exit_code},
-            "replace": {"inode": replacement.descriptor.socket.inode},
-            "delete": {"outcome": outcome.outcome, "reason": outcome.reason,
-                       "exists": socket_path.exists()},
-        })
-        self.assertEqual((outcome.outcome, outcome.reason),
-                         ("refused", "socket-file-replaced"))
-        self.assertTrue(socket_path.exists())
-        replacement.stop()
-        self.assertFalse(socket_path.exists())
+        other = self.spawn()
+        self.assertNotEqual(first.address, other.address)
+        credential = cc.EndpointCredential.from_json(first.descriptor.endpoint_credential)
+        result = cc.reap_endpoint(other.address, credential, context=self.endpoint_context)
+        self.assertEqual(result["status"], "stale-target")
+        for peer in (first, other):
+            self.assertEqual(cc.inspect_endpoint(peer.address, context=self.endpoint_context)["status"],
+                             "present")
+            self.assertEqual(self.channel(peer).capabilities().inquiry_delivery, "cooperative-checkpoint")
+            peer.stop()
+        self.record("foreign-target-credential", {"outcome": result["status"],
+                                                 "reason": result.get("reason")})
 
     def test_a_committed_request_id_holds_one_real_queue_entry(self):
         peer = self.spawn()

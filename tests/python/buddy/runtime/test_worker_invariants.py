@@ -260,6 +260,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
+        self.state.mkdir(mode=0o700)
         self.work = self.root / "work"
         self.work.mkdir()
 
@@ -322,12 +323,15 @@ class LiveActivityForwardTests(unittest.TestCase):
         self.endpoints[str(directory)] = endpoint
         ready_file = directory / "live-ready.json"
         ready_file.write_text(json.dumps(LiveEndpointDescriptor(
-            address="fixture-address", name="Fixture Activity", instance_id="c" * 64, host_pid=42).to_payload()))
+            address="fixture-address", name="Fixture Activity", instance_id="c" * 64, host_pid=42, endpoint_credential="opaque-native-credential").to_payload()))
         control = {"operation": "worker", "harness": harness, "requestFile": str(request_file),
                    "directory": str(directory),
                    "live": {"readyFile": str(ready_file), "instanceId": "c" * 64, "token": "d" * 64}}
         handle = types.SimpleNamespace(role_run_control=control, role_run_identity=identity,
                                        pid=42, cancel_requested=False)
+        import c_two as cc
+        self.enterContext(mock.patch.object(cc.EndpointCredential, "from_json", return_value=types.SimpleNamespace(
+            address="fixture-address", context=cc.local_endpoint_context())))
         # Readiness/held-request validation, wire admission and forwarding all
         # run. Only the SDK connection is local; no native PID is proven here.
         def local_call(_channel, operation, text):
