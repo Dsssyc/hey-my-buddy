@@ -47,6 +47,10 @@ R-A 原始 token 修正固定 artifact `de5793f1-9fd2-40e9-afed-836e54c7bbbb`、
 
 R-F 顺序细化：A/B/C生产实现与 SyntheticBoard/WorkspaceIdentityFixture 接口均已固定整合，R-E只写六个不被R-F导入的测试文件。R-F现在只开发参数化量测脚本并执行smoke，唯一范围 ignored `tmp/hr-scale/`，与R-E独立；Host仍在全部整合、合入最新core后顺序执行完整34万行/接近378MB的原/新量测，不能用smoke替代。复用sqlite3 online backup、既有配方/真实legacy捕获、独立进程time/resource RSS、既有writer上下文仪表；所有初始生成/迁移与每phase峰值区分。未新增全局测试框架或持久机制。
 
+R-F run `7bd25223-0021-45e2-97da-888fda890c8a`，基于 `214692a9` 首次路由，四字段/configuration全部省略；GLM-5.3/max 在 stream 阶段返回供应方不可重试 429/1310，state failed/revision4、没有 output、shutdown self/descendants confirmed，原始材料固定 ignored `host-review-repair-20261010/hr-scale-round1-limited/`。fresh Codex high enabled/available/quotaExhausted=false 后，按既有例外在原 run 完整 codex/openai/gpt-6.1-sol/high continue（hr-scale-continue-rate-limit-1310-r1，revision4→5），只 ignored 量测脚本/smoke，Host全规模仍待全部整合和最新core，未改日常设置或进程。
+
+R-D真实浏览器补证：固定 `9a8ae43b` 构建，私有真实ConsoleHTTP/SyntheticBoard预览，不读取日常看板、不调用模型。Chrome独占预览后台重载后578.436秒观察窗内恰一条首次快照GET/200、无周期快照，切回实际恢复GET/304与三秒cadence；原生自动化按键时间不能定位浏览器visibility事件，未把该延迟冒充服务端耗时，“立即一次”精确边界由六处独立移除和fake-clock断言守住。初次IAB始终visible及被Chrome阻止的工具标签不当后台证据，原材料保留。源码与合成已安装runtime均默认两项/详细信息关闭，在light/dark、1280/760×860实际DOM宽度下无水平溢出，Enter/Space分别展开/收起且版本读取总数仍2。合成已安装6.8.2/2026-09-30仅沿用VersionInfoTests READY配方，标记程序未执行；初写指针权限错误导致真实产品显示未记录，随后用既有write_active_runtime纠正，仅私有夹具，未安装/动凭据。证据 `host-review-repair-20261010/rd-visibility-single/{native-times-r2,version-browser-matrix,version-browser-keyboard,version-fixture-boundary}.json`，改后截图位于ignored `host-review-repair-20261010/screenshots/RD01-Chrome-*.jpg`、`RD02-Chrome-background-first-read-return.jpg`；发行产物的最终源码重建仍待整合后完成。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
