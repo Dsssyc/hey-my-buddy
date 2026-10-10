@@ -61,3 +61,11 @@ Host 另作两份公共接线单点变异：运行时恢复借用 SDK 当前域�
 - `protocol.test_rpc_config.ProfileTests.test_0755_state_creates_0700_ipc_without_parent_repair`
 - `protocol.test_rpc_config.ProfileTests.test_explicit_state_and_environment_are_the_only_sources`
 - `protocol.test_rpc_config.ProfileTests.test_missing_state_refuses_before_sdk_or_default_paths`
+
+## R-05 目标识别结论撤回与用户授权返修
+
+Host 复读真实 catalog-loss 日志后发现，前述“额外一处命中拒绝诱饵”的结论不成立：固定测试失败于 `Browser.bootstrap` 的 HTTP 500 / INTERNAL_ERROR 断言，没有明确核对诱饵记录或文件 source/content。这份失败保留，但不计为指定目标变异的有效证据；其余 20 份具体环境/fixture 目标断言不受影响。错误来自 Host 对任意 AssertionError 的宽泛分类，不能写成已完成 R-05 验证。
+
+Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: An accepted goal cannot be continued`，没有创建新回合。用户明确授权例外新增一个经路由的窄微任务 2-E，唯一可写 `tests/python/console/test_console.py` 中的新增 R-05 测试与新 `docs/acceptance/c-two-r05-guard.md`；不碰旧 run、原固定记录与正在由 2-C 独占的 support。目的为在 CLI/HTTP/bootstrap 错误时也明确核对记录拒绝诱饵，正常路径仍验证真实服务与修改后 fixture 重读。旧签收、原失败与撤回全部保留，R-05 等新固定交付与实际目标变异通过后再登记。
+
+首批整合为 `57837f2f`，2-A 的 `int-9f3931f7-e1e3-49e8-9763-cd4d5a40311f`、2-B 的 `int-8b1f1f78-4f9f-400f-85ab-578282f80aca` 均 verified 后内部签收。原始产物日志与脚本已保存在 Host 根的 `retained-c2a-8p4Pqv` / `retained-b2b-iptu2A`，Host 按创建时记录的两个确切任务根整体回收，删除错误未屏蔽；清单在 `repair-ab-task-root-cleanup.json`。受管检出经黑板 cleanup-plan 核对，2-A 已自动 applied，2-B 后续按其 eligible 计划 apply，不手工删除受管检出。
