@@ -114,3 +114,5 @@ Host核对工具的两处失败已纠正：第三变异首次误定位support.py
 1-A2补丁整合fdff0c2a，integration int-81363d55-478d-4dff-ae38-41607dcda753 已 verified，原run accepted/completed；cleanup-plan/apply 已 applied。Host在保留最新原补丁、两回合顶层验证日志和固定副本后整体删除结构化交付登记的两个确切任务根 <1A2_FIRST_TASK_TMP>/<1A2_SECOND_TASK_TMP>，没有按前缀查找或删除其他对象；公共依赖材料另拷到Host自建根供后续微任务使用，增补editables的公开下载退出0、哈希已登记。实施检出uv sync --frozen退出0，现为0.7.4，只更新实施环境；记录补充后仓库卫生5项退出0。
 
 1-B从9a9a66c3路由提交，run6f1205d5-c82d-45ea-87d3-241c627d0cc2，四项配置全部省略。决定dec-4a97c9c4-1d3c-4446-9f67-74628c5f84de选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；按用户许可在原run continue改用已完成同类1-A2的Codex/openai/gpt-6.1-sol/high，未改变全局配置。Host首份continue错误地把四字段写在顶层，INVALID_ARGUMENT拒绝且无状态改动，随后按现有CLI契约改用configuration对象成功；原错误保留，未另开run。微任务仍在实施，未验收。
+
+1-B继续期间，Host把最新socu/buddy-core的1a9decd9合入，合并提交8013f9cc58b5d78f8bc7fe63e5acf4ab7673a90d，仅docs/design/backlog.md变化，没有手动改Host维护文档；本项目端点仍按计划0700，未把Host的其他权限实测写成自主证据。1-C任务另明确V-10必须核对连接消耗部分预算之后的排队截止时间，复用现有本机时间窗，防止连接后服务端重新获得整窗；涉及公开schema或范围外接口则停止交付缺口。B的固定基线与写入范围保持。监测包装器未取得继续回合结果后，Host按指南前台持有原run唯一await，不另开run。
