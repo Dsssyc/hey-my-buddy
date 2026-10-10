@@ -166,3 +166,21 @@ Host 分别对该 core 的归档副本与合并后的源码执行 loader，执�
 首次经路由省略全部四项配置，仍用同一宏任务；不指定 buddy 的返修、同 run 的不可重试限流恢复、唯一写入范围、Worker 不删除、共享 refs/stash 禁令、私有根与无真实模型规则全部保留。仅跑五份受影响测试并核对目标单点变异，Host 固定审查后整合。下一次完整检查只在这一批最终代码上运行，保留两次已失败的完整检查；没有安装或重启日常服务/Worker，没有清扫公共 IPC 或日常状态。
 
 2-F run 为 `cc637748-00eb-4f62-9d0d-90b3aae9230b`，基线 `bd89119a0c5b961016f1d6d269267fcd869c8ac2`，路由决定 `dec-88585fc4-9fc7-4ba7-9b7f-6acafd20ccb4` 选 ZCode/zai-api/GLM-5.3-Flash/max。原生结果记录供应方不可重试 429/1310，原生与外层停止均确认；按用户既有许可在原 run 上 continue 改用已完成本批同类工作的 Codex/openai/gpt-6.1-sol/high。第一次配置恢复缺少独立 reason 字段，被 INVALID_ARGUMENT 拒绝，没有形成新回合；补齐 reason、使用新 commandId 后排队成功，两个原始请求/响应保留。没有改变用户路由配置。记录中的“真实模型冒烟 0 次”只指待用户逐次批准的四个 harness 回合；为微任务选择和运行 buddy 所用模型另按各 run 记录。
+
+## 2-F 固定产物的 Host 独立验证
+
+固定提交 `cd716e41847e42aba9d2e5ca5cba699018064d73`、artifact `f1dc502c-a2df-4565-8a48-16fa23bc7597`、累积补丁 SHA-256 `7a89ebb3e2376a4736792145ba3cb85e723589d8ee083ecd8416e54dadf00b29` 均已核对；六路径没有越界。Worker 的 assistance 与原生沙箱阻断记录原样保留。Host 在固定源码上用独立解释器、空的私有 HOME 与明确状态/运行时根执行五份完整聚焦测试，共 109 项，全部退出 0，没有实际模型调用。
+
+| 文件 | 实际项数 | 测试 / 命令秒 |
+| --- | --- | --- |
+| `buddy.runtime.test_repair_recovery` | 10 | 41.618 / 42.194 |
+| `buddy.harnesses.dsh.test_dsh_role_wiring` | 12 | 6.121 / 6.610 |
+| `buddy.harnesses.zcode.test_zcode_inquiry` | 47 | 7.414 / 7.834 |
+| `install.test_backup_preflight` | 12 | 1.432 / 2.005 |
+| `protocol.test_transport_attach` | 28 | 1.062 / 1.439 |
+
+Host 从同一固定源码重新生成六份只改一处的副本，不使用 Worker 的通过标签作判断：恢复 HOME 继承命中 `daemon overrides must leave HOME`；删除 DSH 与 ZCode 的显式状态根分别命中各自 channel 归属断言；恢复旧快照顺序命中原全快照相等断言；把 SDK 拒绝输入改回 0750 命中 `ServiceError not raised`；把允许输入改成 0770 命中 `0750 must reach the actual SDK peer`。六份都恰好一项 failure、无 errors、退出 1，命令耗时依次 0.355、0.888、0.948、1.145、0.571、0.530 秒。后两份是原生 SDK 输入边界负控，不称为删除了厂商的权限实现；测试确认接受 0750、拒绝 0770/0777，并确认 peer 收件与无 chmod。没有将权限沙箱、任意传输失败或导入错误算为红灯。
+
+原始证据为 `tmp/c073-host/host-2f-{recovery,dsh,zcode,backup,attach}.{json,log}`、`host-2f-target-proofs.json`、六份 `host-2f-red-*.{json,log}`，副本位于本任务私有根。五文件旧编号 108 个全部保留，唯一新增 `protocol.test_transport_attach.RpcReadOnlySetupTests.test_group_readable_ipc_reaches_native_rpc_without_chmod`；整批 loader 为 213 模块、3,474 个编号，3,473 个未变化集合相等，无删除、重复或加载错误。没有改 Worker 的固定记录与范围内代码；本节只登记 Host 的补核事实。
+
+用户明确指定的 `socu/buddy-core@1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 已合入且祖先核对通过；该分支随后新增两笔文档提交，最新为 `fea30f2964fb15ead6da1a53f8abfc96abc1ee87`，本批按“完整检查前合入最新 core”的原要求合入。增量仅为 Host 维护的 ADR、术语、索引、待办与 AGENTS 文档，没有产品、测试或控制台改动，不冒认本线所写。最终检查将绑定实际实施提交及该 core，保留此前两次完整失败。

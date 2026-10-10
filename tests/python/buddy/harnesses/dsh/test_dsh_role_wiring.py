@@ -256,11 +256,13 @@ class WorkerRegisteredRunTests(DshRoleCase):
         channel = None
         while time_module.monotonic() < deadline:
             if holder:
-                _, channel = handle_live_binding(holder[0])
+                _, channel = handle_live_binding(holder[0], state_dir=self.environment["BUDDY_STATE_DIR"])
             if channel is not None:
                 break
             time_module.sleep(0.05)
         self.assertIsNotNone(channel, "the held controller endpoint never became ready")
+        self.assertEqual(channel._state_dir, (self.root / "state").resolve(),
+                         "the Host inquiry channel must use the fixture's private state root")
         live_request = LiveRequest(identity=request.identity, request_id="live-1", kind="inquiry",
                                    payload=InquiryPayload(question_id="inq-1",
                                                           question="bounded wiring question"))

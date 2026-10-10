@@ -1,9 +1,8 @@
 """Focused transport tests: attaching to a healthy private service must not mutate anything.
 
-Every fixture is an isolated local directory. Nothing here contacts a real C-Two
-endpoint, the network, or a native App pipe: the ping RPC is patched at the
-``_request`` boundary so the tests observe exactly which filesystem operations
-the attach path performs.
+Every fixture is an isolated local directory. Most tests patch the ping RPC to
+observe filesystem operations. The IPC access tests use the existing native
+probe subprocess with a controlled ping contract, never a model or daily peer.
 """
 import json
 import os
@@ -434,15 +433,91 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         recorder.assert_no_mutation()
         self.assertFalse(missing.exists())
 
-    def test_unsafe_ipc_is_not_chmodded_or_connected(self):
+    def native_ping_peer(self):
+        """Reuse the protocol probe's native process, profile and stop handshake."""
+        import c_two as cc
+        from c_two import crm
+        from protocol import test_rpc_config as probe_fixture
+        from support import shutdown_private_rpc
+        from hey_my_buddy.protocol import transport
+
+        @crm(namespace="buddy.probe", version="1.0.0")
+        class ProbeContract:
+            def echo(self, payload: str) -> str: ...
+            def ping(self, payload: str) -> str: ...
+            def sleep_ms(self, payload: str) -> str: ...
+
+        received = self.directory / "received.jsonl"
+        received.write_text("")
+        script = probe_fixture.PROBE_SERVER.replace(
+            "    def sleep_ms(self, payload: str) -> str:",
+            "    def ping(self, payload: str) -> str:\n"
+            "        return self.echo(payload)\n"
+            "    def sleep_ms(self, payload: str) -> str:",
+        ).replace(
+            "        return payload",
+            "        with (state / 'received.jsonl').open('a') as stream:\n"
+            "            stream.write(payload + '\\n')\n"
+            "        return payload",
+        )
+        self.addCleanup(shutdown_private_rpc)
+        # Register ownership before waiting for readiness: a failed startup must
+        # still collect this exact child, without discovering or stopping a peer.
+        peer = probe_fixture.ProbeServer.__new__(probe_fixture.ProbeServer)
+
+        def stop():
+            if hasattr(peer, "process"):
+                peer.close()
+                if hasattr(peer, "address"):
+                    self.assertEqual(peer.process.returncode, 0, "the native probe must confirm shutdown")
+            elif hasattr(peer, "log"):
+                peer.log.close()
+
+        self.addCleanup(stop)
+        with patch.object(probe_fixture, "PROBE_SERVER", script):
+            probe_fixture.ProbeServer.__init__(peer, self.directory)
+        self.assertEqual(Path(json.loads(peer.endpoint_path.read_text())["root"]), self.directory / "ipc")
+        self.assertEqual(cc.__version__, "0.7.4")
+        self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
+        self.enterContext(patch.object(transport, "CONTROL_NAME", "buddy-probe"))
+        endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}
+        self.endpoint_file.write_text(json.dumps(endpoint))
+        return endpoint, received
+
+    def test_group_readable_ipc_reaches_native_rpc_without_chmod(self):
+        endpoint, received = self.native_ping_peer()
         ipc = self.directory / "ipc"
-        ipc.mkdir(mode=0o750)
-        with patch("hey_my_buddy.protocol.transport.cc.connect") as connect:
-            with MutationRecorder() as recorder:
-                self.assertIsNone(_attach_read_only(self.directory))
-            recorder.assert_no_mutation()
-            connect.assert_not_called()
+        ipc.chmod(0o750)
+        with MutationRecorder() as recorder:
+            self.assertEqual(_attach_read_only(self.directory), endpoint,
+                             "0750 must reach the actual SDK peer")
+        recorder.assert_no_mutation()
+        self.assertEqual([json.loads(line) for line in received.read_text().splitlines()],
+                         [{"token": ENDPOINT["token"]}])
         self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), 0o750)
+
+    def test_unsafe_ipc_is_not_chmodded_or_connected(self):
+        """Unsafe means group/world writable; the SDK refuses before the peer receives RPC."""
+        from support import shutdown_private_rpc
+        from hey_my_buddy.protocol.transport import _request
+
+        endpoint, received = self.native_ping_peer()
+        ipc = self.directory / "ipc"
+        for mode in (0o770, 0o777):
+            with self.subTest(mode=oct(mode)):
+                shutdown_private_rpc()
+                ipc.chmod(mode)
+                with MutationRecorder() as recorder:
+                    with self.assertRaises(ServiceError) as refused:
+                        _request(endpoint, "ping", {}, state_dir=self.directory)
+                    self.assertIsNone(_attach_read_only(self.directory))
+                recorder.assert_no_mutation()
+                self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+                self.assertRegex(str(refused.exception.__cause__).lower(),
+                                 r"(group|world|other).*(writ|permission)|(writ|permission).*(group|world|other)",
+                                 "the SDK must reject writable access, not an arbitrary transport error")
+                self.assertEqual(received.read_text(), "", "the unsafe SDK client must never reach the peer")
+                self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), mode)
 
     def test_explicit_state_reaches_rpc_setup(self):
         from hey_my_buddy.protocol.client import BoardClient
