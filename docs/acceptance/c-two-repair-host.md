@@ -184,3 +184,15 @@ Host 从同一固定源码重新生成六份只改一处的副本，不使用 Wo
 原始证据为 `tmp/c073-host/host-2f-{recovery,dsh,zcode,backup,attach}.{json,log}`、`host-2f-target-proofs.json`、六份 `host-2f-red-*.{json,log}`，副本位于本任务私有根。五文件旧编号 108 个全部保留，唯一新增 `protocol.test_transport_attach.RpcReadOnlySetupTests.test_group_readable_ipc_reaches_native_rpc_without_chmod`；整批 loader 为 213 模块、3,474 个编号，3,473 个未变化集合相等，无删除、重复或加载错误。没有改 Worker 的固定记录与范围内代码；本节只登记 Host 的补核事实。
 
 用户明确指定的 `socu/buddy-core@1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 已合入且祖先核对通过；该分支随后新增两笔文档提交，最新为 `fea30f2964fb15ead6da1a53f8abfc96abc1ee87`，本批按“完整检查前合入最新 core”的原要求合入。增量仅为 Host 维护的 ADR、术语、索引、待办与 AGENTS 文档，没有产品、测试或控制台改动，不冒认本线所写。最终检查将绑定实际实施提交及该 core，保留此前两次完整失败。
+
+2-F 整合提交为 `3fb2c5c60c762a854b2ae1f3aca87c865c3e5cdb`，黑板登记 `int-5c9ab592-259b-4b13-9001-378a585b9206` 为 verified，原 run 已 accepted/completed。清理计划 `cln-ea16e156-765c-4fba-9ff3-2817efc117fc` 通过 eligibility 和两层停止核对，以计划原样给出的 confirmPath 执行，removed=true；只回收该微任务受管检出，固定产物、原始记录和任务根保留供 Host 复核。没有删除其他会话对象或清扫日常目录。
+
+## 第三次完整检查与 Host 临时根修正
+
+`3fb2c5c60c762a854b2ae1f3aca87c865c3e5cdb` / core `fea30f2964fb15ead6da1a53f8abfc96abc1ee87` 的完整检查仍用默认并行数，退出 1、689.527 秒；213 模块中 212 个通过、只有安装版 ZCode 的六项文件失败（3 failures、2 errors）。通过模块计 3,468 项、跳过 1 项；全量 loader 仍为 3,474，不写成全通过。此前两次全检与单文件 green 保留。原始证据为 `final-fixture-check-{started,process,result,summary}.json` 与 `final-fixture-check.log`。
+
+Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加 stderr 留存，再使用同样深度的私有检查根复跑。六项文件退出 1、13.376 秒，五处都得到 `Error: listen EINVAL: invalid argument .../tmp/znr-<uuid>.sock`；失败发生在原生 app server 建立会话前。Host 改用开始时创建并登记确切路径的短任务根，仍经检查运行器的 child_environment 构造同样独立的 p019/tmp、HOME、状态及运行时域；同一文件六项通过，退出 0、20.163 秒，native stderr 为空，两个发现用例的 localhost 模型请求为 0，三个回合用例分别 4、3、4 次 localhost 响应，没有真实供应方请求。
+
+这次明确修正的是 Host 自己的忽略目录检查入口：原入口把系统临时根再嵌在较长的 Host 根与 label 之下，导致 ZCode 自建绝对 Unix 套接字路径过长。新的完整入口直接在系统临时目录创建短 `cf-` 任务根，创建时记下确切路径，TMPDIR、BUDDY_CHECKS_TMPDIR、HOME、state、runtime、uv cache 全在该根；不修改产品、测试、期限或并行数。长根 red 与短根 green 证据为 `installed-zcode-final-{long,short}.{json,log}` 及短根 ownership 登记。该定位支持临时路径原因，不把初跑统归为机器负载，也不改写任何一次失败。
+
+再次全检前 core 又增加了纯文档提交 `40d82d937caa03a058b484ff0f660657cd595945`，已合入为 `7c44bba1a5936733daafe40a41deba1cf918194d`；相对上一候选的产品、测试、锁文件与控制台均无变化，指定 `1f7e8b60` 仍为祖先。下一次检查绑定实际最终实施提交和该 core，不改 Host 维护的文档内容。
