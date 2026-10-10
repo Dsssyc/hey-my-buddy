@@ -265,3 +265,5 @@ Host 已执行开发依赖准备，退出 0、4.590 秒，`apps/console` 源码�
 | 2-E / `22e5e432-44c3-439c-b885-2b3f7f23c470` | `dec-783275aa-5531-40d1-a1ba-2fc4240aeb19`；ZCode/zai-api/GLM-5.3-Flash/max | Codex/openai/gpt-6.1-sol/high |
 
 三项首次提交均省略全部四项配置。供应方均返回不可重试 429/1310，失败回合两层停止确认后，按用户已有许可在各自原 run 上 continue，使用已完成本批同类工作的完整配置；没有改变用户路由设置。原失败与请求材料分别保留在 `<实施检出>/tmp/c073-host/repair-rpc*`、`repair-checkpoint*`、`repair-r05*` 的精确材料清单中；此处星号只说明文件名前缀，未用于清理。
+
+公共夹具整合归属补充：2-D 提示并由 Host 实测确认，`tests/python/buddy/harnesses/zcode/test_zcode.py` 的共享 `live_channel` 需要显式传 fixture 自身状态根，不能借用检查进程的另一个根。Host 统一修改这处共享调用并补根归属断言，记录原失败、修正后的通过与去掉传递时的目标红灯；不把该文件加入并发 Worker 的写入范围。2-D 范围内的 canonical 根缺陷仍退回原 run。最终完整检查依然只在所有返修整合并合入最新 core 后运行，既有失败日志保留。

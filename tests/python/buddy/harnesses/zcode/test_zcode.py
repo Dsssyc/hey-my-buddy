@@ -87,8 +87,11 @@ class ZcodeFixtureCase(unittest.TestCase):
 
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            state, channel = handle_live_binding(handle)
+            state, channel = handle_live_binding(
+                handle, state_dir=self.environment["BUDDY_STATE_DIR"])
             if channel is not None:
+                self.assertEqual(channel._state_dir, Path(self.environment["BUDDY_STATE_DIR"]).resolve(),
+                                 "the role channel must use the fixture's private state root")
                 return channel
             time.sleep(0.05)
         self.fail("the held controller endpoint never became ready")

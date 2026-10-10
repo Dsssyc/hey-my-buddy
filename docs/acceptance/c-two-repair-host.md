@@ -97,3 +97,15 @@ Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: 
 2-C 的七模块共 84 项全部通过，真实 daemon 文件包含实际注册、连接与健康 RPC。Host 从固定源码分别复制九份单点变异：去掉 CLI 根绑定、恢复旧桩签名、去掉 attach 根、放宽缺根拒绝、放宽外来根身份校验、恢复无路径 Mock、去掉 Worker 显式传根、去掉 channel 显式传根、去掉 daemon 直接 health 根。九份均为一项目标 failure、errors=0、退出 1；每份日志还核对对应私有根、关键字签名或身份绑定的具体失败消息。最后一份实际启动私有 daemon 后命中根断言，不是 socket 拒绝。证据为 `host-rpc-green-results.json`、`host-rpc-mutants-plan.json`、`host-rpc-mutants-results.json` 及逐项原始日志。
 
 R-05 真实 catalog-loss 变异退出 1，一项目标 failure、errors=0，5.105 / 5.780 秒。HTTP 500 仍先出现，随后 finally 中明确断言 `R-05: attempted native discovery/start; rejecting decoy calls:` 失败，附三条自建拒绝脚本的 `["dsh"]` 记录，进入真实发现或程序启动之前即阻断，没有模型调用。此前撤回的旧结论不恢复为旧产物的证据；这一份是新 2-E 的实际目标证明，保存在 `host-r05-catalog-loss-red.log`、`host-r05-target-proof.json`。正常文件与变异均使用 Host 自己创建的私有域，没有访问日常状态或默认公共端点目录。
+
+两份补丁在 `688f0938` 整合，原所有路径的目标 blob 与固定输出逐字节相等。2-C 的 `int-b9bd3d7c-7dcf-4903-897b-eb82c4fb7d3a`、2-E 的 `int-9d5d5531-e0a0-4587-803f-82edfce4f687` 均 verified 后 accepted/completed。黑板回收计划 `cln-bdee4e11-2351-4bf6-b527-fcdb8a65ae0b`、`cln-fd8d3013-6476-4291-a503-d98db3ce4731` 回读均 applied、removed=true，没有重复 apply 或手工删受管检出。Host 保留两项原始日志、脚本与结果材料后，按固定交付报告的确切任务根整体回收；169 与 13 份保留文件的清单、哈希、删除结果在 `repair-ce-retained-evidence.json`、`repair-ce-task-root-cleanup.json`。argv 观察只作补充，实际收尾依据已保存直接子进程的 wait 与签收停止证据，不把缺少 PID 当作停止。
+
+## 2-D 首份退回及 Host 共享夹具接线
+
+首份固定 `8a35816360fbcbb8fb39288006594d724e44e2f3` 的三路径与 SHA-256 已核对。Host 两项并发实跑为退出 1、8.272 / 8.810 秒、两项失败，均实际走到 ready 后在子夹具的 IPC 根断言失败：SDK 返回 canonical `/private/tmp`，自建根仍为 `/tmp`。此为微任务范围内的代码缺陷，已在原 run `a4e106fd-82f7-44ca-8312-9b3a11bd320d` continue 打回，全部四项配置省略；要求在归属建立时规范根，保留隔离断言。原固定失败、三次受限检查及未知 native 停止材料继续保留，不先行签收。
+
+Host 同时复现其范围外提示：原单项 `test_one_send_delivers_and_answers_a_question_and_finishes_completed` 退出 1、20.659 / 21.189 秒，等待 ready observation 超时。共享 `ZcodeFixtureCase` 只设置控制器环境里的状态根，角色通道却从测试进程环境取得另一个根。Host 在公共 `tests/python/buddy/harnesses/zcode/test_zcode.py` 的 `live_channel` 统一传本 fixture 的显式状态根，并在观察就绪前核对 channel 根归属；这一公共改动不属于 2-D 的三路径，不由 Worker 自行扩范围，不改变任何产品行为。
+
+用固定 2-D 源码与这项 Host 公共改动合成独立副本，原单项通过，0.951 / 1.278 秒；从该副本只去掉显式传根，保留根归属断言，目标即退出 1、failure=1、errors=0，0.547 / 0.835 秒，明确报 `the role channel must use the fixture's private state root`。它没有依靠超时或导入错误识别目标。材料为 `host-checkpoint-existing-state-seam`、`host-checkpoint-shared-seam-green`、`host-checkpoint-shared-seam-red` 的原始日志与 JSON；2-D 最终全十项及三处变异仍待其返修固定输出。
+
+共享夹具的工具拒绝文件 `buddy.harnesses.zcode.test_zcode_tool_refusals` 八项独立通过，5.093 / 5.424 秒，原工具拒绝与停止断言保留。该聚焦验证不替代最终完整检查，日志为 `host-zcode-shared-refusals.{json,log}`。
