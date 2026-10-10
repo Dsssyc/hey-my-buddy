@@ -241,3 +241,9 @@ Python完整第一次结束：acaa51802a5c85988c5d930cebbf5d7ce25e4fba，uv run 
 2026-10-10恢复：用户报告11:26（Asia/Singapore）授权restart日常服务，未取消工作、Worker保留，描述符220→23；用户说明当前日常C-Two仍0.6.0，空闲60秒连接池未关闭连接会重新累积，重现时Host仍必须停止报告，不自行维护。Host只用既有attach-only CLI读取原B1 run，然后continue bg-final-identity-continue-after-user-service-recovery-r1（revision6→7），configuration与四字段全省略、原Codex high及6路径范围沿用，不新建B1任务、不更改日常环境。
 
 收尾计划按新授权调整：B1关联返修固定产物/独立检查/目标移除失败后整合，合入最新socu/buddy-core（读取时81a4cfb9，包含DSH原生续接）；共同源码仅workflow.py的不同区域，保留两边行为并跑受影响检查。合入后从最终源码重新核对控制台产物、更新测试编号，在同一最终代码提交顺序运行默认并行的Python完整检查与npm前端全量，保存此前失败日志；若再有疑似负载失败，等空闲后单文件复跑再判断。socu/c-two-073与工作树不操作，日常运行时/服务/Worker不安装升级或重启。两套最终退出0和最后卫生测试仍待执行，未宣称完成。
+
+B1关联返修2026-10-10固定3798e5bb9e5cc10f9050648a406a490e07d8db48、artifact4a1280d2-8061-4952-b483-f5e3ab5c836a；封存累计patch SHA-256 45ec47b9584291a275fc7a29a1f6ebe4173040b90ba822a0063a07ebbf629651，唯一修改install/test_workspace_identity_migration.py，测试文件哈希c56a708223a613ad02cf98a6635bc68d9e19f0a917c0a84239d516450d0abacf。保留原受管缺失路径返回用例编号，严格核对B2先于准备/预约拒绝WORKSPACE_CHANGED/checkoutId，以及全部行/原固定bytes/同一物理inode不变；新增非受管existing用例真实进入准备与B1预约，核对PREPARATION_CONFLICT的checkoutId/holderTaskId/recordedCheckoutId/identityReason，拒绝后无第二任务或占用。生产逻辑无变化，不能把调换拒绝层次写成放宽身份规则。
+
+Host已独立执行隔离B2控制组：关闭B1回退时原受管用例退出0；再移除B2借用保护时该项以BoardError not raised失败、退出1。非受管用例单独移除B1未证明持有者防护时同样失败；真实不同inode目录的现有用例移除物理身份核对时也失败。三组目标失败均1 assertion failure、0 error，正常源码未改；材料review-bg-final-identity/after-service-recovery/host-counterfactuals-r2。首个Host变异runner把材料目录定位少一层，导入失败未执行测试，保留host-counterfactuals并排除，纠正后独立重跑；第一次受影响测试的PYTHONPATH重复拼接，虽固定测试目录已正确，仍中止且排除，重新以固定checkout/src明确源绑定执行，不将中止当验证。Worker私有报告首句绝对主目录位置由Host一句话替为~，仅位置、不改验证结论，登记host-record-correction.json；原冻结产物/patch不变。
+
+Host固定3798e5bb两模块受影响检查39项（迁移35、身份4）退出0、103.118秒，正常teardown；命令明确PYTHONPATH为固定checkout/src，日志host-affected-fixed-source.log。三个目标反事实均以目标断言失败，并保留独立B2控制组通过；原固定历史、原物理目录与没有第二持有者均有严格断言。准备将唯一测试差异整合到Host分支，最终完整检查仍待最新core合入。

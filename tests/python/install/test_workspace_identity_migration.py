@@ -225,15 +225,76 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
     def test_returned_missing_path_does_not_admit_a_second_stable_holder(self):
         board, _run, manifest = self.legacy_run()
         root = Path(manifest["checkoutRoot"])
+        actual = workspace.inspect(str(root))
+        root_inode = root.stat().st_ino
+        git_inode = Path(actual["gitDir"]).stat().st_ino
+        history = self.historical(board)
+        fixed = self.fixed_files()
         saved = root.parent / "saved-absent-checkout"
         root.rename(saved)
         summary, _expected = self.migrate(board)
         self.retained(summary, manifest, "path-missing")
         saved.rename(root)
-        with self.assertRaises(BoardError) as caught:
-            self.submit(board, request_id="returned-competitor", cwd=str(root),
-                        executionWorkspace={"kind": "existing", "access": "write"})
-        self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
+        self.assertEqual(root.stat().st_ino, root_inode)
+        self.assertEqual(Path(actual["gitDir"]).stat().st_ino, git_inode)
+        self.assertEqual(workspace.inspect(str(root)), actual)
+        before = self.all_rows(board)
+        # B2 verifies the original managed allocation before capturing borrowed
+        # input or entering reservation admission. B1 deliberately did not
+        # register an alias while the path was missing; return alone is no proof.
+        with patch.object(workspace, "_prepare_locked", wraps=workspace._prepare_locked) as prepare, patch.object(
+                board.store.workflow, "_reserve", wraps=board.store.workflow._reserve) as reserve:
+            with self.assertRaises(BoardError) as caught:
+                self.submit(board, request_id="returned-competitor", cwd=str(root),
+                            executionWorkspace={"kind": "existing", "access": "write"})
+            self.assertEqual(caught.exception.code, "WORKSPACE_CHANGED")
+            self.assertEqual(caught.exception.details, {"field": "checkoutId"})
+            prepare.assert_not_called()
+            reserve.assert_not_called()
+        self.assertEqual(self.all_rows(board), before)
+        self.assertEqual(self.historical(board), history)
+        self.assertEqual(self.fixed_files(), fixed)
+        self.assertEqual(root.stat().st_ino, root_inode)
+        self.assertEqual(workspace.inspect(str(root)), actual)
+        self.assertEqual((root / "tracked.txt").read_text(), "base\n")
+        self.assertEqual(board.store.count_tasks(), 1)
+
+    def test_returned_missing_existing_checkout_reaches_unproven_reservation_guard(self):
+        # An unmanaged checkout has no borrowed-allocation guard. Real input
+        # preparation must reach B1's atomic reservation gate for this witness.
+        board, run, manifest = self.legacy_run(kind="existing")
+        root = Path(manifest["checkoutRoot"])
+        saved = root.parent / "saved-absent-existing-checkout"
+        history = self.historical(board)
+        fixed = self.fixed_files()
+        root.rename(saved)
+        summary, _expected = self.migrate(board)
+        self.retained(summary, manifest, "path-missing")
+        saved.rename(root)
+        actual = workspace.inspect(str(root))
+        root_inode = root.stat().st_ino
+        before = self.all_rows(board)
+        with patch.object(workspace, "_prepare_locked", wraps=workspace._prepare_locked) as prepare, patch.object(
+                board.store.workflow, "_reserve", wraps=board.store.workflow._reserve) as reserve:
+            with self.assertRaises(BoardError) as caught:
+                self.submit(board, request_id="returned-existing-competitor", cwd=str(root),
+                            executionWorkspace={"kind": "existing", "access": "write"})
+            self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
+            self.assertEqual(caught.exception.details, {
+                "checkoutId": actual["checkoutId"], "holderTaskId": run["runId"],
+                "recordedCheckoutId": manifest["checkoutId"], "identityReason": "path-missing",
+            })
+            prepare.assert_called_once()
+            reserve.assert_called_once()
+        self.assertEqual(self.all_rows(board), before)
+        self.assertEqual(self.historical(board), history)
+        # A refused existing capture can retain its own prepared files for
+        # replay, but cannot rewrite any original fixed history or gain a holder.
+        after_files = self.fixed_files()
+        self.assertEqual({path: after_files[path] for path in fixed}, fixed)
+        self.assertEqual(root.stat().st_ino, root_inode)
+        self.assertEqual(workspace.inspect(str(root)), actual)
+        self.assertEqual((root / "tracked.txt").read_text(), "base\n")
         self.assertEqual(board.store.count_tasks(), 1)
 
     def test_manifest_checkout_root_must_match_the_git_execution_checkout(self):
