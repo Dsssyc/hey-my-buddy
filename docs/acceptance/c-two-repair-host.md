@@ -164,3 +164,5 @@ Host 分别对该 core 的归档副本与合并后的源码执行 loader，执�
 - `tests/python/protocol/test_transport_attach.py`：按已接受规则区分 0750 可连接与可写端点被 SDK 拒绝；保留无 chmod、只读、路径边界，替换已失效的项目预先拒绝期待并登记编号/断言差异。
 
 首次经路由省略全部四项配置，仍用同一宏任务；不指定 buddy 的返修、同 run 的不可重试限流恢复、唯一写入范围、Worker 不删除、共享 refs/stash 禁令、私有根与无真实模型规则全部保留。仅跑五份受影响测试并核对目标单点变异，Host 固定审查后整合。下一次完整检查只在这一批最终代码上运行，保留两次已失败的完整检查；没有安装或重启日常服务/Worker，没有清扫公共 IPC 或日常状态。
+
+2-F run 为 `cc637748-00eb-4f62-9d0d-90b3aae9230b`，基线 `bd89119a0c5b961016f1d6d269267fcd869c8ac2`，路由决定 `dec-88585fc4-9fc7-4ba7-9b7f-6acafd20ccb4` 选 ZCode/zai-api/GLM-5.3-Flash/max。原生结果记录供应方不可重试 429/1310，原生与外层停止均确认；按用户既有许可在原 run 上 continue 改用已完成本批同类工作的 Codex/openai/gpt-6.1-sol/high。第一次配置恢复缺少独立 reason 字段，被 INVALID_ARGUMENT 拒绝，没有形成新回合；补齐 reason、使用新 commandId 后排队成功，两个原始请求/响应保留。没有改变用户路由配置。记录中的“真实模型冒烟 0 次”只指待用户逐次批准的四个 harness 回合；为微任务选择和运行 buddy 所用模型另按各 run 记录。
