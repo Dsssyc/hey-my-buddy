@@ -90,7 +90,7 @@ A user's overall piece of work, holding one or more micro tasks and used to grou
 _Avoid_: 工作目标, objective
 
 **归档 / archive**:
-What the user does to put a completed macro task away: it leaves the default list, takes no new activity and loses nothing, and the user can restore it. Deletion is a separate act by the user.
+What the user does to put away a macro task with nothing left to accept: it leaves the default list and nothing is lost, and for a Host it no longer exists, so further work starts a new macro task. Only the user can bring it back. Deletion is a separate act by the user.
 _Avoid_: 归档 for deletion
 
 **微任务 / micro task**:
