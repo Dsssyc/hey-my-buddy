@@ -19,6 +19,10 @@ R-A、R-B、R-D首先并行，范围互斥；R-C在空位开始；R-E等待R-B�
 
 用户报告日常仍C-Two0.6.0、2026-10-10 11:26授权restart后的状态沿用；服务/Worker故障阻断委派就停止报告，不能自行重启/替换/安装、改限额或凭据。保留原schema15私有迁移授权，但本轮不对日常数据库写迁移或复制其数据。范围内界面取舍以用户简洁要求为准。
 
+R-D 固定产物：最终 artifact `2e1aed35-2556-47df-a5d6-e370c6fefd11`、源码 `9a8ae43b`，5 个文件。Host 私有根独立运行 runtime-version/use-console/App/console-session/edit-mode 共 79 项、tsc 与预览构建，均退出 0；六处独立固定归档的目标移除先干净通过，再各触发行为断言退出 1。Worker 首次证据未显式设置 state/runtime，且依赖路径绑本机布局，Host 在原 run `93accf26` 无配置字段 continue 退回，保留旧材料；新 turn `5d270b91` 显式创建互异私有根、参数化依赖，重跑 25 项、tsc 和六处行为移除全部符合预期，产品源码逐字节未变。版本默认两项/详情默认收起已在私有真浏览器核对，真正隐藏首读/恢复核对待完成；当前整合不等于微任务验收，发行产物与最终全量仍待 Host。固定证据保留在 ignored `tmp/console-ui-and-board-host/review-hr-ui/host-review-round2/` 与 `host-review-round3/`。
+
+R-C 关联返修 run `24db8ed8-6fed-4f06-853f-6712378cad76`，首次路由全部配置字段省略，基线 `3d7fd3d6`。供应方 GLM-5.3/max 非可重试 429/1310，原生回合无产物且 self/descendants 均 confirmed；按既有例外在原 run 完整配置 codex/openai/gpt-6.1-sol/high continue（command hr-cache-continue-rate-limit-1310-r1），当次目录 enabled/available/quotaExhausted=false，未改设置。原始失败保留 ignored `host-review-repair-20261010/hr-cache-round1-limited/`；只写计划的五个测试文件，真实缓存命中副本与 attempt 单独标记各自要能被目标移除击穿。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。

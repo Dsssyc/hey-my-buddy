@@ -3,13 +3,20 @@ import { errorText, type ConsoleApi } from "./api";
 import type { RuntimeVersionInfo, VersionFacts } from "./types";
 
 function Facts({ value }: { value: VersionFacts }) {
-  return <dl className="facts">
-    <dt>软件版本</dt><dd>{value.softwareVersion ?? "未记录"}</dd>
-    <dt>契约版本</dt><dd>{value.contractVersion ?? "未记录"}</dd>
-    <dt>schema</dt><dd>{value.schemaVersion ?? "未记录"}</dd>
-    <dt>来源提交</dt><dd className="mono wrap">{value.sourceCommit ?? "未记录"}</dd>
-    <dt>安装时间</dt><dd>{value.installedAt ?? "未记录"}</dd>
-  </dl>;
+  return <>
+    <dl className="facts">
+      <dt>软件版本</dt><dd>{value.softwareVersion ?? "未记录"}</dd>
+      <dt>安装时间</dt><dd>{value.installedAt ?? "未记录"}</dd>
+    </dl>
+    <details>
+      <summary>详细信息</summary>
+      <dl className="facts">
+        <dt>契约版本</dt><dd>{value.contractVersion ?? "未记录"}</dd>
+        <dt>schema</dt><dd>{value.schemaVersion ?? "未记录"}</dd>
+        <dt>来源提交</dt><dd className="mono wrap">{value.sourceCommit ?? "未记录"}</dd>
+      </dl>
+    </details>
+  </>;
 }
 
 /** One read on the first visible settings visit; snapshot updates never rescan. */
