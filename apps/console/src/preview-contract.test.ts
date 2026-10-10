@@ -34,7 +34,7 @@ import type { Snapshot } from "./types";
 type ManifestEntry = {
   scenario: string;
   path: string;
-  kind: "console-snapshot" | "task-page" | "backup-preflight" | "objectives-page" | "objective-timeline" | "workflow-get";
+  kind: "console-snapshot" | "task-page" | "backup-preflight" | "runtime-version" | "objectives-page" | "objective-timeline" | "workflow-get";
   endpoint: string;
   httpStatus: number;
   expected: "accepted" | "rejected";
@@ -139,6 +139,10 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       const report = await api.backupPreflight();
       outcome.facts = { policy: report.policy, needsAttention: report.needsAttention,
         skipped: report.skipped.count, rejected: report.rejected.count };
+    } else if (entry.kind === "runtime-version") {
+      const version = await api.runtimeVersion();
+      outcome.facts = { mode: version.running.mode, softwareVersion: version.running.softwareVersion,
+        installed: version.installed !== null };
     } else if (entry.kind === "objectives-page") {
       const page = await api.objectives({});
       outcome.facts = { total: page.total, cursor: page.cursor, changed: page.changed };
@@ -193,7 +197,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(manifest.source).toBe("tests/probes/objective_console_preview.py");
     expect(manifest.scenarios).toEqual(["normal", "readonly", "truncated", "error"]);
     expect(new Set(manifest.files.map(entry => entry.kind))).toEqual(
-      new Set(["console-snapshot", "task-page", "backup-preflight", "objectives-page", "objective-timeline", "workflow-get"]));
+      new Set(["console-snapshot", "task-page", "backup-preflight", "runtime-version", "objectives-page", "objective-timeline", "workflow-get"]));
     for (const entry of manifest.files) {
       expect(entry.expected === "accepted" ? entry.expectedCode === undefined : typeof entry.expectedCode === "string").toBe(true);
     }

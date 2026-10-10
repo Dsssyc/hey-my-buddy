@@ -132,7 +132,7 @@ TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source"
 EMIT_SOURCE = "tests/probes/objective_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
-    "normal": ("backup-preflight.json", "console.json", "objectives.json", "tasks.json",
+    "normal": ("backup-preflight.json", "console.json", "objectives.json", "runtime-version.json", "tasks.json",
                "timeline-obj-a.json", "timeline-standalone.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
@@ -1320,6 +1320,13 @@ def backup_preflight_report() -> dict:
             "copied": inventory(3, []), "skipped": inventory(1, skipped), "rejected": inventory(0, [])}
 
 
+def runtime_version_report() -> dict:
+    """The version facts the settings page reads once: one synthetic installed runtime, in use."""
+    facts = {"softwareVersion": "0.0.0", "contractVersion": "0.0.0", "schemaVersion": 0,
+             "sourceCommit": "0" * 40, "installedAt": "2026-09-26T00:00:00Z"}
+    return {"running": {"mode": "runtime", **facts}, "installed": dict(facts)}
+
+
 def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     profiles = profile_views()
     writable = scenario != "readonly"
@@ -1497,6 +1504,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
         f"GET  {base}/api/backup-preflight",
+        f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
         f"model_profiles · evaluation_history   (removed ops: 404; writes incl. objective_stop: 403)",
     )
@@ -1597,6 +1605,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 return self._json(200, task_page(params))
             if path == "/api/backup-preflight":
                 return self._json(200, backup_preflight_report())
+            if path == "/api/runtime-version":
+                return self._json(200, runtime_version_report())
             if path.startswith("/api/objectives/") and path.endswith("/timeline"):
                 identifier = path[len("/api/objectives/"):-len("/timeline")]
                 if not OBJECTIVE_ID.match(identifier) or identifier not in FIXTURES["groups"]:
@@ -2172,12 +2182,15 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
                 console_snapshot(scenario, assets_ready=False), request={})
         if scenario == "normal":
-            # The records view's own paginated read and the storage panel's
-            # on-demand preflight: the two reads the slim snapshot no longer carries.
+            # The records view's own paginated read, the storage panel's on-demand
+            # preflight and the settings page's version facts: reads the slim
+            # snapshot does not carry.
             add(scenario, "tasks.json", "task-page", "GET /api/tasks", 200, "accepted",
                 task_page({}), request={})
             add(scenario, "backup-preflight.json", "backup-preflight", "GET /api/backup-preflight",
                 200, "accepted", backup_preflight_report(), request={})
+            add(scenario, "runtime-version.json", "runtime-version", "GET /api/runtime-version",
+                200, "accepted", runtime_version_report(), request={})
         add(scenario, "objectives.json", "objectives-page", "GET /api/objectives", 200, "accepted",
             objective_page({}), request={})
         if scenario == "error":
@@ -2365,6 +2378,10 @@ def smoke(assets: Path, scenario: str) -> int:
         check("GET /api/backup-preflight serves the on-demand report", status == 200
               and preflight.get("needsAttention") is True and preflight.get("skipped", {}).get("count") == 1
               and preflight.get("rejected", {}).get("count") == 0, f"status={status}")
+        status, version, _headers = call("GET", "/api/runtime-version")
+        check("GET /api/runtime-version serves the version facts", status == 200
+              and version.get("running", {}).get("mode") == "runtime"
+              and version.get("installed", {}).get("softwareVersion") == "0.0.0", f"status={status}")
         status, page, _headers = call("GET", "/api/objectives")
         check("GET /api/objectives", status == 200 and len(page["objectives"]) == 3
               and page["cursor"] == FIXTURES["head"] and page["changed"] is False, f"status={status}")
