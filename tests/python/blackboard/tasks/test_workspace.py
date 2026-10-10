@@ -32,11 +32,17 @@ class WorkspaceTests(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.state = self.root / "state"
-        # copytree creates distinct ordinary files and Git administration; no
-        # hardlinks, captured identity, worktree allocation or board is shared.
-        shutil.copytree(self._repository_template, self.repo, dirs_exist_ok=True)
-        self.git("update-index", "--refresh")
-        self.base = self.git("rev-parse", "HEAD").decode().strip()
+        template = getattr(self, "_repository_template", None)
+        if template is None:
+            # Other TestCases borrow setUp without inheriting our class fixture
+            # or _seed_repository method; preserve their original Git setup.
+            WorkspaceTests._seed_repository(self)
+        else:
+            # copytree creates distinct ordinary files and Git administration;
+            # refresh the copied index against this repository's new inodes.
+            shutil.copytree(template, self.repo, dirs_exist_ok=True)
+            self.git("update-index", "--refresh")
+            self.base = self.git("rev-parse", "HEAD").decode().strip()
 
     def _seed_repository(self):
         self.git("init", "-q")
@@ -69,6 +75,21 @@ class WorkspaceTests(unittest.TestCase):
 
     def prepare(self, request="request", **updates):
         return workspace.prepare(self.state, request, self.intent(**updates))
+
+    def test_borrowed_setup_without_a_template_preserves_router_input_capture(self):
+        from blackboard.routing.test_router import RouterInputTests
+
+        for template in ("absent", None):
+            with self.subTest(template=template):
+                borrower = RouterInputTests("test_existing_input_is_materialized_without_live_or_ignored_files")
+                self.assertFalse(hasattr(borrower, "_repository_template"))
+                self.assertFalse(hasattr(borrower, "_seed_repository"))
+                if template is None:
+                    borrower._repository_template = None
+                result = unittest.TestResult()
+                borrower.run(result)
+                self.assertEqual(result.testsRun, 1)
+                self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
 
     def test_identity_unifies_siblings_and_distinguishes_linked_checkout(self):
         left = workspace.inspect(str(self.repo / "src"))
