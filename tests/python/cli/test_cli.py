@@ -13,6 +13,7 @@ import json
 import os
 import stat
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest import mock
 
@@ -223,13 +224,23 @@ class PrivateStateTestCase(BoardTestCase):
 
     def use_board_transport(self, board) -> None:
         """Substitute only the C-Two socket; the whole service path stays real."""
+        self.enterContext(mock.patch.object(cli, "call_service",
+                          partial(transport.call_service, state_dir=self.directory)))
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
+        def ensure_service(state_dir=None, resource="control"):
+            self.assert_rpc_state_dir(state_dir)
+            return endpoint
+
+        def request(_endpoint, operation, params, resource="control", *, state_dir=None):
+            self.assert_rpc_state_dir(state_dir)
+            return board.call(operation, params)
+
         self.enterContext(
-            mock.patch.object(transport, "ensure_service", lambda state_dir=None, resource="control": endpoint)
+            mock.patch.object(transport, "ensure_service", ensure_service)
         )
         self.enterContext(
             mock.patch.object(
-                transport, "_request", lambda _endpoint, operation, params, resource="control": board.call(operation, params)
+                transport, "_request", request
             )
         )
 

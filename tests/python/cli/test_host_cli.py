@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest import mock
 
@@ -71,12 +72,18 @@ class PrivateCliTestCase(BoardTestCase):
 
     def use_board_transport(self, board, capture: list | None = None) -> None:
         """Substitute only the C-Two socket; the whole service path stays real."""
+        self.bind_cli_state()
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
+        def ensure_service(state_dir=None, resource="control"):
+            self.assert_rpc_state_dir(state_dir)
+            return endpoint
+
         self.enterContext(
-            mock.patch.object(transport, "ensure_service", lambda state_dir=None, resource="control": endpoint)
+            mock.patch.object(transport, "ensure_service", ensure_service)
         )
 
-        def request(_endpoint, operation, params, resource="control"):
+        def request(_endpoint, operation, params, resource="control", *, state_dir=None):
+            self.assert_rpc_state_dir(state_dir)
             if capture is not None:
                 capture.append(json.loads(json.dumps(params)))
             return board.call(operation, params)
@@ -85,16 +92,26 @@ class PrivateCliTestCase(BoardTestCase):
 
     def use_capture_transport(self, capture: list) -> None:
         """Capture the RPC parameters and answer with a canned admitted task."""
+        self.bind_cli_state()
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
+        def ensure_service(state_dir=None, resource="control"):
+            self.assert_rpc_state_dir(state_dir)
+            return endpoint
+
         self.enterContext(
-            mock.patch.object(transport, "ensure_service", lambda state_dir=None, resource="control": endpoint)
+            mock.patch.object(transport, "ensure_service", ensure_service)
         )
 
-        def request(_endpoint, operation, params, resource="control"):
+        def request(_endpoint, operation, params, resource="control", *, state_dir=None):
+            self.assert_rpc_state_dir(state_dir)
             capture.append(json.loads(json.dumps(params)))
             return {"task": {"runId": "run-capture-1", "requestId": "host-cli", "state": "queued"}}
 
         self.enterContext(mock.patch.object(transport, "_request", request))
+
+    def bind_cli_state(self) -> None:
+        self.enterContext(mock.patch.object(cli, "call_service",
+                          partial(transport.call_service, state_dir=self.directory)))
 
     def write_params(self, payload: dict, name: str = "params.json") -> Path:
         path = self.directory / name

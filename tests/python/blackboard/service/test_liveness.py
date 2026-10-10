@@ -27,11 +27,18 @@ class LivenessTests(BoardTestCase):
         board = self.board()
         operations = []
 
-        def request(endpoint, operation, params, resource="control"):
+        def request(endpoint, operation, params, resource="control", *, state_dir=None):
+            self.assert_rpc_state_dir(state_dir)
             operations.append(operation)
             return call_operation(board.service, operation, params)
 
         client = BoardClient(board.directory, autostart=False)
+        # Exercise the substitute's ownership boundary before it handles real
+        # client calls; accepting a missing or foreign root is never harmless.
+        with self.assertRaisesRegex(AssertionError, "explicit private state_dir"):
+            request({}, "ping", {})
+        with self.assertRaisesRegex(AssertionError, "current test"):
+            request({}, "ping", {}, state_dir=self.directory / "foreign-state")
         with patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"address": "private-fixture"}), \
                 patch("hey_my_buddy.protocol.transport._request", side_effect=request), \
                 patch.object(board.store, "integrity", wraps=board.store.integrity) as integrity:

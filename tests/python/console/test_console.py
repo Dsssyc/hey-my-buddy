@@ -713,36 +713,44 @@ class ConsoleDaemonTests(ConsoleTestCase):
         model = payload["providers"][0]["models"][0]
         model["id"] = "r05-first-private-model"
         fixture = self.catalog_fixture(payload)
-        with self.daemon(env=environment):
-            code, health = self.cli("health", env=environment)
-            self.assertEqual(code, 0, health)
-            self.assertEqual(Path(health["stateDir"]), self.directory)
-            code, capabilities = self.cli("capabilities", "{}", env=environment)
-            self.assertEqual(code, 0, capabilities)
-            self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
-            code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}), env=environment)
-            self.assertEqual(code, 0, opened)
-            browser = Browser(opened["url"])
-            csrf = browser.bootstrap()["csrfToken"]
-            status, _headers, body = browser.command(
-                "model_catalog_refresh", {"requestId": "r05-http-catalog"}, csrf=csrf,
+        try:
+            with self.daemon(env=environment):
+                code, health = self.cli("health", env=environment)
+                self.assertEqual(code, 0, health)
+                self.assertEqual(Path(health["stateDir"]), self.directory)
+                code, capabilities = self.cli("capabilities", "{}", env=environment)
+                self.assertEqual(code, 0, capabilities)
+                self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+                code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}), env=environment)
+                self.assertEqual(code, 0, opened)
+                browser = Browser(opened["url"])
+                csrf = browser.bootstrap()["csrfToken"]
+                status, _headers, body = browser.command(
+                    "model_catalog_refresh", {"requestId": "r05-http-catalog"}, csrf=csrf,
+                )
+                self.assertEqual(status, 200, body)
+                self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+                refreshed = json.loads(body)["result"]["catalog"]
+                self.assertEqual(refreshed["source"], f"file:{fixture}", "R-05: private fixture source")
+                self.assertEqual(refreshed["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content")
+                # Re-read changed file contents through the real CLI and transport;
+                # a cached constant or a different fixture cannot satisfy this check.
+                model["id"] = "r05-second-private-model"
+                fixture.write_text(json.dumps(payload))
+                code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "r05-cli-catalog"}), env=environment)
+                self.assertEqual(code, 0, refreshed)
+                self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+                self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}", "R-05: private fixture source after rewrite")
+                self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content after rewrite")
+                self.assertIn(model["id"], {profile["model"] for profile in browser.bootstrap()["profiles"]})
+        finally:
+            # CLI, HTTP and bootstrap failures must still identify a discovery
+            # attempt before the generic transport/status assertion can hide it.
+            self.assertFalse(
+                trace.exists(),
+                "R-05: attempted native discovery/start; rejecting decoy calls: "
+                + (trace.read_text() if trace.exists() else ""),
             )
-            self.assertEqual(status, 200, body)
-            self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
-            refreshed = json.loads(body)["result"]["catalog"]
-            self.assertEqual(refreshed["source"], f"file:{fixture}")
-            self.assertEqual(refreshed["providers"][0]["models"][0]["id"], model["id"])
-            # Re-read changed file contents through the real CLI and transport;
-            # a cached constant or a different fixture cannot satisfy this check.
-            model["id"] = "r05-second-private-model"
-            fixture.write_text(json.dumps(payload))
-            code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "r05-cli-catalog"}), env=environment)
-            self.assertEqual(code, 0, refreshed)
-            self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
-            self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}")
-            self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"])
-            self.assertIn(model["id"], {profile["model"] for profile in browser.bootstrap()["profiles"]})
-        self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
         self.assertEqual(list((self.directory / "home").iterdir()), [])
 
     def test_cli_console_opens_and_closes_the_real_daemon_surface(self):

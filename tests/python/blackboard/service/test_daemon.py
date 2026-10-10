@@ -15,7 +15,7 @@ import threading
 import unittest
 import uuid
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 from support import BoardTestCase, PYTHON_ROOT
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
@@ -286,7 +286,14 @@ class DaemonHealthTests(BoardTestCase):
             with self.daemon(env={"BUDDY_MAX_CONCURRENT": "2", "BUDDY_WORKER_ID": "local"}) as process:
                 self.assertNotEqual(process.poll(), 0)
                 endpoint = _read_endpoint(self.directory)
-                health = _request(endpoint, "health", {})
+                def check_state(*args, **kwargs):
+                    self.assert_rpc_state_dir(kwargs.get("state_dir"))
+                    return DEFAULT
+
+                # The spy checks ownership and still executes the native request.
+                with patch("hey_my_buddy.protocol.transport._request", wraps=_request,
+                           side_effect=check_state) as request:
+                    health = request(endpoint, "health", {}, state_dir=self.directory)
                 self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
                 self.assertEqual(health["maxConcurrent"], 2)
                 self.assertEqual(set(health["capacity"]), {"totalLimit", "totalActive", "models"})

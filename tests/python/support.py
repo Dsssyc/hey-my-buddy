@@ -408,6 +408,12 @@ class BoardTestCase(unittest.TestCase):
         self._stack.append(board)
         return board
 
+    def assert_rpc_state_dir(self, state_dir) -> None:
+        """RPC substitutes accept only this test's explicitly supplied state root."""
+        self.assertIsInstance(state_dir, (str, Path), "RPC requires an explicit private state_dir")
+        self.assertEqual(Path(state_dir).resolve(), self.directory.resolve(),
+                         "RPC state_dir must belong to the current test")
+
     @contextmanager
     def rpc_connection(self, contract, *, name: str, address: str):
         """A direct native connection in this fixture's private state domain."""

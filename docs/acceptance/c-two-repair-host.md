@@ -73,3 +73,27 @@ Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: 
 2-B 的受管检出回收已完成，计划 `cln-6d49a5d2-1194-4f99-9623-ac975c796f20` 返回 applied、removed=true。首次 apply 缺少 confirmPath 被拒绝，未发生回收；随后用计划给出的确切路径确认后成功，两个原始响应均保留。Host 只补充回收事实，没有修改 Worker 的固定记录、代码或测试，因此不重跑其聚焦测试。
 
 第二批 2-C/2-D 基线 `57837f2f`，例外新增的 2-E 基线 `27b91e0d`。三个路由决定、首次不可重试限流与同 run 完整配置继续均列在执行计划；不指定 buddy 的首次请求及失败停止证据完整保留。最终完整检查将使用新的独立日志和空私有 HOME，不覆盖初跑的 `final-check.log` 或结果。
+
+## 2-C 与 2-E 的固定产物及 Host 实际补核
+
+| 微任务 | 固定提交 / artifact | 累积补丁 SHA-256 | 路径核对 |
+| --- | --- | --- | --- |
+| 2-C | `5bed049962c2e954c8a780bf6cd61b4fd69ec04c` / `856f42ea-2d85-476d-9c43-ae18905339a9` | `1f985b7b0dd6aa0fa2041ab2ab592457d798a8924029c7470544dbf74762a482` | 七份测试、support 与新记录，九路径全部在原范围内 |
+| 2-E | `c1822bbb5443a62d12429f37e52be4d11d6082bd` / `1270ff24-19ed-4941-ba8e-2157954562c3` | `74675c1c87c870b3b1d34f55616c9a715d2ef19d9cf31ccaf7ae0074db8315d2` | 仅新增 R-05 测试的内容与新记录，原十九项方法未改 |
+
+两份 Worker 都如实停在 assistance：私有 daemon 启动被其运行环境阻断，不能把已有静态、加载或其他通过结果称为原生通过。Host 从各自固定输出提交重新归档，核对原基线、全部路径与补丁 SHA-256，再用 0.7.4 私有解释器、空 HOME 与独立状态域逐文件执行。范围内记录按固定输出保留，补证写在本文件；没有代改 Worker 代码。
+
+| 日志前缀 | 模块与项数 | 退出码；测试 / 命令秒数 |
+| --- | --- | --- |
+| `host-rpc-green-test_cli` | `cli.test_cli` 19 项 | 0；0.367 / 1.095 |
+| `host-rpc-green-test_cli_views` | `cli.test_cli_views` 11 项 | 0；14.542 / 14.851 |
+| `host-rpc-green-test_host_cli` | `cli.test_host_cli` 31 项 | 0；3.819 / 4.567 |
+| `host-rpc-green-test_liveness` | `blackboard.service.test_liveness` 5 项 | 0；0.342 / 0.615 |
+| `host-rpc-green-test_harness_startup` | `blackboard.service.test_harness_startup` 4 项 | 0；0.024 / 0.291 |
+| `host-rpc-green-test_live_lifecycle_integration` | `buddy.runtime.test_live_lifecycle_integration` 1 项 | 0；0.007 / 0.265 |
+| `host-rpc-green-test_daemon` | `blackboard.service.test_daemon` 13 项 | 0；4.631 / 4.913 |
+| `host-r05-console-green` | `console.test_console` 20 项 | 0；26.648 / 27.345 |
+
+2-C 的七模块共 84 项全部通过，真实 daemon 文件包含实际注册、连接与健康 RPC。Host 从固定源码分别复制九份单点变异：去掉 CLI 根绑定、恢复旧桩签名、去掉 attach 根、放宽缺根拒绝、放宽外来根身份校验、恢复无路径 Mock、去掉 Worker 显式传根、去掉 channel 显式传根、去掉 daemon 直接 health 根。九份均为一项目标 failure、errors=0、退出 1；每份日志还核对对应私有根、关键字签名或身份绑定的具体失败消息。最后一份实际启动私有 daemon 后命中根断言，不是 socket 拒绝。证据为 `host-rpc-green-results.json`、`host-rpc-mutants-plan.json`、`host-rpc-mutants-results.json` 及逐项原始日志。
+
+R-05 真实 catalog-loss 变异退出 1，一项目标 failure、errors=0，5.105 / 5.780 秒。HTTP 500 仍先出现，随后 finally 中明确断言 `R-05: attempted native discovery/start; rejecting decoy calls:` 失败，附三条自建拒绝脚本的 `["dsh"]` 记录，进入真实发现或程序启动之前即阻断，没有模型调用。此前撤回的旧结论不恢复为旧产物的证据；这一份是新 2-E 的实际目标证明，保存在 `host-r05-catalog-loss-red.log`、`host-r05-target-proof.json`。正常文件与变异均使用 Host 自己创建的私有域，没有访问日常状态或默认公共端点目录。
