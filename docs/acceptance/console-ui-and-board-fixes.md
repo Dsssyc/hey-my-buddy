@@ -43,6 +43,8 @@ R-C 最终固定 artifact `782ac9eb-832c-42d0-a7f2-4db450424a5f`、源码 `464c1
 
 R-A 新发现的原始 token 回归已留探针证据：当 requestId 等于另一经 load_alias_map 接受的别名 oldId，b093 的 reference matcher 返回 events-reference，1a5 新版返回空集合。仅规范化查索引会丢弃原始精确引用，违反保守性；Host 在原 run continue（hr-storage-continue-preserve-raw-reference-token-r1）修 matcher 和回归，当前旧整合仍不验收。R-E 沙箱导入/收尾阻塞已有原始日志：无目标执行，不计测试失败；Host 提供本任务现成私有开发解释器及真实单项 profile，case正常 1 项/6.184 秒、213 次 workspace._git、正常最终私有收尾 exit 0（源码 ddcbdcc8 与 R-E输入生产/测试相同），原 run continue（hr-speed-continue-private-interpreter-and-host-profile-r1）继续六文件，不扩大沙箱权限、安装或替换日常进程。
 
+R-A 原始 token 修正固定 artifact `de5793f1-9fd2-40e9-afed-836e54c7bbbb`、源码 `dce17653`：只加原始精确索引匹配，并继续 canonical 身份匹配，由既有 reason set 去重；不重复解析或改变 23 表/零候选/围栏机制。原 33 方法与断言 AST 不变，新 3 编号分别覆盖有效别名原 request 的 matcher、规划/应用保留且无关对照可回收、inventory 后才插入原引用的 writer 重查。Host 最新 4 项正常退出 0（29.161 秒）；独立仅移除原始精确匹配，三项全部 AssertionError、errors 0、退出 1，包括真实 checkout 被错误删除的断言。修正前探针旧版 events-reference/新版空集合和初轮暂时整合仍保留，不将其作为最终完全通过证据。全模块现在 36 项，Worker 最新受影响 12 项正常通过，最终默认检查会覆盖全文件；全规模规划/应用 RSS/围栏仍待 R-F。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。

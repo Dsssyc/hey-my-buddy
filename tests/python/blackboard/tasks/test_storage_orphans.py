@@ -47,11 +47,11 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
-    def orphan(self):
+    def orphan(self, request_id='orphan-request'):
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
                   'base': {'kind': 'working-tree'}, 'includeUntracked': [],
                   'writeScope': ['.'], 'integrator': 'host:host-1'}
-        manifest = workspace.prepare(self.directory, 'orphan-request', intent)
+        manifest = workspace.prepare(self.directory, request_id, intent)
         checkout = Path(manifest['checkoutRoot'])
         planned = self.board_instance.call('storage_plan', {})
         self.assertTrue(any(row['path'] == str(checkout) for row in planned['candidates']),
@@ -599,4 +599,82 @@ class StorageOrphanTests(WorkflowTestCase):
         with patch.object(storage, '_orphan_workspace', side_effect=change_after_proof):
             result = self.assert_retained(checkout, planned)
         self.assertEqual(calls, [str(checkout), str(checkout)])
+        self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])
+
+    def proven_source_checkout_alias(self):
+        intent = {'kind': 'existing', 'cwd': str(self.repo), 'access': 'write',
+                  'base': {'kind': 'working-tree'}, 'includeUntracked': [],
+                  'writeScope': ['.'], 'integrator': 'host:host-1'}
+        source = workspace.prepare(self.directory, 'raw-token-alias-source', intent)
+        git_dir = Path(workspace.inspect(str(self.repo))['gitDir'])
+        facts = git_dir.stat()
+        old = workspace._sha(workspace_identity._json([str(git_dir), facts.st_dev, facts.st_ino]))
+        canonical = workspace_identity.stable_identity(git_dir)
+        self.assertEqual(canonical, source['checkoutId'])
+        self.assertNotEqual(old, canonical)
+        entry = {'version': 1, 'source': 'fixed-input-and-inode', 'newId': canonical,
+                 'anchors': [{'directory': str(git_dir), 'inode': facts.st_ino,
+                              'legacyDevice': facts.st_dev, 'workspaceId': source['workspaceId'],
+                              'manifestSha256': source['manifestSha256'], 'role': 'sourceCheckoutId'}]}
+        with self.board_instance.store.db.write() as connection:
+            connection.execute('INSERT INTO meta(key,value) VALUES (?,?)',
+                               (workspace_identity.META_KEY_PREFIX + old, json.dumps(entry)))
+            mapping = workspace_identity.load_alias_map(connection)
+        self.assertEqual(mapping[old], canonical, 'the alias must pass the real path/inode/hash reader')
+        return old, canonical, mapping
+
+    def test_raw_request_reference_survives_an_unrelated_verified_identity_alias(self):
+        request_id, canonical, mapping = self.proven_source_checkout_alias()
+        manifest, _, _ = self.orphan(request_id)
+        self.assertNotEqual(canonical, manifest['checkoutId'])
+        self.assertFalse(workspace_identity.equivalent(request_id, manifest['checkoutId'], mapping=mapping))
+        body = json.dumps({'requestId': request_id})
+        self.assertEqual(json.loads(body), {'requestId': request_id})
+        rows = [('events', {'payload_json': body})]
+        self.assertEqual(storage._allocation_reference_reasons(rows, manifest, request_id, mapping=mapping),
+                         ['events-reference'], 'canonical identity must not replace an exact original request fact')
+
+    def test_raw_request_alias_reference_protects_only_its_orphan_during_plan_and_apply(self):
+        request_id, canonical, _ = self.proven_source_checkout_alias()
+        manifest, checkout, _ = self.orphan(request_id)
+        self.assertNotEqual(canonical, manifest['checkoutId'])
+        request = json.loads((checkout.parent / 'request.json').read_text())
+        self.assertEqual(request['requestId'], request_id)
+        control = workspace.prepare(self.directory, 'raw-token-unreferenced-control', request['intent'])
+        control_checkout = Path(control['checkoutRoot'])
+        self.assertNotEqual(canonical, control['checkoutId'])
+        # The sole board reference is the original request string, not the
+        # candidate's path/manifest/workspace/checkout identity or the alias target.
+        with self.board_instance.store.db.write() as connection:
+            connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('raw-request',?,?)",
+                               (json.dumps({'requestId': request_id}), '2026-01-01T00:00:00Z'))
+            self.assertEqual(workspace_identity.load_alias_map(connection)[request_id], canonical)
+        planned = self.board_instance.call('storage_plan', {})
+        row = next(row for row in planned['candidates'] if row['path'] == str(checkout))
+        control_row = next(row for row in planned['candidates'] if row['path'] == str(control_checkout))
+        self.assertTrue(control_row['eligible'], control_row['reasons'])
+        result = self.apply(planned)
+        self.assertTrue(checkout.is_dir(), 'the original request reference must preserve the actual checkout')
+        self.assertFalse(control_checkout.exists(), 'an unrelated proven orphan must remain reclaimable')
+        self.assertEqual([removed['path'] for removed in result['removed']], [str(control_checkout)])
+        self.assertFalse(row['eligible'])
+        self.assertIn('events-reference', row['reasons'])
+
+    def test_late_raw_request_alias_reference_is_rechecked_inside_writer_fence(self):
+        request_id, canonical, _ = self.proven_source_checkout_alias()
+        manifest, checkout, planned = self.orphan(request_id)
+        self.assertNotEqual(canonical, manifest['checkoutId'])
+        original = storage.inspect
+        inserted = []
+        def insert_after_inventory(*args, **kwargs):
+            result = original(*args, **kwargs)
+            with self.board_instance.store.db.write() as connection:
+                self.assertEqual(workspace_identity.load_alias_map(connection)[request_id], canonical)
+                connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('late-raw-request',?,?)",
+                                   (json.dumps({'requestId': request_id}), '2026-01-01T00:00:00Z'))
+            inserted.append(True)
+            return result
+        with patch.object(storage, 'inspect', side_effect=insert_after_inventory):
+            result = self.assert_retained(checkout, planned)
+        self.assertEqual(inserted, [True])
         self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])

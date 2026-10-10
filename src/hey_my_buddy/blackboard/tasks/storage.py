@@ -229,6 +229,8 @@ def _allocation_reference_sets(rows, allocations, *, mapping=None):
             for item in value:
                 yield from matches(item)
         elif isinstance(value, str):
+            # An original fact remains exact even when it also names an alias.
+            yield from tokens.get(value, ())
             yield from tokens.get(workspace_identity.canonical(value, mapping=mapping), ())
             if os.path.isabs(value):
                 for path in {value, os.path.normpath(value)}:
