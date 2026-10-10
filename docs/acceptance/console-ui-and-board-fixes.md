@@ -443,3 +443,5 @@ PA-T aeb6fcd0-ce4c-4769-be7a-e0e3068366f4 与 PA-L 38fd3783-03bf-488f-9d84-92b87
 ### 用户补充：侧栏不保留空白槽
 
 用户在本轮私有预览截图指出项目横条和条目比侧栏背景窄，要求去掉空隙。实际测得 list-scroll offsetWidth=328、clientWidth=313、scrollHeight=clientHeight=548，虽不需要滚动，scrollbar-gutter:stable 仍预留 15 CSS px。新增 PA-S 关联原 UI-FRAME，唯一写入 apps/console/src/styles.css 与 ui-box-model.test.tsx，取消列表的强制滚动条预留，复用标准 scrollbar-gutter:auto 与现有 overflow 行为；其他页面的槽不改，不加元素、设置、补偿宽度或隐藏滚动条。PA12：列表无需滚动时项目横条和条目右边缘与背景齐平；PA13：内容需要滚动时仍能滚动、无横向溢出。只跑受影响测试，由 Host 在真实浏览器保存前后尺寸与截图；补充源改动之后重新运行最终前端全量、重构建并逐字节核对，再运行指定 Python 范围和卫生，前一份 905 项通过及 316 项 Python 通过仍保留为中间验证。
+
+PA-S d05cc5df-3021-46a0-aa95-622f53c82091 首次同样默认路由到 ZCode，供应方不可重试 429/1310、无产物且停机已确认；保留 first-failure get/result/await，确认完整 Codex 配置启用可用后在原 run continue（codex/openai/gpt-6.1-sol/high），没有改共享配置或日常运行时。
