@@ -194,3 +194,5 @@ Host七份独立最终源码变异取得目标assert失败exit1：移除connect�
 - `buddy.harnesses.test_c_two_live.WireFrameTests.test_private_deadline_is_finite_and_keeps_the_public_window_bound`
 - `buddy.harnesses.test_c_two_live.WireFrameTests.test_the_request_frame_carries_the_private_deadline_and_envelope`
 - `protocol.test_inquiry_transport.TransportTests.test_sdk_deadline_facts_expire_without_reporting_a_stopped_owner`
+
+1-C补丁整合6d072f37，integration int-ee84b6fb-d68d-4191-953c-cde71213aa18 verified，原run accepted/completed；cleanup-plan/apply applied。Host保留范围缺口、实施回合的顶层脚本/manifest/所有runs原始日志、最终原补丁与固定副本后，按结构化交付唯一根 <1C_TASK_TMP> 整体回收，未按前缀扫描或清扫默认公共域。未运行60秒连接空闲泄漏探针，该项留给Claude Code Host验收。
