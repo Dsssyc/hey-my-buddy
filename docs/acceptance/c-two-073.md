@@ -228,3 +228,5 @@ Host自己的顺序修正引入了凭据清理失败后的第二次机会丢失�
 另一个确认的范围外夹具遗漏已修正：blackboard/store/test_blackboard.py重启场景的wait_capacity直接_request补state_dir=self.directory，该实际重启用例exit0/15.171秒。全检中ZCode与Claude两个取消用例失败分别保留；空闲时独立重跑完整相关文件，ZCode25项exit0/30.499秒，Claude42项exit0/41.636秒，没有改取消测试或停止判定，也不把这些单文件成功改写成初跑成功。
 
 余下失败涉及原唯一写入范围之外的大批夹具和调用方。本计划要求“明显超出计划则停止说明”；本次先登记可审查的补充范围，暂停扩大实施：RPC私有state传递及Mock/stub接口适配；其余原生角色/工具/用量夹具的0700状态域初始化；同一测试进程同时使用多个不同state的并发场景隔离；安装版ZCode离线app-server关闭与Host原生回合停止的独立定位；console测试catalog显式环境与host-preview开发依赖前提。每一份修改仍需独立固定交付/聚焦/去掉目标行为红灯，默认经路由，公共文件由Host整合。未证明的controller失败不能统称为状态根或机器负载，不能弱化shutdown与工具/用量断言。
+
+用户答复“先交 Claude Code Host 复核失败记录”。固定的 26 模块失败清单、原始证据摘要、后续聚焦范围与未定位项已整理在 [c-two-failure-review.md](c-two-failure-review.md)；补充实施继续暂停，等待用户转达复核意见。本次只整理记录，未提交新的修复微任务、未重跑完整检查、未运行付费冒烟。
