@@ -8,7 +8,7 @@ import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
 import { objectiveTimelineFixture } from "./objective-fixtures";
 import type { ObjectiveTimeline as ObjectiveTimelineData, TimelineRow, TimelineSpan } from "./objective-types";
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const styles = () => readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
 /**
@@ -103,6 +103,52 @@ describe("0.16 P1.8: the acceptance-wait dashed line", () => {
 });
 
 describe("0.16 P2.3: timeline zoom controls", () => {
+  it.each([0, 120])("keeps a selected %s-minute anchor and the opening glyph reserve through +2, max and fit", minute => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
+    const timeline = objectiveTimelineFixture();
+    const start = Date.parse("2026-09-26T01:12:00Z");
+    const at = (minute: number) => new Date(start + minute * 60000).toISOString();
+    const template = timeline.spans.find(span => span.kind === "execution")!;
+    timeline.rows = timeline.rows.slice(0, 2).map(row => ({ ...row, acceptedAt: null }));
+    timeline.spans = [{ ...template, spanId: "anchor", runId: timeline.rows[0]!.runId, startAt: at(minute),
+      endAt: at(minute + 0.05), resultStatus: "failed", uncertain: false, shutdownConfirmed: true },
+    { ...template, spanId: "domain", kind: "host", runId: timeline.rows[1]!.runId, startAt: at(0), endAt: at(240),
+      uncertain: false, shutdownConfirmed: true }];
+    timeline.events = [];
+    render(<ObjectiveTimeline {...baseProps(timeline, { selection: { type: "item", key: "span:anchor" } })} />);
+    const scroller = document.querySelector<HTMLElement>(".tl-scroll")!;
+    const trackWidth = () => Number(/\+ ([\d.]+)px/.exec(document.querySelector<HTMLElement>(".tl-grid")!.style.width)![1]) - 12;
+    const screenX = () => 240 + Number.parseFloat(document.querySelector<HTMLElement>('[data-key="span:anchor"]')!.style.left) / 100 * trackWidth() - scroller.scrollLeft;
+    const originalX = screenX();
+    if (minute === 0) scroller.scrollLeft = 11; // Near the sticky edge, preserve the full 16px on the next step.
+    const zoomIn = screen.getByRole("button", { name: "放大" }) as HTMLButtonElement;
+    for (let step = 0; step < 20 && !zoomIn.disabled; step++) {
+      fireEvent.click(zoomIn);
+      expect(Math.abs(screenX() - originalX)).toBeLessThanOrEqual(0.5 + 1e-8);
+      expect(screenX()).toBeGreaterThanOrEqual(240 + 16 - 0.5);
+    }
+    expect(zoomIn.disabled).toBe(true);
+    expect(trackWidth() - 16).toBe(240 * 60);
+    fireEvent.click(screen.getByRole("button", { name: "适应窗口" }));
+    expect(trackWidth() + 12).toBe(1000 - 240);
+    expect(scroller.scrollLeft).toBe(0);
+    expect(Math.abs(screenX() - originalX)).toBeLessThanOrEqual(0.5 + 1e-8);
+  });
+
+  it("chooses tick spacing from real activity pixels excluding the leading reserve", () => {
+    const timeline = objectiveTimelineFixture();
+    const template = timeline.spans[0]!;
+    timeline.spans = [{ ...template, startAt: "2026-09-26T01:12:00Z", endAt: "2026-09-26T04:16:00Z", kind: "host" }];
+    timeline.events = [];
+    timeline.rows = timeline.rows.slice(0, 1).map(row => ({ ...row, acceptedAt: null }));
+    render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    const ticks = [...document.querySelectorAll<HTMLElement>(".tick")];
+    // 772 / 184 * 15 < 64, whereas incorrectly counting 788px would select 15 minutes.
+    expect(ticks[0]!.textContent).toMatch(/:30$/);
+    expect(ticks[1]!.textContent).toMatch(/:00$/);
+    expect(ticks).toHaveLength(6);
+  });
+
   it("offers −/+/适应窗口 with the fit level pressed and − disabled there", () => {
     const timeline = objectiveTimelineFixture();
     render(<ObjectiveTimeline {...baseProps(timeline)} />);

@@ -97,7 +97,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     const { container } = render(<ObjectiveTimeline {...props(data)} />);
     const failed = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:short"]')!;
     const wait = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:wait"]')!;
-    expect(Number.parseFloat(failed.style.width)).toBeCloseTo(100 / (418 * 60 * 1000), 12);
+    expect(Number.parseFloat(failed.style.width)).toBeCloseTo((772 / 788) * 100 / (418 * 60 * 1000), 12);
     expect(failed.style.left).toMatch(/%$/);
     expect(failed.style.padding).toBe("");
     expect(wait.previousElementSibling).toBe(failed);
@@ -107,7 +107,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".sp.queue").getPropertyValue("--tl-item-height")).toBe("8px");
   });
 
-  it("U5.4: keeps fixed decoration sizes and shares an 8px reading inset inside every label", () => {
+  it("U5.4: keeps fixed decoration sizes and reserves 16px beside terminal circles", () => {
     expect(rule(".end-mark").width).toBe("15px");
     expect(rule(".end-mark").height).toBe("15px");
     expect(rule(".end-mark").lineHeight).toBe("12px");
@@ -115,7 +115,8 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".mk").marginLeft).toBe("-9px");
     render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
     const solidText = document.querySelector(".tl-scroll .sp-solid-text")!;
-    expect(getComputedStyle(solidText).padding).toBe("0px 8px");
+    expect(getComputedStyle(solidText).paddingLeft).toBe("16px");
+    expect(getComputedStyle(solidText).paddingRight).toBe("16px");
     expect(rule(".sp-text").overflow).toBe("hidden");
     expect(rule(".sp-text").textOverflow).toBe("ellipsis");
     expect(rule(".sp.unknown .solid").padding).toBe("");
@@ -173,15 +174,15 @@ describe("U5: audited controls retain the shared global box model and normal siz
 });
 
 describe("U6.4: reading insets stay inside real label widths", () => {
-  it("gives ordinary, solid and tail text the same internal space without inflating span geometry", () => {
+  it("gives ordinary, terminal, solid and tail text their reading space inside real geometry", () => {
     render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
     for (const selector of [".exec:not(.unknown) .sp-text", ".wait .sp-text", ".sp-solid-text", ".sp-tail"]) {
       const labels = document.querySelectorAll<HTMLElement>(`.tl-scroll ${selector}`);
       expect(labels.length, selector).toBeGreaterThan(0);
       for (const label of labels) {
         const css = getComputedStyle(label);
-        expect(css.paddingLeft, selector).toBe("8px");
-        expect(css.paddingRight, selector).toBe("8px");
+        expect(css.paddingLeft, selector).toBe("16px");
+        expect(css.paddingRight, selector).toBe(label.matches(".sp-solid-text, .exec.failed > .sp-text, .exec.cancelled > .sp-text") ? "16px" : "8px");
         expect(css.boxSizing, selector).toBe("border-box");
         expect(css.overflow, selector).toBe("hidden");
         expect(css.textOverflow, selector).toBe("ellipsis");

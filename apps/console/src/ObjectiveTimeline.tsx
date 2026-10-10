@@ -28,6 +28,8 @@ const FALLBACK_LABEL_PX = 240;
  * 适应窗口 has no internal horizontal overflow.
  */
 const TRACK_END_PX = 12;
+/** Room for opening glyphs beside the sticky label column, at every scale. */
+const TRACK_START_PX = 16;
 /** The inspector drawer's default and keyboard-adjusted geometry (P2.1). */
 const DRAWER_DEFAULT_PX = 168;
 const DRAWER_MIN_PX = 44;
@@ -37,8 +39,14 @@ const DRAWER_USEFUL_PX = 96;
 /** The timeline keeps this height before the drawer may take more (P2.1). */
 const TIMELINE_MIN_PX = 200;
 const ZOOM_STEP = 1.5;
-/** Matches the label's 8px CSS inset on each side. */
-const SPAN_TEXT_INSET_PX = 16;
+/** Matches the label's left 16px / right 8px CSS insets. */
+const SPAN_TEXT_INSET_PX = 24;
+/** Terminal circles reserve another 8px inside execution and solid labels. */
+const TERMINAL_TEXT_INSET_PX = 32;
+/** A central cross needs its real width, independently of the 14px shape. */
+const ROUTING_CROSS_MIN_PX = 18;
+/** Percentage subtraction can lose a fraction of a nanopixel at exact thresholds. */
+const PIXEL_EPSILON = 1e-9;
 
 /**
  * The natural (unshrunk) outer height of a fixed section of the column. Using
@@ -307,7 +315,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   // The time scale ends TRACK_END_PX before the canvas edge (see above).
   const effectiveViewport = Math.max(1, (viewport ?? FALLBACK_VIEWPORT_PX) - TRACK_END_PX);
   const fitPpm = useMemo(
-    () => layout ? fitPixelsPerMinute(layout, effectiveViewport) : Number.POSITIVE_INFINITY,
+    () => layout ? fitPixelsPerMinute(layout, effectiveViewport, TRACK_START_PX) : Number.POSITIVE_INFINITY,
     [layout, effectiveViewport],
   );
   // Pixels are a pure function of the measured viewport, so content sizing can
@@ -315,7 +323,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   // is clamped to [fit, MAX].
   const clampedZoom = zoom === null ? null : Math.max(0, Math.min(zoom, Math.max(fitPpm, MAX_PIXELS_PER_MINUTE)));
   const scaled = useMemo(
-    () => layout ? scaleTimeline(layout, effectiveViewport, clampedZoom ?? undefined) : null,
+    () => layout ? scaleTimeline(layout, effectiveViewport, clampedZoom ?? undefined, TRACK_START_PX) : null,
     [layout, effectiveViewport, clampedZoom],
   );
   const currentPpm = clampedZoom ?? fitPpm;
@@ -330,7 +338,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (percent === null) return;
     const labelW = labelWidthPx();
     const trackX = percent / 100 * scaled.widthPx;
-    element.scrollLeft = Math.max(0, Math.round(labelW + trackX - anchor.screenX));
+    element.scrollLeft = Math.max(0, labelW + trackX - Math.max(labelW + TRACK_START_PX, anchor.screenX));
   }, [scaled, layout, canvasKey]);
 
   const spansByRun = useMemo(() => {
@@ -652,7 +660,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     // Fixed idle blocks leave the remaining pixels to real activity.
     const collapsedGapPx = scaled.gaps.filter(gap => gap.collapsed)
       .reduce((total, gap) => total + (gap.toPercent - gap.fromPercent) / 100 * widthPx, 0);
-    const pxPerMinute = (widthPx - collapsedGapPx) / realMinutes;
+    const pxPerMinute = (widthPx - TRACK_START_PX - collapsedGapPx) / realMinutes;
     const steps = [15, 30, 60, 120, 240, 480, 1440];
     const stepMinutes = steps.find(step => step * pxPerMinute >= 64) ?? 1440;
     const stepMs = stepMinutes * 60000;
@@ -732,7 +740,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     const right = facts.endMs !== null ? scaled.position(facts.endMs) : null;
     const width = right !== null ? Math.max(right - left, 0) : 0;
     const widthPxSpan = width / 100 * widthPx;
-    const textPx = Math.max(0, widthPxSpan - SPAN_TEXT_INSET_PX);
+    const terminal = span.kind === "execution" && (facts.outcome === "failed" || facts.outcome === "cancelled");
+    const textPx = Math.max(0, widthPxSpan - (terminal ? TERMINAL_TEXT_INSET_PX : SPAN_TEXT_INSET_PX)) + PIXEL_EPSILON;
     // Child offsets use real pixels: CSS minimum shapes never move an instant.
     const endStyle: CSSProperties = { left: `${widthPxSpan - 7.5}px`, right: "auto" };
     const selected = selection?.type === "item" && selection.key === facts.item.key;
@@ -762,7 +771,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (span.kind === "routing") {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        {facts.outcome === "failed" && <i className="routing-cross" aria-hidden="true" />}
+        {facts.outcome === "failed" && widthPxSpan + PIXEL_EPSILON >= ROUTING_CROSS_MIN_PX && <i className="routing-cross" aria-hidden="true" />}
       </button>;
     }
     if (span.kind === "host") {
@@ -796,9 +805,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
         <span className="solid" style={{ width: `${solidWidthPx}px` }} aria-hidden="true" />
-        <span className="sp-text sp-solid-text" style={{ width: `${solidWidthPx}px` }}>{solidWidthPx - SPAN_TEXT_INSET_PX >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <span className="sp-text sp-solid-text" style={{ width: `${solidWidthPx}px` }}>{solidWidthPx - TERMINAL_TEXT_INSET_PX + PIXEL_EPSILON >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
         <i className="end-mark warn" style={{ left: `${solidWidthPx - 7.5}px`, right: "auto" }} aria-hidden="true">?</i>
-        <span className="sp-text sp-tail" style={{ left: `${tailLeftPx}px`, width: `${tailWidthPx}px` }}>{tailWidthPx - SPAN_TEXT_INSET_PX >= 50 && !tailOverlaps ? "结束未确认" : ""}</span>
+        <span className="sp-text sp-tail" style={{ left: `${tailLeftPx}px`, width: `${tailWidthPx}px` }}>{tailWidthPx - SPAN_TEXT_INSET_PX + PIXEL_EPSILON >= 50 && !tailOverlaps ? "结束未确认" : ""}</span>
       </button>;
     }
     const endMark = facts.outcome === "failed" ? <i className="end-mark bad" style={endStyle} aria-hidden="true">✕</i>
@@ -829,7 +838,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
             onScroll={() => { if (openCluster !== null) requestClusterClose(false); }}
             onKeyDown={onCanvasKeyDown}>
             <div ref={gridRef} className="tl-grid" role="group" aria-label="工作目标时间轴"
-              style={{ width: `calc(var(--label-w) + ${Math.round(widthPx) + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
+              style={{ width: `calc(var(--label-w) + ${widthPx + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
               <div className="tl-row axis">
                 <div className="tl-label">委派 / 时间</div>
                 <div className="tl-track">

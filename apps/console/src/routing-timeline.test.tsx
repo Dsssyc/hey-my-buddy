@@ -85,7 +85,7 @@ describe("recorded routing facts", () => {
 });
 
 describe("routing timeline interactions", () => {
-  it("keeps a one-millisecond failed route readable without changing its recorded duration", () => {
+  it("keeps a one-millisecond failed route red and omits its crowded cross without changing recorded duration", () => {
     const { timeline, span } = fixture({
       endAt: "2026-09-26T01:21:00.001Z", resultStatus: "failed", routing: { routingMode: "fast" },
     });
@@ -93,12 +93,14 @@ describe("routing timeline interactions", () => {
     const { container } = render(<ObjectiveTimeline {...props(timeline)} />);
     const bar = container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(bar.classList.contains("failed")).toBe(true);
-    expect(bar.querySelector(".routing-cross")).toBeTruthy();
+    expect(bar.querySelector(".routing-cross")).toBeNull();
+    expect(bar.title).toContain("路由失败");
+    expect(bar.getAttribute("aria-label")).toBe(bar.title);
     expect(bar.querySelector(".routing-fallback-mark")).toBeNull();
     expect([span.startAt, span.endAt]).toEqual(recordedTimes);
-    // The unmeasured 800px track reserves 12px after the final instant.
+    // The unmeasured 800px track reserves 16px before and 12px after time.
     // Use the existing scale so this fixture's folded gaps remain accounted for.
-    const scale = scaleTimeline(createTimelineLayout(timeline), 800 - 12);
+    const scale = scaleTimeline(createTimelineLayout(timeline), 800 - 12, undefined, 16);
     expect(Date.parse(span.endAt!) - Date.parse(span.startAt!)).toBe(1);
     const start = scale.position(span.startAt)!;
     const end = scale.position(span.endAt)!;
@@ -165,7 +167,9 @@ describe("routing timeline interactions", () => {
     expect(button.title).toBe(`未记录路由 · 已选 Claude Opus 5.5 · high · ${label}`);
     expect(button.getAttribute("aria-label")).toBe(button.title);
     if (css) expect(button.classList.contains(css)).toBe(true);
-    expect(!!button.querySelector(".routing-cross")).toBe(css === "failed");
+    const scale = scaleTimeline(createTimelineLayout(timeline), 788, undefined, 16);
+    const realWidth = (scale.position(span.endAt)! - scale.position(span.startAt)!) / 100 * scale.widthPx;
+    expect(!!button.querySelector(".routing-cross")).toBe(css === "failed" && realWidth >= 18);
     expect([span.startAt, span.endAt]).toEqual(originalTimes);
     fireEvent.click(button);
     expect(callbacks.onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ runId: "r2" }));

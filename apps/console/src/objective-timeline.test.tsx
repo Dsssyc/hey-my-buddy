@@ -53,6 +53,9 @@ describe("objective timeline rendering", () => {
     route.resultStatus = "failed";
     const props = baseProps(timeline);
     const view = render(<ObjectiveTimeline {...props} />);
+    // The fixture route is narrow at fit; max exercises its full failure glyph.
+    const zoomIn = screen.getByRole("button", { name: "放大" }) as HTMLButtonElement;
+    for (let i = 0; i < 20 && !zoomIn.disabled; i++) fireEvent.click(zoomIn);
     expect(item("span:s-r2-r")!.querySelector(".routing-cross")).toBeTruthy();
     expect(item("span:s-r2-r")!.getAttribute("title")).toBe(item("span:s-r2-r")!.getAttribute("aria-label"));
     route.resultStatus = "cancelled";
@@ -424,7 +427,7 @@ describe("objective timeline rendering", () => {
       expect(observers.length).toBeGreaterThan(before);
       // 900px viewport minus the 240px fallback label column = 660px canvas:
       // exactly the viewport (适应窗口 never overflows), of which the time
-      // track is 648px and 12px stay after the last instant.
+      // track is 648px including 16px before time; 12px stay after the last instant.
       expect(grid.style.width).toBe("calc(var(--label-w) + 660px)");
       const band = document.querySelector(".fold-band") as HTMLElement;
       expect(band.style.width).toBe("32px");
