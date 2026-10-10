@@ -240,3 +240,5 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 已签收微任务的受管检出通过各自 cleanup-plan/apply 回收，记录中的确切路径与保留固定产物可复核。Host 私有根、短根原生冒烟/检查证据，以及 2-D、2-F 原始失败对应任务根留给整步复核；没有因为后来 green 改写它们曾经的 unknown 停止证据，也没有按相同名称、前缀或日期推断并清扫别的会话对象。后续回收只按创建时台账与已登记的确切根进行。日常 state/ipc 的先前越界残留、公共默认端点命名空间仍未触碰。
 
 最终提交关口 core 又新增两笔 Host 文档更新至 `7b5beabf5f4c1d4fba0390127bf0ad2473bfc08e`，已按确切提交合入；增量只有 AGENTS、术语、索引、ADR 与待办。全检提交之后的 src、tests、pyproject.toml、uv.lock、apps/console 差集再次为空，原全检与真实冒烟绑定仍有效，指定 `1f7e8b60` 仍为祖先。这里仅记录合入来源，没有自行改写 Host 文档；按仅文档变化规则只重跑仓库卫生测试。
+
+用户随后指定 core 停在 `12eb4fcdc2be8d6599c862fae3b9d3a20b40409d`，已一次合入为 `f63dd2097c39c6c65de1b281c49c951c4dbdae4f`。独立核对 `1f7e8b60..12eb4fcd` 仅涉及 docs、CONTEXT、AGENTS，全检候选之后的 src、tests、pyproject.toml、uv.lock、apps/console 差集仍为空。按用户要求不重跑完整检查或真实冒烟，仅跑仓库卫生、源 skill/Host 文档读取与链接、README/operations 读取及构建 skill 的文档链接测试，共 20 项通过、两个命令均退出 0；证据为 `core-12eb4fcd-doc-tests.{json,log}`（17 项，0.317 秒）与 `core-12eb4fcd-shipped-doc-tests.{json,log}`（3 项，0.406 秒）。补本记录后再跑卫生测试。最新合入 core 是 `12eb4fcd`，完整检查的原代码/core 绑定与三次真实冒烟证据不改写，继续停止等整步 Host 验收。
