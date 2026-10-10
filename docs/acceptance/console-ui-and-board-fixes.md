@@ -424,3 +424,16 @@ Host私有ffd5b2bb副本负向排查：模块求值前预置models.showUnavailab
 R-B在委派前收窄补充范围：备份database_snapshot目前仍对单张表收集/排序序列化行；如有写入的峰值因此仍过高，允许在该现有指纹函数内复用SQLite/标准库实现有界处理及对应backup测试，必须保持当前fingerprint格式、BLOB/Unicode/排序、备份校验/事件头/排除workers默认语义不变。无schema/新持久表/新测试框架，不能用另一套指纹绕过原快照绑定；完整备份/触发器回归列为受影响检查。R-A及其他微任务不写该文件。
 
 本轮首交：R-A run91f46843-5004-4906-a440-11f6299d5697、R-B run778ae456-460b-46d9-99d5-b3d150b75711、R-D run93accf26-54b0-4357-962d-60dcf6fe8980，基于c6280fb0提交，三次均省略所有四字段/configuration、明确原已accepted关联run和原宏任务；健康读取contract0.27/status ok，仍以attach-only既有CLI访问共享日常服务，不触发冷启动。三次首次路由分别GLM-5.3 max、GLM-5.3 max、GLM-5.3-Flash max，均供应方stream不可重试429/1310，原停止证据self/descendants confirmed、无输出；原始get/result与packet固定host-review-repair-20261010/hr_*-round1-limited。各自fresh enabled/available/quota未耗尽后按用户限流例外在原run完整codex/openai/gpt-6.1-sol/high continue（hr-*-continue-rate-limit-1310-r1，revision4→5），范围/规则保持。原模型错误与Monitor compact摘要不当测试/产物验收，等待新固定交付。
+
+## 验收合入后的界面小返修计划（2026-10-10）
+
+Claude Code Host 通过后以 f1372949 合入，随后发现 U2 的结束未确认尾部与后续时间片叠字，以及 D2 的后台首读只覆盖快照、没有覆盖宏任务列表。本轮沿用 Host codex-adr027、原宏任务与原分支，开始前已快进到 socu/buddy-core 1f7e8b60；上述缺口与此前失败记录保留。本轮写入只限 apps/console、发行产物与本记录，不推送，保留 tmp/ 全部截图及日志。
+
+| 关联返修微任务 | 唯一写入范围 | 做法与复用 | 验证编号 |
+| --- | --- | --- | --- |
+| PA-T：关联原 UI-FRAME run c8f16418-db44-4ee1-a5e8-532d7d80b071 | apps/console/src/ObjectiveTimeline.tsx、timeline-layers.test.tsx | 复用现有同一行 span 事实与时间区间判断：结束未确认的虚线尾部与后续时间片重合时只去掉尾部文字；问号、虚线、title、aria 原样。没有重合继续显示。不加元素、层或设置。 | PA01：重合隐藏文字；PA02：无重合与边界保留；PA03：标记、悬停与读屏不变；去掉重合判断必须失败。 |
+| PA-L：关联原 R-D run 93accf26-54b0-4357-962d-60dcf6fe8980 | apps/console/src/use-objective-list.ts、use-objective-list.test.tsx、use-task-history.ts、use-task-history.test.tsx | 复用现有 Page Visibility、首读状态、AbortController 与代次隔离；首屏激活列表第一次读不等可见，后台仅暂停周期，前台立即读。保留分页、筛选失效与迟响应保护。不加提示。 | PA04：初始 hidden 列表内容及核对时间；PA05：隐藏无周期、回前台立即读；PA06：迟响应、卸载与分页不回退；重新加首读可见性闩锁必须失败。 |
+
+两个微任务无共同写入文件，均默认经路由提交，adapter/provider/model/effort 四字段及 configuration 均不写；原已验收 run 不能 continue，创建关联返修。产物缺陷打回当前返修 run 后在原 run continue，供应方不可重试限流按既有完整配置例外登记。Worker 只跑受影响测试，不跑全量、不构建产物；先建 ignored 任务目录、交付确切路径、不删除、不使用 stash、不操作分支或标签。Host 独立固定产物、实际测试与目标行为移除变异。
+
+PA07：私有合成看板的三个宏任务，适应窗口与放大两级，逐行测量非空 .sp-text 的实际文字范围并截图；PA08：真实后台加载列表已读取并有内容，隐藏期间无周期读取、切回立即读取，保留请求日志与截图。PA09：最终前端全量 npm --prefix apps/console test；PA10：重新构建发行产物并在最终源码的全新固定副本重构建，逐字节一致；PA11：tests/python/console、tests/python/install 与仓库卫生，使用私有状态及运行时根、清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT。本轮不跑 Python 完整检查。真实服务验证只用私有服务，日常服务故障则停下报告。
