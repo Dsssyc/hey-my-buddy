@@ -40,7 +40,7 @@ Unix 端点目录选择为 `<state>/ipc`，复用项目已有的私有目录保�
 | V-03 | 发布版版本/公开接口、本批独立进程下关闭池与 4 KiB、合法 8 MiB 往返；报告关闭 buddy 池，不把配置容量说成驻留内存 |
 | V-04 | 服务、Worker、控制器和 CLI 首次通信前同根；根权限 0700、长路径可用、不同根连接失败；不安全目录拒绝、Windows 无 root 参数 |
 | V-05 | 去掉根配置或关闭池配置时对应测试失败；所有原生 C-Two 测试和检查运行器只触及私有域，无公共命名空间清扫 |
-| V-06 | 锁文件 c-two 0.7.3、构建资源覆盖、私有安装产物从该锁取得依赖；不更新日常运行时 |
+| V-06 | 锁文件 c-two 0.7.4、构建资源覆盖、私有安装产物从该锁取得依赖；不更新日常运行时 |
 | V-07 | 正常端点退出无残留；持有的控制器被杀后确认两层停止再 reap，回收对应端点；移除停止证据或凭据绑定时防护失败 |
 | V-08 | 活端点 busy、旧凭据 stale-target、无法核实均保留真实结果且只调用一次，不误删目标；原生凭据编解码使用库而非自造字段 |
 | V-09 | 自建对端暂停时，首次连接与已连接各一例按连接期限抛出pre_dispatch；去掉连接期限目标测试失败，仅暂停自建进程。业务调用期限按时抛出、映射旧超时码、同一连接随后可用；不新增每调用等待线程，去掉期限时测试失败 |
@@ -96,3 +96,11 @@ Host从最终固定输出重新建立三份变异副本：去掉私有根setter�
 目标由0.7.3改为已发布0.7.4，分支与已提交记录文件名保留。1-A2作为小微任务先于1-B，更新依赖/锁并重新取得版本绑定证据。当前计划段落已更新；此前0.7.3实测、失败、验收与暂停记载均是历史，不改写成0.7.4通过。1-C恢复，所有实时连接带连接期限、业务调用带调用期限，整个等待线程删除；两种期限同码，通过transport_phase区分。连接空闲60秒后泄漏由Claude Code Host用私有验收探针核对，本批测试集不加长等待用例。
 
 日常0.6.0服务的FD接近上限。遇到Too many open files立即停止报告，不重启或替换日常服务/Worker，也不以私有服务替代委派。四个harness的真实回合及其重跑仍须用户逐次批准，旧批准不覆盖本批；其他原约束保持。
+
+1-A2 基线111f885c，run9afaad94-0410-4bfc-826b-cba26a5a0b81，仍归原宏任务；首次提交省略四项配置。Host专用0.7.4环境复核connect公开参数、暂停自建对端：fresh与already-connected连接的150ms预算分别152.3/152.4ms抛CallDeadlineExceeded，transport_phase=pre_dispatch；对端恢复后可用。timeout0为0.1ms的pre_dispatch，负数/正负无穷/NaN/字符串均拒绝；100ms业务调用约101.8ms为dispatch_uncertain，同一连接再调用成功，原超时调用仍在对端完成。不带期限的独立客户端在一秒外层观察窗仍停在before-connect，仅终止自己创建的探针客户端，随后恢复并正常关闭自己创建的服务，inspect=absent。无模型、无默认公共域、无日常进程操作，原始证据tmp/c073-host/connect-timeout-probe.*。
+
+Host公开表面比较0.7.3与0.7.4：__all__、异常类名字、ClientIPCOverrides/ServerIPCOverrides键及类型、所用公开函数签名均一致，唯一签名差为connect新增timeout；只核公开能力，不对vendor静态证明。0.7.4第二份私有探针重取4KiB/8MiB往返、调用期限、池计数和端点维护：两次8MiB约11.392/11.808ms，调用期限101.128/105.616ms、dispatch_uncertain，同连接随后可用，远端仍完成；outgoing SHM used=0、peak=8,392,704；alive reap=busy，正常exit0后already-absent/inspect absent，杀自己的模拟组exit-9后reaped/inspect absent；目录只余.gate/.gate.marker，无端点。脚本复制时输出文件名最初沿用了旧probe名，Host把新结果另存public-probe.result.json，并从未改的旧stdout恢复旧0.7.3结果JSON，随后修正新脚本输出名；两版历史数据均保留，不混写为本次结果。
+
+1-A2 首次决定dec-83d0edbf-3bf8-43aa-8725-b031c8e233cd选择ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；原run continue改为Codex/openai/gpt-6.1-sol/high（已完成1-A同类配置与锁），按用户许可登记，未改用户路由/模型配置。尚无文件描述符耗尽错误；如遇到即停。
+
+1-A2 第二回合停在依赖准备的Host assistance边界：原沙箱DNS与缺依赖失败保留，未声称升级完成。Host在固定输出5a8459d6的独立副本从公开PyPI执行uv lock --upgrade-package c-two，退出0，只更新c-two0.7.3→0.7.4；用导出的哈希锁下载当前平台依赖及构建依赖，两次退出0，共16个wheel和参考锁，命令与SHA256在原任务根host-materials/provenance.json。材料交原run continue自行核对写入，Host未代改实施分支uv.lock；本回合不指定配置四字段。真实无模型0.7.4探针证据继续保留，尚未复核最终固定产物或开展1-B/1-C。
