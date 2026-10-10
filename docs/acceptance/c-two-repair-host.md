@@ -196,3 +196,11 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 这次明确修正的是 Host 自己的忽略目录检查入口：原入口把系统临时根再嵌在较长的 Host 根与 label 之下，导致 ZCode 自建绝对 Unix 套接字路径过长。新的完整入口直接在系统临时目录创建短 `cf-` 任务根，创建时记下确切路径，TMPDIR、BUDDY_CHECKS_TMPDIR、HOME、state、runtime、uv cache 全在该根；不修改产品、测试、期限或并行数。长根 red 与短根 green 证据为 `installed-zcode-final-{long,short}.{json,log}` 及短根 ownership 登记。该定位支持临时路径原因，不把初跑统归为机器负载，也不改写任何一次失败。
 
 再次全检前 core 又增加了纯文档提交 `40d82d937caa03a058b484ff0f660657cd595945`，已合入为 `7c44bba1a5936733daafe40a41deba1cf918194d`；相对上一候选的产品、测试、锁文件与控制台均无变化，指定 `1f7e8b60` 仍为祖先。下一次检查绑定实际最终实施提交和该 core，不改 Host 维护的文档内容。
+
+## 最终完整检查通过与下一验收关口
+
+最终代码提交 `e0ce3d2be333b1655397920d59a8014162730849`，core 绑定 `40d82d937caa03a058b484ff0f660657cd595945`，用户指定 `1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 的祖先关系通过。命令为 `uv run --frozen python -m hey_my_buddy.cli.checks`，未带 jobs，使用默认并行数；退出码 0，用时 690.917 秒，213/213 个文件通过，实际执行清单 3,474 项（其中跳过 1 项）。完整检查已涵盖本批五份夹具、真实 C-Two 私有注册/回收/期限、四个 harness 的 localhost 或模拟路径、打包与运行时检查。安装版 ZCode 文件在完整检查中通过，22.2 秒；本次没有对其降低断言、超时或检查范围。
+
+本次运行使用创建时登记确切路径的短私有系统任务根；检查运行器自行创建并收尾自己的 `buddy-checks-<nonce>` 根，Host 外层材料留待验收。开始与结束负载分别约 20.81 / 83.46，仅为运行条件观察，不用作通过或失败解释。原始证据为 `tmp/c073-host/final-short-check-{started,process,result,summary,owned-root}.json` 与 `final-short-check.log`。前三次完整失败全部保留，没有用最终 green 覆盖原结果。记录后的产品、测试、锁文件与控制台差集核对为空；只补记录时不重跑完整检查，仍重跑 `cli.test_repository_hygiene`。
+
+四个最短真实 Worker 回合的脚本与独立批准门已准备，仍未执行（真实付费冒烟 0 次；各微任务委派的模型使用另按各 run 登记）。准备从一次 Codex Worker 回合开始，证明真实 CLI 经私有服务、Worker 主循环、角色、运行模块与 C-Two 通道完成最小交付，留存签收、工具事实与两层停止；其余 ZCode、Claude Code、DSH 及任何重跑都继续逐次请求用户批准。沿用已有登录，不设置 CODEX_HOME 或 CLAUDE_CONFIG_DIR，不读凭据文件，不安装、升级或重启日常运行时。真实冒烟与 Claude Code Host 的最终验收仍是后续关口，不把完整检查退出 0 写成整批已验收。
