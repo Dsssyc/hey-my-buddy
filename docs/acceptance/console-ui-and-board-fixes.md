@@ -1,5 +1,21 @@
 # 控制台界面与黑板可靠性：执行计划与验收记录
 
+## 最终交付（2026-10-10，等待 Claude Code Host 验收）
+
+B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
+
+| 最终验证 | 实际检查提交 | 文件 / 项数 | 退出码 | 耗时 |
+| --- | --- | --- | --- | --- |
+| `uv run --frozen python -m hey_my_buddy.cli.checks` | `ffd5b2bbf24149f167851105da03831f853e9862` | 默认 4 workers，212 / 3400，skipped 1 | 0 | 842.853 秒 |
+| `npm --prefix apps/console test` | `ec9e1526585d96e96dd8e5e6202476879004a339` | 66 / 844，全部通过 | 0 | 23.129 秒 |
+| `npm --prefix apps/console run build` | `ec9e1526585d96e96dd8e5e6202476879004a339` | tsc 与 Vite，4 个发行资产 | 0 | 0.845 秒 |
+
+Python 完整检查之后唯一代码/测试变化是 `apps/console/src/console-session.test.tsx` 的查看习惯夹具隔离；Python 源码、全部 Python 测试、前端产品源码与 4 个发行资产逐字节相同，绑定证据 `tmp/console-ui-and-board-host/final/python-gate-final-source-binding.json`。因此保留该轮完整 Python 结果，前端在返修提交上完整重跑；其余后续提交仅改本记录并重跑仓库卫生。最终构建资产与已提交 `acaa5180` 产物、已核对的 `f8e2a493` 私有浏览器预览相同，`assets-source-proof-final.json` 保存哈希与提交绑定。
+
+Python 编号以最新 core 的 202 文件 / 3230 项为基线，本批为 212 文件 / 3400 项：新增 170、删除 0；上游相对原 613faa40 新增 75、删除 8，单独列账。前端最终 66 文件 / 844 项；末次会话返修保留原 20 项及全部安全断言，没有新增/删除编号。完整日志、命令、负向材料与截图都在 Host 的 ignored `tmp/console-ui-and-board-host/`，不提交图片。
+
+最终核对边界：B1 用真实私有 Git/SQLite、设备号模拟与不同 inode 目录验证，不在日常状态执行迁移，也未验证真实重启或 Windows。B3 对无关写入不重算、单宏只重算一项，接近日常规模的合成看板量测与全量变化变慢的结果均在本记录及 measurements JSON，耗时不作回归断言。U4 未加载的历史深链不越过现有分页扫描；U7 极矮窗口使用内外两层滚动；U9 真实 HTTP 只注入首屏/无 cursor/连接重试，追加页失败与迟响应由单元/变异覆盖；U10 用明确完整的私有合成投影验证，744px 维持既有文字列表回退。没有日常安装/升级/重启或登录凭据操作；架构、协议与 DSH 的直接写入范围未扩大。下列时间顺序记录中的“待执行/停止”是当时状态，以本节及最后收尾事实为最终结论。
+
 2026-10-08，Codex Host `codex-adr027`。从最新 `socu/buddy-core@613faa4089c02ef1d5ef9b1d0743920de6f4a7cc` 建立 `socu/console-ui-and-board-fixes`，工作树 `~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy`，不推送。来源为待办中 B1–B5 与控制台 U1–U11，原控制台读取批次的 Host 验收已读。第一部分先完成并由本 Host 验收，再开始界面实现；新宏任务的实际 ID 与微任务 ID 在首次提交成功后填写，Host ID 沿用。
 
 日常服务与 Worker 属于所有会话，不重启、不停止、不替换，也不安装升级或改登录凭据。只经路由委派，四个 buddy 字段全部省略；每个微任务的 Worker 只运行影响范围内的测试，禁止完整检查、删除材料、stash 与创建/切换分支，改动留在工作区供服务封存；先建 ignored 专用目录并报告精确路径。所有测试清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，再设置明确的私有状态/运行时/源路径。日常委派受故障阻断时停下报告给用户，不自行恢复进程。范围内缺陷退回原 run，继续同样不指定，换 buddy 用 reroute；仅不可重试供应方限流的许可例外使用原 run 完整配置并登记。
@@ -248,7 +264,7 @@ Host已独立执行隔离B2控制组：关闭B1回退时原受管用例退出0�
 
 Host固定3798e5bb两模块受影响检查39项（迁移35、身份4）退出0、103.118秒，正常teardown；命令明确PYTHONPATH为固定checkout/src，日志host-affected-fixed-source.log。三个目标反事实均以目标断言失败，并保留独立B2控制组通过；原固定历史、原物理目录与没有第二持有者均有严格断言。准备将唯一测试差异整合到Host分支，最终完整检查仍待最新core合入。
 
-B1关联返修整合5d9fac44、integration int-40776bd6-1f80-4322-be25-45e78edf0b9f verified1，原run accepted；accepted sweep回收cln-516f130f-c6c5-4176-8f2a-205e248a063e applied、`~/.local/share/hey-my-buddy/state/workspaces/ws-41ae4e6001c48f6e44171a3e140018f0/checkout`确已不存在。Host计划请求遇revision冲突，随后apply与sweep并发返回WORKSPACE_GIT_ERROR；fresh get证明同一计划已applied且精确目录不存在，未把错误回复当回收成功证据，也未据此声称共享服务故障或重启。前端测试返修run091248a0同样applied/absent，至此11个本批microtasks均accepted、其检出均已回收；固定Git产物、收据、任务材料、Host副本保留。
+B1关联返修整合5d9fac44、integration int-40776bd6-1f80-4322-be25-45e78edf0b9f verified1，原run accepted；accepted sweep回收cln-516f130f-c6c5-4176-8f2a-205e248a063e applied、`~/.local/share/hey-my-buddy/state/workspaces/ws-41ae4e6001c48f6e44171a3e140018f0/checkout`确已不存在。Host计划请求遇revision冲突，随后apply返回WORKSPACE_GIT_ERROR（原因未追查）；fresh get证明同一计划已applied且精确目录不存在，未把错误回复当回收成功证据，也未据此声称共享服务故障或重启。前端测试返修run091248a0同样applied/absent，至此11个本批microtasks均accepted、其检出均已回收；固定Git产物、收据、任务材料、Host副本保留。
 
 收尾合入最新core：3a8a8ef16470551aa130aa9a4a4766c80686c86d第二父1a9decd95736a15a5ec4b4db6526e4cb48666326，无冲突；导入已验收DSH原生续接及其拥有的文档，Host本批相对该core没有修改禁止文件。唯一重叠生产文件workflow.py自动合并不同区域，随后验证DSH选择/Worker与本批身份/拒绝撤销路径。标准npm --prefix apps/console run build在3a8a8ef1退出0、1.441秒，四个最终资产哈希与acaa5180已提交资产及f8e2a493私有浏览器预览逐字节相同，无新增构建差异；final/assets-source-proof-merged.json保留绑定。全部U01–U11已有真实私有浏览器截图/状态证据，matrix与最终源码/资产指纹已绑定browser-qa-checklist.json，不重复未改变的界面操作。
 
@@ -263,3 +279,25 @@ B1关联返修整合5d9fac44、integration int-40776bd6-1f80-4322-be25-45e78edf0
 Host私有ffd5b2bb副本负向排查：模块求值前预置models.showUnavailable=true，立即原单项仍退出0（1passed19skipped），不能计为目标失败；再在标题加载后给既有300ms历史debounce完成机会（仅私有副本act等待350ms），原连接丢失保存用例以[model_profiles] != []明确失败、1failed19skipped、退出1、无导入/未处理错误。原所有assertions不变，生产源码未改，材料final/session-seeded-baseline与settled-history保留。说明测试默认夹具没有隔离持久查看习惯且依赖时间窗口；不是已证明的写入门禁缺陷，也不是仅凭load average就归因负载。要求返修复用其他两测试已有的只清/恢复自己两个view键方式、其他键不碰，再独立核对和最终完整前端。
 
 会话夹具返修固定79e90fb99e98a095acf7022178fccf88573ed774、artifact8cb57f47-7f8a-46ed-906c-b5db8251fe2b，唯一测试文件SHA-256 754c579d1d02bd4d7d299e9b3848ebcde5fe904eecafc2570a6a7f8a6c3300ac，Git blob/patch/scope一致；Worker全部材料console-session-isolation-bb9e843a提前固定。复用相邻测试两键save/clear/restore，保留cleanup/hash/theme，并在原保存防护用例等待既有FILTER_DEBOUNCE_MS + 50让读取可达；原20项编号与每行expect均保留，未将model_profiles混为保存、未放宽operations=[]。Host固定产物正常20项退出0、13.322秒，tsc退出0；模块求值前预置相同两个键与两个无关哨兵、完整同文件20项退出0、12.935秒，afterAll证明恢复原值且无关键未变。仅移除两键隔离、保留相同初值/等待/全部原断言时，原目标1项AssertionError [model_profiles] != []、19skipped、退出1、2.103秒，无导入/未处理异常。host-checks/summary.json、host-assertion-preservation.json与原始日志保留；三组私有源码副本不改变主源码。前端最终全量仍待整合后执行。
+
+末次会话返修整合ec9e1526、integration int-4ead069c-31e0-46e6-ada3-e1f01a4fff78 verified1，原run a51cf7ac accepted；随后同提交标准构建退出0、发行资产全部相同，完整前端66文件844项退出0。Python在合入后ffd5b2bb的3400项完整退出0保留，末次只有前端测试夹具改动，Python源码/测试与前端产品/资产均已逐字节核对相同；最终Python门禁不重跑，末次只补记录与卫生。此前失败日志分别final/frontend-first-failed.*、frontend-merged-first-failed.*、python-first-failed.*，单文件20通过与同偏好有/无隔离的反事实都保留，不覆盖或掩盖第一次失败。
+
+最后回收：a51cf7ac 的计划cln-51a615db-41bb-4a10-b4ae-8ea47305af69，fresh get为applied、result.removed=true，`~/.local/share/hey-my-buddy/state/workspaces/ws-1697368e071d5139b98ec29405e856dd/checkout`确不存在。Host exact-path apply曾返回WORKSPACE_GIT_ERROR，未把错误当成功；随后以持久计划和文件系统事实确认回收，错误的精确成因未追查。B1先前类似回复的并发成因措辞也已改为事实，验证结果不变。全部12个microtasks accepted，12个精确checkout路径都不存在；final/accepted-cleanup-proof-all.json保留计划/路径/原收据，所有Worker任务材料均在回收前复制保存。Host自己的分支/工作树与ignored材料保留，等待Claude Code Host验收后再按确切路径回收。
+
+截图索引：以下路径均相对Host工作树ignored `tmp/console-ui-and-board-host/screenshots/`，完整明暗/宽窄/命名状态矩阵、尺寸、命中及网络事实在同目录JSON及browser-qa-checklist.json。每项至少一张改后图，U5另保留改前；没有提交图片。
+
+| 项 | 代表改后截图 |
+| --- | --- |
+| U1 | `U01-after-IAB-light-wide-complete.jpg` |
+| U2 | `U02-U05-frame-matrix-dark-compact-native125.jpg` |
+| U3 | `U03-U07-after-dark-compact.jpg` |
+| U4 | `U04-after-IAB-dark-wide-restored.jpg` |
+| U5 | `U02-U05-frame-matrix-light-wide-native125.jpg`，改前 `U05-before-light-wide-100.jpg` |
+| U6 | `U06-after-IAB-installed-facts-context.jpg` |
+| U7 | `U07-after-last-card-return-compact.jpg`，极矮 `U07-after-very-short-outer-scroll.jpg` |
+| U8 | `U08-after-dark-compact.jpg` |
+| U9 | `U09-after-dark-compact.jpg` |
+| U10 | `U10-U11-after-dark-wide.jpg` |
+| U11 | `U10-U11-after-light-wide.jpg` |
+
+收尾仅补本记录；`cli.test_repository_hygiene` 私有环境5项退出0，`git diff --check`退出0。最终代码与assets保持ec9e1526，Python/full frontend/builder精确提交号与退出0见首表；Host工作树保持，不推送，不安装升级或重启日常服务/Worker、不触碰另一会话分支/检出。至此停止本批实施，等待Claude Code Host验收；验收之前不开始其他工作。
