@@ -204,3 +204,13 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 本次运行使用创建时登记确切路径的短私有系统任务根；检查运行器自行创建并收尾自己的 `buddy-checks-<nonce>` 根，Host 外层材料留待验收。开始与结束负载分别约 20.81 / 83.46，仅为运行条件观察，不用作通过或失败解释。原始证据为 `tmp/c073-host/final-short-check-{started,process,result,summary,owned-root}.json` 与 `final-short-check.log`。前三次完整失败全部保留，没有用最终 green 覆盖原结果。记录后的产品、测试、锁文件与控制台差集核对为空；只补记录时不重跑完整检查，仍重跑 `cli.test_repository_hygiene`。
 
 四个最短真实 Worker 回合的脚本与独立批准门已准备，仍未执行（真实付费冒烟 0 次；各微任务委派的模型使用另按各 run 登记）。准备从一次 Codex Worker 回合开始，证明真实 CLI 经私有服务、Worker 主循环、角色、运行模块与 C-Two 通道完成最小交付，留存签收、工具事实与两层停止；其余 ZCode、Claude Code、DSH 及任何重跑都继续逐次请求用户批准。沿用已有登录，不设置 CODEX_HOME 或 CLAUDE_CONFIG_DIR，不读凭据文件，不安装、升级或重启日常运行时。真实冒烟与 Claude Code Host 的最终验收仍是后续关口，不把完整检查退出 0 写成整批已验收。
+
+## 用户单次批准的 Codex 真实 Worker 冒烟
+
+用户明确回复“批准这一次 Codex 回合”后，Host 才生成与配置、脚本哈希、准备文件、nonce 和确切根绑定的单次批准文件。源提交 `80916e3eb499b9768d90fd7873de8b5e5a7424ab`，与完整检查候选的生产代码相同；实际调用 Codex/openai/gpt-6.1-sol/low，一个 Worker 回合、没有重跑。原生版本 `codex-cli 0.160.1`，回合命令退出 0、32.542 秒。真实角色结果 ok/completed，私有黑板 run `18c33384-8894-4e86-8bc8-412e1f9d00db` 的固定 artifact `551bdc1e-f168-4ddf-baa5-57e2e77b315a` 已 accepted/completed，签收前状态为 delivered；没有以 RPC 排队响应代替交付。
+
+工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/native session/turn；本探针请求没有任何文件或命令工作，通过既有 Codex 结构化交付接缝完成。控制器 shutdownConfirmed=true、wait 退出 0，原生 stopEvidence.native.groupState=gone；角色的 processState.shutdownConfirmed=true。模型用量来源为 Codex app-server，nativeRecords=1、inputTokens=17,850、cachedInputTokens=0、outputTokens=41、reasoningOutputTokens=0。只报告原生 token 事实，不推算费用。
+
+持有的 Worker 与私有服务均停止，C-Two shutdown.completed=true；服务、Worker、控制器三个实际地址 inspect 均 absent，私有 state/ipc 套接字残留集合为空，没有手工 unlink。证据为 `tmp/c073-host/codex-approved-smoke-{started,result,proof}.json`、`codex-approved-smoke.log` 及 `<CODEX_SMOKE_ROOT>` 中的 run-request、run-result、round、delivered-view、acknowledgment、stop-and-endpoints 与固定原生 evidence；不在记录里写出凭据或完整主目录。没有设置 CODEX_HOME/CLAUDE_CONFIG_DIR，没有读取登录凭据文件内容或操作日常服务/Worker。
+
+结合已定位的 ZCode 临时套接字长度条件，Host 将尚未运行的其余三个入口准备在开始时创建并登记确切路径的短私有系统任务根，脚本逐字节哈希不变；只重做 prepare，modelCalls=0、nativeStarts=0，旧准备材料保留、没有消耗旧批准门。三个真实回合仍各待用户批准，Codex 的这一次授权不延伸到其他 harness 或重跑。
