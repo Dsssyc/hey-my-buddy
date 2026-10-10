@@ -212,4 +212,31 @@ describe("light and dark themes", () => {
     expect(styles.match(/#[0-9a-fA-F]{3,8}\b/g)).toBeNull();
     expect(styles.match(/\b(rgb|hsl)a?\(/g)).toBeNull();
   });
+
+  it("keeps every text colour readable on every background it sits on, in both themes", () => {
+    const text = readFileSync(resolve(process.cwd(), "src/tokens.css"), "utf8");
+    const split = text.indexOf(":root[data-theme=");
+    const luminance = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16) / 255)
+        .map(share => share <= 0.03928 ? share / 12.92 : ((share + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (first: string, second: string) => {
+      const [lighter, darker] = [luminance(first), luminance(second)].sort((a, b) => b - a);
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    for (const block of [text.slice(0, split), text.slice(split)]) {
+      const value = (name: string) => block.match(new RegExp(`--${name}: (#[0-9a-f]{6});`))![1];
+      const pairs = [
+        ...["ink", "ink2", "ink3", "live", "hand", "fail", "past"].flatMap(ink => ["paper", "surface", "sunk", "live-wash"].map(ground => [ink, ground])),
+        ["ink", "hand-wash"], ["ink2", "hand-wash"], ["ink3", "hand-wash"], ["hand", "hand-wash"],
+        ["ink", "fail-wash"], ["ink2", "fail-wash"], ["ink3", "fail-wash"], ["fail", "fail-wash"],
+        ["surface", "ink"], ["surface", "fail"],
+        ["bar-ink", "bar"], ["bar-ink2", "bar"], ["bar-hand", "bar"], ["bar-fail", "bar"], ["bar", "bar-hand"],
+      ];
+      for (const [ink, ground] of pairs) {
+        expect(contrast(value(ink), value(ground)), `${ink} on ${ground}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
 });
