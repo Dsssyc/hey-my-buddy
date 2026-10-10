@@ -502,3 +502,5 @@ PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-aft
 | PB-07 | 记录本次用户指出的缺陷、源提交、测试编号变化、实际验证与未验证部分；记录更改后重跑仓库卫生；验收后按确切路径回收 Worker 检出，保留 Host tmp/。 |
 
 本次原始证据目录为 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-geometry-spacing-20261010/。对外可见变化为短时间片与结束标记准确对应时间，标签留出内部空白并在过窄时省略文字；最终事实在交付节记录。
+
+PB-G 第一次交付在 Host attention 边界封存四路径产物：另一个受影响的 routing-timeline.test.tsx 仍断言 1ms 路由宽度为 0.3%，Worker 因写入范围未包含它而保留未改，报告五文件有一项失败。Host 将该单个测试文件加入同一 run 的 scope-amend（scopeVersion 1→2），在原 run 上继续且不指定四字段；其他写入范围与约束不变。此为本次几何修正必需的旧错误断言更正，不恢复错误实现。
