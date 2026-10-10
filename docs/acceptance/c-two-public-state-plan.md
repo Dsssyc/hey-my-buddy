@@ -193,7 +193,7 @@ Host 在固定副本补核 path_state 全 12 项退出 0、6.801 秒，public_st
 
 按用户明确的范围修订许可，把六个已查到的测试调用方纳入；blocking.await_run 和 console_cli.run 属于 CLI 内部 helper，必须消费 main 已解析 Path，不再有默认或调用公开解析的重复选择。catalog.discover 位于黑板内部、生产由 service/store 明确传目录，不是新公开状态入口，也改必填 Path，删除其目录环境 fallback，保留账户/模型语义，直接调用的离线测试显式提供自有根。没有对外新增入口或改变 CLI schema，console 仅 Python 状态传递，无前端变化。
 
-附加唯一写入路径如下，原 53 路径全部保留，总 66 路径；Host 仍独占计划和整合记录。继续 API 没有 executionWorkspace 变更字段，原提交意图保持原样，按该 API 的 input 原 run 记录这份明确范围修订；不可把旧投影说成已经改写，最终固定产物按本次明确有效范围独立核验。原始 scope、修订理由、基线和新 scope 为 `tmp/c073-host/state-boundaries-scope-amendment.json`，Task/Host 验收以该继续输入为依据。
+附加唯一写入路径如下，原 53 路径全部保留，总 66 路径；Host 仍独占计划和整合记录。continue 没有 executionWorkspace 变更字段；Host 起初只用 input 登记范围许可，漏查了已有 scope-amend 操作，没有更新黑板的机械 scope 版本。这是 Host 的流程错误，不能把该 input 当作已完成 scope-amend。原始 scope、修订理由、基线和新 scope 为 `tmp/c073-host/state-boundaries-scope-amendment.json`，Task/Host 验收以该继续输入为依据。
 
 - `tests/python/blackboard/service/test_service_environment.py`
 - `tests/python/buddy/runtime/test_worker_runtime.py`
@@ -210,3 +210,5 @@ Host 在固定副本补核 path_state 全 12 项退出 0、6.801 秒，public_st
 - `tests/python/blackboard/evaluation/test_evaluation.py`
 
 Worker 如实披露第二次误触真实 bind、数字 wait 记录缺口和任务根外 `/tmp/state-calls-readonly-audit.txt` 的写入。Host 只读观测已登记的 `/tmp/c073-c-H6SbNM`：没有与该根绑定的当前活进程、观测问题或持有 daemon/supervisor 锁；这个当下观察不能补造过去缺失的 wait/两层停止回执。根外文件先保留，要求 Worker 用自身原始命令记录说明新建或覆盖的证据，不能按名称/日期推断归属或删除；首次披露与违规口径保留。原 run continue 还须正确接线新增调用方并保留全部旧失败、只跑受影响测试、无真实沙箱重试和无付费模型调用，真实环境补核由 Host 对最终固定候选完成。
+
+补核接口后发现 scope-amend 必须在所有相关回合已确认停止、没有冻结旧 scope 的待执行 continuation 时执行；不能追溯授权活动回合。Host 发现顺序错误时 R2 已 running、scopeVersion 仍 1、self stop 未确认，未调用一个必然被拒绝的修改，也不取消并重建 run或手动改manifest/数据库。等待该回合停下后先核对合法固定交付/机械scope失败现场，有新增路径时按已有workspace-resolve保全与核验，再scope-amend为下一回合记录66路径并在原run continue；当前回合的旧scope与错误顺序保留，任何失败不能改写为通过。
