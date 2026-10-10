@@ -445,3 +445,37 @@ PA-T aeb6fcd0-ce4c-4769-be7a-e0e3068366f4 与 PA-L 38fd3783-03bf-488f-9d84-92b87
 用户在本轮私有预览截图指出项目横条和条目比侧栏背景窄，要求去掉空隙。实际测得 list-scroll offsetWidth=328、clientWidth=313、scrollHeight=clientHeight=548，虽不需要滚动，scrollbar-gutter:stable 仍预留 15 CSS px。新增 PA-S 关联原 UI-FRAME，唯一写入 apps/console/src/styles.css 与 ui-box-model.test.tsx，取消列表的强制滚动条预留，复用标准 scrollbar-gutter:auto 与现有 overflow 行为；其他页面的槽不改，不加元素、设置、补偿宽度或隐藏滚动条。PA12：列表无需滚动时项目横条和条目右边缘与背景齐平；PA13：内容需要滚动时仍能滚动、无横向溢出。只跑受影响测试，由 Host 在真实浏览器保存前后尺寸与截图；补充源改动之后重新运行最终前端全量、重构建并逐字节核对，再运行指定 Python 范围和卫生，前一份 905 项通过及 316 项 Python 通过仍保留为中间验证。
 
 PA-S d05cc5df-3021-46a0-aa95-622f53c82091 首次同样默认路由到 ZCode，供应方不可重试 429/1310、无产物且停机已确认；保留 first-failure get/result/await，确认完整 Codex 配置启用可用后在原 run continue（codex/openai/gpt-6.1-sol/high），没有改共享配置或日常运行时。
+
+### 小返修的固定产物与最终验证
+
+本轮最终代码与发行产物为 `2bca5fe5fbd461c298e7eb1e1020ac2ea6478490`。在 `1f7e8b60` 上实施两处验收后发现的缺陷，并按用户测试期间的补充要求修正侧栏空槽；没有后端代码变化，没有推送或安装。下面记录的是 Host 亲自固定并复核的结果，旧验收记录、失败尝试及原 tmp/ 材料均保留。
+
+| 微任务 | 固定源码 / 产物 | 整合提交 | Host 验证 |
+| --- | --- | --- | --- |
+| PA-T，aeb6fcd0-ce4c-4769-be7a-e0e3068366f4 | 99f26d55 / b37f1027-80d4-4d2b-89d5-4f84301a463d | 11ba51ed | 校验累计补丁及两文件 Git blob；44 项定向，取消重合抑制时 17 项失败。 |
+| PA-L，38fd3783-03bf-488f-9d84-92b870912c5d | 03119379 / 474f3b20-83d5-409c-9c45-79986a629083 | 136dbaa1 | 校验四文件；71 项定向，分别取消两个列表的首读例外时 9 项、8 项失败。 |
+| PA-S，d05cc5df-3021-46a0-aa95-622f53c82091 | 4a5f7cc9 / 0111513e-b03f-4a3b-85cd-4993251d7a57 | 78bbcaef | Worker 缺少依赖，退出 127、执行 0 项，未记为通过；Host 用现有依赖在固定副本完成 22 项，恢复 stable 空槽时 1 项失败。 |
+
+所有最终交付源码与固定产物逐字节相同。Node 24.21.0 下 Host 对 5 个受影响前端文件共同运行 137 项，退出 0；四份隔离变异的失败数仍为 17、9、8、1，均由目标断言触发。前端全量从已验收的 854 到 906，新增 52（时间轴 37、两个列表 14、侧栏 1），没有删除旧测试；更名 3 个旧测试，具体为两个 hook 的首次 debounce 隐藏时序与宏任务 hook 的 hidden mount 期望，从不读取更正为首读一次，其余周期暂停、前台读取、分页及隔离断言保留并加强。Python 没有新增、删除或更名。
+
+| 最终代码 2bca5fe5 上的检查 | 命令与机制 | 项数 / 产物 | 退出码与耗时 |
+| --- | --- | --- | --- |
+| 前端全量 | `npm --prefix apps/console test`，附加 default/json reporter 保存逐项结果；使用已安装的 Node 24.21.0 | 66 文件，906 项，全通过 | 0，23.502 秒 |
+| 构建 | `npm --prefix apps/console run build`；从同一提交重新导出 apps/console 与既有 docs/assets 图标，空产物目录独立构建，不安装依赖 | 4 个文件与提交逐字节相同，包含路径清单和 SHA-256 | 0，首次 Node 24 构建 0.978 秒、最终固定副本 0.987 秒 |
+| Python 指定范围 | `~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/.venv/bin/python tmp/console-ui-and-board-host/post-acceptance-ui-20261010/run_python_targets.py`；复用 checks 的发现、默认 4 并行、每文件私有子根及清理，仅筛选 console、install 与 cli.test_repository_hygiene | 8 console + 17 install + 1 卫生文件，共 316 项，跳过 0 | 0，126.300 秒，私有清理无残留 |
+
+最终前端全量完成之后才运行 Python 指定范围；本轮没有运行 Python 完整检查。检查前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，状态、运行时和临时根均为私有；模型与原生 harness 启动使用测试哨兵，除微任务委派外未调用模型。原先 Host 定向验证、905 项中间全量及第一份构建使用默认 Node 25.8.1，虽然通过，但不符合 package.json 支持范围；保留原日志，后续全部相关绿测、四份变异、构建与最终两套检查改为现有 Node 24.21.0。记录源码提交的小错误也保留原 metadata：无 .git 的固定副本继承了父工作树的 rev-parse，已按固定产物提交与逐文件校验纠正，不改测试结果。独立构建的首次副本漏了既有图标依赖而失败，随后从同一提交补齐 docs/assets 并通过；另一次命令误在 Host 根重构建，不算独立构建证据。
+
+### 实际浏览器、截图与边界
+
+全部位置相对 Host 工作树 `~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/`，本轮材料根 `tmp/console-ui-and-board-host/post-acceptance-ui-20261010/`。现有 ui_board_final.py 构造私有合成看板，三个宏任务和合成状态继续使用既有夹具，没有复制日常数据、没有原生模型调用。截图留在该根的 screenshots/，不提交图片。
+
+PA07：最终构建的三份宏任务，在适应窗口、放大一级和放大两级分别保存截图（PA07-final-objective1-*、PA07-final-objective2-retry-*、PA07-final-objective3-*），共 9 份。`final-timeline-matrix.json` 逐行读取非空 .sp-text，以 DOM Range 的实际文本范围裁剪到已有文字盒，64 个含时间片的行在每档缩放均无文字交集。合成委派 2 的重合尾部文字为空，问号、dotted 边框、title 和 aria 中的结束未确认仍在。旧构建确有约 50 px 横向文字交集，保留 before-bounds.json 与 PA01-before-fit.jpg。无重合、相接、跨行、缺失或倒序时间及原宽度阈值由定向测试覆盖；没有把原生停机模拟为真实执行证据。部分浏览器输入在后台标签上超时，重新选中已知私有标签后从适应窗口重做，部分截图及日志不删除。
+
+PA08：已被浏览器工具领取的 Chrome 标签虽在原生标签栏后台，却仍报告 visible 并每 3 秒读取，保留 claimed-hidden-reads-unusable.jsonl，未用它证明暂停。随后用未被浏览器工具领取的原生 Chrome 私有标签，后台菜单 Reload：后台 105.709 秒内，快照与 /api/objectives 各一次 200，没有周期读取。暂停下一次列表响应后，原生页面显示 3 个宏任务，列表核对时间仍为后台首读的 21:04:52；`real-background-proof.json`、原生 AX 与 HTTP 日志、PA08-real-background-content-verified.png 固定这一事实。首次原生绘制是空白，PA08-real-background-content.png 保留为不可用截图；选择标签时 Chrome 窗口仍被遮挡，不能当作 document-visible 的精确时间点，未声称测到真实前台恢复的毫秒延迟，立即调度由假时钟测试验证。截图证明时的 JavaScript 属于 3c25a0a1，与最终 2bca5fe5 的 JavaScript 逐字节相同，差别只有侧栏 CSS 与资源名；绑定摘要见 background-final-javascript-binding.json。
+
+PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-after-geometry.json记录无滚动时列表、项目横条、条目均为 328 px，右边缘 345，与背景一致；修正前 clientWidth 为 313，强制空槽 15 px。PA12-sidebar-no-gutter.jpg 保存改后画面。PA13：切到 50 条执行记录，实际内容高 4760、视口高 403，PageDown 后 scrollTop 从 0 到 70.5，scrollWidth=clientWidth=313；需要滚动时保留原生滚动条，没有额外占位或横向溢出，见 sidebar-native-scroll.json 与 PA13-sidebar-keyboard-scroll.jpg。没有实测物理触控设备；没有新增 Windows 及主题/窗口矩阵核对。
+
+对外可见的变化只有三项：重合的结束未确认尾部不再绘制这几个字，其余证据不变；激活列表后台首次加载有内容和核对时间，隐藏周期仍暂停；侧栏不需要滚动时不再预留空白槽。没有新增 UI 元素、提示、设置、服务事件或服务端端点。
+
+三个关联返修 run 已分别绑定固定产物与已验证的整合记录并 accepted；PA-T 与 PA-S 的 Host attention 由 Host 完成实际核对后直接验收，原缺少验证的事实留在 note。整合记录为 int-cf8351a7-09a6-4031-9e09-dc0c1f94ec0b、int-c8f2a36d-8fc1-4ef8-bc48-9c9e47c5720d、int-4abddd91-db4b-4dfc-b676-f03282b2594d。受管检出按登记的确切路径核对已回收：~/.local/share/hey-my-buddy/state/workspaces/ws-19d548ec9a82329b058f8a1f775e2f79/checkout、~/.local/share/hey-my-buddy/state/workspaces/ws-1694e6a2cea47fd9c95f2981da592ece/checkout、~/.local/share/hey-my-buddy/state/workspaces/ws-f481f7f81a452698bdc600c89a78dfe9/checkout。PA-T 的计划/应用由本 Host 执行；PA-L 遇一次 REVISION_CONFLICT，原结果保留，重读时 PA-L 和 PA-S 已是 applied，检出不存在，未重复删除。固定副本、Worker 材料副本、截图和日志均在 Host tmp/ 保留，Host 工作树不回收，等待 Claude Code Host 验收。
