@@ -169,7 +169,7 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     return reasons
 
 
-def _workspace_reference_rows(connection) -> list[tuple[str, dict]]:
+def _workspace_reference_rows(connection):
     """Physical references in retained facts, without filtering their state.
 
     Integration targets need not be a run's execution workspace: verifying a
@@ -178,14 +178,15 @@ def _workspace_reference_rows(connection) -> list[tuple[str, dict]]:
     Include durable inputs, results and receipts that can retain other physical
     locations; identity alias metadata alone never counts as a reference.
     """
-    return [(table, dict(row)) for table in (
+    for table in (
         'tasks', 'attempts', 'artifacts', 'objectives', 'resource_claims', 'messages',
         'events', 'commands', 'decision_requests', 'harness_health', 'evaluation_evidence',
         'workflow_runs', 'workflow_children', 'workspace_reservations',
         'workflow_continuations', 'workflow_turns', 'workflow_artifacts',
         'workflow_requests', 'workflow_scope_versions', 'workflow_workspace_conflicts',
-        'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions')
-        for row in connection.execute('SELECT * FROM ' + table)]
+        'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions'):
+        for row in connection.execute('SELECT * FROM ' + table):
+            yield table, row
 
 
 def allocation_references(connection, manifest: dict, request_id: str | None = None) -> list[str]:
@@ -196,45 +197,68 @@ def allocation_references(connection, manifest: dict, request_id: str | None = N
 
 
 def _allocation_reference_reasons(rows, manifest, request_id, *, mapping=None):
+    return _allocation_reference_sets(rows, [(manifest, request_id)], mapping=mapping)[0]
+
+
+def _allocation_reference_sets(rows, allocations, *, mapping=None):
+    """One streaming pass, one parse per structured field, bounded by a row.
+
+    Exact tokens and normalized ancestor paths match every candidate together.
+    No state filter is safe: historical receipts and malformed structured facts
+    can still retain a location. Only the reason sets survive each input row.
+    """
     from . import workspace_identity
+    if not allocations:
+        return []
     if mapping is None:
         mapping = workspace_identity.active_aliases()
-    checkout = manifest['checkoutRoot']
-    allocation = str(Path(checkout).parent)
-    def refers(value):
+    reasons = [set() for _ in allocations]
+    tokens, paths = {}, {}
+    for index, (manifest, request_id) in enumerate(allocations):
+        for token in (manifest['workspaceId'], request_id, manifest.get('manifestSha256'),
+                      workspace_identity.canonical(manifest['checkoutId'], mapping=mapping)):
+            if isinstance(token, str):
+                tokens.setdefault(token, set()).add(index)
+        paths.setdefault(str(Path(manifest['checkoutRoot']).parent), set()).add(index)
+
+    def matches(value):
         if isinstance(value, dict):
-            return any(refers(item) for item in value.values())
-        if isinstance(value, list):
-            return any(refers(item) for item in value)
-        if not isinstance(value, str):
-            return False
-        if (value == manifest['workspaceId'] or value == request_id
-                or value == manifest.get('manifestSha256')
-                or workspace_identity.equivalent(value, manifest['checkoutId'], mapping=mapping)
-                or value == allocation or value.startswith(allocation + '/')):
-            return True
-        if os.path.isabs(value):
-            normalized = os.path.normpath(value)
-            if normalized == allocation or normalized.startswith(allocation + os.sep):
-                return True
-        return False
-    reasons = set()
+            for item in value.values():
+                yield from matches(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from matches(item)
+        elif isinstance(value, str):
+            yield from tokens.get(workspace_identity.canonical(value, mapping=mapping), ())
+            if os.path.isabs(value):
+                for path in {value, os.path.normpath(value)}:
+                    while True:
+                        yield from paths.get(path, ())
+                        parent = os.path.dirname(path)
+                        if parent == path:
+                            break
+                        path = parent
+
     for table, row in rows:
-        parsed = dict(row)
-        for field, value in row.items():
+        referenced = set()
+        unproven = False
+        for field in row.keys():
+            value = row[field]
             if isinstance(value, str) and (field.endswith('_json') or field in ('exclusive_resources', 'required_capabilities', 'log_paths')):
                 try:
-                    parsed[field] = json.loads(value)
+                    value = json.loads(value)
                 except ValueError:
-                    # Unreadable structured board facts cannot prove absence of
-                    # a retained reference. Freeform task text is never parsed.
-                    reasons.add(table + '-reference-unproven')
-        if refers(parsed):
-            reasons.add(table + '-reference')
-    return sorted(reasons)
+                    unproven = True
+            referenced.update(matches(value))
+        for index in referenced:
+            reasons[index].add(table + '-reference')
+        if unproven:
+            for item in reasons:
+                item.add(table + '-reference-unproven')
+    return [sorted(item) for item in reasons]
 
 
-def _orphan_workspace(store, directory: Path, reference_rows) -> dict:
+def _orphan_workspace(store, directory: Path) -> dict:
     """Only the original allocation record can prove an orphan's exact checkout."""
     from . import workspace, workspace_identity
     state = store.directory.resolve()
@@ -262,8 +286,8 @@ def _orphan_workspace(store, directory: Path, reference_rows) -> dict:
                 or pinned.get('snapshot', {}).get('stagedCommit') != manifest['snapshot']['stagedCommit']):
             raise BoardError('STORAGE_UNSAFE', 'Original allocation records do not prove this checkout')
         result['manifest'] = manifest
+        result['allocationRequestId'] = request['requestId']
         with workspace_identity.board_aliases(state):
-            result['reasons'].extend(_allocation_reference_reasons(reference_rows, manifest, request['requestId']))
             proof = workspace.cleanup_inspect(state, manifest)
         result['reasons'].extend(proof['reasons'])
         result['proof'] = proof
@@ -307,14 +331,36 @@ def _remove_orphan_workspace(store, candidate: dict) -> None:
     # This is the same lock and order as submission: allocation, then board.
     # Keep the DB writer fence through removal so admission cannot win between
     # checking retained facts and deleting a checkout.
-    with workspace._lock(directory), store.db.write() as connection:
-        fresh = _orphan_workspace(store, directory, _workspace_reference_rows(connection))
-        if (fresh['reasons'] or fresh['allocationFacts'] != candidate.get('allocationFacts')
-                or fresh['manifest'] != candidate.get('manifest')
-                or tree_info(Path(candidate['path']))[1:] != (candidate['fingerprint'], True)):
-            raise BoardError('STORAGE_CHANGED', 'Orphan allocation changed or acquired a board reference',
-                             reasons=fresh['reasons'])
-        workspace.cleanup_remove(store.directory, fresh['manifest'])
+    with workspace._lock(directory):
+        # Git and allocation-record proof precede the writer transaction. The
+        # allocation lock still fences same-request preparation/admission.
+        fresh = _orphan_workspace(store, directory)
+        with store.db.write() as connection:
+            if not fresh['reasons']:
+                fresh['reasons'].extend(allocation_references(
+                    connection, fresh['manifest'], fresh['allocationRequestId']))
+            if (fresh['reasons'] or fresh['allocationFacts'] != candidate.get('allocationFacts')
+                    or fresh['manifest'] != candidate.get('manifest')
+                    or tree_info(Path(candidate['path']))[1:] != (candidate['fingerprint'], True)):
+                raise BoardError('STORAGE_CHANGED', 'Orphan allocation changed or acquired a board reference',
+                                 reasons=fresh['reasons'])
+            # Revalidate small physical records after the historical scan too;
+            # moving Git inspection out of the transaction must not widen the
+            # deletion authority to changed request/input records or inodes.
+            for name, item in (('allocation', directory), ('checkout', Path(candidate['path'])),
+                               ('lock', directory / '.lock')):
+                _guard_storage(item)
+                identity = item.lstat()
+                facts = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
+                if facts != fresh['allocationFacts']['identities'][name]:
+                    raise BoardError('STORAGE_CHANGED', 'Orphan physical identity changed')
+            for name, key in (('request.json', 'requestSha256'), ('input.json', 'inputSha256')):
+                record = _read_storage_json(directory / name)
+                if workspace._sha(workspace._json(record)) != fresh['allocationFacts'][key]:
+                    raise BoardError('STORAGE_CHANGED', 'Orphan allocation record changed')
+            if _read_storage_json(directory / 'manifest.json') != fresh['manifest']:
+                raise BoardError('STORAGE_CHANGED', 'Orphan allocation manifest changed')
+            workspace.cleanup_remove(store.directory, fresh['manifest'])
 
 
 def inspect(store) -> dict:
@@ -341,9 +387,7 @@ def inspect(store) -> dict:
     native_owners = {}
     workspace_inputs = []
     with store.db.read() as connection:
-        reference_rows = _workspace_reference_rows(connection)
-        runs = connection.execute('SELECT * FROM workflow_runs').fetchall()
-        for run in runs:
+        for run in connection.execute('SELECT * FROM workflow_runs'):
             task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
             reasons = _zcode_reasons(store, connection, run, task, now)
             native_owners[hashlib.sha256(run['run_id'].encode()).hexdigest()] = (run['run_id'], reasons)
@@ -387,6 +431,17 @@ def inspect(store) -> dict:
                     if path.name not in ('goals', 'accounts'):
                         add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
     seen = set()
+    # Board knowledge is independent of whether physical ownership is proved.
+    # Rejected/borrowed allocations must not fall through to the orphan path.
+    recognized = set()
+    for _, _, manifest, retained, _, _ in workspace_inputs:
+        for recorded in (manifest, *retained):
+            root = recorded.get('checkoutRoot')
+            if isinstance(root, str):
+                recognized.add(Path(os.path.normpath(root)))
+            identifier = recorded.get('workspaceId')
+            if recorded.get('kind') == 'worktree' and workspace._workspace_identifier(identifier):
+                recognized.add(state / 'workspaces' / identifier / 'checkout')
     for run_id, revision, manifest, retained, reasons, sealed in workspace_inputs:
         try:
             allocation = workspace.resolve_allocation(state, manifest, retained)
@@ -404,20 +459,32 @@ def inspect(store) -> dict:
             # Invalid ownership never licenses a filesystem guess.
             continue
     workspace_root = state / 'workspaces'
+    orphan_inputs = []
     if private_dirs.linked_component(workspace_root) is not None:
         add('workspaces', workspace_root, ['linked-path'], orphan=True, runId=None)
     elif workspace_root.is_dir():
         for directory in sorted(workspace_root.iterdir()):
             path = directory / 'checkout'
-            if path in seen:
+            if path in seen or path in recognized:
                 continue
             if not (path.exists() or private_dirs.linked_component(path) is not None):
-                add('workspaces', directory, ['allocation-unproven'], orphan=True, runId=None)
                 continue
-            orphan = _orphan_workspace(store, directory, reference_rows)
-            reasons = orphan.pop('reasons')
-            orphan.pop('path')
-            add('workspaces', path, reasons, **orphan)
+            orphan_inputs.append(_orphan_workspace(store, directory))
+    pending = [item for item in orphan_inputs if not item['reasons']]
+    if pending:
+        from . import workspace_identity
+        with store.db.read() as connection:
+            references = _allocation_reference_sets(
+                _workspace_reference_rows(connection),
+                [(item['manifest'], item['allocationRequestId']) for item in pending],
+                mapping=workspace_identity.load_alias_map(connection))
+        for item, reasons in zip(pending, references):
+            item['reasons'].extend(reasons)
+    for orphan in orphan_inputs:
+        reasons = orphan.pop('reasons')
+        path = Path(orphan.pop('path'))
+        orphan.pop('allocationRequestId', None)
+        add('workspaces', path, reasons, **orphan)
     runtime_root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
     from ...home import default_state_dir
     foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()

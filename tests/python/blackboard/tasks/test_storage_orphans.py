@@ -3,27 +3,41 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sqlite3
 import threading
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from support import private_state_dir
 from hey_my_buddy.blackboard.tasks import storage, workflow, workspace, workspace_identity
 
 
 class StorageOrphanTests(WorkflowTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Reuse immutable Git input preparation, not boards or mutable checkouts.
+        # Existing private-state cleanup still verifies service/worker locks.
+        root = cls.enterClassContext(private_state_dir(prefix='storage-source-'))
+        cls.source_template = root / 'source'
+        cls.source_template.mkdir()
+        builder = cls()
+        builder.git(cls.source_template, 'init', '-q')
+        builder.git(cls.source_template, 'config', 'user.name', 'Storage test')
+        builder.git(cls.source_template, 'config', 'user.email', 'storage@example.invalid')
+        (cls.source_template / 'tracked.txt').write_text('input\n')
+        (cls.source_template / '.gitignore').write_text('ignored/\n')
+        builder.git(cls.source_template, 'add', '.')
+        builder.git(cls.source_template, 'commit', '-qm', 'private input')
+
     def setUp(self):
         super().setUp()
         self.workspace = workspace
         workflow._workspace_module = workspace
         self.repo = self.workdir('source').resolve()
-        self.git(self.repo, 'init', '-q')
-        self.git(self.repo, 'config', 'user.name', 'Storage test')
-        self.git(self.repo, 'config', 'user.email', 'storage@example.invalid')
-        (self.repo / 'tracked.txt').write_text('input\n')
-        (self.repo / '.gitignore').write_text('ignored/\n')
-        self.git(self.repo, 'add', '.')
-        self.git(self.repo, 'commit', '-qm', 'private input')
+        shutil.copytree(self.source_template, self.repo, dirs_exist_ok=True)
         self.board_instance = self.board()
         self.enterContext(patch.object(storage, 'process_inventory', return_value=([], [], True)))
 
@@ -227,6 +241,11 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(self.git(self.repo, 'for-each-ref', '--format=%(refname):%(objectname)',
                                  'refs/buddy/workspaces/' + manifest['workspaceId'] + '/'), refs)
         self.assertEqual({name: (parent / name).read_bytes() for name in records}, records)
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
+            replanned = self.board_instance.call('storage_plan', {})
+        scan.assert_not_called()
+        self.assertFalse(any(row['path'] in (str(checkout), str(parent))
+                             for row in replanned['candidates']))
         with self.board_instance.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations').fetchone()[0], 0)
@@ -428,7 +447,7 @@ class StorageOrphanTests(WorkflowTestCase):
         other.mkdir()
         planned = self.board_instance.call('storage_plan', {})
         rows = [row for row in planned['candidates'] if row.get('orphan')]
-        self.assertEqual(len(rows), 2)
+        self.assertEqual([row['path'] for row in rows], [str(unknown / 'checkout')])
         self.assertTrue(all(not row['eligible'] and 'allocation-unproven' in row['reasons'] for row in rows))
         self.apply(planned)
         self.assertEqual((unknown / 'checkout' / 'valuable.txt').read_text(), 'retain')
@@ -439,3 +458,145 @@ class StorageOrphanTests(WorkflowTestCase):
         ref = manifest['snapshot']['inputRef']
         self.git(self.repo, 'symbolic-ref', ref, manifest['snapshot']['stagedRef'])
         self.assert_retained(checkout, planned)
+
+    def test_absent_checkouts_and_host_owned_records_need_no_reference_scan(self):
+        root = self.directory / 'workspaces'
+        (root / 'empty').mkdir(parents=True)
+        request_only = root / 'request-only'
+        request_only.mkdir()
+        (request_only / 'request.json').write_text(json.dumps({'version': 1, 'requestId': 'pending'}))
+        host = self.submit(self.board_instance, request_id='host-owned', cwd=str(self.repo), kind='existing')
+        self.assertEqual(host['workspace']['kind'], 'existing')
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
+            planned = self.board_instance.call('storage_plan', {})
+        scan.assert_not_called()
+        self.assertFalse(any(row['category'] == 'workspaces' for row in planned['candidates']))
+        self.assertTrue(request_only.is_dir())
+        self.assertTrue((root / 'empty').is_dir())
+        self.assertEqual((self.repo / 'tracked.txt').read_text(), 'input\n')
+
+    def test_known_allocation_with_rejected_ownership_is_never_an_orphan(self):
+        submitted = self.submit(self.board_instance, request_id='known', cwd=str(self.repo), kind='worktree')
+        checkout = Path(submitted['workspace']['path'])
+        manifest = json.loads((checkout.parent / 'manifest.json').read_text())
+        before = self.board_instance.call('storage_plan', {})
+        row = next(row for row in before['candidates'] if row['path'] == str(checkout))
+        self.assertFalse(row.get('orphan', False))
+        self.assertFalse(row['eligible'])
+        with patch.object(workspace, 'resolve_allocation', side_effect=storage.BoardError('WORKSPACE_CHANGED', 'rejected')):
+            refused = self.board_instance.call('storage_plan', {})
+        self.assertFalse(any(row.get('orphan') and row['path'] == str(checkout) for row in refused['candidates']))
+        self.apply(refused)
+        self.assertTrue(checkout.is_dir())
+        # Retained board provenance also protects an allocation whose current
+        # manifest alone no longer proves the physical ownership.
+        with self.board_instance.store.db.write() as connection:
+            current = dict(manifest, kind='existing')
+            current['manifestSha256'] = workspace._sha(workspace._json({k: v for k, v in current.items() if k != 'manifestSha256'}))
+            connection.execute('UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?',
+                               (json.dumps(current), submitted['runId']))
+        changed = dict(manifest, access='read')
+        changed['manifestSha256'] = workspace._sha(workspace._json({k: v for k, v in changed.items() if k != 'manifestSha256'}))
+        (checkout.parent / 'manifest.json').write_text(json.dumps(changed))
+        self.assertIsNone(workspace.resolve_allocation(self.directory, current, [manifest]))
+        unproven = self.board_instance.call('storage_plan', {})
+        self.assertFalse(any(row.get('orphan') and row['path'] == str(checkout) for row in unproven['candidates']))
+        self.assertTrue(checkout.is_dir())
+
+    def test_planning_streams_rows_and_parses_each_field_once_for_multiple_orphans(self):
+        first, checkout, _ = self.orphan()
+        request = json.loads((checkout.parent / 'request.json').read_text())
+        second = workspace.prepare(self.directory, 'second-orphan', request['intent'])
+        body = json.dumps({'note': 'unique retained unrelated structured evidence'})
+        with self.board_instance.store.db.write() as connection:
+            connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('private',?,?)",
+                               (body, '2026-01-01T00:00:00Z'))
+        original = json.loads
+        calls = []
+        def counted(value, *args, **kwargs):
+            if value == body:
+                calls.append(value)
+            return original(value, *args, **kwargs)
+        with self.board_instance.store.db.read() as connection:
+            read_rows = []
+            def streamed(sql):
+                for row in connection.execute(sql):
+                    read_rows.append(sql)
+                    yield row
+            rows = storage._workspace_reference_rows(SimpleNamespace(execute=streamed))
+            self.assertIs(iter(rows), rows, 'reference rows must stream, never materialize all tables')
+            next(rows)
+            self.assertEqual(len(read_rows), 1, 'the first row must not preload historical facts')
+        with patch.object(storage.json, 'loads', side_effect=counted):
+            planned = self.board_instance.call('storage_plan', {})
+        self.assertEqual(len(calls), 1, 'one planning pass must parse a retained JSON field once')
+        for manifest in (first, second):
+            row = next(row for row in planned['candidates'] if row['path'] == manifest['checkoutRoot'])
+            self.assertTrue(row['eligible'], row['reasons'])
+
+    def test_directory_identity_is_bound_only_to_original_request(self):
+        _, checkout, planned = self.orphan()
+        request_path = checkout.parent / 'request.json'
+        original = json.loads(request_path.read_text())
+        other = workspace.prepare(self.directory, 'other-real-allocation', original['intent'])
+        other_checkout = Path(other['checkoutRoot'])
+        # Both allocations are genuine, with valid manifests, pinned inputs,
+        # direct refs and Git locks. Only the request-derived directory binding
+        # is broken by giving the second allocation the first original request.
+        request_path_other = other_checkout.parent / 'request.json'
+        request_path_other.write_text(json.dumps(original))
+        self.assertEqual(json.loads(request_path_other.read_text()), original)
+        workspace._validate_manifest(other)
+        proof = workspace.cleanup_inspect(self.directory, other)
+        self.assertEqual(proof['reasons'], [])
+        for suffix in ('input', 'staged', 'retained/input', 'retained/staged'):
+            self.assertEqual(self.git(self.repo, 'show-ref', '--verify', '--hash',
+                                     'refs/buddy/workspaces/' + other['workspaceId'] + '/' + suffix),
+                             other['inputCommit'] if suffix.endswith('input') else other['snapshot']['stagedCommit'])
+        inspected = self.board_instance.call('storage_plan', {})
+        row = next(row for row in inspected['candidates'] if row['path'] == str(other_checkout))
+        self.assertFalse(row['eligible'], 'a different request-derived directory must never be reclaimable')
+        self.assertIn('allocation-unproven', row['reasons'])
+        self.assertTrue(other_checkout.is_dir())
+        first_row = next(row for row in inspected['candidates'] if row['path'] == str(checkout))
+        self.assertTrue(first_row['eligible'], first_row['reasons'])
+
+    def test_late_reference_after_physical_proof_is_rechecked_in_writer_transaction(self):
+        _, checkout, planned = self.orphan()
+        original = storage._orphan_workspace
+        inspected = []
+        def insert_after_proof(*args, **kwargs):
+            fresh = original(*args, **kwargs)
+            inspected.append(fresh['path'])
+            if len(inspected) == 2:
+                # Apply inventory and physical proof have both already completed.
+                # An independent committed reference must still win before the
+                # authoritative writer fence and actual checkout removal.
+                with self.board_instance.store.db.write() as connection:
+                    connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('private-late',?,?)",
+                                       (json.dumps({'retained': {'path': str(checkout / '..' / 'checkout')}}),
+                                        '2026-01-01T00:00:00Z'))
+            return fresh
+        with patch.object(storage, '_orphan_workspace', side_effect=insert_after_proof):
+            result = self.assert_retained(checkout, planned)
+        self.assertEqual(inspected, [str(checkout), str(checkout)])
+        self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])
+        self.assertTrue(checkout.is_dir())
+
+    def test_late_allocation_record_change_after_physical_proof_is_retained(self):
+        _, checkout, planned = self.orphan()
+        original = storage._orphan_workspace
+        calls = []
+        def change_after_proof(*args, **kwargs):
+            fresh = original(*args, **kwargs)
+            calls.append(fresh['path'])
+            if len(calls) == 2:
+                path = checkout.parent / 'request.json'
+                changed = json.loads(path.read_text())
+                changed['requestId'] = 'different-original-request'
+                path.write_text(json.dumps(changed))
+            return fresh
+        with patch.object(storage, '_orphan_workspace', side_effect=change_after_proof):
+            result = self.assert_retained(checkout, planned)
+        self.assertEqual(calls, [str(checkout), str(checkout)])
+        self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])

@@ -23,6 +23,8 @@ R-D 固定产物：最终 artifact `2e1aed35-2556-47df-a5d6-e370c6fefd11`、源�
 
 R-C 关联返修 run `24db8ed8-6fed-4f06-853f-6712378cad76`，首次路由全部配置字段省略，基线 `3d7fd3d6`。供应方 GLM-5.3/max 非可重试 429/1310，原生回合无产物且 self/descendants 均 confirmed；按既有例外在原 run 完整配置 codex/openai/gpt-6.1-sol/high continue（command hr-cache-continue-rate-limit-1310-r1），当次目录 enabled/available/quotaExhausted=false，未改设置。原始失败保留 ignored `host-review-repair-20261010/hr-cache-round1-limited/`；只写计划的五个测试文件，真实缓存命中副本与 attempt 单独标记各自要能被目标移除击穿。
 
+R-A 固定产物：artifact `e8dfed17-203b-4824-85fd-747bec917cec`、源码 `1a5b2489`，仅 storage.py 与 test_storage_orphans.py。Host 私有根独立复跑 33 项、退出 0（148.780 秒），七处目标移除均触发 AssertionError、无 error、退出 1：缺检出候选、已认识分配、目录/request 绑定、无候选不扫描、跨候选重复解析、整库实体化、写围栏权威重查。旧 27 编号保留、错误空目录期望已纠正、新增 6；原残留引用、损坏 JSON、真实 Git/ref/锁/收据/竞态断言均保留。流水游标和共享候选 token/祖先路径索引复用 SQLite/JSON，不加 schema。任意保留字段仍需全事实扫描，时间随保留字节数线性；应用在 allocation lock 内先做 Git 证明、再在 writer fence 重新扫权威引用并重查物理记录到实际移除结束。全规模耗时/RSS/围栏测量待 R-F，当前整合不等于微任务验收。Worker 当前原 27 单模块同轮 cProfile 从 132.741 到 116.386 秒，准备/收尾从 5.215 到 1.752 秒；不把不同负载下 Host 148.780 秒或原完整 177 秒当同条件性能改善。固定材料在 ignored `tmp/console-ui-and-board-host/review-hr-storage/host-review-round2/`。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
