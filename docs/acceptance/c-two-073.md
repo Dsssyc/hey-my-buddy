@@ -230,3 +230,24 @@ Host自己的顺序修正引入了凭据清理失败后的第二次机会丢失�
 余下失败涉及原唯一写入范围之外的大批夹具和调用方。本计划要求“明显超出计划则停止说明”；本次先登记可审查的补充范围，暂停扩大实施：RPC私有state传递及Mock/stub接口适配；其余原生角色/工具/用量夹具的0700状态域初始化；同一测试进程同时使用多个不同state的并发场景隔离；安装版ZCode离线app-server关闭与Host原生回合停止的独立定位；console测试catalog显式环境与host-preview开发依赖前提。每一份修改仍需独立固定交付/聚焦/去掉目标行为红灯，默认经路由，公共文件由Host整合。未证明的controller失败不能统称为状态根或机器负载，不能弱化shutdown与工具/用量断言。
 
 用户答复“先交 Claude Code Host 复核失败记录”。固定的 26 模块失败清单、原始证据摘要、后续聚焦范围与未定位项已整理在 [c-two-failure-review.md](c-two-failure-review.md)；补充实施继续暂停，等待用户转达复核意见。本次只整理记录，未提交新的修复微任务、未重跑完整检查、未运行付费冒烟。
+
+## Claude Code Host 复核后的补充实施
+
+Host 在 `3cca4505` 归档副本、0.7.4 环境、私有检查根和空临时 HOME 中单独重跑 25 个模块（未跑 `test_host_workflow_worker`），22 个稳定复现。以下是用户转达的 Host 证据，尚不是本轮 Host 自行重跑所得：七份测试缺 `state_dir` 或 Mock/桩不接受参数；十余份原生角色的 0755 状态目录被本项目新增权限要求拒绝；问询对端与 console 夹具的隔离被破坏。先前未定位项目据此有了具体原因，不再用机器负载解释这些失败。ZCode、Claude 取消文件及安装版 ZCode 单独通过，初跑仍保留；`test_blackboard` 整文件 57 项由 Host 单独通过。
+
+偏离登记：`9b73fe42` 的 `worker.py` 清理顺序修正是 Host 在整合中自己引入回归后的代码修复，超出一句话记录更正；Claude Code Host 已接受。原两处点变异及首次失败保留。隔离越界登记：初跑的 `test_inquiry_owner` 在日常 `~/.local/share/hey-my-buddy/state/ipc` 创建了 `.gate` 与 `.gate.marker`；console 子进程丢失模型目录夹具，实际执行本机 Claude 与 Codex，Host 空 HOME 复现出现 `.claude.json`、`.claude/backups` 与 `.codex/tmp/arg0`。这些是此前未声明的测试行为；日常 `ipc` 不回收、不改动，修复只验证新自建私有材料。
+
+当前规则按用户决定收紧归属并放宽误加的父目录权限：内部角色、Worker 运行时及测试对端显式取得状态根，缺失则失败，不能解析默认状态目录；只有面向 Host 的 CLI 可以解析默认状态目录。状态目录本批不新增权限要求。`<state>/ipc` 仍以 0700 创建，已有端点目录的所有权与写入权限交给 C-Two 校验，其拒绝映射为现有 BoardError；项目保留链接与 `..` 防护。库接受 0755 父目录及符合规则的端点目录，不把“必须 0700”写成库的要求。
+
+| 微任务 | 唯一可写范围 | 顺序与验收 |
+| --- | --- | --- |
+| 2-A 内部域与端点规则 | `src/hey_my_buddy/protocol/rpc_config.py`、`src/hey_my_buddy/buddy/harnesses/c_two_live.py`、`tests/python/protocol/test_rpc_config.py`、`tests/python/buddy/harnesses/test_c_two_live.py`、`tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`、`tests/python/buddy/harnesses/test_inquiry_owner.py`、新 `docs/acceptance/c-two-domain-repair.md` | 最先实施；复用原生 set_local_endpoint 校验，禁止内部缺根时回退；问询 peer 显式私有根。R-01～R-04。角色与 Worker 公共接线缺口由 Host 统一整合，不改注册表或 schema。 |
+| 2-B 测试子进程隔离 | `tests/python/support.py`、`tests/python/console/test_console.py`、`tests/python/cli/test_support_cleanup.py`、`tests/python/blackboard/service/fixtures/daemon_with_catalog.py`、新 `docs/acceptance/c-two-fixture-isolation.md` | 与 2-A 独立同时实施；显式传递本测试的模型目录夹具，继续清除继承的权限、运行时与凭据变量；真实程序替换为自建拒绝/记录探针。R-05、R-06。 |
+| 2-C RPC 夹具适配 | 七份 `tests/python/` 文件：`cli/test_cli.py`、`cli/test_cli_views.py`、`cli/test_host_cli.py`、`blackboard/service/test_liveness.py`、`blackboard/service/test_harness_startup.py`、`buddy/runtime/test_live_lifecycle_integration.py`、`blackboard/service/test_daemon.py`；以及 `tests/python/support.py`、新 `docs/acceptance/c-two-rpc-fixtures.md` | 2-A/2-B 整合后开始；只补参数与 Mock 私有状态根，不改产品，不减少断言或既有编号。R-07。 |
+| 2-D 并发域夹具 | `tests/python/buddy/harnesses/zcode/test_zcode_checkpoint.py`、新 `tests/python/buddy/harnesses/zcode/fixtures/checkpoint_domain.py`、新 `docs/acceptance/c-two-checkpoint-isolation.md` | 2-A/2-B 整合后，与 2-C 独立实施；两个状态域各有自建进程，复用现有原生模拟夹具，保留两份并发用例的断言与编号。R-08。 |
+
+R-01：缺状态根并清除相关环境时，真实内部入口失败，空私有 HOME 的默认路径未出现；去掉拒绝或恢复默认回退应使目标断言失败。R-02：真实 SDK 接受 0755 状态目录下项目新建的 0700 ipc，不修父目录；恢复旧父目录权限拒绝应失败。R-03：端点目录权限与所有权拒绝由 SDK 实际触发并映射；链接与 `..` 仍拒绝，去掉对应保护应失败。R-04：问询 peer 的真实注册与连接同在显式私有域，空 HOME 未改；移除其根传递应失败。R-05：console 的真实私有服务取得显式模型目录夹具，不执行真实原生 CLI；去掉夹具传递应由探针或目标断言抓住。R-06：检查环境与子进程清除继承身份/凭据/运行时，但保留显式私有夹具，检查进程不解析默认状态目录；分别去掉保护确认失败。R-07：七份测试逐文件聚焦通过，既有编号集合不减少。R-08：两个进程各自使用不同私有域且问询不串线，恢复单解释器跨域应使目标断言失败。
+
+微任务都由路由首次选择，不填四项配置；各自隔离检出，公共值、角色与注册表仍归 Host。Worker 不删除任何对象，不使用 stash，不新建、切换、移动或删除分支/标签，不提交，改动由黑板封存；短任务根在开始时记录，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指入其中，材料与变异副本在根内，交付后 Host 按确切路径回收。只跑受影响测试，固定交付后 Host 独立检查与目标行为变异；范围内缺陷回原 run continue，小的记录更正由 Host 登记。日常服务失败或 Too many open files 即停止报告，不重启替换。
+
+Host 在本检出执行 `npm --prefix apps/console ci` 准备 AGENTS 要求的开发依赖，不改前端源码与锁。2-A/2-B 收齐整合后才开始 2-C/2-D；最终合入最新 core、核对全部编号变化、保留原失败后，避开其他会话重测试高峰，以默认并行数重跑一次完整检查。疑似负载失败保留初次结果，空闲后单文件重跑再判断；四个付费冒烟仍须用户逐次批准，未批准不运行。
