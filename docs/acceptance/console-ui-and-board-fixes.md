@@ -579,3 +579,43 @@ core 仍为用户已确认停止变动的 12eb4fcd，已在本分支祖先中，
 | PC-06 | 最终源码前端全量、构建和全新构建字节核对；顺序运行 console/install、仓库卫生与读取文档的测试，不跑 Python 全量；只改记录后只补卫生与文档读取测试。 |
 
 证据放在 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-edge-and-decorations-20261010/，原 tmp/ 全保留。对外可见变化是开头标记完整显示、文字按符号留白而在狭段省略、选择边框不压住符号；不新增界面负担。继续停在本批范围内，全部完成后等 Claude Code Host 验收。
+
+PC-EDGE 的减法补充：同一开头密集显示路由叉号和执行结束圆标会造成重复叠饰。短路由的真实可用宽度不足以容纳叉号及内距时，省略中央叉号，保留既有失败红边框、14px 最小识别形状与完整 title/aria；宽路由照旧。此为本次图形拥挤范围内的明确更正，旧的“一毫秒路由必须有中央叉号”断言随之更正，补短/长路由边界和移除省略行为时的失败验证。
+
+PC-03 同时把 routing-cross 沿用其它装饰的 pointer-events:none，使透明点击盒不吞掉邻近圆标；宽路由保留叉号及父按钮点击，端点圆标仍可点击。Host 另以宽路由真实区间与短终止端点重合的私有投影场景核对左/中/右命中；不新增命中或碰撞机制。
+
+PC-EDGE R1 已固定产物 f23236dc / 86258179-47d7-4e02-ba82-414b4a4d404f，Host 七文件 182 项通过。私有 edge 短路由场景起点五个符号均无标题遮挡且左/中/右命中为 true；宽路由场景 failed 圆标却为 true/false/false，后两点 top 为 routing-cross，故在原 run 上 continue 返修，四配置字段及 configuration 全省略。先前 inquiry 缺 inquiryId 被 INVALID_ARGUMENT 拒绝；补齐后虽 queued，但 installed Codex 的 live bridge 不可用，并未送达，未把 queued 当成已处理；明确缺陷与修法以本次 continue 输入为准。宽路由失败截图与 geometry、初版夹具及日志全保留。最终夹具锚点在启动时固定，避免周期读取让合成起点随 observedAt 移动，且清除模板复制时与成功状态不符的旧 error 文本；这些只是 ignored 夹具更正，不修改产品状态或时间事实。
+
+
+PC-EDGE 首次路由 run 6a116761-6123-4cfe-a8a6-33ebdca048c0 到 zcode/zai-api/GLM-5.3/max；供应方不可重试 429/1310，无封存产物，根及后代 shutdown confirmed。初次 get/result/await 固定在本轮证据根 r1-quota-*，按既有用户例外在同一 run 完整配置 codex/openai/gpt-6.1-sol/high continue（pc_edge-quota-recovery-r1，workflow revision 4→5）。原范围、原宏任务与控制权保留；没有安装、修改凭据或更换日常 Worker。R1 的范围内点击缺陷随后继续在原 run 返修（revision 8→9），configuration 及四配置字段全部省略，未重路由。
+
+R2 固定 output artifact 777d7127-f08e-403f-b315-eaa3a2d4f2b1 / commit d0b0fb5c544ba324f4e5db7733e0cbfd77600c96，十文件累计 patch SHA-256 为 15f2dc0af15b5b52b70b96c9aa7c7193394c827ce6cebc526d3ed3d1e4c348ec。相对 R1 仅 styles.css 与 timeline-layers.test.tsx 变化，另八个路径逐字节相同；R2 只给已有 routing-cross 设置 pointer-events:none 并加五状态的命中保护测试。Host 固定文件校验、Git blob 比对、累计 patch git apply --check 都通过，十个整合路径与 R2 blob 相同。源码整合 3991847d，发行产物提交 2f3f9285ded8c421f897cd840c19eb6cc39c7690；固定证明为 review-pc-edge/r2/fixed-source-proof.json 与本轮 integrated-source-proof.json。Worker 临时材料 pc-edge-a659272f、pc-edge-pointer-24308f06 两个精确目录均已复制到 review-pc-edge/r2/，原 R1 也保留。
+
+Host 独立在 R2 固定源码上运行七个受影响文件，187 项、exit 0、12.899 秒。首次 Host 包装命令误写相对 runner 路径而 exit 2，没有运行测试；改用确切绝对路径并从固定检出执行才计为通过。R1 的八处独立变异分别使 18、20、9、3、10、5、4、1 项断言失败；这些行为在 R2 的八个不变文件与 CSS 差异上复核仍保留，不重跑无关变异。R2 另独立去掉 routing-cross 的 pointer-events:none，U6.6 五状态全部 AssertionError、exit 1；恢复产物的七文件验证已通过。host-mutation-summary.json、host-pointer-mutation-summary.json 与原始日志完整保留。Worker 的 101 项定向验证、类型检查与自身变异只作交付证据，未代替上述 Host 检查。
+
+前端测试编号 931→958，净新增 27，删除 0；全名比较为 37 新名字、10 旧名字退出。十处对应更名是短 failed 路由省略叉号、装饰图层上下关系、六个按新内距推导的 execution/host 阈值、U5.4 的符号留白、U6.4 的普通/terminal 内距，原用例仍在。新增涵盖前留白映射、默认零留白、刻度真实像素、selected 缩放锚点、读数线/事件 guide、终止 label 阈值、短路由边界、五状态透明点击盒以及 fit/+2/max 的开头符号。逐个全名与对照保留在 frontend-inventory-before.json / frontend-inventory-delta.json / frontend-final-report.json。
+
+真实浏览器使用最终已提交资产 index-rFE2-AhM.js / index-C63_rCyG.css，私有预览 http://127.0.0.1:64116/，ready.json 绑定 2f3f9285、三个合成宏任务、63 个合成 run，subprocessAttempts=0。normal 模式三个宏任务 fit/+2/max 共九组文字范围核对均无 text/text 或 text/end-mark 相交，普通 label 左 16px、右 8px。edge-glyphs 明确投影开头 ✓、短失败 ✕、零时长取消 ⊘、unknown ? 与验收 !，三个宏任务同样 fit/+2/max 各有截图与几何；以开头标记作缩放锚点，各五个 glyph 的 sticky 标题遮挡为 0、左/中/右十五处命中都为 true，短路由中央叉号省略、短等待文本为空、后续等待正常显示。所有投影只是私有 UI 夹具，未当作真实原生执行或时间事实的证据。
+
+edge-glyphs-wide-route 采用 R1 失败的 99px 路由及 1px 执行区间，最终浅色 selected/键盘 focus 与深色 focus/run-member 的圆标三处命中均为 true，失败圆标实际点击选择执行片段，focus-visible 与 hover 在 DOM 中为 true。路由自身透明装饰不接点击，父按钮仍为 auto；在两段真实等待投影的露出间隙实际点击得到 routeSelected=true，按 Enter 打开“路由依据”详情。最初直接点路由的中心及 85% 位置得到等待片段，因为夹具的两段等待本来覆盖那里；该失败测量保留，未虚构为路由点击成功。准确命中证明为 final-routing-gap-click-proof.json；键盘打开详情见 final-route-keyboard-open.txt / jpg。浅/深色完整截图及 read-only elementsFromPoint 不用 jsdom 的 fireEvent 代替。
+
+操作过程里先在没有选中开头锚点时直接放大，浏览器按现有中心锚点水平滚动，使开头时间在可视区域之外；另一次 Tab 跳到后续等待也令浏览器滚动。两个未命中的 raw geometry 保留，不计为开头标记验收。随后返回 fit、选择开头，再放大，核对实际可见的开头边界；没有改源码或拦截正常滚动来通过。两次浏览器动作出现工具 CDP 超时，重新读取实际 DOM 后再决定继续；关闭详情实际已完成，不重复点击。实际 viewport 1058×595，另核对列表收起后的宽轨道；未声称做过本轮 125% 原生缩放或不同窗口尺寸。最终浏览器 error 日志为空，日常看板没有安装本批资产。
+
+截图留在本轮 ignored 证据根：final-normal-macro[1-3]-light-[fit/plus2/max].jpg，final-edge-macro*-*-text.jpg，final-wide-macro1-light-max-keyboard-focus.jpg，final-wide-macro1-dark-max-keyboard-focus-text.jpg，final-wide-macro1-dark-max-run-member.jpg，以及 final-short-delivery.jpg。最终时间轴恢复浅色，预览保留；Host tmp/、原失败截图、日志和夹具均未清理，不提交图片。对外可见变化为起点标记旁的轨道留白、普通文字左侧 16px 内距、terminal 右侧 16px 内距、窄路由省略重复叉号、装饰低于符号与文字、叉号透明盒不截邻近圆标的点击；不新增 UI 元素、图层或设置。
+
+
+最终门槛全部绑定 2f3f9285ded8c421f897cd840c19eb6cc39c7690，整合后顺序执行（没有 Python 完整检查）：
+
+| 命令 | 实际结果 |
+| --- | --- |
+| npm --prefix apps/console test（附 default/json reporter 留证） | 66 文件、958 项、失败 0、exit 0，32.379 秒，frontend-final.log/json 与完整 JSON reporter 留存。 |
+| npm --prefix apps/console run build | tsc --noEmit 与 Vite exit 0，整合源码 3991847d 构建 1.054 秒；产物在 2f3f9285 提交。 |
+| 全新 git archive 2f3f9285 的 apps/console 与 docs/assets，npm --prefix apps/console run build | 初始发行输出不存在，exit 0，0.979 秒；四个资产与最终提交 Git blob 逐字节一致，fresh-build-byte-equality.json 保存字节与 SHA-256。 |
+| 私有 runner 选择 tests/python/console、tests/python/install、cli.test_repository_hygiene、cli.test_skill_workflow | 27 文件、328 项、skip 0，默认 4 并行，exit 0，135.457 秒；private teardown 无失败，完整模块清单与汇总在 python-targets-summary.json。 |
+
+所有门槛复用已存在 Node 24.21.0、console 依赖与本分支 .venv；清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，使用私有状态和运行时根。Python 运行期间机器 load averages 约 25/30/32，所选测试仍全部通过；没有负载疑似失败、单文件重跑或额外完整检查。没有停止、重启、替换日常服务/Worker，没有安装或升级日常运行时，没有操作登录与凭据；除本次委派外没有模型调用。core 12eb4fcd 仍为本分支祖先，用户已说明只改文档且停止变动，不重复整合。
+
+
+Host integration int-879fe6c8-9742-4692-a5c3-3b1153a086f2 绑定最终 artifact、2f3f9285 目标与十个 Worker 路径；Host 自己构建而变化的五个资产路径（旧/新 hash 文件和 index.html）由 hostPaths 单独登记，未伪归 Worker。acknowledge accepted 从 revision 13→14，attention 已结清；随后 cleanup-plan 因 revision 变化被拒，重读为 revision 15/planned/eligible。一次 apply 缺 confirmPath 被 INVALID_ARGUMENT 拒绝；补齐确切路径后再遇 REVISION_CONFLICT，重新 get 为 revision 16、plan cln-2d913b22-7eae-4bdc-b9af-94c08edea9ff/applied，确切 ~/.local/share/hey-my-buddy/state/workspaces/ws-3ddc7d0e0afa70631b5b31d31ffffe57/checkout 已不存在。未重复删除或断言清理施行主体；R1 的 ws-84c18f5531a91df950b53f46de8019ba/checkout 也已不存在。manifest/input/output 与所有 Host 复制证据仍保留。宽路由的 Enter 打开另补 final-wide-route-keyboard-loaded.txt / jpg，实际“路由依据”详情已读取完成；真实取值不混同模拟点击回调。
+
+本 Host 的微任务产物验收仅代表上述固定整合与验证，整批仍等 Claude Code Host 验收。分支 socu/console-ui-and-board-fixes 不推送；本 Host 工作树与 tmp/ 证据保留。末次只改记录，前端全量及所选 Python 门槛不重复；提交记录后补跑仓库卫生与读取文档的测试。
