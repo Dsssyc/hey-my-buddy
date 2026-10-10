@@ -1,11 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, createApi, errorText, isSessionExpiredRefusal } from "./api";
 import type { ConsoleApi } from "./api";
 import { createAuthorityLatch, sessionCanWrite } from "./console-session";
 import { QUEUE_POLL_MS } from "./use-editor";
+import { FILTER_DEBOUNCE_MS } from "./use-profile-history";
+import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ConsoleSession, Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
 
@@ -176,7 +178,25 @@ async function readSnapshotOnForeground(snapshot: ConsoleApi["snapshot"]) {
   }
 }
 
-afterEach(() => { cleanup(); window.location.hash = ""; document.documentElement.dataset.theme = ""; });
+// These cases start with default model filters and restore only the keys they own.
+const modelViewKeys = ["models.enabledOnly", "models.showUnavailable"]
+  .map(name => VIEW_PREFERENCE_PREFIX + name);
+let savedModelViews: Array<string | null>;
+beforeEach(() => {
+  savedModelViews = modelViewKeys.map(key => window.localStorage.getItem(key));
+  for (const key of modelViewKeys) window.localStorage.removeItem(key);
+});
+
+afterEach(() => {
+  cleanup();
+  modelViewKeys.forEach((key, index) => {
+    const saved = savedModelViews[index];
+    if (saved === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, saved);
+  });
+  window.location.hash = "";
+  document.documentElement.dataset.theme = "";
+});
 /** Builds one authenticated-snapshot envelope; `null` leaves the field out. */
 function envelope(consoleSession: unknown, include = true) {
   return {
@@ -664,6 +684,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
+    // Let restored-history reads become reachable before checking the default fixture's gate.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, FILTER_DEBOUNCE_MS + 50)); });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "断线草稿");
     await readSnapshotOnForeground(f.api.snapshot);
