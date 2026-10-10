@@ -37,3 +37,7 @@ Worker 开始时建立短的系统临时任务根、创建时记下确切路径�
 清除继承 BUDDY_*、ANTHROPIC_*、C2_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，只用已确认归属的空 HOME、状态与运行时根；默认目录测试仅在私有 HOME 中暂时不设置 BUDDY_STATE_DIR，服务始终用明确的同一私有目录启动。模型目录必须是固定夹具，原生 CLI 用 sentinel 或已存在模拟夹具，不发现真实账户或调用真实模型。依赖只在任务根的 uv 环境使用已核对公开锁定材料，不安装/升级/重启/替换日常服务、Worker 或运行时，不改日常配置、数据或登录，不读凭据内容。Too many open files 或日常委派服务故障出现立即停止报告。
 
 Host 核对固定补丁与风险接缝、实际聚焦测试、目标故障注入和编号后，整合登记并签收微任务；最终代码默认并行数运行一次 `uv run --frozen python -m hey_my_buddy.cli.checks`，保留历史失败。只改记录后只跑卫生，未改前端不跑前端套件。整合方已有 11 文件 218 项及两次 62 秒连接探针、三次已批准真实冒烟保留其原提交绑定，不为记录变化重跑。完成后提交记录并停在整批验收关口；微任务签收不等于整合 Host 验收。
+
+## 路由与同 run 恢复登记
+
+3-A run `ef9677e7-df3e-4f57-b03b-4c7add95b85f`，微任务基线 `9e45e890e0c249250621a12d165001c9c76d7e8e`。首次四项配置全部省略，路由决定 `dec-7705e392-3073-4d96-9576-986a5c4eca38` 选 ZCode/zai-api/GLM-5.3/max；实际 nativeFailure.attribution 为 provider rate_limited、statusCode=429、providerErrorCode=1310、retryable=false，两层停止确认，没有固定修复交付。按本批既有许可，用完整 configuration 与独立 reason 在原 run continue 到 Codex/openai/gpt-6.1-sol/high（曾完成本批 C-Two 实施与夹具返修），revision 5 已排队，范围与规则不变。没有修改用户路由设置或为 ZCode 重试相同限流回合；既有三个付费冒烟和用户暂不调用 ZCode 的决定不改写，微任务使用模型另按本 run 记录。请求、原始失败、路由与恢复响应保存在 `tmp/c073-host/public-state-repair*`。
