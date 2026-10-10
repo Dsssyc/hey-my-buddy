@@ -31,6 +31,8 @@ R-B 的 E 计时没有冒充改善：Worker 原 39 项 106.834→120.568 秒，�
 
 R-D 真浏览器：用户协助打开 Chrome 私有页后，Host 以新的唯一私有端口隔离其他标签；原生后台标签菜单重载，约 578 秒仅一次 snapshot 200、无周期请求，切回后恢复 304/3 秒节奏。输入工具到真实可见性事件的延迟不归为服务端耗时；“立即一次”由 fake clock 的明确计数/时间边界与目标失败守住。版本明暗×1280/760 像素四组均默认每份软件版本/安装时间两项、原生 details 收起、无横溢出；Enter/Space 独立展开收起不增加 API 读取。安装份用现有 VersionInfoTests READY 元数据配方的私有夹具、从未执行其标记解释器；初始 pointer 缺 owner-private mode 如实显示未记录，随后复用 launcher.write_active_runtime 正确写私有指针，不是安装。忽略图片和 DOM/请求证据在 `tmp/console-ui-and-board-host/host-review-repair-20261010/screenshots/` 与 `rd-visibility-single/`，初始工具焦点/错误矩阵保留但不充当宽窄/隐藏通过证据。
 
+R-E 顺序起点已具备：R-B 的身份夹具接口 `74059ff2` 已由 Host 核对、整合为 `778fa48f`，该接口只对 identity/migration 类 opt in、其他派生类仍原初态。R-E 以此固定输入启动，只写其六个测试文件；R-B 同 run 的准备成本补充与这六个文件互斥。若 R-B 后续改变共享夹具接口，Host 先核对差异，并在原 R-E run 继续受影响修正，最终整合后再做交叉验证。R-B provisional integration-record 初次遇 revision race，重读 11 后标准重试返回 verified `int-cb19f582-57b7-49d1-9ce9-52482ba3c65f`；未重启进程。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
