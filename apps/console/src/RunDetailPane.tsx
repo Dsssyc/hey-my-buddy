@@ -7,7 +7,6 @@ import type { TimelineRow } from "./objective-types";
 import { TaskDetails } from "./TaskDetails";
 import { taskTitle, titleTooltip } from "./task-state";
 import type { SectionId } from "./objective-display";
-import { useGlobalRefresh } from "./global-refresh";
 
 export type DetailTarget = {
   runId: string;
@@ -51,23 +50,18 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   const [remote, setRemote] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  useGlobalRefresh(async () => {
-    const value = await api.task(target.runId);
-    if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== target.runId || !("task" in value)) throw new Error("委派详情不完整。");
-    setRemote(value as Task);
-    setError("");
-  }, active);
   useEffect(() => {
     let current = true;
+    const controller = new AbortController();
     setRemote(null); setError("");
-    api.task(target.runId).then(value => {
+    api.task(target.runId, controller.signal).then(value => {
       if (!current) return;
       if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== target.runId || !("task" in value)) {
         throw new Error("委派详情不完整。");
       }
       setRemote(value as Task);
     }).catch(reason => { if (current) setError(errorText(reason)); });
-    return () => { current = false; };
+    return () => { current = false; controller.abort(); };
   }, [api, target.runId, attempt]);
   const delegationTitle = remote
     ? { text: rowTitleFor?.(remote.runId) ?? taskTitle(remote).text, full: rowTitleFor?.(remote.runId) ?? titleTooltip(taskTitle(remote)) }
@@ -88,9 +82,13 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
     {remote
       ? <TaskDetails key={`${remote.runId}:${target.openRevision ?? 0}`} task={remote} snapshot={snapshot} api={api} refresh={refresh}
         selectTask={runId => { if (runId) onNavigate(runId); }} active={active}
-        onTaskUpdate={next => setRemote(previous =>
-          previous?.runId === next.runId && previous.revision === next.revision
-          && previous.workflow?.revision === next.workflow?.revision ? previous : next)}
+        onTaskUpdate={next => setRemote(previous => {
+          if (next.runId !== target.runId) return previous;
+          if (previous?.runId === next.runId && (next.revision < previous.revision
+            || (next.workflow?.revision ?? 0) < (previous.workflow?.revision ?? 0)
+            || previous.revision === next.revision && previous.workflow?.revision === next.workflow?.revision)) return previous;
+          return next;
+        })}
         hideBackButton initialSection={target.section} routingDecisionId={target.decisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} />
       : error
         ? <div className="detail-placeholder">

@@ -1,8 +1,9 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
+import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ModelConcurrencyEntry, Profile, Snapshot, WriterGrant } from "./types";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -111,8 +112,22 @@ function concurrencyInput() {
   return screen.getByRole("spinbutton", { name: "并发上限" }) as HTMLInputElement;
 }
 
+// These cases start with default model filters and restore only the keys they own.
+const modelViewKeys = ["models.enabledOnly", "models.showUnavailable"]
+  .map(name => VIEW_PREFERENCE_PREFIX + name);
+let savedModelViews: Array<string | null>;
+beforeEach(() => {
+  savedModelViews = modelViewKeys.map(key => window.localStorage.getItem(key));
+  for (const key of modelViewKeys) window.localStorage.removeItem(key);
+});
+
 afterEach(() => {
   cleanup();
+  modelViewKeys.forEach((key, index) => {
+    const saved = savedModelViews[index];
+    if (saved === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, saved);
+  });
   window.location.hash = "";
   document.documentElement.dataset.theme = "";
 });

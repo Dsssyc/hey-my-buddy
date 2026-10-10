@@ -275,8 +275,16 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 /* ---- Work objectives: secondary history switch and left list ---- */
-.history-switch { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-.history-switch-bar { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.history-switch { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.history-view-toggle { flex: 0 0 auto; }
+.list-collapse { margin-left: auto; }
+.local-read-state { flex: 0 0 auto; margin: 0; padding: 4px 14px; font-size: 11px; }
+.list-panel[hidden], .rail-panel[hidden] { display: none !important; }
+.list-mobile-navigation { display: none; }
+.list-title-toolbar { flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
+.list-title-toolbar h2 { flex: 1 1 auto; }
+.local-read-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.snapshot-read-state { flex-shrink: 0; }
 .history-view { flex: 1; min-height: 0; overflow: hidden; }
 .count-line { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; }
 .cnt { display: inline-flex; gap: 3px; white-space: nowrap; }
@@ -340,40 +348,60 @@ button.tl-label:hover { background: var(--subtle); }
 .new-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); animation: tl-new-fade 3s ease-out forwards; }
 @keyframes tl-new-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 .trunc-chip { font-size: 10px; font-weight: 500; color: var(--warning); }
-.tl-track { position: relative; min-width: 0; }
+/* Spans must not establish stacking contexts: their backgrounds stay below
+   every span's marks and text, even while selected, hovered or focused. Only
+   the pointer-transparent decoration rises to the interaction layer. */
+.tl-track { position: relative; min-width: 0; --tl-layer-detail: 1; --tl-layer-text: 2; --tl-layer-interaction: 3; }
 .tl-row > .tl-track { z-index: 2; }
 .tl-overlay { position: absolute; top: 0; bottom: 0; left: var(--label-w); right: 0; pointer-events: none; z-index: 1; }
 .fold-band { position: absolute; top: 0; bottom: 0; border-inline: 1px dashed var(--line-strong); background: repeating-linear-gradient(90deg, transparent 0 7px, var(--line) 7px 8px), var(--subtle); }
-.expanded-band { position: absolute; top: 0; bottom: 0; background: var(--subtle); border-inline: 1px dotted var(--line-strong); }
 .now-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); }
 .guide-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--focus); }
 .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); padding: 3px 0 0 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
-.fold-button { position: absolute; top: 2px; bottom: 2px; min-width: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 2px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 9px; line-height: 1.25; overflow: hidden; z-index: 3; }
-.fold-button:hover { color: var(--accent); border-color: var(--accent); }
-.collapse-button { position: absolute; top: 5px; height: 22px; display: flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px dashed var(--line-strong); border-radius: 4px; background: var(--subtle); color: var(--muted); font-size: 10px; white-space: nowrap; z-index: 3; }
-.collapse-button:hover { color: var(--accent); border-color: var(--accent); }
 .now-chip { position: absolute; right: 3px; bottom: 3px; padding: 1px 5px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font-size: 10px; white-space: nowrap; z-index: 3; }
 /* Track items (spans, markers, flags) sit on the track; row labels keep their
    sticky grid placement and are never pulled out of the row by this rule. */
-.tl-track > .sp, .tl-track > .mk, .tl-track > .flag { position: absolute; top: 50%; transform: translateY(-50%); }
+.tl-track > :is(.sp, .mk, .flag) { position: absolute; top: calc(50% - var(--tl-item-height) / 2); }
 .tl-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.sp { height: 22px; min-width: 4px; padding: 0 6px; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; text-align: left; white-space: nowrap; overflow: visible; }
-.sp-text { display: block; overflow: hidden; text-overflow: ellipsis; position: relative; }
-.sp.queue { height: 8px; padding: 0; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--line-strong); }
-/* A short routing hit area can overlap the next execution bar at fit zoom. */
-.sp.routing { height: 22px; padding: 0; border: 1px solid var(--line-strong); color: var(--ink); z-index: 1; }
-.sp.wait { background: var(--warning-wash); border: 1.5px dashed var(--warning); color: var(--warning); }
-.sp.wait.open { border-right: 0; border-radius: 3px 0 0 3px; }
-.sp.wait.cancelled { border-color: var(--muted); color: var(--muted); }
+.tl-track > :is(.sp, .mk, .flag):focus-visible { outline: none; }
+/* The shape layer deliberately paints in the DOM order browsers give positioned
+   boxes: a later span's shape can never cover an earlier span's end mark or
+   text, because they paint in the shared detail and text layers above shapes. */
+.sp { --tl-item-height: 22px; display: flex; align-items: center; height: var(--tl-item-height); min-width: 4px; padding: 0; border: 0; border-radius: 3px; background: var(--c, var(--line-strong)); color: var(--on-cfg); font-size: 11px; line-height: var(--tl-item-height); text-align: left; white-space: nowrap; overflow: visible; }
+/* Text on its own layer: readable over every later span, while the geometry
+   stays the percentage width alone. */
+.sp-text { display: block; pointer-events: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; position: relative; z-index: var(--tl-layer-text, 2); }
+.sp.queue { --tl-item-height: 8px; background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, transparent 2px 5px); }
+.sp::before { content: ""; position: absolute; inset: 0; box-sizing: border-box; border-radius: inherit; pointer-events: none; }
+.sp.queue::before, .sp.routing::before { border: 1px solid var(--line-strong); }
+/* Failed routing retains its established readable minimum; its cross uses the
+   mark layer without lifting the overlapping routing background. */
+.sp.routing { color: var(--ink); }
+/* Borders are decorations inside the recorded geometry, so even a routing
+   double border cannot inflate a short span or its hit target. */
+.sp.wait { background: var(--warning-wash); color: var(--warning); }
+.sp.wait::before { border: 1.5px dashed var(--warning); }
+.sp.wait.open { border-radius: 3px 0 0 3px; }
+.sp.wait.open::before { border-right: 0; }
+.sp.wait.cancelled { color: var(--muted); }
+.sp.wait.cancelled::before { border-color: var(--muted); }
 .sp.failed { box-shadow: 0 0 0 1.5px var(--danger); }
 .sp.exec.cancelled { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 42%, transparent) 0 2px, transparent 2px 6px); }
 .sp.striped { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--on-cfg) 38%, transparent) 0 1.5px, transparent 1.5px 5px); }
 .sp.running { background: linear-gradient(90deg, var(--c) 72%, color-mix(in srgb, var(--c) 40%, transparent)); }
-.sp.unknown { background: transparent; border: 1.5px dotted var(--c); color: var(--ink); padding: 0; }
-.sp.unknown .solid { position: absolute; inset: -1.5px auto -1.5px -1.5px; background: var(--c); border-radius: 2px; color: var(--on-cfg); padding: 0 6px; line-height: 22px; overflow: hidden; }
+/* Unknown-stop geometry is unchanged; the solid shape and its label are
+   siblings so the shape cannot carry text above other marks. */
+.sp.unknown { background: transparent; color: var(--ink); }
+.sp.unknown::before { border: 1.5px dotted var(--c); }
+.sp.unknown .solid { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 2px; pointer-events: none; }
+.sp-solid-text { position: absolute; inset: 0 auto 0 0; padding: 0 6px; line-height: 22px; color: var(--on-cfg); }
 .sp.unknown .sp-tail { color: var(--muted); font-size: 10px; line-height: 20px; }
-.sp.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
-.sp.failed.selected { box-shadow: 0 0 0 1.5px var(--danger), 0 0 0 3px var(--surface), 0 0 0 5px var(--focus); }
+.sp::after, .mk::after, .flag::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: var(--tl-layer-interaction, 3); }
+.sp.run-member::after, .flag.run-member::after { box-shadow: 0 0 0 1px var(--focus); }
+.sp.selected::after, .mk.selected::after, .flag.selected::after { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
+.sp.failed.selected::after { box-shadow: 0 0 0 1.5px var(--danger), 0 0 0 3px var(--surface), 0 0 0 5px var(--focus); }
+.sp:hover::after, .mk:hover::after, .flag:hover::after { outline: 1px solid var(--line-strong); outline-offset: 2px; }
+.sp:focus-visible::after, .mk:focus-visible::after, .flag:focus-visible::after { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* State changes keep the routing texture shared with the legend. */
 .sp.routing.review.running, .sp.routing.review.failed, .sp.routing.review.cancelled, .sp.routing.review.unknown {
   background-color: var(--subtle);
@@ -384,34 +412,42 @@ button.tl-label:hover { background: var(--subtle); }
   background-color: var(--subtle);
   background-image: repeating-linear-gradient(90deg, var(--muted) 0 1px, transparent 1px 5px);
 }
-.sp.routing.running { border-style: double; border-width: 3px; }
-.sp.routing.failed { min-width: 14px; border-color: var(--danger); }
+/* An inset outline keeps the double stroke inside even the 4px minimum. */
+.sp.routing.running::before { border: 0; outline: 3px double var(--line-strong); outline-offset: -3px; }
+.sp.routing.failed { min-width: 14px; }
 .sp.routing.fallback { min-width: 24px; }
+.sp.routing.failed::before { border-color: var(--danger); }
 .sp.routing.fallback.failed .routing-cross { right: 12px; }
-.sp.routing.cancelled { border: 1.5px dashed var(--muted); }
-.sp.routing.unknown { border: 1.5px dotted var(--line-strong); }
+.sp.routing.cancelled::before { border: 1.5px dashed var(--muted); }
+.sp.routing.unknown::before { border: 1.5px dotted var(--line-strong); }
 .swatch.routing { position: relative; border: 1px solid var(--line-strong); }
 .swatch.routing.running { border-style: double; border-width: 3px; }
 .swatch.routing.failed { border-color: var(--danger); }
 .swatch.routing.cancelled { border: 1.5px dashed var(--muted); }
 .swatch.routing.unknown { border: 1.5px dotted var(--line-strong); }
-.routing-cross { position: absolute; inset: 0; pointer-events: none; }
+.routing-cross { position: absolute; inset: 0; z-index: var(--tl-layer-detail, 1); }
 .routing-cross::before, .routing-cross::after {
   content: ""; position: absolute; top: 50%; left: 50%; width: 9px; height: 1px;
   background: var(--danger); transform: translate(-50%, -50%) rotate(45deg);
 }
 .routing-cross::after { transform: translate(-50%, -50%) rotate(-45deg); }
-.routing-fallback-mark { position: absolute; top: -8px; right: -5px; min-width: 13px; height: 13px; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--surface); color: var(--ink); font-size: 11px; font-style: normal; line-height: 11px; text-align: center; pointer-events: none; z-index: 2; }
-.end-mark { position: absolute; top: -7px; right: -7px; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid currentColor; background: var(--surface); font-size: 9px; font-weight: 700; line-height: 12px; text-align: center; font-style: normal; z-index: 1; }
+/* A retired-history defect mark also lifts above the shape layer. */
+.routing-fallback-mark { position: absolute; top: -8px; right: -5px; min-width: 13px; height: 13px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--surface); color: var(--ink); font-size: 11px; font-style: normal; line-height: 11px; text-align: center; z-index: var(--tl-layer-detail, 1); }
+/* End marks share the track detail layer and keep pointer hits on their owning
+   button. The animated pulse is visual only. */
+.end-mark { position: absolute; top: -7px; right: -7px; width: 15px; height: 15px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid currentColor; background: var(--surface); font-size: 9px; font-weight: 700; line-height: 12px; text-align: center; font-style: normal; z-index: var(--tl-layer-detail, 1); }
 .end-mark.bad { color: var(--danger); } .end-mark.muted { color: var(--muted); } .end-mark.warn { color: var(--warning); }
-.pulse { position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--c); animation: tl-pulse 1.6s ease-in-out infinite; }
+.pulse { position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--c); animation: tl-pulse 1.6s ease-in-out infinite; pointer-events: none; z-index: var(--tl-layer-detail, 1); }
 @keyframes tl-pulse { 50% { transform: scale(1.7); opacity: .35; } }
-.mk, .flag { width: 18px; height: 18px; margin-left: -9px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 16px; text-align: center; }
-.mk.accept, .flag.accept { color: var(--accent); border-color: var(--accent-line); }
-.mk.reject, .flag.reject { color: var(--danger); border-color: var(--danger-line); }
-.mk.cancel { color: var(--danger); border-color: var(--danger-line); }
-.mk.decide { color: var(--warning); border-color: var(--warning-line); }
-.mk.cluster { font-weight: 700; background: var(--subtle); }
+/* Event markers and acceptance flags stay above the bars they annotate. */
+.mk, .flag { --tl-item-height: 18px; width: 18px; height: var(--tl-item-height); margin-left: -9px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font-size: 10px; line-height: 16px; text-align: center; }
+.mk::before, .flag::before { content: ""; position: absolute; inset: 0; box-sizing: border-box; border: 1px solid var(--tl-mark-border, var(--line-strong)); border-radius: inherit; background: var(--tl-mark-bg, var(--surface)); pointer-events: none; z-index: var(--tl-layer-detail, 1); }
+.tl-mark-text { display: block; position: relative; padding: 1px; z-index: var(--tl-layer-text, 2); }
+.mk.accept, .flag.accept { color: var(--accent); --tl-mark-border: var(--accent-line); }
+.mk.reject, .flag.reject { color: var(--danger); --tl-mark-border: var(--danger-line); }
+.mk.cancel { color: var(--danger); --tl-mark-border: var(--danger-line); }
+.mk.decide { color: var(--warning); --tl-mark-border: var(--warning-line); }
+.mk.cluster { font-weight: 700; --tl-mark-bg: var(--subtle); }
 .flag { border-radius: 50%; font-weight: 700; }
 .tl-state { padding: 28px 20px; color: var(--muted); font-size: 13px; }
 .tl-state[role="alert"] { color: var(--danger); }
@@ -443,7 +479,7 @@ button.tl-label:hover { background: var(--subtle); }
   .tl-scroll { --label-w: 240px; }
 }
 @media (max-width: 760px) {
-  .history-switch-bar > span { display: none; }
+  .list-mobile-navigation { display: flex; flex-shrink: 0; }
   .narrow-back { display: inline-flex; flex-shrink: 0; white-space: nowrap; }
   .tl-toolbar, .locator { padding-inline: 14px; }
   .trunc-banner { margin-inline: 14px; }
@@ -494,10 +530,7 @@ button.tl-label:hover { background: var(--subtle); }
 .marker-popover-main > .muted { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .marker-popover-row .button { margin-right: 6px; flex-shrink: 0; }
 .marker-popover-hint { margin: 0; padding: 4px 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
-.mk.open { outline: 2px solid var(--focus); outline-offset: 1px; }
-.mk.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
-/* Row-level selection: every span and flag of the selected run gets a thin outline. */
-.sp.run-member, .flag.run-member { box-shadow: 0 0 0 1px var(--focus); }
+.mk.open::after { outline: 2px solid var(--focus); outline-offset: 1px; }
 .tl-label.opened-run { box-shadow: inset 3px 0 var(--accent); }
 .opened-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); }
 .tl-entry.opened { box-shadow: inset 3px 0 var(--accent); background: var(--subtle); }
@@ -532,6 +565,11 @@ button.tl-label:hover { background: var(--subtle); }
 .workspace-grid.list-rail { grid-template-columns: 48px minmax(0, 1fr); }
 .workspace-grid.list-rail > .pane-divider { display: none; }
 .rail-panel { padding: 0; border-right: 1px solid var(--line); }
+.rail-panel > .history-view-toggle { margin: 8px auto 0; }
+@media (max-width: 760px) {
+  .workspace-grid.list-rail { display: grid; }
+  .workspace-grid.list-rail.has-selection > .rail-panel { display: flex; }
+}
 .rail-expand { display: flex; align-items: center; justify-content: center; width: 100%; flex: 1 1 auto; padding: 14px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .14em; }
 .rail-expand:hover { background: var(--subtle); color: var(--accent); }
 .rail-text { writing-mode: vertical-rl; }
@@ -699,7 +737,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .tl-grid .tl-overlay { right: var(--track-end, 0px); }
 /* A fitted break may be narrower than its label; the band stays honest and
    the full wording lives in the button's name and tooltip. */
-.fold-button { min-width: 0; }
 .shared-popover:focus:not(:focus-visible) { outline: none; }
 
 /* P2.1: compact header form at short viewports. */
@@ -910,26 +947,25 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 }
 
 /* Console polish: keep the timeline canvas as the scrolling surface. */
-.timeline-view { overflow: hidden; }
+.timeline-view { overflow-x: hidden; overflow-y: auto; }
 .tl-head { flex-shrink: 0; max-height: none; min-height: 0; overflow: visible; padding-block: 8px; gap: 4px; }
 .tl-head .objective-title-row h2 { flex: 1 1 0; }
 .tl-head .objective-title-row .objective-description { flex: 1 1 0; min-width: 0; display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .tl-head .objective-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
-.tl-head .time-stats { position: relative; border: 0; }
-.tl-head .time-stats > summary { padding: 2px 0; white-space: nowrap; cursor: pointer; }
-.tl-head .time-stats-body { position: absolute; z-index: 8; top: calc(100% + 3px); right: 0; inline-size: min(34em, calc(100vw - 32px)); max-block-size: min(50vh, 340px); overflow-y: auto; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
+.tl-head .time-stats { white-space: nowrap; }
 .timeline-view > .tl-head, .timeline-view > .delegation-band, .timeline-view > .tl-toolbar { flex-shrink: 0; min-height: 0; overflow: visible; }
+.timeline-view > .delegation-band { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
+.timeline-view > .delegation-band.collapsed { flex: 0 0 auto; min-height: 0; max-height: none; }
 .timeline-view > .timeline-body, .timeline-view > .tl-body { min-height: 120px; }
-.delegation-strip { flex-wrap: wrap; overflow: hidden; gap: 6px 8px; }
+.delegation-strip { flex: 1 1 auto; min-height: 48px; flex-wrap: wrap; align-content: flex-start; overflow-x: hidden; overflow-y: auto; gap: 6px 8px; }
 .delegation-card { width: min(262px, 100%); }
+.delegation-strip > .delegation-card, .delegation-strip > .strip-bound { flex-shrink: 0; }
 .delegation-show-all { align-self: center; }
 .timeline-legend-popover { inline-size: min(36em, calc(100vw - 16px)); display: grid; gap: 10px; padding: 12px; }
 .timeline-view-switch { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
 .timeline-view-switch .button { border: 0; border-radius: 0; min-height: 28px; }
 .timeline-view-switch .button[aria-pressed="true"] { color: var(--accent); background: var(--accent-wash); }
 .timeline-view-switch .button + .button { border-left: 1px solid var(--line); }
-.fold-button { top: 5px; bottom: auto; height: 28px; min-width: 24px; flex-direction: row; padding: 0; font-size: 15px; line-height: 1; }
-.sp:hover, .mk:hover, .flag:hover { filter: brightness(1.16); outline: 1px solid var(--line-strong); outline-offset: 2px; }
 .inspector-dock-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-dock-toggle { min-width: 28px; min-height: 28px; font-size: 16px; }
 .timeline-view > .inspector-separator { flex-shrink: 0; }
@@ -956,3 +992,20 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-review-config select { flex: 1; width: auto; min-width: 0; height: 32px; padding: 4px 8px; }
 .harness-review > .button { height: 32px; padding-block: 4px; }
 .harness-review > p { flex-basis: 100%; margin: 0; }
+
+/* Proven idle breaks keep fixed pixels; their readouts never widen the axis. */
+.idle-block { position: absolute; top: 5px; height: 28px; display: flex; align-items: center; justify-content: center; padding: 0; border-inline: 1px dashed var(--line-strong); border-radius: 3px; background: repeating-linear-gradient(135deg, transparent 0 4px, var(--line) 4px 5px), var(--subtle); color: var(--muted); font-size: 12px; z-index: 3; }
+.idle-block:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.fold-band { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--line) 4px 5px), var(--subtle); }
+.now-line { width: 1px; margin-left: 0; background: var(--muted); opacity: .35; }
+.now-chip { background: var(--subtle); color: var(--muted); }
+.timeline-readout-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .45; }
+.timeline-readout { position: absolute; top: 42px; padding: 2px 5px; border-radius: 3px; background: var(--surface); color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.timeline-readout-line[hidden], .timeline-readout[hidden] { display: none; }
+
+.time-stats-popover .time-stats-body { padding: 0; overflow-wrap: anywhere; }
+.delegation-band-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding-inline-end: 20px; }
+.delegation-band-head > .delegation-band-toggle { flex: 1 1 auto; width: auto; min-width: 0; }
+.delegation-band-head > .delegation-show-all { flex: 0 0 auto; }
+.delegation-current { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 20px; min-width: 0; }
+.delegation-hidden-current { max-inline-size: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

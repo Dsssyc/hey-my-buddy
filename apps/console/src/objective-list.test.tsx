@@ -22,6 +22,14 @@ const props = () => ({
 afterEach(() => cleanup());
 
 describe("objective list (0.16 P1.4)", () => {
+  it("shows only the supplied read verification time and explicitly names missing evidence", () => {
+    const checked = Date.parse("2026-10-09T11:12:13Z");
+    const view = render(<ObjectiveList {...props()} verifiedAtMs={checked} />);
+    expect(view.container.querySelector(".local-read-state")!.textContent).toBe(`核对时间 ${new Date(checked).toLocaleString("zh-CN", { hour12: false })}`);
+    view.rerender(<ObjectiveList {...props()} verifiedAtMs={null} />);
+    expect(view.container.querySelector(".local-read-state")!.textContent).toBe("核对时间未记录");
+  });
+
   it("groups by project name and count; standalone roots are 历史独立委派 and folded by default", async () => {
     const user = userEvent.setup();
     const p = props();
@@ -205,15 +213,15 @@ describe("objective list (0.16 P1.4)", () => {
     expect(other).toHaveProperty("disabled", false);
   });
 
-  it("renders the 48px rail strip with only the expand control", () => {
+  it("renders the rail while keeping list content mounted and hidden", () => {
     const onToggleRail = vi.fn();
     const view = render(<ObjectiveList { ...{ ...props(), rail: true, onToggleRail } } />);
     const expand = screen.getByRole("button", { name: /工作目标/ });
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     expect(expand.textContent).toContain("›");
     // The rail shows only the strip: no filters, no rows.
-    expect(view.container.querySelector(".list-filters")).toBeNull();
-    expect(view.container.querySelector(".task-list")).toBeNull();
+    expect(view.container.querySelector(".list-filters")!.closest("[hidden]")).not.toBeNull();
+    expect(view.container.querySelector(".task-list")!.closest("[hidden]")).not.toBeNull();
     expect(view.container.querySelector(".rail-state")).toBeNull();
     fireEvent.click(expand);
     expect(onToggleRail).toHaveBeenCalled();

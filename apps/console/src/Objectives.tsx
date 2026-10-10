@@ -19,8 +19,7 @@ import type { AuthorityLatch } from "./console-session";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { displayTitle } from "./objective-display";
 import { useBackgroundInert } from "./modal";
-
-const EMPTY_SET: ReadonlySet<string> = new Set();
+import { useViewPreference } from "./view-preferences";
 
 /* 0.15.1 U1 geometry (docs/design/objective-browser-0.15.1.md §1–2): the
    viewport picks the layout; above 760px an open detail collapses the list to
@@ -137,28 +136,32 @@ export function Objectives({ snapshot, api, refresh, active = true, authority, w
   authority?: AuthorityLatch; writesAvailable?: boolean;
 }) {
   const [view, setView] = useState<"objectives" | "records">("objectives");
+  const [listCollapsed, setListCollapsed] = useViewPreference("delegation-list-collapsed");
+  const destination = view === "objectives" ? "全部执行记录" : "工作目标";
+  const listNavigation = <button type="button" className="button small-button history-view-toggle"
+    title={`切换到${destination}`} aria-label={`切换到${destination}`}
+    onClick={() => setView(current => current === "objectives" ? "records" : "objectives")}>
+    <span aria-hidden="true">⇄</span>
+  </button>;
   return <div className="history-switch">
-    <div className="history-switch-bar">
-      <div className="segmented" aria-label="记录视图">
-        <button type="button" aria-pressed={view === "objectives"} onClick={() => setView("objectives")}
-          >工作目标</button>
-        <button type="button" aria-pressed={view === "records"} onClick={() => setView("records")}
-          >全部执行记录</button>
-      </div>
-    </div>
     <div className="history-view" hidden={view !== "objectives"}>
       <ObjectivesWorkspace snapshot={snapshot} api={api} refresh={refresh}
-        active={active && view === "objectives"} authority={authority} writesAvailable={writesAvailable} />
+        active={active && view === "objectives"} authority={authority} writesAvailable={writesAvailable}
+        listNavigation={listNavigation} listCollapsed={listCollapsed}
+        onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
     <div className="history-view" hidden={view !== "records"}>
-      <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"} />
+      <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"}
+        listNavigation={listNavigation} listCollapsed={listCollapsed}
+        onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
   </div>;
 }
 
-function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writesAvailable }: {
+function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, listNavigation, listCollapsed, onCollapseList, onExpandList }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
   authority?: AuthorityLatch; writesAvailable: boolean;
+  listNavigation: ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
   const [filter, setFilter] = useState<ObjectiveFilter>("all");
   const [query, setQuery] = useState(""), [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState("");
@@ -166,7 +169,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   // The pinned inspector selection, kept per objective so switching back restores it.
   const [selectionByObjective, setSelectionByObjective] = useState<Map<string, InspectorSelection>>(() => new Map());
-  const [expandedByObjective, setExpandedByObjective] = useState<Map<string, Set<string>>>(() => new Map());
   const list = useObjectiveList(api, { query, projectId, hostId, filter }, active);
   const timeline = useObjectiveTimeline(api, selected, active);
   // The list row is freshest, but a list refresh must never unmount an open
@@ -223,7 +225,8 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   // overlay that never changes the right-column geometry.
   const [listRail, setListRail] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const railActive = listRail && !narrowViewport;
+  const autoRailActive = listRail && !narrowViewport;
+  const railActive = listCollapsed || autoRailActive;
   const wasDocking = useRef(false);
   useEffect(() => {
     const docking = detailOpen && !narrowViewport;
@@ -291,17 +294,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   function navigateRun(runId: string) {
     setDetail({ runId });
   }
-  function toggleGap(gapId: string) {
-    setExpandedByObjective(previous => {
-      const current = previous.get(selected ?? "") ?? new Set<string>();
-      const next = new Set(current);
-      if (next.has(gapId)) next.delete(gapId); else next.add(gapId);
-      return new Map(previous).set(selected ?? "", next);
-    });
-  }
-  function setExpanded(gapIds: Set<string>) {
-    setExpandedByObjective(previous => new Map(previous).set(selected ?? "", gapIds));
-  }
 
   // Esc closes the transient drawer first, then the detail, while this tab
   // owns the page and the keystroke did not start inside a field or a dialog.
@@ -336,8 +328,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     return () => document.removeEventListener("mousedown", onClick);
   }, [drawerOpen]);
 
-  const expanded = selected ? expandedByObjective.get(selected) ?? EMPTY_SET : EMPTY_SET;
-
   // The header's stop control: one objective-level action, its honest status,
   // and the replay entry for a lost reply. Read-only sessions see the reason.
   let stopControl: ReactNode = null;
@@ -367,14 +357,18 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     : null;
 
   const listPane = <ObjectiveList
-    rows={list.rows} total={list.total} loading={list.loading} error={list.error}
+    rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
     nextCursor={list.nextCursor} reorder={list.reorder}
     filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
     selected={selected}
     active={active}
     visible={active && !railActive && !(narrowViewport && !!selected)}
     rail={railActive} railButtonRef={railButtonRef}
+    listNavigation={listNavigation}
+    onCollapse={() => { onCollapseList(); setDrawerOpen(false); }}
     onToggleRail={() => {
+      if (listCollapsed) onExpandList();
+      if (!autoRailActive) return;
       setDrawerOpen(current => {
         if (current) railButtonRef.current?.focus();
         return !current;
@@ -399,9 +393,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     selection={selection}
     headerActions={stopControl}
     profiles={snapshot.profiles}
-    expandedGapIds={expanded}
-    onToggleGap={toggleGap}
-    onSetExpanded={setExpanded}
     onSelectItem={selectItem}
     onOpenItem={openItem}
     onSelectRun={selectRun}
@@ -429,6 +420,12 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     : undefined;
   const detailPane = <aside className={"panel detail-panel" + (detailOpen && !narrowViewport ? " docked" : "")}
     ref={paneRef} aria-label="工作目标详情">
+    {selected && <div className="panel-toolbar list-mobile-navigation">
+      {listNavigation}<h2>工作目标</h2>
+      <button type="button" className="button small-button" title={listCollapsed ? "展开工作目标列表" : "收起工作目标列表"}
+        aria-label={listCollapsed ? "展开工作目标列表" : "收起工作目标列表"}
+        onClick={listCollapsed ? onExpandList : onCollapseList}>{listCollapsed ? "展开列表" : "收起列表"}</button>
+    </div>}
     {selected
       ? <div className={detailOpen && !narrowViewport ? "right-dock side" : "right-stage"} style={stageStyle}>
         <div key="timeline" className="right-stage-pane">{timelinePane}</div>
@@ -448,13 +445,15 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
       <SplitView selected={!!selected} rail={railActive} list={listPane} detail={detailPane} />
       {railActive && drawerOpen && <div className="list-drawer" role="dialog" aria-label="工作目标列表（抽屉）">
         <ObjectiveList
-          rows={list.rows} total={list.total} loading={list.loading} error={list.error}
+          rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
           nextCursor={list.nextCursor} reorder={list.reorder}
           filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
           selected={selected}
           active={active}
           visible={active && drawerOpen}
           rail={false}
+          listNavigation={listNavigation}
+          onCollapse={() => { onCollapseList(); setDrawerOpen(false); }}
           onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
           onSelect={selectObjective} onRetry={list.retry} onMore={list.more}
           onApplyReorder={list.applyReorder} />

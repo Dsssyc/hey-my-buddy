@@ -15,6 +15,7 @@ import { familySearchText, harnessGroups, harnessUnavailableText } from "./buddy
 import { pendingMark } from "./profile-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { HarnessStatus } from "./HarnessStatus";
+import { useViewPreference } from "./view-preferences";
 import { BuddyStatusBar } from "./BuddyStatusBar";
 import { BUDDY_SECTIONS, buddyHash, buddyLocation } from "./buddy-navigation";
 import type { BuddyLocation, BuddySection } from "./buddy-navigation";
@@ -32,9 +33,10 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   const [location, setLocation] = useState<BuddyLocation>(() => buddyLocation(window.location.hash) ?? { section: "models" });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [query, setQuery] = useState(""), [enabledOnly, setEnabledOnly] = useState(false);
+  const [query, setQuery] = useState("");
+  const [enabledOnly, setEnabledOnly, setEnabledOnlyForView] = useViewPreference("models.enabledOnly");
   /** The user asked to see unavailable configurations as well. */
-  const [showUnavailable, setShowUnavailable] = useState(false);
+  const [showUnavailable, setShowUnavailable, setShowUnavailableForView] = useViewPreference("models.showUnavailable");
   /** Harness groups the user folded or unfolded, overriding the default. */
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   /** Families added by this page's own discovery, marked "新" for this session. */
@@ -44,7 +46,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
   const [guard, setGuard] = useState("");
   const history = useProfileHistory(api, snapshot.csrfToken, snapshot.tableRevision,
-    { query, adapter: "", enabled: showUnavailable });
+    { query, adapter: "", enabled: active && location.section === "models" && showUnavailable, autoOpen: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const sessionWritable = editor.sessionWritable;
@@ -81,11 +83,12 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   useEffect(() => { autoPages.current = 0; }, [query, snapshot.tableRevision]);
   useEffect(() => {
     if (!showUnavailable) { autoPages.current = 0; return; }
+    if (!active || location.section !== "models") return;
     if (history.error || history.loading || !history.hasMore) return;
     if (autoPages.current >= Math.ceil(MAX_HISTORY_PROFILES / PROFILE_PAGE_SIZE)) return;
     autoPages.current += 1;
     history.loadMore();
-  }, [showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
+  }, [active, location.section, showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
   // The family mark keeps the list-membership fact: every family holding a
   // buddy in the configured Router list is marked, not only the role holder.
   const routerIds = new Set(snapshot.configuration === null ? [] : data.configuration?.routerProfileIds ?? []);
@@ -113,8 +116,9 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
       if (!target) return;
       setHistoryOpen(false);
       setSelected(familyKey(target));
-      setQuery(""); setEnabledOnly(false);
-      if (!target.available) setShowUnavailable(true);
+      // A deep link temporarily reveals its target; only checkbox changes persist.
+      setQuery(""); setEnabledOnlyForView(false);
+      if (!target.available) setShowUnavailableForView(true);
       setFolded(previous => ({ ...previous, [target.adapter]: false }));
       setFocusRequest(previous => ({ profileId: target.profileId, n: (previous?.n ?? 0) + 1 }));
     } else if (location.section === "router") {
@@ -172,12 +176,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索模型、Harness、提供方" /></label>
       <label className="check-field"><input type="checkbox" checked={enabledOnly} onChange={e => setEnabledOnly(e.target.checked)} />只看已启用</label>
       {unavailableCount > 0 && <label className="check-field"><input type="checkbox" checked={showUnavailable}
-        onChange={e => {
-          setShowUnavailable(e.target.checked);
-          // Checking the box is the explicit request that starts the bounded
-          // `model_profiles` read; unchecking only hides what is already loaded.
-          if (e.target.checked) history.open();
-        }} />显示不可用配置（{unavailableCount}）</label>}
+        onChange={e => setShowUnavailable(e.target.checked)} />显示不可用配置（{unavailableCount}）</label>}
       {showUnavailable && history.loading && <p className="small muted" role="status">正在读取不可用配置…</p>}
       {showUnavailable && history.error && <p className="banner guard-banner" role="alert">{history.error}
         <button type="button" className="button small-button" onClick={history.reload}>重试读取</button></p>}

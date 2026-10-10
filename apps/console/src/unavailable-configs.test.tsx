@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -141,6 +141,8 @@ async function openRetired(f: ReturnType<typeof fixture>, user: ReturnType<typeo
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
+  vi.restoreAllMocks();
   window.location.hash = "";
   document.documentElement.dataset.theme = "";
 });
@@ -421,5 +423,131 @@ describe("stale settings and unrelated saves", () => {
     expect(f.published[0].familyAnnotationChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
     ]);
+  });
+});
+
+describe("browser model view preferences", () => {
+  it("restores both filters across unmount/remount and a reload with one bounded history read", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    let view = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await screen.findByRole("heading", { name: "模型 2" });
+    expect(f.command).toHaveBeenCalledWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf");
+    view.unmount();
+    const reloaded = fixture();
+    view = render(<App suppliedApi={reloaded.api} />);
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true));
+    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", true);
+    await screen.findByRole("heading", { name: "模型 2" });
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    view.rerender(<App suppliedApi={reloaded.api} />);
+    await new Promise(resolve => setTimeout(resolve, 450));
+    expect(reloaded.operations).toEqual(["model_profiles"]);
+  });
+
+  it("keeps the stored unavailable preference when the checkbox is hidden and still reads once", async () => {
+    window.localStorage.setItem("hey-my-buddy.console.view.models.showUnavailable", "true");
+    const f = fixture();
+    const state = f.snapshot();
+    state.unavailableProfileCount = 0;
+    f.command.mockImplementation(async () => ({ profiles: state.profiles, cards: [], preferences: [], sampleCounts: {}, modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null }));
+    window.location.hash = "#models";
+    const view = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    await waitFor(() => expect(f.command).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("checkbox", { name: /^显示不可用配置/ })).toBeNull();
+    expect(window.localStorage.getItem("hey-my-buddy.console.view.models.showUnavailable")).toBe("true");
+    view.rerender(<App suppliedApi={f.api} />);
+    await new Promise(resolve => setTimeout(resolve, 450));
+    expect(f.command).toHaveBeenCalledExactlyOnceWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf");
+  });
+
+  it("uses unchecked defaults with broken storage and still lets the view change", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    const f = fixture();
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
+    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true);
+    expect(f.command).not.toHaveBeenCalled();
+  });
+});
+
+describe("deep links preserve manually saved filters", () => {
+  const enabledKey = "hey-my-buddy.console.view.models.enabledOnly";
+  const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
+  function jump(profileId: string) {
+    act(() => {
+      window.location.hash = `#buddy/models/${encodeURIComponent(profileId)}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  }
+
+  it("reveals a disabled target without overwriting the manually checked enabled-only filter", async () => {
+    const f = fixture();
+    for (const profile of f.snapshot().profiles) profile.enabled = false;
+    const user = userEvent.setup();
+    window.location.hash = "#buddy/models";
+    let view = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf"));
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    expect(localStorage.getItem(enabledKey)).toBe("true");
+    expect(localStorage.getItem(unavailableKey)).toBe("false");
+    jump(flashHigh);
+    await screen.findByRole("heading", { name: "deepseek-flash" });
+    expect(screen.getByRole("switch", { name: "启用 high" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
+    expect(localStorage.getItem(enabledKey)).toBe("true");
+    expect(localStorage.getItem(unavailableKey)).toBe("false");
+    view.unmount();
+    window.location.hash = "#buddy/models";
+    view = render(<App suppliedApi={f.api} />);
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true));
+    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
+    expect(localStorage.getItem(enabledKey)).toBe("true");
+    expect(localStorage.getItem(unavailableKey)).toBe("false");
+  });
+
+  it("reveals an unavailable Router target without overwriting the manually unchecked filter", async () => {
+    const f = fixture({ staleDecision: true });
+    const user = userEvent.setup();
+    window.location.hash = "#buddy/models";
+    let view = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await screen.findByRole("heading", { name: "模型 2" });
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    expect(localStorage.getItem(enabledKey)).toBe("false");
+    expect(localStorage.getItem(unavailableKey)).toBe("false");
+    const status = screen.getByRole("region", { name: "全局状态" });
+    await user.click(within(status).getByRole("link", { name: "Router 需处理，去处理" }));
+    await screen.findByRole("heading", { name: "retired-model" });
+    expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", true);
+    expect(localStorage.getItem(enabledKey)).toBe("false");
+    expect(localStorage.getItem(unavailableKey)).toBe("false");
+    view.unmount();
+    window.location.hash = "#buddy/models";
+    view = render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
+    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
+    expect(localStorage.getItem(enabledKey)).toBe("false");
+    expect(localStorage.getItem(unavailableKey)).toBe("false");
   });
 });

@@ -1,7 +1,11 @@
 """Upgrade of an idle schema-14 board: verified backup, in-place migration, rollback."""
 import gzip
+import json
+import os
 import sqlite3
-from contextlib import closing
+import shutil
+import tempfile
+from contextlib import closing, ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -11,15 +15,32 @@ from hey_my_buddy.blackboard.store.db import Database
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import BoardStore
 from support import BoardTestCase
+from blackboard.tasks import test_workspace_identity as identity_fixtures
 
 FIXTURE = Path(__file__).resolve().parents[1] / "blackboard/store/fixtures/schema-12.sql"
 
 
 class UpgradeMigrationTests(BoardTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-upgrade-schema-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.state = Path(temporary.name) / "state"
+        fixture.state.mkdir(mode=0o700)
+        fixture._seed_schema_14()
+        cls._database_template = fixture.state / "board.sqlite3"
+
     def setUp(self) -> None:
         super().setUp()
         self.state = self.directory / "state"
         self.state.mkdir(mode=0o700)
+        # The seed connection is closed before publication. Each case owns a
+        # distinct database inode, connections, journals, locks and backup files.
+        shutil.copyfile(self._database_template, self.state / "board.sqlite3")
+
+    def _seed_schema_14(self) -> None:
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
             connection.executescript(FIXTURE.read_text())
             connection.executemany("INSERT INTO meta(key, value) VALUES(?, ?)",
@@ -102,4 +123,78 @@ class UpgradeMigrationTests(BoardTestCase):
         self.assertEqual(caught.exception.code, "UPGRADE_VERIFY_FAILED")
         with mock.patch("hey_my_buddy.install.upgrade.command", return_value={"leaks": []}):
             evidence = upgrade.verify_started(self.state, target, {**health, "schemaVersion": 14}, before)
-        self.assertEqual(evidence["schemaVersion"], 14)
+            self.assertEqual(evidence["schemaVersion"], 14)
+
+
+class UpgradeWorkspaceIdentityTests(identity_fixtures.WorkspaceIdentityFixture):
+    """Run the actual upgrade coordinator on private state without processes.
+
+    Lifecycle process seams are substituted. The maintenance locks, verified
+    backup, migration, exact fingerprint check and rollback use real files/SQL.
+    No service, Worker, runtime materialization or login operation runs.
+    """
+
+    def private_upgrade(self, *, reject_verification=False):
+        board, run, manifest = self.legacy_run()
+        board.call("workflow_cancel", {"runId": run["runId"], "reason": "private idle fixture",
+                                       **self.control(run)})
+        initial = self.all_rows(board)
+        root = self.directory / "private-runtimes"
+        previous, target = root / ("a" * 32), root / ("b" * 32)
+        previous.mkdir(parents=True)
+        target.mkdir()
+        endpoint = {"runtimeIdentity": "runtime:" + previous.name, "serviceId": "private-service",
+                    "pid": 123, "contractVersion": "private-fixture"}
+        (self.directory / "control.json").write_text(json.dumps(endpoint))
+        health = {**endpoint, "maxConcurrent": 2, "waitCapacity": 4}
+        started = {"runtimeContentId": target.name, "runtimeStable": True, "schemaVersion": 15,
+                   "maxConcurrent": 2, "waitCapacity": 4}
+        original_verify = upgrade.verify_started
+
+        def verify(state, runtime_path, observed, expected):
+            if reject_verification and runtime_path == target:
+                raise BoardError("UPGRADE_VERIFY_FAILED", "private target verification failure")
+            return original_verify(state, runtime_path, observed, expected)
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory),
+                                                            "BUDDY_RUNTIME_ROOT": str(root)}))
+            for name, options in (
+                ("get_state_dir", {"return_value": self.directory}),
+                ("runtime.is_ready", {"return_value": True}),
+                ("runtime.read_ready", {"return_value": {"sourceCommit": "private-fixture"}}),
+                ("runtime.materialize", {"return_value": {"runtimeDir": str(target)}}),
+                ("probe", {"return_value": health}),
+                ("detach", {}),
+                ("start", {"side_effect": lambda state, runtime_path: {**started, "runtimeContentId": runtime_path.name}}),
+                ("command", {"return_value": {"leaks": []}}),
+                ("verify_started", {"side_effect": verify}),
+            ):
+                stack.enter_context(mock.patch("hey_my_buddy.install.upgrade." + name, **options))
+            stack.enter_context(mock.patch("hey_my_buddy.install.launcher.write_active_runtime"))
+            stack.enter_context(mock.patch("hey_my_buddy.blackboard.tasks.storage.prune_old_runtimes", return_value={"complete": True}))
+            result = upgrade.upgrade({})
+        return board, run, manifest, initial, result
+
+    def test_real_upgrade_calls_identity_migration_after_verified_backup(self):
+        board, run, manifest, initial, result = self.private_upgrade()
+        self.assertTrue(result["upgraded"], result)
+        verified_backup = backup.verify(Path(result["backup"]["path"]))
+        self.assertEqual(verified_backup["schema"], 15)
+        self.assertTrue(result["verification"]["retainedDataFingerprints"])
+        current = self.all_rows(board)
+        actual = self.workspace.inspect(manifest["path"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT project_id FROM objectives WHERE objective_id=?", (run["objectiveId"],)).fetchone()[0], actual["repositoryId"])
+            self.assertEqual(connection.execute("SELECT checkout_id FROM workspace_reservations WHERE holder_task_id=?", (run["runId"],)).fetchone()[0], actual["checkoutId"])
+        for table in initial:
+            if table not in {"meta", "objectives", "workspace_reservations"}:
+                self.assertEqual(current[table], initial[table], table)
+        journal = json.loads((self.directory / "upgrade-last.json").read_text())
+        self.assertIn(manifest["checkoutId"], journal["identityMigration"]["mapped"])
+
+    def test_post_migration_failure_restores_exact_private_backup(self):
+        board, _run, _manifest, initial, result = self.private_upgrade(reject_verification=True)
+        self.assertFalse(result["upgraded"], result)
+        self.assertEqual(result["rollback"]["runtimeContentId"], "a" * 32, result)
+        self.assertEqual(self.all_rows(board), initial)

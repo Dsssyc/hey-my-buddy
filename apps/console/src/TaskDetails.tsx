@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
+import { errorText, readVerificationText } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { TimelineRow } from "./objective-types";
 import { WorkflowPanel } from "./WorkflowPanel";
@@ -34,18 +34,56 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   overviewRow?: TimelineRow | null;
 }) {
   const [detail, setDetail] = useState<unknown>(null), [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [checked, setChecked] = useState<{ runId: string; revision: number; workflowRevision: number; at: number | null } | null>(null);
   const [routingRequest, setRoutingRequest] = useState(0);
-  useEffect(() => {
-    if (!active || task.workflow) return;
-    let current = true;
-    setDetail(null); setError("");
-    api.task(task.runId).then(value => { if (current) {
+  const update = useRef(onTaskUpdate);
+  update.current = onTaskUpdate;
+  const currentTask = useRef(task);
+  currentTask.current = task;
+  const propagateUpdate = useCallback((next: Task) => {
+    const current = currentTask.current;
+    if (next.runId === current.runId && next.revision >= current.revision
+      && (next.workflow?.revision ?? 0) >= (current.workflow?.revision ?? 0)) update.current(next);
+  }, []);
+  const request = useRef<{ sequence: number; controller: AbortController | null }>({ sequence: 0, controller: null });
+  const lastRead = useRef<{ runId: string } | null>(null);
+  const readTask = useCallback(async () => {
+    request.current.controller?.abort();
+    const controller = new AbortController();
+    const sequence = ++request.current.sequence;
+    request.current.controller = controller;
+    setBusy(true); setError("");
+    try {
+      const value = await api.task(task.runId, controller.signal);
+      if (controller.signal.aborted || sequence !== request.current.sequence) return;
+      if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== task.runId || !("task" in value)) {
+        throw new Error("委派详情不完整。");
+      }
+      const next = value as Task;
+      if (next.revision < currentTask.current.revision
+        || (next.workflow?.revision ?? 0) < (currentTask.current.workflow?.revision ?? 0)) return;
+      lastRead.current = { runId: next.runId };
       setDetail(value);
-      if (value && typeof value === "object" && "runId" in value && value.runId === task.runId && "task" in value) onTaskUpdate(value as Task);
-    } })
-      .catch(reason => { if (current) setError(errorText(reason)); });
-    return () => { current = false; };
-  }, [api, active, task.runId, task.revision, !!task.workflow, onTaskUpdate]);
+      setChecked({ runId: next.runId, revision: next.revision, workflowRevision: next.workflow?.revision ?? 0, at: api.readVerifiedAt?.(value) ?? null });
+      update.current(next);
+    } catch (reason) {
+      if (!controller.signal.aborted && sequence === request.current.sequence) setError(errorText(reason));
+    } finally {
+      if (!controller.signal.aborted && sequence === request.current.sequence) setBusy(false);
+    }
+  }, [api, task.runId]);
+  useEffect(() => {
+    setBusy(false);
+    if (!active) return;
+    if (!task.workflow && lastRead.current?.runId !== task.runId) void readTask();
+    return () => {
+      ++request.current.sequence;
+      request.current.controller?.abort();
+    };
+  }, [active, task.runId, task.revision, !!task.workflow, readTask]);
+  const verifiedAt = checked?.runId === task.runId && checked.revision === task.revision
+    && checked.workflowRevision === (task.workflow?.revision ?? 0) ? checked.at : api.readVerifiedAt?.(task) ?? null;
   const project = taskProject(task);
   const decision = task.spec?.decision as { decisionId?: string } | undefined;
   const recordInfo = <details className="detail-section"><summary>来源与标识</summary><dl className="facts">
@@ -68,14 +106,19 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       <h2 className="detail-title" title={titleTooltip(title)}>
         {excerpt(title.text, 100)}{titleNote && <span className="title-source-note">{titleNote}</span>}
       </h2>
+      <div className="local-read-toolbar" aria-label="微任务详情读取">
+        <button type="button" className="button small-button" aria-label="刷新微任务详情" title="只重新读取当前微任务详情" disabled={!active || busy} onClick={() => { void readTask(); }}>{busy ? "正在读取…" : "刷新详情"}</button>
+        <span className="small muted" title="当前微任务详情读取的服务器核对时间">{readVerificationText(verifiedAt)}</span>
+      </div>
+      {error && <p role="alert" className="error-message">{error}
+        <button type="button" className="button small-button" disabled={!active || busy} onClick={() => { void readTask(); }}>重试读取</button></p>}
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
         {task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={taskExecutor(task)} onClick={() => setRoutingRequest(n => n + 1)}>
           <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
-        selectTask={selectTask} active={active} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
+        selectTask={selectTask} active={active} onTaskUpdate={propagateUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
         initialSection={initialSection} routingDecisionId={routingDecisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} /> : <div className="detail-body">
-      {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
       <p className="small muted" title={usage.title}>用量：{usage.text}</p>
       {recordInfo}

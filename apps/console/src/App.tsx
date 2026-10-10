@@ -12,8 +12,7 @@ import { Objectives } from "./Objectives";
 import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
 import { Badge, Icon } from "./ui";
-import { errorText } from "./api";
-import { refreshVisibleReads } from "./global-refresh";
+import { readVerificationText } from "./api";
 import "./styles.css";
 import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 
@@ -37,7 +36,7 @@ function currentTab(): Tab {
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
-  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} strictRefresh={() => state.refresh(undefined, true)} connectionError={state.error} updatedAt={state.updatedAt} /> :
+  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
     <main className="startup"><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" />
       <h1>{state.error ? "暂时无法连接黑板" : "正在连接本地黑板"}</h1>
       <p role={state.error ? "alert" : "status"}>{state.error || "正在连接…"}</p>
@@ -73,12 +72,10 @@ function SaveBar({ editor, mutationsAvailable, describedBy }: {
   </div>;
 }
 
-function Connected({ api, snapshot, refresh, strictRefresh, connectionError, updatedAt }: {
-  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; strictRefresh: () => Promise<Snapshot | null>; connectionError: string; updatedAt: number | null;
+function Connected({ api, snapshot, refresh, connectionError }: {
+  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
 }) {
   const [tab, setTab] = useState<Tab>(currentTab);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshNote, setRefreshNote] = useState("");
   const [visited, setVisited] = useState(() => new Set<Tab>([currentTab()]));
   const theme = useTheme();
   // One latch for the mounted page: the polling snapshot's own descriptor
@@ -90,7 +87,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
   const writesAvailable = !connectionError && sessionWritable;
   const mutationsAvailable = writesAvailable && snapshot.capabilities.evaluationWriteGate !== false;
   const unavailableReason = connectionError
-    ? "连接中断；请刷新重试，草稿已保留。"
+    ? "连接中断；请重试连接，草稿已保留。"
     : !sessionWritable
       ? "登录已失效；请运行 buddy console 重新登录，草稿已保留。"
       : snapshot.capabilities.evaluationWriteGate === false
@@ -115,20 +112,7 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
   const connectionTitle = connectionError
     ? `连接中断：${connectionError} 请检查服务或刷新重试。`
     : `评价表 V${snapshot.tableRevision}`;
-  async function refreshAll() {
-    if (refreshing) return;
-    setRefreshing(true);
-    setRefreshNote("正在刷新…");
-    try {
-      const outcomes = await Promise.allSettled([strictRefresh(), refreshVisibleReads()]);
-      const failed = outcomes.find((result): result is PromiseRejectedResult => result.status === "rejected");
-      if (failed) throw failed.reason;
-      setRefreshNote(`已刷新 · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date())}`);
-    } catch (failure) { setRefreshNote(`刷新失败：${errorText(failure)}`); }
-    finally { setRefreshing(false); }
-  }
   const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
-  const automaticRead = updatedAt === null ? "数据未更新" : `数据截至 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(updatedAt)}`;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddy";
   return <div className="app-shell">
@@ -146,14 +130,14 @@ function Connected({ api, snapshot, refresh, strictRefresh, connectionError, upd
         </a>)}
       </nav>
       <div className="header-status">
-        {connectionError && <span className="connection" title={connectionTitle}>连接中断 · 请检查本地服务并刷新</span>}
+        {connectionError && <span className="connection" title={connectionTitle}>连接中断 · 请检查本地服务</span>}
         {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
-        <button className="icon-button" aria-label="刷新工作台" title={refreshNote || automaticRead} disabled={refreshing} onClick={() => void refreshAll()}><span className={refreshing ? "refresh-spinning" : undefined}><Icon name="refresh" /></span></button>
       </div>
     </header>
     <main id="main" className="main-content" tabIndex={-1}>
       <h1 className="sr-only">{tabs[tab]}</h1>
-      {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
+      {connectionError && <p className="banner error-banner" role="alert">{connectionError} <button type="button" className="button small-button" onClick={() => void refresh()}>重试连接</button></p>}
+      <p className="small muted snapshot-read-state">黑板快照 · {readVerificationText(api.readVerifiedAt?.(snapshot))}</p>
       {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
         <span title={conflictTitle}>设置已更新；请核对草稿。</span>
         {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">

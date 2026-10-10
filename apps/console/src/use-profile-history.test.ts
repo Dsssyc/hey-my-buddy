@@ -200,3 +200,41 @@ describe("useProfileHistory", () => {
     expect(command).toHaveBeenCalledTimes(1);
   });
 });
+
+it("opens restored history once with existing bounds and does not repeat after failure or hide/show", async () => {
+  const { api, command } = fakeApi(() => { throw new Error("unavailable"); });
+  const { result, rerender } = renderHook(({ enabled }) => useProfileHistory(api, "csrf", 2,
+    { query: "", adapter: "", enabled, autoOpen: true }), { initialProps: { enabled: false } });
+  await sleep(FILTER_DEBOUNCE_MS + 120);
+  expect(command).not.toHaveBeenCalled();
+  rerender({ enabled: true });
+  await waitFor(() => expect(result.current.error).toBe("unavailable"));
+  expect(command).toHaveBeenCalledExactlyOnceWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf");
+  rerender({ enabled: false });
+  rerender({ enabled: true });
+  await sleep(FILTER_DEBOUNCE_MS + 120);
+  expect(command).toHaveBeenCalledTimes(1);
+});
+
+it("stops retained history at the existing six-page 600-profile display budget", async () => {
+  let reads = 0;
+  const { api, command } = fakeApi(() => {
+    const index = reads++;
+    return page(Array.from({ length: 100 }, (_, n) => `retained-${index * 100 + n}`), 2, `cursor-${index + 1}`);
+  });
+  const { result } = renderHook(() => useProfileHistory(api, "csrf", 2,
+    { query: "", adapter: "", enabled: true, autoOpen: true }));
+  await waitFor(() => expect(result.current.page?.profiles).toHaveLength(100));
+  for (let pages = 2; pages <= 6; pages++) {
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.page?.profiles).toHaveLength(pages * 100));
+  }
+  expect(result.current.limitReached).toBe(true);
+  expect(result.current.hasMore).toBe(false);
+  act(() => result.current.loadMore());
+  expect(command).toHaveBeenCalledTimes(6);
+  expect(command.mock.calls.map(([, params]) => params)).toEqual([
+    { includeUnavailable: true, limit: 100 },
+    ...Array.from({ length: 5 }, (_, index) => ({ includeUnavailable: true, limit: 100, after: `cursor-${index + 1}` })),
+  ]);
+});

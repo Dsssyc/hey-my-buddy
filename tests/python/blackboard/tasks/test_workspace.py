@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,6 +14,17 @@ from hey_my_buddy.blackboard.tasks import workspace
 
 
 class WorkspaceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-workspace-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.repo = Path(temporary.name) / "repo"
+        fixture.repo.mkdir()
+        fixture._seed_repository()
+        cls._repository_template = fixture.repo
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-workspace-")
         self.addCleanup(self.temp.cleanup)
@@ -20,6 +32,19 @@ class WorkspaceTests(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.state = self.root / "state"
+        template = getattr(self, "_repository_template", None)
+        if template is None:
+            # Other TestCases borrow setUp without inheriting our class fixture
+            # or _seed_repository method; preserve their original Git setup.
+            WorkspaceTests._seed_repository(self)
+        else:
+            # copytree creates distinct ordinary files and Git administration;
+            # refresh the copied index against this repository's new inodes.
+            shutil.copytree(template, self.repo, dirs_exist_ok=True)
+            self.git("update-index", "--refresh")
+            self.base = self.git("rev-parse", "HEAD").decode().strip()
+
+    def _seed_repository(self):
         self.git("init", "-q")
         self.git("config", "user.name", "Workspace Test")
         self.git("config", "user.email", "workspace@example.invalid")
@@ -51,6 +76,21 @@ class WorkspaceTests(unittest.TestCase):
     def prepare(self, request="request", **updates):
         return workspace.prepare(self.state, request, self.intent(**updates))
 
+    def test_borrowed_setup_without_a_template_preserves_router_input_capture(self):
+        from blackboard.routing.test_router import RouterInputTests
+
+        for template in ("absent", None):
+            with self.subTest(template=template):
+                borrower = RouterInputTests("test_existing_input_is_materialized_without_live_or_ignored_files")
+                self.assertFalse(hasattr(borrower, "_repository_template"))
+                self.assertFalse(hasattr(borrower, "_seed_repository"))
+                if template is None:
+                    borrower._repository_template = None
+                result = unittest.TestResult()
+                borrower.run(result)
+                self.assertEqual(result.testsRun, 1)
+                self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+
     def test_identity_unifies_siblings_and_distinguishes_linked_checkout(self):
         left = workspace.inspect(str(self.repo / "src"))
         right = workspace.inspect(str(self.repo / "docs"))
@@ -64,7 +104,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(left["path"], str(self.repo / "src"))
 
     def test_non_git_and_unborn_checkout_are_explicit_errors(self):
-        self.assert_error("WORKSPACE_UNSUPPORTED", workspace.inspect, str(self.root))
+        non_git = self.root / "non-git"
+        non_git.mkdir()
+        # TMPDIR may live inside a checkout. An invalid local Git pointer stops
+        # discovery from borrowing that ancestor as this fixture's repository.
+        (non_git / ".git").write_text("gitdir: missing-private-repository\n")
+        self.assert_error("WORKSPACE_UNSUPPORTED", workspace.inspect, str(non_git))
         unborn = self.root / "unborn"
         unborn.mkdir()
         self.git("init", "-q", cwd=unborn)
@@ -155,8 +200,14 @@ class WorkspaceTests(unittest.TestCase):
             if path.name == "manifest.json":
                 raise OSError("simulated crash")
             return original(path, data)
-        with patch.object(workspace, "_write_once", side_effect=interrupt):
-            self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
+        original_git = workspace._git
+        def failed_removal(root, *args, **kwargs):
+            if args[:2] == ("worktree", "remove"):
+                raise BoardError("WORKSPACE_GIT_ERROR", "simulated cleanup failure", argv=["git", *args])
+            return original_git(root, *args, **kwargs)
+        with patch.object(workspace, "_write_once", side_effect=interrupt), patch.object(workspace, "_git", side_effect=failed_removal):
+            error = self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
+        self.assertFalse(error.details["preparationCleanup"]["removed"])
         _, directory = workspace._workspace_directory(self.state, "request")
         changed = directory / "checkout/src/file.txt"
         changed.write_text("valuable unfinished work")

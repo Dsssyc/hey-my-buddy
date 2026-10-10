@@ -58,6 +58,7 @@ const emptyObjectives = () => ({ objectives: [], total: 0, nextCursor: null, cur
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   window.location.hash = "";
   document.documentElement.dataset.theme = "";
 });
@@ -83,6 +84,7 @@ describe("console interactions", () => {
       },
     ];
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => state),
       command: vi.fn(async () => ({})),
       task: vi.fn(async () => records[0]),
@@ -92,7 +94,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
@@ -128,6 +130,7 @@ describe("console interactions", () => {
       },
     ];
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => state),
       command: vi.fn(),
       task: vi.fn(async () => ({
@@ -146,7 +149,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /停止证据测试/ }),
@@ -160,6 +163,7 @@ describe("console interactions", () => {
   it("viewing, editing locally and switching pages never sends a write or model request", async () => {
     const state = initial();
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
@@ -168,7 +172,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
     await user.click(screen.getByRole("link", { name: "Buddy 配置" }));
     await screen.findByRole("heading", { name: "模型 1" });
@@ -196,6 +200,7 @@ describe("console interactions", () => {
   it("opens Buddy 配置 from the retired #settings and #models bookmarks and keeps 设置 at #system", async () => {
     const state = initial();
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
@@ -236,6 +241,7 @@ describe("console interactions", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     const api = {
+      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),
@@ -256,5 +262,30 @@ describe("console interactions", () => {
     await user.click(screen.getByRole("button", { name: "更新记录" }));
     await screen.findByText("暂无已发布评价");
     expect(command.mock.calls.map(([operation]) => operation)).toEqual(["evaluation_history"]);
+  });
+
+  // D2-A1/A2: a hidden bootstrap leaves startup or shows the existing error UI.
+  it.each([false, true])("finishes the hidden bootstrap through the existing App presentation (failure=%s)", async failure => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const api = {
+      snapshot: failure ? vi.fn(async () => { throw new Error("fixture offline"); }) : vi.fn(async () => initial()),
+      command: vi.fn(),
+      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+      objectives: vi.fn(async () => emptyObjectives()),
+    } as unknown as ConsoleApi;
+    render(<App suppliedApi={api} />);
+    if (failure) {
+      expect(await screen.findByRole("heading", { name: "暂时无法连接黑板" })).toBeTruthy();
+      expect(screen.getByRole("alert").textContent).toBe("fixture offline");
+      expect(screen.getByRole("button", { name: "重新连接" })).toBeTruthy();
+      expect(screen.queryByRole("navigation", { name: "主要导航" })).toBeNull();
+    } else {
+      expect(await screen.findByRole("navigation", { name: "主要导航" })).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    }
+    expect(screen.queryByRole("heading", { name: "正在连接本地黑板" })).toBeNull();
+    expect(screen.queryByText("正在连接…")).toBeNull();
+    expect(api.snapshot).toHaveBeenCalledTimes(1);
+    expect(api.command).not.toHaveBeenCalled();
   });
 });

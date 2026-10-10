@@ -14,30 +14,21 @@ function baseProps(timeline: ObjectiveTimelineData | null, overrides: Record<str
   const props: ObjectiveTimelineProps = {
     summary: timeline?.objective ?? null, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
-    expandedGapIds: new Set<string>(), onToggleGap: vi.fn(), onSetExpanded: vi.fn(),
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
   };
   return { ...props, ...overrides } as ObjectiveTimelineProps;
 }
 
-/** Stateful harness so selection and folds flow through parent-owned state. */
+/** Stateful harness so selection flows through parent-owned state. */
 function Harness({ timeline, selectionSource }: {
   timeline: ObjectiveTimelineData;
   selectionSource?: { get: () => unknown };
 }) {
-  const [expanded, setExpanded] = useState(new Set<string>());
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
   if (selectionSource) selectionSource.get = () => selection;
   return <ObjectiveTimeline {...baseProps(timeline, {
     selection,
-    expandedGapIds: expanded,
-    onToggleGap: (gapId: string) => setExpanded(previous => {
-      const next = new Set(previous);
-      if (next.has(gapId)) next.delete(gapId); else next.add(gapId);
-      return next;
-    }),
-    onSetExpanded: (ids: Set<string>) => setExpanded(ids),
     onSelectItem: (item: TimelineItem) => setSelection({ type: "item", key: item.key }),
     onSelectRun: (runId: string) => setSelection({ type: "run", runId }),
     onClearSelection: () => setSelection(null),
@@ -117,7 +108,8 @@ describe("objective timeline rendering", () => {
     // The plain-sentence durations and the record source fold into 时间统计 (§3).
     const stats = head.querySelector(".time-stats") as HTMLElement;
     expect(within(stats).getByText("时间统计")).toBeTruthy();
-    const body = stats.querySelector(".time-stats-body") as HTMLElement;
+    await userEvent.setup().click(stats);
+    const body = screen.getByRole("dialog", { name: "时间统计" }).querySelector(".time-stats-body") as HTMLElement;
     expect(body.textContent).toMatch(/从开始到最近一次活动：\S+/);
     expect(body.textContent).toMatch(/其间至少有一项在运行的时间：\S+/);
     // The fixture has overlapping executions, so the cumulative sum exceeds
@@ -223,37 +215,16 @@ describe("objective timeline rendering", () => {
     expect(single.textContent).not.toContain(LONG_TASK_LINE);
   });
 
-  it("folds long idle stretches, expands one break and offers expand/collapse all", async () => {
-    const user = userEvent.setup();
-    const timeline = objectiveTimelineFixture();
-    const onSetExpanded = vi.fn();
-    const view = render(<Harness timeline={timeline} selectionSource={{ get: () => null }} />);
-    void onSetExpanded;
-    const folds = screen.getAllByRole("button", { name: /已折叠，展开/ });
-    expect(folds.length).toBe(2);
-    await user.click(folds[0]!);
-    expect(await screen.findByRole("button", { name: /^收起空闲/ })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: /已折叠，展开/ }).length).toBe(1);
-    await user.click(screen.getByRole("button", { name: "展开全部空闲" }));
-    expect(screen.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "折叠空闲" }));
-    expect(screen.getAllByRole("button", { name: /已折叠，展开/ }).length).toBe(2);
-    view.unmount();
-  });
-
-  it("offers exactly one idle-fold toggle whose label follows the fold state", async () => {
-    const user = userEvent.setup();
-    const view = render(<Harness timeline={objectiveTimelineFixture()} />);
-    // name is anchored, so a second 展开全部空闲/折叠空闲 button makes getByRole throw.
-    const toggle = () => screen.getByRole("button", { name: /^(展开全部空闲|折叠空闲)$/ });
-    expect(toggle().textContent).toBe("展开全部空闲");
-    await user.click(toggle());
-    expect(screen.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
-    expect(toggle().textContent).toBe("折叠空闲");
-    await user.click(toggle());
-    expect(screen.getAllByRole("button", { name: /已折叠，展开/ }).length).toBe(2);
-    expect(toggle().textContent).toBe("展开全部空闲");
-    view.unmount();
+  it("shows fixed idle blocks with ranges and removes every expand control", () => {
+    render(<Harness timeline={objectiveTimelineFixture()} />);
+    const blocks = [...document.querySelectorAll<HTMLElement>(".idle-block")];
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block.style.width).toBe("32px");
+      expect(block.getAttribute("aria-label")).toMatch(/空闲 .+ · .+–.+/);
+      expect(block.tabIndex).toBe(0);
+    }
+    expect(screen.queryByRole("button", { name: /展开全部空闲|折叠空闲|收起空闲|已折叠，展开/ })).toBeNull();
   });
 
   it("keeps only list-appropriate controls in the toolbar while the list view is on", async () => {
@@ -261,14 +232,14 @@ describe("objective timeline rendering", () => {
     const { container } = render(<Harness timeline={objectiveTimelineFixture()} />);
     const toolbar = () => within(container.querySelector(".tl-toolbar") as HTMLElement);
     const idleToggle = () => toolbar().queryByRole("button", { name: /^(展开全部空闲|折叠空闲)$/ });
-    expect(idleToggle()).toBeTruthy();
+    expect(idleToggle()).toBeNull();
     expect(toolbar().getByRole("group", { name: "时间轴缩放" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "列表" }));
     expect(idleToggle()).toBeNull();
     expect(toolbar().queryByRole("group", { name: "时间轴缩放" })).toBeNull();
     // Switching back to the timeline restores every timeline-only control.
     await user.click(screen.getByRole("button", { name: "时间轴" }));
-    expect(idleToggle()).toBeTruthy();
+    expect(idleToggle()).toBeNull();
     expect(toolbar().getByRole("group", { name: "时间轴缩放" })).toBeTruthy();
   });
 
@@ -293,13 +264,14 @@ describe("objective timeline rendering", () => {
       scopeComplete: false,
     });
     const first = render(<ObjectiveTimeline {...baseProps(truncated)} />);
-    expect(screen.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
+    expect(document.querySelector(".idle-block")).toBeNull();
     const banner = screen.getByRole("status");
     expect(banner.textContent).toContain("执行片段已截断：显示 15 / 20 段");
     expect(banner.textContent).toContain("Host 事件已截断：显示 9 / 12 条");
     expect(first.container.querySelector(".trunc-chip")!.textContent).toContain("‹ 3 条事件未返回");
     // The overview marks the duration numbers as recorded-part only.
-    const warn = first.container.querySelector(".metric-warn") as HTMLElement;
+    fireEvent.click(screen.getByRole("button", { name: "时间统计" }));
+    const warn = screen.getByRole("dialog", { name: "时间统计" }).querySelector(".metric-warn") as HTMLElement;
     expect(warn.textContent).toContain("不完整");
     expect(warn.getAttribute("title")).toContain("执行片段已截断");
     first.unmount();
@@ -418,7 +390,7 @@ describe("objective timeline rendering", () => {
     expect(span.getAttribute("aria-label")).not.toContain("至 现在");
   });
 
-  it("measures the viewport after the async canvas mounts, resizes and keeps breaks at 64px", async () => {
+  it("measures the viewport after the async canvas mounts, resizes and keeps breaks at 32px", async () => {
     const observers: Array<{ observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; callback: ResizeObserverCallback }> = [];
     vi.stubGlobal("ResizeObserver", class {
       observe = vi.fn();
@@ -450,20 +422,24 @@ describe("objective timeline rendering", () => {
       // The canvas mounts with the data; the viewport observer attaches then.
       const grid = document.querySelector(".tl-grid") as HTMLElement;
       expect(observers.length).toBeGreaterThan(before);
-      const viewportObserver = observers[observers.length - 1]!;
       // 900px viewport minus the 240px fallback label column = 660px canvas:
       // exactly the viewport (适应窗口 never overflows), of which the time
       // track is 648px and 12px stay after the last instant.
       expect(grid.style.width).toBe("calc(var(--label-w) + 660px)");
       const band = document.querySelector(".fold-band") as HTMLElement;
-      const bandPercent = Number.parseFloat(band.style.width);
-      expect(bandPercent / 100 * 648).toBeCloseTo(64, 5);
+      expect(band.style.width).toBe("32px");
       // A viewport resize remaps the same recorded facts without feedback.
       stubbedWidth = 1400;
-      act(() => { viewportObserver.callback([], viewportObserver as unknown as ResizeObserver); });
+      act(() => {
+        const scroll = document.querySelector(".tl-scroll");
+        for (const observer of observers) {
+          if (observer.observe.mock.calls.some(([element]) => element === scroll)) {
+            observer.callback([], observer as unknown as ResizeObserver);
+          }
+        }
+      });
       await waitFor(() => expect(grid.style.width).toBe("calc(var(--label-w) + 1160px)"));
-      const remapped = Number.parseFloat((document.querySelector(".fold-band") as HTMLElement).style.width);
-      expect(remapped / 100 * 1148).toBeCloseTo(64, 5);
+      expect((document.querySelector(".fold-band") as HTMLElement).style.width).toBe("32px");
     } finally {
       delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
       if (widthOriginal) Object.defineProperty(widthOriginal.target, "clientWidth", widthOriginal.descriptor);
@@ -765,7 +741,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(container.querySelector(".timeline-body")!.className).toContain("as-list");
     const list = container.querySelector(".tl-list")!;
     const gaps = [...list.querySelectorAll(".tl-gap")];
-    expect(gaps.length).toBe(2);
+    expect(gaps.length).toBe(3);
     expect(gaps[0]!.textContent).toMatch(/^空闲 \d+ (小时|分钟|分)/);
     const entries = [...list.querySelectorAll(".tl-entry")];
     expect(entries.length).toBe(timeline.spans.length + timeline.events.length);

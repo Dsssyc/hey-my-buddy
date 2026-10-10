@@ -1,8 +1,9 @@
 import type { TimelineLayout } from "./objective-timeline-layout";
 
-const GAP_PX = 64;
-/** The largest share of a fitted track all folded breaks may occupy together. */
-const GAP_BUDGET_SHARE = 0.4;
+/** Every proven idle break keeps this pixel width, at every zoom and count. */
+export const TIMELINE_IDLE_PX = 32;
+/** Keep real activity readable when fixed breaks alone consume the viewport. */
+const MIN_REAL_TRACK_PX = 64;
 /** The largest zoom level (0.16 P2.3): +60px per minute is disabled beyond this. */
 export const MAX_PIXELS_PER_MINUTE = 60;
 
@@ -18,64 +19,37 @@ function collapsedCount(layout: TimelineLayout): number {
   return layout.gaps.filter(gap => gap.collapsed).length;
 }
 
-/**
- * The width of one folded break on a track of `trackPx`: at most GAP_PX, and
- * all breaks together at most 40% of the actual track, so 适应窗口 always
- * fits the viewport instead of forcing horizontal overflow. Times and counts
- * are never dropped to make room — the breaks shrink.
- */
-function fitGapWidth(trackPx: number, count: number): number {
-  if (count <= 0) return 0;
-  return Math.min(GAP_PX, trackPx * GAP_BUDGET_SHARE / count);
-}
-
-/**
- * The 适应窗口 scale in pixels per real minute (0.16 P2.3): computed from the
- * available track width with no minimum px/minute floor, so a first open never
- * forces horizontal scrolling.
- */
+/** Fit real activity into the room left after fixed idle blocks, allowing necessary overflow. */
 export function fitPixelsPerMinute(layout: TimelineLayout, viewportWidth: number): number {
   const { foldedMs, durationMs } = layoutNumbers(layout);
   const collapsed = collapsedCount(layout);
   const realMs = Math.max(0, durationMs - foldedMs);
   const viewport = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : 800;
-  const gapPx = fitGapWidth(viewport, collapsed);
+  const gapTotalPx = collapsed * TIMELINE_IDLE_PX;
   const realMinutes = realMs / 60_000;
   if (realMinutes <= 0) return Number.POSITIVE_INFINITY;
-  return Math.max((viewport - collapsed * gapPx) / realMinutes, 0);
+  const realPx = collapsed > 0 ? Math.max(viewport - gapTotalPx, MIN_REAL_TRACK_PX) : viewport;
+  return realPx / realMinutes;
 }
 
 /**
- * Fit the normalized layout to a scrollable track. Occupancy, gap identities,
- * folding and timestamps remain the layout module's decisions; this adapter
- * only sizes each collapsed break — at most 64px, and together at most 40% of
- * the actual track while fitting.
- *
- * Without `pixelsPerMinute` the view fits the viewport exactly (适应窗口):
- * the track is the viewport width and breaks shrink within their budget. With
- * `pixelsPerMinute` the real-time scale is fixed at that px/minute and the
- * canvas may scroll horizontally; folded breaks widen continuously from their
- * fit width back to 64px as the zoom grows, so no zoom step jumps. The value
- * is clamped to at least the fit scale so zoom never inverts.
+ * Size the existing monotonic map with fixed 32px idle blocks. Occupancy,
+ * eligibility and times remain the layout's decisions. Fit may scroll when
+ * many blocks leave too little room for real activity; neither blocks nor the
+ * real-time axis are squeezed to zero. Manual zoom clamps to the fit scale.
  */
 export function scaleTimeline(layout: TimelineLayout, viewportWidth: number, pixelsPerMinute?: number): TimelineLayout & { widthPx: number } {
   const collapsed = layout.gaps.filter(gap => gap.collapsed);
   const { foldedMs, foldedPercent, durationMs } = layoutNumbers(layout);
   const realMs = Math.max(0, durationMs - foldedMs);
   const viewport = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : 800;
-  let widthPx: number;
-  let gapPx: number;
   const fitPpm = fitPixelsPerMinute(layout, viewport);
-  if (pixelsPerMinute !== undefined && Number.isFinite(pixelsPerMinute) && Number.isFinite(fitPpm) && fitPpm > 0) {
-    const ppm = Math.max(pixelsPerMinute, fitPpm);
-    // Breaks grow with the zoom factor from their fit width until 64px, so
-    // the zoom level equal to fit renders exactly as fit.
-    gapPx = Math.min(GAP_PX, fitGapWidth(viewport, collapsed.length) * ppm / fitPpm);
-    widthPx = Math.max(viewport, realMs / 60_000 * ppm + collapsed.length * gapPx);
-  } else {
-    widthPx = viewport;
-    gapPx = fitGapWidth(viewport, collapsed.length);
-  }
+  const ppm = pixelsPerMinute !== undefined && Number.isFinite(pixelsPerMinute)
+    ? Math.max(pixelsPerMinute, fitPpm) : fitPpm;
+  const gapPx = TIMELINE_IDLE_PX;
+  const widthPx = realMs > 0
+    ? Math.max(viewport, realMs / 60_000 * ppm + collapsed.length * gapPx)
+    : viewport;
   const realScale = (widthPx - collapsed.length * gapPx) / (100 - foldedPercent);
 
   function remap(percent: number): number {

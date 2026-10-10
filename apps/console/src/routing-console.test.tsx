@@ -303,19 +303,30 @@ describe("recorded decision details", () => {
     expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: "missing", includeAudit: true }, "csrf");
   });
 
-  it("keeps a long recorded reason and the raw snapshots collapsed until requested", async () => {
+  it("expands a long recorded reason in one paragraph, collapses, and resets on record switch", async () => {
     const reason = "这是保留在黑板中的具体选择依据。".repeat(60);
-    const command = vi.fn(async () => ({ decision: decision("long", { reason }) }));
+    const command = vi.fn(async (_op: string, params: { decisionId: string }) => ({ decision: decision(params.decisionId, { reason }) }));
+    const api = apiFor(snapshot(), command);
     const user = userEvent.setup();
-    render(<DecisionDetails decisionId="long" api={apiFor(snapshot(), command)} csrfToken="csrf" />);
-    const disclosure = (await screen.findByText("展开完整依据")).closest("details")!;
-    expect(disclosure.open).toBe(false);
-    expect(screen.getByText(reason.slice(0, 360) + "…")).toBeTruthy();
+    const view = render(<DecisionDetails decisionId="long" api={api} csrfToken="csrf" />);
+    const button = await screen.findByRole("button", { name: "展开" });
+    const paragraph = button.closest("p")!;
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(paragraph.textContent).toContain(reason.slice(0, 360) + "…");
+    expect(document.querySelectorAll(".decision-reason")).toHaveLength(1);
+    expect(screen.queryByText(reason)).toBeNull();
     expect(screen.getByText("记录标识与原始快照").closest("details")).toHaveProperty("open", false);
-    await user.click(within(disclosure).getByText("展开完整依据"));
-    expect(disclosure.open).toBe(true);
-    expect(within(disclosure).getByText(reason)).toBeTruthy();
-    expect(command).toHaveBeenCalledTimes(1);
+    await user.click(button);
+    expect(paragraph.textContent).toBe(reason + " 收起");
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "收起" }).getAttribute("aria-expanded")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "收起" }));
+    expect(paragraph.textContent).toContain(reason.slice(0, 360) + "…");
+    await user.click(screen.getByRole("button", { name: "展开" }));
+    view.rerender(<DecisionDetails decisionId="another" api={api} csrfToken="csrf" />);
+    expect((await screen.findByRole("button", { name: "展开" })).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(reason)).toBeNull();
+    expect(command).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -330,7 +341,7 @@ describe("delegation routing rationale", () => {
     });
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command, [record])} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /完成 goal 状态内核/ }));
     await screen.findByRole("tab", { name: "路由依据" });
     expect(command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
@@ -457,7 +468,7 @@ describe("delegation routing rationale", () => {
     });
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command, [record])} />);
-    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /完成 goal 状态内核/ }));
     await user.click(screen.getByRole("button", { name: "查看选择依据" }));
     const detail = await screen.findByRole("region", { name: "决策依据详情" });

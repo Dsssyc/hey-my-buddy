@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ObjectiveTimeline, TimelineSpan } from "./objective-types";
 import { createTimelineLayout } from "./objective-timeline-layout";
-import { fitPixelsPerMinute, scaleTimeline } from "./objective-timeline-scale";
+import { fitPixelsPerMinute, scaleTimeline, TIMELINE_IDLE_PX } from "./objective-timeline-scale";
 
 const start = Date.parse("2026-09-27T00:00:00Z");
 const at = (minute: number) => new Date(start + minute * 60_000).toISOString();
@@ -19,117 +19,78 @@ function data(count = 2): Pick<ObjectiveTimeline, "spans" | "events" | "observed
 const gapPx = (gap: { fromPercent: number; toPercent: number }, widthPx: number) => (gap.toPercent - gap.fromPercent) * widthPx / 100;
 
 describe("timeline track pixel scale", () => {
-  it("keeps a folded gap at 64px when the track has room, without changing its times", () => {
-    const layout = createTimelineLayout(data());
-    const original = JSON.stringify(layout.gaps);
-    for (const viewport of [400, 800, 1600, 3200]) {
-      const scaled = scaleTimeline(layout, viewport);
-      expect(scaled.widthPx).toBe(viewport);
-      expect(scaled.gaps[0].id).toBe(layout.gaps[0].id);
-      expect(gapPx(scaled.gaps[0], scaled.widthPx)).toBeCloseTo(64, 8);
-      expect(scaled.position(scaled.startMs)).toBeCloseTo(0);
-      expect(scaled.position(scaled.endMs)).toBeCloseTo(100);
+  it("keeps every idle break at exactly 32px across widths, counts and zoom", () => {
+    expect(TIMELINE_IDLE_PX).toBe(32);
+    for (const count of [2, 4, 25, 80]) {
+      const layout = createTimelineLayout(data(count));
+      const original = JSON.stringify(layout.gaps);
+      for (const viewport of [20, 100, 260, 400, 800, 1600]) {
+        const fitPpm = fitPixelsPerMinute(layout, viewport);
+        for (const ppm of [undefined, fitPpm, fitPpm * 1.5, 60, 0, -1, Number.NaN]) {
+          const scaled = scaleTimeline(layout, viewport, ppm);
+          expect(Number.isFinite(scaled.widthPx)).toBe(true);
+          expect(scaled.widthPx).toBeGreaterThanOrEqual(viewport);
+          for (const gap of scaled.gaps) {
+            expect(gapPx(gap, scaled.widthPx)).toBeCloseTo(32, 7);
+            expect(scaled.position(gap.startMs)).toBeCloseTo(gap.fromPercent, 8);
+            expect(scaled.position(gap.endMs)).toBeCloseTo(gap.toPercent, 8);
+          }
+          expect(scaled.position(scaled.startMs)).toBeCloseTo(0);
+          expect(scaled.position(scaled.endMs)).toBeCloseTo(100);
+        }
+      }
+      expect(JSON.stringify(layout.gaps)).toBe(original);
     }
-    expect(JSON.stringify(layout.gaps)).toBe(original);
   });
 
-  it("fits three breaks into a 380px track: the track stays 380px and breaks share at most 40%", () => {
-    const layout = createTimelineLayout(data(4));
-    expect(layout.gaps.filter(gap => gap.collapsed)).toHaveLength(3);
-    const scaled = scaleTimeline(layout, 380);
-    // Fit wins over the fixed band width: no 480px canvas, no overflow.
-    expect(scaled.widthPx).toBe(380);
-    const bands = scaled.gaps.filter(gap => gap.collapsed).map(gap => gapPx(gap, 380));
-    for (const band of bands) expect(band).toBeLessThanOrEqual(64 + 1e-9);
-    expect(bands.reduce((sum, band) => sum + band, 0)).toBeCloseTo(380 * 0.4, 6);
-    expect(scaled.position(scaled.endMs)).toBeCloseTo(100);
-  });
-
-  it("fits a narrow 260px track (500px column minus 240px labels) without a 380px floor", () => {
-    const layout = createTimelineLayout(data(4));
+  it("allows necessary overflow and preserves positive real activity and monotonic times", () => {
+    const layout = createTimelineLayout(data(80));
     const scaled = scaleTimeline(layout, 260);
-    expect(scaled.widthPx).toBe(260);
-    const total = scaled.gaps.filter(gap => gap.collapsed).reduce((sum, gap) => sum + gapPx(gap, 260), 0);
-    expect(total).toBeCloseTo(104, 6);
-    expect(fitPixelsPerMinute(layout, 260)).toBeCloseTo((260 - 104) / 40, 8);
-  });
-
-  it("shrinks many breaks inside the fitted track and preserves a monotonic axis", () => {
-    const scaled = scaleTimeline(createTimelineLayout(data(25)), 800);
-    expect(scaled.widthPx).toBe(800);
-    for (const gap of scaled.gaps) {
-      expect(gapPx(gap, scaled.widthPx)).toBeCloseTo(800 * 0.4 / 24, 8);
-      expect(scaled.position(gap.startMs)).toBeCloseTo(gap.fromPercent, 8);
-      expect(scaled.position(gap.endMs)).toBeCloseTo(gap.toPercent, 8);
-    }
+    expect(scaled.widthPx).toBe(79 * 32 + 64);
+    expect(fitPixelsPerMinute(layout, 260)).toBeCloseTo(64 / 800, 8);
     let previous = -1;
-    for (let minute = 0; minute < 3140; minute++) {
+    for (let minute = 0; minute <= 10280; minute++) {
       const current = scaled.position(at(minute))!;
+      expect(Number.isFinite(current)).toBe(true);
       expect(current).toBeGreaterThanOrEqual(previous - 1e-9);
       previous = current;
     }
-  });
-
-  it("restores proportional elapsed time for expanded gaps and never changes uncertainty", () => {
-    const layout = createTimelineLayout(data());
-    const expanded = createTimelineLayout(data(), new Set(layout.gaps.map(gap => gap.id)));
-    const scaled = scaleTimeline(expanded, 100);
-    // 适应窗口 has no minimum px/minute floor (0.16 P2.3): the track is exactly
-    // the available width instead of forcing horizontal overflow.
-    expect(scaled.widthPx).toBe(100);
-    expect(scaled.gaps[0].collapsed).toBe(false);
-    expect(scaled.position(at(70))).toBeCloseTo(50);
-    expect(scaled.canFold).toBe(expanded.canFold);
-    expect(scaled.position("bad timestamp")).toBeNull();
-  });
-
-  it("scales real time by an explicit px/minute while folded breaks return to 64px", () => {
-    const layout = createTimelineLayout(data());
-    const fit = scaleTimeline(layout, 800);
-    const zoomed = scaleTimeline(layout, 800, 60);
-    expect(zoomed.widthPx).toBeGreaterThan(fit.widthPx);
-    for (const gap of zoomed.gaps) {
-      if (gap.collapsed) expect(gapPx(gap, zoomed.widthPx)).toBeCloseTo(64, 8);
+    for (const span of data(80).spans) {
+      expect(scaled.position(span.endAt)! - scaled.position(span.startAt)!).toBeGreaterThan(0);
     }
-    // A zoom below the fit scale clamps back to fit.
-    const floored = scaleTimeline(layout, 800, 0.01);
-    expect(floored.widthPx).toBe(fit.widthPx);
-    expect(floored.position(at(135))).toBeCloseTo(fit.position(at(135))!, 8);
   });
 
-  it("widens shrunken breaks continuously from the fit width back to 64px as zoom grows", () => {
+  it("fits ordinary narrow views and clamps lower zoom back to fit", () => {
     const layout = createTimelineLayout(data(4));
-    const fitPpm = fitPixelsPerMinute(layout, 380);
-    let previousBand = 0;
-    let previousWidth = 0;
-    for (const factor of [1, 1.05, 1.2, 1.5, 2.25, 5]) {
-      const scaled = scaleTimeline(layout, 380, fitPpm * factor);
-      const band = gapPx(scaled.gaps.find(gap => gap.collapsed)!, scaled.widthPx);
-      expect(band).toBeGreaterThanOrEqual(previousBand - 1e-9);
-      expect(band).toBeLessThanOrEqual(64 + 1e-9);
-      expect(scaled.widthPx).toBeGreaterThanOrEqual(previousWidth);
-      previousBand = band;
-      previousWidth = scaled.widthPx;
+    for (const viewport of [260, 380, 800]) {
+      const fit = scaleTimeline(layout, viewport);
+      expect(fit.widthPx).toBe(viewport);
+      expect(fitPixelsPerMinute(layout, viewport)).toBeCloseTo((viewport - 3 * 32) / 40, 8);
+      const lower = scaleTimeline(layout, viewport, 0.01);
+      expect(lower.widthPx).toBe(fit.widthPx);
+      expect(lower.position(at(135))).toBeCloseTo(fit.position(at(135))!, 8);
     }
-    expect(gapPx(scaleTimeline(layout, 380, fitPpm).gaps.find(gap => gap.collapsed)!, 380)).toBeCloseTo(380 * 0.4 / 3, 6);
-    expect(previousBand).toBeCloseTo(64, 8);
   });
 
-  it("reports the fit scale in px/minute from the available width", () => {
-    const layout = createTimelineLayout(data());
-    const ppm = fitPixelsPerMinute(layout, 800);
-    const fit = scaleTimeline(layout, 800);
-    expect(ppm).toBeGreaterThan(0);
-    expect(Number.isFinite(ppm)).toBe(true);
-    expect(fit.widthPx).toBe(800);
-    expect(ppm).toBeCloseTo((800 - 64) / 20, 8);
+  it("keeps incomplete and unreliable reads proportional and never invents idle", () => {
+    for (const slice of [{ ...data(), scopeComplete: false },
+      { ...data(), spans: data().spans.map(span => ({ ...span, clockSkew: true })) }]) {
+      const scaled = scaleTimeline(createTimelineLayout(slice), 100);
+      expect(scaled.widthPx).toBe(100);
+      expect(scaled.canFold).toBe(false);
+      expect(scaled.gaps.every(gap => !gap.collapsed)).toBe(true);
+      expect(scaled.position(at(70))).toBeCloseTo(50);
+      expect(scaled.position("bad timestamp")).toBeNull();
+    }
   });
 
-  it("handles empty and point-only layouts without inventing extent", () => {
-    const empty = scaleTimeline(createTimelineLayout({ ...data(), spans: [] }), Number.NaN);
-    expect(empty.widthPx).toBe(800);
-    expect(empty.startMs).toBeNull();
-    expect(empty.position(at(0))).toBeNull();
+  it("handles invalid viewports, empty and point-only layouts without inventing extent", () => {
+    for (const viewport of [Number.NaN, Infinity, -10, 0]) {
+      const empty = scaleTimeline(createTimelineLayout({ ...data(), spans: [] }), viewport);
+      expect(empty.widthPx).toBe(800);
+      expect(empty.startMs).toBeNull();
+      expect(empty.position(at(0))).toBeNull();
+    }
     const point = data(1);
     point.spans[0].endAt = point.spans[0].startAt;
     const scaled = scaleTimeline(createTimelineLayout(point), 800);

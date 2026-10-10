@@ -107,6 +107,8 @@ export type ProfileHistoryFilters = {
   adapter: string;
   /** False keeps a hidden view from fetching in the background. */
   enabled: boolean;
+  /** A restored browser preference requests the same bounded history. */
+  autoOpen?: boolean;
 };
 
 /** Stored page plus the revision and filter generation it was read for. */
@@ -187,7 +189,7 @@ export function useProfileHistory(
   // One bounded first-page request per revision/filter generation while the
   // retained view is wanted (and visible). A settled generation is not retried.
   useEffect(() => {
-    if (!wanted || !filters.enabled) return;
+    if (!(wanted || filters.autoOpen) || !filters.enabled) return;
     const key = `${tableRevision}\u0000${filterKey}`;
     if (requestedKey.current === key) return;
     const timer = setTimeout(() => {
@@ -195,7 +197,7 @@ export function useProfileHistory(
       void fetchPage(undefined, true);
     }, FILTER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [wanted, filters.enabled, tableRevision, filterKey, fetchPage]);
+  }, [wanted, filters.autoOpen, filters.enabled, tableRevision, filterKey, fetchPage]);
 
   const page = stored.revision === tableRevision && stored.key === filterKey ? stored.page : null;
   const loaded = page?.profiles.length ?? 0;

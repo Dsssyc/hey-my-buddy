@@ -15,12 +15,12 @@ const page = (objectives: ObjectiveSummary[], nextCursor: string | null = null, 
   ({ objectives, total: objectives.length, nextCursor, cursor: 10, changed });
 const query: ObjectiveQuery = { query: "", projectId: "p1", hostId: "", filter: "all" };
 
-function harness() {
+function harness(readVerifiedAt?: (value: unknown) => number | null) {
   const requests: { query: ObjectiveQuery; signal?: AbortSignal; resolve: (value: ObjectivePage) => void; reject: (error: Error) => void }[] = [];
   const objectives = vi.fn((params: ObjectiveQuery, signal?: AbortSignal) => new Promise<ObjectivePage>((resolve, reject) => {
     requests.push({ query: params, signal, resolve, reject });
   }));
-  const api = { objectives } as unknown as ConsoleApi;
+  const api = { objectives, readVerifiedAt } as unknown as ConsoleApi;
   const hook = renderHook(({ query, active }) => useObjectiveList(api, query, active), { initialProps: { query, active: true } });
   return { ...hook, requests, objectives };
 }
@@ -388,5 +388,33 @@ describe("work-objective list hook", () => {
     expect(f.result.current.nextCursor).toBe("recovered-cursor");
     act(() => f.result.current.more());
     expect(f.requests[4]!.query.before).toBe("recovered-cursor");
+  });
+});
+
+
+describe("U09 objective list verification", () => {
+  it("labels loaded objective data using only successful response verification and clears it for another scope", async () => {
+    const checked = new WeakMap<object, number>();
+    const f = harness(value => checked.get(value as object) ?? null);
+    await startRead();
+    const first = page([summary("first", 3)], "older"); checked.set(first, 1000);
+    await act(async () => f.requests[0].resolve(first));
+    expect(f.result.current.verifiedAtMs).toBe(1000);
+    act(() => f.result.current.more());
+    const older = page([summary("older", 1)]); checked.set(older, 500);
+    await act(async () => f.requests[1].resolve(older));
+    expect(f.result.current.verifiedAtMs).toBe(500);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[2].reject(new Error("verification unavailable")));
+    expect(f.result.current.verifiedAtMs).toBe(500);
+    act(() => f.result.current.retry());
+    const current = page([summary("first", 3), summary("older", 1)]); checked.set(current, 2000);
+    await act(async () => f.requests[3].resolve(current));
+    expect(f.result.current.verifiedAtMs).toBe(2000);
+    f.rerender({ query: { ...query, hostId: "another-host" }, active: true });
+    expect(f.result.current.verifiedAtMs).toBeNull();
+    await startRead();
+    await act(async () => f.requests[4].resolve(page([summary("new-scope", 99)])));
+    expect(f.result.current.verifiedAtMs).toBeNull();
   });
 });

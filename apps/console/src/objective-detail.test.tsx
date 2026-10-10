@@ -7,7 +7,6 @@ import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 import { objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
-import { refreshVisibleReads } from "./global-refresh";
 import type { ObjectiveStopResult, ObjectiveTimeline } from "./objective-types";
 
 function snapshotFixture(): Snapshot {
@@ -146,17 +145,18 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(true);
     await waitFor(() => expect(within(document.querySelector(".run-view")!).getByRole("tab", { name: "执行记录" })
       .getAttribute("aria-selected")).toBe("true"));
-    expect(f.api.task).toHaveBeenCalledWith("r2");
+    expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal));
     // The delegation detail carries no Host write form anymore (U4).
     expect(document.querySelector(".workflow-controls")).toBeNull();
   });
 
-  it("returns to the timeline by button and by Escape, restoring focus, outline and expanded gaps", async () => {
+  it("returns to the timeline by button and by Escape, restoring focus, outline and fixed idle blocks", async () => {
     stubViewport(true);
     const f = harness();
     await openObjective(f);
-    // Expand one folded break first; it must survive the detail round-trip.
-    await f.user.click((await screen.findAllByRole("button", { name: /已折叠，展开/ }))[0]!);
+    // The fixed idle blocks survive the detail round-trip.
+    const idleCount = document.querySelectorAll(".idle-block").length;
+    expect(idleCount).toBeGreaterThan(0);
     await openSpan(f, "s-r1-e");
     const span = document.querySelector('.tl-list [data-key="span:s-r1-e"]') as HTMLButtonElement;
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
@@ -164,7 +164,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     expect(document.activeElement).toBe(span);
     // Opening pinned the selection, so the outline survives the return.
     expect(span.className).toContain("selected");
-    expect(screen.getByRole("button", { name: /^收起空闲/ })).toBeTruthy();
+    expect(document.querySelectorAll(".idle-block")).toHaveLength(idleCount);
     // Reopen and return with Escape while focus is outside any field.
     await openSpan(f, "s-r1-e");
     fireEvent.keyDown(document.body, { key: "Escape" });
@@ -181,8 +181,8 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
     (f.api.objectives as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ objectives: [], total: 0, nextCursor: null, cursor: 41, changed: false });
-    await act(async () => { await refreshVisibleReads(); });
-    await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(2));
+    // The existing bounded periodic read is the trigger; there is no shell broadcast.
+    await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(2), { timeout: 4500 });
     expect(document.querySelector(".run-view")).toBeTruthy();
     expect(document.querySelector(".locator")).toBeTruthy();
   });
@@ -209,7 +209,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await openSpan(f, "s-r2-e1");
     await f.user.click(await screen.findByRole("tab", { name: "协作与待办" }));
     await f.user.click(await screen.findByRole("button", { name: "r3" }));
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3"));
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3", expect.any(AbortSignal)));
     const crumbs = document.querySelector(".locator .crumbs") as HTMLElement;
     expect(crumbs.textContent).toContain("补充 schema 升级离线副本的验证测试");
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
@@ -235,7 +235,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-r");
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r2"));
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal)));
     expect(f.api.task).not.toHaveBeenCalledWith("run-d02b");
     expect(screen.getByRole("tab", { name: "路由依据" }).getAttribute("aria-selected")).toBe("true");
     await screen.findByText("第一轮的路由依据");

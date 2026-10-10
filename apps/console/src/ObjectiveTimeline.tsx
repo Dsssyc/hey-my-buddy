@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
-import { createTimelineLayout, TIMELINE_FOLD_THRESHOLD_MS } from "./objective-timeline-layout";
-import { fitPixelsPerMinute, MAX_PIXELS_PER_MINUTE, scaleTimeline } from "./objective-timeline-scale";
+import { createTimelineLayout } from "./objective-timeline-layout";
+import { fitPixelsPerMinute, MAX_PIXELS_PER_MINUTE, scaleTimeline, TIMELINE_IDLE_PX } from "./objective-timeline-scale";
 import type { SpanOutcome, TimelineItem, FriendlyProfile } from "./objective-display";
 import {
   buildChronology, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
@@ -14,6 +14,7 @@ import { DelegationStrip, ObjectiveOverview } from "./ObjectiveOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import { Popover } from "./Popover";
+import { idleReadout, TimelineReadout } from "./TimelineReadout";
 import { buildInspectorCard, type InspectorCard, type InspectorSelection } from "./inspector-card";
 
 /** Markers closer than this many actual track pixels merge into one numbered marker. */
@@ -79,9 +80,6 @@ export type ObjectiveTimelineProps = {
   headerActions?: ReactNode;
   /** Snapshot profiles for friendly configuration names (0.16 0.3). */
   profiles?: readonly FriendlyProfile[] | null;
-  expandedGapIds: ReadonlySet<string>;
-  onToggleGap: (gapId: string) => void;
-  onSetExpanded: (gapIds: Set<string>) => void;
   onSelectItem: (item: TimelineItem) => void;
   onOpenItem: (item: TimelineItem) => void;
   onSelectRun: (runId: string) => void;
@@ -258,9 +256,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const observedAtMs = toMs(props.displayObservedAt ?? timeline?.observedAt);
   const layout = useMemo(
     () => timeline
-      ? createTimelineLayout({ ...timeline, observedAt: props.displayObservedAt ?? timeline.observedAt }, props.expandedGapIds)
+      ? createTimelineLayout({ ...timeline, observedAt: props.displayObservedAt ?? timeline.observedAt })
       : null,
-    [timeline, props.displayObservedAt, props.expandedGapIds],
+    [timeline, props.displayObservedAt],
   );
   const canvasKey = timeline?.objective.objectiveId ?? null;
 
@@ -436,12 +434,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   const canFold = layout?.canFold ?? false;
   const eligibleGaps = useMemo(() =>
-    (scaled?.gaps ?? []).filter(gap => gap.endMs - gap.startMs > TIMELINE_FOLD_THRESHOLD_MS),
+    (scaled?.gaps ?? []).filter(gap => gap.collapsed),
     [scaled]);
-  // One toolbar toggle drives every eligible idle gap: it offers 展开全部空闲
-  // while any of them is still folded and 折叠空闲 once all of them are open.
-  const allIdleExpanded = eligibleGaps.length > 0
-    && eligibleGaps.every(gap => props.expandedGapIds.has(gap.id));
 
   const chronology = useMemo(() => {
     if (!timeline || !layout) return [];
@@ -653,8 +647,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   const ticks = useMemo(() => {
     if (!scaled || !layout || layout.startMs === null || layout.endMs === null || realMinutes <= 0) return [] as { at: number; label: string; left: number }[];
-    // Breaks shrink to fit the viewport, so measure their actual pixel total
-    // instead of assuming 64px each.
+    // Fixed idle blocks leave the remaining pixels to real activity.
     const collapsedGapPx = scaled.gaps.filter(gap => gap.collapsed)
       .reduce((total, gap) => total + (gap.toPercent - gap.fromPercent) / 100 * widthPx, 0);
     const pxPerMinute = (widthPx - collapsedGapPx) / realMinutes;
@@ -786,7 +779,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       const solidShare = Math.min(100, solidWidth / Math.max(width, 0.3) * 100);
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="solid" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <span className="solid" style={{ width: `${solidShare}%` }} aria-hidden="true" />
+        <span className="sp-text sp-solid-text" style={{ width: `${solidShare}%` }}>{solidWidth / 100 * widthPx >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
         <i className="end-mark warn" style={{ left: `calc(${solidShare}% - 8px)` }} aria-hidden="true">?</i>
         <span className="sp-text sp-tail" style={{ marginLeft: `calc(${solidShare}% + 10px)` }}>{width - solidWidth >= 4 ? "结束未确认" : ""}</span>
       </button>;
@@ -824,19 +818,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                 <div className="tl-label">委派 / 时间</div>
                 <div className="tl-track">
                   {ticks.map(tick => <span key={tick.at} className="tick" style={{ left: `${tick.left}%` }}>{tick.label}</span>)}
-                  {canFold && eligibleGaps.map(gap => gap.collapsed
-                    ? <button key={gap.id} type="button" className="fold-button" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }}
-                      aria-label={`空闲 ${durationShort(gap.endMs - gap.startMs)}，${clockTime(gap.startMs)} 至 ${clockTime(gap.endMs)}，已折叠，展开`}
-                      title={`空闲 ${durationShort(gap.endMs - gap.startMs)} · ${clockTime(gap.startMs)}–${clockTime(gap.endMs)}`}
-                      onClick={() => props.onToggleGap(gap.id)}>
-                      <span aria-hidden="true">›</span>
-                    </button>
-                    // In the right half the control hangs leftwards from the
-                    // band's end, so its label never runs past the canvas.
-                    : <button key={gap.id} type="button" className="collapse-button"
-                      style={gap.fromPercent <= 50 ? { left: `${gap.fromPercent + 0.4}%` } : { right: `${100 - gap.toPercent + 0.4}%` }}
-                      aria-label={`收起空闲 ${durationShort(gap.endMs - gap.startMs)}`}
-                      onClick={() => props.onToggleGap(gap.id)}>收起空闲 {durationShort(gap.endMs - gap.startMs)}</button>)}
+                  {eligibleGaps.map(gap => <span key={gap.id} className="idle-block" tabIndex={0} data-gap-id={gap.id}
+                    style={{ left: `${gap.fromPercent}%`, width: `${TIMELINE_IDLE_PX}px` }}
+                    aria-label={idleReadout(gap)}
+                    title={idleReadout(gap)}>
+                    <span aria-hidden="true">//</span>
+                  </span>)}
                   {nowVisible && nowLeft !== null && <span className="now-chip">现在 {clockTime(observedAtMs!)}</span>}
                 </div>
               </div>
@@ -880,8 +867,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       onDoubleClick={() => {
                         if (single) props.onOpenItem(single);
                       }}>
-                      <span aria-hidden="true">{glyph.glyph}</span>
-                      {glyph.count > 0 && <sup className="mk-count" aria-hidden="true">{glyph.count}</sup>}
+                      <span className="tl-mark-text" aria-hidden="true">{glyph.glyph}
+                        {glyph.count > 0 && <sup className="mk-count">{glyph.count}</sup>}
+                      </span>
                     </button>;
                   })}
                   {!hidden && active && openClusterView && openClusterView.items.length > 1 && <MarkerPopover
@@ -948,14 +936,14 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       className={"tl-item flag " + (row.acceptanceVerdict === "rejected" ? "reject" : "accept") + (settleSelected ? " selected" : "") + (runSelected ? " run-member" : "")}
                       style={{ left: `${settleLeft}%` }} data-x={settleLeft}
                       tabIndex={focusKey === settle.key ? 0 : -1} aria-label={itemAria(settle)} title={itemAria(settle)}
-                      {...itemHandlers(settle.key)}>{row.acceptanceVerdict === "rejected" ? "!" : "✓"}</button>}
+                      {...itemHandlers(settle.key)}><span className="tl-mark-text" aria-hidden="true">{row.acceptanceVerdict === "rejected" ? "!" : "✓"}</span></button>}
                   </div>
                 </div>;
               })}
               <div className="tl-overlay" aria-hidden="true">
-                {canFold && eligibleGaps.map(gap => gap.collapsed
-                  ? <div key={gap.id} className="fold-band" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }} />
-                  : <div key={gap.id} className="expanded-band" style={{ left: `${gap.fromPercent}%`, width: `${gap.toPercent - gap.fromPercent}%` }} />)}
+                {eligibleGaps.map(gap => <div key={gap.id} className="fold-band"
+                  style={{ left: `${gap.fromPercent}%`, width: `${TIMELINE_IDLE_PX}px` }} />)}
+                {!hidden && active && !asList && <TimelineReadout gridRef={gridRef} scrollRef={scrollRef} scale={scaled} />}
                 {nowVisible && nowLeft !== null && <div className="now-line" style={{ left: `${nowLeft}%` }} />}
                 {guideLeft !== null && <div className="guide-line" style={{ left: `${guideLeft}%` }} />}
               </div>
@@ -999,9 +987,6 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       </div>
       </Popover>}
       <div className="tl-tools">
-        {!asList && canFold && eligibleGaps.length > 0 && <button type="button" className="button small-button idle-fold-toggle"
-          onClick={() => props.onSetExpanded(allIdleExpanded ? new Set() : new Set(eligibleGaps.map(gap => gap.id)))}>
-          {allIdleExpanded ? "折叠空闲" : "展开全部空闲"}</button>}
         {!asList && <div className="tl-zoom" role="group" aria-label="时间轴缩放">
           <button type="button" className="button small-button" aria-label="缩小" disabled={zoomAtFit}
             title={zoomAtFit ? "已是适应窗口的最小刻度" : "缩小时间轴（键盘 -）"} onClick={zoomOut}>−</button>

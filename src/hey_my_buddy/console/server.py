@@ -799,6 +799,8 @@ class Console:
                     return self._task_history()
                 if relative == "/api/backup-preflight":
                     return self._backup_preflight()
+                if relative == "/api/runtime-version":
+                    return self._runtime_version()
                 if relative == "/api/objectives":
                     return self._objective_read("objective_list", {}, OBJECTIVE_LIST_PARAMETERS)
                 if relative.startswith("/api/objectives/") and relative.endswith("/timeline"):
@@ -869,6 +871,15 @@ class Console:
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary
                     return self._error(500, "INTERNAL_ERROR", "The console could not read the snapshot")
                 self._send_read(outcome, coding)
+
+            def _runtime_version(self) -> None:
+                """Version facts are read only when settings explicitly asks for them."""
+                from .version_info import version_info
+                try:
+                    report = version_info(console.store.directory)
+                except Exception:  # noqa: BLE001 - no private paths or traceback cross the boundary
+                    return self._error(500, "INTERNAL_ERROR", "The runtime version could not be read")
+                self._json(200, report)
 
             def _backup_preflight(self) -> None:
                 """The original backup preflight, computed only on this explicit read.
