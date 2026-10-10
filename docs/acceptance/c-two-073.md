@@ -214,3 +214,7 @@ Host 的公共接线聚焦按每文件独立解释器运行：worker_runtime4、
 1-D 编号集合由实际 unittest loader 核对：3268→3270，3268个既有编号集合相等，改名/删除均0，仅新增 protocol.test_ctwo_integration.CTwoIntegrationTests.test_holder_reaps_killed_controller_and_preserves_foreign_peer 与 protocol.test_ctwo_integration.CTwoIntegrationTests.test_normal_stop_and_same_connection_after_deadline；模块203，loader错误/重复0。原始清单与差集在tmp/c073-host/integration-final-ids.json、integration-id-delta.json；四处夹具及公共Worker接线不改变编号。仓库卫生5项exit0。
 
 1-D 首次 integration-record 返回 INTEGRATION_UNVERIFIED：Host 把补证追加进 Worker 范围内记录，目标 blob 不再等于固定交付。已把 Host 实际验证与整合证据保留在 c-two-integration-host.md，Worker 的 c-two-integration.md 从固定 9d873dfc 逐字节恢复，代码与测试不变；用新 commandId 重试登记，不把失败登记称为成功。
+
+1-D 已以 int-b93d8ac7-0349-4438-a810-1e3ae62c7689 verified 登记并 accepted/completed。首次 acknowledge 误用 status 参数，被0.27 CLI以INVALID_ARGUMENT拒绝，没有形成签收；改用既有verdict参数的新commandId后成功。黑板已自动回收受管检出，后续cleanup-plan回读state=applied/result.removed=true，不重复删除。保留两回合顶层交付日志、固定副本与六份冒烟材料后，Host只整体删除两个结构化交付报告的确切 <1D_FIRST_TASK_TMP>/<1D_FINAL_TASK_TMP>；无通配符，无其他会话对象。
+
+四个最短回合的入口与共享脚本已经固定SHA复制至Host自建 <HOST_TASK_TMP>/native-smoke-bundle，逐个静态prepare退出0；prepare未发现CLI、未启动模型。候选配置复用现有已验证选择：ZCode/zai-api/GLM-5.3-Flash/max，Codex/openai/gpt-6.1-sol/low，Claude/anthropic/claude-haiku-4-5-20251001/default，DSH/deepseek-official/deepseek-v4-flash/off。各回合独立私有根，execute必须绑定用户的逐次批准，当前0个真实回合、没有批准文件。脚本不覆写CODEX_HOME或CLAUDE_CONFIG_DIR；登录/额度若阻碍，只如实记录，重跑另请批准。
