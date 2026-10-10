@@ -196,3 +196,5 @@ Host七份独立最终源码变异取得目标assert失败exit1：移除connect�
 - `protocol.test_inquiry_transport.TransportTests.test_sdk_deadline_facts_expire_without_reporting_a_stopped_owner`
 
 1-C补丁整合6d072f37，integration int-ee84b6fb-d68d-4191-953c-cde71213aa18 verified，原run accepted/completed；cleanup-plan/apply applied。Host保留范围缺口、实施回合的顶层脚本/manifest/所有runs原始日志、最终原补丁与固定副本后，按结构化交付唯一根 <1C_TASK_TMP> 整体回收，未按前缀扫描或清扫默认公共域。未运行60秒连接空闲泄漏探针，该项留给Claude Code Host验收。
+
+1-D基线dcc11031，run8a6200bc-324e-4d64-b232-b4794eb1d198首次省略四字段，经决定dec-d9c89127-f9b9-4750-a119-bb10ae0805a0选ZCode/zai-api/GLM-5.3-Flash/max；供应方不可重试429/1310，两层停止确认后用户许可原run continue改用完成本批同类工作的Codex/openai/gpt-6.1-sol/high。范围仍三个新测试/fixture/记录，模型冒烟只准备，不执行。所有原清理/私有根/共享refs/日常服务约束保持，源分支不推送。
