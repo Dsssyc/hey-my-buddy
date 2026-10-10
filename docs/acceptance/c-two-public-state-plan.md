@@ -319,3 +319,21 @@ Host-only 观察助手只记录原持有 Popen 的实际 wait/poll-reap 和原 c
 Host 独立 loader 再核：3,519 唯一 ID、216 模块、重复 0、loaderErrors 0，R3→R4 集合严格相等、增删 0；原 3-B→3-C 的 8 删除/15 新增及逐条规则对应保留。结果为 `state-boundaries-r4-ids.json`；原七失败文件99项加先前通过3420项恰好3519，不把编号清单当新整批检查通过。
 
 Root 整合只应用 dbffa3ab→70e94943 的七路径差异，再追加本计划；不重放已经整合的 R3 累积补丁，不代改 Worker 代码或测试。原 scope1 失败、正式 v2/v3/v4 与同 run continue、全检 dcc265b0 exit1、首次取消失败及当前未知历史回执均保留。最终完整检查仍待在本次整合提交上运行，原 run 尚未签收，以便范围缺陷继续打回；回收与最后全检结果另附。
+
+
+## 3-A、3-B、3-C 全部整合后的最终检查与回收
+
+最终代码与测试提交 `256023c56eeebc1f57da2889980c165166eb380d`，包含原 3-A `99cd2b06`、3-B `8183fd05` 和 3-C/R4；指定 core `12eb4fcdc2be8d6599c862fae3b9d3a20b40409d` 已为其祖先，没有合入仅用于复核的 e8f57266 等整合分支。命令 `uv run --frozen python -m hey_my_buddy.cli.checks`，不带 --jobs、默认 4 进程，实际 exit 0、645.517 秒；3,519 项（跳过 1）、216/216 文件通过，未报告未运行模块、失败模块或未计数模块。负载开始12.20/12.50/15.35、结束32.71/25.79/20.51，如实保留，不为耗时改测试。完整启动/精确私有根/进程/原始日志/结果/汇总为 `tmp/c073-host/state-boundaries-final-r4-check*`。检查器自建根已正常回收；本次没有模型调用、日常运行时安装或服务/Worker重启。
+
+编号对照：R3→R4 3,519/216 集合严格相等；3-B 3,512→最终3,519 的未变3,504、删除8、增加15逐条规则表已登记。与整批最新代码core基线3,421比较，未变3,399、删除22、增加120，完整集合与差为 `state-boundaries-whole-core-id-delta.json`；被本批 C-Two 旧清理/等待线程/缓冲池机制取代的旧编号对照保留此前交付及 c-two-repair-host.md，额外两个 core 旧编号在3-C对应新 review-scope/health 保真规则。本轮六份fixture返修未增删编号。
+
+最终固定产物 `989e8292-6be5-4a54-88d4-788e668df0fd` / `70e949439f5ec962407fbe00c92c2efe20284c9d`，整合 `int-06c340ce-86a9-43b4-b720-1b7338190596` verified、61 路径逐项一致，完整检查通过后才 acknowledge accepted（revision27）。原 `int-99cf5fe7-a471-44dd-b7d4-1a66f54bec5a` 是 R3 的 verified 登记，没有把706.360秒七文件失败的结果签收为通过；两个整合与历史失败均保留。首个 cleanup-plan 在签收后的revision变化时返回 REVISION_CONFLICT、没有回收；重新读取并以新命令创建计划 `cln-c713e495-bfc9-41f8-b227-865a4b84f290`，apply 返回 removed=true，精确受管检出不存在，未手动切换分支或删受管检出。
+
+Host 在已登记 Worker 根 `/tmp/c073-c-H6SbNM` 做只读进程/持锁观测，processes/problems/notes为空、daemon/supervisor持锁为空；先按 symlinks=True 留存其23,780份普通文件和477,397,504字节、符号链接不跟随，逐份hash与台账为 `tmp/c073-host/state-boundaries-retained-evidence.json`，然后只对这一个确切根整体rmtree，removed=true。留存位置为 `<HOST_TASK_ROOT>/retained-c073-c-H6SbNM`；没有使用通配符或日期/同名前缀推断归属，删除报错不屏蔽。根外 `/tmp/state-calls-readonly-audit.txt` 未访问、未删除，写前归属/实际覆盖仍未知；旧daemon缺数字wait不能由当前空观测补造。3-A/3-B精确根的先前回收记录保留；实施检出保留供整批Host验收。
+
+对外可见的最终状态：公开入口仍支持显式目录/环境/默认，统一解析为真实路径；用户链接路径可达，服务所有者冷启动/启动照旧修正自己目录到0700，只读attach不创建不chmod；不安全路径保留自己code/message/path，系统写入/IPC拒绝才是LAUNCH_ACCESS_DENIED。C-Two0.7.4使本项目端点位于私有 `<state>/ipc`、关闭buddy池、使用原生凭据回收与连接/调用期限；新旧传输不能互通，0.29.0仍未安装，本线不升级契约或schema。内部必填Path/必填deadline、旧规则删除不新增公开CLI字段。保护文档由Claude Code Host维护，本线只在自己的记录列出变化。
+
+这次完整检查后只有验收记录追加，后续只重跑仓库卫生与文档读取/链接测试，不重跑完整检查；apps/console无源码改动，不跑前端测试。既有各一次Codex/Claude Code/DSH付费真实回合证据仍各绑原提交，未重跑；ZCode无额度，真实回合仍未验证。微任务内部签收与整批Claude Code Host验收分开：本线完成后停下，不启动跨侧引用清理或其他队列、不推送、不安装或升级日常运行时。
+
+
+最终记录更新后的仓库卫生与文档读取/链接补核实际20项通过：cli.test_repository_hygiene + cli.test_skill_workflow 17项/exit0/0.808秒；README/operations读取与打包skill内部链接3项/exit0/0.471秒。卫生扫描用真实HOME识别本机标识，其余状态/运行时/TMP仍显式私有，清除继承运行身份，没有原生程序发现或模型调用。原始命令和日志为 `tmp/c073-host/state-boundaries-final-doc-tests` 与 `state-boundaries-final-shipped-doc-tests`。补记本段后仅再跑仓库卫生；不重跑已通过的完整检查。整批验收仍待Claude Code Host，当前无后续任务启动。
